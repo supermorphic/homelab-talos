@@ -92,6 +92,12 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    - name: sonarr
+      group: Media
+      url: "https://sonarr.lab.supermorphic.com/ping"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     # External dependency cert-manager relies on for wildcard-cert renewal.
     - name: letsencrypt-acme
       group: External

@@ -56,7 +56,7 @@ hardlink import → Plex.
 
 Already in place across the media stack:
 - **Gatus** `Media` group: `plex`, `qbittorrent-vpn` (VPN health), and each activated
-  app. Prowlarr is active; Sonarr, Radarr, and Seerr are added at their activation
+  app. Prowlarr and Sonarr are active; Radarr and Seerr are added at their activation
   commits.
 - **Prometheus/Alertmanager:** `QbittorrentVpnDown` (critical) — the VPN kill-switch alert.
 - **Homepage:** service tiles for every media app and a secret-backed Prowlarr activity
