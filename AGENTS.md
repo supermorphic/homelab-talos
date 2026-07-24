@@ -22,6 +22,37 @@ boundary** — Flux continuously reconciles `main` onto the live cluster.
 - Keep commits scoped and reviewable. Report which validation ran versus was
   skipped, and why.
 
+## Git worktrees
+
+Development may happen in a dedicated Git worktree (one per feature branch) to
+allow parallel work. **First determine whether the current checkout is a
+worktree**, then apply the rules below only if it is.
+
+- Detect by comparing:
+
+  ```
+  git rev-parse --git-dir          # e.g. .../.git/worktrees/<name> in a worktree
+  git rev-parse --git-common-dir   # the shared repo .git
+  ```
+
+  If the two differ, this is a **linked worktree** — abide by these rules. If they
+  are equal, this is the primary checkout — the normal `Required workflow` applies
+  (which already forbids committing/pushing to `main`).
+
+When in a worktree:
+
+- Stay on the worktree's currently checked-out feature branch. Confirm it with
+  `git branch --show-current` before making changes and again before committing or
+  pushing.
+- Do not switch, checkout, create, rename, or delete branches unless explicitly
+  instructed. Never switch this worktree to `main`.
+- Do not create, move, remove, prune, lock, unlock, or repair worktrees, and do not
+  modify the primary checkout or any other worktree.
+- Push only the current feature branch; open pull requests against `main` and never
+  merge directly into it.
+- Do not use `git reset --hard`, `git clean -fd`, or force-push without explicit
+  approval.
+
 ## Interface: `mise` + `just`
 
 - Run every tool through the pinned toolchain: `mise exec -- just …`. Do not use
