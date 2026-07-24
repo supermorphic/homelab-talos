@@ -2116,7 +2116,7 @@ grafana-admin-reset: require-bash
       a=$(printf "%s:%s" "$GF_SECURITY_ADMIN_USER" "$GF_SECURITY_ADMIN_PASSWORD" | base64 | tr -d "\n")
       wget -qO- -T 6 --header="Authorization: Basic $a" "http://localhost:3000/api/search?limit=1" >/dev/null 2>&1 && echo yes || echo no')"
     [[ "$ok" == 'yes' ]] || { echo 'Grafana admin creds still fail to authenticate after reset.' >&2; exit 1; }
-    echo 'Grafana DB admin password reset to match the grafana-admin Secret; API auth verified. (Sync homepage-secrets grafana-user/password to the same creds + restart homepage for the widget.)'
+    echo 'Grafana DB admin password reset to match the grafana-admin Secret; API auth verified. (Sync the homepage-grafana Secret to the same creds via just repo homepage-grafana-secrets + restart homepage for the widget.)'
 
 # Validate the Phase 10 Gatus source: files, wiring, namespace gateway label,
 # staged suspend, key values, HTTPRoute, and the pinned chart render.
@@ -2226,15 +2226,25 @@ homepage-validate: require-bash
     [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'homepage.lab.supermorphic.com' ]]
     [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 
-    secret="$base/app/homepage-secrets.sops.yaml"
-    [[ -f "$secret" ]] || { echo "Missing Homepage Secret: $secret (run just repo homepage-secrets)." >&2; exit 1; }
-    [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.metadata.name' "$secret")" == 'homepage-secrets' ]]
-    [[ "$(yq -r '.metadata.namespace' "$secret")" == 'homepage' ]]
+    # Per-service split Secrets (rotate independently): homepage-grafana + homepage-plex.
+    grafana_secret="$base/app/homepage-grafana.sops.yaml"
+    plex_secret="$base/app/homepage-plex.sops.yaml"
+    [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
+    [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
+    [[ "$(sops filestatus "$grafana_secret" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.metadata.name' "$grafana_secret")" == 'homepage-grafana' ]]
+    [[ "$(yq -r '.metadata.namespace' "$grafana_secret")" == 'homepage' ]]
+    [[ "$(sops filestatus "$plex_secret" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.metadata.name' "$plex_secret")" == 'homepage-plex' ]]
+    [[ "$(yq -r '.metadata.namespace' "$plex_secret")" == 'homepage' ]]
+    # The deployment must reference the split Secrets, not the old combined one.
+    ! rg -q 'homepage-secrets' "$dep"
+    [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
+    [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
 
     kustomize build "$base/app" >/dev/null
 
-    echo 'Phase 10 Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and encrypted Secret passed validation.'
+    echo 'Phase 10 Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted Secrets (homepage-grafana + homepage-plex) passed validation.'
 
 # Verify the live Homepage app: Kustomization Ready, deployment rolled out,
 # HTTPRoute accepted, dashboard reachable via HTTPS, and foundation green.

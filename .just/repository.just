@@ -549,56 +549,95 @@ monitoring-secrets:
 
 # Write only the SOPS-encrypted Homepage Secret (Grafana widget credentials) from
 # GRAFANA_ADMIN_USER/GRAFANA_ADMIN_PASSWORD. Same creds as the Grafana admin login.
-homepage-secrets:
+# Write ONLY the SOPS-encrypted Homepage Grafana widget Secret (homepage-grafana in the
+# homepage namespace) from GRAFANA_ADMIN_USER/GRAFANA_ADMIN_PASSWORD. Split from the Plex
+# token so either can be rotated independently. Never echoes the values.
+homepage-grafana-secrets:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    expected_confirmation='write:monitoring:homepage-secrets:sops'
-    target='kubernetes/apps/monitoring/homepage/app/homepage-secrets.sops.yaml'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-secrets.XXXXXX)"
+    expected_confirmation='write:monitoring:homepage-grafana:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-grafana.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-grafana.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
 
     just repo secrets
     [[ -n "${GRAFANA_ADMIN_USER:-}" ]] || {
-      echo 'Set GRAFANA_ADMIN_USER to the Grafana admin username (for the Homepage widget).' >&2
+      echo 'Set GRAFANA_ADMIN_USER to the Grafana admin username (must match the grafana-admin Secret).' >&2
       exit 1
     }
     [[ -n "${GRAFANA_ADMIN_PASSWORD:-}" ]] || {
-      echo 'Set GRAFANA_ADMIN_PASSWORD to that Grafana admin password.' >&2
+      echo 'Set GRAFANA_ADMIN_PASSWORD to that Grafana admin password (must match the grafana-admin Secret).' >&2
       exit 1
     }
+    [[ "${HOMEPAGE_GRAFANA_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Grafana Secret.' >&2
+      echo "Set HOMEPAGE_GRAFANA_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-grafana" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."username" = strenv(GRAFANA_ADMIN_USER) |
+       .stringData."password" = strenv(GRAFANA_ADMIN_PASSWORD)' \
+      >"$temp_dir/homepage-grafana.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-grafana.yaml" >"$temp_dir/homepage-grafana.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-grafana.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-grafana.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$GRAFANA_ADMIN_PASSWORD" "$temp_dir/homepage-grafana.sops.yaml"
+
+    mv -- "$temp_dir/homepage-grafana.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-grafana in homepage)."
+
+# Write ONLY the SOPS-encrypted Homepage Plex widget Secret (homepage-plex in the homepage
+# namespace) from PLEX_TOKEN. Independent of the Grafana Secret. Never echoes the value.
+homepage-plex-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-plex:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-plex.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-plex.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
     [[ -n "${PLEX_TOKEN:-}" ]] || {
       echo 'Set PLEX_TOKEN to a Plex server token (X-Plex-Token) for the Homepage Plex widget.' >&2
       exit 1
     }
-    [[ "${HOMEPAGE_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to write the Homepage Secret.' >&2
-      echo "Set HOMEPAGE_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+    [[ "${HOMEPAGE_PLEX_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Plex Secret.' >&2
+      echo "Set HOMEPAGE_PLEX_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
       exit 1
     }
 
-    export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD PLEX_TOKEN
+    export PLEX_TOKEN
     yq -n \
       '.apiVersion = "v1" |
        .kind = "Secret" |
-       .metadata.name = "homepage-secrets" |
+       .metadata.name = "homepage-plex" |
        .metadata.namespace = "homepage" |
        .type = "Opaque" |
-       .stringData."grafana-user" = strenv(GRAFANA_ADMIN_USER) |
-       .stringData."grafana-password" = strenv(GRAFANA_ADMIN_PASSWORD) |
-       .stringData."plex-token" = strenv(PLEX_TOKEN)' \
-      >"$temp_dir/homepage-secrets.yaml"
+       .stringData."token" = strenv(PLEX_TOKEN)' \
+      >"$temp_dir/homepage-plex.yaml"
 
     sops --encrypt --filename-override "$target" \
-      "$temp_dir/homepage-secrets.yaml" >"$temp_dir/homepage-secrets.sops.yaml"
-    [[ "$(sops filestatus "$temp_dir/homepage-secrets.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-secrets.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
-    ! rg -Fq -- "$GRAFANA_ADMIN_PASSWORD" "$temp_dir/homepage-secrets.sops.yaml"
-    ! rg -Fq -- "$PLEX_TOKEN" "$temp_dir/homepage-secrets.sops.yaml"
+      "$temp_dir/homepage-plex.yaml" >"$temp_dir/homepage-plex.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-plex.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-plex.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$PLEX_TOKEN" "$temp_dir/homepage-plex.sops.yaml"
 
-    mv -- "$temp_dir/homepage-secrets.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (homepage-secrets in homepage). Then wire it into the homepage kustomization."
+    mv -- "$temp_dir/homepage-plex.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-plex in homepage)."
 
 # Run repository and declarative Talos source validation.
 verify: verify-files

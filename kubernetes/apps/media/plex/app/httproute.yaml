@@ -14,7 +14,7 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "plex.svg"
     gethomepage.dev/href: "https://plex.lab.supermorphic.com"
-    # Live Plex widget. Token injected from the homepage-secrets Secret via
+    # Live Plex widget. Token injected from the homepage-plex Secret via
     # HOMEPAGE_VAR (never cleartext); widget stays blank until the operator adds it.
     # Albums intentionally omitted (allowed: streams, albums, movies, tv).
     gethomepage.dev/widget.type: "plex"
