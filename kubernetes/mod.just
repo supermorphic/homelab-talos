@@ -18,7 +18,7 @@ cilium-render:
       --values {{cilium_values}}
 
 # Validate the app-local Cilium source and pinned Helm render.
-cilium-validate: require-bash
+cilium-validate:
     @scripts/validate/cilium.sh
 
 # Print read-only live Cilium and Kubernetes status.
@@ -141,13 +141,15 @@ metrics-server-verify: require-bash
 
     echo 'metrics-server acceptance passed: deployment ready, metrics.k8s.io Available, and kubectl top nodes returns data.'
 
-# Exercise the offline validation assertion API, including its failure diagnostics.
-validator-tests: require-bash
-    @scripts/validate/test.sh
+# Unit-test the offline configuration policies without contacting a cluster.
+validator-tests:
+    @conftest fmt --check tests/policy
+    @conftest verify --policy tests/policy
 
 # Enforce cross-application media source policy without contacting the cluster.
-media-policy-validate: require-bash
-    @scripts/validate/media-policy.sh
+media-policy-validate:
+    @conftest test --combine --all-namespaces \
+      --policy tests/policy/media kubernetes/apps/media
 
 # Validate the built app manifests against Kubernetes + CRD schemas, offline of the
 # cluster (schemas are fetched over HTTPS). Secrets are kept (only the SOPS metadata

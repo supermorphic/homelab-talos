@@ -85,6 +85,45 @@ checksum = "sha256:035bb0bbd0b1782f77908b080f99c735d82af8f993a54ec29950d4d17b0f3
 url = "https://github.com/cilium/cilium-cli/releases/download/v0.19.6/cilium-windows-amd64.zip"
 url_api = "https://api.github.com/repos/cilium/cilium-cli/releases/assets/477187974"
 
+[[tools.conftest]]
+version = "0.68.2"
+backend = "aqua:open-policy-agent/conftest"
+
+[tools.conftest."platforms.linux-arm64"]
+checksum = "sha256:4005441089655ded475384cb87d57762ae08ebef78305bada49c70530d2f4184"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775404"
+
+[tools.conftest."platforms.linux-arm64-musl"]
+checksum = "sha256:4005441089655ded475384cb87d57762ae08ebef78305bada49c70530d2f4184"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775404"
+
+[tools.conftest."platforms.linux-x64"]
+checksum = "sha256:e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775369"
+
+[tools.conftest."platforms.linux-x64-musl"]
+checksum = "sha256:e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775369"
+
+[tools.conftest."platforms.macos-arm64"]
+checksum = "sha256:cdb5445179e0cc42906e2b0233694900f272a501878d416a9c875b1f7bdfd34c"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775371"
+
+[tools.conftest."platforms.macos-x64"]
+checksum = "sha256:7682c54243d2c16579589f55aac47c51389d26f103f828902880288ba7f0605e"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Darwin_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775370"
+
+[tools.conftest."platforms.windows-x64"]
+checksum = "sha256:66a88d02e6c03a714e9f0751c3d86ee9c5591739c367ca1b79c4f9f2f90ac4cb"
+url = "https://github.com/open-policy-agent/conftest/releases/download/v0.68.2/conftest_0.68.2_Windows_x86_64.zip"
+url_api = "https://api.github.com/repos/open-policy-agent/conftest/releases/assets/396775403"
+
 [[tools.flux2]]
 version = "2.9.2"
 backend = "aqua:fluxcd/flux2"

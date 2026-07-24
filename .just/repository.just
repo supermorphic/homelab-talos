@@ -15,6 +15,7 @@ versions:
     @helm version --short
     @flux --version
     @cilium version --client
+    @conftest --version
     @kustomize version
     @sops --version
     @age --version

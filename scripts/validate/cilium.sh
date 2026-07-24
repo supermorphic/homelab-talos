@@ -1,54 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source scripts/validate/lib.sh
-
 app_dir='kubernetes/apps/kube-system/cilium/app'
 values_file='kubernetes/apps/kube-system/cilium/app/values.yaml'
 chart='oci://quay.io/cilium/charts/cilium'
-oci="$app_dir/ocirepository.yaml"
-helmrelease="$app_dir/helmrelease.yaml"
-version="$(yq -r '.spec.ref.tag' "$oci")"
+version="$(yq -r '.spec.ref.tag' "$app_dir/ocirepository.yaml")"
 temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for file in \
   "$app_dir/kustomization.yaml" \
-  "$oci" \
-  "$helmrelease" \
+  "$app_dir/ocirepository.yaml" \
+  "$app_dir/helmrelease.yaml" \
   "$values_file" \
   'kubernetes/apps/kube-system/cilium/ks.yaml'; do
-  assert_file "$file" 'required Cilium source'
+  [[ -f "$file" ]] || {
+    echo "Missing required Cilium source: $file" >&2
+    exit 1
+  }
 done
 
-assert_pinned_value "$version" 'Cilium chart version'
-assert_yaml_values "$oci" \
-  '.spec.url' "$chart"
-assert_yaml_values "$helmrelease" \
-  '.spec.releaseName' 'cilium' \
-  '.spec.targetNamespace' 'kube-system' \
-  '.spec.storageNamespace' 'kube-system' \
-  '.spec.valuesFrom[0].name' 'cilium-values' \
-  '.spec.valuesFrom[0].valuesKey' 'values.yaml'
-assert_yaml_values "$values_file" \
-  '.cluster.name' 'nuc-cluster' \
-  '.cluster.id' '1' \
-  '.ipam.mode' 'kubernetes' \
-  '.kubeProxyReplacement' 'true' \
-  '.k8sServiceHost' 'localhost' \
-  '.k8sServicePort' '7445' \
-  '.cgroup.autoMount.enabled' 'false' \
-  '.cgroup.hostRoot' '/sys/fs/cgroup' \
-  '.routingMode' 'tunnel' \
-  '.tunnelProtocol' 'vxlan' \
-  '.bpf.masquerade' 'false' \
-  '.operator.replicas' '2' \
-  '.hubble.relay.enabled' 'true' \
-  '.hubble.ui.enabled' 'false' \
-  '.envoy.enabled' 'false' \
-  '.gatewayAPI.enabled' 'false' \
-  '.l2announcements.enabled' 'false' \
-  '.bgpControlPlane.enabled' 'false'
+[[ -n "$version" && "$version" != 'null' ]]
+[[ "$(yq -r '.spec.url' "$app_dir/ocirepository.yaml")" == "$chart" ]]
+[[ "$(yq -r '.spec.releaseName' "$app_dir/helmrelease.yaml")" == 'cilium' ]]
+[[ "$(yq -r '.spec.targetNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]
+[[ "$(yq -r '.spec.storageNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].name' "$app_dir/helmrelease.yaml")" == 'cilium-values' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].valuesKey' "$app_dir/helmrelease.yaml")" == 'values.yaml' ]]
+
+[[ "$(yq -r '.cluster.name' "$values_file")" == 'nuc-cluster' ]]
+[[ "$(yq -r '.cluster.id' "$values_file")" == '1' ]]
+[[ "$(yq -r '.ipam.mode' "$values_file")" == 'kubernetes' ]]
+[[ "$(yq -r '.kubeProxyReplacement' "$values_file")" == 'true' ]]
+[[ "$(yq -r '.k8sServiceHost' "$values_file")" == 'localhost' ]]
+[[ "$(yq -r '.k8sServicePort' "$values_file")" == '7445' ]]
+[[ "$(yq -r '.cgroup.autoMount.enabled' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.cgroup.hostRoot' "$values_file")" == '/sys/fs/cgroup' ]]
+[[ "$(yq -r '.routingMode' "$values_file")" == 'tunnel' ]]
+[[ "$(yq -r '.tunnelProtocol' "$values_file")" == 'vxlan' ]]
+[[ "$(yq -r '.bpf.masquerade' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.operator.replicas' "$values_file")" == '2' ]]
+[[ "$(yq -r '.hubble.relay.enabled' "$values_file")" == 'true' ]]
+[[ "$(yq -r '.hubble.ui.enabled' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.envoy.enabled' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.gatewayAPI.enabled' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.l2announcements.enabled' "$values_file")" == 'false' ]]
+[[ "$(yq -r '.bgpControlPlane.enabled' "$values_file")" == 'false' ]]
 ! yq -r '.securityContext.capabilities.ciliumAgent[]' "$values_file" | rg -qx 'SYS_MODULE'
 
 kustomize build "$app_dir" >"$temp_dir/kustomization.yaml"
