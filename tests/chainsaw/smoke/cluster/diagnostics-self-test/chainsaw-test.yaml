@@ -1,0 +1,31 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: diagnostics-self-test
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: cluster
+    homelab-talos/suite: diagnostics-self-test
+spec:
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 5s
+  steps:
+    - name: intentional-read-only-failure
+      try:
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: chainsaw-diagnostics-self-test-never-exists
+                namespace: flux-system
+      catch:
+        - describe:
+            apiVersion: kustomize.toolkit.fluxcd.io/v1
+            kind: Kustomization
+            name: cluster-apps
+            namespace: flux-system
+        - events:
+            namespace: flux-system

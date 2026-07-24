@@ -6,6 +6,9 @@ Scenarios are organized by operational risk:
 - `e2e/`: guarded functional workflows that can change workload state.
 - `resilience/`: explicitly confirmed disruption and recovery workflows.
 
-The first read-only `smoke/cluster/flux-ready` proof scenario lands with the
-guarded runner and evidence pipeline. This tooling phase intentionally contains
-no live test.
+The first read-only `smoke/cluster/flux-ready` scenario proves the guarded runner
+and evidence pipeline. `diagnostics-self-test` is an opt-in, intentionally
+failing read-only assertion used to verify catch/fallback diagnostics and primary
+failure preservation. Run the target normally with `just test smoke cluster`;
+select the self-test explicitly with
+`just test smoke cluster diagnostics-self-test`.

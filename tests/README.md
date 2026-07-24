@@ -14,5 +14,23 @@ module. It lints Chainsaw configuration and tests, parses their YAML assets, and
 runs ShellCheck over `scripts/test/`. It deliberately uses a nonexistent
 kubeconfig and unsets SOPS age-key variables.
 
-Live test recipes are added in the next phase with explicit safety guards. They
-must never enter `just ci`.
+Live commands are operator-only:
+
+- `mise exec -- just test smoke cluster`
+- `mise exec -- just test smoke cluster diagnostics-self-test` (expected failure)
+- `mise exec -- just test diagnostics cluster`
+- `mise exec -- just test e2e <registered-target>`
+- `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
+
+Every live command requires an explicit registered target. Smoke additionally
+accepts an optional registered scenario after the target; target and scenario
+names are not interchangeable. E2E and resilience have no registered targets
+yet and fail closed. Live commands must never enter `just ci`.
+
+Each smoke run writes a collision-resistant directory under `.test-results/`
+containing `junit.xml`, `summary.json`, `environment.json`, the Chainsaw log, and
+allowlisted fallback diagnostics. Artifacts record only the confirmation
+variable name, never its value. Environment metadata records tier and target,
+plus the scenario when one was explicitly selected. A failed diagnostic
+collection is recorded separately and cannot turn a failed assertion into a
+pass.
