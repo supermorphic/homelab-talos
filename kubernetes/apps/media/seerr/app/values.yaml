@@ -1,0 +1,83 @@
+# Seerr (media request manager) via the bjw-s app-template chart. Seerr is the official
+# merger/successor of Overseerr + Jellyseerr (image ghcr.io/seerr-team/seerr). It only
+# orchestrates requests — it holds no media files, so it needs no shared /data, just a
+# config PVC (SQLite). Single replica, Recreate on a Longhorn RWO config volume. Plex +
+# Sonarr/Radarr links and the API key are manual first-run settings persisted in /app/config.
+#
+# NOTE: the runtime UID for the seerr-team image is unverified here; confirm /app/config is
+# writable at rollout (fsGroup 568 chowns the fresh PVC). Adjust runAsUser if the image
+# requires a different user.
+controllers:
+  seerr:
+    type: deployment
+    strategy: Recreate
+    pod:
+      securityContext:
+        runAsUser: 568
+        runAsGroup: 568
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+    containers:
+      app:
+        image:
+          repository: ghcr.io/seerr-team/seerr
+          tag: v3.0.1
+        env:
+          TZ: America/Denver
+          PORT: "5055"
+        resources:
+          requests:
+            cpu: 25m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        probes:
+          # /api/v1/status is unauthenticated and returns 200 with version info.
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /api/v1/status
+                port: 5055
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /api/v1/status
+                port: 5055
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /api/v1/status
+                port: 5055
+              periodSeconds: 5
+              failureThreshold: 30
+service:
+  app:
+    controller: seerr
+    ports:
+      http:
+        port: 5055
+persistence:
+  config:
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    storageClass: longhorn
+    # Preserve the request DB / settings across a teardown (Longhorn reclaim is Delete).
+    annotations:
+      helm.sh/resource-policy: keep
+    globalMounts:
+      - path: /app/config
