@@ -24,6 +24,7 @@ mod kube "kubernetes"
 ci:
     just repo lint
     just repo verify
+    just kube validator-tests
     just kube kubeconform
     just kube cilium-validate
     just kube metrics-server-validate
@@ -37,6 +38,7 @@ ci:
     just kube qbittorrent-validate
     just kube arr-validate
     just kube seerr-validate
+    just kube media-policy-validate
     just kube monitoring-validate
     just kube gatus-validate
     just kube homepage-validate

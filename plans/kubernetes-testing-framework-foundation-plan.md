@@ -53,12 +53,20 @@ scenarios described under "Required follow-up sequence."
 8. **No continuous-leak claim is accepted until probe placement is explicit.**
    A workstation-side process or intermittent `kubectl exec` sampling alone
    cannot prove continuous behavior inside a Pod network namespace.
+9. **Conftest is the offline semantic-policy engine.** Rego is reserved for
+   collection-wide or cross-file invariants where it replaces shell iteration
+   and provides native unit tests. Thin Bash continues to orchestrate
+   `helm template`, `kustomize build`, and CLI input/output; readable,
+   application-specific configuration snapshots may remain Bash/yq. Policies
+   use pinned Conftest, OPA v1 syntax (`import rego.v1`), and positive and
+   negative tests. Chainsaw remains the live-scenario engine.
 
 ## Architecture
 
 | Responsibility | Location | In `just ci`? | Engine |
 |---|---|---:|---|
-| Offline source/render validation | `scripts/validate/` | Yes | Bash + focused assertion helpers |
+| Offline source/render orchestration | `scripts/validate/` | Yes | Thin Bash + pinned CLIs |
+| Offline semantic policy and unit tests | `tests/policy/` | Yes | Conftest + Rego |
 | Specialized live checks not suited to Chainsaw | `scripts/verify/` | No | Guarded Bash and pinned CLIs |
 | Test dispatch, safety, locking, results | `scripts/test/` | Offline portions only | Bash |
 | Live scenario definitions and test-local assets | `tests/chainsaw/` | Schema only | Chainsaw |
@@ -75,10 +83,12 @@ The `*-validate` versus `*-verify` boundary from `AGENTS.md` remains strict:
 - No test decrypts SOPS files or reads secret values into results.
 
 Shared code is deliberately small. `scripts/lib/common.sh` may contain error
-formatting, the Bash version guard, and repository-root discovery. Offline YAML
-assertions stay in `scripts/validate/lib.sh`; live Kubernetes helpers stay under
-`scripts/test/`. Cleanup traps remain explicit in each top-level runner so a
-generic helper cannot silently replace an existing trap or hide cleanup failure.
+formatting, the Bash version guard, and repository-root discovery. Do not build a
+shell assertion framework: cross-file and collection-wide YAML policy belongs in
+`tests/policy/`, while simple app snapshots may stay local to their validator.
+Live Kubernetes helpers stay under `scripts/test/`. Cleanup traps remain explicit
+in each top-level runner so a generic helper cannot silently replace an existing
+trap or hide cleanup failure.
 
 ## Delivery: PR sequence
 
@@ -88,8 +98,9 @@ sequence of small PRs, each passing `just ci` on its own:
 1. **PR 1 — 0A mechanical:** extract inline `*-validate` bodies into
    `scripts/validate/*.sh` behind thin wrappers; add `scripts/lib/common.sh`.
    Behavior-preserving; no policy change.
-2. **PR 2 — 0A policy + fixtures:** stricter tag/`dependsOn`/rendered/media-policy
-   assertions plus the negative-fixture regression tests.
+2. **PR 2 — 0A policy foundation:** pin Conftest; add tested Rego for the
+   semantic media tag/`dependsOn`/gateway/capability/PVC policy; preserve existing
+   Bash rendering and readable app-specific snapshots.
 3. **PR 3 — tooling + layout:** pin Chainsaw/ShellCheck (+ schema validator only if
    needed), `.gitignore`, `mod test`, `tests/` + `scripts/test/` scaffolding, and
    `scripts/test/validate-chainsaw.sh`; wire `just test validate` into `ci`.
@@ -110,27 +121,37 @@ This step is behavior-preserving:
 
 - Keep assertion semantics, invocation order, render inputs, and output messages
   unchanged initially.
-- Centralize repeated file, YAML, wiring, render, SOPS-state, and Bash-version
-  checks without decrypting secrets.
+- Extract orchestration without introducing a general-purpose shell assertion
+  library. Missing render/build inputs should normally fail through the owning
+  pinned CLI rather than duplicate `assert_file`/`assert_wired` helpers.
 - Do not combine the mechanical move with a new tag policy, a new media-wide
   policy, or changed `dependsOn` semantics.
 - Keep `kubeconform` repo-wide rather than duplicating it per application.
 - Run every offline validator and `just ci` before changing policy behavior.
 
-After the extraction is green, add stricter assertions in a separate commit:
+After the extraction is green, add stricter semantic policy in a separate
+Conftest/Rego commit:
 
 - Reject mutable image tags such as `latest`, `main`, `master`, `stable`, and
   `nightly`.
 - Use subset semantics for `dependsOn` unless exact membership is an explicit
   invariant.
-- Assert behavior-critical properties on rendered resources.
+- Preserve existing behavior-critical rendered assertions; migrate them to
+  Conftest incrementally when cross-resource policy provides a concrete benefit.
 - Add the media-wide capability, gateway, image-pinning, and PVC policy.
-- Add automated negative fixtures that prove descriptive failures for at least:
-  mutable image tag, `RollingUpdate` with an RWO PVC, unauthorized `NET_ADMIN`,
-  missing dependency, and public gateway exposure.
+- Add native Rego unit tests that prove descriptive failures for at least:
+  mutable or missing image tags, `RollingUpdate` with an RWO PVC, unauthorized
+  `NET_ADMIN`, missing dependency, and public gateway exposure.
 
-The fixture tests replace ad-hoc manual source edits as the regression contract
-for the assertion library.
+Run `conftest verify` in `just ci`. Prefer inline `with input as ...` cases; keep
+declarative fixture files only when a realistic object is clearer than inline
+test data. Use explicit or all-namespace policy evaluation so a package mismatch
+cannot silently select the default `main` namespace and report zero policies.
+
+This reverses the earlier decision to defer OPA. The scope is intentionally
+narrow: SOPS encryption checks remain in `scripts/check-sops-encrypted.sh`,
+schema validation remains kubeconform, rendering stays thin Bash, and Chainsaw
+owns live behavior.
 
 ## Phase 0B — Live-verification extraction and classification
 
@@ -166,6 +187,8 @@ is large.
   `mise.lock`. Verify the exact registry identifier and release during
   implementation.
 - Add pinned ShellCheck.
+- Keep the Conftest version introduced in Phase 0A pinned and locked; it embeds
+  the OPA runtime used by the repository policies.
 - Only if `chainsaw lint` is not cluster-free (see Decision 6): add a pinned JSON
   Schema validator suitable for the schemas exported by Chainsaw. Pinning may be
   through mise or an exact pre-commit hook revision, but it must be reproducible
@@ -198,7 +221,6 @@ scripts/
 ├── lib/
 │   └── common.sh
 ├── validate/
-│   ├── lib.sh
 │   └── <validator>.sh
 ├── verify/
 │   └── <live-check>.sh
@@ -217,6 +239,10 @@ scripts/
 tests/
 ├── mod.just
 ├── README.md
+├── policy/
+│   └── media/
+│       ├── media.rego
+│       └── media_test.rego
 ├── config/
 │   └── chainsaw.yaml
 ├── chainsaw/
@@ -401,7 +427,7 @@ the test framework supplements rather than replaces them.
 
 - New: `scripts/lib/common.sh`, `scripts/validate/*.sh`,
   `scripts/verify/*.sh`, `scripts/test/**`, `tests/mod.just`,
-  `tests/README.md`, `tests/config/chainsaw.yaml`, and
+  `tests/README.md`, `tests/policy/**`, `tests/config/chainsaw.yaml`, and
   `tests/chainsaw/smoke/cluster/flux-ready/chainsaw-test.yaml`, plus the opt-in
   diagnostics self-test fixture.
 - Edited: `.mise.toml`, `mise.lock`, `.gitignore`, `.justfile`,
@@ -417,11 +443,12 @@ Foundation is complete when:
 
 1. The work is on a feature branch and the final diff is scoped and reviewed.
 2. Mechanical validator extraction preserves behavior, followed by separately
-   reviewed policy improvements with automated negative fixtures.
+   reviewed Conftest policy with native positive and negative Rego tests.
 3. Extracted live verification wrappers remain guarded; operator-only parity
    checks are run or explicitly reported as skipped.
-4. A clean workstation installs Chainsaw, ShellCheck, and any conditionally
-   required schema validator from pinned configuration and lock data.
+4. A clean workstation installs Conftest, Chainsaw, ShellCheck, and any
+   conditionally required schema validator from pinned configuration and lock
+   data.
 5. `mise exec -- just test validate` validates every Chainsaw test/config file
    through confirmed cluster-free `chainsaw lint` or the exported-schema
    fallback, and ShellCheck passes.

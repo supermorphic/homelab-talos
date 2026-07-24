@@ -141,6 +141,16 @@ metrics-server-verify: require-bash
 
     echo 'metrics-server acceptance passed: deployment ready, metrics.k8s.io Available, and kubectl top nodes returns data.'
 
+# Unit-test the offline configuration policies without contacting a cluster.
+validator-tests:
+    @conftest fmt --check tests/policy
+    @conftest verify --policy tests/policy
+
+# Enforce cross-application media source policy without contacting the cluster.
+media-policy-validate:
+    @conftest test --combine --all-namespaces \
+      --policy tests/policy/media kubernetes/apps/media
+
 # Validate the built app manifests against Kubernetes + CRD schemas, offline of the
 # cluster (schemas are fetched over HTTPS). Secrets are kept (only the SOPS metadata
 # is stripped); CRDs absent from the schema sources are reported as skipped, not
