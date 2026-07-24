@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-grafana
+    namespace: homepage
+type: Opaque
+stringData:
+    username: ENC[AES256_GCM,data:phDNfJY=,iv:O/IWBC/3bGSmnHYMop66WxcNfbvIU/lD9CWuhxzUgkQ=,tag:fJAFfECkyu6QmlyBHdT8Fw==,type:str]
+    password: ENC[AES256_GCM,data:g0HWEKFUnodcG4mXkfSNO4PxbiMCXjy+GZ85fR0FiioGTt74M88=,iv:ZJTslNXfH1L915X/Ev7A/QFHnV57XQC+wHJmurNoeTo=,tag:3JLmcD81pYxP+162rVwdgA==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB0eEdXdjFqMVFJaWVycTd1
+            cmpab2JFKzQ5a0l1djNDVWNVZUNLSVBhdFNNCmJwVXcrR1I5Q21BQlpBOTMwdEx3
+            NDYwai9Ub1RPUDRTVm00VFFDUEdUTFEKLS0tIE5IclRMK052aU1rZm9rOUtzckpP
+            ZGlGRzc0SmN0TmVhNWowblkwdHZWdUUKq4YIOGrpX+y8nuDblkNk5J2Y0HkiPta1
+            XBx361AAhjFvo0ir9ljBy2WTgDuOihOZoUp6A3UdKVBdJiB/tTV5Kg==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-07-24T13:32:00Z"
+    mac: ENC[AES256_GCM,data:HZXKlN1Ze4Muh7488zsdpoEjJey4keLPMYXZwfgglGnRhwikI240/U+7pWqdEtiqTEOsl4zAJ+7sBrb7viYaKGp9/mClTQjYDDf5ovNzhFjZKb1cUjWSwMoKD/ET/U0icJDBmCNikjZFNJSH+SxpqXutSftkjttxaiHw961n4TY=,iv://xgAVbAlz8SSD6PnavMQ53yXEW1+9BloLMOYjls2e0=,tag:1yZAbUU5GrKFYL5cURoyKQ==,type:str]
+    version: 3.13.2
