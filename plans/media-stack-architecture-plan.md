@@ -17,7 +17,7 @@ requirements + design + status.
 | Phase | Scope | Status |
 |---|---|---|
 | 11 | Shared SMB `/data` + Plex (single replica, reschedule-verified, QuickSync) | **Complete** (2026-07-23) |
-| 12 | VPN download client — qBittorrent + Gluetun (ProtonVPN) | **In progress** |
+| 12 | VPN download client — qBittorrent + Gluetun (ProtonVPN) | **Complete** (2026-07-24) |
 | 13 | Automation — Prowlarr, Sonarr, Radarr | Planned |
 | 14 | Requests + observability — **Seerr**, Gatus/Homepage/dashboards | Planned |
 

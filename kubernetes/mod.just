@@ -327,23 +327,17 @@ flux-preflight: flux-validate
       echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
-    [[ "$(git branch --show-current)" == 'main' ]] || {
-      echo 'Refusing Flux bootstrap: the checked-out branch is not main.' >&2
-      exit 1
-    }
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing Flux bootstrap: commit and push the reviewed Phase 6 sources first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
       echo "Refusing Flux bootstrap: origin must be $expected_origin." >&2
       exit 1
     }
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing Flux bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Flux bootstrap' \
+      kubernetes/mod.just \
+      .just/bootstrap.just \
+      kubernetes/flux \
+      kubernetes/apps/kube-system/cilium \
+      kubernetes/apps/flux-system/flux-canary
     [[ "$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')" == 'https://192.168.90.20:6443' ]]
 
     just kube cilium-status

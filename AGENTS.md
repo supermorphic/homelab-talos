@@ -44,6 +44,16 @@ The operator owns worktree lifecycle. The agent **never** runs
 `git worktree add|remove|move|prune|lock|unlock|repair`, and never modifies the
 primary checkout or any other worktree slot.
 
+**The worktree active at the start of the conversation is the agent's absolute
+filesystem boundary for repository work.** Keep all inspection, edits, validation,
+commits, rebases, pushes, and PR updates in that same worktree path. Never create or
+use a second worktree, temporary clone, or alternate checkout to reach another
+branch or PR. Authorization to update a branch or PR does **not** authorize any
+worktree lifecycle operation or work in another checkout. If the requested branch
+is checked out elsewhere, or cannot be used safely in the current slot, stop and
+ask the operator to resolve or reassign it; do not solve the conflict by creating or
+using another worktree.
+
 **Starting a task in a slot** — bring it onto the assigned branch off fresh remote
 state:
 
@@ -63,12 +73,20 @@ state:
 - Stay on the assigned feature branch; confirm it again with
   `git branch --show-current` before committing or pushing. Never switch the slot to
   local `main`.
+- Parallel work may advance `origin/main` at any time. Before the final `just ci`
+  and again immediately before every push or PR update, run `git fetch origin` and
+  check whether `origin/main` is an ancestor of the feature branch. If not, rebase
+  the clean feature branch onto `origin/main`, resolve any conflicts without
+  discarding either side, and rerun `just ci`. If `origin/main` advances again,
+  repeat the rebase and validation cycle rather than pushing a stale base.
 - Do not create additional branches unless the task explicitly requires it, and do
   not rename or delete branches.
 - Push only the assigned feature branch; open pull requests against `main` and never
   merge directly into it.
-- Do not use `git reset --hard`, `git clean -fd`, or force-push without explicit
-  approval.
+- Do not use `git reset --hard`, `git clean -fd`, or an unconditional force-push.
+  After the required rebase of an already-published assigned branch, update only
+  that branch with `--force-with-lease`; if the lease fails, stop because the remote
+  branch changed unexpectedly.
 
 **After a task:** do not switch branches or delete the feature branch until its pull
 request has merged or the operator explicitly releases the slot. Before releasing,
@@ -84,6 +102,11 @@ confirm there are no staged, unstaged, or untracked files (`git status --short`)
 - Cluster-mutating `bootstrap …` recipes require an explicit `*_CONFIRM` value and
   are **operator-run**. Agents stage the source, validate, commit, and hand off the
   rollout — they do not run live rollouts.
+- An operator may run a guarded rollout from any clean branch or worktree after
+  `git fetch origin main`; no local `main` checkout is required. The recipe must
+  verify that its guard implementation and rollout-specific source paths match the
+  current remote `origin/main` commit. This permits unrelated committed feature
+  work without allowing feature-branch manifests to become the deployment source.
 
 ## Validation
 

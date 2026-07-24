@@ -17,8 +17,8 @@ live cluster — so changes go through a branch and a pull request, not direct c
 to `main`:
 
 ```bash
-git switch main && git pull --ff-only
-git switch -c feat/<short-description>
+git fetch origin
+git switch -c feat/<short-description> origin/main
 # ... make changes ...
 mise exec -- just ci            # cluster-independent, secret-free validation gate
 git add -A && git commit -m "..."
@@ -95,6 +95,25 @@ VS Code automatically recognizes the folder as a linked Git worktree.
 (or resumes an existing one), makes changes, runs `just ci`, commits, pushes, and
 opens the PR. It never touches the worktree itself, never switches the slot to
 `main`, and never self-merges.
+
+Because other worktrees may merge concurrently, the agent fetches `origin` before
+final validation and again immediately before each push. If `origin/main` is no
+longer an ancestor of the feature branch, it rebases onto the new `origin/main`,
+reruns `mise exec -- just ci`, and repeats the check. An already-published branch is
+updated after that rebase with `--force-with-lease` only; a failed lease is treated
+as unexpected remote work and stops the update.
+
+**Operator rollouts may also run inside a feature worktree.** A guarded
+`mise exec -- just bootstrap …` recipe does not require the checked-out branch to
+be `main`. Before rollout, run `git fetch origin main` and leave the worktree clean.
+The guard compares its own rollout implementation and the exact source paths it
+will reconcile with the fetched commit currently published at remote
+`origin/main`. It refuses local changes to those paths, while allowing committed
+feature work elsewhere in the tree. Flux still reconciles only `main`; branch
+independence changes where the command may run, not what is allowed to deploy.
+This is a fail-closed drift check for a trusted operator checkout, not
+tamper-resistant attestation of the helper already executing; pull-request review
+and branch protection remain the source-integrity controls.
 
 **You: after review, squash-merge the PR.** Then either:
 
@@ -461,6 +480,9 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 - `.kube/config` holds the ignored Kubernetes admin credential retrieved through
   the Talos machine API.
 - `.just/` holds repository and cross-domain bootstrap command modules.
+- `scripts/lib/common.sh` holds validator-safe shared shell helpers;
+  `scripts/lib/rollout.sh` holds operator rollout guards; `scripts/validate/`
+  holds the cluster-independent validators invoked by Just recipes.
 - `talos/mod.just` and `kubernetes/mod.just` colocate domain commands with their
   declarative sources; the root `.justfile` only declares namespaces.
 - `clusterconfig/` holds only the three ignored rendered Talos machine configs.

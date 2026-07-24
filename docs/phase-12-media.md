@@ -2,10 +2,14 @@
 
 ## Status
 
-**Planned.** qBittorrent runs beside **Gluetun** (ProtonVPN WireGuard) in one Pod, so
-all of qBittorrent's internet traffic egresses through the VPN or is dropped. The
-**kill switch is a hard, live-tested gate** (see `plans/media-stack-architecture-plan.md`,
-"VPN kill switch") — nothing is activated until the failure test passes on the cluster.
+**Complete / live (2026-07-24, PR #32 — `suspend: false`).** qBittorrent runs beside
+**Gluetun** (ProtonVPN WireGuard) in one Pod, so all of qBittorrent's internet traffic
+egresses through the VPN or is dropped. The **kill switch is a hard, live-tested gate**
+(see `plans/media-stack-architecture-plan.md`, "VPN kill switch"); it passed on the cluster
+(see "Verified findings" below) before activation. One non-blocking operational follow-up
+remains open — whether a *container* (vs *pod*) restart clears the stuck DoT-DNS cycle;
+tracked under "Recovery hierarchy" and covered meanwhile by the
+`QbittorrentGluetunRestartLoop` alert and operator pod recreation.
 
 An expert review of the initial design was incorporated in full (6 corrections +
 credential simplification), verified against the Gluetun wiki. This doc records that
@@ -60,7 +64,7 @@ test (including a hard Gluetun-container kill) is mandatory, not assumed.
   `DNS_KEEP_NAMESERVER=on` unless a test shows a required internal lookup.
 - **[C4] Control-server auth** — mount `/gluetun/auth/config.toml` (via
   `HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH`) from the SOPS secret with two roles:
-  `health` = `GET /v1/vpn/status` `auth=none` (startup probe + future Gatus); `vpn_control`
+  `health` = `GET /v1/vpn/status` `auth=none` (startup probe + live Gatus check); `vpn_control`
   = `PUT /v1/vpn/status`, `GET /v1/publicip/ip`, `GET /v1/portforward` `auth=apikey`
   (kill-switch verify). Never a blanket `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE=none`.
 - **[C5] both `VPN_PORT_FORWARDING_UP_COMMAND` and `_DOWN_COMMAND`** — the documented
@@ -84,13 +88,13 @@ recipe-generated control-server **apikey** baked into the mounted `config.toml`.
 See [`protonvpn-gluetun.md`](protonvpn-gluetun.md) for the full assembly (why only the
 key is used, the "don't mount `wg0.conf`" caveat, the credential-generation options),
 the **annual manual credential-renewal runbook**, and the VPN-expiry monitoring options
-(a reactive critical VPN-down alert in Phase 14 + an external yearly reminder).
+(the live reactive critical VPN-down alert + an external yearly reminder).
 
 ## Kill-switch acceptance gate — BLOCKING (`qbittorrent-killswitch-verify`, operator-run)
 
-Not in `just ci`; Phase 12 is not flipped `suspend: false` / not "done" until it passes
-live. The gate is **bulletproof by design**: the node's own WAN IP is captured first (via
-a throwaway no-VPN pod) and threaded through every step as a **hard never-leak
+Not in `just ci`; Phase 12 was not flipped `suspend: false` or declared complete until
+this gate passed live. The gate is **bulletproof by design**: the node's own WAN IP is
+captured first (via a throwaway no-VPN pod) and threaded through every step as a **hard never-leak
 invariant** — if qBittorrent's egress IP ever equals the home WAN IP, the gate fails
 instantly. All egress probes run **from qBittorrent's own network namespace** (the `app`
 container), not from Gluetun (which has VPN-infra allowances), so they measure exactly
@@ -184,14 +188,14 @@ the health route (`GET /v1/vpn/status`) is no-auth, mutating routes stay apikey-
   gethomepage Gluetun widget (public IP / country / forwarded port) is deferred because it
   requires exposing the control-server apikey to Homepage.
 
-## PR breakdown
+## Completed rollout sequence
 
-- **12-1** — qBittorrent+Gluetun manifests (staged `suspend: true`) + `just repo
+- **12-1** delivered qBittorrent+Gluetun manifests (initially staged `suspend: true`) + `just repo
   protonvpn-secrets` + `qbittorrent-validate` (→ `just ci`) + `qbittorrent-verify` +
   `qbittorrent-killswitch-verify` + `bootstrap qbittorrent`.
-- Rollout (operator): `just repo protonvpn-secrets` → merge → `just bootstrap
-  qbittorrent` → `just kube qbittorrent-verify` → **`just kube
-  qbittorrent-killswitch-verify`** → flip `suspend: false`.
+- The operator rollout completed: `just repo protonvpn-secrets` → merge → `just
+  bootstrap qbittorrent` → `just kube qbittorrent-verify` → **`just kube
+  qbittorrent-killswitch-verify`** → durable `suspend: false` merged in PR #32.
 
 ## First-run / manual settings
 
