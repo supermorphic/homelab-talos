@@ -15,6 +15,7 @@ versions:
     @helm version --short
     @flux --version
     @cilium version --client
+    @chainsaw version
     @conftest --version
     @kustomize version
     @sops --version
@@ -23,6 +24,7 @@ versions:
     @just --version
     @gh --version | head -n 1
     @gitleaks version
+    @shellcheck --version
 
 # Verify that the loaded private age identity matches this repository.
 secrets:

@@ -15,6 +15,9 @@ mod bootstrap ".just/bootstrap.just"
 [group("Kubernetes")]
 mod kube "kubernetes"
 
+[group("Testing")]
+mod test "tests"
+
 # Cluster-independent, secret-free validation contract. Run locally before opening a
 # PR; GitHub Actions runs the exact same command on PRs and pushes to main. Requires
 # the mise toolchain and network egress (Helm pulls public charts) but NO kubeconfig,
@@ -24,6 +27,7 @@ mod kube "kubernetes"
 ci:
     just repo lint
     just repo verify
+    just test validate
     just kube validator-tests
     just kube kubeconform
     just kube cilium-validate

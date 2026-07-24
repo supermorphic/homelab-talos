@@ -46,6 +46,66 @@ url = "https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-wi
 url_api = "https://api.github.com/repos/FiloSottile/age/releases/assets/333752673"
 provenance = "github-attestations"
 
+[[tools."aqua:kyverno/chainsaw"]]
+version = "0.2.15"
+backend = "aqua:kyverno/chainsaw"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-arm64"]
+checksum = "sha256:fecf5f3ea74d11da2cd5d95a4c016d5d2543cbc4844ce21adf5e727e7ffd9e44"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798806"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-arm64".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-arm64-musl"]
+checksum = "sha256:fecf5f3ea74d11da2cd5d95a4c016d5d2543cbc4844ce21adf5e727e7ffd9e44"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798806"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-arm64-musl".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-x64"]
+checksum = "sha256:295d226c89f126c0a97775d364be149f47a810c8a3f9829ee410583d0c1abe3c"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798796"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-x64".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-x64-musl"]
+checksum = "sha256:295d226c89f126c0a97775d364be149f47a810c8a3f9829ee410583d0c1abe3c"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798796"
+
+[tools."aqua:kyverno/chainsaw"."platforms.linux-x64-musl".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.macos-arm64"]
+checksum = "sha256:502bef17dd822217e82590e9ccf01c1e26a56b3fa34a835789b9af73e82a169a"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798810"
+
+[tools."aqua:kyverno/chainsaw"."platforms.macos-arm64".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.macos-x64"]
+checksum = "sha256:ddb56002ff8c6265f55ec40c82eb0ef0dddec5127dd12d4fc5e7953453481f4b"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798790"
+
+[tools."aqua:kyverno/chainsaw"."platforms.macos-x64".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
+[tools."aqua:kyverno/chainsaw"."platforms.windows-x64"]
+checksum = "sha256:02e7d519c4e815c89dc8a4b14e2b70474d5301f514e721c0e5b3062f67294229"
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/chainsaw_windows_amd64.tar.gz"
+url_api = "https://api.github.com/repos/kyverno/chainsaw/releases/assets/413798771"
+
+[tools."aqua:kyverno/chainsaw"."platforms.windows-x64".provenance.slsa]
+url = "https://github.com/kyverno/chainsaw/releases/download/v0.2.15/multiple.intoto.jsonl"
+
 [[tools.cilium-cli]]
 version = "0.19.6"
 backend = "aqua:cilium/cilium-cli"
@@ -568,6 +628,45 @@ url_api = "https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/47811
 checksum = "sha256:71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5"
 url = "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478119643"
+
+[[tools.shellcheck]]
+version = "0.11.0"
+backend = "aqua:koalaman/shellcheck"
+
+[tools.shellcheck."platforms.linux-arm64"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools.shellcheck."platforms.linux-arm64-musl"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools.shellcheck."platforms.linux-x64"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools.shellcheck."platforms.linux-x64-musl"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools.shellcheck."platforms.macos-arm64"]
+checksum = "sha256:56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056932"
+
+[tools.shellcheck."platforms.macos-x64"]
+checksum = "sha256:3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056930"
+
+[tools.shellcheck."platforms.windows-x64"]
+checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
 
 [[tools.sops]]
 version = "3.13.2"
