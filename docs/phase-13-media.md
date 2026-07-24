@@ -2,11 +2,12 @@
 
 ## Status
 
-**Staged (`suspend: true`).** Three bjw-s app-template apps in the `media` namespace:
-**Prowlarr** (indexer manager), **Sonarr** (TV), **Radarr** (movies). Low-risk relative to
-Phase 12 — no VPN, no privileged containers, no secrets in Git (API keys and inter-app
-links are first-run settings persisted in each config PVC). Rolled out per app by the
-operator after `just ci`.
+**In progress.** **Prowlarr** passed its guarded live acceptance gate on 2026-07-24
+(Ready, rollout complete, HTTPRoute Accepted, DNS and `/ping`) and is now durable with
+`suspend: false`. **Sonarr** and **Radarr** remain staged with `suspend: true` for their
+separate operator rollouts. All three are low-risk relative to Phase 12 — no VPN, no
+privileged containers, and no secrets in Git; API keys and inter-app links are first-run
+settings persisted in each config PVC.
 
 ## Design (uniform across the three)
 
