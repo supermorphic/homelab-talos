@@ -2,12 +2,13 @@
 
 ## Status
 
-**In progress.** **Prowlarr** passed its guarded live acceptance gate on 2026-07-24
-(Ready, rollout complete, HTTPRoute Accepted, DNS and `/ping`) and is now durable with
-`suspend: false`. **Sonarr** and **Radarr** remain staged with `suspend: true` for their
-separate operator rollouts. All three are low-risk relative to Phase 12 — no VPN, no
-privileged containers, and no secrets in Git; API keys and inter-app links are first-run
-settings persisted in each config PVC.
+**In progress.** **Prowlarr** and **Sonarr** passed their guarded live acceptance gates
+on 2026-07-24 (Ready, rollout complete, HTTPRoute Accepted, DNS and `/ping`) and are
+durable with `suspend: false`. **Radarr** remains staged with `suspend: true` for its
+separate operator rollout. All three are low-risk relative to Phase 12 — no VPN, no
+privileged containers, and no plaintext secrets in Git. API keys and inter-app links are
+first-run settings persisted in each config PVC; any Homepage integration copy is stored
+only in an independently rotatable SOPS-encrypted Secret.
 
 ## Design (uniform across the three)
 
@@ -42,8 +43,8 @@ media-storage  (static RWX SMB PV + media-data PVC)
 
 ## Observability
 
-Gatus `Media`-group `/ping` probes are activation-aware: Prowlarr is monitored now;
-Sonarr and Radarr are added only when their `suspend` flags are durably set to `false`.
+Gatus `Media`-group `/ping` probes are activation-aware: Prowlarr and Sonarr are
+monitored now; Radarr is added only when its `suspend` flag is durably set to `false`.
 This proves DNS → gateway → app without creating false alarms for staged workloads that
 do not exist yet. Homepage shows a pod-status tile per app and a live Prowlarr widget.
 
@@ -57,7 +58,8 @@ key placeholder, while leaving the widget to display its complete default field 
 
 ## Rollout (operator, after merge — per app)
 
-Recommended order: **Prowlarr first**, then Sonarr and Radarr.
+Recommended order: **Prowlarr first**, then Sonarr and Radarr. Prowlarr and Sonarr are
+complete; **Radarr is the remaining rollout**.
 
 ```bash
 # from any clean branch/worktree after the rollout source is merged to main
@@ -89,12 +91,14 @@ Repeat with `sonarr` / `radarr` (confirm string `bootstrap:phase13:<app>`).
    ```
 
    Commit only the resulting `homepage-prowlarr.sops.yaml`; never the plaintext key.
-3. **Prowlarr** → add indexers → add Sonarr & Radarr as **Apps** (their URLs +
-   API keys) so indexers sync automatically.
-4. **Sonarr/Radarr** → **Download client** = qBittorrent at
-   `http://qbittorrent.media.svc.cluster.local:8080`; **root folders**
-   `/data/media/tv` and `/data/media/movies`.
-5. Confirm the qBittorrent save path is under `/data/downloads` so imports hardlink.
+3. In Sonarr, select **Forms (Login Page)** with authentication **Enabled**, then set
+   **root folder** `/data/media/tv` and **download client** qBittorrent at
+   `http://qbittorrent.media.svc.cluster.local:8080`.
+4. In Prowlarr, add indexers and add **Sonarr** as an App using
+   `http://sonarr.media.svc.cluster.local:8989` plus Sonarr's API key. Add Radarr after
+   its rollout using the equivalent in-cluster URL and API key.
+5. Confirm the qBittorrent save path is under `/data/downloads` so Sonarr imports
+   hardlink rather than copy.
 
 ## End-to-end gate (do not claim Phase 13 "done" until)
 
