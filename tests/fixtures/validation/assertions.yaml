@@ -1,0 +1,14 @@
+spec:
+  url: oci://example.invalid/chart
+  enabled: false
+  replicas: 0
+  empty: ""
+  nullValue: null
+  strategy: Recreate
+  dependsOn:
+    - name: cilium
+    - name: media-storage
+image:
+  tag: v1.2.3
+mutableImage:
+  tag: latest

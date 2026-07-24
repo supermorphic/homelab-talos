@@ -1,0 +1,24 @@
+controllers:
+  qbittorrent:
+    strategy: Recreate
+    initContainers:
+      gluetun:
+        image:
+          repository: ghcr.io/qdm12/gluetun
+          tag: v3.41.1
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+    containers:
+      app:
+        image:
+          repository: ghcr.io/home-operations/qbittorrent
+          tag: 5.2.3
+        securityContext:
+          capabilities:
+            drop: ["ALL"]
+persistence:
+  config:
+    accessMode: ReadWriteOnce
+  data:
+    existingClaim: media-data
