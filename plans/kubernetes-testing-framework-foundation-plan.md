@@ -59,6 +59,11 @@ scenarios described under "Required follow-up sequence."
    application-specific configuration snapshots may remain Bash/yq. Policies
    use pinned Conftest, OPA v1 syntax (`import rego.v1`), and positive and
    negative tests. Chainsaw remains the live-scenario engine.
+10. **Smoke read-only safety is machine-enforced.** Conftest rejects any smoke
+    scenario outside `flux-system`, any smoke scenario without
+    `spec.concurrent: false`, and mutating operations in try/catch/finally/cleanup.
+    The runner also requires a non-empty JUnit test count so selector drift cannot
+    produce a vacuous green live run.
 
 ## Architecture
 
@@ -447,8 +452,9 @@ Foundation is complete when:
    conditionally required schema validator from pinned configuration and lock
    data.
 5. `mise exec -- just test validate` validates every Chainsaw test/config file
-   through confirmed cluster-free `chainsaw lint` or the exported-schema
-   fallback, and ShellCheck passes.
+   through confirmed cluster-free `chainsaw lint`, enforces the Conftest smoke
+   safety policy, exercises result/confirmation regressions, and passes
+   ShellCheck.
 6. `mise exec -- just --list` exposes `just test validate|smoke|e2e|resilience`
    without redundant `test-test-*` naming.
 7. `mise exec -- just ci` passes with no kubeconfig, age key, cluster, or DNS
