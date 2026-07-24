@@ -1867,6 +1867,82 @@ arr-verify app: require-bash
     curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/ping" >/dev/null || { echo "$app /ping not reachable via the gateway." >&2; exit 1; }
     echo "$app live acceptance passed (Ready, rollout, HTTPRoute Accepted, DNS, /ping)."
 
+# Validate the Phase 14 Seerr source: files, wiring, no-secret ks, app-template chartRef,
+# config-only PVC (Longhorn RWO + Recreate + keep at /app/config), HTTPRoute, Gatus probe,
+# and the pinned app-template render. Cluster-independent — part of `just ci`.
+seerr-validate: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    base='kubernetes/apps/media/seerr'
+    ks="$base/ks.yaml"; hr="$base/app/helmrelease.yaml"; values="$base/app/values.yaml"; route="$base/app/httproute.yaml"
+    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-seerr-validate.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+
+    for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml" "$oci"; do
+      [[ -f "$f" ]] || { echo "Missing Phase 14 Seerr source: $f" >&2; exit 1; }
+    done
+    rg -qx '  - ./seerr/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
+      echo 'Refusing: ./seerr/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
+      exit 1
+    }
+
+    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
+    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
+    [[ "$(yq -r '.spec.decryption // "none"' "$ks")" == 'none' ]] || { echo 'seerr ks.yaml must not declare decryption (no secrets).' >&2; exit 1; }
+    [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,media' ]]
+    [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
+
+    [[ "$(yq -r '.controllers.seerr.strategy' "$values")" == 'Recreate' ]]
+    [[ "$(yq -r '.controllers.seerr.containers.app.image.repository' "$values")" == 'ghcr.io/seerr-team/seerr' ]]
+    tag="$(yq -r '.controllers.seerr.containers.app.image.tag' "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
+    [[ "$(yq -r '.controllers.seerr.containers.app.securityContext.capabilities.drop[]' "$values" | tr '\n' ' ')" == 'ALL ' ]]
+    [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOnce' ]]
+    [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
+    [[ "$(yq -r '.persistence.config.annotations."helm.sh/resource-policy"' "$values")" == 'keep' ]]
+    [[ "$(yq -r '.persistence.config.globalMounts[0].path' "$values")" == '/app/config' ]]
+    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'seerr is config-only; it must not mount media-data.' >&2; exit 1; }
+
+    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'seerr.lab.supermorphic.com' ]]
+    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
+    [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == 'seerr' ]]
+    [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '5055' ]]
+    rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'seerr has no Gatus endpoint.' >&2; exit 1; }
+
+    chart_url="$(yq -r '.spec.url' "$oci")"
+    chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
+    kustomize build "$base/app" >/dev/null
+    helm template seerr "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
+    [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'seerr' ]]
+    [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/render.yaml")" == 'Recreate' ]]
+
+    echo "Seerr $tag source (config-only, app-template, RWO/Recreate config at /app/config), HTTPRoute, Gatus probe, and pinned render passed validation."
+
+# Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
+# Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
+seerr-verify: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='kubeconfig'
+    ns='media'
+    gateway_ip='192.168.90.30'
+    host='seerr.lab.supermorphic.com'
+
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization seerr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'seerr Kustomization not Ready.' >&2; exit 1; }
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease seerr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'seerr HelmRelease not Ready.' >&2; exit 1; }
+    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/seerr --timeout=5m
+    accepted=false
+    for _ in {1..24}; do
+      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute seerr --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]] && { accepted=true; break; }
+      sleep 5
+    done
+    [[ "$accepted" == 'true' ]] || { echo 'seerr HTTPRoute was not Accepted.' >&2; exit 1; }
+    [[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
+    curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/api/v1/status" >/dev/null || { echo 'seerr /api/v1/status not reachable via the gateway.' >&2; exit 1; }
+    echo 'Phase 14 Seerr acceptance passed. First-run: connect Plex + Sonarr/Radarr (URLs + API keys) in the Seerr UI.'
+
 # Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.
