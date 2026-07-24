@@ -1583,6 +1583,14 @@ qbittorrent-validate: require-bash
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING_UP_COMMAND' "$values")" != 'null' ]]
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING_DOWN_COMMAND' "$values")" != 'null' ]]
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.startup.spec.httpGet.port' "$values")" == '8000' ]]
+    # Deliberately-slow k8s liveness fallback: restart gluetun only after a sustained
+    # stuck-VPN state (running but no public IP). Must stay slow so normal flaps (Gluetun
+    # self-heals in seconds) never trip it.
+    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.enabled' "$values")" == 'true' ]]
+    yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.exec.command[]' "$values" | grep -q 'publicip'
+    lft="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.failureThreshold' "$values")"
+    lps="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.periodSeconds' "$values")"
+    [[ "$lft" =~ ^[0-9]+$ && "$lps" =~ ^[0-9]+$ && $(( lft * lps )) -ge 180 ]] || { echo 'gluetun liveness must be deliberately slow (failureThreshold*periodSeconds >= 180s).' >&2; exit 1; }
     # Only Gluetun is privileged; qBittorrent drops all caps.
     [[ "$(yq -r '.controllers.qbittorrent.containers.app.securityContext.capabilities.drop[]' "$values" | tr '\n' ' ')" == 'ALL ' ]]
     # Device + auth config mounted; config on Longhorn RWO; shared /data.

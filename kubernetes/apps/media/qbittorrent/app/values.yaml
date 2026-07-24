@@ -66,7 +66,37 @@ controllers:
               # Up to 5 min for the tunnel + firewall to come up.
               periodSeconds: 5
               failureThreshold: 60
-          liveness: { enabled: false }
+          # Deliberately-slow k8s fallback for the case Gluetun's own HEALTH_RESTART_VPN
+          # can't self-heal in place: after a tunnel interruption Gluetun sometimes
+          # reconnects the data plane but its DoT healthcheck keeps cycling, so it stays
+          # status=running with an EMPTY public IP and never reacquires the forwarded
+          # port. This liveness restarts the (fresh) gluetun container only after ~5 min of
+          # that stuck state — long enough that a normal flap (Gluetun self-heals in
+          # seconds) never trips it. It reads the control-server apikey from the mounted
+          # config and treats a non-running status (e.g. an intentional stop) as healthy so
+          # it never fights a deliberate control-API action.
+          # NOTE: whether a *container* restart clears the DoT cycle (vs needing a fresh
+          # pod/netns) is unvalidated live — see docs/phase-12-media.md; the
+          # QbittorrentVpnDown critical alert remains the backstop.
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - >-
+                    key=$(sed -n 's/^apikey *= *"\(.*\)".*/\1/p' /gluetun/auth/config.toml);
+                    s=$(wget -qO- -T 8 --header "X-API-Key: $key" http://127.0.0.1:8000/v1/vpn/status 2>/dev/null);
+                    echo "$s" | grep -q '"status":"running"' || exit 0;
+                    ip=$(wget -qO- -T 8 --header "X-API-Key: $key" http://127.0.0.1:8000/v1/publicip/ip 2>/dev/null);
+                    echo "$ip" | grep -q '"public_ip":"[0-9]'
+              # Runs only after the startup probe succeeds. ~5 min of sustained
+              # running-but-no-public-IP before a container restart.
+              periodSeconds: 30
+              timeoutSeconds: 12
+              failureThreshold: 10
           readiness: { enabled: false }
     containers:
       app:
