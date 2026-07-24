@@ -77,13 +77,19 @@ git worktree add --detach ../homelab-talos-agent-3 origin/main
 the agent creates its own feature branch on its first task, so the slots never
 collide over a branch name.
 
-**You: open each slot in its own VS Code window** (`-n` forces a new window):
+List every worktree (primary checkout plus slots) with:
 
 ```bash
-code -n ../homelab-talos-agent-1
-code -n ../homelab-talos-agent-2
-code -n ../homelab-talos-agent-3
+git worktree list
 ```
+
+**You: open each slot in its own VS Code window.** For each slot:
+
+1. Open the Command Palette with `Cmd+Shift+P` (or select **File → New Window**).
+2. In the new window, select **File → Open Folder…**.
+3. Select the worktree directory, e.g. `homelab-talos-agent-1`.
+
+VS Code automatically recognizes the folder as a linked Git worktree.
 
 **The agent, per task, inside a slot:** creates a feature branch off `origin/main`
 (or resumes an existing one), makes changes, runs `just ci`, commits, pushes, and
