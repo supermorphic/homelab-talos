@@ -56,6 +56,64 @@ Because merging to `main` deploys via Flux, the PR plus a green `ci` check is th
 review gate before anything reaches the cluster; branch protection makes that gate
 mandatory rather than conventional.
 
+### Parallel agent worktrees
+
+To run several agents at once, give each one a **reusable worktree slot** — a
+persistent linked worktree that lives beside this repo. You (the operator) own the
+worktree lifecycle; the agent only manages branches, commits, and PRs *inside* the
+slot. The agent-side rules are in [`AGENTS.md`](AGENTS.md) → "Git worktrees".
+
+**You: create the slots once.** From the primary checkout:
+
+```bash
+cd /Users/ksiggins/Development/homelab-talos
+git fetch origin
+git worktree add --detach ../homelab-talos-agent-1 origin/main
+git worktree add --detach ../homelab-talos-agent-2 origin/main
+git worktree add --detach ../homelab-talos-agent-3 origin/main
+```
+
+`--detach` starts each slot on a detached `origin/main` with no branch checked out —
+the agent creates its own feature branch on its first task, so the slots never
+collide over a branch name.
+
+List every worktree (primary checkout plus slots) with:
+
+```bash
+git worktree list
+```
+
+**You: open each slot in its own VS Code window.** For each slot:
+
+1. Open the Command Palette with `Cmd+Shift+P` (or select **File → New Window**).
+2. In the new window, select **File → Open Folder…**.
+3. Select the worktree directory, e.g. `homelab-talos-agent-1`.
+
+VS Code automatically recognizes the folder as a linked Git worktree.
+
+**The agent, per task, inside a slot:** creates a feature branch off `origin/main`
+(or resumes an existing one), makes changes, runs `just ci`, commits, pushes, and
+opens the PR. It never touches the worktree itself, never switches the slot to
+`main`, and never self-merges.
+
+**You: after review, squash-merge the PR.** Then either:
+
+- **Start fresh** — tell the agent to begin a new task; it deletes the merged branch
+  and branches again off `origin/main`. The worktree and its VS Code window stay put.
+- **Continue on the same branch** — e.g. a follow-up before merge, or more work after
+  merge; the agent stays on the branch. No worktree change either way.
+
+**You: retire a slot when you're done with it.** Close its VS Code window, then
+remove the worktree from the primary checkout:
+
+```bash
+git worktree remove ../homelab-talos-agent-1        # add --force if it refuses on leftover files
+git worktree prune                                  # tidy stale metadata if needed
+```
+
+Deleting a slot's directory by hand leaves dangling metadata — always use
+`git worktree remove`.
+
 ## Physical KVM Note
 
 When connecting the KVM's HDMI and USB cables, `nuc1` and `nuc3` can use their
