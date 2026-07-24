@@ -23,7 +23,8 @@ current stable **`v3.0.1`**.
 - `dependsOn: [media, internal-gateway]` (needs the namespace/OCIRepository + gateway; the
   Plex/*arr links are runtime API calls, not deploy-order deps).
 - HTTPRoute `seerr.lab.supermorphic.com` (internal gateway, wildcard TLS) + a
-  `gethomepage.dev` tile. Gatus `Media`-group probe on `/api/v1/status`.
+  `gethomepage.dev` tile. Its Gatus `Media`-group probe on `/api/v1/status` is added
+  when Seerr is activated, so the staged workload does not generate a false alarm.
 - **UID caveat:** the seerr-team image's runtime user is unverified here; `fsGroup: 568`
   chowns the fresh config PVC, but confirm `/app/config` is writable at rollout and adjust
   `runAsUser` if the image needs a different user.
@@ -32,7 +33,7 @@ current stable **`v3.0.1`**.
 
 `just ci` includes `seerr-validate` (files, wiring, no-secret ks, dependency graph,
 app-template chartRef, config PVC RWO+Recreate+keep at `/app/config`, no `media-data`,
-HTTPRoute → `seerr:5055`, a matching Gatus probe, pinned render). Operator-only:
+HTTPRoute → `seerr:5055`, activation-aware Gatus probe, pinned render). Operator-only:
 `seerr-verify`, `bootstrap seerr`.
 
 ## Rollout (operator, after merge)
@@ -54,10 +55,12 @@ hardlink import → Plex.
 ## Observability wrap-up (Phase 14 scope)
 
 Already in place across the media stack:
-- **Gatus** `Media` group: `plex`, `qbittorrent-vpn` (VPN health), `prowlarr`, `sonarr`,
-  `radarr`, `seerr`.
+- **Gatus** `Media` group: `plex`, `qbittorrent-vpn` (VPN health), and each activated
+  app. Prowlarr is active; Sonarr, Radarr, and Seerr are added at their activation
+  commits.
 - **Prometheus/Alertmanager:** `QbittorrentVpnDown` (critical) — the VPN kill-switch alert.
-- **Homepage:** service tiles for every media app.
+- **Homepage:** service tiles for every media app and a secret-backed Prowlarr activity
+  widget.
 
 Remaining/optional follow-ups (not blocking Seerr):
 - A media/VPN **Grafana dashboard** (the Gatus `gatus_results_endpoint_success` series is

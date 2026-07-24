@@ -14,6 +14,11 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "prowlarr.svg"
     gethomepage.dev/href: "https://prowlarr.lab.supermorphic.com"
+    # Live Prowlarr widget. The API key is injected into Homepage from its
+    # per-service SOPS Secret; it is never stored in this annotation.
+    gethomepage.dev/widget.type: "prowlarr"
+    gethomepage.dev/widget.url: "http://prowlarr.media.svc.cluster.local:9696"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_PROWLARR_API_KEY}}"
 spec:
   hostnames:
     - prowlarr.lab.supermorphic.com

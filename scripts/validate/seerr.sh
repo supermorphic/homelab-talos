@@ -35,7 +35,11 @@ tag="$(yq -r '.controllers.seerr.containers.app.image.tag' "$values")"; [[ -n "$
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == 'seerr' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '5055' ]]
-rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'seerr has no Gatus endpoint.' >&2; exit 1; }
+if [[ "$suspend_state" == 'false' ]]; then
+  rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'Active seerr has no Gatus endpoint.' >&2; exit 1; }
+else
+  ! rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'Suspended seerr must not create a failing Gatus endpoint.' >&2; exit 1; }
+fi
 
 chart_url="$(yq -r '.spec.url' "$oci")"
 chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
@@ -44,4 +48,4 @@ helm template seerr "$chart_url" --version "$chart_tag" --namespace media --valu
 [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'seerr' ]]
 [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/render.yaml")" == 'Recreate' ]]
 
-echo "Seerr $tag source (config-only, app-template, RWO/Recreate config at /app/config), HTTPRoute, Gatus probe, and pinned render passed validation."
+echo "Seerr $tag source (config-only, app-template, RWO/Recreate config at /app/config), HTTPRoute, activation-aware Gatus probe, and pinned render passed validation."

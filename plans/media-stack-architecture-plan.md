@@ -18,7 +18,7 @@ requirements + design + status.
 |---|---|---|
 | 11 | Shared SMB `/data` + Plex (single replica, reschedule-verified, QuickSync) | **Complete** (2026-07-23) |
 | 12 | VPN download client — qBittorrent + Gluetun (ProtonVPN) | **Complete** (2026-07-24) |
-| 13 | Automation — Prowlarr, Sonarr, Radarr | Planned |
+| 13 | Automation — Prowlarr, Sonarr, Radarr | **In progress** — Prowlarr live; Sonarr/Radarr staged (2026-07-24) |
 | 14 | Requests + observability — **Seerr**, Gatus/Homepage/dashboards | Planned |
 
 ## Objective & boundaries
@@ -112,8 +112,8 @@ kubernetes/apps/media/
   No host networking/hostPort/runtime socket; dedicated ServiceAccounts, automount off
   where unused. Gluetun control API never exposed via HTTPRoute/LB.
 - **Secrets:** `smb-credentials` (SMB), `protonvpn` (WireGuard key + Gluetun control
-  apikey), `homepage-grafana` + `homepage-plex` (split per-service widget creds, rotate
-  independently) — SOPS, via guarded recipes.
+  apikey), `homepage-grafana` + `homepage-plex` + `homepage-prowlarr` (split
+  per-service widget creds, rotate independently) — SOPS, via guarded recipes.
 
 ## VPN kill switch (Phase 12) — the hard requirement
 

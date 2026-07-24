@@ -48,8 +48,18 @@ for app in prowlarr sonarr radarr; do
   [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
   [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == "$app" ]]
 
-  # A Gatus /ping health probe must exist for this app.
-  rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "$app has no Gatus endpoint." >&2; exit 1; }
+  # Gatus must probe active apps, but not staged/suspended apps that do not exist yet.
+  if [[ "$suspend_state" == 'false' ]]; then
+    rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "Active $app has no Gatus endpoint." >&2; exit 1; }
+  else
+    ! rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "Suspended $app must not create a failing Gatus endpoint." >&2; exit 1; }
+  fi
+
+  if [[ "$app" == 'prowlarr' ]]; then
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'prowlarr' ]]
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://prowlarr.media.svc.cluster.local:9696' ]]
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_PROWLARR_API_KEY}}' ]]
+  fi
 
   kustomize build "$base/app" >/dev/null
   helm template "$app" "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/$app.yaml"
@@ -58,4 +68,4 @@ for app in prowlarr sonarr radarr; do
   echo "  $app $tag OK"
 done
 
-echo 'Phase 13 *arr source (Prowlarr, Sonarr, Radarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes, Gatus probes, and pinned renders passed validation.'
+echo 'Phase 13 *arr source (Prowlarr, Sonarr, Radarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes/Homepage widget, activation-aware Gatus probes, and pinned renders passed validation.'

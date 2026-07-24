@@ -49,6 +49,14 @@ spec:
                   name: homepage-plex
                   key: token
                   optional: true
+            # Prowlarr widget API key (optional: widget blank until
+            # `just repo homepage-prowlarr-secrets` creates the encrypted Secret).
+            - name: HOMEPAGE_VAR_PROWLARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-prowlarr
+                  key: apiKey
+                  optional: true
           resources:
             requests:
               cpu: 25m
