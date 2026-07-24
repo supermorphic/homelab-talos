@@ -277,7 +277,7 @@ available for focused developer validation.
 | `just ci` | Run the cluster-independent, secret-free validation gate (lint + verify + kubeconform + all `*-validate`) | — | Local + GitHub Actions; the PR gate |
 | `just test validate` | Lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
-| `just test smoke diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
+| `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
 | `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |
 | `just test e2e <target>` | Run an allowlisted state-changing functional scenario under a single-run lock | `.kube/config` | Fails closed until a target is registered |
 | `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and locking guards | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |

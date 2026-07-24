@@ -41,6 +41,7 @@ done < <(find scripts/test -type f -name '*.sh' -print | LC_ALL=C sort)
 
 scripts/test/safety/require-chaos-confirmation-test.sh
 scripts/test/lib/results-test.sh
+scripts/test/run-chainsaw-dispatch-test.sh
 
 printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d.\n' \
   "$test_count" "$yaml_count" "$script_count"

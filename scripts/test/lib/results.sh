@@ -6,9 +6,10 @@ write_environment() {
   local finished_at="$3"
   local tier="$4"
   local target="$5"
-  local namespace="$6"
-  local cluster_version="$7"
-  local confirmation_type="$8"
+  local scenario="$6"
+  local namespace="$7"
+  local cluster_version="$8"
+  local confirmation_type="$9"
   local git_revision git_dirty chainsaw_version kubectl_version
 
   git_revision="$(git rev-parse HEAD)"
@@ -26,6 +27,7 @@ write_environment() {
   CLUSTER_VERSION="$cluster_version" \
   TEST_TIER="$tier" \
   TEST_TARGET="$target" \
+  TEST_SCENARIO="$scenario" \
   TEST_NAMESPACE="$namespace" \
   CONFIRMATION_TYPE="$confirmation_type" \
     yq --null-input --output-format json '{
@@ -46,10 +48,11 @@ write_environment() {
         "node": null,
         "podUid": null
       },
-      "test": {
+      "test": ({
         "tier": strenv(TEST_TIER),
-        "target": strenv(TEST_TARGET)
-      },
+        "target": strenv(TEST_TARGET),
+        "scenario": strenv(TEST_SCENARIO)
+      } | del(.scenario | select(. == ""))),
       "confirmationTokenType": strenv(CONFIRMATION_TYPE)
     }' >"$output_dir/environment.json"
 }

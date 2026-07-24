@@ -65,6 +65,11 @@ scenarios described under "Required follow-up sequence."
     try/catch/finally/cleanup, test-level catch, and configuration-level
     `spec.error.catch`. The runner also requires a non-empty JUnit test count so
     selector drift cannot produce a vacuous green live run.
+11. **Live test identity uses fixed axes.** Public commands use
+    `just test <tier> <target> [scenario]`; every live target is explicit, the
+    optional scenario position is smoke-only, and target/scenario names are not
+    aliases. `all` remains reserved until it genuinely dispatches every
+    registered target. Result metadata records the same identity.
 
 ## Architecture
 
@@ -267,10 +272,11 @@ hierarchy and eliminates brittle relative sourcing such as
 
 ### Safe dispatch
 
-`scripts/test/run-chainsaw.sh` accepts an explicit tier and target and:
+`scripts/test/run-chainsaw.sh` accepts an explicit tier and target, plus an
+optional registered scenario for smoke, and:
 
-- Allows only registered targets; no arbitrary path or shell argument is
-  forwarded.
+- Allows only registered targets and scenarios; target and scenario names are
+  not aliases, and no arbitrary path or shell argument is forwarded.
 - Verifies `kubeconfig` exists for live tiers.
 - Creates an atomic single-run lock for state-mutating E2E/resilience tests and
   refuses concurrent execution.
@@ -335,8 +341,9 @@ non-deterministic.
 - Chainsaw runs once with `JUNIT-STEP` reporting and the wrapper normalizes its
   emitted report name to `junit.xml`.
 - `environment.json` records start/end time, Git revision, dirty boolean, pinned
-  tool versions, cluster versions when available, tier, target, namespace, node,
-  Pod UID, and confirmation token *type* only.
+  tool versions, cluster versions when available, tier, target, an explicitly
+  selected scenario when present, namespace, node, Pod UID, and confirmation
+  token *type* only.
 - `summary.json` records the primary status plus explicit safety, infrastructure,
   assertion, external-dependency, cleanup, and recovery fields.
 - A public-IP provider outage is an external-dependency or infrastructure
@@ -352,16 +359,17 @@ all failures return nonzero.
 
 ```text
 validate                       # offline schema + shell validation
-smoke target="all"             # operator-only, read-only
-e2e target="all"               # operator-only, state-changing functional tests
+smoke target scenario=""       # operator-only, read-only
+e2e target                     # operator-only, state-changing functional tests
 resilience target              # operator-only, disruptive and token-guarded
-diagnostics target="media"     # operator-only, read-only collection
+diagnostics target             # operator-only, read-only collection
 ```
 
 Operator examples:
 
 ```text
 mise exec -- just test smoke cluster
+mise exec -- just test smoke cluster diagnostics-self-test
 mise exec -- just test e2e media
 mise exec -- just test resilience qbittorrent-vpn-disconnect
 mise exec -- just test diagnostics media
@@ -462,7 +470,8 @@ Foundation is complete when:
    dependency beyond existing public chart/schema downloads.
 8. An operator run of `mise exec -- just test smoke cluster` performs no
    Kubernetes mutation, passes against `flux-system`, and writes populated JUnit,
-   summary, environment, and diagnostic artifacts.
+   summary, environment, and diagnostic artifacts; an optional third positional
+   selects a registered scenario without changing the target axis.
 9. A deliberately failing proof assertion demonstrates diagnostic capture and
    accurate primary-versus-diagnostic status without exposing secrets.
 10. `.test-results/` is ignored, concurrent state-changing runs are refused, and

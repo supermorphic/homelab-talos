@@ -5,13 +5,14 @@ source scripts/lib/common.sh
 source scripts/test/lib/results.sh
 require_bash
 
-[[ "$#" -eq 2 ]] || {
-  echo 'Usage: run-chainsaw.sh <smoke|e2e|resilience|diagnostics> <registered-target>' >&2
+[[ "$#" -ge 2 && "$#" -le 3 ]] || {
+  echo 'Usage: run-chainsaw.sh <smoke|e2e|resilience|diagnostics> <registered-target> [registered-scenario]' >&2
   exit 2
 }
 
 tier="$1"
 target="$2"
+scenario="${3:-}"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
@@ -37,13 +38,25 @@ acquire_state_lock() {
 case "$tier" in
   smoke)
     case "$target" in
-      all | cluster | flux-ready)
-        test_dir='tests/chainsaw/smoke/cluster'
-        selector='homelab-talos/suite=default'
-        ;;
-      diagnostics-self-test)
-        test_dir='tests/chainsaw/smoke/cluster'
-        selector='homelab-talos/suite=diagnostics-self-test'
+      cluster)
+        case "$scenario" in
+          '')
+            test_dir='tests/chainsaw/smoke/cluster'
+            selector='homelab-talos/suite=default'
+            ;;
+          flux-ready)
+            test_dir='tests/chainsaw/smoke/cluster/flux-ready'
+            selector='homelab-talos/suite=default'
+            ;;
+          diagnostics-self-test)
+            test_dir='tests/chainsaw/smoke/cluster/diagnostics-self-test'
+            selector='homelab-talos/suite=diagnostics-self-test'
+            ;;
+          *)
+            echo "Unknown smoke scenario for target ${target}: $scenario" >&2
+            exit 2
+            ;;
+        esac
         ;;
       *)
         echo "Unknown smoke target: $target" >&2
@@ -52,6 +65,10 @@ case "$tier" in
     esac
     ;;
   diagnostics)
+    [[ -z "$scenario" ]] || {
+      echo "The diagnostics tier does not accept a scenario: $scenario" >&2
+      exit 2
+    }
     [[ "$target" == 'cluster' ]] || {
       echo "Unknown diagnostics target: $target" >&2
       exit 2
@@ -59,11 +76,19 @@ case "$tier" in
     diagnostics_only=true
     ;;
   e2e)
+    [[ -z "$scenario" ]] || {
+      echo "The E2E tier does not accept a scenario: $scenario" >&2
+      exit 2
+    }
     acquire_state_lock
     echo 'No E2E targets are registered yet.' >&2
     exit 2
     ;;
   resilience)
+    [[ -z "$scenario" ]] || {
+      echo "The resilience tier does not accept a scenario: $scenario" >&2
+      exit 2
+    }
     scripts/test/safety/require-chaos-confirmation.sh "$target"
     confirmation_type='CLUSTER_CHAOS_CONFIRM'
     acquire_state_lock
@@ -106,7 +131,7 @@ if [[ "$diagnostics_only" == true ]]; then
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   set +e
   write_environment "$run_dir" "$started_at" "$finished_at" "$tier" "$target" \
-    "$namespace" "$cluster_version" "$confirmation_type"
+    "$scenario" "$namespace" "$cluster_version" "$confirmation_type"
   environment_exit_code="$?"
   set -e
   if [[ "$environment_exit_code" -ne 0 && "$primary_exit_code" -eq 0 ]]; then
@@ -173,7 +198,7 @@ diagnostics_status='passed'
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set +e
 write_environment "$run_dir" "$started_at" "$finished_at" "$tier" "$target" \
-  "$namespace" "$cluster_version" "$confirmation_type"
+  "$scenario" "$namespace" "$cluster_version" "$confirmation_type"
 environment_exit_code="$?"
 set -e
 if [[ "$environment_exit_code" -ne 0 && "$primary_exit_code" -eq 0 ]]; then

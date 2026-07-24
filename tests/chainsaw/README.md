@@ -9,4 +9,6 @@ Scenarios are organized by operational risk:
 The first read-only `smoke/cluster/flux-ready` scenario proves the guarded runner
 and evidence pipeline. `diagnostics-self-test` is an opt-in, intentionally
 failing read-only assertion used to verify catch/fallback diagnostics and primary
-failure preservation.
+failure preservation. Run the target normally with `just test smoke cluster`;
+select the self-test explicitly with
+`just test smoke cluster diagnostics-self-test`.
