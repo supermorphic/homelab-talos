@@ -24,9 +24,10 @@ boundary** — Flux continuously reconciles `main` onto the live cluster.
 
 ## Git worktrees
 
-Development may happen in a dedicated Git worktree (one per feature branch) to
-allow parallel work. **First determine whether the current checkout is a
-worktree**, then apply the rules below only if it is.
+Development may happen in a **reusable agent worktree slot** — a persistent linked
+worktree the operator provisions once, in which the agent works one feature branch
+at a time. **First determine whether the current checkout is a worktree**, then
+apply the rules below only if it is.
 
 - Detect by comparing:
 
@@ -35,23 +36,43 @@ worktree**, then apply the rules below only if it is.
   git rev-parse --git-common-dir   # the shared repo .git
   ```
 
-  If the two differ, this is a **linked worktree** — abide by these rules. If they
-  are equal, this is the primary checkout — the normal `Required workflow` applies
-  (which already forbids committing/pushing to `main`).
+  If the two differ, this is a **linked worktree slot** — abide by these rules. If
+  they are equal, this is the primary checkout — the normal `Required workflow`
+  applies (which already forbids committing/pushing to `main`).
 
-When in a worktree:
+The operator owns worktree lifecycle. The agent **never** runs
+`git worktree add|remove|move|prune|lock|unlock|repair`, and never modifies the
+primary checkout or any other worktree slot.
 
-- Stay on the worktree's currently checked-out feature branch. Confirm it with
-  `git branch --show-current` before making changes and again before committing or
-  pushing.
-- Do not switch, checkout, create, rename, or delete branches unless explicitly
-  instructed. Never switch this worktree to `main`.
-- Do not create, move, remove, prune, lock, unlock, or repair worktrees, and do not
-  modify the primary checkout or any other worktree.
-- Push only the current feature branch; open pull requests against `main` and never
+**Starting a task in a slot** — bring it onto the assigned branch off fresh remote
+state:
+
+1. Confirm the tree is clean with `git status --short`. If it is not clean, or the
+   slot is still parked on a prior feature branch whose PR has not merged, stop and
+   hand back to the operator — do not switch away from unreleased work.
+2. Refresh remote state with `git fetch origin`.
+3. Move onto the assigned branch off `origin/main`:
+   - new branch: `git switch -c <assigned-branch> origin/main`
+   - resuming an existing branch (e.g. addressing PR review):
+     `git switch <assigned-branch>` — do not `reset --hard` onto `origin/main`
+     without explicit approval.
+4. Confirm the active branch with `git branch --show-current` before modifying files.
+
+**During a task:**
+
+- Stay on the assigned feature branch; confirm it again with
+  `git branch --show-current` before committing or pushing. Never switch the slot to
+  local `main`.
+- Do not create additional branches unless the task explicitly requires it, and do
+  not rename or delete branches.
+- Push only the assigned feature branch; open pull requests against `main` and never
   merge directly into it.
 - Do not use `git reset --hard`, `git clean -fd`, or force-push without explicit
   approval.
+
+**After a task:** do not switch branches or delete the feature branch until its pull
+request has merged or the operator explicitly releases the slot. Before releasing,
+confirm there are no staged, unstaged, or untracked files (`git status --short`).
 
 ## Interface: `mise` + `just`
 
