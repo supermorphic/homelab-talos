@@ -164,7 +164,7 @@ available for focused developer validation.
 | `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Enabled in Phase 3; destructive after confirmation |
 | `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
-| `just talos kubeconfig` | Fetch the ignored workstation kubeconfig from Talos into repo-root `./kubeconfig` (no etcd/NotReady gate) | — | Day-2; the routine way to (re)fetch a kubeconfig after Cilium |
+| `just talos kubeconfig` | Atomically refresh the ignored workstation kubeconfig at `.kube/config` through Talos (no etcd/NotReady gate) | — | Day-2; the routine way to (re)fetch a kubeconfig after Cilium |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Enabled in Phase 4; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Enabled in Phase 4; destructive after confirmation |
@@ -347,9 +347,15 @@ the current shell. Do not create the key file inside this repository.
 For a short session:
 
 ```bash
-export SOPS_AGE_KEY='AGE-SECRET-KEY-...'
+printf 'SOPS age private key: '
+read -rs SOPS_AGE_KEY
+printf '\n'
+export SOPS_AGE_KEY
 just repo secrets
 ```
+
+`SOPS_AGE_KEY` must be exported: an unexported shell variable is not visible to
+`mise exec`, `just`, or `sops`. Unset it when the operation is complete.
 
 For repeated operations, use an owner-readable file outside the repository:
 
@@ -392,13 +398,28 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 ## Repository Boundaries
 
 - `talos/` holds declarative Talhelper inputs beginning in Phase 2.
+- `.talos/config` holds the ignored Talos API client credential generated from the
+  encrypted Talhelper identity.
+- `.kube/config` holds the ignored Kubernetes admin credential retrieved through
+  the Talos machine API.
 - `.just/` holds repository and cross-domain bootstrap command modules.
 - `talos/mod.just` and `kubernetes/mod.just` colocate domain commands with their
   declarative sources; the root `.justfile` only declares namespaces.
-- `clusterconfig/` holds ignored rendered Talos machine configs.
+- `clusterconfig/` holds only the three ignored rendered Talos machine configs.
 - `kubernetes/` holds Flux sources beginning in Phase 5.
 - `docs/` holds inventory, recovery, secret handling, and phase evidence.
 - `plans/` holds architectural decisions and phased acceptance gates.
+
+The repo-local `.talos/config` and `.kube/config` paths intentionally do not rely
+on the CLIs' `$HOME` defaults or ambient current contexts. Guarded recipes always
+pass the selected credential path explicitly.
+
+A linked worktree has its own ignored credential directories. Initialize
+`.talos/config` either by loading the repository SOPS identity and running
+`just talos generate`, or by installing a trusted talosconfig from another
+operator checkout with directory mode `0700` and file mode `0600`. Then run
+`just talos kubeconfig` to fetch and validate that worktree's `.kube/config`;
+do not copy credentials into Git.
 
 Generated configs, kubeconfigs, talosconfigs, decrypted secrets, Helm output,
 support bundles, and age private identities must remain outside Git. The private

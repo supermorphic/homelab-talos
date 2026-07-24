@@ -53,8 +53,9 @@ The schematic contains `intel-ucode`, `i915`, `iscsi-tools`, and
 ## Verification
 
 - `talhelper validate talconfig talos/talconfig.yaml` passed.
-- Talhelper rendered `nuc1.yaml`, `nuc2.yaml`, `nuc3.yaml`, and `talosconfig` into
-  the ignored `clusterconfig/` directory.
+- Talhelper rendered `nuc1.yaml`, `nuc2.yaml`, and `nuc3.yaml` into the ignored
+  `clusterconfig/` directory and installed the generated Talos client credential
+  at ignored `.talos/config`.
 - `talosctl validate --mode metal --strict` passed for all three machine configs.
 - `just talos validate` asserted every locked Phase 2 machine, network, image,
   CNI, encryption, and volume value in the rendered output.
@@ -63,6 +64,6 @@ The schematic contains `intel-ucode`, `i915`, `iscsi-tools`, and
 - The hostname documents are the only per-node machine-policy difference; DHCP
   reservations remain the source of each node's address.
 - The encrypted identity is trackable, while generated machine configs and
-  talosconfig remain ignored.
+  `.talos/config` remain ignored.
 - The repository secret scans passed without exposing or tracking identity
   plaintext.

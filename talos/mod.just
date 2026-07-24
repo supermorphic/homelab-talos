@@ -1,6 +1,9 @@
 set default-list
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+talosconfig := "../.talos/config"
+kubeconfig := "../.kube/config"
+
 # Validate the trackable Talhelper inputs without decrypting cluster identity.
 source-validate:
     #!/usr/bin/env bash
@@ -17,6 +20,12 @@ source-validate:
 generate: source-validate
     #!/usr/bin/env bash
     set -euo pipefail
+    umask 077
+
+    talosconfig='{{talosconfig}}'
+    generated_talosconfig='../clusterconfig/talosconfig'
+    expected_endpoints=$'192.168.90.10\n192.168.90.11\n192.168.90.12'
+
     just repo secrets
     rm -rf ../clusterconfig
     talhelper genconfig \
@@ -24,16 +33,43 @@ generate: source-validate
       --secret-file talsecret.sops.yaml \
       --out-dir ../clusterconfig \
       --no-gitignore
+
+    actual_endpoints="$(yq -r '.context as $context | .contexts[$context].endpoints[]' "$generated_talosconfig" | sort)"
+    [[ "$actual_endpoints" == "$expected_endpoints" ]] || {
+      echo 'Refusing generated talosconfig: expected exactly the three NUC endpoints.' >&2
+      exit 1
+    }
+
+    talosconfig_dir="${talosconfig%/*}"
+    install -d -m 700 "$talosconfig_dir"
+    staged_talosconfig="$(mktemp "$talosconfig_dir/config.XXXXXX")"
+    trap 'rm -f -- "$staged_talosconfig"' EXIT
+    install -m 600 "$generated_talosconfig" "$staged_talosconfig"
+    mv -f -- "$staged_talosconfig" "$talosconfig"
+    trap - EXIT
+    rm -- "$generated_talosconfig"
+
     just talos validate
 
 # Validate rendered machine configs and the Phase 2 acceptance settings.
 validate: source-validate
     #!/usr/bin/env bash
     set -euo pipefail
-    expected_files=$'../clusterconfig/nuc1.yaml\n../clusterconfig/nuc2.yaml\n../clusterconfig/nuc3.yaml\n../clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
+    expected_files=$'../clusterconfig/nuc1.yaml\n../clusterconfig/nuc2.yaml\n../clusterconfig/nuc3.yaml'
     actual_files="$(find ../clusterconfig -maxdepth 1 -type f | sort)"
     [[ "$actual_files" == "$expected_files" ]] || {
-      echo "Render exactly nuc1.yaml, nuc2.yaml, nuc3.yaml, and talosconfig first." >&2
+      echo "Render exactly nuc1.yaml, nuc2.yaml, and nuc3.yaml first." >&2
+      exit 1
+    }
+    [[ -f "$talosconfig" ]] || {
+      echo "Missing $talosconfig; run just talos generate first." >&2
+      exit 1
+    }
+    expected_endpoints=$'192.168.90.10\n192.168.90.11\n192.168.90.12'
+    actual_endpoints="$(yq -r '.context as $context | .contexts[$context].endpoints[]' "$talosconfig" | sort)"
+    [[ "$actual_endpoints" == "$expected_endpoints" ]] || {
+      echo 'Refusing talosconfig: expected exactly the three NUC endpoints.' >&2
       exit 1
     }
 
@@ -203,7 +239,7 @@ apply-live node: validate
         ;;
     esac
 
-    talosconfig='../clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
     config="../clusterconfig/${node}.yaml"
     [[ -f "$talosconfig" ]] || {
       echo "Missing $talosconfig; run just talos generate first." >&2
@@ -264,9 +300,9 @@ volume-status:
     set -euo pipefail
     just repo require-bash
 
-    talosconfig='../clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
     [[ -f "$talosconfig" ]] || {
-      echo 'Missing ../clusterconfig/talosconfig; run just talos generate.' >&2
+      echo "Missing $talosconfig; run just talos generate." >&2
       exit 1
     }
 
@@ -307,36 +343,45 @@ volume-status:
       echo 'One or more node volumes are unhealthy.' >&2
       exit 1
     }
+    echo 'All node volumes healthy: longhorn ready and mounted at /var/mnt/longhorn (xfs, unencrypted); STATE and EPHEMERAL ready and luks2.'
 
 # Asks Talos for the admin kubeconfig over the machine API using the talosconfig,
 # with no etcd/NotReady gate; the day-two replacement for `just bootstrap verify`
 # once Cilium is installed and the nodes are Ready. Requires `just talos generate`.
-# Fetch the ignored workstation kubeconfig from Talos into repo-root ./kubeconfig.
+# Fetch the ignored workstation kubeconfig from Talos into repo-local .kube/config.
 kubeconfig:
     #!/usr/bin/env bash
     set -euo pipefail
     just repo require-bash
 
-    talosconfig='../clusterconfig/talosconfig'
-    kubeconfig='../kubeconfig'
+    talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     [[ -f "$talosconfig" ]] || {
-      echo "Missing $talosconfig; run just talos generate first." >&2
+      echo "Missing $talosconfig." >&2
+      echo 'Load the repository SOPS identity and run just talos generate, or install a trusted existing talosconfig at that path with mode 0600.' >&2
       exit 1
     }
 
-    talosctl kubeconfig "$kubeconfig" \
+    kubeconfig_dir="${kubeconfig%/*}"
+    install -d -m 700 "$kubeconfig_dir"
+    staged_kubeconfig="$(mktemp "$kubeconfig_dir/config.XXXXXX")"
+    trap 'rm -f -- "$staged_kubeconfig"' EXIT
+
+    talosctl kubeconfig "$staged_kubeconfig" \
       --nodes 192.168.90.10 \
       --endpoints "$nodes_csv" \
       --talosconfig "$talosconfig" \
       --merge=false \
       --force >/dev/null
-    chmod 600 "$kubeconfig"
+    chmod 600 "$staged_kubeconfig"
 
-    api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
+    api_server="$(kubectl --kubeconfig "$staged_kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
     [[ "$api_server" == 'https://192.168.90.20:6443' ]] || {
       echo "Refusing kubeconfig: server $api_server is not the expected API VIP https://192.168.90.20:6443." >&2
       exit 1
     }
+
+    mv -f -- "$staged_kubeconfig" "$kubeconfig"
+    trap - EXIT
     echo "Wrote $kubeconfig targeting $api_server."
-    echo 'All node volumes healthy: longhorn ready and mounted at /var/mnt/longhorn (xfs, unencrypted); STATE and EPHEMERAL ready and luks2.'

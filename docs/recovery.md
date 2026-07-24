@@ -47,9 +47,9 @@ mise exec -- just talos generate
 ```
 
 The recipe verifies the age identity, renders `clusterconfig/nuc1.yaml` through
-`nuc3.yaml` and `clusterconfig/talosconfig`, then performs strict metal-mode and
-policy validation. These outputs and the later kubeconfig remain ignored. Never
-recover them by committing plaintext copies.
+`nuc3.yaml`, installs the generated Talos client credential at `.talos/config`,
+then performs strict metal-mode and policy validation. These outputs and the later
+`.kube/config` remain ignored. Never recover them by committing plaintext copies.
 
 Phase-specific rebuild and recovery evidence is maintained under `docs/`.
 

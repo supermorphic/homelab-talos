@@ -2,12 +2,15 @@ set default-list
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := ".."
 
+talosconfig := ".talos/config"
+kubeconfig := ".kube/config"
+
 # Verify all Phase 4 prerequisites and refuse if etcd is already initialized.
 preflight:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    talosconfig='clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     expected_endpoints=$'192.168.90.10\n192.168.90.11\n192.168.90.12'
     actual_endpoints="$(yq -r '.context as $context | .contexts[$context].endpoints[]' "$talosconfig" | sort)"
@@ -110,14 +113,14 @@ talos: preflight
     talosctl bootstrap \
       --nodes 192.168.90.10 \
       --endpoints 192.168.90.10 \
-      --talosconfig clusterconfig/talosconfig
+      --talosconfig "{{talosconfig}}"
 
 # Print read-only etcd membership, service, discovery, and recent-log status.
 status node='all':
     #!/usr/bin/env bash
     set -euo pipefail
 
-    talosconfig='clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     requested_node='{{node}}'
     case "$requested_node" in
@@ -175,7 +178,7 @@ retry-join node:
         ;;
     esac
 
-    talosconfig='clusterconfig/talosconfig'
+    talosconfig='{{talosconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
 
     member_table="$(talosctl etcd members \
@@ -227,8 +230,8 @@ verify:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    talosconfig='clusterconfig/talosconfig'
-    kubeconfig='kubeconfig'
+    talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     expected_names=$'nuc1\nnuc2\nnuc3'
     expected_endpoints=$'192.168.90.10\n192.168.90.11\n192.168.90.12'
@@ -280,16 +283,23 @@ verify:
       exit 1
     }
 
-    talosctl kubeconfig "$kubeconfig" \
+    kubeconfig_dir="${kubeconfig%/*}"
+    install -d -m 700 "$kubeconfig_dir"
+    staged_kubeconfig="$(mktemp "$kubeconfig_dir/config.XXXXXX")"
+    trap 'rm -f -- "$staged_kubeconfig"' EXIT
+
+    talosctl kubeconfig "$staged_kubeconfig" \
       --nodes 192.168.90.10 \
       --endpoints "$nodes_csv" \
       --talosconfig "$talosconfig" \
       --merge=false \
       --force >/dev/null
-    chmod 600 "$kubeconfig"
+    chmod 600 "$staged_kubeconfig"
 
-    api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
+    api_server="$(kubectl --kubeconfig "$staged_kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
     [[ "$api_server" == 'https://192.168.90.20:6443' ]]
+    mv -f -- "$staged_kubeconfig" "$kubeconfig"
+    trap - EXIT
 
     nodes_json=''
     node_count=0
@@ -358,7 +368,7 @@ cilium:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     values_file='kubernetes/apps/kube-system/cilium/app/values.yaml'
     chart='oci://quay.io/cilium/charts/cilium'
     version='1.19.6'
@@ -369,7 +379,7 @@ cilium:
     just talos validate
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
@@ -482,7 +492,7 @@ flux:
 
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     expected_confirmation="bootstrap:flux:prod:${owner}/${repository}:read-only"
 
     just kube flux-preflight
@@ -554,7 +564,7 @@ flux-ssh-known-hosts:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     expected_url='ssh://git@ssh.github.com:443/7yXwscXEzv6phzUnKfrw/homelab-talos'
     expected_fingerprint='SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM'
     expected_confirmation='repair:flux-system:known-hosts:ssh.github.com:443'
@@ -613,7 +623,7 @@ flux-sops:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     expected_confirmation='create:flux-system:sops-age'
     expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
     key_file="$(mktemp /tmp/homelab-talos-flux-sops.XXXXXX)"
@@ -672,7 +682,7 @@ flux-adopt-cilium:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     source_file='kubernetes/apps/kube-system/cilium/ks.yaml'
     expected_confirmation='adopt:cilium:kube-system:flux'
 
@@ -776,7 +786,7 @@ foundation:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -823,7 +833,7 @@ foundation:
     umask 077
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -937,7 +947,7 @@ storage:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -959,7 +969,7 @@ storage:
     trap cleanup_storage EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -1027,7 +1037,7 @@ csi-driver-smb:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1043,7 +1053,7 @@ csi-driver-smb:
     }
     trap cleanup_csi EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing csi-driver-smb bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1093,7 +1103,7 @@ media-storage:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1113,7 +1123,7 @@ media-storage:
     }
     trap cleanup_media EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing media-storage bootstrap: commit and push the reviewed suspended sources first.' >&2
@@ -1168,7 +1178,7 @@ plex:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1184,7 +1194,7 @@ plex:
     }
     trap cleanup_plex EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing plex bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1234,7 +1244,7 @@ qbittorrent:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1250,7 +1260,7 @@ qbittorrent:
     }
     trap cleanup_qbt EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing qbittorrent bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1303,7 +1313,7 @@ arr app:
 
     app='{{app}}'
     case "$app" in prowlarr|sonarr|radarr) ;; *) echo "Usage: just bootstrap arr <prowlarr|sonarr|radarr>" >&2; exit 1;; esac
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1319,7 +1329,7 @@ arr app:
     }
     trap cleanup_arr EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo "Refusing $app bootstrap: commit and push the reviewed suspended source first." >&2
@@ -1368,7 +1378,7 @@ seerr:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1384,7 +1394,7 @@ seerr:
     }
     trap cleanup_seerr EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing seerr bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1433,7 +1443,7 @@ intel-gpu-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1449,7 +1459,7 @@ intel-gpu-plugin:
     }
     trap cleanup_gpu EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing intel-gpu-plugin bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1498,7 +1508,7 @@ monitoring:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1520,7 +1530,7 @@ monitoring:
     trap cleanup_monitoring EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -1587,7 +1597,7 @@ gatus:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1603,7 +1613,7 @@ gatus:
     }
     trap cleanup_gatus EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Gatus bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1655,7 +1665,7 @@ homepage:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1671,7 +1681,7 @@ homepage:
     }
     trap cleanup_homepage EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Homepage bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1724,7 +1734,7 @@ trivy:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1740,7 +1750,7 @@ trivy:
     }
     trap cleanup_trivy EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Trivy bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1792,7 +1802,7 @@ metrics-server:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
@@ -1808,7 +1818,7 @@ metrics-server:
     }
     trap cleanup_metrics_server EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing metrics-server bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1872,19 +1882,19 @@ reboot node:
         ;;
     esac
 
-    talosconfig='clusterconfig/talosconfig'
-    kubeconfig='kubeconfig'
+    talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     expected_names=$'nuc1\nnuc2\nnuc3'
     expected_confirmation="reboot:${node}:${node_ip}"
 
     just repo require-bash
     [[ -f "$talosconfig" ]] || {
-      echo 'Missing clusterconfig/talosconfig; run just talos generate.' >&2
+      echo "Missing $talosconfig; run just talos generate." >&2
       exit 1
     }
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -2021,8 +2031,8 @@ resize-longhorn node:
         ;;
     esac
 
-    talosconfig='clusterconfig/talosconfig'
-    kubeconfig='kubeconfig'
+    talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     expected_names=$'nuc1\nnuc2\nnuc3'
     config="clusterconfig/${node}.yaml"

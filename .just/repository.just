@@ -37,7 +37,7 @@ secrets:
       printf '%s\n' "$SOPS_AGE_KEY" > "$key_file"
       actual="$(age-keygen -y "$key_file")"
     else
-      echo "Set SOPS_AGE_KEY or SOPS_AGE_KEY_FILE." >&2
+      echo "Set and export SOPS_AGE_KEY or SOPS_AGE_KEY_FILE." >&2
       exit 1
     fi
     [[ "$actual" == "$expected" ]] || {
@@ -671,9 +671,12 @@ require-bash:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @git check-ignore -q clusterconfig/nuc1.yaml
-    @git check-ignore -q talosconfig
-    @git check-ignore -q kubeconfig
+    @git check-ignore -q .talos/config
+    @git check-ignore -q .kube/config
+    @git check-ignore -q scratch/talosconfig
+    @git check-ignore -q scratch/kubeconfig
     @git check-ignore -q support-bundles/example.tar.gz
+    @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi
     @if git check-ignore -q kubernetes/apps/example/secret.sops.yaml; then echo "encrypted Kubernetes secrets must be trackable" >&2; exit 1; fi
