@@ -21,6 +21,7 @@
 /.mise.local.toml
 /helm-output/
 /support-bundles/
+/.test-results/
 *.dec.yaml
 *.decrypted.yaml
 

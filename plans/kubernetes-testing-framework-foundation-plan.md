@@ -42,12 +42,11 @@ scenarios described under "Required follow-up sequence."
 6. **Offline Chainsaw validation prefers the binary's own offline path.** Chainsaw
    ships a real `chainsaw lint` command and a `chainsaw export schemas` command;
    there is no `chainsaw schema-lint`, and `chainsaw test --no-cluster` is not used
-   as lint because cluster operations fail while local scripts may run. During
-   Phase 1, confirm whether `chainsaw lint` validates test/config files fully
-   offline (no kubeconfig, no cluster). If it does, it is the primary offline check
-   and no extra JSON-Schema validator dependency is added; `chainsaw export schemas`
-   is retained only for editor/IDE wiring. Fall back to exported-schema validation
-   with a pinned JSON-Schema validator only if `chainsaw lint` is not cluster-free.
+   as lint because cluster operations fail while local scripts may run. Phase 1
+   confirmed that pinned Chainsaw 0.2.15 lints both configuration and test input
+   with a deliberately nonexistent kubeconfig and no cluster access. It is the
+   primary offline check, so no extra JSON-Schema validator dependency is added;
+   `chainsaw export schemas` is retained only for editor/IDE wiring.
 7. **Production smoke tests name an existing namespace explicitly.** They must
    not cause Chainsaw to create an ephemeral namespace.
 8. **No continuous-leak claim is accepted until probe placement is explicit.**
@@ -183,16 +182,13 @@ is large.
 
 ## Phase 1 — Pinned tooling and offline schema validation
 
-- Add a pinned Chainsaw release through the mise/aqua registry and refresh
-  `mise.lock`. Verify the exact registry identifier and release during
-  implementation.
-- Add pinned ShellCheck.
+- Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
+- Pin ShellCheck 0.11.0 through the mise registry.
 - Keep the Conftest version introduced in Phase 0A pinned and locked; it embeds
   the OPA runtime used by the repository policies.
-- Only if `chainsaw lint` is not cluster-free (see Decision 6): add a pinned JSON
-  Schema validator suitable for the schemas exported by Chainsaw. Pinning may be
-  through mise or an exact pre-commit hook revision, but it must be reproducible
-  from a clean checkout. If `chainsaw lint` is offline, skip this dependency.
+- Do not add a separate JSON Schema validator: Decision 6 confirms the pinned
+  Chainsaw lint path is cluster-free. Reconsider only if standalone
+  StepTemplates require schema coverage that the pinned binary cannot provide.
 - Keep the existing pinned `kubeconform`, `kubectl`, `helm`, `kustomize`, `yq`,
   and other repository tools.
 - Defer Python/`uv` until the first real network or API probe is implemented.
@@ -201,10 +197,11 @@ is large.
 
 `scripts/test/validate-chainsaw.sh` performs offline test validation:
 
-1. Preferred: run `chainsaw lint` over every test/config file if it is confirmed
-   cluster-free. Fallback: `chainsaw export schemas` to a temp dir and validate
-   each `chainsaw-test.yaml`, step template, and configuration file against the
-   matching exported schema with the pinned JSON-Schema validator.
+1. Run the confirmed cluster-free `chainsaw lint` over the configuration and
+   every conventionally named `chainsaw-test.yaml`/`chainsaw-test.yml`. Parse all
+   scenario YAML separately so referenced resources cannot contain malformed
+   YAML. Reconsider exported-schema validation only if standalone StepTemplates
+   are introduced and pinned Chainsaw cannot lint them directly.
 2. Parse referenced YAML files.
 3. Run ShellCheck on repository test scripts.
 4. Never invoke live test steps or local scenario scripts.
