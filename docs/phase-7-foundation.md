@@ -133,10 +133,12 @@ addresses, but it still requires the operator's explicit DHCP confirmation.
 
 ## Guarded Rollout
 
-After the suspended source commit is on `origin/main`, keep the age identity
-loaded and run:
+After the suspended source commit is on `origin/main`, fetch it into any clean
+branch/worktree, keep the age identity loaded, and run:
 
 ```bash
+git fetch origin main
+git status --short  # must print nothing
 export PHASE7_NETWORK_CONFIRM='reserve:192.168.90.30-39:gateway:192.168.90.30'
 export PHASE7_BOOTSTRAP_CONFIRM='bootstrap:phase7:internal-foundation:192.168.90.30'
 mise exec -- just bootstrap foundation
@@ -180,7 +182,7 @@ The phase is complete only when the final verifier proves:
 ## Acceptance Evidence
 
 Recorded 2026-07-20. All nine Phase 7 Kustomizations are `suspend: false` and
-Ready; the durable desired state is committed on `main`.
+Ready; the durable desired state is merged into `main`.
 
 | Check | Observed |
 |---|---|

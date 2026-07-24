@@ -101,10 +101,18 @@ the SOPS key exists and Cilium adoption succeeds.
 
 ## Execution
 
-Run all commands from the repository root. First commit and push the reviewed
-Phase 6 implementation so local `HEAD` exactly matches `origin/main`. Git review,
-commit, and push remain explicit source-control actions; every cluster mutation
-is encapsulated by a guarded Just recipe.
+Run all commands from the repository root. First merge the reviewed Phase 6
+implementation to `origin/main`, then fetch that commit into the current clean
+worktree. The checked-out branch may be any feature branch: the guarded workflow
+compares the Phase 6 rollout paths with remote `origin/main` instead of requiring
+local `HEAD` to equal it. Git review, commit, and push remain explicit
+source-control actions; every cluster mutation is encapsulated by a guarded Just
+recipe.
+
+```bash
+git fetch origin main
+git status --short  # must print nothing
+```
 
 Validate the published source, pinned Cilium OCI render, and live prerequisites:
 
@@ -140,7 +148,7 @@ unset FLUX_CILIUM_ADOPTION_CONFIRM
 ```
 
 Review the single intended source change in
-`kubernetes/apps/kube-system/cilium/ks.yaml`, commit it, and push `main`. After
+`kubernetes/apps/kube-system/cilium/ks.yaml`, commit it, and merge it to `main`. After
 Flux observes that commit, run the acceptance gates:
 
 ```bash

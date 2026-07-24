@@ -836,17 +836,20 @@ foundation:
       echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing Phase 7 bootstrap: commit and push the reviewed suspended sources first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing Phase 7 bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Phase 7 bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/kustomization.yaml \
+      kubernetes/apps/security/kustomization.yaml \
+      kubernetes/apps/security/cert-manager \
+      kubernetes/apps/networking/kustomization.yaml \
+      kubernetes/apps/networking/metallb \
+      kubernetes/apps/networking/envoy-gateway \
+      kubernetes/apps/networking/internal-gateway \
+      kubernetes/apps/networking/external-dns \
+      kubernetes/apps/testing/kustomization.yaml \
+      kubernetes/apps/testing/echo
     [[ "$(yq ea -r '[select(.kind == "Kustomization") | .spec.suspend] | .[]' "${phase7_sources[@]}" | sort -u)" == 'true' ]] || {
       echo 'Refusing first Phase 7 bootstrap: all nine child Kustomizations must be staged suspended in Git.' >&2
       exit 1
@@ -854,7 +857,7 @@ foundation:
 
     just repo secrets
     just kube foundation-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -972,24 +975,19 @@ storage:
       echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing storage bootstrap: commit and push the reviewed suspended sources first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing storage bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'storage bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/storage/kustomization.yaml \
+      kubernetes/apps/storage/longhorn
     [[ "$(yq ea -r '[select(.kind == "Kustomization") | .spec.suspend] | .[]' "$ks" | sort -u)" == 'true' ]] || {
       echo 'Refusing storage bootstrap: both storage Kustomizations must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube storage-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -1054,17 +1052,12 @@ csi-driver-smb:
     trap cleanup_csi EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing csi-driver-smb bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing csi-driver-smb bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'csi-driver-smb bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/storage/kustomization.yaml \
+      kubernetes/apps/storage/csi-driver-smb
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing csi-driver-smb bootstrap: it must be staged suspended in Git.' >&2
       exit 1
@@ -1124,17 +1117,13 @@ media-storage:
     trap cleanup_media EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing media-storage bootstrap: commit and push the reviewed suspended sources first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing media-storage bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'media-storage bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/storage
     for f in "$ns_ks" "$st_ks"; do
       [[ "$(yq -r '.spec.suspend' "$f")" == 'true' ]] || {
         echo "Refusing media-storage bootstrap: $f must be staged suspended in Git." >&2
@@ -1195,17 +1184,13 @@ plex:
     trap cleanup_plex EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing plex bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing plex bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'plex bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/plex
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing plex bootstrap: it must be staged suspended in Git.' >&2
       exit 1
@@ -1261,17 +1246,13 @@ qbittorrent:
     trap cleanup_qbt EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing qbittorrent bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing qbittorrent bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'qbittorrent bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/qbittorrent
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing qbittorrent bootstrap: it must be staged suspended in Git.' >&2
       exit 1
@@ -1303,7 +1284,7 @@ qbittorrent:
 
 # Reconcile a suspended Phase 13 *arr app after guarded checks, then verify:
 #   just bootstrap arr <prowlarr|sonarr|radarr>
-# Operator-run. Requires committed+pushed suspended source on main and
+# Operator-run. Requires the suspended source to match deployed origin/main and
 # ARR_BOOTSTRAP_CONFIRM='bootstrap:phase13:<app>'. On failure the resumed Kustomization
 # is re-suspended while its resources are preserved. Recommended order: prowlarr, then
 # sonarr and radarr.
@@ -1330,17 +1311,13 @@ arr app:
     trap cleanup_arr EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo "Refusing $app bootstrap: commit and push the reviewed suspended source first." >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo "Refusing $app bootstrap: local HEAD and origin/main differ." >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source "$app bootstrap" \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      "kubernetes/apps/media/$app"
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo "Refusing $app bootstrap: it must be staged suspended in Git." >&2
       exit 1
@@ -1371,7 +1348,7 @@ arr app:
     echo "Phase 13 $app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Then wire first-run: Prowlarr indexers -> Sonarr/Radarr; root folders /data/media/{tv,movies}; download client http://qbittorrent.media.svc.cluster.local:8080."
 
 # Reconcile the suspended Phase 14 Seerr app after guarded checks, then verify. Operator-run.
-# Requires committed+pushed suspended source on main and
+# Requires the suspended source to match deployed origin/main and
 # SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr'. On failure the resumed Kustomization is
 # re-suspended while its resources are preserved.
 seerr:
@@ -1395,17 +1372,13 @@ seerr:
     trap cleanup_seerr EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing seerr bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing seerr bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'seerr bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/seerr
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing seerr bootstrap: it must be staged suspended in Git.' >&2
       exit 1
@@ -1460,17 +1433,12 @@ intel-gpu-plugin:
     trap cleanup_gpu EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing intel-gpu-plugin bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing intel-gpu-plugin bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'intel-gpu-plugin bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/kube-system/kustomization.yaml \
+      kubernetes/apps/kube-system/intel-gpu-plugin
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing intel-gpu-plugin bootstrap: it must be staged suspended in Git.' >&2
       exit 1
@@ -1533,24 +1501,19 @@ monitoring:
       echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing monitoring bootstrap: commit and push the reviewed suspended sources first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing monitoring bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'monitoring bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/kube-prometheus-stack
     [[ "$(yq ea -r '[select(.kind == "Kustomization") | .spec.suspend] | .[]' "$ks" | sort -u)" == 'true' ]] || {
       echo 'Refusing monitoring bootstrap: both monitoring Kustomizations must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube monitoring-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -1614,24 +1577,19 @@ gatus:
     trap cleanup_gatus EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing Gatus bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing Gatus bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Gatus bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/gatus
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing Gatus bootstrap: the Gatus Kustomization must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube gatus-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -1682,24 +1640,19 @@ homepage:
     trap cleanup_homepage EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing Homepage bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing Homepage bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Homepage bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/homepage
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing Homepage bootstrap: the Homepage Kustomization must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube homepage-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -1751,24 +1704,19 @@ trivy:
     trap cleanup_trivy EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing Trivy bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing Trivy bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Trivy bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/security/kustomization.yaml \
+      kubernetes/apps/security/trivy-operator
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing Trivy bootstrap: the Trivy Kustomization must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube trivy-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \
@@ -1819,24 +1767,19 @@ metrics-server:
     trap cleanup_metrics_server EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git branch --show-current)" == 'main' ]]
-    [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing metrics-server bootstrap: commit and push the reviewed suspended source first.' >&2
-      exit 1
-    }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    [[ "$remote_head" == "$(git rev-parse HEAD)" ]] || {
-      echo 'Refusing metrics-server bootstrap: local HEAD and origin/main differ.' >&2
-      exit 1
-    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'metrics-server bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/kube-system/kustomization.yaml \
+      kubernetes/apps/kube-system/metrics-server
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing metrics-server bootstrap: the Kustomization must be staged suspended in Git.' >&2
       exit 1
     }
 
     just kube metrics-server-validate
-    # Pull main so flux-verify's artifact==origin/main check passes right after a merge.
+    # Reconcile the published main source before checking Flux's artifact revision.
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps \

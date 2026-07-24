@@ -54,10 +54,12 @@ the gateway → proves DNS → gateway → app). Homepage shows a pod-status til
 Recommended order: **Prowlarr first**, then Sonarr and Radarr.
 
 ```bash
-# on main, synced; e.g. for prowlarr
+# from any clean branch/worktree after the rollout source is merged to main
+git fetch origin main
+git status --short  # must print nothing
 export ARR_BOOTSTRAP_CONFIRM='bootstrap:phase13:prowlarr'
-just bootstrap arr prowlarr
-just kube arr-verify prowlarr
+mise exec -- just bootstrap arr prowlarr
+mise exec -- just kube arr-verify prowlarr
 # then set suspend: false in Git for prowlarr/ks.yaml, commit, push, rerun arr-verify
 ```
 
@@ -72,9 +74,10 @@ Repeat with `sonarr` / `radarr` (confirm string `bootstrap:phase13:<app>`).
    `/data/media/tv` and `/data/media/movies`.
 3. Confirm the qBittorrent save path is under `/data/downloads` so imports hardlink.
 
-## End-to-end gate (deferred — do not claim Phase 13 "done" until)
+## End-to-end gate (do not claim Phase 13 "done" until)
 
-A full **request → download → hardlink import → visible in Plex** run, which depends on
-Phase 12's kill-switch gate having passed and qBittorrent being active. Capture that
-evidence (and the hardlink proof already recorded in `docs/phase-11-media.md`) when
-Phase 12 is live.
+Run a direct Sonarr/Radarr **search → download → hardlink import → visible in Plex**
+test. Phase 12's kill-switch gate has passed and qBittorrent is active, so this gate
+does not depend on Seerr. Capture the test evidence and repeat the hardlink proof from
+`docs/phase-11-media.md`. The full **Seerr request → download → import → Plex** flow is
+the separate Phase 14 acceptance gate.

@@ -86,12 +86,13 @@ export STORAGE_BOOTSTRAP_CONFIRM='bootstrap:phase9:storage:longhorn'
 mise exec -- just bootstrap storage
 ```
 
-`bootstrap storage` requires a clean, pushed `main`, both Kustomizations staged
-`suspend: true` in Git and live, re-runs `storage-validate` + `flux-verify`, then
-resumes `longhorn` → `longhorn-config` in order (waiting for each to become
-Ready), and finishes with `storage-verify`. Any failure re-suspends the resumed
-Kustomizations while preserving their resources. No operator SOPS key is needed —
-Flux decrypts the CIFS Secret in-cluster.
+`bootstrap storage` may run from any clean branch/worktree after `git fetch origin
+main`. Its rollout guard and storage source paths must match remote `origin/main`,
+and both Kustomizations must be staged `suspend: true` in Git and live. It re-runs
+`storage-validate` + `flux-verify`, then resumes `longhorn` → `longhorn-config` in
+order (waiting for each to become Ready), and finishes with `storage-verify`. Any
+failure re-suspends the resumed Kustomizations while preserving their resources.
+No operator SOPS key is needed — Flux decrypts the CIFS Secret in-cluster.
 
 After acceptance passes, set both Kustomizations to `suspend: false`, commit and
 push, and re-run `just kube storage-verify` to confirm the durable state.
