@@ -7,13 +7,8 @@ cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
 talosconfig := ".talos/config"
 kubeconfig := ".kube/config"
-flux_path := "kubernetes/flux/clusters/prod"
 github_owner := "7yXwscXEzv6phzUnKfrw"
 github_repository := "homelab-talos"
-cert_manager_chart := "oci://quay.io/jetstack/charts/cert-manager"
-metallb_repository := "https://metallb.github.io/metallb"
-envoy_gateway_chart := "oci://docker.io/envoyproxy/gateway-helm"
-external_dns_repository := "https://kubernetes-sigs.github.io/external-dns"
 
 # Render the pinned Cilium chart to standard output without writing generated YAML.
 cilium-render:
@@ -24,72 +19,7 @@ cilium-render:
 
 # Validate the app-local Cilium source and pinned Helm render.
 cilium-validate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    app_dir='{{cilium_app}}'
-    values_file='{{cilium_values}}'
-    chart='{{cilium_chart}}'
-    version="$(yq -r '.spec.ref.tag' '{{cilium_app}}/ocirepository.yaml')"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for file in \
-      "$app_dir/kustomization.yaml" \
-      "$app_dir/ocirepository.yaml" \
-      "$app_dir/helmrelease.yaml" \
-      "$values_file" \
-      'kubernetes/apps/kube-system/cilium/ks.yaml'; do
-      [[ -f "$file" ]] || {
-        echo "Missing required Cilium source: $file" >&2
-        exit 1
-      }
-    done
-
-    [[ -n "$version" && "$version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$app_dir/ocirepository.yaml")" == "$chart" ]]
-    [[ "$(yq -r '.spec.releaseName' "$app_dir/helmrelease.yaml")" == 'cilium' ]]
-    [[ "$(yq -r '.spec.targetNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]
-    [[ "$(yq -r '.spec.storageNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]
-    [[ "$(yq -r '.spec.valuesFrom[0].name' "$app_dir/helmrelease.yaml")" == 'cilium-values' ]]
-    [[ "$(yq -r '.spec.valuesFrom[0].valuesKey' "$app_dir/helmrelease.yaml")" == 'values.yaml' ]]
-
-    [[ "$(yq -r '.cluster.name' "$values_file")" == 'nuc-cluster' ]]
-    [[ "$(yq -r '.cluster.id' "$values_file")" == '1' ]]
-    [[ "$(yq -r '.ipam.mode' "$values_file")" == 'kubernetes' ]]
-    [[ "$(yq -r '.kubeProxyReplacement' "$values_file")" == 'true' ]]
-    [[ "$(yq -r '.k8sServiceHost' "$values_file")" == 'localhost' ]]
-    [[ "$(yq -r '.k8sServicePort' "$values_file")" == '7445' ]]
-    [[ "$(yq -r '.cgroup.autoMount.enabled' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.cgroup.hostRoot' "$values_file")" == '/sys/fs/cgroup' ]]
-    [[ "$(yq -r '.routingMode' "$values_file")" == 'tunnel' ]]
-    [[ "$(yq -r '.tunnelProtocol' "$values_file")" == 'vxlan' ]]
-    [[ "$(yq -r '.bpf.masquerade' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.operator.replicas' "$values_file")" == '2' ]]
-    [[ "$(yq -r '.hubble.relay.enabled' "$values_file")" == 'true' ]]
-    [[ "$(yq -r '.hubble.ui.enabled' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.envoy.enabled' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.gatewayAPI.enabled' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.l2announcements.enabled' "$values_file")" == 'false' ]]
-    [[ "$(yq -r '.bgpControlPlane.enabled' "$values_file")" == 'false' ]]
-    ! yq -r '.securityContext.capabilities.ciliumAgent[]' "$values_file" | rg -qx 'SYS_MODULE'
-
-    kustomize build "$app_dir" >"$temp_dir/kustomization.yaml"
-    [[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "cilium-values") | .metadata.labels."reconcile.fluxcd.io/watch"' "$temp_dir/kustomization.yaml")" == 'Enabled' ]]
-    [[ -n "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "cilium-values") | .data."values.yaml"' "$temp_dir/kustomization.yaml")" ]]
-
-    helm template cilium "$chart" \
-      --version "$version" \
-      --namespace kube-system \
-      --values "$values_file" >"$temp_dir/rendered.yaml"
-
-    [[ -n "$(yq ea -r 'select(.kind == "DaemonSet" and .metadata.name == "cilium") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
-    [[ -n "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "cilium-operator") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
-    [[ -n "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "hubble-relay") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
-    [[ -z "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "hubble-ui") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
-    [[ -z "$(yq ea -r 'select(.kind == "DaemonSet" and .metadata.name == "cilium-envoy") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
-
-    echo "Cilium $version app sources and Helm render passed validation."
+    @scripts/validate/cilium.sh
 
 # Print read-only live Cilium and Kubernetes status.
 cilium-status:
@@ -186,38 +116,7 @@ cilium-postflight:
 # Validate the metrics-server source: files, wiring, dependency, pinned chart, the
 # Talos --kubelet-insecure-tls flag, and the render (version derived from the HR).
 metrics-server-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/kube-system/metrics-server'
-    ks="$base/ks.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    values="$base/app/values.yaml"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-metrics-server-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$hr" "$repo" "$values" "$base/app/kustomization.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing metrics-server source: $f" >&2; exit 1; }
-    done
-    rg -qx '  - ./metrics-server/ks.yaml' kubernetes/apps/kube-system/kustomization.yaml || {
-      echo 'Refusing: ./metrics-server/ks.yaml is not wired into the kube-system kustomization.' >&2
-      exit 1
-    }
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq ea -r '[.spec.dependsOn[].name] | join(",")' "$ks")" == 'cilium' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == 'https://kubernetes-sigs.github.io/metrics-server' ]]
-    [[ -n "$(yq -r '.args[] | select(. == "--kubelet-insecure-tls")' "$values")" ]]
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-
-    kustomize build "$base/app" >/dev/null
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template metrics-server metrics-server --repo https://kubernetes-sigs.github.io/metrics-server --version "$chart_version" --namespace kube-system --values "$values" >/dev/null
-
-    echo 'metrics-server source, wiring, dependency, insecure-tls flag, and pinned render passed validation.'
+    @scripts/validate/metrics-server.sh
 
 # Verify metrics-server: Kustomization + HelmRelease Ready, deployment rolled out,
 # the metrics.k8s.io APIService Available, and kubectl top returns data.
@@ -305,11 +204,8 @@ foundation-ca-expiry: require-bash
 require-bash:
     #!/usr/bin/env bash
     set -euo pipefail
-    [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-      echo 'This repository requires bash >= 4 (for example: brew install bash).' >&2
-      echo 'macOS /bin/bash 3.2 skips set -e for [[ ]] tests, so validation would not gate.' >&2
-      exit 1
-    }
+    source scripts/lib/common.sh
+    require_bash
 
 # Verify the complete live Phase 5 Cilium acceptance gate.
 cilium-verify: require-bash
@@ -415,80 +311,7 @@ cilium-verify: require-bash
 
 # Validate the complete local Phase 6 source and pinned OCI render without mutating the cluster.
 flux-validate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    expected_flux="$(yq -p=toml -r '.tools.flux2' .mise.toml 2>/dev/null)"
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-flux-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for file in \
-      '{{flux_path}}/apps.yaml' \
-      'kubernetes/apps/kustomization.yaml' \
-      'kubernetes/apps/flux-system/kustomization.yaml' \
-      'kubernetes/apps/flux-system/flux-canary/ks.yaml' \
-      'kubernetes/apps/flux-system/flux-canary/app/kustomization.yaml' \
-      'kubernetes/apps/flux-system/flux-canary/app/secret.sops.yaml' \
-      'kubernetes/apps/kube-system/kustomization.yaml' \
-      'kubernetes/apps/kube-system/cilium/ks.yaml'; do
-      [[ -f "$file" ]] || {
-        echo "Missing required Flux source: $file" >&2
-        exit 1
-      }
-    done
-
-    [[ "$(flux version --client | awk '{print $2}' | sed 's/^v//')" == "$expected_flux" ]]
-    [[ "$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .encrypted_regex' .sops.yaml)" == '^(data|stringData)$' ]]
-    [[ "$expected_recipient" == age1* ]]
-
-    canary='kubernetes/apps/flux-system/flux-canary/app/secret.sops.yaml'
-    [[ "$(sops filestatus "$canary" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$canary" | sort -u)" == "$expected_recipient" ]]
-    [[ "$(yq -r '.kind' "$canary")" == 'Secret' ]]
-    [[ "$(yq -r '.metadata.name' "$canary")" == 'flux-canary' ]]
-    [[ "$(yq -r '.stringData.marker' "$canary")" != 'ready' ]]
-
-    root='{{flux_path}}/apps.yaml'
-    [[ "$(yq -r '.metadata.name' "$root")" == 'cluster-apps' ]]
-    [[ "$(yq -r '.spec.path' "$root")" == './kubernetes/apps' ]]
-    [[ "$(yq -r '.spec.sourceRef.name' "$root")" == 'flux-system' ]]
-    [[ "$(yq -r '.spec.deletionPolicy' "$root")" == 'Orphan' ]]
-
-    cilium='kubernetes/apps/kube-system/cilium/ks.yaml'
-    [[ "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' "$cilium")" == 'disabled' ]]
-    [[ "$(yq -r '.spec.deletionPolicy' "$cilium")" == 'Orphan' ]]
-    [[ "$(yq -r '.spec.decryption.provider' "$cilium")" == 'sops' ]]
-    [[ "$(yq -r '.spec.decryption.secretRef.name' "$cilium")" == 'sops-age' ]]
-    cilium_suspend="$(yq -r '.spec.suspend // false' "$cilium")"
-    [[ "$cilium_suspend" == 'true' || "$cilium_suspend" == 'false' ]]
-    [[ "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' kubernetes/apps/kube-system/cilium/app/helmrelease.yaml)" == 'disabled' ]]
-
-    canary_ks='kubernetes/apps/flux-system/flux-canary/ks.yaml'
-    [[ "$(yq -r '.spec.dependsOn[0].name' "$canary_ks")" == 'cilium' ]]
-    [[ "$(yq -r '.spec.decryption.provider' "$canary_ks")" == 'sops' ]]
-    [[ "$(yq -r '.spec.decryption.secretRef.name' "$canary_ks")" == 'sops-age' ]]
-
-    kustomize build kubernetes/apps >"$temp_dir/apps.yaml"
-    kustomize build kubernetes/apps/kube-system >"$temp_dir/kube-system.yaml"
-    kustomize build kubernetes/apps/flux-system >"$temp_dir/flux-system.yaml"
-    kustomize build kubernetes/apps/kube-system/cilium/app >"$temp_dir/cilium.yaml"
-    kustomize build kubernetes/apps/flux-system/flux-canary/app >"$temp_dir/canary.yaml"
-
-    # Presence check, not an exact set: adding an app must not require editing this
-    # assertion (it broke on every Phase 9/10 addition). Confirm the critical
-    # bootstrap Kustomizations build; app churn is caught by each app's *-validate.
-    built_kustomizations="$(yq ea -r '[select(.kind == "Kustomization") | .metadata.name] | .[]' "$temp_dir/apps.yaml" | sort -u)"
-    for required in cilium flux-canary; do
-      rg -qx "$required" <<<"$built_kustomizations" || {
-        echo "flux-validate: required Kustomization '$required' is missing from the apps build." >&2
-        exit 1
-      }
-    done
-    [[ -z "$(rg '^apiVersion: (apps|extensions)/v1beta|^apiVersion: (networking.k8s.io|policy)/v1beta1' kubernetes --glob '*.yaml' || true)" ]]
-
-    just kube cilium-validate
-    echo "Flux $expected_flux source, SOPS canary, dependency graph, and Cilium adoption guards passed validation."
+    @scripts/validate/flux.sh
 
 # Check the live cluster and Git publication boundary before GitHub bootstrap.
 flux-preflight: flux-validate
@@ -628,195 +451,7 @@ flux-verify: flux-validate require-bash
 
 # Validate the complete local Phase 7 graph, encrypted providers, and pinned chart renders.
 foundation-validate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    cloudflare_secret='kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml'
-    pihole_secret='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
-    pihole_ca='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-foundation-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for file in \
-      'kubernetes/apps/security/cert-manager/ks.yaml' \
-      'kubernetes/apps/security/cert-manager/app/ocirepository.yaml' \
-      'kubernetes/apps/security/cert-manager/app/helmrelease.yaml' \
-      'kubernetes/apps/security/cert-manager/app/values.yaml' \
-      'kubernetes/apps/security/cert-manager/config/clusterissuers.yaml' \
-      'kubernetes/apps/security/cert-manager/config/staging-certificate.yaml' \
-      'kubernetes/apps/security/cert-manager/certificate/certificate.yaml' \
-      'kubernetes/apps/networking/metallb/ks.yaml' \
-      'kubernetes/apps/networking/metallb/app/helmrelease.yaml' \
-      'kubernetes/apps/networking/metallb/app/values.yaml' \
-      'kubernetes/apps/networking/metallb/config/address-pool.yaml' \
-      'kubernetes/apps/networking/envoy-gateway/ks.yaml' \
-      'kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml' \
-      'kubernetes/apps/networking/envoy-gateway/app/helmrelease.yaml' \
-      'kubernetes/apps/networking/envoy-gateway/app/values.yaml' \
-      'kubernetes/apps/networking/internal-gateway/ks.yaml' \
-      'kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml' \
-      'kubernetes/apps/networking/internal-gateway/app/gateway.yaml' \
-      'kubernetes/apps/networking/external-dns/ks.yaml' \
-      'kubernetes/apps/networking/external-dns/app/helmrelease.yaml' \
-      'kubernetes/apps/networking/external-dns/app/kustomization.yaml' \
-      "$pihole_ca" \
-      'kubernetes/apps/networking/external-dns/app/values.yaml' \
-      'kubernetes/apps/testing/echo/ks.yaml' \
-      'kubernetes/apps/testing/echo/app/deployment.yaml' \
-      'kubernetes/apps/testing/echo/app/httproute.yaml' \
-      "$cloudflare_secret" \
-      "$pihole_secret"; do
-      [[ -f "$file" ]] || {
-        echo "Missing required Phase 7 source: $file" >&2
-        echo 'Run just repo phase7-secrets if a provider Secret is missing.' >&2
-        exit 1
-      }
-    done
-
-    for secret in "$cloudflare_secret" "$pihole_secret"; do
-      [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-      [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
-      [[ "$(yq -r '.kind' "$secret")" == 'Secret' ]]
-    done
-    [[ "$(yq -r '.metadata.name' "$cloudflare_secret")" == 'cloudflare-api-token' ]]
-    [[ "$(yq -r '.metadata.namespace' "$cloudflare_secret")" == 'cert-manager' ]]
-    [[ "$(yq -r '.metadata.name' "$pihole_secret")" == 'pihole-password' ]]
-    [[ "$(yq -r '.metadata.namespace' "$pihole_secret")" == 'external-dns' ]]
-    ! rg -q 'PRIVATE KEY' "$pihole_ca"
-    openssl verify -CAfile "$pihole_ca" "$pihole_ca" >/dev/null
-    # CA remaining-lifetime is a time-based check: it lives in
-    # `just kube foundation-ca-expiry`, kept OUT of `just ci` so it cannot turn an
-    # unrelated PR red purely because the calendar advanced.
-
-    phase7_sources=(
-      kubernetes/apps/security/cert-manager/ks.yaml
-      kubernetes/apps/networking/metallb/ks.yaml
-      kubernetes/apps/networking/envoy-gateway/ks.yaml
-      kubernetes/apps/networking/internal-gateway/ks.yaml
-      kubernetes/apps/networking/external-dns/ks.yaml
-      kubernetes/apps/testing/echo/ks.yaml
-    )
-    suspend_states="$(yq ea -r '[select(.kind == "Kustomization") | (.spec.suspend // false)] | .[]' "${phase7_sources[@]}" | sort -u)"
-    [[ "$suspend_states" == 'true' || "$suspend_states" == 'false' ]] || {
-      echo 'Every Phase 7 Kustomization must be staged together: all suspended or all active.' >&2
-      exit 1
-    }
-
-    # Versions are read from the manifests (single source of truth) so a Renovate
-    # bump to a HelmRelease/OCIRepository doesn't need a duplicate literal edited here.
-    cert_manager_version="$(yq -r '.spec.ref.tag' kubernetes/apps/security/cert-manager/app/ocirepository.yaml)"
-    metallb_version="$(yq -r '.spec.chart.spec.version' kubernetes/apps/networking/metallb/app/helmrelease.yaml)"
-    envoy_gateway_version="$(yq -r '.spec.ref.tag' kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml)"
-    external_dns_chart_version="$(yq -r '.spec.chart.spec.version' kubernetes/apps/networking/external-dns/app/helmrelease.yaml)"
-    for v in "$cert_manager_version" "$metallb_version" "$envoy_gateway_version" "$external_dns_chart_version"; do
-      [[ -n "$v" && "$v" != 'null' ]]
-    done
-    [[ "$(yq -r '.spec.url' kubernetes/apps/security/cert-manager/app/ocirepository.yaml)" == '{{cert_manager_chart}}' ]]
-    [[ "$(yq -r '.spec.url' kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml)" == '{{envoy_gateway_chart}}' ]]
-
-    cert_ks='kubernetes/apps/security/cert-manager/ks.yaml'
-    [[ "$(yq ea -r 'select(.metadata.name == "cert-manager") | .spec.dependsOn[].name' "$cert_ks")" == 'cilium' ]]
-    [[ "$(yq ea -r 'select(.metadata.name == "cert-manager-config") | .spec.dependsOn[].name' "$cert_ks")" == 'cert-manager' ]]
-    [[ "$(yq ea -r 'select(.metadata.name == "wildcard-certificate") | .spec.dependsOn[].name' "$cert_ks")" == 'cert-manager-config' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/metallb/ks.yaml | head -n 1)" == 'cilium' ]]
-    [[ "$(yq ea -r 'select(.metadata.name == "metallb-config") | .spec.dependsOn[].name' kubernetes/apps/networking/metallb/ks.yaml)" == 'metallb' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/envoy-gateway/ks.yaml)" == 'cilium' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/internal-gateway/ks.yaml | sort)" == $'envoy-gateway\nmetallb-config\nwildcard-certificate' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/external-dns/ks.yaml)" == 'internal-gateway' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/testing/echo/ks.yaml)" == 'external-dns-internal' ]]
-
-    metallb_values='kubernetes/apps/networking/metallb/app/values.yaml'
-    [[ "$(yq -r '.frrk8s.enabled' "$metallb_values")" == 'false' ]]
-    [[ "$(yq -r '.speaker.frr.enabled' "$metallb_values")" == 'false' ]]
-    pool='kubernetes/apps/networking/metallb/config/address-pool.yaml'
-    [[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.addresses[0]' "$pool")" == '192.168.90.30-192.168.90.39' ]]
-    [[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.autoAssign' "$pool")" == 'false' ]]
-
-    gateway='kubernetes/apps/networking/internal-gateway/app/gateway.yaml'
-    [[ "$(yq ea -r 'select(.kind == "Gateway") | .spec.listeners[0].hostname' "$gateway")" == '*.lab.supermorphic.com' ]]
-    [[ "$(yq ea -r 'select(.kind == "Gateway") | .spec.listeners[0].port' "$gateway")" == '443' ]]
-    [[ "$(yq ea -r 'select(.kind == "Gateway") | .spec.listeners[0].tls.certificateRefs[0].name' "$gateway")" == 'wildcard-lab-supermorphic-com-tls' ]]
-    proxy='kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml'
-    [[ "$(yq -r '.spec.provider.kubernetes.envoyDeployment.replicas' "$proxy")" == '2' ]]
-    [[ "$(yq -r '.spec.provider.kubernetes.envoyService.annotations."metallb.io/loadBalancerIPs"' "$proxy")" == '192.168.90.30' ]]
-    [[ "$(yq -r '.spec.provider.kubernetes.envoyService.externalTrafficPolicy' "$proxy")" == 'Local' ]]
-
-    dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'
-    [[ "$(yq -r '.provider.name' "$dns_values")" == 'pihole' ]]
-    [[ "$(yq -r '.registry' "$dns_values")" == 'noop' ]]
-    [[ "$(yq -r '.policy' "$dns_values")" == 'upsert-only' ]]
-    [[ "$(yq -r '.sources | join(" ")' "$dns_values")" == 'gateway-httproute' ]]
-    [[ "$(yq -r '.domainFilters | join(" ")' "$dns_values")" == 'lab.supermorphic.com' ]]
-    [[ "$(yq -r '.annotationFilter' "$dns_values")" == 'external-dns.k8s.io/audience=internal' ]]
-    [[ "$(yq -r '.gatewayNamespace' "$dns_values")" == 'networking' ]]
-    [[ "$(yq -r '.extraArgs."gateway-name"' "$dns_values")" == 'internal' ]]
-    [[ "$(yq -r '.extraArgs."pihole-api-version"' "$dns_values")" == '6' ]]
-    [[ "$(yq -r '.extraArgs."pihole-server"' "$dns_values")" == 'https://pi.hole' ]]
-    [[ "$(yq -r '.extraArgs."pihole-tls-skip-verify" // ""' "$dns_values")" == '' ]]
-    [[ "$(yq -r '.env[] | select(.name == "SSL_CERT_FILE") | .value' "$dns_values")" == '/etc/ssl/pihole/tls_ca.crt' ]]
-    [[ "$(yq -r '.extraVolumes[] | select(.name == "pihole-ca") | .configMap.name' "$dns_values")" == 'pihole-ca' ]]
-    [[ "$(yq -r '.extraVolumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' "$dns_values")" == '/etc/ssl/pihole true' ]]
-    [[ "$(yq -r '.configMapGenerator[] | select(.name == "pihole-ca") | [.namespace, .files[]] | join(" ")' kubernetes/apps/networking/external-dns/app/kustomization.yaml)" == 'external-dns tls_ca.crt=pihole-ca.crt' ]]
-
-    for directory in \
-      kubernetes/apps \
-      kubernetes/apps/security/cert-manager/app \
-      kubernetes/apps/security/cert-manager/config \
-      kubernetes/apps/security/cert-manager/certificate \
-      kubernetes/apps/networking/metallb/app \
-      kubernetes/apps/networking/metallb/config \
-      kubernetes/apps/networking/envoy-gateway/app \
-      kubernetes/apps/networking/internal-gateway/app \
-      kubernetes/apps/networking/external-dns/app \
-      kubernetes/apps/testing/echo/app; do
-      kustomize build "$directory" >"$temp_dir/$(tr '/' '-' <<<"$directory").yaml"
-    done
-
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repositories.yaml"
-    export HELM_REPOSITORY_CONFIG="$temp_dir/repositories.yaml"
-    export HELM_REPOSITORY_CACHE="$temp_dir/repository-cache"
-    helm template cert-manager '{{cert_manager_chart}}' \
-      --version "$cert_manager_version" \
-      --namespace cert-manager \
-      --values kubernetes/apps/security/cert-manager/app/values.yaml >"$temp_dir/cert-manager.yaml"
-    helm template metallb metallb \
-      --repo '{{metallb_repository}}' \
-      --version "$metallb_version" \
-      --namespace metallb-system \
-      --values "$metallb_values" >"$temp_dir/metallb.yaml"
-    helm template envoy-gateway '{{envoy_gateway_chart}}' \
-      --version "$envoy_gateway_version" \
-      --namespace envoy-gateway-system \
-      --include-crds \
-      --values kubernetes/apps/networking/envoy-gateway/app/values.yaml >"$temp_dir/envoy-gateway.yaml"
-    helm template external-dns-internal external-dns \
-      --repo '{{external_dns_repository}}' \
-      --version "$external_dns_chart_version" \
-      --namespace external-dns \
-      --values "$dns_values" >"$temp_dir/external-dns.yaml"
-
-    rg -q '^kind: Deployment$' "$temp_dir/cert-manager.yaml"
-    rg -q '^  name: cert-manager$' "$temp_dir/cert-manager.yaml"
-    rg -q '^kind: DaemonSet$' "$temp_dir/metallb.yaml"
-    rg -q '^  name: metallb-speaker$' "$temp_dir/metallb.yaml"
-    ! rg -q '^  name: .*frr' "$temp_dir/metallb.yaml"
-    rg -q '^  name: envoy-gateway$' "$temp_dir/envoy-gateway.yaml"
-    rg -q '^  name: gatewayclasses.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
-    rg -q '^  name: gateways.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
-    rg -q '^  name: httproutes.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
-    rg -q '^  name: envoyproxies.gateway.envoyproxy.io$' "$temp_dir/envoy-gateway.yaml"
-    rg -q -- '--source=gateway-httproute' "$temp_dir/external-dns.yaml"
-    rg -q -- '--provider=pihole' "$temp_dir/external-dns.yaml"
-    rg -q -- '--annotation-filter=external-dns.k8s.io/audience=internal' "$temp_dir/external-dns.yaml"
-    rg -q -- '--gateway-name=internal' "$temp_dir/external-dns.yaml"
-    rg -q -- '--pihole-server=https://pi.hole' "$temp_dir/external-dns.yaml"
-    ! rg -q -- '--pihole-tls-skip-verify' "$temp_dir/external-dns.yaml"
-    [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.containers[] | select(.name == "external-dns") | .env[] | select(.name == "SSL_CERT_FILE") | .value' "$temp_dir/external-dns.yaml")" == '/etc/ssl/pihole/tls_ca.crt' ]]
-    [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.volumes[] | select(.name == "pihole-ca") | .configMap.name' "$temp_dir/external-dns.yaml")" == 'pihole-ca' ]]
-    [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.containers[] | select(.name == "external-dns") | .volumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' "$temp_dir/external-dns.yaml")" == '/etc/ssl/pihole true' ]]
-
-    echo 'Phase 7 source, SOPS provider Secrets, dependency graph, policy, and pinned Helm renders passed validation.'
+    @scripts/validate/foundation.sh
 
 # Print the read-only Phase 7 controller, certificate, address, Gateway, DNS, and echo state.
 foundation-status:
@@ -1030,241 +665,22 @@ flux-canary-test: flux-verify
 # Validate the Phase 9 storage source: files, encrypted CIFS Secret, dependency
 # graph, staged-suspend uniformity, key values, wiring, and the pinned Longhorn render.
 storage-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/storage/longhorn'
-    ks="$base/ks.yaml"
-    secret="$base/config/nas-credentials.sops.yaml"
-    values="$base/app/values.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    jobs="$base/config/recurring-jobs.yaml"
-    backuptarget="$base/config/backup-target.yaml"
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-storage-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$secret" "$values" "$hr" "$repo" "$jobs" "$backuptarget" \
-      "$base/app/namespace.yaml" "$base/app/kustomization.yaml" \
-      "$base/config/kustomization.yaml" kubernetes/apps/storage/kustomization.yaml; do
-      [[ -f "$f" ]] || {
-        echo "Missing Phase 9 storage source: $f" >&2
-        echo 'Run just repo storage-secrets if the CIFS Secret is missing.' >&2
-        exit 1
-      }
-    done
-
-    rg -qx '  - ./storage' kubernetes/apps/kustomization.yaml || {
-      echo 'Refusing: ./storage is not wired into kubernetes/apps/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
-    [[ "$(yq -r '.kind' "$secret")" == 'Secret' ]]
-    [[ "$(yq -r '.metadata.name' "$secret")" == 'nas-credentials' ]]
-    [[ "$(yq -r '.metadata.namespace' "$secret")" == 'longhorn-system' ]]
-
-    suspend_states="$(yq ea -r '[select(.kind == "Kustomization") | (.spec.suspend // false)] | .[]' "$ks" | sort -u)"
-    [[ "$suspend_states" == 'true' || "$suspend_states" == 'false' ]] || {
-      echo 'Both storage Kustomizations must be staged together: all suspended or all active.' >&2
-      exit 1
-    }
-
-    [[ "$(yq ea -r 'select(.metadata.name == "longhorn") | .spec.dependsOn[].name' "$ks")" == 'cilium' ]]
-    [[ "$(yq ea -r 'select(.metadata.name == "longhorn-config") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,longhorn' ]]
-
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == 'https://charts.longhorn.io' ]]
-    [[ "$(yq -r '.defaultSettings.defaultDataPath' "$values")" == '/var/mnt/longhorn' ]]
-    [[ "$(yq -r '.defaultSettings.replicaSoftAntiAffinity' "$values")" == 'false' ]]
-    [[ "$(yq -r '.persistence.defaultClassReplicaCount' "$values")" == '2' ]]
-    [[ "$(yq -r '.kind' "$backuptarget")" == 'BackupTarget' ]]
-    [[ "$(yq -r '.metadata.name' "$backuptarget")" == 'default' ]]
-    [[ "$(yq -r '.spec.backupTargetURL' "$backuptarget")" == 'cifs://192.168.0.3/Longhorn' ]]
-    [[ "$(yq -r '.spec.credentialSecret' "$backuptarget")" == 'nas-credentials' ]]
-    [[ "$(yq ea -r '[select(.kind == "RecurringJob") | .spec.task] | .[]' "$jobs" | sort | tr '\n' ' ')" == 'backup snapshot ' ]]
-
-    kustomize build "$base/app" >/dev/null
-    kustomize build "$base/config" >/dev/null
-
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template longhorn longhorn --repo https://charts.longhorn.io --version "$chart_version" --namespace longhorn-system --values "$values" >"$temp_dir/longhorn.yaml"
-    rg -q '^  name: longhorn-manager$' "$temp_dir/longhorn.yaml"
-
-    echo 'Phase 9 storage source, encrypted CIFS Secret, dependency graph, values, and pinned Longhorn render passed validation.'
+    @scripts/validate/storage.sh
 
 # Validate the Phase 11 SMB CSI driver source, wiring, dependency, and pinned render.
 csi-driver-smb-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/storage/csi-driver-smb'
-    ks="$base/ks.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    values="$base/app/values.yaml"
-    chart_repo='https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-csi-smb-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$hr" "$repo" "$values" "$base/app/namespace.yaml" "$base/app/kustomization.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 11 csi-driver-smb source: $f" >&2; exit 1; }
-    done
-
-    rg -qx '  - ./csi-driver-smb/ks.yaml' kubernetes/apps/storage/kustomization.yaml || {
-      echo 'Refusing: ./csi-driver-smb/ks.yaml is not wired into kubernetes/apps/storage/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' "$ks")" == 'cilium' ]]
-    [[ "$(yq -r '.metadata.labels."pod-security.kubernetes.io/enforce"' "$base/app/namespace.yaml")" == 'privileged' ]]
-
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == "$chart_repo" ]]
-
-    kustomize build "$base/app" >/dev/null
-
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template csi-driver-smb csi-driver-smb --repo "$chart_repo" --version "$chart_version" --namespace csi-driver-smb --values "$values" >"$temp_dir/render.yaml"
-    rg -q 'smb\.csi\.k8s\.io' "$temp_dir/render.yaml"
-
-    echo "csi-driver-smb $chart_version source, wiring, dependency, and pinned render passed validation."
+    @scripts/validate/csi-driver-smb.sh
 
 # Validate the Phase 11 shared media storage: namespace + app-template source,
 # encrypted SMB Secret, static RWX SMB PV/PVC, dependency graph, and wiring.
 media-storage-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    ns_ks='kubernetes/apps/media/namespace/ks.yaml'
-    st_ks='kubernetes/apps/media/storage/ks.yaml'
-    nsfile='kubernetes/apps/media/namespace/app/namespace.yaml'
-    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
-    pv='kubernetes/apps/media/storage/app/persistentvolume.yaml'
-    pvc='kubernetes/apps/media/storage/app/persistentvolumeclaim.yaml'
-    secret='kubernetes/apps/media/storage/app/smb-credentials.sops.yaml'
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-
-    for f in "$ns_ks" "$st_ks" "$nsfile" "$oci" "$pv" "$pvc" "$secret" \
-      kubernetes/apps/media/namespace/app/kustomization.yaml \
-      kubernetes/apps/media/storage/app/kustomization.yaml \
-      kubernetes/apps/media/kustomization.yaml; do
-      [[ -f "$f" ]] || {
-        echo "Missing Phase 11 media storage source: $f" >&2
-        echo 'Run just repo media-smb-secrets if the SMB Secret is missing.' >&2
-        exit 1
-      }
-    done
-
-    rg -qx '  - ./media' kubernetes/apps/kustomization.yaml || {
-      echo 'Refusing: ./media is not wired into kubernetes/apps/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    media_suspend="$(yq -r '.spec.suspend // false' "$ns_ks")"
-    storage_suspend="$(yq -r '.spec.suspend // false' "$st_ks")"
-    [[ "$media_suspend" == "$storage_suspend" ]] || {
-      echo 'media and media-storage must be staged together: both suspended or both active.' >&2
-      exit 1
-    }
-    [[ "$media_suspend" == 'true' || "$media_suspend" == 'false' ]]
-
-    [[ "$(yq -r '.spec.dependsOn[].name' "$ns_ks")" == 'cilium' ]]
-    [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$st_ks")" == 'csi-driver-smb,media' ]]
-
-    [[ "$(yq -r '.metadata.labels."gateway.supermorphic.com/access"' "$nsfile")" == 'internal' ]]
-    [[ "$(yq -r '.metadata.labels."pod-security.kubernetes.io/enforce"' "$nsfile")" == 'privileged' ]]
-
-    [[ "$(yq -r '.spec.url' "$oci")" == 'oci://ghcr.io/bjw-s-labs/helm/app-template' ]]
-    oci_tag="$(yq -r '.spec.ref.tag' "$oci")"
-    [[ -n "$oci_tag" && "$oci_tag" != 'null' ]]
-
-    [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
-    [[ "$(yq -r '.kind' "$secret")" == 'Secret' ]]
-    [[ "$(yq -r '.metadata.name' "$secret")" == 'smb-credentials' ]]
-    [[ "$(yq -r '.metadata.namespace' "$secret")" == 'media' ]]
-
-    [[ "$(yq -r '.kind' "$pv")" == 'PersistentVolume' ]]
-    [[ "$(yq -r '.spec.csi.driver' "$pv")" == 'smb.csi.k8s.io' ]]
-    [[ "$(yq -r '.spec.csi.volumeAttributes.source' "$pv")" == '//192.168.0.3/Prometheus' ]]
-    [[ "$(yq -r '.spec.accessModes[]' "$pv" | sort -u)" == 'ReadWriteMany' ]]
-    [[ "$(yq -r '.spec.csi.nodeStageSecretRef.name' "$pv")" == 'smb-credentials' ]]
-    [[ "$(yq -r '.spec.csi.nodeStageSecretRef.namespace' "$pv")" == 'media' ]]
-
-    [[ "$(yq -r '.spec.accessModes[]' "$pvc" | sort -u)" == 'ReadWriteMany' ]]
-    [[ "$(yq -r '.spec.volumeName' "$pvc")" == 'media-data' ]]
-    [[ "$(yq -r '.metadata.namespace' "$pvc")" == 'media' ]]
-
-    kustomize build kubernetes/apps/media/namespace/app >/dev/null
-    kustomize build kubernetes/apps/media/storage/app >/dev/null
-
-    echo 'Phase 11 media storage source, encrypted SMB Secret, static RWX SMB PV/PVC, dependency graph, and wiring passed validation.'
+    @scripts/validate/media-storage.sh
 
 # Validate the Phase 11 Plex source: files, wiring, dependency, app-template chartRef,
 # values (Recreate + RWO config, shared media-data, emptyDir transcode), HTTPRoute,
 # and the pinned app-template render.
 plex-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/media/plex'
-    ks="$base/ks.yaml"
-    hr="$base/app/helmrelease.yaml"
-    values="$base/app/values.yaml"
-    route="$base/app/httproute.yaml"
-    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-plex-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml" "$oci"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 11 Plex source: $f" >&2; exit 1; }
-    done
-
-    rg -qx '  - ./plex/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
-      echo 'Refusing: ./plex/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,media-storage' ]]
-
-    [[ "$(yq -r '.spec.chartRef.kind' "$hr")" == 'OCIRepository' ]]
-    [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
-
-    [[ "$(yq -r '.controllers.plex.type' "$values")" == 'deployment' ]]
-    [[ "$(yq -r '.controllers.plex.strategy' "$values")" == 'Recreate' ]]
-    [[ "$(yq -r '.controllers.plex.containers.app.image.repository' "$values")" == 'ghcr.io/home-operations/plex' ]]
-    image_tag="$(yq -r '.controllers.plex.containers.app.image.tag' "$values")"
-    [[ -n "$image_tag" && "$image_tag" != 'null' ]]
-    [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOncePod' ]]
-    [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
-    [[ "$(yq -r '.persistence.media.existingClaim' "$values")" == 'media-data' ]]
-    [[ "$(yq -r '.persistence.transcode.type' "$values")" == 'emptyDir' ]]
-
-    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'plex.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-    [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '32400' ]]
-
-    chart_url="$(yq -r '.spec.url' "$oci")"
-    chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
-
-    kustomize build "$base/app" >/dev/null
-
-    helm template plex "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
-    [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'plex' ]]
-    [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/render.yaml")" == 'Recreate' ]]
-
-    echo "Plex $image_tag source, app-template chartRef, values (Recreate/RWOP config, media-data, emptyDir transcode), HTTPRoute, and pinned render passed validation."
+    @scripts/validate/plex.sh
 
 # Verify the live Longhorn acceptance gate: controllers, node disks, default
 # StorageClass, backup target, recurring jobs, and a two-replica test PVC.
@@ -1478,35 +894,7 @@ plex-reschedule-verify: require-bash
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
 intel-gpu-plugin-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/kube-system/intel-gpu-plugin'
-    ks="$base/ks.yaml"
-    ds="$base/app/daemonset.yaml"
-
-    for f in "$ks" "$ds" "$base/app/kustomization.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 11 intel-gpu-plugin source: $f" >&2; exit 1; }
-    done
-
-    rg -qx '  - ./intel-gpu-plugin/ks.yaml' kubernetes/apps/kube-system/kustomization.yaml || {
-      echo 'Refusing: ./intel-gpu-plugin/ks.yaml is not wired into kubernetes/apps/kube-system/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '.spec.dependsOn[].name' "$ks")" == 'cilium' ]]
-
-    [[ "$(yq -r '.kind' "$ds")" == 'DaemonSet' ]]
-    [[ "$(yq -r '.metadata.namespace' "$ds")" == 'kube-system' ]]
-    image="$(yq -r '.spec.template.spec.containers[0].image' "$ds")"
-    [[ "$image" == intel/intel-gpu-plugin:* ]]
-    [[ "$image" != *:latest ]]
-
-    kustomize build "$base/app" >/dev/null
-
-    echo "intel-gpu-plugin ($image) source, wiring, dependency, and DaemonSet manifest passed validation."
+    @scripts/validate/intel-gpu-plugin.sh
 
 # Verify the live Phase 11 Intel GPU device plugin: Kustomization Ready, DaemonSet
 # rolled out, and every node advertising gpu.intel.com/i915 (QuickSync capacity).
@@ -1533,114 +921,7 @@ intel-gpu-plugin-verify: require-bash
 # Validate the Phase 12 qBittorrent+Gluetun source: files, wiring, dependency,
 # encrypted ProtonVPN Secret, the sidecar/kill-switch essentials, and the pinned render.
 qbittorrent-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/media/qbittorrent'
-    ks="$base/ks.yaml"
-    hr="$base/app/helmrelease.yaml"
-    values="$base/app/values.yaml"
-    route="$base/app/httproute.yaml"
-    secret="$base/app/protonvpn.sops.yaml"
-    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-qbt-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$hr" "$values" "$route" "$secret" "$base/app/kustomization.yaml" "$oci"; do
-      [[ -f "$f" ]] || {
-        echo "Missing Phase 12 qBittorrent source: $f" >&2
-        echo 'Run just repo protonvpn-secrets if the ProtonVPN Secret is missing.' >&2
-        exit 1
-      }
-    done
-
-    rg -qx '  - ./qbittorrent/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
-      echo 'Refusing: ./qbittorrent/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,media-storage' ]]
-    [[ "$(yq -r '.spec.decryption.provider' "$ks")" == 'sops' ]]
-    [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
-
-    [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
-    [[ "$(yq -r '.metadata.name' "$secret")" == 'protonvpn' ]]
-    [[ "$(yq -r '.metadata.namespace' "$secret")" == 'media' ]]
-
-    # Gluetun native sidecar + kill-switch essentials.
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.restartPolicy' "$values")" == 'Always' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.securityContext.capabilities.add[]' "$values" | tr '\n' ' ')" == 'NET_ADMIN ' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_SERVICE_PROVIDER' "$values")" == 'protonvpn' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING' "$values")" == 'on' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.PORT_FORWARD_ONLY' "$values")" == 'on' ]]
-    [[ -n "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.SERVER_COUNTRIES // ""' "$values")" ]]
-    # WebUI (8080) + control server (8000) admitted on the pod interface.
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.FIREWALL_INPUT_PORTS' "$values")" == '8000,8080' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH' "$values")" == '/gluetun/auth/config.toml' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING_UP_COMMAND' "$values")" != 'null' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING_DOWN_COMMAND' "$values")" != 'null' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.startup.spec.httpGet.port' "$values")" == '8000' ]]
-    # Deliberately-slow k8s liveness fallback: restart gluetun only after a sustained
-    # stuck-VPN state (running but no forwarded port). Public IP is deliberately not the
-    # signal: its one-shot metadata fetch can fail on an otherwise working tunnel.
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.enabled' "$values")" == 'true' ]]
-    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.custom' "$values")" == 'true' ]]
-    probe_cmd="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.exec.command[2]' "$values")"
-    [[ "$probe_cmd" == *'/v1/portforward'* ]]
-    [[ "$probe_cmd" != *'/v1/publicip/ip'* ]]
-    [[ "$probe_cmd" == *'"status":"stopped"'* ]]
-    [[ "$probe_cmd" == *'"status":"running"'* ]]
-    [[ "$probe_cmd" == *'|| exit 1'* ]]
-    lft="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.failureThreshold' "$values")"
-    lps="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.periodSeconds' "$values")"
-    [[ "$lft" =~ ^[0-9]+$ && "$lps" =~ ^[0-9]+$ && $(( lft * lps )) -ge 180 ]] || { echo 'gluetun liveness must be deliberately slow (failureThreshold*periodSeconds >= 180s).' >&2; exit 1; }
-    # Only Gluetun is privileged; qBittorrent drops all caps.
-    [[ "$(yq -r '.controllers.qbittorrent.containers.app.securityContext.capabilities.drop[]' "$values" | tr '\n' ' ')" == 'ALL ' ]]
-    # Device + auth config mounted; config on Longhorn RWO; shared /data.
-    [[ "$(yq -r '.persistence.tun.hostPath' "$values")" == '/dev/net/tun' ]]
-    [[ "$(yq -r '.persistence.tun.hostPathType' "$values")" == 'CharDevice' ]]
-    [[ "$(yq -r '.persistence."gluetun-auth".type' "$values")" == 'secret' ]]
-    [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
-    [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]]
-
-    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'qbittorrent.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-
-    # Reactive VPN-down alerting: in-cluster control-server Service (no HTTPRoute) +
-    # a critical PrometheusRule fed by the Gatus health probe.
-    svc="$base/app/service-gluetun-control.yaml"
-    rule="$base/app/prometheusrule.yaml"
-    [[ -f "$svc" && -f "$rule" ]] || {
-      echo "Missing Phase 12 VPN-alert source ($svc / $rule)." >&2
-      exit 1
-    }
-    [[ "$(yq -r '.kind' "$svc")" == 'Service' ]]
-    [[ "$(yq -r '.metadata.name' "$svc")" == 'qbittorrent-gluetun-control' ]]
-    [[ "$(yq -r '.spec.ports[0].port' "$svc")" == '8000' ]]
-    # The control server must never be routed to the gateway/LB.
-    ! rg -qi 'gluetun-control' "$route"
-    [[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
-    [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentVpnDown") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
-    [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentGluetunRestartLoop") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
-    rg -q 'gatus_results_endpoint_success' "$rule"
-    rg -q 'kube_pod_init_container_status_restarts_total' "$rule"
-    # The Gatus health probe that feeds the rule must exist.
-    rg -q 'name: qbittorrent-vpn' kubernetes/apps/monitoring/gatus/app/values.yaml
-    rg -q 'status == running' kubernetes/apps/monitoring/gatus/app/values.yaml
-
-    chart_url="$(yq -r '.spec.url' "$oci")"
-    chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
-    kustomize build "$base/app" >/dev/null
-    helm template qbittorrent "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
-    [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'qbittorrent' ]]
-    [[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .restartPolicy' "$temp_dir/render.yaml")" == 'Always' ]]
-    yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .livenessProbe.exec.command[]' "$temp_dir/render.yaml" | rg -q '/v1/portforward'
-
-    echo 'Phase 12 qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'
+    @scripts/validate/qbittorrent.sh
 
 # Verify the live Phase 12 qBittorrent: Kustomization + HelmRelease Ready, rollout,
 # HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway. The VPN
@@ -1796,67 +1077,7 @@ qbittorrent-killswitch-verify: require-bash
 # shared /data for sonarr/radarr, HTTPRoutes, Gatus /ping probes, and the pinned
 # app-template render. Cluster-independent — part of `just ci`.
 arr-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
-    chart_url="$(yq -r '.spec.url' "$oci")"
-    chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-arr-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for app in prowlarr sonarr radarr; do
-      base="kubernetes/apps/media/$app"
-      ks="$base/ks.yaml"; hr="$base/app/helmrelease.yaml"; values="$base/app/values.yaml"; route="$base/app/httproute.yaml"
-      for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml"; do
-        [[ -f "$f" ]] || { echo "Missing Phase 13 source: $f" >&2; exit 1; }
-      done
-      rg -qx "  - ./$app/ks.yaml" kubernetes/apps/media/kustomization.yaml || {
-        echo "Refusing: ./$app/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml." >&2
-        exit 1
-      }
-
-      suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-      [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-      # No SOPS decryption — these apps carry no secrets (API keys are first-run).
-      [[ "$(yq -r '.spec.decryption // "none"' "$ks")" == 'none' ]] || { echo "$app ks.yaml must not declare decryption (no secrets)." >&2; exit 1; }
-      deps="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")"
-      if [[ "$app" == 'prowlarr' ]]; then
-        [[ "$deps" == 'internal-gateway,media' ]] || { echo "prowlarr dependsOn must be [media, internal-gateway]; got: $deps." >&2; exit 1; }
-      else
-        [[ "$deps" == 'internal-gateway,media-storage' ]] || { echo "$app dependsOn must be [media-storage, internal-gateway]; got: $deps." >&2; exit 1; }
-      fi
-
-      [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
-
-      [[ "$(yq -r ".controllers.$app.strategy" "$values")" == 'Recreate' ]]
-      [[ "$(yq -r ".controllers.$app.containers.app.image.repository" "$values")" == "ghcr.io/home-operations/$app" ]]
-      tag="$(yq -r ".controllers.$app.containers.app.image.tag" "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
-      [[ "$(yq -r ".controllers.$app.containers.app.securityContext.capabilities.drop[]" "$values" | tr '\n' ' ')" == 'ALL ' ]]
-      [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOnce' ]]
-      [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
-      [[ "$(yq -r '.persistence.config.annotations."helm.sh/resource-policy"' "$values")" == 'keep' ]]
-      if [[ "$app" == 'prowlarr' ]]; then
-        [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'prowlarr must not mount media-data (config-only).' >&2; exit 1; }
-      else
-        [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
-      fi
-
-      [[ "$(yq -r '.spec.hostnames[0]' "$route")" == "$app.lab.supermorphic.com" ]]
-      [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-      [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == "$app" ]]
-
-      # A Gatus /ping health probe must exist for this app.
-      rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "$app has no Gatus endpoint." >&2; exit 1; }
-
-      kustomize build "$base/app" >/dev/null
-      helm template "$app" "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/$app.yaml"
-      [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/$app.yaml")" == "$app" ]]
-      [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/$app.yaml")" == 'Recreate' ]]
-      echo "  $app $tag OK"
-    done
-
-    echo 'Phase 13 *arr source (Prowlarr, Sonarr, Radarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes, Gatus probes, and pinned renders passed validation.'
+    @scripts/validate/arr.sh
 
 # Verify a live Phase 13 *arr app: `just kube arr-verify <prowlarr|sonarr|radarr>`.
 # Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, DNS, and /ping over the
@@ -1889,53 +1110,7 @@ arr-verify app: require-bash
 # config-only PVC (Longhorn RWO + Recreate + keep at /app/config), HTTPRoute, Gatus probe,
 # and the pinned app-template render. Cluster-independent — part of `just ci`.
 seerr-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/media/seerr'
-    ks="$base/ks.yaml"; hr="$base/app/helmrelease.yaml"; values="$base/app/values.yaml"; route="$base/app/httproute.yaml"
-    oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-seerr-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml" "$oci"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 14 Seerr source: $f" >&2; exit 1; }
-    done
-    rg -qx '  - ./seerr/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
-      echo 'Refusing: ./seerr/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '.spec.decryption // "none"' "$ks")" == 'none' ]] || { echo 'seerr ks.yaml must not declare decryption (no secrets).' >&2; exit 1; }
-    [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,media' ]]
-    [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
-
-    [[ "$(yq -r '.controllers.seerr.strategy' "$values")" == 'Recreate' ]]
-    [[ "$(yq -r '.controllers.seerr.containers.app.image.repository' "$values")" == 'ghcr.io/seerr-team/seerr' ]]
-    tag="$(yq -r '.controllers.seerr.containers.app.image.tag' "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
-    [[ "$(yq -r '.controllers.seerr.containers.app.securityContext.capabilities.drop[]' "$values" | tr '\n' ' ')" == 'ALL ' ]]
-    [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOnce' ]]
-    [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
-    [[ "$(yq -r '.persistence.config.annotations."helm.sh/resource-policy"' "$values")" == 'keep' ]]
-    [[ "$(yq -r '.persistence.config.globalMounts[0].path' "$values")" == '/app/config' ]]
-    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'seerr is config-only; it must not mount media-data.' >&2; exit 1; }
-
-    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'seerr.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-    [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == 'seerr' ]]
-    [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '5055' ]]
-    rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'seerr has no Gatus endpoint.' >&2; exit 1; }
-
-    chart_url="$(yq -r '.spec.url' "$oci")"
-    chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
-    kustomize build "$base/app" >/dev/null
-    helm template seerr "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
-    [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'seerr' ]]
-    [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/render.yaml")" == 'Recreate' ]]
-
-    echo "Seerr $tag source (config-only, app-template, RWO/Recreate config at /app/config), HTTPRoute, Gatus probe, and pinned render passed validation."
+    @scripts/validate/seerr.sh
 
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
@@ -1965,73 +1140,7 @@ seerr-verify: require-bash
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.
 monitoring-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/monitoring/kube-prometheus-stack'
-    ks="$base/ks.yaml"
-    secret="$base/app/grafana-admin.sops.yaml"
-    values="$base/app/values.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    routes="$base/config/httproutes.yaml"
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-monitoring-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$secret" "$values" "$hr" "$repo" "$routes" \
-      "$base/app/namespace.yaml" "$base/app/kustomization.yaml" \
-      "$base/config/kustomization.yaml" kubernetes/apps/monitoring/kustomization.yaml; do
-      [[ -f "$f" ]] || {
-        echo "Missing Phase 10 monitoring source: $f" >&2
-        echo 'Run just repo monitoring-secrets if the Grafana Secret is missing.' >&2
-        exit 1
-      }
-    done
-
-    rg -qx '  - ./monitoring' kubernetes/apps/kustomization.yaml || {
-      echo 'Refusing: ./monitoring is not wired into kubernetes/apps/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
-    [[ "$(yq -r '.kind' "$secret")" == 'Secret' ]]
-    [[ "$(yq -r '.metadata.name' "$secret")" == 'grafana-admin-secret' ]]
-    [[ "$(yq -r '.metadata.namespace' "$secret")" == 'monitoring' ]]
-
-    suspend_states="$(yq ea -r '[select(.kind == "Kustomization") | (.spec.suspend // false)] | .[]' "$ks" | sort -u)"
-    [[ "$suspend_states" == 'true' || "$suspend_states" == 'false' ]] || {
-      echo 'Both monitoring Kustomizations must be staged together: all suspended or all active.' >&2
-      exit 1
-    }
-
-    [[ "$(yq ea -r 'select(.metadata.name == "kube-prometheus-stack") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,longhorn' ]]
-    [[ "$(yq ea -r 'select(.metadata.name == "kube-prometheus-stack-config") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'internal-gateway,kube-prometheus-stack' ]]
-
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == 'https://prometheus-community.github.io/helm-charts' ]]
-    [[ "$(yq -r '.prometheus.prometheusSpec.retention' "$values")" == '30d' ]]
-    [[ "$(yq -r '.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage' "$values")" == '50Gi' ]]
-    [[ "$(yq -r '.grafana.persistence.enabled' "$values")" == 'true' ]]
-    for c in kubeProxy kubeControllerManager kubeScheduler kubeEtcd; do
-      [[ "$(yq -r ".${c}.enabled" "$values")" == 'false' ]]
-    done
-    [[ "$(yq ea -r '[select(.kind == "HTTPRoute") | .spec.hostnames[0]] | sort | join(" ")' "$routes")" == 'alertmanager.lab.supermorphic.com grafana.lab.supermorphic.com prometheus.lab.supermorphic.com' ]]
-    [[ "$(yq ea -r '[select(.kind == "HTTPRoute") | .spec.parentRefs[].name] | unique | .[]' "$routes")" == 'internal' ]]
-    [[ "$(yq -r '.metadata.labels."gateway.supermorphic.com/access"' "$base/app/namespace.yaml")" == 'internal' ]]
-
-    kustomize build "$base/app" >/dev/null
-    kustomize build "$base/config" >/dev/null
-
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template kube-prometheus-stack kube-prometheus-stack --repo https://prometheus-community.github.io/helm-charts --version "$chart_version" --namespace monitoring --values "$values" >"$temp_dir/kps.yaml"
-    render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanager") | .kind] | .[]' "$temp_dir/kps.yaml" | sort -u | tr '\n' ' ')"
-    [[ "$render_kinds" == 'Alertmanager Prometheus ' ]]
-
-    echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, and pinned kube-prometheus-stack render passed validation.'
+    @scripts/validate/monitoring.sh
 
 # Verify the live monitoring stack: HelmRelease + workloads healthy, PVCs bound
 # on Longhorn, HTTPRoutes accepted, all three UIs reachable with trusted HTTPS
@@ -2122,44 +1231,7 @@ grafana-admin-reset: require-bash
 # Validate the Phase 10 Gatus source: files, wiring, namespace gateway label,
 # staged suspend, key values, HTTPRoute, and the pinned chart render.
 gatus-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/monitoring/gatus'
-    ks="$base/ks.yaml"
-    values="$base/app/values.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    route="$base/app/httproute.yaml"
-    ns="$base/app/namespace.yaml"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-gatus-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$values" "$hr" "$repo" "$route" "$ns" "$base/app/kustomization.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 10 Gatus source: $f" >&2; exit 1; }
-    done
-    rg -qx '  - ./gatus/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
-      echo 'Refusing: ./gatus/ks.yaml is not listed in kubernetes/apps/monitoring/kustomization.yaml.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '.metadata.labels."gateway.supermorphic.com/access"' "$ns")" == 'internal' ]]
-    [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,internal-gateway' ]]
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == 'https://twin.github.io/helm-charts' ]]
-    [[ "$(yq -r '.config.storage.type' "$values")" == 'memory' ]]
-    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'gatus.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-
-    kustomize build "$base/app" >/dev/null
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template gatus gatus --repo https://twin.github.io/helm-charts --version "$chart_version" --namespace gatus --values "$values" >/dev/null
-
-    echo 'Phase 10 Gatus source, wiring, namespace label, values, HTTPRoute, and pinned chart render passed validation.'
+    @scripts/validate/gatus.sh
 
 # Verify the live Gatus app: Kustomization + HelmRelease Ready, PVC bound,
 # HTTPRoute accepted, the dashboard reachable via HTTPS, and foundation green.
@@ -2198,54 +1270,7 @@ gatus-verify: require-bash
 # Validate the Phase 10 Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
 homepage-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/monitoring/homepage'
-    ks="$base/ks.yaml"
-    ns="$base/app/namespace.yaml"
-    dep="$base/app/deployment.yaml"
-    route="$base/app/httproute.yaml"
-
-    for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.yaml" \
-      "$base/app/kustomization.yaml" "$base/app/config/settings.yaml" \
-      "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
-      "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
-    done
-    rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
-      echo 'Refusing: ./homepage/ks.yaml is not listed in the monitoring kustomization.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq -r '.metadata.labels."gateway.supermorphic.com/access"' "$ns")" == 'internal' ]]
-    [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,internal-gateway' ]]
-    [[ "$(yq -r '.spec.template.spec.containers[0].image' "$dep")" == ghcr.io/gethomepage/homepage:* ]]
-    [[ "$(yq -r '[.spec.template.spec.containers[0].env[] | select(.name == "HOMEPAGE_ALLOWED_HOSTS") | .value] | .[0]' "$dep")" == 'homepage.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'homepage.lab.supermorphic.com' ]]
-    [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
-
-    # Per-service split Secrets (rotate independently): homepage-grafana + homepage-plex.
-    grafana_secret="$base/app/homepage-grafana.sops.yaml"
-    plex_secret="$base/app/homepage-plex.sops.yaml"
-    [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
-    [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
-    [[ "$(sops filestatus "$grafana_secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.metadata.name' "$grafana_secret")" == 'homepage-grafana' ]]
-    [[ "$(yq -r '.metadata.namespace' "$grafana_secret")" == 'homepage' ]]
-    [[ "$(sops filestatus "$plex_secret" | yq -r '.encrypted')" == 'true' ]]
-    [[ "$(yq -r '.metadata.name' "$plex_secret")" == 'homepage-plex' ]]
-    [[ "$(yq -r '.metadata.namespace' "$plex_secret")" == 'homepage' ]]
-    # The deployment must reference the split Secrets, not the old combined one.
-    ! rg -q 'homepage-secrets' "$dep"
-    [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
-    [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
-
-    kustomize build "$base/app" >/dev/null
-
-    echo 'Phase 10 Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted Secrets (homepage-grafana + homepage-plex) passed validation.'
+    @scripts/validate/homepage.sh
 
 # Verify the live Homepage app: Kustomization Ready, deployment rolled out,
 # HTTPRoute accepted, dashboard reachable via HTTPS, and foundation green.
@@ -2283,45 +1308,7 @@ homepage-verify: require-bash
 # Validate the Phase 10 Trivy Operator source: files, wiring, staged suspend,
 # dependency, pinned chart, key scanner settings, and the render.
 trivy-validate: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    base='kubernetes/apps/security/trivy-operator'
-    ks="$base/ks.yaml"
-    values="$base/app/values.yaml"
-    hr="$base/app/helmrelease.yaml"
-    repo="$base/app/helmrepository.yaml"
-    temp_dir="$(mktemp -d /tmp/homelab-talos-trivy-validate.XXXXXX)"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-
-    for f in "$ks" "$values" "$hr" "$repo" "$base/app/namespace.yaml" "$base/app/kustomization.yaml"; do
-      [[ -f "$f" ]] || { echo "Missing Phase 10 Trivy source: $f" >&2; exit 1; }
-    done
-    rg -qx '  - ./trivy-operator/ks.yaml' kubernetes/apps/security/kustomization.yaml || {
-      echo 'Refusing: ./trivy-operator/ks.yaml is not listed in the security kustomization.' >&2
-      exit 1
-    }
-
-    suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-    [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-    [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium' ]]
-    chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
-    [[ -n "$chart_version" && "$chart_version" != 'null' ]]
-    [[ "$(yq -r '.spec.url' "$repo")" == 'https://aquasecurity.github.io/helm-charts' ]]
-    [[ "$(yq -r '.operator.sbomGenerationEnabled' "$values")" == 'false' ]]
-    [[ "$(yq -r '.operator.clusterComplianceEnabled' "$values")" == 'false' ]]
-    # infra-assessment cannot run on Talos (read-only host); keep it disabled.
-    [[ "$(yq -r '.operator.infraAssessmentScannerEnabled' "$values")" == 'false' ]]
-    [[ "$(yq -r '.trivy.ignoreUnfixed' "$values")" == 'true' ]]
-    [[ "$(yq -r '.serviceMonitor.enabled' "$values")" == 'true' ]]
-
-    kustomize build "$base/app" >/dev/null
-    printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
-    HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-      helm template trivy-operator trivy-operator --repo https://aquasecurity.github.io/helm-charts --version "$chart_version" --namespace trivy-system --values "$values" >"$temp_dir/trivy.yaml"
-    [[ "$(yq ea 'select(.kind == "ConfigMap" and .metadata.name == "trivy-operator-config") | .data.OPERATOR_SBOM_GENERATION_ENABLED' "$temp_dir/trivy.yaml")" == 'false' ]]
-
-    echo 'Phase 10 Trivy Operator source, wiring, dependency, pinned chart, scanner settings, and render passed validation.'
+    @scripts/validate/trivy.sh
 
 # Verify the live Trivy Operator: Kustomization + HelmRelease Ready, operator
 # rolled out, report CRDs installed, and foundation green.
