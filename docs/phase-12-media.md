@@ -2,10 +2,14 @@
 
 ## Status
 
-**Planned.** qBittorrent runs beside **Gluetun** (ProtonVPN WireGuard) in one Pod, so
-all of qBittorrent's internet traffic egresses through the VPN or is dropped. The
-**kill switch is a hard, live-tested gate** (see `plans/media-stack-architecture-plan.md`,
-"VPN kill switch") — nothing is activated until the failure test passes on the cluster.
+**Complete / live (2026-07-24, PR #32 — `suspend: false`).** qBittorrent runs beside
+**Gluetun** (ProtonVPN WireGuard) in one Pod, so all of qBittorrent's internet traffic
+egresses through the VPN or is dropped. The **kill switch is a hard, live-tested gate**
+(see `plans/media-stack-architecture-plan.md`, "VPN kill switch"); it passed on the cluster
+(see "Verified findings" below) before activation. One non-blocking operational follow-up
+remains open — whether a *container* (vs *pod*) restart clears the stuck DoT-DNS cycle;
+tracked under "Recovery hierarchy" and covered meanwhile by the
+`QbittorrentGluetunRestartLoop` alert and operator pod recreation.
 
 An expert review of the initial design was incorporated in full (6 corrections +
 credential simplification), verified against the Gluetun wiki. This doc records that
