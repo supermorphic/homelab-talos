@@ -53,7 +53,7 @@ do not exist yet. Homepage shows a pod-status tile per app and a live Prowlarr w
 `ks`, dependency graph, app-template chartRef, config PVC (RWO + Recreate + keep), shared
 `/data` for sonarr/radarr, HTTPRoutes, activation-aware Gatus probes, and the pinned render.
 The Prowlarr checks also enforce its Homepage widget type, in-cluster URL, secret-backed
-key placeholder, and supported activity fields.
+key placeholder, while leaving the widget to display its complete default field set.
 
 ## Rollout (operator, after merge — per app)
 

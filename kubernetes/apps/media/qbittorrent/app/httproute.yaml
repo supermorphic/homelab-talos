@@ -20,7 +20,6 @@ metadata:
     # in-pod Gluetun port-forward hook separately.)
     gethomepage.dev/widget.type: "qbittorrent"
     gethomepage.dev/widget.url: "http://qbittorrent.media.svc.cluster.local:8080"
-    gethomepage.dev/widget.fields: '["leech","download","seed","upload"]'
 spec:
   hostnames:
     - qbittorrent.lab.supermorphic.com

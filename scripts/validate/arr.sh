@@ -59,7 +59,6 @@ for app in prowlarr sonarr radarr; do
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'prowlarr' ]]
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://prowlarr.media.svc.cluster.local:9696' ]]
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_PROWLARR_API_KEY}}' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields"' "$route")" == '["numberOfGrabs","numberOfQueries","numberOfFailGrabs","numberOfFailQueries"]' ]]
   fi
 
   kustomize build "$base/app" >/dev/null
