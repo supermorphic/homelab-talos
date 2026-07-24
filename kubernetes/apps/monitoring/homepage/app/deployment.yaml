@@ -29,25 +29,25 @@ spec:
             - name: HOMEPAGE_ALLOWED_HOSTS
               value: homepage.lab.supermorphic.com
             # Grafana widget credentials (optional: the pod starts without the
-            # Secret; the widget stays blank until `just repo homepage-secrets`).
+            # Secret; the widget stays blank until `just repo homepage-grafana-secrets`).
             - name: HOMEPAGE_VAR_GRAFANA_USER
               valueFrom:
                 secretKeyRef:
-                  name: homepage-secrets
-                  key: grafana-user
+                  name: homepage-grafana
+                  key: username
                   optional: true
             - name: HOMEPAGE_VAR_GRAFANA_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: homepage-secrets
-                  key: grafana-password
+                  name: homepage-grafana
+                  key: password
                   optional: true
-            # Plex widget token (optional: widget blank until the Secret has it).
+            # Plex widget token (optional: widget blank until `just repo homepage-plex-secrets`).
             - name: HOMEPAGE_VAR_PLEX_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: homepage-secrets
-                  key: plex-token
+                  name: homepage-plex
+                  key: token
                   optional: true
           resources:
             requests:

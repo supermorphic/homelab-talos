@@ -8,8 +8,8 @@ metadata:
     external-dns.k8s.io/audience: internal
     # Homepage auto-discovery (kubernetes.yaml gateway: true). The Grafana widget's
     # credentials come from Homepage env vars (HOMEPAGE_VAR_*), backed by the
-    # SOPS-encrypted homepage-secrets Secret — never a cleartext annotation. The
-    # widget stays blank until that Secret is created (just repo homepage-secrets).
+    # SOPS-encrypted homepage-grafana Secret — never a cleartext annotation. The
+    # widget stays blank until that Secret is created (just repo homepage-grafana-secrets).
     gethomepage.dev/enabled: "true"
     gethomepage.dev/name: "Grafana"
     gethomepage.dev/description: "Observability and visualization dashboards"
