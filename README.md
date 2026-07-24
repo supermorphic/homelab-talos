@@ -9,6 +9,8 @@ The canonical design and rollout order are in
 [`plans/talos-flux-platform-plan.md`](plans/talos-flux-platform-plan.md). Start
 there before enabling a new phase. Physical preflight evidence is in
 [`docs/phase-0-preflight.md`](docs/phase-0-preflight.md).
+Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, and Seerr UI configuration is
+documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
 
 ## Development workflow
 

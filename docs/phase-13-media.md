@@ -75,6 +75,10 @@ Repeat with `sonarr` / `radarr` (confirm string `bootstrap:phase13:<app>`).
 
 ### First-run wiring (manual, persists in config PVCs)
 
+Follow the canonical greenfield checklist in
+[`arr-stack-startup.md`](arr-stack-startup.md). The summary below records the
+Phase 13-specific requirements.
+
 1. On Prowlarr's initial authentication screen select **Forms (Login Page)**, keep
    **Authentication Required** set to **Enabled**, and create a strong unique login.
    The account is stored in `prowlarr.db` on the retained config PVC; pod replacement,
