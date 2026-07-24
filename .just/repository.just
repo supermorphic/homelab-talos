@@ -662,11 +662,8 @@ lint:
 require-bash:
     #!/usr/bin/env bash
     set -euo pipefail
-    [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-      echo 'This repository requires bash >= 4 (for example: brew install bash).' >&2
-      echo 'macOS /bin/bash 3.2 skips set -e for [[ ]] tests, so validation would not gate.' >&2
-      exit 1
-    }
+    source scripts/lib/common.sh
+    require_bash
 
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
