@@ -642,6 +642,49 @@ homepage-plex-secrets:
     mv -- "$temp_dir/homepage-plex.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-plex in homepage)."
 
+# Write ONLY the SOPS-encrypted Homepage Prowlarr widget Secret
+# (homepage-prowlarr in the homepage namespace) from PROWLARR_API_KEY.
+# Independent of the other Homepage widget credentials. Never echoes the value.
+homepage-prowlarr-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-prowlarr:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-prowlarr.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-prowlarr.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${PROWLARR_API_KEY:-}" ]] || {
+      echo 'Set PROWLARR_API_KEY to the API key from Prowlarr Settings > General.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_PROWLARR_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Prowlarr Secret.' >&2
+      echo "Set HOMEPAGE_PROWLARR_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export PROWLARR_API_KEY
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-prowlarr" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."apiKey" = strenv(PROWLARR_API_KEY)' \
+      >"$temp_dir/homepage-prowlarr.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-prowlarr.yaml" >"$temp_dir/homepage-prowlarr.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-prowlarr.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-prowlarr.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$PROWLARR_API_KEY" "$temp_dir/homepage-prowlarr.sops.yaml"
+
+    mv -- "$temp_dir/homepage-prowlarr.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-prowlarr in homepage)."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files
     just talos source-validate

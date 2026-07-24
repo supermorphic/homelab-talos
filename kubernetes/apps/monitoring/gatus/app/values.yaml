@@ -82,30 +82,13 @@ config:
       conditions:
         - "[STATUS] == 200"
         - "[BODY].status == running"
-    # *arr automation (black-box through the internal gateway). /ping is each app's
-    # unauthenticated health endpoint (no API key) and returns 200 when serving.
+    # Active *arr automation (black-box through the internal gateway). /ping is
+    # unauthenticated (no API key) and returns 200 when the app is serving. Add each
+    # endpoint when its suspended rollout is accepted and activated in Git; probing
+    # staged-but-absent apps creates false alarms.
     - name: prowlarr
       group: Media
       url: "https://prowlarr.lab.supermorphic.com/ping"
-      interval: 1m
-      conditions:
-        - "[STATUS] == 200"
-    - name: sonarr
-      group: Media
-      url: "https://sonarr.lab.supermorphic.com/ping"
-      interval: 1m
-      conditions:
-        - "[STATUS] == 200"
-    - name: radarr
-      group: Media
-      url: "https://radarr.lab.supermorphic.com/ping"
-      interval: 1m
-      conditions:
-        - "[STATUS] == 200"
-    # Seerr request UI: /api/v1/status is unauthenticated and returns 200 with version.
-    - name: seerr
-      group: Media
-      url: "https://seerr.lab.supermorphic.com/api/v1/status"
       interval: 1m
       conditions:
         - "[STATUS] == 200"

@@ -5,6 +5,7 @@ resources:
   - ./deployment.yaml
   - ./homepage-grafana.sops.yaml
   - ./homepage-plex.sops.yaml
+  - ./homepage-prowlarr.sops.yaml
   - ./httproute.yaml
   - ./namespace.yaml
   - ./rbac.yaml

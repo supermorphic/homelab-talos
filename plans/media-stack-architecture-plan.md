@@ -112,8 +112,8 @@ kubernetes/apps/media/
   No host networking/hostPort/runtime socket; dedicated ServiceAccounts, automount off
   where unused. Gluetun control API never exposed via HTTPRoute/LB.
 - **Secrets:** `smb-credentials` (SMB), `protonvpn` (WireGuard key + Gluetun control
-  apikey), `homepage-grafana` + `homepage-plex` (split per-service widget creds, rotate
-  independently) — SOPS, via guarded recipes.
+  apikey), `homepage-grafana` + `homepage-plex` + `homepage-prowlarr` (split
+  per-service widget creds, rotate independently) — SOPS, via guarded recipes.
 
 ## VPN kill switch (Phase 12) — the hard requirement
 

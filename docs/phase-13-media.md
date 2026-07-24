@@ -23,8 +23,9 @@ settings persisted in each config PVC.
   `/data/media/{tv,movies}` (same filesystem — never a copy). `dependsOn:
   [media-storage, internal-gateway]`.
 - HTTPRoutes `{prowlarr,sonarr,radarr}.lab.supermorphic.com` (internal gateway, wildcard
-  TLS) with `gethomepage.dev` service tiles (pod-selector). No live widgets yet (those need
-  each app's API key).
+  TLS) with `gethomepage.dev` service tiles (pod-selector). Prowlarr includes its live
+  activity widget; Homepage receives the API key from the independently rotatable,
+  SOPS-encrypted `homepage-prowlarr` Secret.
 - **Image pins:** `prowlarr 2.1.5.5216`, `sonarr 4.0.18.2978`, `radarr 5.28.0.10205`.
   Radarr is pinned to the latest **v5** rather than the new **v6.0.0** major — deliberately
   conservative for a fresh, not-yet-live-tested install; bump to 6.x when ready.
@@ -41,14 +42,18 @@ media-storage  (static RWX SMB PV + media-data PVC)
 
 ## Observability
 
-Gatus `Media`-group `/ping` probes for `prowlarr`, `sonarr`, `radarr` (black-box through
-the gateway → proves DNS → gateway → app). Homepage shows a pod-status tile per app.
+Gatus `Media`-group `/ping` probes are activation-aware: Prowlarr is monitored now;
+Sonarr and Radarr are added only when their `suspend` flags are durably set to `false`.
+This proves DNS → gateway → app without creating false alarms for staged workloads that
+do not exist yet. Homepage shows a pod-status tile per app and a live Prowlarr widget.
 
 ## Validation
 
 `just ci` includes `arr-validate` (one recipe over all three): files, wiring, no-secret
 `ks`, dependency graph, app-template chartRef, config PVC (RWO + Recreate + keep), shared
-`/data` for sonarr/radarr, HTTPRoutes, a matching Gatus probe, and the pinned render.
+`/data` for sonarr/radarr, HTTPRoutes, activation-aware Gatus probes, and the pinned render.
+The Prowlarr checks also enforce its Homepage widget type, in-cluster URL, secret-backed
+key placeholder, and supported activity fields.
 
 ## Rollout (operator, after merge — per app)
 
@@ -68,12 +73,28 @@ Repeat with `sonarr` / `radarr` (confirm string `bootstrap:phase13:<app>`).
 
 ### First-run wiring (manual, persists in config PVCs)
 
-1. **Prowlarr** → add indexers → add Sonarr & Radarr as **Apps** (their URLs +
+1. On Prowlarr's initial authentication screen select **Forms (Login Page)**, keep
+   **Authentication Required** set to **Enabled**, and create a strong unique login.
+   The account is stored in `prowlarr.db` on the retained config PVC; pod replacement,
+   upgrades, and node rescheduling do not require recreating it. Recover an empty/lost
+   PVC from Longhorn/Prowlarr backups rather than committing the dynamic config database.
+2. Create the Homepage widget Secret from Prowlarr **Settings → General → API Key**:
+
+   ```bash
+   read -rs PROWLARR_API_KEY
+   export PROWLARR_API_KEY
+   export HOMEPAGE_PROWLARR_SECRETS_CONFIRM='write:monitoring:homepage-prowlarr:sops'
+   mise exec -- just repo homepage-prowlarr-secrets
+   unset PROWLARR_API_KEY HOMEPAGE_PROWLARR_SECRETS_CONFIRM
+   ```
+
+   Commit only the resulting `homepage-prowlarr.sops.yaml`; never the plaintext key.
+3. **Prowlarr** → add indexers → add Sonarr & Radarr as **Apps** (their URLs +
    API keys) so indexers sync automatically.
-2. **Sonarr/Radarr** → **Download client** = qBittorrent at
+4. **Sonarr/Radarr** → **Download client** = qBittorrent at
    `http://qbittorrent.media.svc.cluster.local:8080`; **root folders**
    `/data/media/tv` and `/data/media/movies`.
-3. Confirm the qBittorrent save path is under `/data/downloads` so imports hardlink.
+5. Confirm the qBittorrent save path is under `/data/downloads` so imports hardlink.
 
 ## End-to-end gate (do not claim Phase 13 "done" until)
 
