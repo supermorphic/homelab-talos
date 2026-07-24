@@ -5,7 +5,8 @@ set working-directory := ".."
 cilium_chart := "oci://quay.io/cilium/charts/cilium"
 cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
-kubeconfig := "kubeconfig"
+talosconfig := ".talos/config"
+kubeconfig := ".kube/config"
 flux_path := "kubernetes/flux/clusters/prod"
 github_owner := "7yXwscXEzv6phzUnKfrw"
 github_repository := "homelab-talos"
@@ -97,7 +98,7 @@ cilium-status:
 
     kubeconfig='{{kubeconfig}}'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing ignored kubeconfig; run just bootstrap verify." >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -125,7 +126,7 @@ cilium-diagnostics:
       diagnostics="$(talosctl get diagnostics \
         --nodes "$node_ip" \
         --endpoints "$nodes_csv" \
-        --talosconfig clusterconfig/talosconfig \
+        --talosconfig "{{talosconfig}}" \
         --output json)" || {
         status=1
         continue
@@ -167,14 +168,14 @@ cilium-postflight:
     etcd_status="$(talosctl etcd status \
       --nodes "$nodes_csv" \
       --endpoints "$nodes_csv" \
-      --talosconfig clusterconfig/talosconfig)"
+      --talosconfig "{{talosconfig}}")"
     printf '%s\n' "$etcd_status"
     [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$etcd_status")" == '3' ]]
 
     alarm_status="$(talosctl etcd alarm list \
       --nodes "$nodes_csv" \
       --endpoints "$nodes_csv" \
-      --talosconfig clusterconfig/talosconfig)"
+      --talosconfig "{{talosconfig}}")"
     printf '%s\n' "$alarm_status"
     [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarm_status")" == '0' ]]
 
@@ -224,7 +225,7 @@ metrics-server-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization metrics-server --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'metrics-server Kustomization is not Ready.' >&2; exit 1; }
     kubectl --kubeconfig "$kubeconfig" --namespace kube-system rollout status deployment/metrics-server --timeout=5m
 
@@ -328,7 +329,7 @@ cilium-verify: require-bash
     trap cleanup EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing ignored kubeconfig; run just bootstrap verify." >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
@@ -500,7 +501,7 @@ flux-preflight: flux-validate
     expected_origin="https://github.com/${owner}/${repository}.git"
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just bootstrap verify only if it must be refreshed.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]] || {
@@ -543,7 +544,7 @@ flux-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -825,7 +826,7 @@ foundation-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -856,7 +857,7 @@ foundation-verify: foundation-validate require-bash
     kubeconfig='{{kubeconfig}}'
     phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -956,10 +957,10 @@ flux-restart: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     expected_confirmation='restart:flux-system:controllers'
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -1271,7 +1272,7 @@ storage-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='longhorn-system'
     tpvc='storage-verify-test'
     tmp="$(mktemp -d /tmp/homelab-talos-storage-verify.XXXXXX)"
@@ -1349,7 +1350,7 @@ csi-driver-smb-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='csi-driver-smb'
 
     [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization csi-driver-smb --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -1372,7 +1373,7 @@ media-storage-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
 
     for n in media media-storage; do
       [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$n" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -1393,7 +1394,7 @@ plex-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     gateway_ip='192.168.90.30'
     host='plex.lab.supermorphic.com'
@@ -1436,7 +1437,7 @@ plex-reschedule-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     selector='app.kubernetes.io/name=plex'
     cordoned=''
@@ -1513,7 +1514,7 @@ intel-gpu-plugin-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='kube-system'
 
     [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization intel-gpu-plugin --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -1648,7 +1649,7 @@ qbittorrent-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     gateway_ip='192.168.90.30'
     host='qbittorrent.lab.supermorphic.com'
@@ -1677,7 +1678,7 @@ qbittorrent-killswitch-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=qbittorrent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
     [[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is Phase 12 bootstrapped?).' >&2; exit 1; }
@@ -1866,7 +1867,7 @@ arr-verify app: require-bash
 
     app='{{app}}'
     case "$app" in prowlarr|sonarr|radarr) ;; *) echo "Usage: just kube arr-verify <prowlarr|sonarr|radarr>" >&2; exit 1;; esac
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     gateway_ip='192.168.90.30'
     host="$app.lab.supermorphic.com"
@@ -1942,7 +1943,7 @@ seerr-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='media'
     gateway_ip='192.168.90.30'
     host='seerr.lab.supermorphic.com'
@@ -2039,7 +2040,7 @@ monitoring-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='monitoring'
     gateway_ip='192.168.90.30'
 
@@ -2102,7 +2103,7 @@ grafana-admin-reset: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='monitoring'
     pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
     [[ -n "$pod" ]] || { echo 'No grafana pod found in monitoring.' >&2; exit 1; }
@@ -2166,7 +2167,7 @@ gatus-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='gatus'
     gateway_ip='192.168.90.30'
 
@@ -2252,7 +2253,7 @@ homepage-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='homepage'
     gateway_ip='192.168.90.30'
 
@@ -2328,7 +2329,7 @@ trivy-verify: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
-    kubeconfig='kubeconfig'
+    kubeconfig='{{kubeconfig}}'
     ns='trivy-system'
 
     [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization trivy-operator --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Trivy Kustomization is not Ready.' >&2; exit 1; }

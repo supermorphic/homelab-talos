@@ -56,9 +56,9 @@ Run the foundation for at least 24 hours with:
 ```bash
 cd /Users/ksiggins/Development/homelab-talos
 mise exec -- just kube foundation-verify
-mise exec -- kubectl --kubeconfig kubeconfig get pods -A --no-headers \
+mise exec -- kubectl --kubeconfig .kube/config get pods -A --no-headers \
   | awk '{r=$5; sub(/\(.*/,"",r); tot+=r} END{print "total container restarts:", tot+0}'
-mise exec -- talosctl --talosconfig clusterconfig/talosconfig \
+mise exec -- talosctl --talosconfig .talos/config \
   --nodes 192.168.90.10,192.168.90.11,192.168.90.12 \
   --endpoints 192.168.90.10,192.168.90.11,192.168.90.12 etcd alarm list
 ```
@@ -124,7 +124,7 @@ directory; never commit it, as it can contain sensitive runtime data):
 
 ```bash
 mkdir -p support-bundles
-mise exec -- talosctl --talosconfig clusterconfig/talosconfig \
+mise exec -- talosctl --talosconfig .talos/config \
   --nodes 192.168.90.10,192.168.90.11,192.168.90.12 \
   --endpoints 192.168.90.10 \
   support --output support-bundles/nuc-cluster-$(date +%Y%m%d).zip

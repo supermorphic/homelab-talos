@@ -33,8 +33,8 @@ Without an activated mise shell, prefix each command with `mise exec --`.
 
 The preflight requires:
 
-1. The ignored generated talosconfig contains exactly the nuc1, nuc2, and nuc3
-   endpoints.
+1. The ignored generated `.talos/config` contains exactly the nuc1, nuc2, and
+   nuc3 endpoints.
 2. Every rendered Talos config still passes strict Phase 2 validation.
 3. All three authenticated APIs report the expected hostname, internal UKI boot,
    Secure Boot state, Samsung system disk, ready encrypted volumes, Longhorn
@@ -68,7 +68,7 @@ requires:
 
 - Exactly three etcd members and exactly one elected leader.
 - Successful etcd status from all three nodes and no alarms.
-- An owner-readable ignored `kubeconfig` retrieved through Talos.
+- An owner-readable ignored `.kube/config` retrieved through Talos.
 - Kubernetes API access through `https://192.168.90.20:6443`.
 - Exactly `nuc1`, `nuc2`, and `nuc3`, all labeled control planes and `NotReady`
   before Cilium.
@@ -106,8 +106,9 @@ as the third voting member without another bootstrap or member removal.
 
 Final etcd status reported three members on protocol `3.6.12` and storage
 `3.6.0`, the same leader and Raft index on every member, no learners, no errors,
-and no alarms. The verifier wrote the ignored workstation `kubeconfig` with mode
-`0600` and successfully queried the VIP-backed Kubernetes API.
+and no alarms. The verifier atomically wrote the ignored workstation
+`.kube/config` with mode `0600` and successfully queried the VIP-backed
+Kubernetes API.
 
 Phase 5 subsequently implemented the canonical Cilium values and guarded install
 workflow. See [`phase-5-cilium.md`](phase-5-cilium.md) for live acceptance

@@ -1,6 +1,11 @@
+# Local privileged client credentials
+/.talos/
+/.kube/
+
 # Talos generated configs and secrets
 /clusterconfig/
 
+# Defensive credential-name rules for files generated outside the canonical paths.
 **/talosconfig
 **/kubeconfig
 **/controlplane.yaml
