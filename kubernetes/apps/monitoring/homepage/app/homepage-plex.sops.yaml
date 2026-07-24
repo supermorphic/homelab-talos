@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-plex
+    namespace: homepage
+type: Opaque
+stringData:
+    token: ENC[AES256_GCM,data:+nwRlm+g23qedYWDboOVSLmPNYw=,iv:N9mC8MIztuWthmjErEAnkSern/VSs+3HwH+DGwguN9E=,tag:JOEXUD39EeOxpl6lgZLsnw==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA4Z1I5T29WOTJHN1lhVWFj
+            ekxEQjhqZlZjQTJtazdPaFNPaGJISzQwTDEwCmNhRm13UmtSOFJ0S2JOYWYrSlo0
+            bHVnbnVsNzc3ZTdVSm56ZHlMSm4vRFUKLS0tIDhSY2FLdmh0UkNCWlYzeUp2U1JQ
+            SldtS242dFNUME04cldQcFZpSW5VVlEK4vfHmtdrccpzeSUF/F3wgCATnVRXFsn+
+            LTIn72/Hs44Y4wt/CEkaqR0DSTu0diWLPHrqxxbiIAeretnjlLn0cQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-07-24T13:32:27Z"
+    mac: ENC[AES256_GCM,data:I9QCApQnGynCj4hJNBgxYi2Gh1oU+Iz2IFbMo+LIbKKZzULVLsC1cizDlapr7QZURVDxFKXCjmqur6QeU1lahmhQSteFhc+OQunmi1LSNrAmi5V6OSS7arwndkMGLzC07Qx5Bk/+VR0+HBy+5kNThatuSmWtaXR+3PgYieBbL04=,iv:kxnpkhcnXq6d7iovGHvR1n4wPmXNhpTIIgqXcFEURrM=,tag:NwBD4hif9rZz0Z/oideiqA==,type:str]
+    version: 3.13.2
