@@ -2000,6 +2000,31 @@ monitoring-verify: require-bash
     just kube foundation-verify
     echo 'Phase 10 monitoring acceptance passed: kube-prometheus-stack Ready (Prometheus, Alertmanager, Grafana, exporters), PVCs bound on Longhorn, HTTPRoutes accepted, and all three UIs reachable with trusted HTTPS through the internal gateway.'
 
+# Reset Grafana's DB admin password to the current grafana-admin Secret value. Grafana
+# only applies the admin password on first init, so a rotated/recreated Secret (e.g. the
+# age-key migration) leaves the DB on the old password (401s, incl. the Homepage widget).
+# This reuses the pod's own GF_SECURITY_ADMIN_* env, so no secret value is printed or
+# passed on the command line. Operator-run; cluster-dependent; NOT in `just ci`.
+grafana-admin-reset: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='kubeconfig'
+    ns='monitoring'
+    pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+    [[ -n "$pod" ]] || { echo 'No grafana pod found in monitoring.' >&2; exit 1; }
+
+    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c grafana -- \
+      sh -c 'grafana cli --homepath /usr/share/grafana admin reset-admin-password "$GF_SECURITY_ADMIN_PASSWORD" >/dev/null 2>&1 && echo ok' | grep -qx ok || {
+        echo 'grafana cli reset-admin-password failed.' >&2; exit 1; }
+
+    # Verify the Secret creds now authenticate to the API (no secret printed).
+    ok="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c grafana -- sh -c '
+      a=$(printf "%s:%s" "$GF_SECURITY_ADMIN_USER" "$GF_SECURITY_ADMIN_PASSWORD" | base64 | tr -d "\n")
+      wget -qO- -T 6 --header="Authorization: Basic $a" "http://localhost:3000/api/search?limit=1" >/dev/null 2>&1 && echo yes || echo no')"
+    [[ "$ok" == 'yes' ]] || { echo 'Grafana admin creds still fail to authenticate after reset.' >&2; exit 1; }
+    echo 'Grafana DB admin password reset to match the grafana-admin Secret; API auth verified. (Sync homepage-secrets grafana-user/password to the same creds + restart homepage for the widget.)'
+
 # Validate the Phase 10 Gatus source: files, wiring, namespace gateway label,
 # staged suspend, key values, HTTPRoute, and the pinned chart render.
 gatus-validate: require-bash
