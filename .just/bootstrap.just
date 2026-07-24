@@ -369,7 +369,7 @@ cilium:
     just talos validate
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just bootstrap verify.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
     api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
@@ -823,7 +823,7 @@ foundation:
     umask 077
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -959,7 +959,7 @@ storage:
     trap cleanup_storage EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -1043,7 +1043,7 @@ csi-driver-smb:
     }
     trap cleanup_csi EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing csi-driver-smb bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1113,7 +1113,7 @@ media-storage:
     }
     trap cleanup_media EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing media-storage bootstrap: commit and push the reviewed suspended sources first.' >&2
@@ -1184,7 +1184,7 @@ plex:
     }
     trap cleanup_plex EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing plex bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1250,7 +1250,7 @@ qbittorrent:
     }
     trap cleanup_qbt EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing qbittorrent bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1319,7 +1319,7 @@ arr app:
     }
     trap cleanup_arr EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo "Refusing $app bootstrap: commit and push the reviewed suspended source first." >&2
@@ -1384,7 +1384,7 @@ seerr:
     }
     trap cleanup_seerr EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing seerr bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1449,7 +1449,7 @@ intel-gpu-plugin:
     }
     trap cleanup_gpu EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing intel-gpu-plugin bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1520,7 +1520,7 @@ monitoring:
     trap cleanup_monitoring EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]]
@@ -1603,7 +1603,7 @@ gatus:
     }
     trap cleanup_gatus EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Gatus bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1671,7 +1671,7 @@ homepage:
     }
     trap cleanup_homepage EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Homepage bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1740,7 +1740,7 @@ trivy:
     }
     trap cleanup_trivy EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing Trivy bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1808,7 +1808,7 @@ metrics-server:
     }
     trap cleanup_metrics_server EXIT
 
-    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig.' >&2; exit 1; }
+    [[ -f "$kubeconfig" ]] || { echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2; exit 1; }
     [[ "$(git branch --show-current)" == 'main' ]]
     [[ -z "$(git status --porcelain)" ]] || {
       echo 'Refusing metrics-server bootstrap: commit and push the reviewed suspended source first.' >&2
@@ -1884,7 +1884,7 @@ reboot node:
       exit 1
     }
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
 

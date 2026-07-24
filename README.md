@@ -164,12 +164,13 @@ available for focused developer validation.
 | `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Enabled in Phase 3; destructive after confirmation |
 | `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
+| `just talos kubeconfig` | Fetch the ignored workstation kubeconfig from Talos into repo-root `./kubeconfig` (no etcd/NotReady gate) | — | Day-2; the routine way to (re)fetch a kubeconfig after Cilium |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Enabled in Phase 4; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Enabled in Phase 4; destructive after confirmation |
 | `just bootstrap status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Enabled in Phase 4; diagnostic |
 | `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Enabled in Phase 4; mutating after confirmation |
-| `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Historical Phase 4 gate; do not use after Cilium |
+| `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Historical Phase 4 gate; do not use after Cilium — use `just talos kubeconfig` to fetch a kubeconfig day-2 |
 | `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Enabled in Phase 5; read-only |
 | `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Enabled in Phase 5; read-only |
 | `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Enabled in Phase 5; read-only |

@@ -307,4 +307,36 @@ volume-status:
       echo 'One or more node volumes are unhealthy.' >&2
       exit 1
     }
+
+# Asks Talos for the admin kubeconfig over the machine API using the talosconfig,
+# with no etcd/NotReady gate; the day-two replacement for `just bootstrap verify`
+# once Cilium is installed and the nodes are Ready. Requires `just talos generate`.
+# Fetch the ignored workstation kubeconfig from Talos into repo-root ./kubeconfig.
+kubeconfig:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just repo require-bash
+
+    talosconfig='../clusterconfig/talosconfig'
+    kubeconfig='../kubeconfig'
+    nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
+    [[ -f "$talosconfig" ]] || {
+      echo "Missing $talosconfig; run just talos generate first." >&2
+      exit 1
+    }
+
+    talosctl kubeconfig "$kubeconfig" \
+      --nodes 192.168.90.10 \
+      --endpoints "$nodes_csv" \
+      --talosconfig "$talosconfig" \
+      --merge=false \
+      --force >/dev/null
+    chmod 600 "$kubeconfig"
+
+    api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
+    [[ "$api_server" == 'https://192.168.90.20:6443' ]] || {
+      echo "Refusing kubeconfig: server $api_server is not the expected API VIP https://192.168.90.20:6443." >&2
+      exit 1
+    }
+    echo "Wrote $kubeconfig targeting $api_server."
     echo 'All node volumes healthy: longhorn ready and mounted at /var/mnt/longhorn (xfs, unencrypted); STATE and EPHEMERAL ready and luks2.'

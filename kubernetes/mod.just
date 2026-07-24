@@ -97,7 +97,7 @@ cilium-status:
 
     kubeconfig='{{kubeconfig}}'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing ignored kubeconfig; run just bootstrap verify." >&2
+      echo "Missing ignored kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
 
@@ -328,7 +328,7 @@ cilium-verify: require-bash
     trap cleanup EXIT
 
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing ignored kubeconfig; run just bootstrap verify." >&2
+      echo "Missing ignored kubeconfig; run just talos kubeconfig." >&2
       exit 1
     }
     api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
@@ -500,7 +500,7 @@ flux-preflight: flux-validate
     expected_origin="https://github.com/${owner}/${repository}.git"
 
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig; run just bootstrap verify only if it must be refreshed.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
     [[ "$(git branch --show-current)" == 'main' ]] || {
@@ -543,7 +543,7 @@ flux-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
 
@@ -825,7 +825,7 @@ foundation-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
 
@@ -856,7 +856,7 @@ foundation-verify: foundation-validate require-bash
     kubeconfig='{{kubeconfig}}'
     phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
 
@@ -959,7 +959,7 @@ flux-restart: require-bash
     kubeconfig='kubeconfig'
     expected_confirmation='restart:flux-system:controllers'
     [[ -f "$kubeconfig" ]] || {
-      echo 'Missing ignored kubeconfig.' >&2
+      echo 'Missing ignored kubeconfig; run just talos kubeconfig.' >&2
       exit 1
     }
 
