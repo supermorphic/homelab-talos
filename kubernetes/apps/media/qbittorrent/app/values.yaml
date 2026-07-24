@@ -66,7 +66,41 @@ controllers:
               # Up to 5 min for the tunnel + firewall to come up.
               periodSeconds: 5
               failureThreshold: 60
-          liveness: { enabled: false }
+          # Deliberately-slow k8s fallback for the case Gluetun's own HEALTH_RESTART_VPN
+          # can't self-heal in place: after a tunnel interruption Gluetun sometimes
+          # reconnects the data plane but its DoT healthcheck keeps cycling, so it stays
+          # status=running and never reacquires the forwarded port. The forwarded port is
+          # the direct service-health signal; public-IP discovery is only a one-shot
+          # metadata fetch and can be empty on an otherwise working tunnel. This liveness
+          # restarts the gluetun container only after ~5 min of running with no forwarded
+          # port — long enough that a normal flap (Gluetun self-heals in seconds) never
+          # trips it. It reads the control-server apikey from the mounted config. Only an
+          # explicitly stopped VPN reports healthy; unreadable, unknown, transitional, and
+          # crashed states fail so a hung control server cannot disable the fallback.
+          # NOTE: whether a *container* restart clears the DoT cycle (vs needing a fresh
+          # pod/netns) is unvalidated live — see docs/phase-12-media.md; the
+          # QbittorrentGluetunRestartLoop alerts if this fallback repeats without recovery.
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - >-
+                    key=$(sed -n 's/^apikey *= *"\(.*\)".*/\1/p' /gluetun/auth/config.toml);
+                    [ -n "$key" ] || exit 1;
+                    s=$(wget -qO- -T 5 --header "X-API-Key: $key" http://127.0.0.1:8000/v1/vpn/status 2>/dev/null) || exit 1;
+                    echo "$s" | grep -q '"status":"stopped"' && exit 0;
+                    echo "$s" | grep -q '"status":"running"' || exit 1;
+                    pf=$(wget -qO- -T 5 --header "X-API-Key: $key" http://127.0.0.1:8000/v1/portforward 2>/dev/null) || exit 1;
+                    echo "$pf" | grep -Eq '"port":[1-9][0-9]*'
+              # Runs only after the startup probe succeeds. ~5 min of sustained
+              # running-but-no-forwarded-port before a container restart.
+              periodSeconds: 30
+              timeoutSeconds: 12
+              failureThreshold: 10
           readiness: { enabled: false }
     containers:
       app:

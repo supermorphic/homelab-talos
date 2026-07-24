@@ -115,25 +115,49 @@ On a failed/interrupted run a `trap` deletes the pod to reset to a clean state.
 Precondition: first-run done (WebUI password + "Bypass authentication for localhost",
 which the port-forward UP command also needs).
 
-### Verified findings (live, 2026-07-23)
+### Verified findings (live, 2026-07-24)
 
-- **Kill switch is solid:** every run showed egress only via ProtonVPN Sweden at baseline,
-  **zero IP/route egress** while stopped, and the **home WAN IP never appeared**. DNS is
-  isolated (resolver = `127.0.0.1`). This — the hard requirement — passed repeatedly.
+- **Kill switch is solid (hard requirement, verified repeatedly):** egress only via
+  ProtonVPN **Sweden** at baseline; **zero IP/route egress** while stopped; **home WAN IP
+  never appeared** in baseline, polite-stop, or a real `tun0`-down interruption. DNS is
+  structurally isolated — the app resolver is `127.0.0.1` (Gluetun DoT), and Gluetun's own
+  resolver attempts to cluster DNS return `operation not permitted` (firewall-blocked).
+- **`tun0` is stable:** the WireGuard interface name (`VPN_INTERFACE`, default `tun0`) does
+  **not** change on reconnect/server rotation — confirmed present before and after a real
+  interruption. Only the endpoint (transparent) and the NAT-PMP forwarded port (handled by
+  the UP/DOWN commands) rotate.
 - **`kubectl exec … kill -KILL 1` cannot crash the sidecar:** the kernel blocks
-  same-PID-namespace SIGKILL to PID 1 (`restartCount` stayed 0), so a container-level crash
-  can't be injected from an exec. Fail-closed on a real in-place gluetun crash is
-  structural anyway (qBittorrent has no `NET_ADMIN`; Gluetun's firewall DROP rules persist).
-  The gate therefore recovers via **pod recreation** (= node reschedule), which is
-  deterministic and recovered to Sweden in seconds in testing.
-- **In-place restart can loop:** Gluetun's control-API `PUT stopped→running` (and its own
-  healthcheck-triggered restart) sometimes re-establishes the WireGuard handshake but then
-  cycles on `lookup … i/o timeout` DNS healthchecks. Rapid repeated reconnects during
-  testing triggered **ProtonVPN reconnect rate-limiting** (handshake succeeds, no traffic).
-  Robust recovery is a **pod restart / node reschedule** (fresh netns), and the reactive
-  `QbittorrentVpnDown` critical alert surfaces any stuck-down VPN for the unattended case.
-  A follow-up option to harden in-place recovery is Gluetun DNS tuning (`DOT=off` or a
-  `HEALTH_TARGET_ADDRESS` IP so the healthcheck doesn't depend on DNS).
+  same-PID-namespace SIGKILL to PID 1 (`restartCount` stays 0). Fail-closed on a real
+  in-place gluetun crash is structural anyway (qBittorrent has no `NET_ADMIN`; the firewall
+  DROP rules persist). The gate recovers via **pod recreation** (= node reschedule), which
+  is deterministic and recovered to Sweden in seconds.
+- **In-place recovery can get stuck (reproducible):** after a real `tun0`-down interruption
+  Gluetun reconnects the **data plane** (app egresses via a Sweden VPN IP — no leak) but its
+  **DoT-DNS healthcheck cycles** (`lookup cloudflare.com/github.com: i/o timeout`), so it
+  stays `status=running` with an **empty public IP** and never reacquires the forwarded
+  port. Same pod UID, `restartCount` 0 — a purely in-process loop. A **pod recreation**
+  (fresh process + netns) recovers cleanly; container-only restart remains unvalidated.
+  (Rapid repeated reconnects also trip **ProtonVPN reconnect rate-limiting** — space out
+  live tests.)
+
+### Recovery hierarchy + the k8s liveness fallback
+
+Per the validated design, recovery escalates: (1) Gluetun detects the failed tunnel →
+(2) firewall stays fail-closed → (3) Gluetun reconnects in place (`HEALTH_RESTART_VPN=on`,
+default; **encrypted DoT retained — do not set `DOT=off`**) → (4) forwarded port reacquired
++ propagated → (5) **k8s restarts the container only when in-place recovery stays stuck**.
+Step 5 is a **deliberately-slow gluetun liveness probe** (exec: control-server
+`status=running` **and** a nonzero forwarded port; ~5 min
+`failureThreshold*periodSeconds` so a normal flap never trips it). The forwarded port is
+the direct health signal: Gluetun's public-IP discovery is a one-shot metadata fetch and
+can remain empty on an otherwise working tunnel. Only an explicit `status=stopped` reports
+healthy; query failures and unknown/transitional/crashed states fail.
+
+**Open validation:** whether a *container* restart (same netns, fresh gluetun process)
+clears the DoT cycle, or whether only a *pod* restart (fresh netns) does. Confirm live when
+ProtonVPN is calm; if a container restart is insufficient, escalate step 5 to pod
+recreation. `QbittorrentGluetunRestartLoop` fires after two container restarts in 15m so
+this failure is not silent; manual/operator pod recreation is the recovery meanwhile.
 
 ## Observability (reactive VPN-down reporting)
 
@@ -145,12 +169,15 @@ the health route (`GET /v1/vpn/status`) is no-auth, mutating routes stay apikey-
 - **Gatus (primary status):** a `Media`-group endpoint `qbittorrent-vpn` probes the
   control server with a **body condition `[BODY].status == running`** (the control server
   answers 200 even while the tunnel is down, so status-code alone is insufficient).
-- **Prometheus / Alertmanager (critical alert):** `PrometheusRule` `qbittorrent-vpn` →
+- **Prometheus / Alertmanager (critical alerts):** `PrometheusRule` `qbittorrent-vpn` →
   **`QbittorrentVpnDown` (severity: critical)** fires on `gatus_results_endpoint_success{
-  name="qbittorrent-vpn"} == 0` for 5m, plus `QbittorrentVpnProbeMissing` (warning) if the
-  metric disappears. *Alertmanager has no receiver configured yet — the alert fires and is
-  visible in Alertmanager/Prometheus/Grafana; delivery to a phone/email channel is a
-  follow-up (needs a channel + secret).*
+  name="qbittorrent-vpn"} == 0` for 5m when status is not running.
+  **`QbittorrentGluetunRestartLoop` (severity: critical)** fires after two Gluetun container
+  restarts in 15m, covering the `status=running`/no-forwarded-port state if container-only
+  recovery repeats. `QbittorrentVpnProbeMissing` warns if the Gatus metric disappears.
+  *Alertmanager has no receiver configured yet — alerts fire and are visible in
+  Alertmanager/Prometheus/Grafana; delivery to a phone/email channel is a follow-up (needs
+  a channel + secret).*
 - **Grafana:** the `gatus_results_endpoint_success` series and the firing alert are
   queryable/visible without a bespoke dashboard.
 - **Homepage:** the qBittorrent tile (pod-selector) shows pod health; the optional
