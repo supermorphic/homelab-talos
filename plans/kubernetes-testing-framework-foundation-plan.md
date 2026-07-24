@@ -60,10 +60,11 @@ scenarios described under "Required follow-up sequence."
    use pinned Conftest, OPA v1 syntax (`import rego.v1`), and positive and
    negative tests. Chainsaw remains the live-scenario engine.
 10. **Smoke read-only safety is machine-enforced.** Conftest rejects any smoke
-    scenario outside `flux-system`, any smoke scenario without
-    `spec.concurrent: false`, and mutating operations in try/catch/finally/cleanup.
-    The runner also requires a non-empty JUnit test count so selector drift cannot
-    produce a vacuous green live run.
+    scenario with missing dispatch labels, outside `flux-system`, or without
+    `spec.concurrent: false`. It rejects mutating operations in step
+    try/catch/finally/cleanup, test-level catch, and configuration-level
+    `spec.error.catch`. The runner also requires a non-empty JUnit test count so
+    selector drift cannot produce a vacuous green live run.
 
 ## Architecture
 

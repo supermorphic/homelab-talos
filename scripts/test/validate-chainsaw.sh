@@ -11,7 +11,7 @@ unset SOPS_AGE_KEY SOPS_AGE_KEY_FILE
 chainsaw lint configuration --file tests/config/chainsaw.yaml
 conftest test --all-namespaces \
   --policy tests/policy/chainsaw \
-  tests/chainsaw/smoke
+  tests/config/chainsaw.yaml tests/chainsaw/smoke
 
 test_count=0
 while IFS= read -r test_file; do
