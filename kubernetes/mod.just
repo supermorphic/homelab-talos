@@ -1584,10 +1584,16 @@ qbittorrent-validate: require-bash
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.env.VPN_PORT_FORWARDING_DOWN_COMMAND' "$values")" != 'null' ]]
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.startup.spec.httpGet.port' "$values")" == '8000' ]]
     # Deliberately-slow k8s liveness fallback: restart gluetun only after a sustained
-    # stuck-VPN state (running but no public IP). Must stay slow so normal flaps (Gluetun
-    # self-heals in seconds) never trip it.
+    # stuck-VPN state (running but no forwarded port). Public IP is deliberately not the
+    # signal: its one-shot metadata fetch can fail on an otherwise working tunnel.
     [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.enabled' "$values")" == 'true' ]]
-    yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.exec.command[]' "$values" | grep -q 'publicip'
+    [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.custom' "$values")" == 'true' ]]
+    probe_cmd="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.exec.command[2]' "$values")"
+    [[ "$probe_cmd" == *'/v1/portforward'* ]]
+    [[ "$probe_cmd" != *'/v1/publicip/ip'* ]]
+    [[ "$probe_cmd" == *'"status":"stopped"'* ]]
+    [[ "$probe_cmd" == *'"status":"running"'* ]]
+    [[ "$probe_cmd" == *'|| exit 1'* ]]
     lft="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.failureThreshold' "$values")"
     lps="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.spec.periodSeconds' "$values")"
     [[ "$lft" =~ ^[0-9]+$ && "$lps" =~ ^[0-9]+$ && $(( lft * lps )) -ge 180 ]] || { echo 'gluetun liveness must be deliberately slow (failureThreshold*periodSeconds >= 180s).' >&2; exit 1; }
@@ -1618,7 +1624,9 @@ qbittorrent-validate: require-bash
     ! rg -qi 'gluetun-control' "$route"
     [[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
     [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentVpnDown") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
+    [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentGluetunRestartLoop") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
     rg -q 'gatus_results_endpoint_success' "$rule"
+    rg -q 'kube_pod_init_container_status_restarts_total' "$rule"
     # The Gatus health probe that feeds the rule must exist.
     rg -q 'name: qbittorrent-vpn' kubernetes/apps/monitoring/gatus/app/values.yaml
     rg -q 'status == running' kubernetes/apps/monitoring/gatus/app/values.yaml
@@ -1629,6 +1637,7 @@ qbittorrent-validate: require-bash
     helm template qbittorrent "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
     [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'qbittorrent' ]]
     [[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .restartPolicy' "$temp_dir/render.yaml")" == 'Always' ]]
+    yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .livenessProbe.exec.command[]' "$temp_dir/render.yaml" | rg -q '/v1/portforward'
 
     echo 'Phase 12 qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'
 

@@ -1,9 +1,10 @@
 ---
-# Reactive critical alert: fires when the ProtonVPN tunnel is down. Sourced from the
-# Gatus health probe of Gluetun's control server (endpoint "qbittorrent-vpn" in group
-# "Media"); Gatus exports gatus_results_endpoint_success (1=up, 0=down) and is scraped by
-# Prometheus. When the tunnel drops, Gluetun's firewall kill-switches all qBittorrent
-# egress (fail-closed) — this alert is what makes that visible instead of a silent stall.
+# Reactive critical alerts for a down ProtonVPN tunnel and a repeating Gluetun liveness
+# fallback. Gatus exports the control-server status check as
+# gatus_results_endpoint_success (1=up, 0=down). The restart-loop rule independently
+# catches the partial failure where Gluetun still reports status=running but cannot
+# reacquire a forwarded port and its container-level fallback does not recover it.
+# Gluetun's firewall keeps qBittorrent fail-closed throughout.
 # Prometheus discovers this rule cluster-wide (ruleSelectorNilUsesHelmValues: false).
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -29,6 +30,26 @@ spec:
               the control server failing for >5m). qBittorrent egress is kill-switched
               (fail-closed) and downloads are paused. Check Gluetun logs and the ProtonVPN
               WireGuard credential (annual Extend / expiry — see docs/protonvpn-gluetun.md).
+        - alert: QbittorrentGluetunRestartLoop
+          # A healthy liveness recovery increments this counter once. Two restarts in the
+          # same 15-minute window mean the container-level fallback is repeating; because
+          # it preserves the pod network namespace, operator pod recreation may be needed.
+          expr: >-
+            increase(kube_pod_init_container_status_restarts_total{
+              namespace="media",
+              pod=~"qbittorrent-.*",
+              container="gluetun"
+            }[15m]) >= 2
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: qBittorrent Gluetun liveness recovery is looping
+            description: >-
+              The Gluetun container restarted at least twice in 15 minutes. Its deliberately
+              slow liveness fallback is not restoring a nonzero ProtonVPN forwarded port.
+              qBittorrent remains fail-closed; inspect Gluetun logs and recreate the
+              qBittorrent pod if a fresh network namespace is required.
         - alert: QbittorrentVpnProbeMissing
           # The health probe metric disappeared entirely (Gatus down, endpoint removed,
           # or scrape broken) — the VPN alert above is blind until this clears.

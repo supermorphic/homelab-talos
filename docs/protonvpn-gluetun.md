@@ -144,16 +144,19 @@ Gluetun has no metric for it, and there is no Proton API to query in this flow �
 **nothing in the cluster can autonomously discover the renewal date**. Given that, three
 realistic approaches (recommend #1 + #3):
 
-1. **Reactive critical alert — IMPLEMENTED (Phase 12).** Alert on the *symptom*: the
+1. **Reactive critical alerts — IMPLEMENTED (Phase 12).** Alert on the *symptoms*: the
    Gluetun control server's no-auth health role (`GET /v1/vpn/status`) reports the VPN not
    `running` for > 5 min → **critical**. This catches an expired credential *and every
-   other tunnel failure* (Proton outage, node issue, config regression) and is the backstop
-   that guarantees you're never silently offline. Wiring: a **Gatus** `Media/qbittorrent-vpn`
+   other failure that changes Gluetun's status (Proton outage, node issue, config
+   regression). Wiring: a **Gatus** `Media/qbittorrent-vpn`
    check probes the in-cluster control server (ClusterIP `qbittorrent-gluetun-control`,
    never LAN-exposed, never logs the apikey) with body condition `status == running`;
    Gatus exports `gatus_results_endpoint_success`, and the `QbittorrentVpnDown`
-   `PrometheusRule` (severity `critical`) fires on it. Downside: it fires *after* expiry (at
-   first downtime), not before. *Alertmanager has no receiver yet — see below.*
+   `PrometheusRule` (severity `critical`) fires on it. The partial failure where status
+   remains `running` but the forwarded port is missing is handled by the deliberately-slow
+   Gluetun liveness fallback; `QbittorrentGluetunRestartLoop` becomes critical after two
+   container restarts in 15m if that fallback does not recover. Downside: these alerts fire
+   *after* expiry/failure, not before. *Alertmanager has no receiver yet — see below.*
 
 2. **Proactive expiry alert (optional, semi-manual).** Store the known renewal date as a
    value you control — e.g. a small static metric (`protonvpn_credential_expiry_timestamp`)

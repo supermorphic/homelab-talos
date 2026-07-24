@@ -135,9 +135,10 @@ which the port-forward UP command also needs).
   Gluetun reconnects the **data plane** (app egresses via a Sweden VPN IP — no leak) but its
   **DoT-DNS healthcheck cycles** (`lookup cloudflare.com/github.com: i/o timeout`), so it
   stays `status=running` with an **empty public IP** and never reacquires the forwarded
-  port. Same pod UID, `restartCount` 0 — a purely in-process loop. A **fresh process
-  (pod/container restart) recovers cleanly**. (Rapid repeated reconnects also trip
-  **ProtonVPN reconnect rate-limiting** — space out live tests.)
+  port. Same pod UID, `restartCount` 0 — a purely in-process loop. A **pod recreation**
+  (fresh process + netns) recovers cleanly; container-only restart remains unvalidated.
+  (Rapid repeated reconnects also trip **ProtonVPN reconnect rate-limiting** — space out
+  live tests.)
 
 ### Recovery hierarchy + the k8s liveness fallback
 
@@ -146,14 +147,17 @@ Per the validated design, recovery escalates: (1) Gluetun detects the failed tun
 default; **encrypted DoT retained — do not set `DOT=off`**) → (4) forwarded port reacquired
 + propagated → (5) **k8s restarts the container only when in-place recovery stays stuck**.
 Step 5 is a **deliberately-slow gluetun liveness probe** (exec: control-server
-`status=running` **and** non-empty public IP; ~5 min `failureThreshold*periodSeconds` so a
-normal flap never trips it; an intentional stop reports healthy). The
-`QbittorrentVpnDown` critical alert is the unattended backstop.
+`status=running` **and** a nonzero forwarded port; ~5 min
+`failureThreshold*periodSeconds` so a normal flap never trips it). The forwarded port is
+the direct health signal: Gluetun's public-IP discovery is a one-shot metadata fetch and
+can remain empty on an otherwise working tunnel. Only an explicit `status=stopped` reports
+healthy; query failures and unknown/transitional/crashed states fail.
 
 **Open validation:** whether a *container* restart (same netns, fresh gluetun process)
 clears the DoT cycle, or whether only a *pod* restart (fresh netns) does. Confirm live when
 ProtonVPN is calm; if a container restart is insufficient, escalate step 5 to pod
-recreation (the alert + a manual/operator restart cover it meanwhile).
+recreation. `QbittorrentGluetunRestartLoop` fires after two container restarts in 15m so
+this failure is not silent; manual/operator pod recreation is the recovery meanwhile.
 
 ## Observability (reactive VPN-down reporting)
 
@@ -165,12 +169,15 @@ the health route (`GET /v1/vpn/status`) is no-auth, mutating routes stay apikey-
 - **Gatus (primary status):** a `Media`-group endpoint `qbittorrent-vpn` probes the
   control server with a **body condition `[BODY].status == running`** (the control server
   answers 200 even while the tunnel is down, so status-code alone is insufficient).
-- **Prometheus / Alertmanager (critical alert):** `PrometheusRule` `qbittorrent-vpn` →
+- **Prometheus / Alertmanager (critical alerts):** `PrometheusRule` `qbittorrent-vpn` →
   **`QbittorrentVpnDown` (severity: critical)** fires on `gatus_results_endpoint_success{
-  name="qbittorrent-vpn"} == 0` for 5m, plus `QbittorrentVpnProbeMissing` (warning) if the
-  metric disappears. *Alertmanager has no receiver configured yet — the alert fires and is
-  visible in Alertmanager/Prometheus/Grafana; delivery to a phone/email channel is a
-  follow-up (needs a channel + secret).*
+  name="qbittorrent-vpn"} == 0` for 5m when status is not running.
+  **`QbittorrentGluetunRestartLoop` (severity: critical)** fires after two Gluetun container
+  restarts in 15m, covering the `status=running`/no-forwarded-port state if container-only
+  recovery repeats. `QbittorrentVpnProbeMissing` warns if the Gatus metric disappears.
+  *Alertmanager has no receiver configured yet — alerts fire and are visible in
+  Alertmanager/Prometheus/Grafana; delivery to a phone/email channel is a follow-up (needs
+  a channel + secret).*
 - **Grafana:** the `gatus_results_endpoint_success` series and the firing alert are
   queryable/visible without a bespoke dashboard.
 - **Homepage:** the qBittorrent tile (pod-selector) shows pod health; the optional
