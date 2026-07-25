@@ -147,15 +147,51 @@ upgrades, or node rescheduling.
 
 ### Indexers
 
+The **Settings → Indexers** page has two separate `+` buttons: **Add Indexer**
+(the indexer catalog) and, lower down, **Add Indexer Proxy**. If the `+` you press
+only offers **FlareSolverr**, **Http**, **SOCKS4**, and **SOCKS5**, that is the
+*proxy* dialog — those four are connection proxies, not indexers. Close it and use
+the **Add Indexer** button in the **Indexers** panel instead. See
+[Indexer proxies](#indexer-proxies) for when (and whether) a proxy is needed.
+
+To add an indexer:
+
 1. Open **Settings → Indexers**.
-2. Select **Add Indexer**.
-3. Choose the tracker or indexer.
+2. In the **Indexers** panel, select **Add Indexer** (`+`). Prowlarr opens a
+   searchable catalog of several hundred indexer definitions.
+3. Search for and choose the specific tracker or indexer.
 4. Enter its required API key, cookie, username/password, or other credential.
 5. Leave **Redirect** disabled unless that specific indexer requires it.
 6. Select the default sync profile unless a deliberate per-application policy is
    needed.
 7. Select **Test**, require a successful result, and then **Save**.
 8. Repeat for every desired indexer.
+
+Which indexers to add is a deliberate operator choice and depends on your sources.
+Usenet indexers (Newznab definitions, paired with a paid Usenet provider) are the
+most reliable and lowest-maintenance; public torrent indexers are free but variable
+and some sit behind Cloudflare; private torrent trackers require their own
+membership and credentials. Add only indexers you are entitled to use, and only for
+content you have the right to download. The servarr wiki and the community
+[TRaSH guides](https://trash-guides.info/) track which definitions are currently
+healthy.
+
+#### Indexer proxies
+
+The **Add Indexer Proxy** dialog offers **FlareSolverr**, **Http**, **SOCKS4**, and
+**SOCKS5**. These are optional, and **none are required for the normal flow** —
+leave this section empty unless a specific indexer forces it.
+
+- **FlareSolverr** — a headless-browser helper that solves Cloudflare anti-bot
+  challenges for the few public indexers that still require it. It is **not deployed
+  in this cluster**, so it cannot be selected as-is: using it means first adding a
+  FlareSolverr application (its own guarded rollout under `kubernetes/apps/media/`)
+  and pointing this proxy at its in-cluster URL. Upstream is steadily removing the
+  FlareSolverr requirement from indexer definitions, so prefer indexers that do not
+  need it rather than standing up the service.
+- **Http / SOCKS4 / SOCKS5** — forward an indexer's traffic through an external
+  proxy. Not needed here: Prowlarr reaches indexers directly, and it is qBittorrent
+  — not Prowlarr — that egresses through the ProtonVPN tunnel.
 
 Do not add qBittorrent under **Prowlarr → Settings → Download Clients** for the
 normal automation flow. Prowlarr download clients are only used for searches
