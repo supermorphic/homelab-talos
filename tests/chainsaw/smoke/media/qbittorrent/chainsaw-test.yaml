@@ -1,0 +1,102 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: qbittorrent-smoke
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: media
+    homelab-talos/suite: qbittorrent
+spec:
+  # Policy (safety.rego) requires the existing flux-system namespace + concurrent:false.
+  # Workloads live in `media`, so every resource/diagnostic below names namespace: media
+  # explicitly rather than relying on the test's default namespace.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: helmrelease-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: qbittorrent
+                namespace: media
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            name: qbittorrent
+            namespace: media
+        - events:
+            namespace: media
+    - name: deployment-available
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: qbittorrent
+                namespace: media
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: qbittorrent
+            namespace: media
+        - events:
+            namespace: media
+    - name: pod-containers-ready
+      try:
+        # Scope to the qBittorrent pod by label; assert BOTH the gluetun sidecar and the
+        # app container report ready. No name (pod name is dynamic under Recreate).
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                namespace: media
+                labels:
+                  app.kubernetes.io/name: qbittorrent
+              status:
+                # gluetun runs as a native sidecar (initContainer w/ restartPolicy: Always),
+                # so its readiness is in initContainerStatuses, not containerStatuses.
+                (initContainerStatuses[?name == 'gluetun']):
+                  - ready: true
+                (containerStatuses[?name == 'app']):
+                  - ready: true
+      catch:
+        - podLogs:
+            namespace: media
+            selector: app.kubernetes.io/name=qbittorrent
+        - events:
+            namespace: media
+    - name: httproute-accepted
+      try:
+        - assert:
+            resource:
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: qbittorrent
+                namespace: media
+              status:
+                (parents[0].conditions[?type == 'Accepted']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            name: qbittorrent
+            namespace: media
+        - events:
+            namespace: media
