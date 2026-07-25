@@ -686,7 +686,7 @@ homepage-prowlarr-secrets:
     echo "Wrote SOPS-encrypted $target (homepage-prowlarr in homepage)."
 
 # Run repository and declarative Talos source validation.
-verify: verify-files
+verify: verify-files verify-extracted-scripts
     just talos source-validate
     just repo secret-scan
     @echo "Repository and Phase 2 Talos source checks passed."
@@ -710,6 +710,16 @@ require-bash:
     set -euo pipefail
     source scripts/lib/common.sh
     require_bash
+
+# Parse and ShellCheck mechanically extracted live-verification scripts. Their
+# cluster behavior is proven separately through operator-run parity gates.
+[private]
+verify-extracted-scripts:
+    @for script in scripts/verify/*.sh; do \
+      test -x "$script"; \
+      bash -n "$script"; \
+      shellcheck --external-sources "$script"; \
+    done
 
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash

@@ -191,6 +191,16 @@ cluster (or an explicit, recorded skip) before its PR merges. Do PR 5 only after
 the harness (PRs 1–4) is proven, and consider splitting it per-recipe if the diff
 is large.
 
+Ship Phase 0B as per-recipe slices. **PR 5a starts with
+`metrics-server-verify`:** mechanically move its body to
+`scripts/verify/metrics-server.sh` without changing the public command or its
+behavior. Classify the Kustomization, Deployment, and APIService readiness checks
+as future Chainsaw smoke assertions; classify `kubectl top nodes` as a read-only
+functional probe that remains in the verification script until equivalent
+scenario coverage passes repeatedly. The live
+`mise exec -- just kube metrics-server-verify` parity run is the hard merge gate
+for this slice.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
