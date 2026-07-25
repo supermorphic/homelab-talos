@@ -540,6 +540,27 @@ Foundation work is followed by separate, reviewable changes:
    deferred. Do not infer behavior from the CLI name.
 7. Node drain and Talos reboot with quorum, volume, SMB, and recovery evidence.
 8. Controlled functional download and complete Servarr workflow.
+
+   **PARTIAL (2026-07-25): the deterministic hardlink-import contract is delivered; the
+   full functional workflow is deferred as operator-driven.** The complete workflow
+   (Sonarr add → Prowlarr search → qBittorrent grab → download → import → hardlink) is
+   NOT cleanly/safely automatable today: the *arr stack is entirely first-run-manual and
+   unconfigured (no committed indexers, download-client wiring, root folders, or
+   Prowlarr→*arr sync — see `docs/arr-stack-startup.md`, `docs/phase-14-media.md:9`),
+   content/indexer choice is a deliberate operator *entitlement* decision (no legal test
+   source is defined), and real downloads are external-dependency-flaky. So the full
+   workflow stays a documented **operator E2E** (drive the manual UI searches per
+   `docs/arr-stack-startup.md`'s test gates + the phase-11 hardlink evidence), deferred
+   until the first-run wiring + a legally-entitled content source are in place.
+
+   **Delivered:** the `media-hardlink` e2e target — the first e2e-tier scenario — automates
+   the phase-11 same-inode/link-count proof (`docs/phase-11-media.md:55-61`) as a
+   deterministic, safe regression guard: it proves the `media-data` SMB share preserves
+   hardlinks across `/data/downloads` ↔ `/data/media` (the filesystem contract the entire
+   "hardlink not copy" import depends on) using a self-generated throwaway file — no
+   external download, no real content. A controlled *legal* download E2E (an
+   operator-designated well-seeded legal torrent via qBittorrent's `/api/v2`, proving
+   completion + no VPN leak) remains an optional future addition.
 9. Reusable Flux, Gateway API, DNS, Cilium, Longhorn, SMB, and cluster suites.
 10. Periodic conformance testing where appropriate.
 

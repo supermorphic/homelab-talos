@@ -31,6 +31,10 @@ Live commands are operator-only:
 - `mise exec -- just test probe qbittorrent`
 - `mise exec -- just test probe vpn-leak`
 - `mise exec -- just test probe dns-isolation`
+- `mise exec -- just test e2e media-hardlink` (non-destructive: proves the media-data SMB
+  share preserves hardlinks across `/data/downloads` ↔ `/data/media` — the filesystem
+  contract every *arr "hardlink not copy" import depends on — using a throwaway test file,
+  no external download; cleans up after itself)
 - `mise exec -- just test e2e <registered-target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect`

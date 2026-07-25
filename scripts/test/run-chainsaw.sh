@@ -93,8 +93,16 @@ case "$tier" in
       exit 2
     }
     acquire_state_lock
-    echo 'No E2E targets are registered yet.' >&2
-    exit 2
+    case "$target" in
+      media-hardlink)
+        test_dir='tests/chainsaw/e2e/media-hardlink'
+        selector='homelab-talos/suite=media-hardlink'
+        ;;
+      *)
+        echo "Unknown e2e target: $target" >&2
+        exit 2
+        ;;
+    esac
     ;;
   resilience)
     [[ -z "$scenario" ]] || {
