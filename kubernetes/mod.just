@@ -854,24 +854,7 @@ intel-gpu-plugin-validate: require-bash
 # Verify the live Phase 11 Intel GPU device plugin: Kustomization Ready, DaemonSet
 # rolled out, and every node advertising gpu.intel.com/i915 (QuickSync capacity).
 intel-gpu-plugin-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='kube-system'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization intel-gpu-plugin --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-      echo 'intel-gpu-plugin Kustomization is not Ready.' >&2
-      exit 1
-    }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status daemonset/intel-gpu-plugin --timeout=3m
-
-    advertised="$(kubectl --kubeconfig "$kubeconfig" get nodes --output json | yq -r '[.items[] | select(.status.allocatable["gpu.intel.com/i915"] != null)] | length')"
-    [[ "$advertised" -ge 1 ]] || {
-      echo 'No node advertises gpu.intel.com/i915 — check /dev/dri on the NUCs (the siderolabs/i915 extension) and the plugin logs.' >&2
-      exit 1
-    }
-    echo "Phase 11 intel-gpu-plugin acceptance passed: Kustomization Ready, DaemonSet rolled out, $advertised node(s) advertise gpu.intel.com/i915."
+    @scripts/verify/intel-gpu-plugin.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 12 qBittorrent+Gluetun source: files, wiring, dependency,
 # encrypted ProtonVPN Secret, the sidecar/kill-switch essentials, and the pinned render.

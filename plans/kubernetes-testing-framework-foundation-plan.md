@@ -223,6 +223,17 @@ functional probe or destructive step, and the documented hardlink proof in
 `mise exec -- just kube media-storage-verify` parity run is the hard merge gate
 for this slice.
 
+**PR 5d continues with `intel-gpu-plugin-verify`:** mechanically move its body to
+`scripts/verify/intel-gpu-plugin.sh` behind the same thin, guarded wrapper without
+changing the public command or its behavior. The `intel-gpu-plugin` Kustomization
+Ready and the DaemonSet rollout classify as future Chainsaw smoke assertions; the
+`gpu.intel.com/i915` allocatable-resource count is a read-only node-capability
+probe (dependent on the Talos `siderolabs/i915` extension and real `/dev/dri`
+hardware) that remains in the verification script until equivalent scenario
+coverage passes repeatedly. The slice adds no destructive step. The live
+`mise exec -- just kube intel-gpu-plugin-verify` parity run is the hard merge gate
+for this slice.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
