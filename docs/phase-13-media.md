@@ -38,10 +38,21 @@ only in an independently rotatable SOPS-encrypted Secret.
 ```text
 media  (namespace + app-template OCIRepository)
 ├── prowlarr        [media, internal-gateway]
+├── flaresolverr    [media]                       (optional; stateless, in-cluster only)
 media-storage  (static RWX SMB PV + media-data PVC)
 ├── sonarr          [media-storage, internal-gateway]
 └── radarr          [media-storage, internal-gateway]
 ```
+
+**FlareSolverr (optional):** a stateless headless-Chromium proxy (ClusterIP `:8191`, no
+PVC, no HTTPRoute, no VPN) that Prowlarr uses as a **per-indexer** Indexer Proxy to reach
+Cloudflare-protected indexers (e.g. 1337x). It shares Prowlarr's direct egress (same NAT
+IP — routing it through the VPN would break the Cloudflare session). Guarded rollout:
+`just bootstrap flaresolverr` (confirm `bootstrap:phase13:flaresolverr`). It is exempt in
+`media.rego` from the config-PVC and HTTPRoute requirements via `stateless_internal_apps`;
+all other policies (pinned tag, drop-ALL caps, dependency order) still apply. See
+[`arr-stack-startup.md`](arr-stack-startup.md) for the Prowlarr proxy wiring and the
+experiment's abort condition.
 
 ## Observability
 

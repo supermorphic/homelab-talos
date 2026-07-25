@@ -517,6 +517,19 @@ seerr-validate: require-bash
 seerr-verify: require-bash
     @scripts/verify/seerr.sh {{quote(kubeconfig)}}
 
+# Validate the FlareSolverr source: files, wiring, no-secret ks, app-template chartRef,
+# stateless (no config PVC, no HTTPRoute), non-root + drop-ALL caps, /dev/shm memory,
+# ClusterIP :8191, activation-aware Gatus probe, and the pinned render. Cluster-independent
+# — part of `just ci`.
+flaresolverr-validate: require-bash
+    @scripts/validate/flaresolverr.sh
+
+# Verify the live FlareSolverr: Kustomization + HelmRelease Ready, rollout, Service
+# endpoints, and an in-cluster GET / "ready" probe over a port-forward (no HTTPRoute/DNS).
+# Operator-only; not in ci. Proves the service is UP, NOT that any indexer works.
+flaresolverr-verify: require-bash
+    @scripts/verify/flaresolverr.sh {{quote(kubeconfig)}}
+
 # Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.

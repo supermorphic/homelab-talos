@@ -85,9 +85,57 @@ message |
 	contains(message, fragment)
 }
 
+# Stateless, in-cluster-only app (flaresolverr): no config PVC and no HTTPRoute, but every
+# other rule (pinned tag, drop-ALL caps, dependency ordering) still applies. This fixture
+# must produce zero denials; it is the guardrail that stops the stateless exemption from
+# being "cleaned up" and silently breaking FlareSolverr.
+stateless_fixture := [
+	{
+		"path": "kubernetes/apps/media/flaresolverr/app/values.yaml",
+		"contents": {"controllers": {"flaresolverr": {
+			"strategy": "RollingUpdate",
+			"containers": {"app": {
+				"image": {"tag": "v3.5.0"},
+				"securityContext": {"capabilities": {"drop": ["ALL"]}},
+			}},
+		}}},
+	},
+	{
+		"path": "kubernetes/apps/media/flaresolverr/ks.yaml",
+		"contents": {"spec": {"dependsOn": [{"name": "media"}]}},
+	},
+]
+
 test_valid_media_app_has_no_violations if {
 	messages := deny with input as valid_fixture
 	count(messages) == 0
+}
+
+test_stateless_internal_app_has_no_violations if {
+	messages := deny with input as stateless_fixture
+	count(messages) == 0
+}
+
+# A stateless app with a mutable tag is still denied — the exemption is PVC/HTTPRoute only.
+test_stateless_app_still_enforces_pinned_tag if {
+	fixture_input := json.patch(stateless_fixture, [{
+		"op": "replace",
+		"path": "/0/contents/controllers/flaresolverr/containers/app/image/tag",
+		"value": "latest",
+	}])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "uses mutable image tag")) == 1
+}
+
+# A stateless app that drops the ALL-capabilities requirement is still denied.
+test_stateless_app_still_enforces_drop_all if {
+	fixture_input := json.patch(stateless_fixture, [{
+		"op": "replace",
+		"path": "/0/contents/controllers/flaresolverr/containers/app/securityContext/capabilities/drop",
+		"value": [],
+	}])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "must drop all Linux capabilities")) == 1
 }
 
 host_namespace_fixture(namespace) := [{

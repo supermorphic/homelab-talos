@@ -42,6 +42,7 @@ ci:
     just kube qbittorrent-validate
     just kube arr-validate
     just kube seerr-validate
+    just kube flaresolverr-validate
     just kube media-policy-validate
     just kube monitoring-validate
     just kube gatus-validate

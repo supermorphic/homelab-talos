@@ -186,15 +186,39 @@ The **Add Indexer Proxy** dialog offers **FlareSolverr**, **Http**, **SOCKS4**, 
 leave this section empty unless a specific indexer forces it.
 
 - **FlareSolverr** — a headless-browser helper that solves Cloudflare anti-bot
-  challenges for the few public indexers that still require it. It is **not deployed
-  in this cluster**, so it cannot be selected as-is: using it means first adding a
-  FlareSolverr application (its own guarded rollout under `kubernetes/apps/media/`)
-  and pointing this proxy at its in-cluster URL. Upstream is steadily removing the
-  FlareSolverr requirement from indexer definitions, so prefer indexers that do not
-  need it rather than standing up the service.
+  challenges for the few public indexers that still require it (e.g. 1337x, which
+  otherwise fails with "Unable to access 1337x.to, blocked by CloudFlare Protection").
+  It **is deployed in this cluster** as a stateless, in-cluster-only app
+  (`kubernetes/apps/media/flaresolverr/`, ClusterIP `:8191`, no UI, no VPN). Add it as
+  a **per-indexer** proxy — see [FlareSolverr for Cloudflare indexers](#flaresolverr-for-cloudflare-indexers).
+  It is experimental: Cloudflare actively counters FlareSolverr, so it may not unblock
+  every indexer. Prefer indexers that do not need it where you can.
 - **Http / SOCKS4 / SOCKS5** — forward an indexer's traffic through an external
   proxy. Not needed here: Prowlarr reaches indexers directly, and it is qBittorrent
   — not Prowlarr — that egresses through the ProtonVPN tunnel.
+
+##### FlareSolverr for Cloudflare indexers
+
+FlareSolverr is a **per-indexer** proxy — attach it only to the indexers that need it,
+never globally. It and Prowlarr must share the same outward-facing IP (both egress
+directly, no VPN), or the Cloudflare session breaks; do not route FlareSolverr through
+Gluetun.
+
+1. **Settings → Indexers → Add Indexer Proxy → FlareSolverr.**
+   - **Name:** `FlareSolverr`
+   - **Host:** `http://flaresolverr.media.svc.cluster.local:8191`
+   - **Tags:** `flaresolverr`
+   - **Test**, require success, **Save**.
+2. Open the Cloudflare-protected indexer (e.g. **1337x**) and add the tag
+   `flaresolverr` to it — **and only to it**. Do not tag indexers that do not need it.
+3. **Test the indexer.** Success requires all three: the proxy Test passes, the 1337x
+   indexer Test passes, **and** a manual 1337x search in Prowlarr returns real results.
+
+If 1337x still fails after confirming the tag, confirming Prowlarr and FlareSolverr share
+one egress IP, and trying the primary plus one current alternate 1337x URL — **stop**.
+Do not escalate to custom Chrome flags, extra proxies, VPN routing, or a privileged
+container to force one optional public indexer. Disable 1337x, leave FlareSolverr for the
+next indexer that needs it, and continue with your other indexers.
 
 Do not add qBittorrent under **Prowlarr → Settings → Download Clients** for the
 normal automation flow. Prowlarr download clients are only used for searches
