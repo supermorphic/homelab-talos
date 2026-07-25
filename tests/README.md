@@ -50,6 +50,13 @@ Live commands are operator-only:
   evicts the pod, proving the Longhorn RWOP config volume re-attaches on the landing node
   (Longhorn currentNodeID moves), a /config marker survives, and the SMB share re-mounts;
   restores only the node it cordoned)
+- `CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot`
+  (DOUBLE-GATED: reboots the Talos node hosting Plex via the authoritative
+  `just bootstrap reboot` recipe — which owns quorum/TPM/etcd/foundation recovery — then
+  proves Plex recovers with its config volume re-attached + SMB re-mounted. First check
+  which node Plex is on: `kubectl -n media get pod -l app.kubernetes.io/name=plex -o wide`,
+  then set `TALOS_REBOOT_CONFIRM` for that exact node. `talosctl reboot` is bootstrap-tier,
+  so this is operator-run.)
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario

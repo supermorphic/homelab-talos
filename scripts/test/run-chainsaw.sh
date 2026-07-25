@@ -121,6 +121,10 @@ case "$tier" in
         test_dir='tests/chainsaw/resilience/plex-cross-node-reschedule'
         selector='homelab-talos/suite=plex-cross-node-reschedule'
         ;;
+      plex-node-reboot)
+        test_dir='tests/chainsaw/resilience/plex-node-reboot'
+        selector='homelab-talos/suite=plex-node-reboot'
+        ;;
       *)
         echo "Unknown resilience target: $target" >&2
         exit 2
