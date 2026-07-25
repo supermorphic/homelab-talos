@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-radarr
+    namespace: homepage
+type: Opaque
+stringData:
+    apiKey: ENC[AES256_GCM,data:jdYLQuD+2yQHYhcYHQ5DqQvyuQkyQQ7PJk5JNa4V1QQ=,iv:osgdFLFBUfE4NxjqTZJEYz/eHq8u471izauNAKBNi0o=,tag:dOX+ONRYCDibHnwMRcIGRQ==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBwZDU4YkFuMlJieXExZkdT
+            ZmxZczFqdUxIL0hNMXA1K1FCZHhGMzZNS1IwCmJZQWFMUlNTcHBPN0NGa1ZwSEgy
+            NW5pVVQ1OFM1MS9td0R2UHc4d0pSMDAKLS0tIHQrY1ZodFdmTThKRHE0SndselNB
+            VHhBSWoxeVVXczhIT2IxUVk0TmZ1Yk0KdSyYt7EiJ8vJGX9I5h/4QDG2qMrLa1m4
+            XTxeycGfP+QOKVpfwgVPyVNuCTesd8EsvJZeUiTiFgvnJUxf28SRJQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-07-25T18:07:40Z"
+    mac: ENC[AES256_GCM,data:jbSVRZuwy3GAYogZ7NAsdq328XpGaKMSMQtDsHRMwZDI9Z6+Aw580oojyB8xC5H0ds3pSEZQlXCf2PTfi2zVSA2M75FA7b6bt0PkMAXsSAff3jHc/jdJn6uE0TuaKuVBr9oxTTdFvn1zteHytB6SPFJ4z7FqsGfvAKC6qzijmLA=,iv:45rovzEDSRAKXPHvWxzu8koLj7kdqZck7ndjY1f/5yg=,tag:j4WkKk/J1b77hn01ZrpbTg==,type:str]
+    version: 3.13.2

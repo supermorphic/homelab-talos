@@ -390,10 +390,27 @@ Seerr's [Radarr service](#radarr-service) step). No setup action is required her
 ### API key
 
 Radarr's API key is under **Settings → General → Security**. You do **not** paste it
-while in Radarr — it is entered later, in two places: Prowlarr, in
-[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr), and
-Seerr, in the [Radarr service](#radarr-service) step. Copy it only when entering it
-into those screens; never commit it.
+into Radarr — it is entered elsewhere: Prowlarr, in
+[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr);
+Seerr, in the [Radarr service](#radarr-service) step; and the Homepage widget below.
+Copy it only when entering it into those screens; never commit it.
+
+The Homepage Radarr widget reads the same key from an independently rotatable SOPS
+Secret. Create it without printing the value:
+
+```bash
+printf 'Radarr API key: '
+IFS= read -r -s RADARR_API_KEY
+printf '\n'
+export RADARR_API_KEY
+export HOMEPAGE_RADARR_SECRETS_CONFIRM='write:monitoring:homepage-radarr:sops'
+mise exec -- just repo homepage-radarr-secrets
+unset RADARR_API_KEY HOMEPAGE_RADARR_SECRETS_CONFIRM
+```
+
+Run this only when creating or rotating the widget Secret. Commit only the resulting
+encrypted `homepage-radarr.sops.yaml`. The widget stays blank until the Secret exists
+and Flux reconciles it.
 
 ### Check
 

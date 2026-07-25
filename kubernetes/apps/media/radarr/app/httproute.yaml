@@ -14,6 +14,11 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "radarr.svg"
     gethomepage.dev/href: "https://radarr.lab.supermorphic.com"
+    # Live widget uses Radarr's API key from Homepage's SOPS Secret
+    # (homepage-radarr). Blank until `just repo homepage-radarr-secrets` runs.
+    gethomepage.dev/widget.type: "radarr"
+    gethomepage.dev/widget.url: "http://radarr.media.svc.cluster.local:7878"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_RADARR_API_KEY}}"
 spec:
   hostnames:
     - radarr.lab.supermorphic.com
