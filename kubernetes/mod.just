@@ -373,67 +373,7 @@ flux-status:
 
 # Verify final Phase 6 ownership, source, SOPS, canary, and Cilium health.
 flux-verify: flux-validate require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
-    expected_url='ssh://git@ssh.github.com:443/{{github_owner}}/{{github_repository}}'
-    temp_key="$(mktemp /tmp/homelab-talos-flux-age.XXXXXX)"
-    trap 'rm -f -- "$temp_key"' EXIT
-
-    flux check --kubeconfig "$kubeconfig"
-    for deployment in source-controller kustomize-controller helm-controller notification-controller; do
-      available="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployment "$deployment" --output jsonpath='{.status.availableReplicas}')"
-      [[ "$available" == '1' ]] || {
-        echo "$deployment does not have exactly one available replica." >&2
-        exit 1
-      }
-    done
-
-    source_json="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get gitrepository flux-system --output json)"
-    [[ "$(yq -r '.spec.url' - <<<"$source_json")" == "$expected_url" ]]
-    [[ "$(yq -r '.spec.ref.branch' - <<<"$source_json")" == 'main' ]]
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$source_json")" == 'True' ]]
-    remote_head="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
-    artifact_revision="$(yq -r '.status.artifact.revision' - <<<"$source_json")"
-    [[ "$artifact_revision" == *"$remote_head" ]] || {
-      echo "Flux artifact $artifact_revision has not reconciled origin/main at $remote_head." >&2
-      exit 1
-    }
-
-    for name in flux-system cluster-apps cilium flux-canary; do
-      kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
-        --for=condition=Ready "kustomization/$name" --timeout=10m
-      state="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$name" --output json)"
-      [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$state")" == 'True' ]] || {
-        echo "Flux Kustomization $name is not Ready." >&2
-        exit 1
-      }
-      [[ "$(yq -r '.spec.suspend // false' - <<<"$state")" == 'false' ]]
-    done
-
-    kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret sops-age \
-      --output jsonpath='{.data.age\.agekey}' | base64 --decode >"$temp_key"
-    chmod 600 "$temp_key"
-    [[ "$(age-keygen -y "$temp_key")" == "$expected_recipient" ]]
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-canary --output jsonpath='{.data.marker}' | base64 --decode)" == 'ready' ]]
-
-    source_secret_keys="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-system --output json | yq -r '.data | keys | .[]' | sort)"
-    [[ "$source_secret_keys" == $'identity\nidentity.pub\nknown_hosts' ]] || {
-      echo "Unexpected Flux source credential fields: $source_secret_keys" >&2
-      exit 1
-    }
-
-    cilium_source="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get ocirepository cilium --output json)"
-    [[ -n "$(yq -r '.spec.ref.tag' - <<<"$cilium_source")" ]]
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$cilium_source")" == 'True' ]]
-    cilium_release="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get helmrelease cilium --output json)"
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$cilium_release")" == 'True' ]]
-    [[ "$(yq -r '.spec.releaseName' - <<<"$cilium_release")" == 'cilium' ]]
-
-    just kube cilium-postflight
-    echo 'Phase 6 verification passed: Flux, SSH source auth, SOPS, canary reconciliation, and Cilium ownership are healthy.'
+    @scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
 
 # Validate the complete local Phase 7 graph, encrypted providers, and pinned chart renders.
 foundation-validate:
@@ -472,106 +412,7 @@ foundation-status:
 
 # Verify the complete live Phase 7 internal foundation acceptance gate.
 foundation-verify: foundation-validate require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
-    [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
-      exit 1
-    }
-
-    just kube flux-verify
-    for name in "${phase7_names[@]}"; do
-      kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
-        --for=condition=Ready "kustomization/$name" --timeout=15m
-      state="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$name" --output json)"
-      [[ "$(yq -r '.spec.suspend // false' - <<<"$state")" == 'false' ]]
-      [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$state")" == 'True' ]]
-    done
-
-    for deployment in cert-manager cert-manager-webhook cert-manager-cainjector; do
-      kubectl --kubeconfig "$kubeconfig" --namespace cert-manager rollout status "deployment/$deployment" --timeout=10m
-      replicas="$(kubectl --kubeconfig "$kubeconfig" --namespace cert-manager get deployment "$deployment" --output json | yq -r '[.spec.replicas, (.status.availableReplicas // 0)] | join(" ")')"
-      [[ "$replicas" == '2 2' ]]
-    done
-    for issuer in letsencrypt-staging letsencrypt-production; do
-      kubectl --kubeconfig "$kubeconfig" wait --for=condition=Ready "clusterissuer/$issuer" --timeout=10m
-    done
-    for certificate in wildcard-lab-supermorphic-com-staging wildcard-lab-supermorphic-com; do
-      kubectl --kubeconfig "$kubeconfig" --namespace networking wait --for=condition=Ready "certificate/$certificate" --timeout=15m
-    done
-
-    controller="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get deployment metallb-controller --output json | yq -r '[.spec.replicas, (.status.availableReplicas // 0)] | join(" ")')"
-    [[ "$controller" == '1 1' ]]
-    speaker="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset metallb-speaker --output json | yq -r '[.status.desiredNumberScheduled, .status.numberReady, (.status.numberUnavailable // 0)] | join(" ")')"
-    [[ "$speaker" == '3 3 0' ]]
-    pool="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get ipaddresspool internal --output json)"
-    [[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$pool")" == '192.168.90.30-192.168.90.39' ]]
-    [[ "$(yq -r '.spec.autoAssign' - <<<"$pool")" == 'false' ]]
-    ! kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset frr-k8s-daemon >/dev/null 2>&1
-
-    gateway_class="$(kubectl --kubeconfig "$kubeconfig" get gatewayclass internal --output json)"
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Accepted") | .status][0]' - <<<"$gateway_class")" == 'True' ]]
-    gateway="$(kubectl --kubeconfig "$kubeconfig" --namespace networking get gateway internal --output json)"
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Programmed") | .status][0]' - <<<"$gateway")" == 'True' ]]
-    [[ "$(yq -r '.status.addresses[].value' - <<<"$gateway" | sort -u)" == '192.168.90.30' ]]
-    [[ "$(yq -r '.status.listeners[] | select(.name == "https") | [.conditions[] | select(.type == "Accepted") | .status][0]' - <<<"$gateway")" == 'True' ]]
-
-    envoy_services="$(kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system get services --output json)"
-    envoy_service="$(yq -r '.items[] | select(.spec.type == "LoadBalancer" and (.status.loadBalancer.ingress[]?.ip == "192.168.90.30")) | .metadata.name' - <<<"$envoy_services")"
-    [[ -n "$envoy_service" && "$(wc -l <<<"$envoy_service" | tr -d ' ')" == '1' ]]
-    envoy_deployments="$(kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system get deployments --output json)"
-    envoy_ready="$(yq -r '.items[] | select(.metadata.labels."gateway.envoyproxy.io/owning-gateway-name" == "internal") | [.spec.replicas, (.status.availableReplicas // 0)] | join(" ")' - <<<"$envoy_deployments")"
-    [[ "$envoy_ready" == '2 2' ]]
-
-    kubectl --kubeconfig "$kubeconfig" --namespace external-dns rollout status deployment/external-dns-internal --timeout=10m
-    dns_deployment="$(kubectl --kubeconfig "$kubeconfig" --namespace external-dns get deployment external-dns-internal --output json)"
-    dns_args="$(yq -r '.spec.template.spec.containers[0].args[]' - <<<"$dns_deployment")"
-    for argument in \
-      '--source=gateway-httproute' \
-      '--provider=pihole' \
-      '--registry=noop' \
-      '--policy=upsert-only' \
-      '--domain-filter=lab.supermorphic.com' \
-      '--annotation-filter=external-dns.k8s.io/audience=internal' \
-      '--gateway-name=internal' \
-      '--pihole-api-version=6' \
-      '--pihole-server=https://pi.hole'; do
-      rg -Fx -- "$argument" <<<"$dns_args"
-    done
-    ! rg -Fx -- '--pihole-tls-skip-verify' <<<"$dns_args"
-    [[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "external-dns") | .env[] | select(.name == "SSL_CERT_FILE") | .value' - <<<"$dns_deployment")" == '/etc/ssl/pihole/tls_ca.crt' ]]
-    [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "pihole-ca") | .configMap.name' - <<<"$dns_deployment")" == 'pihole-ca' ]]
-    [[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "external-dns") | .volumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' - <<<"$dns_deployment")" == '/etc/ssl/pihole true' ]]
-    live_pihole_ca="$(kubectl --kubeconfig "$kubeconfig" --namespace external-dns get configmap pihole-ca --output jsonpath='{.data.tls_ca\.crt}')"
-    [[ "$live_pihole_ca" == "$(<kubernetes/apps/networking/external-dns/app/pihole-ca.crt)" ]]
-
-    kubectl --kubeconfig "$kubeconfig" --namespace testing rollout status deployment/echo --timeout=10m
-    echo_replicas="$(kubectl --kubeconfig "$kubeconfig" --namespace testing get deployment echo --output json | yq -r '[.spec.replicas, (.status.availableReplicas // 0)] | join(" ")')"
-    [[ "$echo_replicas" == '2 2' ]]
-    route="$(kubectl --kubeconfig "$kubeconfig" --namespace testing get httproute echo --output json)"
-    [[ "$(yq -r '[.status.parents[].conditions[] | select(.type == "Accepted") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]
-    [[ "$(yq -r '[.status.parents[].conditions[] | select(.type == "ResolvedRefs") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]
-
-    dns_answer=''
-    for attempt in {1..30}; do
-      dns_answer="$(dig +short @192.168.90.2 echo.lab.supermorphic.com A | sort -u)"
-      [[ "$dns_answer" == '192.168.90.30' ]] && break
-      sleep 10
-    done
-    [[ "$dns_answer" == '192.168.90.30' ]] || {
-      echo "Pi-hole returned '$dns_answer' instead of 192.168.90.30." >&2
-      exit 1
-    }
-    response="$(curl --silent --show-error --fail --max-time 15 \
-      --resolve echo.lab.supermorphic.com:443:192.168.90.30 \
-      https://echo.lab.supermorphic.com/)"
-    [[ -n "$response" ]]
-
-    just kube cilium-postflight
-    echo 'Phase 7 verification passed: certificates, MetalLB, Envoy Gateway, Pi-hole DNS, trusted HTTPS, echo, Talos, and etcd are healthy.'
+    @scripts/verify/foundation.sh {{quote(kubeconfig)}}
 
 # Restart the flux-system controllers and prove reconciliation resumes.
 flux-restart: require-bash
@@ -671,80 +512,7 @@ plex-validate: require-bash
 # Verify the live Longhorn acceptance gate: controllers, node disks, default
 # StorageClass, backup target, recurring jobs, and a two-replica test PVC.
 storage-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='longhorn-system'
-    tpvc='storage-verify-test'
-    tmp="$(mktemp -d /tmp/homelab-talos-storage-verify.XXXXXX)"
-    cleanup() {
-      kubectl --kubeconfig "$kubeconfig" --namespace "$ns" delete pvc "$tpvc" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-      rm -rf -- "$tmp"
-    }
-    trap cleanup EXIT
-
-    for n in longhorn longhorn-config; do
-      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$n" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-        echo "Storage Kustomization $n is not Ready." >&2
-        exit 1
-      }
-    done
-
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status daemonset/longhorn-manager --timeout=5m
-
-    nodes_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get nodes.longhorn.io --output json)"
-    [[ "$(yq -r '.items | length' - <<<"$nodes_json")" == '3' ]] || { echo 'Expected three Longhorn nodes.' >&2; exit 1; }
-    ready="$(yq -r '[.items[] | [.status.conditions[] | select(.type == "Ready") | .status][0]] | unique | join(" ")' - <<<"$nodes_json")"
-    [[ "$ready" == 'True' ]] || { echo "Longhorn nodes are not all Ready ($ready)." >&2; exit 1; }
-    disk_paths="$(yq -r '[.items[].spec.disks[].path] | unique | join(" ")' - <<<"$nodes_json")"
-    [[ "$disk_paths" == '/var/mnt/longhorn' ]] || { echo "Longhorn disk path(s) '$disk_paths', expected /var/mnt/longhorn." >&2; exit 1; }
-
-    sc="$(kubectl --kubeconfig "$kubeconfig" get storageclass longhorn --output json)"
-    [[ "$(yq -r '.metadata.annotations."storageclass.kubernetes.io/is-default-class"' - <<<"$sc")" == 'true' ]] || { echo 'longhorn is not the default StorageClass.' >&2; exit 1; }
-    [[ "$(yq -r '.parameters.numberOfReplicas' - <<<"$sc")" == '2' ]] || { echo 'longhorn StorageClass is not 2 replicas.' >&2; exit 1; }
-
-    # The CIFS mount + first poll are eventually consistent, so retry (~4 min).
-    bt_available=false
-    for _ in {1..24}; do
-      if [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get backuptargets.longhorn.io default --output jsonpath='{.status.available}' 2>/dev/null)" == 'true' ]]; then
-        bt_available=true
-        break
-      fi
-      sleep 10
-    done
-    [[ "$bt_available" == 'true' ]] || {
-      bt_msg="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get backuptargets.longhorn.io default --output jsonpath='{.status.conditions[?(@.type=="Unavailable")].message}' 2>/dev/null)"
-      echo "Longhorn backup target is not available after retries: ${bt_msg:-unknown}." >&2
-      echo 'Check the CIFS share, the nas-credentials Secret, and whether the Talos nodes can mount CIFS (cifs kernel module).' >&2
-      exit 1
-    }
-    for j in daily-snapshot daily-backup; do
-      kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io "$j" >/dev/null
-    done
-
-    export tpvc ns
-    yq -n \
-      '.apiVersion = "v1" |
-       .kind = "PersistentVolumeClaim" |
-       .metadata.name = strenv(tpvc) |
-       .metadata.namespace = strenv(ns) |
-       .spec.accessModes = ["ReadWriteOnce"] |
-       .spec.storageClassName = "longhorn" |
-       .spec.resources.requests.storage = "1Gi"' >"$tmp/pvc.yaml"
-    kubectl --kubeconfig "$kubeconfig" apply --filename "$tmp/pvc.yaml" >/dev/null
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" wait --for=jsonpath='{.status.phase}'=Bound "pvc/$tpvc" --timeout=3m
-    vol="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pvc "$tpvc" --output jsonpath='{.spec.volumeName}')"
-    replica_nodes=0
-    for _ in {1..24}; do
-      replica_nodes="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get replicas.longhorn.io --selector "longhornvolume=$vol" --output json 2>/dev/null | yq -r '[.items[].spec.nodeID] | unique | length')"
-      [[ "$replica_nodes" == '2' ]] && break
-      sleep 5
-    done
-    [[ "$replica_nodes" == '2' ]] || { echo "Test volume replicas span $replica_nodes nodes; expected 2 (hard anti-affinity)." >&2; exit 1; }
-
-    just kube foundation-verify
-    echo 'Phase 9 storage acceptance passed: Longhorn healthy on three nodes (disks at /var/mnt/longhorn), default two-replica StorageClass, backup target available, recurring jobs present, and a test PVC bound with replicas on two distinct nodes.'
+    @scripts/verify/storage.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
@@ -762,43 +530,7 @@ media-storage-verify: require-bash
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.
 # The node-failure reschedule gate is a manual operator test (docs/phase-11-media.md).
 plex-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='media'
-    gateway_ip='192.168.90.30'
-    host='plex.lab.supermorphic.com'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-      echo 'plex Kustomization is not Ready.' >&2
-      exit 1
-    }
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-      echo 'plex HelmRelease is not Ready.' >&2
-      exit 1
-    }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/plex --timeout=5m
-
-    accepted=false
-    for _ in {1..24}; do
-      if [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute plex --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]]; then
-        accepted=true
-        break
-      fi
-      sleep 5
-    done
-    [[ "$accepted" == 'true' ]] || { echo 'plex HTTPRoute was not Accepted.' >&2; exit 1; }
-
-    [[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || {
-      echo "DNS for $host does not resolve to $gateway_ip via Pi-hole." >&2
-      exit 1
-    }
-    curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/identity" >/dev/null || {
-      echo "Plex /identity is not reachable via the internal gateway." >&2
-      exit 1
-    }
-    echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'
+    @scripts/verify/plex.sh {{quote(kubeconfig)}}
 
 # The Phase 11 gate: prove the single Plex replica recreates on ANOTHER NUC when its
 # node becomes unschedulable, with the Longhorn RWO config volume re-attaching and the
@@ -1034,26 +766,7 @@ seerr-validate: require-bash
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='media'
-    gateway_ip='192.168.90.30'
-    host='seerr.lab.supermorphic.com'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization seerr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'seerr Kustomization not Ready.' >&2; exit 1; }
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease seerr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'seerr HelmRelease not Ready.' >&2; exit 1; }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/seerr --timeout=5m
-    accepted=false
-    for _ in {1..24}; do
-      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute seerr --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]] && { accepted=true; break; }
-      sleep 5
-    done
-    [[ "$accepted" == 'true' ]] || { echo 'seerr HTTPRoute was not Accepted.' >&2; exit 1; }
-    [[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
-    curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/api/v1/status" >/dev/null || { echo 'seerr /api/v1/status not reachable via the gateway.' >&2; exit 1; }
-    echo 'Phase 14 Seerr acceptance passed. First-run: connect Plex + Sonarr/Radarr (URLs + API keys) in the Seerr UI.'
+    @scripts/verify/seerr.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
@@ -1065,62 +778,7 @@ monitoring-validate: require-bash
 # on Longhorn, HTTPRoutes accepted, all three UIs reachable with trusted HTTPS
 # through the internal gateway, and the foundation still green.
 monitoring-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='monitoring'
-    gateway_ip='192.168.90.30'
-
-    for k in kube-prometheus-stack kube-prometheus-stack-config; do
-      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$k" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-        echo "Monitoring Kustomization $k is not Ready." >&2
-        exit 1
-      }
-    done
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease kube-prometheus-stack --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-      echo 'kube-prometheus-stack HelmRelease is not Ready.' >&2
-      exit 1
-    }
-
-    pvc_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pvc --output json)"
-    [[ "$(yq -r '[.items[] | select(.status.phase == "Bound")] | length' - <<<"$pvc_json")" -ge 3 ]] || { echo 'Expected at least three bound PVCs in monitoring.' >&2; exit 1; }
-    [[ "$(yq -r '[.items[].status.phase] | unique | join(" ")' - <<<"$pvc_json")" == 'Bound' ]] || { echo 'Not all monitoring PVCs are Bound.' >&2; exit 1; }
-
-    for r in grafana prometheus alertmanager; do
-      accepted=false
-      for _ in {1..18}; do
-        route="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute "$r" --output json 2>/dev/null)"
-        if [[ "$(yq -r '[.status.parents[].conditions[]? | select(.type == "Accepted") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]; then
-          accepted=true
-          break
-        fi
-        sleep 5
-      done
-      [[ "$accepted" == 'true' ]] || {
-        echo "HTTPRoute $r is not Accepted; confirm the monitoring namespace carries gateway.supermorphic.com/access=internal and that Envoy Gateway has re-listed it." >&2
-        exit 1
-      }
-    done
-
-    dns_answer=''
-    for _ in {1..30}; do
-      dns_answer="$(dig +short @192.168.90.2 grafana.lab.supermorphic.com A | sort -u)"
-      [[ "$dns_answer" == "$gateway_ip" ]] && break
-      sleep 10
-    done
-    [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for grafana, not $gateway_ip." >&2; exit 1; }
-    for host in prometheus alertmanager; do
-      [[ "$(dig +short @192.168.90.2 "$host.lab.supermorphic.com" A | sort -u)" == "$gateway_ip" ]] || { echo "Pi-hole has no $gateway_ip record for $host." >&2; exit 1; }
-    done
-
-    health="$(curl --silent --show-error --fail --max-time 15 --resolve "grafana.lab.supermorphic.com:443:$gateway_ip" https://grafana.lab.supermorphic.com/api/health)"
-    [[ "$(yq -r '.database' - <<<"$health")" == 'ok' ]] || { echo "Grafana /api/health not ok: $health" >&2; exit 1; }
-    curl --silent --show-error --fail --max-time 15 --resolve "prometheus.lab.supermorphic.com:443:$gateway_ip" https://prometheus.lab.supermorphic.com/-/healthy >/dev/null
-    curl --silent --show-error --fail --max-time 15 --resolve "alertmanager.lab.supermorphic.com:443:$gateway_ip" https://alertmanager.lab.supermorphic.com/-/healthy >/dev/null
-
-    just kube foundation-verify
-    echo 'Phase 10 monitoring acceptance passed: kube-prometheus-stack Ready (Prometheus, Alertmanager, Grafana, exporters), PVCs bound on Longhorn, HTTPRoutes accepted, and all three UIs reachable with trusted HTTPS through the internal gateway.'
+    @scripts/verify/monitoring.sh {{quote(kubeconfig)}}
 
 # Reset Grafana's DB admin password to the current grafana-admin Secret value. Grafana
 # only applies the admin password on first init, so a rotated/recreated Secret (e.g. the
@@ -1155,36 +813,7 @@ gatus-validate: require-bash
 # Verify the live Gatus app: Kustomization + HelmRelease Ready, PVC bound,
 # HTTPRoute accepted, the dashboard reachable via HTTPS, and foundation green.
 gatus-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='gatus'
-    gateway_ip='192.168.90.30'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization gatus --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Gatus Kustomization is not Ready.' >&2; exit 1; }
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease gatus --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Gatus HelmRelease is not Ready.' >&2; exit 1; }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/gatus --timeout=3m
-
-    accepted=false
-    for _ in {1..18}; do
-      route="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute gatus --output json 2>/dev/null)"
-      if [[ "$(yq -r '[.status.parents[].conditions[]? | select(.type == "Accepted") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]; then accepted=true; break; fi
-      sleep 5
-    done
-    [[ "$accepted" == 'true' ]] || { echo 'Gatus HTTPRoute is not Accepted.' >&2; exit 1; }
-
-    dns_answer=''
-    for _ in {1..30}; do
-      dns_answer="$(dig +short @192.168.90.2 gatus.lab.supermorphic.com A | sort -u)"
-      [[ "$dns_answer" == "$gateway_ip" ]] && break
-      sleep 10
-    done
-    [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for gatus, not $gateway_ip." >&2; exit 1; }
-    curl --silent --show-error --fail --max-time 15 --resolve "gatus.lab.supermorphic.com:443:$gateway_ip" https://gatus.lab.supermorphic.com/health >/dev/null
-
-    just kube foundation-verify
-    echo 'Phase 10 Gatus acceptance passed: Kustomization and HelmRelease Ready, deployment rolled out (in-memory storage), HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at gatus.lab.supermorphic.com.'
+    @scripts/verify/gatus.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 10 Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
@@ -1194,35 +823,7 @@ homepage-validate: require-bash
 # Verify the live Homepage app: Kustomization Ready, deployment rolled out,
 # HTTPRoute accepted, dashboard reachable via HTTPS, and foundation green.
 homepage-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='homepage'
-    gateway_ip='192.168.90.30'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization homepage --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Homepage Kustomization is not Ready.' >&2; exit 1; }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/homepage --timeout=5m
-
-    accepted=false
-    for _ in {1..18}; do
-      route="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute homepage --output json 2>/dev/null)"
-      if [[ "$(yq -r '[.status.parents[].conditions[]? | select(.type == "Accepted") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]; then accepted=true; break; fi
-      sleep 5
-    done
-    [[ "$accepted" == 'true' ]] || { echo 'Homepage HTTPRoute is not Accepted.' >&2; exit 1; }
-
-    dns_answer=''
-    for _ in {1..30}; do
-      dns_answer="$(dig +short @192.168.90.2 homepage.lab.supermorphic.com A | sort -u)"
-      [[ "$dns_answer" == "$gateway_ip" ]] && break
-      sleep 10
-    done
-    [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for homepage, not $gateway_ip." >&2; exit 1; }
-    curl --silent --show-error --fail --max-time 15 --resolve "homepage.lab.supermorphic.com:443:$gateway_ip" https://homepage.lab.supermorphic.com/ >/dev/null
-
-    just kube foundation-verify
-    echo 'Phase 10 Homepage acceptance passed: Kustomization Ready, deployment rolled out, HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at homepage.lab.supermorphic.com.'
+    @scripts/verify/homepage.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 10 Trivy Operator source: files, wiring, staged suspend,
 # dependency, pinned chart, key scanner settings, and the render.
@@ -1232,18 +833,4 @@ trivy-validate: require-bash
 # Verify the live Trivy Operator: Kustomization + HelmRelease Ready, operator
 # rolled out, report CRDs installed, and foundation green.
 trivy-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='trivy-system'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization trivy-operator --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Trivy Kustomization is not Ready.' >&2; exit 1; }
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease trivy-operator --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Trivy HelmRelease is not Ready.' >&2; exit 1; }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/trivy-operator --timeout=5m
-    for crd in vulnerabilityreports.aquasecurity.github.io configauditreports.aquasecurity.github.io; do
-      kubectl --kubeconfig "$kubeconfig" get crd "$crd" >/dev/null 2>&1 || { echo "Missing Trivy CRD $crd." >&2; exit 1; }
-    done
-
-    just kube foundation-verify
-    echo 'Phase 10 Trivy Operator acceptance passed: Kustomization and HelmRelease Ready, operator rolled out, and report CRDs installed.'
+    @scripts/verify/trivy.sh {{quote(kubeconfig)}}
