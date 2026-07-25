@@ -756,22 +756,7 @@ csi-driver-smb-verify: require-bash
 # and the documented hardlink proof (docs/phase-11-media.md); binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-
-    for n in media media-storage; do
-      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$n" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-        echo "Media Kustomization $n is not Ready." >&2
-        exit 1
-      }
-    done
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace media get pvc media-data --output jsonpath='{.status.phase}' 2>/dev/null)" == 'Bound' ]] || {
-      echo 'PVC media/media-data is not Bound.' >&2
-      exit 1
-    }
-    echo 'Phase 11 media storage acceptance passed: media + media-storage Kustomizations Ready and media-data PVC Bound. Run the hardlink proof in docs/phase-11-media.md next.'
+    @scripts/verify/media-storage.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 Plex: Kustomization + HelmRelease Ready, rollout complete,
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.

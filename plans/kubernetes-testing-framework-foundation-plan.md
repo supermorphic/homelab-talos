@@ -212,6 +212,17 @@ functional probe or destructive step. The live
 `mise exec -- just kube csi-driver-smb-verify` parity run is the hard merge gate
 for this slice.
 
+**PR 5c continues with `media-storage-verify`:** mechanically move its body to
+`scripts/verify/media-storage.sh` behind the same thin, guarded wrapper without
+changing the public command or its behavior. Both checks — the `media` and
+`media-storage` Kustomizations Ready and the static RWX `media/media-data` PVC
+Bound — are read-only resource readiness/status assertions, so they classify as
+future Chainsaw smoke assertions (the eventual SMB suite); the slice adds no
+functional probe or destructive step, and the documented hardlink proof in
+`docs/phase-11-media.md` remains the real mount exercise. The live
+`mise exec -- just kube media-storage-verify` parity run is the hard merge gate
+for this slice.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
