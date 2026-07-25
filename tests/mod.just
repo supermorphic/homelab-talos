@@ -22,3 +22,8 @@ resilience target:
 # Collect allowlisted read-only diagnostics from the live cluster.
 diagnostics target:
     @scripts/test/run-chainsaw.sh diagnostics {{quote(target)}}
+
+# Run a single registered read-only network/API probe interactively (a measurement
+# primitive, not an assurance tier). Operator-run; needs the live cluster.
+probe target:
+    @scripts/test/run-probe.sh {{quote(target)}}

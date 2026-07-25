@@ -37,11 +37,13 @@ script_count=0
 while IFS= read -r script_file; do
   shellcheck --external-sources "$script_file"
   script_count=$((script_count + 1))
-done < <(find scripts/test -type f -name '*.sh' -print | LC_ALL=C sort)
+done < <(find scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort)
 
 scripts/test/safety/require-chaos-confirmation-test.sh
 scripts/test/lib/results-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
+scripts/test/run-probe-dispatch-test.sh
+tests/probes/qbittorrent/probe-test.sh
 
 printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d.\n' \
   "$test_count" "$yaml_count" "$script_count"
