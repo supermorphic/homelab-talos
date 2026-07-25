@@ -247,6 +247,27 @@ slice reads live state only and performs no mutation. The live
 `mise exec -- just kube qbittorrent-verify` parity run is the hard merge gate for
 this slice.
 
+**PR 5f batches the low-to-moderate-risk remainder** (operator preference, to
+reduce PR churn): the six read-only acceptance checks `plex`, `seerr`, `trivy`,
+`gatus`, `homepage`, `monitoring` plus the three platform checks `storage`,
+`flux`, `foundation`, each moved verbatim to `scripts/verify/<name>.sh` behind
+thin, guarded wrappers. The read-only checks (readiness/HTTPRoute/rollout →
+future Chainsaw smoke; `dig`/`curl` → read-only functional probes) perform no
+mutation. `storage` creates and deletes a throwaway test PVC (self-cleaning
+trap); `flux` derives the SOPS **public** recipient from the live `sops-age`
+Secret (no secret value is printed) and takes `github_owner`/`github_repository`
+as extra args; `foundation`/`flux`/`storage` retain their `just kube …`
+callbacks (`flux-verify`, `foundation-verify`, `cilium-postflight`) verbatim.
+Two pre-existing `! cmd` absence-assertions in `foundation.sh`
+(`frr-k8s-daemon`, `--pihole-tls-skip-verify`) are non-gating under bash
+`set -e` and are preserved as-is with `# shellcheck disable=SC2251`; hardening
+them to actually gate is deferred to the later scenario-semantics work, not this
+mechanical move. The hard merge gate is one operator sitting running each of the
+nine parity checks: `mise exec -- just kube {plex,seerr,trivy,gatus,homepage,`
+`monitoring,storage,flux,foundation}-verify`. The three destructive/heavy
+recipes (`plex-reschedule`, `cilium`, `qbittorrent-killswitch`) remain a
+separate final slice (PR 5g).
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
