@@ -4,8 +4,9 @@
 
 **In progress.** **Prowlarr** and **Sonarr** passed their guarded live acceptance gates
 on 2026-07-24 (Ready, rollout complete, HTTPRoute Accepted, DNS and `/ping`) and are
-durable with `suspend: false`. **Radarr** remains staged with `suspend: true` for its
-separate operator rollout. All three are low-risk relative to Phase 12 — no VPN, no
+durable with `suspend: false`. **Radarr** is activated with `suspend: false` on
+2026-07-25 for its guarded operator rollout; the direct download acceptance test is the
+remaining Phase 13 gate. All three are low-risk relative to Phase 12 — no VPN, no
 privileged containers, and no plaintext secrets in Git. API keys and inter-app links are
 first-run settings persisted in each config PVC; any Homepage integration copy is stored
 only in an independently rotatable SOPS-encrypted Secret.
@@ -43,10 +44,10 @@ media-storage  (static RWX SMB PV + media-data PVC)
 
 ## Observability
 
-Gatus `Media`-group `/ping` probes are activation-aware: Prowlarr and Sonarr are
-monitored now; Radarr is added only when its `suspend` flag is durably set to `false`.
-This proves DNS → gateway → app without creating false alarms for staged workloads that
-do not exist yet. Homepage shows a pod-status tile per app and a live Prowlarr widget.
+Gatus `Media`-group `/ping` probes are activation-aware: Prowlarr, Sonarr, and Radarr
+are monitored now, each added when its `suspend` flag is durably set to `false`. This
+proves DNS → gateway → app without creating false alarms for staged workloads that do
+not exist yet. Homepage shows a pod-status tile per app and live Prowlarr widget.
 
 ## Validation
 
@@ -58,8 +59,9 @@ key placeholder, while leaving the widget to display its complete default field 
 
 ## Rollout (operator, after merge — per app)
 
-Recommended order: **Prowlarr first**, then Sonarr and Radarr. Prowlarr and Sonarr are
-complete; **Radarr is the remaining rollout**.
+Recommended order: **Prowlarr first**, then Sonarr and Radarr. All three sources are now
+activated (`suspend: false`); run each app's guarded `just bootstrap arr <app>` rollout
+if it has not been brought up yet, then confirm with `arr-verify`.
 
 ```bash
 # from any clean branch/worktree after the rollout source is merged to main
