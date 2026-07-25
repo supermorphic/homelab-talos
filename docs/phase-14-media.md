@@ -2,10 +2,13 @@
 
 ## Status
 
-**Staged (`suspend: true`).** **Seerr** — the official merger/successor of Overseerr +
-Jellyseerr (`ghcr.io/seerr-team/seerr`) — is the request UI that ties Plex + Sonarr +
-Radarr together. Low-risk: no VPN, no privileged containers, no secrets in Git (the Plex
-and *arr API links + Seerr's own API key are first-run settings persisted in `/app/config`).
+**Activated (`suspend: false`, 2026-07-25).** **Seerr** — the official merger/successor of
+Overseerr + Jellyseerr (`ghcr.io/seerr-team/seerr`) — is the request UI that ties Plex +
+Sonarr + Radarr together. It passed its guarded live acceptance gate (Ready, rollout,
+HTTPRoute Accepted, DNS, `/api/v1/status`) and is now Gatus-monitored. Remaining Phase 14
+gate: the first-run UI wiring (Plex + Sonarr + Radarr) and the request end-to-end test.
+Low-risk: no VPN, no privileged containers, no secrets in Git (the Plex and *arr API links
++ Seerr's own API key are first-run settings persisted in `/app/config`).
 
 ## Why Seerr (not Overseerr/Jellyseerr)
 
@@ -60,7 +63,7 @@ hardlink import → Plex.
 
 Already in place across the media stack:
 - **Gatus** `Media` group: `plex`, `qbittorrent-vpn` (VPN health), and each activated
-  app. Prowlarr, Sonarr, and Radarr are active; Seerr is added at its activation
+  app. Prowlarr, Sonarr, Radarr, and Seerr are active; each is added at its activation
   commit.
 - **Prometheus/Alertmanager:** `QbittorrentVpnDown` (critical) — the VPN kill-switch alert.
 - **Homepage:** service tiles for every media app and a secret-backed Prowlarr activity
