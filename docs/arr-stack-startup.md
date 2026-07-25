@@ -45,9 +45,11 @@ Open `https://qbittorrent.lab.supermorphic.com`.
 ### Authentication
 
 1. On a new PVC, sign in as `admin` with the temporary password qBittorrent emits
-   during its first startup. On an existing PVC, use the saved permanent credential.
-   If the temporary password is unavailable, use qBittorrent's official password-reset
-   procedure; do not disable WebUI authentication.
+   during its first startup. It is printed once in the qBittorrent container's
+   startup log (the line begins `The WebUI administrator password was not set. A
+   temporary password is provided...`). On an existing PVC, use the saved permanent
+   credential. If the temporary password is unavailable, use qBittorrent's official
+   password-reset procedure; do not disable WebUI authentication.
 2. Open **Tools → Options → Web UI**.
 3. Set a permanent, unique username and password from the password manager.
 4. Keep WebUI authentication enabled.
@@ -184,6 +186,12 @@ resulting encrypted `homepage-prowlarr.sops.yaml`.
 
 Application connections are completed after Sonarr and Radarr have generated
 their API keys; see [Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr).
+
+### Check
+
+```bash
+mise exec -- just kube arr-verify prowlarr
+```
 
 ## Sonarr
 
