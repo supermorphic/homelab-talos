@@ -31,3 +31,9 @@
 # editor junk
 .vscode/
 .idea/
+
+# Python (uv-managed; probe analyzer bytecode/caches)
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

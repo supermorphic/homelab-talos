@@ -25,6 +25,7 @@ versions:
     @gh --version | head -n 1
     @gitleaks version
     @shellcheck --version
+    @uv --version
 
 # Verify that the loaded private age identity matches this repository.
 secrets:

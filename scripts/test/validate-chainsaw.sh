@@ -45,5 +45,14 @@ scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/run-probe-dispatch-test.sh
 tests/probes/qbittorrent/probe-test.sh
 
-printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d.\n' \
-  "$test_count" "$yaml_count" "$script_count"
+# Offline Python unit tests for probe analyzers (e.g. the VPN leak sentinel). uv (pinned
+# via mise) provides the interpreter; the analyzers are pure, so this needs no cluster.
+# Discover per probe directory so each test can import its sibling module.
+py_test_dirs=0
+while IFS= read -r py_test_dir; do
+  uv run python -m unittest discover -s "$py_test_dir" -p 'test_*.py'
+  py_test_dirs=$((py_test_dirs + 1))
+done < <(find tests/probes -type f -name 'test_*.py' -exec dirname {} \; | LC_ALL=C sort -u)
+
+printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d python_test_dirs=%d.\n' \
+  "$test_count" "$yaml_count" "$script_count" "$py_test_dirs"

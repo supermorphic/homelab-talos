@@ -22,6 +22,9 @@ case "$target" in
   qbittorrent)
     probe='tests/probes/qbittorrent/probe.sh'
     ;;
+  vpn-leak)
+    probe='tests/probes/vpn/leak-sentinel.sh'
+    ;;
   *)
     echo "Unknown probe target: $target" >&2
     exit 2

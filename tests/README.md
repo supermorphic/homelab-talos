@@ -7,18 +7,28 @@ This tree contains declarative, repository-owned test inputs:
 - `policy/` holds cluster-independent Conftest/Rego policy.
 - `fixtures/` holds controlled test data, including a lint-only Chainsaw test
   that is never part of live scenario discovery.
-- `probes/` is reserved for scenario-local behavioral probes.
+- `probes/` holds specialized read-only network/API probes — a measurement
+  primitive, not an assurance tier. Each probe's pure analysis logic is
+  unit-tested offline; the live capture is operator-run. Bash probes reuse the
+  in-cluster exec pattern; Python probe analyzers use `uv` (pinned via mise, no
+  third-party deps — stdlib `unittest`). Current probes: `qbittorrent/` (VPN
+  egress + forwarded-port point checks) and `vpn/` (the continuous in-netns VPN
+  leak sentinel).
 
 `mise exec -- just test validate` is the only cluster-independent command in this
-module. It lints Chainsaw configuration and tests, parses their YAML assets, and
-runs ShellCheck over `scripts/test/`. It deliberately uses a nonexistent
-kubeconfig and unsets SOPS age-key variables.
+module. It lints Chainsaw configuration and tests, parses their YAML assets, runs
+ShellCheck over `scripts/test/` and `tests/probes/`, executes the shell unit-test
+suites, and runs the Python probe unit tests via `uv run python -m unittest`. It
+deliberately uses a nonexistent kubeconfig and unsets SOPS age-key variables.
 
 Live commands are operator-only:
 
 - `mise exec -- just test smoke cluster`
 - `mise exec -- just test smoke cluster diagnostics-self-test` (expected failure)
+- `mise exec -- just test smoke media qbittorrent`
 - `mise exec -- just test diagnostics cluster`
+- `mise exec -- just test probe qbittorrent`
+- `mise exec -- just test probe vpn-leak`
 - `mise exec -- just test e2e <registered-target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 
