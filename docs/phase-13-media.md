@@ -28,9 +28,10 @@ only in an independently rotatable SOPS-encrypted Secret.
   TLS) with `gethomepage.dev` service tiles (pod-selector). Prowlarr includes its live
   activity widget; Homepage receives the API key from the independently rotatable,
   SOPS-encrypted `homepage-prowlarr` Secret.
-- **Image pins:** `prowlarr 2.1.5.5216`, `sonarr 4.0.18.2978`, `radarr 5.28.0.10205`.
-  Radarr is pinned to the latest **v5** rather than the new **v6.0.0** major — deliberately
-  conservative for a fresh, not-yet-live-tested install; bump to 6.x when ready.
+- **Image pins:** `prowlarr 2.5.2.5491`, `sonarr 4.0.18.2978`, `radarr 6.4.0.10523`.
+  Radarr was bumped from the initial conservative **v5** pin to the current **v6** once the
+  stack was live. The v6 upgrade runs a **one-way config-DB migration** — snapshot the
+  radarr config PVC before the rollout, as it cannot be cleanly downgraded afterward.
 
 ## Dependency graph
 
