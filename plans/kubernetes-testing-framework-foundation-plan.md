@@ -234,6 +234,19 @@ coverage passes repeatedly. The slice adds no destructive step. The live
 `mise exec -- just kube intel-gpu-plugin-verify` parity run is the hard merge gate
 for this slice.
 
+**PR 5e continues with `qbittorrent-verify`** (the non-destructive acceptance
+check, *not* the blocking `qbittorrent-killswitch-verify` VPN gate, which is
+preserved untouched): mechanically move its body to
+`scripts/verify/qbittorrent.sh` behind the same thin, guarded wrapper without
+changing the public command or its behavior. The Kustomization/HelmRelease Ready,
+Deployment rollout, and HTTPRoute Accepted checks classify as future Chainsaw
+smoke; the DNS resolution (`dig` against Pi-hole) and WebUI reachability (`curl`
+through the internal gateway) are read-only functional probes that remain in the
+verification script until equivalent E2E scenario coverage passes repeatedly. The
+slice reads live state only and performs no mutation. The live
+`mise exec -- just kube qbittorrent-verify` parity run is the hard merge gate for
+this slice.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
