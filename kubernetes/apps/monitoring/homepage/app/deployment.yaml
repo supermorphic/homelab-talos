@@ -79,6 +79,14 @@ spec:
                   name: homepage-sonarr
                   key: apiKey
                   optional: true
+            # Radarr widget API key (optional: widget blank until
+            # `just repo homepage-radarr-secrets` creates the encrypted Secret).
+            - name: HOMEPAGE_VAR_RADARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-radarr
+                  key: apiKey
+                  optional: true
           resources:
             requests:
               cpu: 25m
