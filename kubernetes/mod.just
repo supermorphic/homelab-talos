@@ -749,23 +749,7 @@ storage-verify: require-bash
 # Verify the live Phase 11 SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
 csi-driver-smb-verify: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    ns='csi-driver-smb'
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization csi-driver-smb --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-      echo 'csi-driver-smb Kustomization is not Ready.' >&2
-      exit 1
-    }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/csi-smb-controller --timeout=3m
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status daemonset/csi-smb-node --timeout=3m
-    kubectl --kubeconfig "$kubeconfig" get csidriver smb.csi.k8s.io >/dev/null || {
-      echo 'CSIDriver smb.csi.k8s.io is not registered.' >&2
-      exit 1
-    }
-    echo 'Phase 11 csi-driver-smb acceptance passed: Kustomization Ready, controller + node plugin rolled out, CSIDriver registered.'
+    @scripts/verify/csi-driver-smb.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)

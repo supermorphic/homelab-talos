@@ -201,6 +201,17 @@ scenario coverage passes repeatedly. The live
 `mise exec -- just kube metrics-server-verify` parity run is the hard merge gate
 for this slice.
 
+**PR 5b continues with `csi-driver-smb-verify`:** mechanically move its body to
+`scripts/verify/csi-driver-smb.sh` behind the same thin, guarded wrapper without
+changing the public command or its behavior. Every check it performs — the
+`csi-driver-smb` Kustomization Ready, the `csi-smb-controller` Deployment and
+`csi-smb-node` DaemonSet rollouts, and the `smb.csi.k8s.io` CSIDriver
+registration — is a read-only Kubernetes resource readiness/status assertion, so
+all of them classify as future Chainsaw smoke assertions; the slice adds no
+functional probe or destructive step. The live
+`mise exec -- just kube csi-driver-smb-verify` parity run is the hard merge gate
+for this slice.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
