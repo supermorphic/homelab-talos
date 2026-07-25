@@ -1,0 +1,32 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-dns
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # external-dns (Pi-hole provider) controller readiness. Actual DNS resolution (dig against
+  # the Pi-hole) and the live pihole-ca byte match stay operator-only in `just kube
+  # foundation-verify`.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: external-dns-available
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: external-dns-internal
+                namespace: external-dns
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: external-dns

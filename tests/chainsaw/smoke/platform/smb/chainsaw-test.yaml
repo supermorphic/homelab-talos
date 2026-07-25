@@ -1,0 +1,61 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-smb
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # SMB CSI driver + the static RWX media-data claim. Binding a static PV is a claimRef match,
+  # not proof the mount works — the real mount is exercised by Plex + the media-hardlink e2e.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: csi-driver-smb-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: csi-smb-controller
+                namespace: csi-driver-smb
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: csi-smb-node
+                namespace: csi-driver-smb
+              status:
+                desiredNumberScheduled: 3
+                numberReady: 3
+        - assert:
+            resource:
+              apiVersion: storage.k8s.io/v1
+              kind: CSIDriver
+              metadata:
+                name: smb.csi.k8s.io
+      catch:
+        - events:
+            namespace: csi-driver-smb
+    - name: media-data-pvc-bound
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: media-data
+                namespace: media
+              status:
+                phase: Bound
+      catch:
+        - events:
+            namespace: media
