@@ -1,0 +1,32 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: media-hardlink
+  labels:
+    homelab-talos/tier: e2e
+    homelab-talos/target: media-hardlink
+    homelab-talos/suite: media-hardlink
+spec:
+  # Operator-only e2e (state-locked, not in `just ci`). Non-destructive to real media — it
+  # only creates + removes a throwaway test file pair under /data/{downloads,media}/.e2e-*.
+  # Proves the media-data SMB share preserves hardlinks across the downloads<->media
+  # subtrees (same inode, link count >= 2), the filesystem contract every *arr "hardlink not
+  # copy" import depends on. The functional-logic loop lives in the guarded orchestrator.
+  namespace: flux-system
+  concurrent: false
+  steps:
+    - name: prove-hardlink-preserved-across-downloads-and-media
+      try:
+        - script:
+            timeout: 3m
+            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/media-hardlink.sh .kube/config
+      catch:
+        - events:
+            namespace: media
+      finally:
+        # Best-effort backstop cleanup of any leftover test dirs (the orchestrator already
+        # removes them via its EXIT trap; this covers a SIGKILL before that ran).
+        - script:
+            content: |
+              pod="$(kubectl -n media get pod -l app.kubernetes.io/name=sonarr -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              [ -n "$pod" ] && kubectl -n media exec "$pod" -c app -- sh -c 'rm -rf /data/downloads/.e2e-media-hardlink-* /data/media/.e2e-media-hardlink-*' >/dev/null 2>&1 || true
