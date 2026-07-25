@@ -1,0 +1,42 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: qbittorrent-pod-recreation
+  labels:
+    homelab-talos/tier: resilience
+    homelab-talos/target: qbittorrent-pod-recreation
+    homelab-talos/suite: qbittorrent-pod-recreation
+spec:
+  # Operator-only, chaos-gated. Deletes the qBittorrent pod and proves startup-gating
+  # (app starts only after Gluetun's native-sidecar startup gate) and config persistence
+  # (same Longhorn PV re-attaches + a marker survives) across the recreation. The
+  # destructive control loop lives in the guarded orchestrator (Decision 3).
+  namespace: flux-system
+  concurrent: false
+  steps:
+    - name: recreate-and-verify-gating-and-persistence
+      try:
+        # Guard step 2: re-invoke the chaos guard before any mutation.
+        - script:
+            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/safety/require-chaos-confirmation.sh qbittorrent-pod-recreation
+        # The experiment. Exit code is the primary assertion; recovery outcome is written
+        # to recovery.json for the runner to record separately.
+        - script:
+            timeout: 8m
+            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-pod-recreation.sh .kube/config
+      catch:
+        - describe:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: qbittorrent
+            namespace: media
+        - podLogs:
+            namespace: media
+            selector: app.kubernetes.io/name=qbittorrent
+        - events:
+            namespace: media
+      finally:
+        # Guard step 5: guaranteed teardown — ensure a healthy rollout even on failure.
+        - script:
+            timeout: 6m
+            content: kubectl --namespace media rollout status deployment/qbittorrent --timeout=5m
