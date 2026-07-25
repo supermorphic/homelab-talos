@@ -98,6 +98,12 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    - name: radarr
+      group: Media
+      url: "https://radarr.lab.supermorphic.com/ping"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     # External dependency cert-manager relies on for wildcard-cert renewal.
     - name: letsencrypt-acme
       group: External
