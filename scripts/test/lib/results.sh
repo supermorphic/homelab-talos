@@ -57,6 +57,17 @@ write_environment() {
     }' >"$output_dir/environment.json"
 }
 
+# Derive a resilience run's recovery/cleanup status from the recovery.json a scenario's
+# orchestrator writes into the run dir. Missing or unparseable → not-classified, so a
+# scenario that never recorded an outcome cannot silently read as a pass. This is kept
+# separate from the primary assertion so a failed recovery is reported, never masked.
+resilience_recovery_status() {
+  local run_dir="$1"
+  local file="$run_dir/recovery.json"
+  [[ -f "$file" ]] || { echo 'not-classified'; return; }
+  yq -r '.status // "not-classified"' "$file" 2>/dev/null || echo 'not-classified'
+}
+
 write_summary() {
   local output_dir="$1"
   local primary_status="$2"

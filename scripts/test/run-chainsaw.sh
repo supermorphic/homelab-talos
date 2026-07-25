@@ -109,6 +109,10 @@ case "$tier" in
         test_dir='tests/chainsaw/resilience/qbittorrent-vpn-disconnect'
         selector='homelab-talos/suite=qbittorrent-vpn-disconnect'
         ;;
+      cleanup-failure-self-test)
+        test_dir='tests/chainsaw/resilience/cleanup-failure-self-test'
+        selector='homelab-talos/suite=cleanup-failure-self-test'
+        ;;
       *)
         echo "Unknown resilience target: $target" >&2
         exit 2
@@ -167,9 +171,11 @@ fi
 export KUBECONFIG="$kubeconfig"
 # Resilience scenarios write recovery.json here so the runner can record the recovery
 # outcome separately from the primary assertion (Phase-3 "reports failure separately").
-# Chainsaw runs script ops from its own working directory, so scenarios cd to the repo
-# root (exported here) before invoking repo-relative guard/orchestrator scripts.
-export HOMELAB_TEST_RUN_DIR="$run_dir"
+# Chainsaw runs script ops from its own working directory, so export the run dir as an
+# ABSOLUTE path (works regardless of a script op's cwd) and the repo root for scenarios
+# that invoke repo-relative guard/orchestrator scripts.
+run_dir_abs="$(cd "$run_dir" && pwd)"
+export HOMELAB_TEST_RUN_DIR="$run_dir_abs"
 export HOMELAB_REPO_ROOT="$repo_root"
 set +e
 chainsaw test "$test_dir" \
@@ -237,11 +243,7 @@ fi
 cleanup_status='not-required'
 recovery_status='not-required'
 if [[ "$tier" == 'resilience' ]]; then
-  if [[ -f "$run_dir/recovery.json" ]]; then
-    recovery_status="$(yq -r '.status // "not-classified"' "$run_dir/recovery.json" 2>/dev/null || echo not-classified)"
-  else
-    recovery_status='not-classified'
-  fi
+  recovery_status="$(resilience_recovery_status "$run_dir")"
   cleanup_status="$recovery_status"
 fi
 write_summary "$run_dir" "$primary_status" "$primary_exit_code" \
