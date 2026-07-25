@@ -275,12 +275,72 @@ On a new PVC, configure:
 
 1. Open **Settings → Media Management**.
 2. Enable **Show Advanced**.
-3. Ensure **Use Hardlinks instead of Copy** is enabled.
-4. Under **Root Folders**, select **Add Root Folder**.
-5. Enter `/data/media/tv` and save.
+3. Configure episode naming:
+
+   | Setting | Value |
+   |---|---|
+   | Rename Episodes | Enabled |
+   | Replace Illegal Characters | Enabled |
+   | Colon Replacement | `Smart Replace` |
+   | Standard Episode Format | `{Series Title} ({Series Year}) - S{season:00}E{episode:00}` |
+   | Daily Episode Format | Leave at the default |
+   | Anime Episode Format | Leave at the default; anime is not currently used |
+   | Series Folder Format | `{Series Title} ({Series Year})` |
+   | Season Folder Format | `Season {season:00}` |
+   | Specials Folder Format | `Specials` |
+   | Multi Episode Style | `Prefixed Range` |
+
+4. Configure folders:
+
+   | Setting | Value |
+   |---|---|
+   | Create Empty Series Folders | Disabled |
+   | Delete Empty Folders | Enabled |
+
+5. Configure importing:
+
+   | Setting | Value |
+   |---|---|
+   | Episode Title Required | `Never` |
+   | Skip Free Space Check | Disabled |
+   | Minimum Free Space | `102400 MB` |
+   | Use Hardlinks instead of Copy | Enabled |
+   | Import Using Script | Disabled |
+   | Import Extra Files | Enabled (extensions: `srt`) |
+
+6. Configure file management:
+
+   | Setting | Value |
+   |---|---|
+   | Unmonitor Deleted Episodes | Disabled |
+   | Propers and Repacks | `Prefer and Upgrade` |
+   | Analyse Video Files | Enabled |
+   | Rescan Series Folder after Refresh | `After Manual Refresh` |
+   | Change File Date | `None` |
+   | Recycling Bin | Blank |
+   | Set Permissions | Disabled |
+
+7. Under **Root Folders**, select **Add Root Folder**.
+8. Enter `/data/media/tv` and save.
 
 The root folder is the organized Plex TV library. Never set it to
 `/data/downloads` or one of its children.
+
+Sonarr leaves qBittorrent's release names unchanged and creates the Plex-facing
+library structure during import. For example:
+
+```text
+/data/media/tv/
+└── Better Call Saul (2015)/
+    └── Season 01/
+        ├── Better Call Saul (2015) - S01E01.mkv
+        ├── Better Call Saul (2015) - S01E02.mkv
+        └── ...
+```
+
+After entering the naming tokens, verify that Sonarr's previews show a series
+year, a zero-padded season folder such as `Season 01`, and `S01E01` episode
+notation before saving.
 
 ### Indexers
 
@@ -368,12 +428,62 @@ On a new PVC, configure:
 
 1. Open **Settings → Media Management**.
 2. Enable **Show Advanced**.
-3. Ensure **Use Hardlinks instead of Copy** is enabled.
-4. Under **Root Folders**, select **Add Root Folder**.
-5. Enter `/data/media/movies` and save.
+3. Configure movie naming:
+
+   | Setting | Value |
+   |---|---|
+   | Rename Movies | Enabled |
+   | Replace Illegal Characters | Enabled |
+   | Colon Replacement | `Smart Replace` |
+   | Standard Movie Format | `{Movie CleanTitle} ({Release Year})` |
+   | Movie Folder Format | `{Movie CleanTitle} ({Release Year})` |
+
+4. Configure folders:
+
+   | Setting | Value |
+   |---|---|
+   | Create Empty Movie Folders | Disabled |
+   | Delete Empty Folders | Enabled |
+
+5. Configure importing:
+
+   | Setting | Value |
+   |---|---|
+   | Skip Free Space Check | Disabled |
+   | Minimum Free Space | `102400 MB` |
+   | Use Hardlinks instead of Copy | Enabled |
+   | Import Using Script | Disabled |
+   | Import Extra Files | Enabled (extensions: `srt`) |
+
+6. Configure file management:
+
+   | Setting | Value |
+   |---|---|
+   | Unmonitor Deleted Movies | Disabled |
+   | Propers and Repacks | `Prefer and Upgrade` |
+   | Analyse Video Files | Enabled |
+   | Rescan Movie Folder after Refresh | `After Manual Refresh` |
+   | Change File Date | `None` |
+   | Recycling Bin | Blank |
+   | Set Permissions | Disabled |
+
+7. Under **Root Folders**, select **Add Root Folder**.
+8. Enter `/data/media/movies` and save.
 
 The root folder is the organized Plex movie library. Never set it to
 `/data/downloads` or one of its children.
+
+Radarr leaves qBittorrent's release name unchanged and creates the Plex-facing
+movie folder and filename during import. For example:
+
+```text
+/data/media/movies/
+└── The Substance (2024)/
+    └── The Substance (2024).mkv
+```
+
+After entering the naming tokens, verify that Radarr's previews show the movie
+title followed by the release year in parentheses before saving.
 
 ### Indexers
 
