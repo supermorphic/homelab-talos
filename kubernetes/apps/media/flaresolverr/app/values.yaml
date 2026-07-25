@@ -4,10 +4,14 @@
 # Cloudflare-protected indexers (e.g. 1337x). Experimental: Cloudflare actively counters
 # FlareSolverr, so a Ready pod does not guarantee any given indexer works.
 #
-# securityContext note: the upstream image creates its own non-root `flaresolverr` user
-# and runs `USER flaresolverr`, and Chromium needs writable profile/temp dirs — so we
-# assert runAsNonRoot WITHOUT forcing runAsUser/GID 568 (which breaks Chrome's dirs) and
-# do NOT set readOnlyRootFilesystem. Chromium gets a memory-backed /dev/shm.
+# securityContext note: the upstream image runs `USER flaresolverr`, which is a NON-NUMERIC
+# username (UID 1000 / GID 1000, home /app — verified from the image's /etc/passwd).
+# Kubernetes cannot verify a non-numeric USER against runAsNonRoot and refuses to start the
+# container (CreateContainerConfigError), so we MUST pin the numeric UID. We pin the image's
+# OWN uid/gid 1000 (NOT the repo-default 568, which would break Chrome's /app dirs), so the
+# container both passes non-root admission and keeps its files correctly owned. Chromium
+# needs writable profile/temp dirs, so readOnlyRootFilesystem stays off; it gets a
+# memory-backed /dev/shm.
 controllers:
   flaresolverr:
     type: deployment
@@ -15,6 +19,9 @@ controllers:
     pod:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
     containers:
