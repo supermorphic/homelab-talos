@@ -45,6 +45,11 @@ Live commands are operator-only:
   (deletes the qBittorrent pod and proves startup-gating — the app container starts only
   after Gluetun's native-sidecar startup gate — and config persistence — the same Longhorn
   PV re-attaches and a marker survives — across the recreation)
+- `CLUSTER_CHAOS_CONFIRM=chaos:plex-cross-node-reschedule mise exec -- just test resilience plex-cross-node-reschedule`
+  (controlled cross-node reschedule under cordon — NOT a drain: cordons Plex's node and
+  evicts the pod, proving the Longhorn RWOP config volume re-attaches on the landing node
+  (Longhorn currentNodeID moves), a /config marker survives, and the SMB share re-mounts;
+  restores only the node it cordoned)
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
