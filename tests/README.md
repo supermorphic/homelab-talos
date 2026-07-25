@@ -37,6 +37,10 @@ Live commands are operator-only:
   (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
   fails closed across the outage, then pod-recreation recovery; records recovery status
   separately in `summary.json`)
+- `CLUSTER_CHAOS_CONFIRM=chaos:cleanup-failure-self-test mise exec -- just test resilience cleanup-failure-self-test`
+  (opt-in self-test, the cleanup analogue of `diagnostics-self-test`: deliberately records
+  a failed recovery while the primary assertion passes; confirm `summary.json` shows
+  `assertion.status: passed` and `recovery.status: failed`. Non-destructive.)
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
