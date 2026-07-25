@@ -113,6 +113,10 @@ case "$tier" in
         test_dir='tests/chainsaw/resilience/cleanup-failure-self-test'
         selector='homelab-talos/suite=cleanup-failure-self-test'
         ;;
+      qbittorrent-pod-recreation)
+        test_dir='tests/chainsaw/resilience/qbittorrent-pod-recreation'
+        selector='homelab-talos/suite=qbittorrent-pod-recreation'
+        ;;
       *)
         echo "Unknown resilience target: $target" >&2
         exit 2

@@ -41,6 +41,10 @@ Live commands are operator-only:
   (opt-in self-test, the cleanup analogue of `diagnostics-self-test`: deliberately records
   a failed recovery while the primary assertion passes; confirm `summary.json` shows
   `assertion.status: passed` and `recovery.status: failed`. Non-destructive.)
+- `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-pod-recreation mise exec -- just test resilience qbittorrent-pod-recreation`
+  (deletes the qBittorrent pod and proves startup-gating — the app container starts only
+  after Gluetun's native-sidecar startup gate — and config persistence — the same Longhorn
+  PV re-attaches and a marker survives — across the recreation)
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
