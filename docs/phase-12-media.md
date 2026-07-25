@@ -75,8 +75,11 @@ test (including a hard Gluetun-container kill) is mandatory, not assumed.
 
 qBittorrent enables **"Bypass authentication for clients on localhost"**
 (`WebUI\LocalHostAuth=false`) so only the in-pod Gluetun hook calls the API without
-creds; the WebUI still requires auth for LAN/Envoy/*arr (the media-stack plan permits a
-documented localhost-only bypass). First-run setting (or pre-seeded `qBittorrent.conf`).
+creds. **"Bypass authentication for clients in whitelisted IP subnets" stays
+disabled**: whitelisting the Pod CIDR would also bypass the browser login because
+internal-Gateway requests arrive from Envoy's in-cluster address. The WebUI and *arr
+clients use the permanent qBittorrent credential. First-run settings persist in the
+config PVC.
 
 ## Secrets
 
@@ -116,8 +119,8 @@ what a torrent would see.
 4. **Final:** `status=running`, egress == VPN IP, country Sweden.
 
 On a failed/interrupted run a `trap` deletes the pod to reset to a clean state.
-Precondition: first-run done (WebUI password + "Bypass authentication for localhost",
-which the port-forward UP command also needs).
+Precondition: first-run done (permanent WebUI credential, subnet bypass disabled, and
+"Bypass authentication for localhost" enabled for the port-forward UP command).
 
 ### Verified findings (live, 2026-07-24)
 
@@ -199,6 +202,10 @@ the health route (`GET /v1/vpn/status`) is no-auth, mutating routes stay apikey-
 
 ## First-run / manual settings
 
-qBittorrent WebUI password, localhost-auth bypass toggle, categories, and save paths
-(`/data/downloads/...`) are first-run settings in the config PVC. Sonarr/Radarr (Phase 13)
-point their download client at `http://qbittorrent.media.svc.cluster.local:8080`.
+qBittorrent WebUI credential, localhost-auth bypass toggle, disabled subnet-auth bypass,
+categories, and save paths (`/data/downloads/...`) are first-run settings in the config
+PVC. The credential is kept in the password manager and copied to Homepage only through
+the operator-generated `homepage-qbittorrent.sops.yaml`. Sonarr/Radarr (Phase 13) point
+their download client at `http://qbittorrent.media.svc.cluster.local:8080` and enter the
+same credential in their retained application configuration. See
+[`arr-stack-startup.md`](arr-stack-startup.md) for the exact procedure.

@@ -60,6 +60,11 @@ for app in prowlarr sonarr radarr; do
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://prowlarr.media.svc.cluster.local:9696' ]]
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_PROWLARR_API_KEY}}' ]]
   fi
+  if [[ "$app" == 'sonarr' ]]; then
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'sonarr' ]]
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://sonarr.media.svc.cluster.local:8989' ]]
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_SONARR_API_KEY}}' ]]
+  fi
 
   kustomize build "$base/app" >/dev/null
   helm template "$app" "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/$app.yaml"

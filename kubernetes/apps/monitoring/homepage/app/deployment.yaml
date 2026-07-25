@@ -57,6 +57,28 @@ spec:
                   name: homepage-prowlarr
                   key: apiKey
                   optional: true
+            # qBittorrent widget WebUI credential (optional: widget blank until
+            # `just repo homepage-qbittorrent-secrets` creates the encrypted Secret).
+            - name: HOMEPAGE_VAR_QBITTORRENT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-qbittorrent
+                  key: username
+                  optional: true
+            - name: HOMEPAGE_VAR_QBITTORRENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-qbittorrent
+                  key: password
+                  optional: true
+            # Sonarr widget API key (optional: widget blank until
+            # `just repo homepage-sonarr-secrets` creates the encrypted Secret).
+            - name: HOMEPAGE_VAR_SONARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-sonarr
+                  key: apiKey
+                  optional: true
           resources:
             requests:
               cpu: 25m

@@ -31,9 +31,13 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 grafana_secret="$base/app/homepage-grafana.sops.yaml"
 plex_secret="$base/app/homepage-plex.sops.yaml"
 prowlarr_secret="$base/app/homepage-prowlarr.sops.yaml"
+qbittorrent_secret="$base/app/homepage-qbittorrent.sops.yaml"
+sonarr_secret="$base/app/homepage-sonarr.sops.yaml"
 [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
 [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
 [[ -f "$prowlarr_secret" ]] || { echo "Missing Homepage Prowlarr Secret: $prowlarr_secret (run just repo homepage-prowlarr-secrets)." >&2; exit 1; }
+[[ -f "$qbittorrent_secret" ]] || { echo "Missing Homepage qBittorrent Secret: $qbittorrent_secret (run just repo homepage-qbittorrent-secrets)." >&2; exit 1; }
+[[ -f "$sonarr_secret" ]] || { echo "Missing Homepage Sonarr Secret: $sonarr_secret (run just repo homepage-sonarr-secrets)." >&2; exit 1; }
 [[ "$(sops filestatus "$grafana_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$grafana_secret")" == 'homepage-grafana' ]]
 [[ "$(yq -r '.metadata.namespace' "$grafana_secret")" == 'homepage' ]]
@@ -43,12 +47,24 @@ prowlarr_secret="$base/app/homepage-prowlarr.sops.yaml"
 [[ "$(sops filestatus "$prowlarr_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$prowlarr_secret")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '.metadata.namespace' "$prowlarr_secret")" == 'homepage' ]]
+[[ "$(sops filestatus "$qbittorrent_secret" | yq -r '.encrypted')" == 'true' ]]
+[[ "$(yq -r '.metadata.name' "$qbittorrent_secret")" == 'homepage-qbittorrent' ]]
+[[ "$(yq -r '.metadata.namespace' "$qbittorrent_secret")" == 'homepage' ]]
+[[ "$(sops filestatus "$sonarr_secret" | yq -r '.encrypted')" == 'true' ]]
+[[ "$(yq -r '.metadata.name' "$sonarr_secret")" == 'homepage-sonarr' ]]
+[[ "$(yq -r '.metadata.namespace' "$sonarr_secret")" == 'homepage' ]]
 # The deployment must reference the split Secrets, not the old combined one.
 ! rg -q 'homepage-secrets' "$dep"
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_USERNAME") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-qbittorrent' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_USERNAME") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'username' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_PASSWORD") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-qbittorrent' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_PASSWORD") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'password' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SONARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-sonarr' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SONARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 
 kustomize build "$base/app" >/dev/null
 

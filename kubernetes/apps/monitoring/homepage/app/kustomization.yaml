@@ -6,6 +6,8 @@ resources:
   - ./homepage-grafana.sops.yaml
   - ./homepage-plex.sops.yaml
   - ./homepage-prowlarr.sops.yaml
+  - ./homepage-qbittorrent.sops.yaml
+  - ./homepage-sonarr.sops.yaml
   - ./httproute.yaml
   - ./namespace.yaml
   - ./rbac.yaml

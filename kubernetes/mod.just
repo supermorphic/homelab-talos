@@ -466,9 +466,9 @@ qbittorrent-verify: require-bash
 # the running pod (stops AND hard-kills the VPN) and needs the live ProtonVPN tunnel.
 # Proves qBittorrent egresses ONLY through ProtonVPN Sweden and fails closed on both a
 # polite stop and an unexpected crash, with the home WAN IP as a hard never-leak invariant.
-# Precondition: first-run done (WebUI password set + "Bypass authentication for localhost"
-# enabled, which the port-forward UP command also relies on). Phase 12 is not flipped
-# suspend: false / not "done" until this passes.
+# Precondition: first-run done (permanent WebUI credential set, subnet-auth bypass
+# disabled, and "Bypass authentication for localhost" enabled for the port-forward UP
+# command). Phase 12 is not flipped suspend: false / not "done" until this passes.
 qbittorrent-killswitch-verify: require-bash
     @scripts/verify/qbittorrent-killswitch.sh {{quote(kubeconfig)}}
 
