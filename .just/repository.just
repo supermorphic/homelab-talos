@@ -643,6 +643,49 @@ homepage-plex-secrets:
     mv -- "$temp_dir/homepage-plex.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-plex in homepage)."
 
+# Write ONLY the SOPS-encrypted Homepage Seerr widget Secret
+# (homepage-seerr in the homepage namespace) from SEERR_API_KEY.
+# Independent of the other Homepage widget credentials. Never echoes the value.
+homepage-seerr-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-seerr:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-seerr.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-seerr.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${SEERR_API_KEY:-}" ]] || {
+      echo 'Set SEERR_API_KEY to the API key from Seerr Settings > General.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_SEERR_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Seerr Secret.' >&2
+      echo "Set HOMEPAGE_SEERR_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export SEERR_API_KEY
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-seerr" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."apiKey" = strenv(SEERR_API_KEY)' \
+      >"$temp_dir/homepage-seerr.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-seerr.yaml" >"$temp_dir/homepage-seerr.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-seerr.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-seerr.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$SEERR_API_KEY" "$temp_dir/homepage-seerr.sops.yaml"
+
+    mv -- "$temp_dir/homepage-seerr.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-seerr in homepage)."
+
 # Write ONLY the SOPS-encrypted Homepage Radarr widget Secret
 # (homepage-radarr in the homepage namespace) from RADARR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.

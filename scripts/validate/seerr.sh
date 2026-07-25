@@ -35,6 +35,9 @@ tag="$(yq -r '.controllers.seerr.containers.app.image.tag' "$values")"; [[ -n "$
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == 'seerr' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '5055' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'seerr' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://seerr.media.svc.cluster.local:5055' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_SEERR_API_KEY}}' ]]
 if [[ "$suspend_state" == 'false' ]]; then
   rg -q '^    - name: seerr$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'Active seerr has no Gatus endpoint.' >&2; exit 1; }
 else
