@@ -58,6 +58,18 @@ case "$tier" in
             ;;
         esac
         ;;
+      media)
+        case "$scenario" in
+          qbittorrent)
+            test_dir='tests/chainsaw/smoke/media/qbittorrent'
+            selector='homelab-talos/suite=qbittorrent'
+            ;;
+          *)
+            echo "Unknown smoke scenario for target ${target}: $scenario" >&2
+            exit 2
+            ;;
+        esac
+        ;;
       *)
         echo "Unknown smoke target: $target" >&2
         exit 2
