@@ -110,6 +110,15 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # In-cluster only (no HTTPRoute): probe the ClusterIP Service DNS directly, like
+    # qbittorrent-vpn / longhorn-ui. "UP" means the solver is alive, NOT that any
+    # Cloudflare-protected indexer works.
+    - name: flaresolverr
+      group: Media
+      url: "http://flaresolverr.media.svc.cluster.local:8191/"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     # External dependency cert-manager relies on for wildcard-cert renewal.
     - name: letsencrypt-acme
       group: External

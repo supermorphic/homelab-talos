@@ -38,7 +38,7 @@ only in an independently rotatable SOPS-encrypted Secret.
 ```text
 media  (namespace + app-template OCIRepository)
 ├── prowlarr        [media, internal-gateway]
-├── flaresolverr    [media]                       (optional; stateless, in-cluster only)
+├── flaresolverr    [media]                       (stateless, in-cluster only; optional per-indexer proxy)
 media-storage  (static RWX SMB PV + media-data PVC)
 ├── sonarr          [media-storage, internal-gateway]
 └── radarr          [media-storage, internal-gateway]
@@ -47,10 +47,14 @@ media-storage  (static RWX SMB PV + media-data PVC)
 **FlareSolverr (optional):** a stateless headless-Chromium proxy (ClusterIP `:8191`, no
 PVC, no HTTPRoute, no VPN) that Prowlarr uses as a **per-indexer** Indexer Proxy to reach
 Cloudflare-protected indexers (e.g. 1337x). It shares Prowlarr's direct egress (same NAT
-IP — routing it through the VPN would break the Cloudflare session). Guarded rollout:
-`just bootstrap flaresolverr` (confirm `bootstrap:phase13:flaresolverr`). It is exempt in
-`media.rego` from the config-PVC and HTTPRoute requirements via `stateless_internal_apps`;
-all other policies (pinned tag, drop-ALL caps, dependency order) still apply. See
+IP — routing it through the VPN would break the Cloudflare session). Activated
+`suspend: false` on 2026-07-25 after its guarded `just bootstrap flaresolverr` rollout
+passed live acceptance (Ready, rollout, Service endpoints, `GET /` ready). Pinned to the
+image's own uid/gid `1000` (`runAsNonRoot` cannot verify the image's non-numeric `USER`, so
+a numeric UID is required to start). It is exempt in `media.rego` from the config-PVC and
+HTTPRoute requirements via `stateless_internal_apps`; all other policies (pinned tag,
+drop-ALL caps, dependency order) still apply. Its Gatus probe hits the ClusterIP Service DNS
+directly (no HTTPRoute) and means "solver alive," not "1337x works." See
 [`arr-stack-startup.md`](arr-stack-startup.md) for the Prowlarr proxy wiring and the
 experiment's abort condition.
 
