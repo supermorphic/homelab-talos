@@ -44,6 +44,7 @@ scripts/test/lib/results-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/run-probe-dispatch-test.sh
 tests/probes/qbittorrent/probe-test.sh
+tests/probes/dns/isolation-test.sh
 
 # Offline Python unit tests for probe analyzers (e.g. the VPN leak sentinel). uv (pinned
 # via mise) provides the interpreter; the analyzers are pure, so this needs no cluster.

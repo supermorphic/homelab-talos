@@ -12,8 +12,9 @@ This tree contains declarative, repository-owned test inputs:
   unit-tested offline; the live capture is operator-run. Bash probes reuse the
   in-cluster exec pattern; Python probe analyzers use `uv` (pinned via mise, no
   third-party deps — stdlib `unittest`). Current probes: `qbittorrent/` (VPN
-  egress + forwarded-port point checks) and `vpn/` (the continuous in-netns VPN
-  leak sentinel).
+  egress + forwarded-port point checks), `vpn/` (the continuous in-netns VPN
+  leak sentinel), and `dns/` (active DNS-isolation: DNS resolves only via the
+  Gluetun loopback resolver; LAN/home and cluster resolvers stay unreachable).
 
 `mise exec -- just test validate` is the only cluster-independent command in this
 module. It lints Chainsaw configuration and tests, parses their YAML assets, runs
@@ -29,6 +30,7 @@ Live commands are operator-only:
 - `mise exec -- just test diagnostics cluster`
 - `mise exec -- just test probe qbittorrent`
 - `mise exec -- just test probe vpn-leak`
+- `mise exec -- just test probe dns-isolation`
 - `mise exec -- just test e2e <registered-target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 
