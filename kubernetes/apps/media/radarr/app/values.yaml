@@ -4,8 +4,9 @@
 # — never a copy. Root folder /data/media/movies and the qBittorrent download client are
 # manual first-run settings persisted in the config PVC.
 #
-# Pinned to Radarr v5 (5.28.0) rather than the new v6.0.0 major, deliberately conservative
-# for a fresh install that has not been live-tested yet; bump to 6.x when ready.
+# Pinned to Radarr v6 (6.4.0). Upgraded from the initial conservative v5 pin once the
+# stack was live; v6 performs a one-way config-DB migration, so snapshot the config PVC
+# before rolling a fresh major bump.
 controllers:
   radarr:
     type: deployment
@@ -20,7 +21,7 @@ controllers:
       app:
         image:
           repository: ghcr.io/home-operations/radarr
-          tag: 5.28.0.10205
+          tag: 6.4.0.10523
         env:
           TZ: America/Denver
         resources:
