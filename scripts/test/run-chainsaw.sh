@@ -70,6 +70,25 @@ case "$tier" in
             ;;
         esac
         ;;
+      platform)
+        # Read-only per-subsystem platform readiness. Scenarios are an EXPLICIT registry (not
+        # filesystem discovery): a bare `platform` runs every suite carrying suite=platform;
+        # a named scenario runs only that subsystem's dir. Add a scenario here + its dir to
+        # register it — a stray directory never auto-runs.
+        selector='homelab-talos/suite=platform'
+        case "$scenario" in
+          '')
+            test_dir='tests/chainsaw/smoke/platform'
+            ;;
+          cluster|flux|gateway|dns|cilium|longhorn|smb)
+            test_dir="tests/chainsaw/smoke/platform/${scenario}"
+            ;;
+          *)
+            echo "Unknown smoke scenario for target ${target}: $scenario" >&2
+            exit 2
+            ;;
+        esac
+        ;;
       *)
         echo "Unknown smoke target: $target" >&2
         exit 2

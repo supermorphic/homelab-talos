@@ -1,0 +1,89 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-gateway
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Gateway API health and route programming: the internal GatewayClass/Gateway are accepted +
+  # programmed on the expected LB address, Envoy is up, and the echo HTTPRoute is Accepted +
+  # ResolvedRefs. Actual HTTPS reachability (curl) + Pi-hole DNS resolution stay operator-only
+  # in `just kube foundation-verify`.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: gatewayclass-and-gateway-programmed
+      try:
+        - assert:
+            resource:
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: GatewayClass
+              metadata:
+                name: internal
+              status:
+                (conditions[?type == 'Accepted']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: Gateway
+              metadata:
+                name: internal
+                namespace: networking
+              status:
+                (conditions[?type == 'Programmed']):
+                  - status: "True"
+                (addresses[?value == '192.168.90.30']):
+                  - value: "192.168.90.30"
+                (listeners[?name == 'https'] | [0].conditions[?type == 'Accepted']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: gateway.networking.k8s.io/v1
+            kind: Gateway
+            name: internal
+            namespace: networking
+        - events:
+            namespace: networking
+    - name: envoy-and-echo-route-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                namespace: envoy-gateway-system
+                labels:
+                  gateway.envoyproxy.io/owning-gateway-name: internal
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: echo
+                namespace: testing
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: echo
+                namespace: testing
+              status:
+                (parents[0].conditions[?type == 'Accepted']):
+                  - status: "True"
+                (parents[0].conditions[?type == 'ResolvedRefs']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: testing

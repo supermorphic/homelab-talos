@@ -27,6 +27,12 @@ Live commands are operator-only:
 - `mise exec -- just test smoke cluster`
 - `mise exec -- just test smoke cluster diagnostics-self-test` (expected failure)
 - `mise exec -- just test smoke media qbittorrent`
+- `mise exec -- just test smoke platform` (all platform readiness suites) or
+  `mise exec -- just test smoke platform <cluster|flux|gateway|dns|cilium|longhorn|smb>` (one).
+  Read-only resource-readiness per subsystem; the deep functional checks (cilium connectivity
+  test, dig/curl DNS+HTTPS, talosctl/etcd, helm-value parity, test-PVC replica anti-affinity)
+  remain operator-only in the `just kube *-verify` recipes. The scenario list is an explicit
+  registry — a bare `smoke platform` runs only suites labelled `homelab-talos/suite=platform`.
 - `mise exec -- just test diagnostics cluster`
 - `mise exec -- just test probe qbittorrent`
 - `mise exec -- just test probe vpn-leak`

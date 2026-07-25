@@ -1,0 +1,117 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-flux
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Flux control-plane + core source readiness. Deep checks (flux check CLI, SOPS/age recipient
+  # match, git artifact-revision reconcile) stay operator-only in `just kube flux-verify`.
+  # cluster-apps Kustomization is intentionally omitted here — it lives in cluster/flux-ready.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: flux-controllers-available
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: source-controller
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: kustomize-controller
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: helm-controller
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: notification-controller
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: flux-system
+    - name: flux-sources-and-kustomizations-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: source.toolkit.fluxcd.io/v1
+              kind: GitRepository
+              metadata:
+                name: flux-system
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: flux-system
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: flux-canary
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: cilium
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: cilium
+                namespace: kube-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: flux-system

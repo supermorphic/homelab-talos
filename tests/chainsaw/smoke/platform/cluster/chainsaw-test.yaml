@@ -1,0 +1,48 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-cluster
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Narrow by design: the three expected nodes are Ready. Deeper Talos/etcd health stays
+  # operator-only (talosctl). cluster-apps Kustomization readiness lives in cluster/flux-ready.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: nodes-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Node
+              metadata:
+                name: nuc1
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Node
+              metadata:
+                name: nuc2
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Node
+              metadata:
+                name: nuc3
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: kube-system

@@ -1,0 +1,89 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-cilium
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Read-only Cilium control-plane readiness. Deep checks (cilium status --wait, connectivity
+  # test, helm-value parity) stay operator-only in `just kube cilium-verify`. Resources are in
+  # kube-system; spec.namespace is flux-system per the smoke policy.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: cilium-agents-and-control-plane-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: cilium
+                namespace: kube-system
+              status:
+                desiredNumberScheduled: 3
+                numberReady: 3
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: cilium-operator
+                namespace: kube-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: hubble-relay
+                namespace: kube-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: coredns
+                namespace: kube-system
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: kube-system
+    - name: cilium-architectural-absence-invariants
+      try:
+        # These are deliberate architecture invariants, not snapshots of today's cluster:
+        # kube-proxy is absent because Cilium provides the kube-proxy replacement;
+        - error:
+            resource:
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: kube-proxy
+                namespace: kube-system
+        # hubble-ui is absent because it is intentionally not deployed;
+        - error:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: hubble-ui
+                namespace: kube-system
+        # cilium-envoy is absent because this Cilium deployment mode embeds Envoy in the agent.
+        - error:
+            resource:
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: cilium-envoy
+                namespace: kube-system

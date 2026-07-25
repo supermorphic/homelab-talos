@@ -1,0 +1,100 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-longhorn
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Longhorn control-plane + storage-class + backup readiness. The test-PVC bind + replica
+  # anti-affinity proof is mutating (creates a PVC) so it stays operator-only in `just kube
+  # storage-verify`; this suite is read-only.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: longhorn-manager-and-nodes-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: longhorn-manager
+                namespace: longhorn-system
+              status:
+                desiredNumberScheduled: 3
+                numberReady: 3
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: Node
+              metadata:
+                name: nuc1
+                namespace: longhorn-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: Node
+              metadata:
+                name: nuc2
+                namespace: longhorn-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: Node
+              metadata:
+                name: nuc3
+                namespace: longhorn-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: longhorn-system
+    - name: longhorn-storageclass-backup-and-jobs
+      try:
+        - assert:
+            resource:
+              apiVersion: storage.k8s.io/v1
+              kind: StorageClass
+              metadata:
+                name: longhorn
+                annotations:
+                  storageclass.kubernetes.io/is-default-class: "true"
+              parameters:
+                numberOfReplicas: "2"
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: BackupTarget
+              metadata:
+                name: default
+                namespace: longhorn-system
+              status:
+                available: true
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: RecurringJob
+              metadata:
+                name: daily-snapshot
+                namespace: longhorn-system
+        - assert:
+            resource:
+              apiVersion: longhorn.io/v1beta2
+              kind: RecurringJob
+              metadata:
+                name: daily-backup
+                namespace: longhorn-system
+      catch:
+        - events:
+            namespace: longhorn-system

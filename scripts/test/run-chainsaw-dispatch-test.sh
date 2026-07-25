@@ -25,6 +25,7 @@ expect_dispatch_rejection 'self-test cannot occupy the target axis' smoke diagno
 expect_dispatch_rejection 'unknown smoke scenario is rejected' smoke cluster unknown-scenario
 expect_dispatch_rejection 'media target requires a scenario' smoke media
 expect_dispatch_rejection 'unknown media smoke scenario is rejected' smoke media unknown-scenario
+expect_dispatch_rejection 'unknown platform smoke scenario is rejected' smoke platform unknown-scenario
 expect_dispatch_rejection 'diagnostics rejects a scenario argument' diagnostics cluster flux-ready
 expect_dispatch_rejection 'smoke requires an explicit target' smoke
 expect_dispatch_rejection 'resilience rejects a scenario argument' resilience qbittorrent-vpn-disconnect extra
