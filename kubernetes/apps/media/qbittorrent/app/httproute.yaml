@@ -14,12 +14,13 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "qbittorrent.svg"
     gethomepage.dev/href: "https://qbittorrent.lab.supermorphic.com"
-    # Live widget. No credentials: qBittorrent's AuthSubnetWhitelist bypasses auth for
-    # in-cluster clients (pod/service CIDRs), so Homepage reaches the API unauthenticated
-    # over cluster DNS — no secret, no cleartext creds. (WebUI\LocalHostAuth handles the
-    # in-pod Gluetun port-forward hook separately.)
+    # Live widget uses the permanent qBittorrent WebUI credential from Homepage's
+    # SOPS Secret. Subnet authentication bypass stays disabled; WebUI\LocalHostAuth
+    # handles only the in-pod Gluetun port-forward hook.
     gethomepage.dev/widget.type: "qbittorrent"
     gethomepage.dev/widget.url: "http://qbittorrent.media.svc.cluster.local:8080"
+    gethomepage.dev/widget.username: "{{HOMEPAGE_VAR_QBITTORRENT_USERNAME}}"
+    gethomepage.dev/widget.password: "{{HOMEPAGE_VAR_QBITTORRENT_PASSWORD}}"
 spec:
   hostnames:
     - qbittorrent.lab.supermorphic.com

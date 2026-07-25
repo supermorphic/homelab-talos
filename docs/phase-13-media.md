@@ -97,7 +97,9 @@ Phase 13-specific requirements.
    Commit only the resulting `homepage-prowlarr.sops.yaml`; never the plaintext key.
 3. In Sonarr, select **Forms (Login Page)** with authentication **Enabled**, then set
    **root folder** `/data/media/tv` and **download client** qBittorrent at
-   `http://qbittorrent.media.svc.cluster.local:8080`.
+   `http://qbittorrent.media.svc.cluster.local:8080` using qBittorrent's permanent
+   WebUI username/password. Use the equivalent settings in Radarr. qBittorrent's subnet
+   authentication bypass stays disabled.
 4. In Prowlarr, add indexers and add **Sonarr** as an App using
    `http://sonarr.media.svc.cluster.local:8989` plus Sonarr's API key. Add Radarr after
    its rollout using the equivalent in-cluster URL and API key.

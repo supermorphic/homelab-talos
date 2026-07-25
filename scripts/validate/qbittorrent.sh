@@ -74,6 +74,8 @@ lps="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.sp
 
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'qbittorrent.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.username"' "$route")" == '{{HOMEPAGE_VAR_QBITTORRENT_USERNAME}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.password"' "$route")" == '{{HOMEPAGE_VAR_QBITTORRENT_PASSWORD}}' ]]
 
 # Reactive VPN-down alerting: in-cluster control-server Service (no HTTPRoute) +
 # a critical PrometheusRule fed by the Gatus health probe.

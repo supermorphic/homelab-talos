@@ -686,6 +686,56 @@ homepage-prowlarr-secrets:
     mv -- "$temp_dir/homepage-prowlarr.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-prowlarr in homepage)."
 
+# Write ONLY the SOPS-encrypted Homepage qBittorrent widget Secret
+# (homepage-qbittorrent in the homepage namespace) from the permanent qBittorrent
+# WebUI credential. qBittorrent's supported Homepage/Servarr integrations use this
+# username/password; never echoes either value.
+homepage-qbittorrent-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-qbittorrent:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-qbittorrent.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-qbittorrent.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${QBITTORRENT_USERNAME:-}" ]] || {
+      echo 'Set QBITTORRENT_USERNAME to the permanent qBittorrent WebUI username.' >&2
+      exit 1
+    }
+    [[ -n "${QBITTORRENT_PASSWORD:-}" ]] || {
+      echo 'Set QBITTORRENT_PASSWORD to the permanent qBittorrent WebUI password.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage qBittorrent Secret.' >&2
+      echo "Set HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-qbittorrent" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."username" = strenv(QBITTORRENT_USERNAME) |
+       .stringData."password" = strenv(QBITTORRENT_PASSWORD)' \
+      >"$temp_dir/homepage-qbittorrent.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-qbittorrent.yaml" >"$temp_dir/homepage-qbittorrent.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-qbittorrent.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-qbittorrent.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$QBITTORRENT_USERNAME" "$temp_dir/homepage-qbittorrent.sops.yaml"
+    ! rg -Fq -- "$QBITTORRENT_PASSWORD" "$temp_dir/homepage-qbittorrent.sops.yaml"
+
+    mv -- "$temp_dir/homepage-qbittorrent.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-qbittorrent in homepage)."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-extracted-scripts
     just talos source-validate

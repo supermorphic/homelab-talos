@@ -47,16 +47,38 @@ Open `https://qbittorrent.lab.supermorphic.com`.
 1. On a new PVC, sign in as `admin` with the temporary password qBittorrent emits
    during its first startup. On an existing PVC, use the saved permanent credential.
    If the temporary password is unavailable, use qBittorrent's official password-reset
-   procedure; do not bypass or disable WebUI authentication.
+   procedure; do not disable WebUI authentication.
 2. Open **Tools → Options → Web UI**.
-3. Set a permanent, unique username and password.
+3. Set a permanent, unique username and password from the password manager.
 4. Keep WebUI authentication enabled.
 5. Enable **Bypass authentication for clients on localhost**. This bypass is only
    for the Gluetun port-forward hook in the same Pod.
-6. Do not add the Kubernetes Pod or Service CIDRs to an authentication bypass.
-   Sonarr and Radarr must use the permanent WebUI credentials.
+6. Disable **Bypass authentication for clients in whitelisted IP subnets** and remove
+   any existing subnet entries. In particular, do not whitelist the Kubernetes Pod
+   CIDR, Service CIDR, or RFC1918 ranges. Requests through the internal Gateway arrive
+   from an in-cluster address, so a Pod-CIDR bypass also bypasses the browser login.
+7. Save, sign out, and confirm the permanent credential signs back in.
 
-Never write the temporary or permanent password into this repository.
+qBittorrent exposes one WebUI credential to integrations supported here. Sonarr,
+Radarr, and Homepage use it; Prowlarr uses it only if direct Prowlarr searches are
+enabled. Keep the human copy in the password manager and create Homepage's independently
+rotatable SOPS Secret without printing either value:
+
+```bash
+printf 'qBittorrent WebUI username: '
+IFS= read -r QBITTORRENT_USERNAME
+printf 'qBittorrent WebUI password: '
+IFS= read -r -s QBITTORRENT_PASSWORD
+printf '\n'
+export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
+export HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM='write:monitoring:homepage-qbittorrent:sops'
+mise exec -- just repo homepage-qbittorrent-secrets
+unset QBITTORRENT_USERNAME QBITTORRENT_PASSWORD HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM
+```
+
+Commit only the resulting encrypted `homepage-qbittorrent.sops.yaml`. Never commit
+the temporary password, plaintext permanent credential, or an unencrypted application
+configuration export.
 
 ### Download paths
 
@@ -136,6 +158,9 @@ upgrades, or node rescheduling.
 Do not add qBittorrent under **Prowlarr → Settings → Download Clients** for the
 normal automation flow. Prowlarr download clients are only used for searches
 initiated directly in Prowlarr; Sonarr and Radarr use their own clients.
+If direct Prowlarr searches are deliberately enabled, configure the same in-cluster
+qBittorrent URL and permanent WebUI credential used by Sonarr and Radarr, with a
+separate category chosen for those searches.
 
 ### API key
 
