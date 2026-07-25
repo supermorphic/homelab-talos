@@ -27,7 +27,10 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output j
 
 release_json="$(helm list --namespace kube-system --kubeconfig "$kubeconfig" --output json)"
 [[ "$(yq -r '.[] | select(.name == "cilium") | .status' - <<<"$release_json")" == 'deployed' ]]
-[[ "$(yq -r '.[] | select(.name == "cilium") | .chart' - <<<"$release_json")" == 'cilium-1.19.6' ]]
+# Strip any Helm OCI +buildmetadata suffix (e.g. cilium-1.19.6+b8d600c542c9) before the
+# version match, so a repackaged chart digest does not fail the assertion.
+cilium_chart="$(yq -r '.[] | select(.name == "cilium") | .chart' - <<<"$release_json")"
+[[ "${cilium_chart%%+*}" == 'cilium-1.19.6' ]]
 
 helm get values cilium \
   --namespace kube-system \
