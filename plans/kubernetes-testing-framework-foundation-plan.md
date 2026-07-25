@@ -268,6 +268,25 @@ nine parity checks: `mise exec -- just kube {plex,seerr,trivy,gatus,homepage,`
 recipes (`plex-reschedule`, `cilium`, `qbittorrent-killswitch`) remain a
 separate final slice (PR 5g).
 
+**PR 5g completes Phase 0B with the three destructive/heavy recipes**, each a
+separate commit so it can be reverted independently: `plex-reschedule` (cordons a
+node + deletes the Plex pod to force a reschedule; self-healing uncordon trap),
+`cilium` (helm-values parity, node/DaemonSet/operator/Hubble health, then the
+~45-min `cilium connectivity test` with sysdump on failure; takes `cilium_values`
+as a second arg and retains the `cilium-postflight` callback), and
+`qbittorrent-killswitch` (the BLOCKING VPN gate — preserved verbatim per the
+"do not weaken or delete" rule: it stops and recreates the pod, exec-probes
+egress from qBittorrent's own netns, and asserts fail-closed with the home WAN IP
+as a never-leak invariant). Behavior is unchanged. Pre-existing non-gating
+`! kubectl` absence-assertions in `cilium.sh` (`kube-proxy`, `hubble-ui`,
+`cilium-envoy`) are preserved as-is with `# shellcheck disable=SC2251`, matching
+the `foundation.sh` treatment in PR 5f; a yq-variable false positive on
+`forbidden_taints` carries a scoped `# shellcheck disable=SC2016`. Each recipe's
+live parity run is its own hard merge gate; the killswitch additionally requires
+the Phase 12 first-run precondition (WebUI password + localhost auth bypass). This
+finishes the mechanical `*-verify` extraction — all 17 recipes are now thin,
+guarded wrappers over `scripts/verify/`.
+
 ## Phase 1 — Pinned tooling and offline schema validation
 
 - Pin Chainsaw 0.2.15 through `aqua:kyverno/chainsaw` and refresh `mise.lock`.
