@@ -30,9 +30,12 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 tag="$(yq -r '.controllers.flaresolverr.containers.app.image.tag' "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
 [[ "$(yq -r '.controllers.flaresolverr.containers.app.securityContext.capabilities.drop[]' "$values" | tr '\n' ' ')" == 'ALL ' ]]
 [[ "$(yq -r '.controllers.flaresolverr.containers.app.securityContext.allowPrivilegeEscalation' "$values")" == 'false' ]]
-# Non-root without forcing UID 568 (the image ships its own flaresolverr user; forcing 568 breaks Chrome dirs).
+# Non-root pinned to the image's OWN uid/gid 1000 (its flaresolverr user), NOT the repo
+# default 568: runAsNonRoot cannot verify the image's non-numeric USER, so a numeric UID is
+# required to start at all, and 1000 keeps Chrome's /app dirs correctly owned.
 [[ "$(yq -r '.controllers.flaresolverr.pod.securityContext.runAsNonRoot' "$values")" == 'true' ]]
-[[ "$(yq -r '.controllers.flaresolverr.pod.securityContext.runAsUser // "unset"' "$values")" == 'unset' ]] || { echo 'flaresolverr must not force runAsUser (let the image user stand).' >&2; exit 1; }
+[[ "$(yq -r '.controllers.flaresolverr.pod.securityContext.runAsUser' "$values")" == '1000' ]] || { echo 'flaresolverr must set runAsUser: 1000 (its image user; runAsNonRoot needs a numeric UID).' >&2; exit 1; }
+[[ "$(yq -r '.controllers.flaresolverr.pod.securityContext.runAsGroup' "$values")" == '1000' ]]
 # Stateless: no config PVC of any kind.
 [[ "$(yq -r '.persistence.config // "none"' "$values")" == 'none' ]] || { echo 'flaresolverr is stateless; it must not define a config PVC.' >&2; exit 1; }
 [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'flaresolverr must not mount media-data.' >&2; exit 1; }
