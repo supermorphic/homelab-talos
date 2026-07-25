@@ -297,10 +297,27 @@ in Seerr's [Sonarr service](#sonarr-service) step). No setup action is required 
 ### API key
 
 Sonarr's API key is under **Settings → General → Security**. You do **not** paste it
-while in Sonarr — it is entered later, in two places: Prowlarr, in
-[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr), and
-Seerr, in the [Sonarr service](#sonarr-service) step. Copy it only when entering it
-into those screens; never commit it.
+into Sonarr — it is entered elsewhere: Prowlarr, in
+[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr);
+Seerr, in the [Sonarr service](#sonarr-service) step; and the Homepage widget below.
+Copy it only when entering it into those screens; never commit it.
+
+The Homepage Sonarr widget reads the same key from an independently rotatable SOPS
+Secret. Create it without printing the value:
+
+```bash
+printf 'Sonarr API key: '
+IFS= read -r -s SONARR_API_KEY
+printf '\n'
+export SONARR_API_KEY
+export HOMEPAGE_SONARR_SECRETS_CONFIRM='write:monitoring:homepage-sonarr:sops'
+mise exec -- just repo homepage-sonarr-secrets
+unset SONARR_API_KEY HOMEPAGE_SONARR_SECRETS_CONFIRM
+```
+
+Run this only when creating or rotating the widget Secret. Commit only the resulting
+encrypted `homepage-sonarr.sops.yaml`. The widget stays blank until the Secret exists
+and Flux reconciles it.
 
 ### Check
 

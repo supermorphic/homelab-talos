@@ -14,6 +14,11 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "sonarr.svg"
     gethomepage.dev/href: "https://sonarr.lab.supermorphic.com"
+    # Live widget uses Sonarr's API key from Homepage's SOPS Secret
+    # (homepage-sonarr). Blank until `just repo homepage-sonarr-secrets` runs.
+    gethomepage.dev/widget.type: "sonarr"
+    gethomepage.dev/widget.url: "http://sonarr.media.svc.cluster.local:8989"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_SONARR_API_KEY}}"
 spec:
   hostnames:
     - sonarr.lab.supermorphic.com
