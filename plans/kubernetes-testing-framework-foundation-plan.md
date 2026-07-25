@@ -508,6 +508,36 @@ Foundation work is followed by separate, reviewable changes:
 6. A realistic unexpected Gluetun failure mechanism. If it requires node/CRI
    access, add a separately guarded recipe rather than mislabeling a controlled
    API stop as a crash.
+
+   **DEFERRED (2026-07-25).** Item 6 remains deferred because no deterministic,
+   characterized in-place Gluetun crash injection mechanism has yet been
+   demonstrated. `kubectl exec` SIGKILL to Gluetun PID 1 is blocked by the kernel
+   (same-PID-ns; `restartCount` stays 0); the pod sets no `shareProcessNamespace`
+   so a debug container cannot target its PID; and the liveness-probe restart has
+   no clean, quick, deterministic trigger (~5 min; risks ProtonVPN rate-limiting).
+   The architecture *strongly supports* fail-closed behavior during an in-place
+   failure (qBittorrent shares the pod netns, lacks NET_ADMIN, and cannot remove
+   Gluetun's firewall DROP rules), but this remains **behaviorally unproven** until
+   a realistic in-place failure is exercised. Static fail-closed prerequisites
+   (PREVENT: `scripts/validate/qbittorrent.sh` sidecar/NET_ADMIN/caps/probe policy +
+   `tests/policy/media/media.rego` NET_ADMIN and host-namespace denies) and
+   monitoring coverage (DETECT: the `QbittorrentGluetunRestartLoop` /
+   `QbittorrentVpnDown` / `QbittorrentVpnProbeMissing` alerts) remain validated but
+   are **NOT counted as behavioral crash coverage** (the PROVE layer).
+
+   `talosctl restart --kubernetes <id>` (with `talosctl containers --kubernetes` to
+   resolve the container) is a plausible single-container failure-injection
+   mechanism — a node-API operation targeting a k8s-containerd process, distinct
+   from the `talosctl reboot` node-lifecycle op. It will be **characterized
+   manually** (operator-run) before any production resilience scenario is designed:
+   record identity deltas (pod UID; app + Gluetun containerID and restartCount;
+   Gluetun PID; VPN IP; forwarded port) before/after, run the leak sentinel
+   throughout, and classify — (A) pod UID same, app intact, Gluetun containerID
+   changed + restartCount +1 → ideal kubelet-recognized trigger, build the real
+   `resilience qbittorrent-gluetun-crash` test; (B) PID-only change, containerID/
+   restartCount unchanged → outside the CRI lifecycle, not a kubelet-managed crash;
+   (C) pod UID changed → that is item 5 (pod recreation); (D) rejected → stays
+   deferred. Do not infer behavior from the CLI name.
 7. Node drain and Talos reboot with quorum, volume, SMB, and recovery evidence.
 8. Controlled functional download and complete Servarr workflow.
 9. Reusable Flux, Gateway API, DNS, Cilium, Longhorn, SMB, and cluster suites.

@@ -93,6 +93,10 @@ rule="$base/app/prometheusrule.yaml"
 [[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
 [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentVpnDown") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
 [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentGluetunRestartLoop") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
+# The VPN kill switch is behaviorally unproven under an in-place Gluetun crash (item 6
+# deferred), so guarantee the detect layer stays present: the probe-missing alert must not
+# silently disappear alongside the two above.
+[[ -n "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentVpnProbeMissing") | .alert] | .[0]' "$rule")" ]]
 rg -q 'gatus_results_endpoint_success' "$rule"
 rg -q 'kube_pod_init_container_status_restarts_total' "$rule"
 # The Gatus health probe that feeds the rule must exist.
