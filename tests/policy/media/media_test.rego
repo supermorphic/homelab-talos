@@ -90,6 +90,35 @@ test_valid_media_app_has_no_violations if {
 	count(messages) == 0
 }
 
+host_namespace_fixture(namespace) := [{
+	"path": "kubernetes/apps/media/qbittorrent/app/values.yaml",
+	"contents": {"controllers": {"qbittorrent": {"pod": {namespace: true}}}},
+}]
+
+test_host_network_is_denied if {
+	messages := deny with input as host_namespace_fixture("hostNetwork")
+	count(messages_matching(messages, "must not enable host namespace hostNetwork")) == 1
+}
+
+test_host_pid_is_denied if {
+	messages := deny with input as host_namespace_fixture("hostPID")
+	count(messages_matching(messages, "must not enable host namespace hostPID")) == 1
+}
+
+test_host_ipc_is_denied if {
+	messages := deny with input as host_namespace_fixture("hostIPC")
+	count(messages_matching(messages, "must not enable host namespace hostIPC")) == 1
+}
+
+test_host_namespace_false_is_allowed if {
+	fixture_input := [{
+		"path": "kubernetes/apps/media/qbittorrent/app/values.yaml",
+		"contents": {"controllers": {"qbittorrent": {"pod": {"hostNetwork": false}}}},
+	}]
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "host namespace")) == 0
+}
+
 test_mutable_tag_is_denied if {
 	fixture_input := fixture(
 		"latest",

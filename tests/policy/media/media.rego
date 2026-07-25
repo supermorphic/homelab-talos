@@ -118,6 +118,25 @@ deny contains msg if {
 	)
 }
 
+# Host namespaces defeat pod-level network/process isolation. The media namespace runs
+# under privileged PSA (Gluetun needs NET_ADMIN + /dev/net/tun), so PSA does not block
+# these — pin them here. No media workload has a legitimate need to join a host namespace.
+host_namespaces := {"hostNetwork", "hostPID", "hostIPC"}
+
+deny contains msg if {
+	some document in input
+	app := media_app(document)
+	required_dependencies[app]
+	some controller_name, controller in object.get(document.contents, "controllers", {})
+	pod := object.get(controller, "pod", {})
+	some namespace in host_namespaces
+	object.get(pod, namespace, false) == true
+	msg := sprintf(
+		"%s: media workload %s/%s must not enable host namespace %s",
+		[document.path, app, controller_name, namespace],
+	)
+}
+
 deny contains msg if {
 	some document in input
 	app := media_app(document)
