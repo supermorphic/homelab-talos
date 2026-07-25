@@ -303,10 +303,10 @@ On a new PVC, configure:
    |---|---|
    | Episode Title Required | `Never` |
    | Skip Free Space Check | Disabled |
-   | Minimum Free Space | `102400 MB` (100 GB) |
+   | Minimum Free Space | `102400 MB` |
    | Use Hardlinks instead of Copy | Enabled |
    | Import Using Script | Disabled |
-   | Import Extra Files | Disabled |
+   | Import Extra Files | Enabled (extensions: `srt`) |
 
 6. Configure file management:
 
@@ -315,7 +315,7 @@ On a new PVC, configure:
    | Unmonitor Deleted Episodes | Disabled |
    | Propers and Repacks | `Prefer and Upgrade` |
    | Analyse Video Files | Enabled |
-   | Rescan Series Folder after Refresh | `Always` |
+   | Rescan Series Folder after Refresh | `After Manual Refresh` |
    | Change File Date | `None` |
    | Recycling Bin | Blank |
    | Set Permissions | Disabled |
@@ -450,16 +450,17 @@ On a new PVC, configure:
    | Setting | Value |
    |---|---|
    | Skip Free Space Check | Disabled |
-   | Minimum Free Space | `102400 MB` (100 GB) |
+   | Minimum Free Space | `102400 MB` |
    | Use Hardlinks instead of Copy | Enabled |
    | Import Using Script | Disabled |
-   | Import Extra Files | Disabled |
+   | Import Extra Files | Enabled (extensions: `srt`) |
 
 6. Configure file management:
 
    | Setting | Value |
    |---|---|
    | Unmonitor Deleted Movies | Disabled |
+   | Propers and Repacks | `Prefer and Upgrade` |
    | Analyse Video Files | Enabled |
    | Rescan Movie Folder after Refresh | `After Manual Refresh` |
    | Change File Date | `None` |
