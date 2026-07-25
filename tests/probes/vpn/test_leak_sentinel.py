@@ -132,5 +132,58 @@ class EvaluateTests(unittest.TestCase):
             os.unlink(path)
 
 
+STOP = "2026-07-25T16:00:30Z"
+
+
+def outage_verdict(egress_samples, stop=STOP, home=HOME, vpn=VPN, settle=5):
+    parsed = {"egress": list(egress_samples), "structural": [], "parse_errors": 0}
+    return ls.evaluate_outage(parsed, home, vpn, stop, settle)
+
+
+class OutageModeTests(unittest.TestCase):
+    # pre-stop (< 16:00:30) via VPN; during outage (>= 16:00:35 with settle=5) blocked.
+    PRE = [egress(VPN, "2026-07-25T16:00:10Z"), egress(VPN, "2026-07-25T16:00:20Z")]
+    DURING_BLOCKED = [egress("", "2026-07-25T16:00:40Z"), egress("", "2026-07-25T16:00:50Z")]
+
+    def test_kill_switch_held_passes(self):
+        v = outage_verdict(self.PRE + self.DURING_BLOCKED)
+        self.assertEqual(v["status"], ls.PASSED)
+        self.assertTrue(ls.is_pass(v))
+
+    def test_home_wan_during_outage_is_leak(self):
+        v = outage_verdict(self.PRE + [egress(HOME, "2026-07-25T16:00:40Z")])
+        self.assertEqual(v["status"], ls.LEAK)
+
+    def test_any_egress_during_outage_is_breach_anomaly(self):
+        v = outage_verdict(self.PRE + [egress("9.9.9.9", "2026-07-25T16:00:40Z")])
+        self.assertEqual(v["status"], ls.ANOMALY)
+
+    def test_pre_stop_not_via_vpn_is_anomaly(self):
+        v = outage_verdict([egress("9.9.9.9", "2026-07-25T16:00:10Z")] + self.DURING_BLOCKED)
+        self.assertEqual(v["status"], ls.ANOMALY)
+
+    def test_no_during_samples_is_unevaluable(self):
+        v = outage_verdict(self.PRE)
+        self.assertEqual(v["status"], ls.UNEVALUABLE)
+
+    def test_no_pre_vpn_baseline_is_unevaluable(self):
+        v = outage_verdict([egress("", "2026-07-25T16:00:10Z")] + self.DURING_BLOCKED)
+        self.assertEqual(v["status"], ls.UNEVALUABLE)
+
+    def test_settle_window_samples_are_ignored(self):
+        # A sample inside the settle window (16:00:32, between stop and stop+5s) must not
+        # count as an outage breach even though egress briefly lingered.
+        v = outage_verdict(self.PRE + [egress(VPN, "2026-07-25T16:00:32Z")] + self.DURING_BLOCKED)
+        self.assertEqual(v["status"], ls.PASSED)
+
+    def test_unparseable_stop_ts_is_unevaluable(self):
+        v = outage_verdict(self.PRE + self.DURING_BLOCKED, stop="not-a-timestamp")
+        self.assertEqual(v["status"], ls.UNEVALUABLE)
+
+    def test_leak_guard_holds_in_pre_segment(self):
+        v = outage_verdict([egress(HOME, "2026-07-25T16:00:10Z")] + self.DURING_BLOCKED)
+        self.assertEqual(v["status"], ls.LEAK)
+
+
 if __name__ == "__main__":
     unittest.main()

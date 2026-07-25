@@ -104,8 +104,16 @@ case "$tier" in
     scripts/test/safety/require-chaos-confirmation.sh "$target"
     confirmation_type='CLUSTER_CHAOS_CONFIRM'
     acquire_state_lock
-    echo 'No resilience targets are registered yet.' >&2
-    exit 2
+    case "$target" in
+      qbittorrent-vpn-disconnect)
+        test_dir='tests/chainsaw/resilience/qbittorrent-vpn-disconnect'
+        selector='homelab-talos/suite=qbittorrent-vpn-disconnect'
+        ;;
+      *)
+        echo "Unknown resilience target: $target" >&2
+        exit 2
+        ;;
+    esac
     ;;
   *)
     echo "Unknown test tier: $tier" >&2
@@ -157,6 +165,12 @@ if [[ "$diagnostics_only" == true ]]; then
 fi
 
 export KUBECONFIG="$kubeconfig"
+# Resilience scenarios write recovery.json here so the runner can record the recovery
+# outcome separately from the primary assertion (Phase-3 "reports failure separately").
+# Chainsaw runs script ops from its own working directory, so scenarios cd to the repo
+# root (exported here) before invoking repo-relative guard/orchestrator scripts.
+export HOMELAB_TEST_RUN_DIR="$run_dir"
+export HOMELAB_REPO_ROOT="$repo_root"
 set +e
 chainsaw test "$test_dir" \
   --config tests/config/chainsaw.yaml \
@@ -217,8 +231,21 @@ if [[ "$environment_exit_code" -ne 0 && "$primary_exit_code" -eq 0 ]]; then
   primary_exit_code=1
   primary_status='failed'
 fi
+# Resilience scenarios drive recovery in a cleanup/finally block and record its outcome
+# in recovery.json; surface it as a SEPARATE cleanup/recovery status without touching the
+# primary assertion. Other tiers never mutate, so their recovery is not-required.
+cleanup_status='not-required'
+recovery_status='not-required'
+if [[ "$tier" == 'resilience' ]]; then
+  if [[ -f "$run_dir/recovery.json" ]]; then
+    recovery_status="$(yq -r '.status // "not-classified"' "$run_dir/recovery.json" 2>/dev/null || echo not-classified)"
+  else
+    recovery_status='not-classified'
+  fi
+  cleanup_status="$recovery_status"
+fi
 write_summary "$run_dir" "$primary_status" "$primary_exit_code" \
-  "$assertion_status" "$diagnostics_status" 'not-required' 'not-required'
+  "$assertion_status" "$diagnostics_status" "$cleanup_status" "$recovery_status"
 
 echo "Chainsaw results: $run_dir"
 exit "$primary_exit_code"
