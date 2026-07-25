@@ -36,7 +36,10 @@ Configure the stack in this order:
 8. Direct Sonarr/Radarr download tests, followed by a Seerr request test.
 
 Complete a service's guarded bootstrap and durable `suspend: false` activation
-before configuring it here.
+before configuring it here. Work through the steps incrementally as each service is
+activated — you do not need every application live at once. For example, connect
+Prowlarr to Sonarr as soon as Sonarr is up (step 5's Sonarr half), before Radarr has
+been activated, and complete Radarr's steps later.
 
 ## qBittorrent
 
@@ -255,6 +258,13 @@ On a new PVC, configure:
 The root folder is the organized Plex TV library. Never set it to
 `/data/downloads` or one of its children.
 
+### Indexers
+
+Do not add indexers in Sonarr. Prowlarr owns them and pushes them here during the
+[application connection](#connect-prowlarr-to-sonarr-and-radarr) with `Full Sync`.
+After that step, Sonarr's **Settings → Indexers** lists entries ending in
+`(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
+
 ### qBittorrent download client
 
 Open **Settings → Download Clients → Add → qBittorrent** and enter:
@@ -278,10 +288,19 @@ policy has been chosen. Select **Test**, require a successful result, and then
 Do not add a remote path mapping. Sonarr and qBittorrent mount the same PVC at
 the same `/data` path.
 
+### Quality profile
+
+Sonarr ships default quality profiles. The repository does not prescribe a
+release-quality policy; the profile is chosen per series when you add it (and again
+in Seerr's [Sonarr service](#sonarr-service) step). No setup action is required here.
+
 ### API key
 
-Copy the Sonarr API key from **Settings → General → Security** only when entering
-it directly into Prowlarr or Seerr. Never commit it.
+Sonarr's API key is under **Settings → General → Security**. You do **not** paste it
+while in Sonarr — it is entered later, in two places: Prowlarr, in
+[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr), and
+Seerr, in the [Sonarr service](#sonarr-service) step. Copy it only when entering it
+into those screens; never commit it.
 
 ### Check
 
@@ -315,6 +334,13 @@ On a new PVC, configure:
 The root folder is the organized Plex movie library. Never set it to
 `/data/downloads` or one of its children.
 
+### Indexers
+
+Do not add indexers in Radarr. Prowlarr owns them and pushes them here during the
+[application connection](#connect-prowlarr-to-sonarr-and-radarr) with `Full Sync`.
+After that step, Radarr's **Settings → Indexers** lists entries ending in
+`(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
+
 ### qBittorrent download client
 
 Open **Settings → Download Clients → Add → qBittorrent** and enter:
@@ -338,10 +364,19 @@ policy has been chosen. Select **Test**, require a successful result, and then
 Do not add a remote path mapping. Radarr and qBittorrent mount the same PVC at
 the same `/data` path.
 
+### Quality profile
+
+Radarr ships default quality profiles. The repository does not prescribe a
+release-quality policy; the profile is chosen per movie when you add it (and again in
+Seerr's [Radarr service](#radarr-service) step). No setup action is required here.
+
 ### API key
 
-Copy the Radarr API key from **Settings → General → Security** only when entering
-it directly into Prowlarr or Seerr. Never commit it.
+Radarr's API key is under **Settings → General → Security**. You do **not** paste it
+while in Radarr — it is entered later, in two places: Prowlarr, in
+[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr), and
+Seerr, in the [Radarr service](#radarr-service) step. Copy it only when entering it
+into those screens; never commit it.
 
 ### Check
 
@@ -351,8 +386,10 @@ mise exec -- just kube arr-verify radarr
 
 ## Connect Prowlarr to Sonarr and Radarr
 
-Return to `https://prowlarr.lab.supermorphic.com` after both applications are
-available.
+Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
+is available — you do not need both at once. Connect **Sonarr** immediately after its
+rollout; connect **Radarr** once its own activation is live. Each app connection is
+independent, and this is the step where each application's API key is finally used.
 
 ### Sonarr application
 
