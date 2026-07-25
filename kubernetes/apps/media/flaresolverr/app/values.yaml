@@ -1,0 +1,82 @@
+# FlareSolverr (headless-Chromium Cloudflare solver) via the bjw-s app-template chart.
+# STATELESS, in-cluster only: no config PVC, no HTTPRoute, no VPN. Prowlarr uses it as a
+# per-indexer Indexer Proxy (http://flaresolverr.media.svc.cluster.local:8191) to reach
+# Cloudflare-protected indexers (e.g. 1337x). Experimental: Cloudflare actively counters
+# FlareSolverr, so a Ready pod does not guarantee any given indexer works.
+#
+# securityContext note: the upstream image creates its own non-root `flaresolverr` user
+# and runs `USER flaresolverr`, and Chromium needs writable profile/temp dirs — so we
+# assert runAsNonRoot WITHOUT forcing runAsUser/GID 568 (which breaks Chrome's dirs) and
+# do NOT set readOnlyRootFilesystem. Chromium gets a memory-backed /dev/shm.
+controllers:
+  flaresolverr:
+    type: deployment
+    strategy: RollingUpdate
+    pod:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+    containers:
+      app:
+        image:
+          repository: ghcr.io/flaresolverr/flaresolverr
+          tag: v3.5.0
+        env:
+          TZ: America/Denver
+          LOG_LEVEL: info
+        resources:
+          requests:
+            cpu: 50m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        probes:
+          # GET / returns 200 + {"msg":"FlareSolverr is ready!"} once Chrome self-tests.
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /
+                port: 8191
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /
+                port: 8191
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /
+                port: 8191
+              # Chrome install self-test can be slow on first boot.
+              periodSeconds: 5
+              failureThreshold: 30
+service:
+  app:
+    controller: flaresolverr
+    ports:
+      http:
+        port: 8191
+persistence:
+  # Memory-backed /dev/shm so Chromium does not exhaust the default 64Mi tmpfs.
+  dshm:
+    type: emptyDir
+    medium: Memory
+    sizeLimit: 256Mi
+    globalMounts:
+      - path: /dev/shm
