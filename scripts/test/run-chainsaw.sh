@@ -117,6 +117,10 @@ case "$tier" in
         test_dir='tests/chainsaw/resilience/qbittorrent-pod-recreation'
         selector='homelab-talos/suite=qbittorrent-pod-recreation'
         ;;
+      plex-cross-node-reschedule)
+        test_dir='tests/chainsaw/resilience/plex-cross-node-reschedule'
+        selector='homelab-talos/suite=plex-cross-node-reschedule'
+        ;;
       *)
         echo "Unknown resilience target: $target" >&2
         exit 2
