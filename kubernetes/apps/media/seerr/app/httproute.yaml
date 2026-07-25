@@ -14,6 +14,12 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "jellyseerr.svg"
     gethomepage.dev/href: "https://seerr.lab.supermorphic.com"
+    # Live widget uses Seerr's API key from Homepage's SOPS Secret
+    # (homepage-seerr). Blank until `just repo homepage-seerr-secrets` runs.
+    # Default fields (pending/approved/completed) — no field override.
+    gethomepage.dev/widget.type: "seerr"
+    gethomepage.dev/widget.url: "http://seerr.media.svc.cluster.local:5055"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_SEERR_API_KEY}}"
 spec:
   hostnames:
     - seerr.lab.supermorphic.com

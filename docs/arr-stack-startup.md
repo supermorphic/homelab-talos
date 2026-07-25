@@ -561,6 +561,26 @@ Open **Settings → Users**:
 3. Grant request, auto-approve, and administrative permissions deliberately.
 4. Set request quotas if the household needs them.
 
+### API key (Homepage widget)
+
+Seerr's own API key is under **Settings → General → API Key** (it exists as soon as
+Seerr boots, independent of the Plex/*arr wiring above). The Homepage Seerr widget reads
+it from an independently rotatable SOPS Secret. Create it without printing the value:
+
+```bash
+printf 'Seerr API key: '
+IFS= read -r -s SEERR_API_KEY
+printf '\n'
+export SEERR_API_KEY
+export HOMEPAGE_SEERR_SECRETS_CONFIRM='write:monitoring:homepage-seerr:sops'
+mise exec -- just repo homepage-seerr-secrets
+unset SEERR_API_KEY HOMEPAGE_SEERR_SECRETS_CONFIRM
+```
+
+Run this only when creating or rotating the widget Secret. Commit only the resulting
+encrypted `homepage-seerr.sops.yaml`. The widget stays blank until the Secret exists and
+Flux reconciles it.
+
 ### Check
 
 ```bash

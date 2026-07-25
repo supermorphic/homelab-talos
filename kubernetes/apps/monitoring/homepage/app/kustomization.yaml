@@ -8,6 +8,7 @@ resources:
   - ./homepage-prowlarr.sops.yaml
   - ./homepage-qbittorrent.sops.yaml
   - ./homepage-radarr.sops.yaml
+  - ./homepage-seerr.sops.yaml
   - ./homepage-sonarr.sops.yaml
   - ./httproute.yaml
   - ./namespace.yaml

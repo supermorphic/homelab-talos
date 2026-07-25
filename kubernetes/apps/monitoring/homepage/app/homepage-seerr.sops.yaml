@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-seerr
+    namespace: homepage
+type: Opaque
+stringData:
+    apiKey: ENC[AES256_GCM,data:FqcIZDEeD6cP3qfBMQKfdMi33hHLfn1cP+BGGBTJP0t7X+vvKAs9ApYSG1+Mj2Po45gCggGyCiXpZKq3qAkNjYKpW9Y=,iv:pEh5VEhJQ07Ax8q9K/zl177bpfpAZqK0+hPzLO4rLyQ=,tag:REf9irGB01z/CNOV/YQk0Q==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBWOGd6MkNZbzRFTmdPUGVh
+            Ulc4Q01sQmsxbDdXR0lzQ1lLTWh1azNQS2pJCmNBbzVudzN6bndBYVJuK0N3a1hF
+            VU5EODJVSm9IbjF3ZXdDMFhsdzZRcmcKLS0tIENjY3MxencyZmg0VHBBUUZrbVYr
+            SVF2YW1sQmN0UHE3ZGpVSjdSblhXY0UK5y8UlpwRUcC3T78K5jsDW5tsg0uFVTCq
+            6qEzNnU6ipkbkORVFvDG74DcUODOMODjEwHjV+TPnxrzHrhIQIvAUg==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-07-25T21:12:55Z"
+    mac: ENC[AES256_GCM,data:bl9otCyHJ2v4WZuvUEEtGEMbnyT1zH9jE1Xp1kqcOslooo7I+tmwWKOgY9txshC6Xi0FyQwvVW6O9eYCOxVjvsJX42ZBnORRxndBF/tlkqV1OgZPGovNzytPYgPNZRB9FPqjYx0BBjPnMtgIAxHtbSRPHfPpGdHnQyyFCat1G04=,iv:gDrmElKAHmm+hN0cNWVCftKxivXQS667zSWrlVjoDb0=,tag:iekDK9Qb4KDWM7/2eqgkUw==,type:str]
+    version: 3.13.2
