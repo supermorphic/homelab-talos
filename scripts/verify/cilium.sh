@@ -69,6 +69,15 @@ coredns_json="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get d
 # shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
 ! kubectl --kubeconfig "$kubeconfig" --namespace kube-system get daemonset cilium-envoy >/dev/null 2>&1
 
+# `cilium status --wait` reports every Failed pod in kube-system as an Error and will
+# never converge while stale tombstones linger — e.g. NodeShutdown-rejected replicas
+# left by rolling Talos node reboots, which Kubernetes does not garbage-collect until
+# ~12500 terminated pods accumulate. GC them first so a healthy cluster is not blocked
+# by dead pod objects (safe: controllers keep their Running replicas; these are
+# Failed-phase only).
+kubectl --kubeconfig "$kubeconfig" --namespace kube-system delete pods \
+  --field-selector status.phase=Failed --ignore-not-found >/dev/null 2>&1 || true
+
 cilium status \
   --kubeconfig "$kubeconfig" \
   --namespace kube-system \
