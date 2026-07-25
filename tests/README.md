@@ -33,6 +33,10 @@ Live commands are operator-only:
 - `mise exec -- just test probe dns-isolation`
 - `mise exec -- just test e2e <registered-target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
+- `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect`
+  (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
+  fails closed across the outage, then pod-recreation recovery; records recovery status
+  separately in `summary.json`)
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario

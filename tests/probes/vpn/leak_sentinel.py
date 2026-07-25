@@ -23,6 +23,7 @@ external-dependency > unevaluable > passed. Only "passed" exits 0.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import sys
 
@@ -70,6 +71,19 @@ def parse_timeline(text):
 
 def _ip(value):
     return str(value or "").strip()
+
+
+def _parse_ts(value):
+    """Parse an ISO8601 UTC timestamp (e.g. 2026-07-25T16:01:20Z) to epoch seconds, or None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
 
 
 # NOTE on the structural check: Gluetun pins egress with a firewall/policy-routing
@@ -169,6 +183,95 @@ def evaluate(
     )
 
 
+def evaluate_outage(parsed, home_wan, vpn_ip, stop_ts, settle_s=5):
+    """Verdict for a controlled VPN-stop transition (resilience item 4).
+
+    Partitions a single continuous timeline by the moment the VPN was stopped and
+    asserts the kill switch held: pre-stop egress is via the VPN, and during the outage
+    (after a settle window) egress is fully blocked — with NO home-WAN IP in any segment.
+    """
+    home_wan = _ip(home_wan)
+    vpn_ip = _ip(vpn_ip)
+    egress = parsed.get("egress", [])
+    stop_epoch = _parse_ts(stop_ts)
+
+    def base(status, reason, extra=None):
+        out = {
+            "status": status,
+            "reason": reason,
+            "mode": "outage",
+            "references": {
+                "home_wan": home_wan,
+                "vpn_ip": vpn_ip,
+                "stop_ts": stop_ts,
+                "settle_s": settle_s,
+            },
+        }
+        if extra:
+            out.update(extra)
+        return out
+
+    if not home_wan:
+        return base(UNEVALUABLE, "home WAN reference IP is empty; cannot evaluate leak")
+    if not vpn_ip:
+        return base(UNEVALUABLE, "VPN IP reference is empty; cannot confirm egress path")
+    if stop_epoch is None:
+        return base(UNEVALUABLE, f"could not parse stop timestamp '{stop_ts}'")
+
+    pre, during, unparsed = [], [], 0
+    for sample in egress:
+        ts = _parse_ts(sample.get("ts"))
+        if ts is None:
+            unparsed += 1
+            continue
+        if ts < stop_epoch:
+            pre.append(_ip(sample.get("ip")))
+        elif ts >= stop_epoch + settle_s:
+            during.append(_ip(sample.get("ip")))
+        # else: transition/settle window — the tunnel is still tearing down; ignored.
+
+    leak_samples = [ip for ip in (pre + during) if ip == home_wan]
+    pre_non_empty = [ip for ip in pre if ip]
+    pre_via_vpn = [ip for ip in pre_non_empty if ip == vpn_ip]
+    pre_anomaly = [ip for ip in pre_non_empty if ip not in (vpn_ip, home_wan)]
+    during_egress = [ip for ip in during if ip]  # any egress during the outage is a breach
+
+    counts = {
+        "pre_stop_total": len(pre),
+        "pre_stop_via_vpn": len(pre_via_vpn),
+        "during_outage_total": len(during),
+        "during_outage_egress": len(during_egress),
+        "egress_leak": len(leak_samples),
+        "unparsed_ts": unparsed,
+    }
+
+    def verdict(status, reason):
+        return base(status, reason, {"counts": counts, "leak_samples": leak_samples})
+
+    # Worst-first. The home-WAN leak guard holds across every segment.
+    if leak_samples:
+        return verdict(LEAK, f"egress showed the home WAN IP {home_wan} across the VPN transition")
+    if pre_anomaly:
+        return verdict(ANOMALY, f"pre-stop egress showed {len(pre_anomaly)} IP(s) not via the VPN")
+    if not pre_via_vpn:
+        return verdict(UNEVALUABLE, "no pre-stop egress via the VPN IP to establish a baseline")
+    if not during:
+        return verdict(
+            UNEVALUABLE,
+            "no egress samples during the outage window (settle too long or capture too short)",
+        )
+    if during_egress:
+        return verdict(
+            ANOMALY,
+            f"KILL-SWITCH BREACH: {len(during_egress)} egress sample(s) succeeded during the VPN outage",
+        )
+    return verdict(
+        PASSED,
+        f"kill switch held: {len(pre_via_vpn)} pre-stop sample(s) via VPN {vpn_ip}, "
+        f"{len(during)} outage sample(s) all blocked, no home-WAN leak",
+    )
+
+
 def is_pass(verdict):
     return verdict.get("status") == PASSED
 
@@ -179,7 +282,15 @@ def main(argv=None):
     parser.add_argument("--home-wan", required=True, help="home/WAN reference IP (must never appear)")
     parser.add_argument("--vpn-ip", required=True, help="expected ProtonVPN public IP")
     parser.add_argument("--expected-resolver", default="127.0.0.1", help="expected in-netns resolver")
+    parser.add_argument("--mode", choices=("baseline", "outage"), default="baseline",
+                        help="baseline (VPN up) or outage (controlled VPN-stop transition)")
+    parser.add_argument("--stop-ts", help="outage mode: ISO8601 timestamp when the VPN was stopped")
+    parser.add_argument("--settle", type=float, default=5.0,
+                        help="outage mode: seconds after stop to ignore while the tunnel tears down")
     args = parser.parse_args(argv)
+
+    if args.mode == "outage" and not args.stop_ts:
+        parser.error("--stop-ts is required in --mode outage")
 
     if args.timeline == "-":
         text = sys.stdin.read()
@@ -187,12 +298,11 @@ def main(argv=None):
         with open(args.timeline, "r", encoding="utf-8") as handle:
             text = handle.read()
 
-    verdict = evaluate(
-        parse_timeline(text),
-        args.home_wan,
-        args.vpn_ip,
-        args.expected_resolver,
-    )
+    parsed = parse_timeline(text)
+    if args.mode == "outage":
+        verdict = evaluate_outage(parsed, args.home_wan, args.vpn_ip, args.stop_ts, args.settle)
+    else:
+        verdict = evaluate(parsed, args.home_wan, args.vpn_ip, args.expected_resolver)
     json.dump(verdict, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if is_pass(verdict) else 1
