@@ -25,6 +25,9 @@ case "$target" in
   vpn-leak)
     probe='tests/probes/vpn/leak-sentinel.sh'
     ;;
+  dns-isolation)
+    probe='tests/probes/dns/isolation.sh'
+    ;;
   *)
     echo "Unknown probe target: $target" >&2
     exit 2
