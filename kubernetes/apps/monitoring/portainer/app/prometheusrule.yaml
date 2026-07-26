@@ -1,0 +1,56 @@
+---
+# Portainer black-box availability and persistence coverage. Gatus proves the
+# complete internal user path and exports gatus_results_endpoint_success.
+# kube-state-metrics independently proves that the retained database claim exists
+# and is Bound. Prometheus discovers this rule cluster-wide because
+# ruleSelectorNilUsesHelmValues is false in kube-prometheus-stack.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: portainer
+  namespace: portainer
+  labels:
+    app.kubernetes.io/name: portainer
+spec:
+  groups:
+    - name: portainer
+      rules:
+        - alert: PortainerDown
+          expr: gatus_results_endpoint_success{name="portainer", group="Platform"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Portainer is unavailable through the internal gateway
+            description: >-
+              The Portainer Gatus probe has failed for more than five minutes.
+              Check internal DNS, the Gateway route, the Portainer Deployment,
+              and its CiliumNetworkPolicy.
+        - alert: PortainerProbeMissing
+          expr: absent(gatus_results_endpoint_success{name="portainer", group="Platform"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Portainer probe data is missing
+            description: >-
+              The Portainer Gatus metric has been absent for more than 15 minutes,
+              so PortainerDown cannot fire. Check Gatus and its ServiceMonitor.
+        - alert: PortainerPersistentVolumeClaimNotBound
+          expr: >-
+            absent(
+              kube_persistentvolumeclaim_status_phase{
+                namespace="portainer",
+                persistentvolumeclaim="portainer",
+                phase="Bound"
+              } == 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Portainer database claim is absent or unbound
+            description: >-
+              The portainer/portainer PVC has not reported Bound for more than
+              five minutes. Portainer's database continuity is at risk; inspect
+              the PVC, Longhorn volume, replicas, and backup state.

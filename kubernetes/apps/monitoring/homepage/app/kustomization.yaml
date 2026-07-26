@@ -5,6 +5,7 @@ resources:
   - ./deployment.yaml
   - ./homepage-grafana.sops.yaml
   - ./homepage-plex.sops.yaml
+  - ./homepage-portainer.sops.yaml
   - ./homepage-prowlarr.sops.yaml
   - ./homepage-qbittorrent.sops.yaml
   - ./homepage-radarr.sops.yaml

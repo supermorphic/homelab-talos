@@ -277,6 +277,7 @@ available for focused developer validation.
 | `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Enabled in Phase 9; mutating after confirmation |
 | `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, recurring jobs, and a two-replica test PVC | — | Enabled in Phase 9; creates and removes a test PVC |
 | `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Portainer Phase 1; mutating tracked ciphertext after confirmation |
+| `just repo homepage-portainer-secrets` | Write only the encrypted Portainer API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Portainer activation; mutating tracked ciphertext after confirmation |
 | `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Portainer Phase 1; read-only and included in `just ci` |
 | `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Portainer Phase 1; read-only and included in `just ci` |
 | `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Portainer Phase 1; mutating after confirmation |

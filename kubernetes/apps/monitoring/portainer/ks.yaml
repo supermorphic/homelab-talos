@@ -23,8 +23,8 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Staged suspended. The operator runs `just bootstrap portainer`; after live
-  # acceptance a follow-up PR flips this to false and adds the Gatus probe.
-  suspend: true
+  # Activated after guarded live acceptance and a successful PVC persistence test.
+  # Git now durably preserves the state established by `just bootstrap portainer`.
+  suspend: false
   timeout: 10m
   wait: true

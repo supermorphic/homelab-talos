@@ -13,6 +13,13 @@ metadata:
     gethomepage.dev/icon: "portainer.svg"
     gethomepage.dev/href: "https://portainer.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=portainer"
+    # Live Kubernetes widget. The API key is injected into Homepage from its
+    # per-service SOPS Secret. Default Kubernetes fields are intentionally used.
+    gethomepage.dev/widget.type: "portainer"
+    gethomepage.dev/widget.url: "https://portainer.lab.supermorphic.com"
+    gethomepage.dev/widget.env: "1"
+    gethomepage.dev/widget.kubernetes: "true"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_PORTAINER_API_KEY}}"
 spec:
   hostnames:
     - portainer.lab.supermorphic.com

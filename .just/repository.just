@@ -602,6 +602,49 @@ homepage-grafana-secrets:
     mv -- "$temp_dir/homepage-grafana.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-grafana in homepage)."
 
+# Write ONLY the SOPS-encrypted Homepage Portainer widget Secret
+# (homepage-portainer in the homepage namespace) from PORTAINER_API_KEY.
+# Generate a dedicated Portainer access token; never echoes the value.
+homepage-portainer-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-portainer:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-portainer.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-portainer.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${PORTAINER_API_KEY:-}" ]] || {
+      echo 'Set PORTAINER_API_KEY to a dedicated Portainer access token for the Homepage widget.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_PORTAINER_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Portainer Secret.' >&2
+      echo "Set HOMEPAGE_PORTAINER_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export PORTAINER_API_KEY
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-portainer" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."apiKey" = strenv(PORTAINER_API_KEY)' \
+      >"$temp_dir/homepage-portainer.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-portainer.yaml" >"$temp_dir/homepage-portainer.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-portainer.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-portainer.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$PORTAINER_API_KEY" "$temp_dir/homepage-portainer.sops.yaml"
+
+    mv -- "$temp_dir/homepage-portainer.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-portainer in homepage)."
+
 # Write ONLY the SOPS-encrypted Homepage Plex widget Secret (homepage-plex in the homepage
 # namespace) from PLEX_TOKEN. Independent of the Grafana Secret. Never echoes the value.
 homepage-plex-secrets:

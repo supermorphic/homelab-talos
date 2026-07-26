@@ -12,12 +12,13 @@ ns="$app/namespace.yaml"
 rbac="$app/rbac.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 secret="$app/portainer-admin-password.sops.yaml"
+rule="$app/prometheusrule.yaml"
 verify_script='scripts/verify/portainer.sh'
 temp_dir="$(mktemp -d /tmp/homelab-talos-portainer-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for file in \
-  "$ks" "$hr" "$values" "$repo" "$route" "$ns" "$rbac" "$policy" "$secret" \
+  "$ks" "$hr" "$values" "$repo" "$route" "$ns" "$rbac" "$policy" "$secret" "$rule" \
   "$app/kustomization.yaml"; do
   [[ -f "$file" ]] || {
     echo "Missing Portainer source: $file" >&2
@@ -62,8 +63,24 @@ dependencies="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")"
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == 'portainer' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '9000' ]]
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'portainer' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'https://portainer.lab.supermorphic.com' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.env"' "$route")" == '1' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.kubernetes"' "$route")" == 'true' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_PORTAINER_API_KEY}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields" // "absent"' "$route")" == 'absent' ]] || {
+  echo 'Portainer Homepage widget must use its default Kubernetes fields.' >&2
+  exit 1
+}
 if [[ "$suspend_state" == 'false' ]]; then
-  rg -q '^    - name: portainer$' kubernetes/apps/monitoring/gatus/app/values.yaml || {
+  [[ "$(yq -r '[.config.endpoints[] | select(
+    .name == "portainer" and
+    .group == "Platform" and
+    .url == "https://portainer.lab.supermorphic.com/" and
+    .interval == "1m" and
+    .conditions[0] == "[STATUS] == 200" and
+    (.conditions | length) == 1
+  )] | length' kubernetes/apps/monitoring/gatus/app/values.yaml)" == '1' ]] || {
     echo 'Active Portainer has no Gatus endpoint.' >&2
     exit 1
   }
@@ -73,6 +90,34 @@ else
     exit 1
   }
 fi
+
+# Activation alert contract: black-box failure, missing telemetry, and database
+# claim absence/unbound state must remain independently detectable.
+rg -qx '  - ./prometheusrule.yaml' "$app/kustomization.yaml"
+[[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
+[[ "$(yq -r '.metadata.name' "$rule")" == 'portainer' ]]
+[[ "$(yq -r '.metadata.namespace' "$rule")" == 'portainer' ]]
+alerts="$(yq -r '[.spec.groups[].rules[].alert] | sort | join(",")' "$rule")"
+[[ "$alerts" == 'PortainerDown,PortainerPersistentVolumeClaimNotBound,PortainerProbeMissing' ]] || {
+  echo "Unexpected Portainer alert set: $alerts" >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerDown") | .expr' "$rule")" == \
+  'gatus_results_endpoint_success{name="portainer", group="Platform"} == 0' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerDown") | .for' "$rule")" == '5m' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerDown") | .labels.severity' "$rule")" == 'critical' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerProbeMissing") | .expr' "$rule")" == \
+  'absent(gatus_results_endpoint_success{name="portainer", group="Platform"})' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerProbeMissing") | .for' "$rule")" == '15m' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerProbeMissing") | .labels.severity' "$rule")" == 'warning' ]]
+pvc_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerPersistentVolumeClaimNotBound") | .expr' "$rule")"
+rg -Fq 'absent(' <<<"$pvc_expr"
+rg -q 'kube_persistentvolumeclaim_status_phase' <<<"$pvc_expr"
+rg -q 'namespace="portainer"' <<<"$pvc_expr"
+rg -q 'persistentvolumeclaim="portainer"' <<<"$pvc_expr"
+rg -q 'phase="Bound"' <<<"$pvc_expr"
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerPersistentVolumeClaimNotBound") | .for' "$rule")" == '5m' ]]
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "PortainerPersistentVolumeClaimNotBound") | .labels.severity' "$rule")" == 'critical' ]]
 
 # Pinned chart/value contract.
 [[ "$(yq -r '.spec.chart.spec.chart' "$hr")" == 'portainer' ]]
@@ -189,4 +234,4 @@ kustomize build "$temp_dir/post-render" >"$temp_dir/final-render.yaml"
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "portainer") | .spec.template.spec.serviceAccountName' "$temp_dir/final-render.yaml")" == 'portainer-readonly' ]]
 [[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "portainer") | [.spec.ports[].port] | join(",")' "$temp_dir/final-render.yaml")" == '9000' ]]
 
-echo 'Portainer CE 2.39.5/chart 239.5.0 staged source, SOPS bootstrap Secret, read-only RBAC, Cilium isolation, internal route, retained RWO PVC, and final post-render passed validation.'
+echo 'Portainer CE 2.39.5/chart 239.5.0 source, SOPS bootstrap Secret, read-only RBAC, Cilium isolation, internal route, retained RWO PVC, activation monitoring, Homepage widget, and final post-render passed validation.'

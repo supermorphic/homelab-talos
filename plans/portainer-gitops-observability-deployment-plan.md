@@ -46,6 +46,12 @@ There is no NodePort, LoadBalancer, public route, Edge tunnel, Docker Agent,
 - Patch the rendered Deployment to use the repository-owned
   `portainer-readonly` ServiceAccount. Chart `239.5.0` omits
   `serviceAccountName` when `localMgmt` is false.
+- In chart `239.5.0`, `localMgmt` gates only the chart's ServiceAccount/RBAC
+  resources and Deployment assignment; it does not disable Portainer's
+  in-cluster discovery. The post-rendered ServiceAccount assignment therefore
+  makes the Talos cluster the automatically registered local environment
+  without an Agent, kubeconfig import, or first-login setup wizard. The custom
+  RBAC keeps that environment read-only.
 - Set `createNamespace: false`; the repository owns the Namespace and its
   Gateway/Pod Security labels.
 - Patch the rendered Service to retain only port 9000.
@@ -168,6 +174,9 @@ Run `just kube portainer-verify` and
 Phase 1 is complete when:
 
 - Flux Kustomization and HelmRelease are Ready;
+- the first administrator login immediately shows the automatically registered
+  local Kubernetes environment (normally environment ID `1`) without manual
+  onboarding, and subsequent restarts recover it from the retained database;
 - the Deployment is Available with one replica, `Recreate`, and
   `portainer-readonly`;
 - the PVC is Bound on Longhorn, retained, and covered by the existing daily

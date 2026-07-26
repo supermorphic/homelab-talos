@@ -102,11 +102,35 @@ mise exec -- just kube portainer-persistence-test
 unset PORTAINER_PERSISTENCE_CONFIRM
 ```
 
-The activation PR then changes the Portainer Kustomization to `suspend: false`
-and adds the Portainer Gatus endpoint and Prometheus alerts. Do not add the probe
-while the app is staged absent.
+After live acceptance and the persistence test, the activation PR changes the
+Portainer Kustomization to `suspend: false` and adds the Portainer Gatus endpoint
+plus Prometheus alerts for sustained endpoint failure, missing probe telemetry,
+and an absent or unbound database PVC. Do not add the probe while the app is
+staged absent.
+
+The activation also enables Homepage's Kubernetes-mode Portainer widget for
+environment `1`. Create a dedicated access token in Portainer under **My
+account → Access tokens**, store it in the password manager, and generate the
+split Homepage Secret before committing:
+
+```bash
+export PORTAINER_API_KEY='<dedicated access token>'
+export HOMEPAGE_PORTAINER_SECRETS_CONFIRM='write:monitoring:homepage-portainer:sops'
+mise exec -- just repo homepage-portainer-secrets
+unset PORTAINER_API_KEY HOMEPAGE_PORTAINER_SECRETS_CONFIRM
+```
+
+The widget deliberately omits `fields`, so Homepage uses its default Kubernetes
+summary fields.
 
 ## First-Run Acceptance
+
+No environment onboarding is required for the Talos cluster. Although
+`localMgmt: false` prevents the official chart from creating a cluster-admin
+binding, the post-rendered Deployment uses the `portainer-readonly`
+ServiceAccount. Portainer detects that in-cluster identity and automatically
+creates the local Kubernetes environment on a fresh database; the retained
+database preserves it across later starts.
 
 Open the internal URL and confirm:
 
