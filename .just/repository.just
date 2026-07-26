@@ -26,6 +26,7 @@ versions:
     @gitleaks version
     @shellcheck --version
     @uv --version
+    @sonobuoy version
 
 # Verify that the loaded private age identity matches this repository.
 secrets:

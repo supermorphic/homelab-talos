@@ -133,6 +133,54 @@ media-policy-validate:
     @conftest test --combine --all-namespaces \
       --policy tests/policy/media kubernetes/apps/media
 
+# On-demand, operator-run Kubernetes conformance via Sonobuoy. NOT in `just ci` and NOT
+# scheduled — Sonobuoy is ephemeral (run -> retrieve -> delete), never a standing workload.
+# MODE=quick (default, ~5-10m, a validation E2E subset — NOT upstream conformance evidence).
+# MODE=certified runs the full certified-conformance suite (~1.5-2h) and IS upstream
+# conformance evidence — run it only for major Kubernetes upgrades / platform changes.
+conformance: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    mode="${MODE:-quick}"
+    case "$mode" in
+      quick)     sono_mode='quick'; label='quick validation subset (NOT upstream conformance)' ;;
+      certified) sono_mode='certified-conformance'; label='certified upstream Kubernetes conformance' ;;
+      *) echo "MODE must be 'quick' (default) or 'certified', got '$mode'." >&2; exit 2 ;;
+    esac
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+
+    # Refuse if a prior Sonobuoy run is still installed (never stack runs).
+    if kubectl --kubeconfig "$kubeconfig" get namespace sonobuoy >/dev/null 2>&1; then
+      echo 'A sonobuoy namespace already exists; a prior run is still installed. Run `sonobuoy delete --wait` first.' >&2
+      exit 1
+    fi
+
+    mkdir -p .test-results
+    run_dir="$(mktemp -d ".test-results/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)-conformance.XXXXXX")"
+
+    # Always tear Sonobuoy down — on success, failure, or interruption — after preserving
+    # whatever results are retrievable. Nothing is left standing in the cluster.
+    cleanup() {
+      sonobuoy retrieve "$run_dir" --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      sonobuoy delete --wait --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    echo "Running Sonobuoy: $label (mode=$sono_mode). Evidence: $run_dir"
+    sonobuoy run --mode "$sono_mode" --wait --kubeconfig "$kubeconfig"
+
+    tarball="$(sonobuoy retrieve "$run_dir" --kubeconfig "$kubeconfig")"
+    echo "Retrieved results: $tarball"
+    sonobuoy results "$tarball" | tee "$run_dir/summary.txt"
+
+    trap - EXIT
+    sonobuoy delete --wait --kubeconfig "$kubeconfig"
+    failed="$(sonobuoy results "$tarball" --plugin e2e | rg -o 'Failed: [0-9]+' | rg -o '[0-9]+' || echo unknown)"
+    [[ "$failed" == '0' ]] || { echo "Sonobuoy e2e reported failures ($failed); see $run_dir." >&2; exit 1; }
+    echo "Sonobuoy $label passed (0 e2e failures). Sonobuoy torn down; evidence in $run_dir."
+
 # Validate the built app manifests against Kubernetes + CRD schemas, offline of the
 # cluster (schemas are fetched over HTTPS). Secrets are kept (only the SOPS metadata
 # is stripped); CRDs absent from the schema sources are reported as skipped, not
