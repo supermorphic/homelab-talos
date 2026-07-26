@@ -11,12 +11,15 @@ import re
 import sys
 import tempfile
 import unittest
+from collections import UserDict, UserList
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "helpers"))
 
 import qbit_manage_policy as qbm
+import qbit_manage_policy_api as qbm_api
 
 RUN_ID = "abc12345def67890"
 SOURCE_YAML = """\
@@ -142,6 +145,51 @@ class PolicyConfigTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     qbm.PolicyConfig.validate(candidate, self.identity, False)
 
+    def test_production_isolation_allows_additional_private_exclusions(self):
+        config = {
+            "commands": {"tag_update": True, "share_limits": True},
+            "settings": {"private_tag": "tracker-private"},
+            "directory": {"root_dir": "/data/downloads"},
+            "share_limits": {
+                "public": {
+                    "categories": ["movies", "tv"],
+                    "exclude_any_tags": ["tracker-private", "tracker-czteam"],
+                }
+            },
+        }
+        qbm.validate_production_isolation(config)
+
+    def test_production_isolation_rejects_unsafe_drift(self):
+        base = {
+            "commands": {"tag_update": True, "share_limits": True},
+            "settings": {"private_tag": "tracker-private"},
+            "directory": {"root_dir": "/data/downloads"},
+            "share_limits": {
+                "public": {
+                    "categories": ["movies", "tv"],
+                    "exclude_any_tags": ["tracker-private"],
+                }
+            },
+        }
+        mutations = {
+            "classification disabled": lambda c: c["commands"].__setitem__("tag_update", False),
+            "private auto-tag missing": lambda c: c["settings"].__setitem__(
+                "private_tag", "other"
+            ),
+            "category added": lambda c: c["share_limits"]["public"].__setitem__(
+                "categories", ["movies", "tv", "music"]
+            ),
+            "private exclusion missing": lambda c: c["share_limits"]["public"].__setitem__(
+                "exclude_any_tags", ["tracker-czteam"]
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                candidate = copy.deepcopy(base)
+                mutate(candidate)
+                with self.assertRaises(qbm.AssertionFailure):
+                    qbm.validate_production_isolation(candidate)
+
     def test_job_manifest_is_restricted_and_never_mounts_media(self):
         manifest = qbm.job_manifest(
             self.identity,
@@ -167,6 +215,31 @@ class PolicyConfigTests(unittest.TestCase):
             "QBT_DRY_RUN",
         ):
             self.assertNotIn(forbidden, serialized)
+
+
+class ApiBridgeTests(unittest.TestCase):
+    def test_qbittorrent_user_collections_normalize_to_plain_json_values(self):
+        response = UserList(
+            [
+                UserDict(
+                    {
+                        "hash": qbm.FIXTURE_HASH,
+                        "progress": 1.0,
+                        "tags": ["tracker-public"],
+                    }
+                )
+            ]
+        )
+        self.assertEqual(
+            qbm_api.normalize_json(response),
+            [
+                {
+                    "hash": qbm.FIXTURE_HASH,
+                    "progress": 1.0,
+                    "tags": ["tracker-public"],
+                }
+            ],
+        )
 
 
 class ResultRecorderTests(unittest.TestCase):
@@ -416,20 +489,52 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertEqual(args[0], ["kubectl", "get", "pod"])
         self.assertNotIn("shell", kwargs)
 
-    def test_in_pod_api_helper_contains_cookie_and_credential_redaction_boundaries(self):
+    def test_api_command_failure_classifier_exposes_only_fixed_labels(self):
+        cases = {
+            "Traceback: ModuleNotFoundError: private detail": "missing-client-module",
+            "SyntaxError: private detail": "helper-syntax",
+            "error: unknown flag: --stdin": "kubectl-stdin-unsupported",
+            "error: unable to upgrade connection: private detail": "exec-transport",
+            'Traceback:\n  File "<stdin>", line 51\nValueError: private detail': (
+                "python-ValueError-L51"
+            ),
+            "command terminated with exit code 1": "helper-process",
+            "password=must-not-surface": "unclassified-command",
+        }
+        for stderr, expected in cases.items():
+            with self.subTest(expected=expected):
+                error = qbm.CommandFailure(["kubectl", "exec"], 1, stderr)
+                self.assertEqual(qbm.classify_api_command_failure(error), expected)
+                self.assertNotIn("private detail", qbm.classify_api_command_failure(error))
+
+    def test_in_pod_api_helper_keeps_credentials_out_of_output(self):
         root = Path(__file__).resolve().parents[3]
-        helper = (root / "scripts/test/helpers/qbit-manage-policy-api.sh").read_text(
+        helper = (root / "scripts/test/helpers/qbit_manage_policy_api.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('--cookie-jar "$cookie_file"', helper)
-        self.assertIn('--cookie "$cookie_file"', helper)
-        self.assertIn("api_get /api/v2/torrents/categories", helper)
-        self.assertIn("api_get /api/v2/torrents/tags", helper)
+        self.assertIn('os.environ.get("QBT_USER")', helper)
+        self.assertIn('os.environ.get("QBT_PASS")', helper)
+        self.assertIn('"errorType": type(error).__name__', helper)
+        self.assertIn('"categories": (0, client.torrents_categories)', helper)
+        self.assertIn('"tags": (0, client.torrents_tags)', helper)
         forbidden = re.compile(
-            r"set -x|printenv|envFrom.*value|"
-            r"(?:echo|printf).*QBT_(?:USER|PASS)"
+            r"printenv|os\.environ(?!\.get)|"
+            r"print\([^)]*(?:username|password|QBT_(?:USER|PASS))"
         )
         self.assertIsNone(forbidden.search(helper))
+
+    def test_api_helper_source_is_streamed_to_the_existing_container(self):
+        kube = mock.Mock()
+        kube.exec.return_value = "[]"
+        client = qbm.QbitClient(kube, "qbit-manage-pod", "helper source")
+        self.assertEqual(client.call("info", qbm.FIXTURE_HASH), "[]")
+        kube.exec.assert_called_once_with(
+            "qbit-manage-pod",
+            ["python3", "-", "info", qbm.FIXTURE_HASH],
+            container="app",
+            input_text="helper source",
+            timeout=45,
+        )
 
     def test_orchestrator_never_collects_application_logs(self):
         source = Path(qbm.__file__).read_text(encoding="utf-8")

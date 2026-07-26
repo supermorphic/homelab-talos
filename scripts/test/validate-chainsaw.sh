@@ -62,9 +62,11 @@ done < <(
     -exec dirname {} \; | LC_ALL=C sort -u
 )
 uv run --locked ruff check \
+  scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/qbit_manage_policy.py \
   scripts/test/scenarios/test_qbit_manage_policy.py
 uv run --locked ruff format --check \
+  scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/qbit_manage_policy.py \
   scripts/test/scenarios/test_qbit_manage_policy.py
 

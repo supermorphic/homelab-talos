@@ -51,10 +51,11 @@ class TerminationRequested(ScenarioFailure):
 class CommandFailure(ScenarioFailure):
     """A subprocess failed; stdout/stderr are deliberately not embedded."""
 
-    def __init__(self, argv: list[str], returncode: int):
+    def __init__(self, argv: list[str], returncode: int, stderr: str = ""):
         super().__init__(f"{Path(argv[0]).name} exited with status {returncode}")
         self.argv = tuple(argv)
         self.returncode = returncode
+        self.stderr = stderr
 
 
 def utc_now() -> str:
@@ -79,8 +80,32 @@ def run_command(
         check=False,
     )
     if result.returncode != 0:
-        raise CommandFailure(argv, result.returncode)
+        raise CommandFailure(argv, result.returncode, result.stderr or "")
     return "" if visible else result.stdout
+
+
+def classify_api_command_failure(error: CommandFailure) -> str:
+    stderr = error.stderr
+    if "ModuleNotFoundError" in stderr or "ImportError" in stderr:
+        return "missing-client-module"
+    if "SyntaxError" in stderr or "IndentationError" in stderr:
+        return "helper-syntax"
+    if "unknown flag: --stdin" in stderr:
+        return "kubectl-stdin-unsupported"
+    if "unable to upgrade connection" in stderr or "error dialing backend" in stderr:
+        return "exec-transport"
+    exceptions = re.findall(
+        r"(?:^|\n)([A-Za-z_][A-Za-z0-9_.]{0,63}(?:Error|Exception)):",
+        stderr,
+    )
+    if exceptions:
+        error_type = exceptions[-1].rsplit(".", maxsplit=1)[-1]
+        lines = re.findall(r'File "<stdin>", line ([1-9][0-9]{0,3})', stderr)
+        suffix = f"-L{lines[-1]}" if lines else ""
+        return f"python-{error_type}{suffix}"
+    if "command terminated with exit code" in stderr:
+        return "helper-process"
+    return "unclassified-command"
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -252,6 +277,37 @@ def validate_no_qbit_collisions(
         raise AssertionFailure("run-named qBittorrent category already exists")
     if set(identity.owned_tags).intersection(tags):
         raise AssertionFailure("run-named qBittorrent tag already exists")
+
+
+def validate_production_isolation(config: dict[str, Any]) -> None:
+    commands = config.get("commands")
+    settings = config.get("settings")
+    share_limits = config.get("share_limits")
+    if (
+        not isinstance(commands, dict)
+        or not isinstance(settings, dict)
+        or not isinstance(share_limits, dict)
+    ):
+        raise AssertionFailure("deployed production category/private isolation drifted")
+
+    public = share_limits.get("public")
+    if not isinstance(public, dict):
+        raise AssertionFailure("deployed production category/private isolation drifted")
+
+    categories = public.get("categories")
+    excluded_tags = public.get("exclude_any_tags")
+    if (
+        commands.get("tag_update") is not True
+        or commands.get("share_limits") is not True
+        or settings.get("private_tag") != "tracker-private"
+        or config.get("directory", {}).get("root_dir") != "/data/downloads"
+        or not isinstance(categories, list)
+        or len(categories) != 2
+        or set(categories) != {"movies", "tv"}
+        or not isinstance(excluded_tags, list)
+        or "tracker-private" not in excluded_tags
+    ):
+        raise AssertionFailure("deployed production category/private isolation drifted")
 
 
 class PolicyConfig:
@@ -559,13 +615,16 @@ class Kubectl:
         argv: list[str],
         *,
         container: str | None = None,
+        input_text: str | None = None,
         timeout: float | None = 60,
     ) -> str:
         command = ["exec", pod]
+        if input_text is not None:
+            command.append("--stdin")
         if container:
             command.extend(["-c", container])
         command.extend(["--", *argv])
-        return self.call(*command, timeout=timeout)
+        return self.call(*command, input_text=input_text, timeout=timeout)
 
     def delete_labeled(self, selector: str) -> None:
         self.call(
@@ -593,12 +652,23 @@ class Kubectl:
 
 
 class QbitClient:
-    def __init__(self, kube: Kubectl, pod: str):
+    def __init__(self, kube: Kubectl, pod: str, helper: str):
         self.kube = kube
         self.pod = pod
+        self.helper = helper
 
     def call(self, command: str, *args: str) -> str:
-        return self.kube.exec(self.pod, ["/opt/e2e/qbt-api.sh", command, *args], timeout=45)
+        try:
+            return self.kube.exec(
+                self.pod,
+                ["python3", "-", command, *args],
+                container="app",
+                input_text=self.helper,
+                timeout=45,
+            )
+        except CommandFailure as error:
+            reason = classify_api_command_failure(error)
+            raise ScenarioFailure(f"in-pod API execution failed ({reason})") from error
 
     def json(self, command: str, *args: str) -> Any:
         return json.loads(self.call(command, *args))
@@ -625,6 +695,12 @@ class QbitClient:
         value = self.json("tags")
         if not isinstance(value, list) or not all(isinstance(tag, str) for tag in value):
             raise ScenarioFailure("qBittorrent tags response was not a string list")
+        return value
+
+    def health(self) -> dict[str, str]:
+        value = self.json("health")
+        if not isinstance(value, dict) or value.get("status") not in {"passed", "failed"}:
+            raise ScenarioFailure("qBittorrent API health response was invalid")
         return value
 
     def add(self, url: str, save_path: str, category: str, name: str) -> str:
@@ -948,83 +1024,35 @@ class Scenario:
                 return False
             self.sleeper(interval)
 
-    def create_api_helper(self) -> None:
-        script = (self.repo_root / "scripts/test/helpers/qbit-manage-policy-api.sh").read_text(
+    def connect_api_helper(self) -> None:
+        helper = (self.repo_root / "scripts/test/helpers/qbit_manage_policy_api.py").read_text(
             encoding="utf-8"
         )
-        labels = {
-            "homelab-talos/e2e-run": self.identity.run_id,
-            "homelab-talos/e2e-target": "qbit-manage-policy",
-        }
-        config_name = f"{self.identity.api_name}-script"
-        config_map = {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": config_name,
-                "namespace": NAMESPACE,
-                "labels": labels,
-            },
-            "data": {"qbt-api.sh": script},
-        }
-        pod = {
-            "apiVersion": "v1",
-            "kind": "Pod",
-            "metadata": {
-                "name": self.identity.api_name,
-                "namespace": NAMESPACE,
-                "labels": labels,
-            },
-            "spec": {
-                "restartPolicy": "Never",
-                "automountServiceAccountToken": False,
-                "securityContext": {
-                    "runAsNonRoot": True,
-                    "runAsUser": 100,
-                    "runAsGroup": 100,
-                    "seccompProfile": {"type": "RuntimeDefault"},
-                },
-                "containers": [
-                    {
-                        "name": "api",
-                        "image": "curlimages/curl:8.11.1",
-                        "command": ["/bin/sh", "-c"],
-                        "args": ["sleep 3600"],
-                        "envFrom": [{"secretRef": {"name": "qbit-manage-secret"}}],
-                        "securityContext": {
-                            "allowPrivilegeEscalation": False,
-                            "capabilities": {"drop": ["ALL"]},
-                        },
-                        "volumeMounts": [
-                            {
-                                "name": "script",
-                                "mountPath": "/opt/e2e",
-                                "readOnly": True,
-                            }
-                        ],
-                    }
-                ],
-                "volumes": [
-                    {
-                        "name": "script",
-                        "configMap": {"name": config_name, "defaultMode": 0o555},
-                    }
-                ],
-            },
-        }
-        self.ledger.resources_attempted = True
-        config_path = self.recorder.write_manifest("api-configmap.json", config_map)
-        pod_path = self.recorder.write_manifest("api-pod.json", pod)
-        self.kube.apply(config_path)
-        self.kube.apply(pod_path)
-        self.kube.call(
-            "wait",
-            "--for=condition=Ready",
-            f"pod/{self.identity.api_name}",
-            "--timeout=3m",
-            timeout=190,
+        pods = self.kube.get_json(
+            "pod",
+            None,
+            "--selector",
+            "app.kubernetes.io/name=qbit-manage",
         )
-        self.qbit = QbitClient(self.kube, self.identity.api_name)
+        running = [
+            item["metadata"]["name"]
+            for item in pods.get("items", [])
+            if item.get("status", {}).get("phase") == "Running"
+        ]
+        if len(running) != 1:
+            raise ScenarioFailure("expected exactly one running qbit_manage API host pod")
+        self.qbit = QbitClient(self.kube, running[0], helper)
+        health = self.qbit.health()
+        if health.get("status") != "passed":
+            error_type = str(health.get("errorType", "unknown"))
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", error_type):
+                error_type = "unknown"
+            stage = str(health.get("stage", "unknown"))
+            if stage not in {"import", "client-init", "auth"}:
+                stage = "unknown"
+            raise ScenarioFailure(
+                f"qbit_manage in-pod API helper health failed ({stage}:{error_type})"
+            )
 
     def preflight(self) -> None:
         print(
@@ -1097,16 +1125,7 @@ class Scenario:
             self.fail("live qbit_manage config is empty")
         atomic_write_text(self.recorder.manifest_path("deployed-config.yml"), config_text)
         self.live_config = load_policy_yaml(config_text)
-        commands = self.live_config.get("commands", {})
-        public = self.live_config.get("share_limits", {}).get("public", {})
-        if (
-            commands.get("tag_update") is not True
-            or commands.get("share_limits") is not True
-            or self.live_config.get("directory", {}).get("root_dir") != "/data/downloads"
-            or sorted(public.get("categories", [])) != ["movies", "tv"]
-            or public.get("exclude_any_tags") != ["tracker-private"]
-        ):
-            self.fail("deployed production category/private isolation drifted")
+        validate_production_isolation(self.live_config)
 
         if self.kube.labeled_names(self.identity.resource_selector):
             self.fail("run-labeled Kubernetes resources already exist")
@@ -1114,7 +1133,7 @@ class Scenario:
         if self.filesystem.discover_recycle(self.identity.run_id):
             self.fail("run-owned recycle path already exists")
 
-        self.create_api_helper()
+        self.connect_api_helper()
         assert self.qbit is not None
         validate_no_qbit_collisions(
             self.identity,
@@ -1511,6 +1530,9 @@ def main(argv: list[str] | None = None) -> int:
             "assertion", "failed", "operator interrupted the E2E workflow"
         )
         print("Operator interrupted the E2E workflow; running exact teardown.", file=sys.stderr)
+    except ScenarioFailure as error:
+        scenario.recorder.write_status("assertion", "failed", str(error))
+        print(f"Scenario failure: {error}", file=sys.stderr)
     except Exception:  # noqa: BLE001 - sanitize unexpected failures before teardown
         scenario.recorder.write_status(
             "assertion", "failed", "unexpected orchestrator or infrastructure failure"
