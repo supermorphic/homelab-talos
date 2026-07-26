@@ -25,7 +25,7 @@ commands:
   tag_tracker_error: false # destructive-adjacent: stays off
   rem_orphaned: false      # destructive: stays off
   tag_nohardlinks: false   # destructive-adjacent: stays off
-  share_limits: false      # PR3 -> true (apply ratio/seed-time limits)
+  share_limits: true       # PR3: apply the category-based ratio/seed-time limits below
   # Global recyclebin-empty + orphaned-dir cleanup pass. Distinct from the per-group
   # share_limits cleanup. Kept true (skipped) through PR1-PR3; PR4 sets it false so the
   # recycle-bin safety window can empty.
@@ -69,4 +69,26 @@ tracker:
   other:
     tag: tracker-public
 
-# No `share_limits:` section yet — added in PR3 (category-based, excluding tracker-private).
+# Category-based share limits. The single `public` group matches every torrent in the
+# tv/movies categories and EXCLUDES anything tagged tracker-private (the safety gate — a
+# private torrent never gets these limits). Torrents with no matching group keep qBittorrent's
+# (disabled) defaults, i.e. seed indefinitely.
+#
+# Behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5 and
+# seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES the
+# torrent when its limit is reached (required by the qBittorrent 5.2.x API; do not inherit the
+# implicit default). `cleanup: false` means NOTHING is removed or deleted here — pausing is
+# fully reversible. PR4 flips cleanup: true (+ recyclebin) after the hardlink-survival proof.
+share_limits:
+  public:
+    priority: 100
+    categories:
+      - movies
+      - tv
+    exclude_any_tags:
+      - tracker-private
+    max_ratio: 1.5
+    min_seeding_time: 1d
+    max_seeding_time: 7d
+    share_limit_action: Stop
+    cleanup: false

@@ -116,12 +116,28 @@ fi
 # PR4 sets skip_cleanup: false and the group cleanup: true. Relax these lines in those PRs.
 [[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo '[PR2-apply] commands.dry_run must be false (tags/limits are applied for real, not just reported).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo '[PR2] commands.tag_update must be true (classification is active).' >&2; exit 1; }
-[[ "$(yq -r '.commands.share_limits' "$config")" == 'false' ]] || { echo '[PR2] commands.share_limits must be false (added in PR3).' >&2; exit 1; }
-[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR2] commands.skip_cleanup must be true.' >&2; exit 1; }
-[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'false' ]] || { echo '[PR2] recyclebin.enabled must be false.' >&2; exit 1; }
-# [stage: PR2] tracker: classification present; share_limits still absent until PR3.
+[[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo '[PR3] commands.share_limits must be true (limits are active).' >&2; exit 1; }
+[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR3] commands.skip_cleanup must be true (flips to false only in PR4).' >&2; exit 1; }
+[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'false' ]] || { echo '[PR3] recyclebin.enabled must be false (enabled only in PR4).' >&2; exit 1; }
 [[ "$(yq -r '.tracker.other.tag // "none"' "$config")" == 'tracker-public' ]] || { echo '[PR2] config.yml tracker.other.tag must be tracker-public (category-based catch-all).' >&2; exit 1; }
-[[ "$(yq -r '.share_limits // "none"' "$config")" == 'none' ]] || { echo '[PR2] config.yml must not define a share_limits: section yet (added in PR3).' >&2; exit 1; }
+
+# --- Category-based public share-limits group (PR3+) ---
+sl='.share_limits.public'
+[[ "$(yq -r "$sl // \"none\"" "$config")" != 'none' ]] || { echo '[PR3] config.yml must define share_limits.public.' >&2; exit 1; }
+# [INVARIANT — safety gate] The public group MUST exclude tracker-private, or a private torrent
+# could be stopped/deleted (hit-and-run). This is the single most important assertion here.
+yq -r "$sl.exclude_any_tags[]?" "$config" | rg -qx 'tracker-private' || { echo '[SAFETY] share_limits.public.exclude_any_tags MUST include tracker-private (excludes private trackers).' >&2; exit 1; }
+# Filters by the Sonarr/Radarr categories.
+for cat in movies tv; do
+  yq -r "$sl.categories[]?" "$config" | rg -qx "$cat" || { echo "[PR3] share_limits.public.categories must include $cat." >&2; exit 1; }
+done
+# The agreed policy numbers and the explicit (qBittorrent-5.2-required) stop action.
+[[ "$(yq -r "$sl.max_ratio" "$config")" == '1.5' ]] || { echo '[PR3] share_limits.public.max_ratio must be 1.5.' >&2; exit 1; }
+[[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo '[PR3] share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
+[[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo '[PR3] share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
+[[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo '[PR3] share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
+# [stage: PR3] cleanup stays false — no deletion until PR4 clears the hardlink gate.
+[[ "$(yq -r "$sl.cleanup" "$config")" == 'false' ]] || { echo '[PR3] share_limits.public.cleanup must be false (deletion is PR4, after the hardlink proof).' >&2; exit 1; }
 
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }
