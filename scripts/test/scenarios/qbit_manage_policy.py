@@ -1161,7 +1161,25 @@ class Scenario:
             self.identity.category,
         )
         if response != "Ok.":
-            raise ExternalDependencyFailure("qBittorrent rejected the public fixture URL")
+            # qBittorrent accepts remote-URL adds asynchronously, and the in-cluster
+            # exec bridge can surface a body other than the exact "Ok." string even
+            # when the add succeeded. Do not treat that as a rejection; let the
+            # registration/completion checks below decide the real outcome so a
+            # successfully-queued fixture is never abandoned (and stranded) here.
+            print(
+                "Note: qBittorrent add returned an unexpected response body; "
+                "verifying fixture registration directly instead of trusting it.",
+                file=sys.stderr,
+            )
+
+        def registered() -> bool:
+            return len(self.qbit.info(FIXTURE_HASH)) == 1
+
+        if not self.wait_for(120, 5, registered):
+            raise ExternalDependencyFailure(
+                "qBittorrent did not register the public fixture within 2 minutes"
+            )
+
         observed: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
 
         def complete() -> bool:
