@@ -114,7 +114,7 @@ fi
 # [stage: PR2] Classification on, limits/cleanup still off. dry_run stays true until the
 # follow-up that flips it to apply tags. PR3 sets share_limits: true and adds the group;
 # PR4 sets skip_cleanup: false and the group cleanup: true. Relax these lines in those PRs.
-[[ "$(yq -r '.commands.dry_run' "$config")" == 'true' ]] || { echo '[PR2] commands.dry_run must be true (flip to apply tags in the follow-up).' >&2; exit 1; }
+[[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo '[PR2-apply] commands.dry_run must be false (tags/limits are applied for real, not just reported).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo '[PR2] commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'false' ]] || { echo '[PR2] commands.share_limits must be false (added in PR3).' >&2; exit 1; }
 [[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR2] commands.skip_cleanup must be true.' >&2; exit 1; }

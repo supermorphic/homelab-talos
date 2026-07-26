@@ -17,7 +17,7 @@
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
 commands:
-  dry_run: true            # PR2: report only. A follow-up sets false to apply the tags.
+  dry_run: false           # PR2-apply: dry-run reviewed clean; tags are now applied for real.
   recheck: false
   cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
   tag_update: true         # PR2: apply the tracker: classification (tracker-public/-private)
