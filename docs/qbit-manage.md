@@ -209,7 +209,9 @@ preferences, and mount `/data/downloads` but never `/data/media`. The CZTeam
 analog additionally uses a unique selector and custom tag. Its public sentinel
 has higher qbit_manage priority (a lower number) but excludes that selector, so
 receiving the CZTeam limit tag proves the fixture stayed out of the public
-group.
+group. The generated config enables group tagging because pinned qbit_manage
+gates `custom_tag` emission behind that setting; the explicit custom tag
+replaces the synthesized priority/group tag.
 
 Results are written under the reported `.test-results/<run>/` directory.
 Inspect `summary.json`, `assertion.json`, `external-dependency.json`,

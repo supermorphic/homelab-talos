@@ -485,7 +485,10 @@ class PolicyConfig:
     def build_czteam_isolation(source: dict[str, Any], identity: RunIdentity) -> dict[str, Any]:
         config = PolicyConfig.build(source, identity, False)
         accelerated = {
-            "add_group_to_tag": False,
+            # qbit_manage v4.10.0 gates custom_tag behind add_group_to_tag.
+            # With custom_tag set, True emits only that explicit run-owned tag;
+            # it does not synthesize the normal priority/group tag.
+            "add_group_to_tag": True,
             "max_ratio": 0.01,
             "min_seeding_time": "1m",
             "max_seeding_time": "2m",

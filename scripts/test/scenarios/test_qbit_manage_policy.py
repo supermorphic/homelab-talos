@@ -194,6 +194,8 @@ class PolicyConfigTests(unittest.TestCase):
         self.assertLess(public["priority"], czteam["priority"])
         self.assertFalse(czteam["cleanup"])
         self.assertTrue(public["cleanup"])
+        self.assertTrue(czteam["add_group_to_tag"])
+        self.assertTrue(public["add_group_to_tag"])
         self.assertIn(self.identity.cz_tag, public["exclude_any_tags"])
         self.assertEqual(config["tracker"], self.source["tracker"])
         rendered = qbm.dump_policy_yaml(config)
@@ -226,9 +228,9 @@ class PolicyConfigTests(unittest.TestCase):
             "custom tag collision": lambda c: c["share_limits"][
                 self.identity.cz_public_group
             ].__setitem__("custom_tag", self.identity.cz_limit_tag),
-            "automatic group tag": lambda c: c["share_limits"][self.identity.cz_group].__setitem__(
-                "add_group_to_tag", True
-            ),
+            "custom tag emission disabled": lambda c: c["share_limits"][
+                self.identity.cz_group
+            ].__setitem__("add_group_to_tag", False),
             "extra group": lambda c: c["share_limits"].__setitem__("unrelated", {"priority": 50}),
         }
         base = qbm.PolicyConfig.build_czteam_isolation(self.source, self.identity)
