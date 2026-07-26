@@ -578,6 +578,19 @@ flaresolverr-validate: require-bash
 flaresolverr-verify: require-bash
     @scripts/verify/flaresolverr.sh {{quote(kubeconfig)}}
 
+# Validate the qbit_manage source: files, wiring, encrypted-Secret decryption, app-template
+# chartRef, non-root drop-ALL Recreate deployment, UI-less (no Service/HTTPRoute/Gatus),
+# SOPS creds via envFrom, and the declarative-policy safety semantics (no category changes,
+# no destructive features, no unknown-tracker catch-all, inert dry-run stage). Plus the
+# pinned render. Cluster-independent — part of `just ci`.
+qbit-manage-validate: require-bash
+    @scripts/validate/qbit-manage.sh
+
+# Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
+# a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
+qbit-manage-verify: require-bash
+    @scripts/verify/qbit-manage.sh {{quote(kubeconfig)}}
+
 # Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.

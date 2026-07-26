@@ -866,6 +866,58 @@ homepage-qbittorrent-secrets:
     mv -- "$temp_dir/homepage-qbittorrent.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-qbittorrent in homepage)."
 
+# Write the SOPS-encrypted qbit_manage Secret in the media namespace from the permanent
+# qBittorrent WebUI credential. qbit_manage's config.yml reads qbt.user/qbt.pass via
+# !ENV QBT_USER / !ENV QBT_PASS (those keys have no env override), so this Secret is the
+# one authoritative media-namespace copy of the WebUI credential. The value's source of
+# truth stays the operator's password manager — the same credential Sonarr/Radarr use.
+# Overwrites the placeholder committed with the app. Never echoes either value.
+qbit-manage-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:media:qbit-manage-secret:sops'
+    target='kubernetes/apps/media/qbit-manage/app/qbit-manage-secret.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-qbit-manage-secrets.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${QBITTORRENT_USERNAME:-}" ]] || {
+      echo 'Set QBITTORRENT_USERNAME to the permanent qBittorrent WebUI username.' >&2
+      exit 1
+    }
+    [[ -n "${QBITTORRENT_PASSWORD:-}" ]] || {
+      echo 'Set QBITTORRENT_PASSWORD to the permanent qBittorrent WebUI password.' >&2
+      exit 1
+    }
+    [[ "${QBIT_MANAGE_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the qbit_manage Secret.' >&2
+      echo "Set QBIT_MANAGE_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "qbit-manage-secret" |
+       .metadata.namespace = "media" |
+       .type = "Opaque" |
+       .stringData."QBT_USER" = strenv(QBITTORRENT_USERNAME) |
+       .stringData."QBT_PASS" = strenv(QBITTORRENT_PASSWORD)' \
+      >"$temp_dir/qbit-manage-secret.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/qbit-manage-secret.yaml" >"$temp_dir/qbit-manage-secret.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/qbit-manage-secret.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/qbit-manage-secret.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$QBITTORRENT_USERNAME" "$temp_dir/qbit-manage-secret.sops.yaml"
+    ! rg -Fq -- "$QBITTORRENT_PASSWORD" "$temp_dir/qbit-manage-secret.sops.yaml"
+
+    mv -- "$temp_dir/qbit-manage-secret.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (qbit-manage-secret in media)."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-extracted-scripts
     just talos source-validate
@@ -917,7 +969,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 16  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 17  # Update when adding/removing a guarded rollout recipe.
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi

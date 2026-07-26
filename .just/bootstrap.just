@@ -1470,6 +1470,78 @@ flaresolverr:
     bootstrap_complete=true
     echo "FlareSolverr live acceptance passed. Set suspend=false in Git, commit, push, rerun just kube flaresolverr-verify. Then (manual UI): Prowlarr > Settings > Indexers > Add Indexer Proxy > FlareSolverr (http://flaresolverr.media.svc.cluster.local:8191, tag flaresolverr); tag 1337x ONLY; require the proxy Test AND a real 1337x search to pass."
 
+# Reconcile the suspended qbit_manage app (UI-less qBittorrent policy scheduler) after guarded
+# checks, then verify. Operator-run. PREREQUISITE: create the real credential first with
+# `just repo qbit-manage-secrets` (the committed Secret ships as an inert placeholder).
+# Requires the suspended source to match deployed origin/main and
+# QBIT_MANAGE_BOOTSTRAP_CONFIRM='bootstrap:media:qbit-manage'. On failure the resumed
+# Kustomization is re-suspended while its resources are preserved. Lands qbit_manage INERT
+# (dry-run, no tagging/limits/cleanup) — classification/limits/cleanup are later PRs.
+qbit-manage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:media:qbit-manage'
+    ks='kubernetes/apps/media/qbit-manage/ks.yaml'
+    secret='kubernetes/apps/media/qbit-manage/app/qbit-manage-secret.sops.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_qbit_manage() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'qbit-manage did not pass; suspending it while preserving its resources.' >&2
+        flux suspend kustomization qbit-manage --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_qbit_manage EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    # Refuse if the committed Secret is still the inert placeholder — the operator must run
+    # `just repo qbit-manage-secrets` with the real qBittorrent WebUI credential first.
+    ! rg -Fq 'PLACEHOLDER_REPLACE' "$secret" || {
+      echo 'Refusing qbit-manage bootstrap: qbit-manage-secret.sops.yaml is still the placeholder.' >&2
+      echo 'Run `just repo qbit-manage-secrets` with the real credential, commit, and push first.' >&2
+      exit 1
+    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'qbit-manage bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/qbit-manage
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing qbit-manage bootstrap: it must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube qbit-manage-validate
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization qbit-manage --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing qbit-manage bootstrap: it is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${QBIT_MANAGE_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the qbit-manage app.' >&2
+      echo "Set QBIT_MANAGE_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing qbit-manage-validate." >&2
+      exit 1
+    }
+
+    resumed=true
+    flux resume kustomization qbit-manage --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization qbit-manage --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait --for=condition=Ready kustomization/qbit-manage --timeout=15m
+
+    just kube qbit-manage-verify
+    bootstrap_complete=true
+    echo "qbit-manage live acceptance passed (INERT dry-run: no torrent field or file changed). Set suspend=false in Git, commit, push, rerun just kube qbit-manage-verify. Classification (PR2), share limits (PR3), and cleanup (PR4) are separate reviewed changes — see docs/qbit-manage.md."
+
 # Reconcile the suspended Phase 11 Intel GPU device plugin after guarded checks, then
 # verify. Deploy + activate this BEFORE adding the gpu.intel.com/i915 request to Plex
 # (requesting a resource that is not yet advertised would leave Plex pod Pending). On

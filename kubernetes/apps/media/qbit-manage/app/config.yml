@@ -1,0 +1,46 @@
+# qbit_manage declarative policy — rendered into ConfigMap qbit-manage-config and mounted
+# read-only at /config/config.yml. Reviewable plaintext: NO credentials live here (qbt.user
+# and qbt.pass resolve from the SOPS-managed Secret via !ENV at runtime).
+#
+# PR1 (this file) is INERT: dry_run true, every command false, skip_cleanup true, and no
+# tracker/share_limits rules. It only proves qbit_manage can authenticate to qBittorrent.
+#   PR2 adds `tracker:` (confirmed public announce keywords) and sets tag_update: true.
+#   PR3 adds `share_limits.public` and sets share_limits: true (cleanup still false).
+#   PR4 flips the group cleanup: true and skip_cleanup: false (after the hardlink gate).
+#
+# Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
+# toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
+commands:
+  dry_run: true            # PR1/PR2-initial: report only, change nothing
+  recheck: false
+  cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
+  tag_update: false        # PR2 -> true (apply the tracker: public classification)
+  rem_unregistered: false  # destructive: stays off
+  tag_tracker_error: false # destructive-adjacent: stays off
+  rem_orphaned: false      # destructive: stays off
+  tag_nohardlinks: false   # destructive-adjacent: stays off
+  share_limits: false      # PR3 -> true (apply ratio/seed-time limits)
+  # Global recyclebin-empty + orphaned-dir cleanup pass. Distinct from the per-group
+  # share_limits cleanup. Kept true (skipped) through PR1-PR3; PR4 sets it false so the
+  # recycle-bin safety window can empty.
+  skip_cleanup: true
+
+qbt:
+  host: http://qbittorrent.media.svc.cluster.local:8080
+  user: !ENV QBT_USER
+  pass: !ENV QBT_PASS
+
+# Download-side recycle bin OFF in PR1-PR3 (no filesystem features active). PR4 enables it
+# as a 7-day safety window and mounts only the download root (never /data/media).
+recyclebin:
+  enabled: false
+
+# No `cat:` section: share_limits.categories (added in PR3) filters qBittorrent's existing
+# categories directly and does not need cat:. If the pinned version errors on undefined save
+# paths during the PR1 dry-run, add a minimal two-entry cat: for the confirmed live paths.
+
+# No `tracker:` section yet — added in PR2 from announce hostnames confirmed live. There is
+# deliberately NO `other:` catch-all: unmatched trackers get only their own domain tag from
+# tag_update, never `tracker-public`, and never any cleanup policy.
+
+# No `share_limits:` section yet — added in PR3.

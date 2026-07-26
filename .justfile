@@ -41,6 +41,7 @@ ci:
     just kube intel-gpu-plugin-validate
     just kube qbittorrent-validate
     just kube arr-validate
+    just kube qbit-manage-validate
     just kube seerr-validate
     just kube flaresolverr-validate
     just kube media-policy-validate
