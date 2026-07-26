@@ -242,6 +242,78 @@ class ApiBridgeTests(unittest.TestCase):
         )
 
 
+class DownloadResilienceTests(unittest.TestCase):
+    """The download step must trust fixture registration, not the add-response body."""
+
+    class _FakeQbit:
+        def __init__(self, identity, *, add_response, register_after=0, complete=True):
+            self.identity = identity
+            self.add_response = add_response
+            self.register_after = register_after
+            self.complete = complete
+            self.info_calls = 0
+            self.add_args = None
+
+        def add(self, url, save_path, category, name):
+            self.add_args = (url, save_path, category, name)
+            return self.add_response
+
+        def info(self, _info_hash):
+            self.info_calls += 1
+            if self.info_calls <= self.register_after:
+                return []
+            return [
+                {
+                    "hash": qbm.FIXTURE_HASH,
+                    "category": self.identity.category,
+                    "save_path": self.identity.download_root,
+                    "progress": 1 if self.complete else 0,
+                    "amount_left": 0 if self.complete else 1,
+                    "size": 4321,
+                    "completion_on": 1700000000,
+                }
+            ]
+
+        def files(self, _info_hash):
+            return [{"progress": 1, "size": 4321}]
+
+    def _scenario(self, directory, fake):
+        clock = {"t": 0.0}
+        run_dir = Path(directory) / RUN_ID
+        run_dir.mkdir()
+        scenario = qbm.Scenario(
+            Path(directory),
+            "unused-kubeconfig",
+            run_dir,
+            sleeper=lambda interval: clock.__setitem__("t", clock["t"] + interval),
+            monotonic=lambda: clock["t"],
+        )
+        scenario.qbit = fake
+        return scenario
+
+    def test_non_ok_add_response_is_verified_by_registration_not_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = self._FakeQbit(identity, add_response="Fails.", register_after=2)
+            scenario = self._scenario(directory, fake)
+            info, files = scenario.download()
+            self.assertEqual(info[0]["hash"], qbm.FIXTURE_HASH)
+            self.assertTrue(files)
+            self.assertIsNotNone(fake.add_args)
+            status = json.loads(
+                (Path(directory) / RUN_ID / "external-dependency.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(status["status"], "passed")
+
+    def test_fixture_that_never_registers_is_an_external_dependency_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = self._FakeQbit(identity, add_response="Fails.", register_after=10_000)
+            scenario = self._scenario(directory, fake)
+            with self.assertRaises(qbm.ExternalDependencyFailure):
+                scenario.download()
+
+
 class ResultRecorderTests(unittest.TestCase):
     def test_status_and_evidence_writes_are_valid_json(self):
         with tempfile.TemporaryDirectory() as directory:
