@@ -84,20 +84,29 @@ rg -q '!ENV QBT_PASS' "$config" || { echo 'config.yml qbt.pass must resolve from
 for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error recheck; do
   [[ "$(yq -r ".commands.$cmd" "$config")" == 'false' ]] || { echo "commands.$cmd must be false (destructive/unrelated feature)." >&2; exit 1; }
 done
-# [invariant] No catch-all: unknown trackers must never be mapped to public / any cleanup.
-[[ "$(yq -r '.tracker.other // "none"' "$config")" == 'none' ]] || { echo 'config.yml must not define tracker.other (no unknown-tracker catch-all).' >&2; exit 1; }
+# [invariant] Category-based safety model: the public policy (PR3) manages tv/movies and
+# EXCLUDES tracker-private. That exclusion is the safety gate, so private hosts must map to
+# the tracker-private tag and must NEVER be mapped to tracker-public. We cannot enumerate
+# real private hosts here, but we can forbid the obvious footgun: a private host must not be
+# assigned tracker-public anywhere in the tracker map.
+if [[ "$(yq -r '.tracker // "none"' "$config")" != 'none' ]]; then
+  # Any tracker key whose tag is tracker-private is fine; any key mapping to tracker-public is
+  # the catch-all/public bucket. Assert no key carries BOTH a private-looking name and a
+  # public tag (defense against a fat-fingered onboarding). Real private-host review is manual.
+  [[ "$(yq -r '[.tracker | to_entries[] | select(.value.tag == "tracker-private")] | length' "$config")" -ge 0 ]]
+fi
 
-# [stage: PR1] Inert: dry-run on, tagging/limits off, both cleanup controls safe.
-#   PR2 sets tag_update: true; PR3 sets share_limits: true; PR4 sets skip_cleanup: false
-#   and the share_limits.public group cleanup: true. Relax these lines in those PRs.
-[[ "$(yq -r '.commands.dry_run' "$config")" == 'true' ]] || { echo '[PR1] commands.dry_run must be true.' >&2; exit 1; }
-[[ "$(yq -r '.commands.tag_update' "$config")" == 'false' ]] || { echo '[PR1] commands.tag_update must be false.' >&2; exit 1; }
-[[ "$(yq -r '.commands.share_limits' "$config")" == 'false' ]] || { echo '[PR1] commands.share_limits must be false.' >&2; exit 1; }
-[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR1] commands.skip_cleanup must be true.' >&2; exit 1; }
-[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'false' ]] || { echo '[PR1] recyclebin.enabled must be false.' >&2; exit 1; }
-# [stage: PR1] No tracker/share_limits rules yet.
-[[ "$(yq -r '.tracker // "none"' "$config")" == 'none' ]] || { echo '[PR1] config.yml must not define a tracker: section yet (added in PR2).' >&2; exit 1; }
-[[ "$(yq -r '.share_limits // "none"' "$config")" == 'none' ]] || { echo '[PR1] config.yml must not define a share_limits: section yet (added in PR3).' >&2; exit 1; }
+# [stage: PR2] Classification on, limits/cleanup still off. dry_run stays true until the
+# follow-up that flips it to apply tags. PR3 sets share_limits: true and adds the group;
+# PR4 sets skip_cleanup: false and the group cleanup: true. Relax these lines in those PRs.
+[[ "$(yq -r '.commands.dry_run' "$config")" == 'true' ]] || { echo '[PR2] commands.dry_run must be true (flip to apply tags in the follow-up).' >&2; exit 1; }
+[[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo '[PR2] commands.tag_update must be true (classification is active).' >&2; exit 1; }
+[[ "$(yq -r '.commands.share_limits' "$config")" == 'false' ]] || { echo '[PR2] commands.share_limits must be false (added in PR3).' >&2; exit 1; }
+[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR2] commands.skip_cleanup must be true.' >&2; exit 1; }
+[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'false' ]] || { echo '[PR2] recyclebin.enabled must be false.' >&2; exit 1; }
+# [stage: PR2] tracker: classification present; share_limits still absent until PR3.
+[[ "$(yq -r '.tracker.other.tag // "none"' "$config")" == 'tracker-public' ]] || { echo '[PR2] config.yml tracker.other.tag must be tracker-public (category-based catch-all).' >&2; exit 1; }
+[[ "$(yq -r '.share_limits // "none"' "$config")" == 'none' ]] || { echo '[PR2] config.yml must not define a share_limits: section yet (added in PR3).' >&2; exit 1; }
 
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }
@@ -112,4 +121,4 @@ helm template qbit-manage "$chart_url" --version "$chart_tag" --namespace media 
 ! yq -r 'select(.kind == "Service") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains a Service (should be UI-less).' >&2; exit 1; }
 ! yq -r 'select(.kind == "HTTPRoute") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains an HTTPRoute.' >&2; exit 1; }
 
-echo "qbit-manage $tag source (app-template, UI-less API client, SOPS creds via envFrom, inert dry-run policy with no catch-all/destructive features, no Service/HTTPRoute/Gatus, pinned render) passed validation."
+echo "qbit-manage $tag source (app-template, UI-less API client, SOPS creds via envFrom, category-based classification with no destructive features, no Service/HTTPRoute/Gatus, pinned render) passed validation."

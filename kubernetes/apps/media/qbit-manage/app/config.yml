@@ -1,20 +1,26 @@
-# qbit_manage declarative policy — rendered into ConfigMap qbit-manage-config and mounted
-# read-only at /config/config.yml. Reviewable plaintext: NO credentials live here (qbt.user
-# and qbt.pass resolve from the SOPS-managed Secret via !ENV at runtime).
+# qbit_manage declarative policy — rendered into ConfigMap qbit-manage-config and copied by
+# the init-config container onto the writable /config/config.yml. Reviewable plaintext: NO
+# credentials live here (qbt.user/qbt.pass resolve from the SOPS Secret via !ENV at runtime).
 #
-# PR1 (this file) is INERT: dry_run true, every command false, skip_cleanup true, and no
-# tracker/share_limits rules. It only proves qbit_manage can authenticate to qBittorrent.
-#   PR2 adds `tracker:` (confirmed public announce keywords) and sets tag_update: true.
-#   PR3 adds `share_limits.public` and sets share_limits: true (cleanup still false).
-#   PR4 flips the group cleanup: true and skip_cleanup: false (after the hardlink gate).
+# CLASSIFICATION MODEL: category-based. The public seeding policy (PR3) manages ALL torrents
+# in the tv/movies categories and EXCLUDES anything tagged `tracker-private`. Safety therefore
+# depends on the tracker-private mapping being COMPLETE — not on withholding a public tag — so
+# an `other: tracker-public` catch-all is intentionally used here. See docs/qbit-manage.md.
+#
+# Rollout stages (this is PR2):
+#   PR1  inert dry-run, no commands, no rules.                                    [done]
+#   PR2  tag_update: true + tracker: (other -> tracker-public, private -> exclude). dry-run
+#        first for a classification report; a follow-up flips dry_run: false to apply tags.
+#   PR3  share_limits.public by category, excluding tracker-private. cleanup still false.
+#   PR4  cleanup: true + skip_cleanup: false, after the hardlink safety proof.
 #
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
 commands:
-  dry_run: true            # PR1/PR2-initial: report only, change nothing
+  dry_run: true            # PR2: report only. A follow-up sets false to apply the tags.
   recheck: false
   cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
-  tag_update: false        # PR2 -> true (apply the tracker: public classification)
+  tag_update: true         # PR2: apply the tracker: classification (tracker-public/-private)
   rem_unregistered: false  # destructive: stays off
   tag_tracker_error: false # destructive-adjacent: stays off
   rem_orphaned: false      # destructive: stays off
@@ -35,12 +41,24 @@ qbt:
 recyclebin:
   enabled: false
 
-# No `cat:` section: share_limits.categories (added in PR3) filters qBittorrent's existing
-# categories directly and does not need cat:. If the pinned version errors on undefined save
-# paths during the PR1 dry-run, add a minimal two-entry cat: for the confirmed live paths.
+# No `cat:` section needed: share_limits.categories (PR3) filters qBittorrent's existing
+# categories directly. Confirmed at the PR1 dry-run that the pinned version runs without it.
 
-# No `tracker:` section yet — added in PR2 from announce hostnames confirmed live. There is
-# deliberately NO `other:` catch-all: unmatched trackers get only their own domain tag from
-# tag_update, never `tracker-public`, and never any cleanup policy.
+# Tracker classification (category-based model).
+#
+#   SAFETY-CRITICAL — private trackers: before downloading from a newly joined private
+#   tracker, add its announce HOSTNAME here mapped to tracker-private so its torrents are
+#   excluded from the public policy (PR3's share_limits excludes tracker-private). Match the
+#   announce host observed on a real torrent, not the Prowlarr display name. Pipe-delimit
+#   multiple hosts. qBittorrent's 24h minimum-seed floor gives a grace window, and cleanup is
+#   off until PR4, but register the host promptly. Example (uncomment + replace):
+#   "your-private-tracker.example|another-private.example":
+#     tag: tracker-private
+tracker:
+  # Catch-all: everything not matched above (all current public torrents) gets tracker-public.
+  # This tag is cosmetic — the public policy is gated by category + tracker-private exclusion,
+  # not by this tag — so a catch-all is safe here (unlike the abandoned include-list model).
+  other:
+    tag: tracker-public
 
-# No `share_limits:` section yet — added in PR3.
+# No `share_limits:` section yet — added in PR3 (category-based, excluding tracker-private).
