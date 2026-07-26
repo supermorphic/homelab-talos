@@ -3,9 +3,11 @@
 # credentials live here (qbt.user/qbt.pass resolve from the SOPS Secret via !ENV at runtime).
 #
 # CLASSIFICATION MODEL: category-based. The public seeding policy manages ALL torrents
-# in the tv/movies categories and EXCLUDES anything tagged `tracker-private`. Safety therefore
-# depends on the tracker-private mapping being COMPLETE — not on withholding a public tag — so
-# an `other: tracker-public` catch-all is intentionally used here. See docs/qbit-manage.md.
+# in the tv/movies categories and EXCLUDES anything tagged `tracker-private`. Two layers apply
+# that tag: (a) settings.private_tag auto-tags EVERY private torrent generically, and (b) the
+# tracker: map can tag specific announce hosts. Layer (a) means safety no longer depends on the
+# host mapping being COMPLETE — a private torrent is excluded even from an unmapped tracker.
+# An `other: tracker-public` catch-all therefore remains safe. See docs/qbit-manage.md.
 #
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
@@ -45,20 +47,43 @@ recyclebin:
   empty_after_x_days: 7
   save_torrents: false
 
+# Generic private-torrent safety net (host-independent). During tag_update, qbit_manage's
+# private_tag applies `tracker-private` to EVERY torrent whose metadata marks it private —
+# no announce host has to be known first. Because the public share-limit group EXCLUDES
+# tracker-private, any private torrent (including one from a newly joined tracker not yet in
+# the tracker: map) is automatically kept out of the public ratio/stop/cleanup policy. This
+# only ever ADDS an exclusion; it can never subject a torrent to the public policy. Explicit
+# per-tracker mappings below are still used to apply tracker-specific tags/groups, but
+# protection no longer depends on the map being complete first.
+settings:
+  private_tag: tracker-private
+
 # No `cat:` section needed: share_limits.categories filters qBittorrent's existing
 # categories directly. The pinned version was validated to run without it.
 
 # Tracker classification (category-based model).
 #
-#   SAFETY-CRITICAL — private trackers: before downloading from a newly joined private
-#   tracker, add its announce HOSTNAME here mapped to tracker-private so its torrents are
-#   excluded from the public policy (share_limits excludes tracker-private). Match the
-#   announce host observed on a real torrent, not the Prowlarr display name. Pipe-delimit
-#   multiple hosts. qBittorrent's 24h minimum-seed floor gives a grace window, but register
-#   the host before adding a private torrent. Example (uncomment + replace):
-#   "your-private-tracker.example|another-private.example":
-#     tag: tracker-private
+#   SAFETY-CRITICAL — private trackers: the settings.private_tag net above already excludes
+#   EVERY private torrent from the public policy generically, so registering a host is no longer
+#   required just to avoid the public ratio/stop/cleanup path (public cleanup is now active).
+#   Still add a newly joined tracker's announce HOSTNAME here when it needs a tracker-specific
+#   tag or share-limit group (e.g. a dedicated policy). Match the announce host observed on a
+#   real torrent, not the Prowlarr display name. Use a YAML list for multiple tags, or
+#   pipe-delimit multiple hosts in one key. Example (uncomment + replace):
+#   "your-private-tracker.example":
+#     tag:
+#       - tracker-private
 tracker:
+  # CZTeam (private tracker). Classify by its VERIFIED announce host (observed from a real
+  # announce URL, host label only — never a passkey/path/query). Two tags: tracker-private is
+  # the generic public-policy exclusion (also applied automatically by settings.private_tag),
+  # and tracker-czteam selects the dedicated CZTeam share-limit group added in a later phase.
+  # Until that group exists, a CZTeam torrent is simply excluded from the public policy and
+  # seeds indefinitely.
+  "tracker.czteam.me":
+    tag:
+      - tracker-private
+      - tracker-czteam
   # Catch-all: everything not matched above (all current public torrents) gets tracker-public.
   # This tag is cosmetic — the public policy is gated by category + tracker-private exclusion,
   # not by this tag — so a catch-all is safe here (unlike the abandoned include-list model).
@@ -66,9 +91,11 @@ tracker:
     tag: tracker-public
 
 # Category-based share limits. The single `public` group matches every torrent in the
-# tv/movies categories and EXCLUDES anything tagged tracker-private (the safety gate — a
-# private torrent never gets these limits). Torrents with no matching group keep qBittorrent's
-# (disabled) defaults, i.e. seed indefinitely.
+# tv/movies categories and EXCLUDES anything tagged tracker-private or tracker-czteam (the
+# safety gate — a private torrent never gets these limits). tracker-czteam is excluded as
+# defense in depth: a CZTeam torrent also carries tracker-private, so either tag alone keeps
+# it out. Torrents with no matching group keep qBittorrent's (disabled) defaults, i.e. seed
+# indefinitely.
 #
 # Behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5 and
 # seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES the
@@ -82,6 +109,7 @@ share_limits:
       - tv
     exclude_any_tags:
       - tracker-private
+      - tracker-czteam
     max_ratio: 1.5
     min_seeding_time: 1d
     max_seeding_time: 7d

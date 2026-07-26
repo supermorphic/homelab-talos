@@ -47,6 +47,40 @@ invalid_named_trackers="$(yq -r '
   exit 1
 }
 
+# Tracker keys are bare announce HOSTNAMES (optionally pipe-delimited), never URLs — a key must
+# not carry a scheme, path, query, or passkey, so a passkey-bearing announce URL can never be
+# committed here. The offending key is deliberately NOT printed: it could contain the secret.
+if yq -r '.tracker | keys | .[]' "$config" | rg -q '[/:?=]|\s'; then
+  echo 'A tracker key contains URL/scheme/path/query/passkey syntax; keys must be bare announce hostnames. (Offending key not shown — it may contain a secret.)' >&2
+  exit 1
+fi
+
+# CZTeam classification must be present: at least one named tracker mapping carries BOTH
+# tracker-private and tracker-czteam. tracker-czteam selects the dedicated CZTeam share-limit
+# group; pairing it with tracker-private keeps CZTeam protected even before that group exists.
+# shellcheck disable=SC2016
+czteam_mapping="$(yq -r '
+  .tracker
+  | to_entries[]
+  | select(.key != "other")
+  | ([.value.tag] | flatten) as $tags
+  | select(($tags | contains(["tracker-private"])) and ($tags | contains(["tracker-czteam"])))
+  | .key
+' "$config")"
+[[ -n "$czteam_mapping" ]] || {
+  echo 'At least one named tracker mapping must carry both tracker-private and tracker-czteam (CZTeam classification).' >&2
+  exit 1
+}
+
+# Generic private-torrent safety net: settings.private_tag auto-tags EVERY private torrent
+# tracker-private, which share_limits.public excludes. This host-independent layer keeps any
+# private torrent (even from a tracker not named above) out of the public policy, so it must
+# stay set while the public group excludes tracker-private.
+[[ "$(yq -r '.settings.private_tag // "none"' "$config")" == 'tracker-private' ]] || {
+  echo 'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).' >&2
+  exit 1
+}
+
 sl='.share_limits.public'
 [[ "$(yq -r "$sl // \"none\"" "$config")" != 'none' ]] || {
   echo 'config.yml must define share_limits.public.' >&2
@@ -55,6 +89,11 @@ sl='.share_limits.public'
 
 [[ "$(yq -r "($sl.exclude_any_tags // []) | contains([\"tracker-private\"])" "$config")" == 'true' ]] || {
   echo 'share_limits.public.exclude_any_tags must include tracker-private.' >&2
+  exit 1
+}
+
+[[ "$(yq -r "($sl.exclude_any_tags // []) | contains([\"tracker-czteam\"])" "$config")" == 'true' ]] || {
+  echo 'share_limits.public.exclude_any_tags must include tracker-czteam (defense in depth for CZTeam).' >&2
   exit 1
 }
 

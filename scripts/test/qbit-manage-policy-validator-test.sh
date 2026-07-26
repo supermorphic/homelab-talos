@@ -54,6 +54,31 @@ yq -i '.tracker."private.example".tag = ["tracker-private", "operator-reviewed"]
 expect_pass 'named private tracker list includes safety tag'
 
 reset_config
+yq -i '.settings.private_tag = "tracker-public"' "$test_config"
+expect_fail 'private_tag net set to the wrong tag' \
+  'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).'
+
+reset_config
+yq -i 'del(.settings.private_tag)' "$test_config"
+expect_fail 'private_tag net removed' \
+  'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).'
+
+reset_config
+yq -i '.share_limits.public.exclude_any_tags = ["tracker-private"]' "$test_config"
+expect_fail 'public no longer excludes tracker-czteam' \
+  'share_limits.public.exclude_any_tags must include tracker-czteam'
+
+reset_config
+yq -i '.tracker."tracker.czteam.me".tag = ["tracker-private"]' "$test_config"
+expect_fail 'czteam mapping lost its tracker-czteam tag' \
+  'At least one named tracker mapping must carry both tracker-private and tracker-czteam'
+
+reset_config
+yq -i '.tracker."tracker.example/passkey".tag = ["tracker-private", "tracker-czteam"]' "$test_config"
+expect_fail 'tracker key carries URL/passkey syntax' \
+  'keys must be bare announce hostnames'
+
+reset_config
 yq -i '.tracker."private.example".tag = "tracker-public"' "$test_config"
 expect_fail 'named tracker mapped public' \
   'Every named tracker mapping must include tracker-private and exclude tracker-public.'
