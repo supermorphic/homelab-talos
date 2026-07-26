@@ -226,7 +226,7 @@ share_limits:
     include_all_tags:
       - e2e-czteam-<run-id>
     custom_tag: e2e-czteam-limit-<run-id>
-    add_group_to_tag: false
+    add_group_to_tag: true
     max_ratio: 0.01
     min_seeding_time: 1m
     max_seeding_time: 2m
@@ -242,7 +242,7 @@ share_limits:
       - tracker-private
       - e2e-czteam-<run-id>
     custom_tag: e2e-czteam-public-limit-<run-id>
-    add_group_to_tag: false
+    add_group_to_tag: true
     max_ratio: 0.01
     min_seeding_time: 1m
     max_seeding_time: 2m
@@ -252,6 +252,9 @@ share_limits:
 
 The public sentinel intentionally has the higher qbit_manage priority. The
 fixture can receive the CZTeam policy only if the public exclusion is honored.
+Pinned qbit_manage v4.10.0 requires `add_group_to_tag: true` before it emits
+`custom_tag`; because each group defines a custom tag, no synthesized
+priority/group tag is added.
 Production's CZTeam-before-public priority remains a statically validated
 defense-in-depth invariant, not a separate dynamic E2E claim.
 
