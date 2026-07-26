@@ -12,7 +12,10 @@
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
 commands:
-  dry_run: false           # the staged dry-run was reviewed; policy now applies for real
+  # [PHASE 2 — CZTeam dry-run] Temporarily true while the new CZTeam share-limit group is
+  # reviewed: qbit_manage REPORTS intended actions but mutates nothing — this also pauses public
+  # cleanup and re-tagging for the window. Phase 3 flips this back to false to activate.
+  dry_run: true
   recheck: false
   cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
   tag_update: true         # apply tracker-public/tracker-private classification
@@ -102,6 +105,25 @@ tracker:
 # torrent when its limit is reached (required by the qBittorrent 5.2.x API; do not inherit the
 # implicit default). Cleanup is enabled only after the completed hardlink-survival proof.
 share_limits:
+  # CZTeam (private): dedicated seeding policy, HIGHER priority than public (lower number wins),
+  # selected by the tracker-czteam tag. A torrent matches exactly one group, so a CZTeam torrent
+  # picks this and never the public group. Policy: seed at least 7 days ALWAYS; after 7 days stop
+  # only once ratio 2.0 is also reached; below ratio 2.0 seed indefinitely (max_seeding_time -1 =
+  # no time cap). min_seeding_time is a hard floor — if ratio 2.0 is hit before 7 days, qbit_manage
+  # clears the limit and resumes the torrent until 7 days (verified against v4.10.0 docs; the floor
+  # REQUIRES a positive max_ratio, which 2.0 satisfies). share_limit_action: Stop = reversible
+  # pause; cleanup: false = never removes or deletes. This exceeds CZTeam's 72h/144h H&R rules with
+  # margin, but local seed time is NOT proof the tracker credited every announce — still check the
+  # CZTeam account/H&R pages.
+  czteam:
+    priority: 10
+    include_all_tags:
+      - tracker-czteam
+    max_ratio: 2.0
+    min_seeding_time: 7d
+    max_seeding_time: -1
+    share_limit_action: Stop
+    cleanup: false
   public:
     priority: 100
     categories:

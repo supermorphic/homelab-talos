@@ -103,4 +103,34 @@ yq -i '.share_limits.public.categories = ["movies"]' "$test_config"
 expect_fail 'missing managed category' \
   'share_limits.public.categories must contain exactly movies and tv.'
 
+reset_config
+yq -i 'del(.share_limits.czteam)' "$test_config"
+expect_fail 'czteam group removed' \
+  'config.yml must define share_limits.czteam.'
+
+reset_config
+yq -i '.share_limits.czteam.priority = 100' "$test_config"
+expect_fail 'czteam not higher priority than public' \
+  'share_limits.czteam.priority must be a number lower than share_limits.public.priority.'
+
+reset_config
+yq -i '.share_limits.czteam.cleanup = true' "$test_config"
+expect_fail 'czteam cleanup would delete a private torrent' \
+  'share_limits.czteam.cleanup must be false'
+
+reset_config
+yq -i '.share_limits.czteam.share_limit_action = "Remove"' "$test_config"
+expect_fail 'czteam action would remove a private torrent' \
+  'share_limits.czteam.share_limit_action must be Stop'
+
+reset_config
+yq -i '.share_limits.czteam.max_seeding_time = "7d"' "$test_config"
+expect_fail 'czteam finite max seed time would time-stop a below-ratio torrent' \
+  'share_limits.czteam.max_seeding_time must be -1'
+
+reset_config
+yq -i '.share_limits.czteam.min_seeding_time = "1d"' "$test_config"
+expect_fail 'czteam minimum seed floor too low' \
+  'share_limits.czteam.min_seeding_time must be 7d'
+
 echo 'qbit_manage policy validator tests passed.'
