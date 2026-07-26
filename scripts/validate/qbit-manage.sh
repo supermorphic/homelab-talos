@@ -52,14 +52,13 @@ tag="$(yq -r '.controllers."qbit-manage".containers.app.image.tag' "$values")"; 
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.envFrom[0].secretRef.name' "$values")" == 'qbit-manage-secret' ]] || { echo 'qbit-manage must load QBT_USER/QBT_PASS via envFrom secretRef qbit-manage-secret.' >&2; exit 1; }
 # UI-less: web server disabled so no Service/route is ever needed. [invariant]
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.env.QBT_WEB_SERVER' "$values")" == 'false' ]] || { echo 'qbit-manage must set QBT_WEB_SERVER=false (no UI).' >&2; exit 1; }
-# [stage: PR2+] Download-root mount. qbit_manage requires directory.root_dir at config load,
-# so the download root is mounted — but ONLY the downloads subPath (never /data/media) and
-# READ-ONLY through PR3 (PR4 flips it read-write for the recycle bin). [invariant: never /media]
+# [invariant: never /media] Download-root mount: ONLY the downloads subPath is ever mounted, so
+# qbit_manage physically cannot reach /data/media — a Plex library file can never be deleted
+# here regardless of policy. Read-write as of PR4 (the recycle bin writes to .RecycleBin).
 [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo 'qbit-manage data mount must use existingClaim media-data.' >&2; exit 1; }
 dl="$(yq -r '.persistence.data.advancedMounts."qbit-manage".app[0]' "$values")"
 [[ "$(yq -r '.path' <<<"$dl")" == '/data/downloads' ]] || { echo 'qbit-manage data mount path must be /data/downloads.' >&2; exit 1; }
 [[ "$(yq -r '.subPath' <<<"$dl")" == 'downloads' ]] || { echo 'qbit-manage must mount ONLY the downloads subPath (never /data/media).' >&2; exit 1; }
-[[ "$(yq -r '.readOnly' <<<"$dl")" == 'true' ]] || { echo 'qbit-manage download-root mount must be readOnly through PR3.' >&2; exit 1; }
 [[ "$(yq -r '.directory.root_dir' "$config")" == '/data/downloads' ]] || { echo 'config.yml directory.root_dir must be /data/downloads.' >&2; exit 1; }
 
 # Auto-reload: config.yml is copied onto a writable emptyDir at pod start, so a ConfigMap-only
@@ -117,8 +116,11 @@ fi
 [[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo '[PR2-apply] commands.dry_run must be false (tags/limits are applied for real, not just reported).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo '[PR2] commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo '[PR3] commands.share_limits must be true (limits are active).' >&2; exit 1; }
-[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'true' ]] || { echo '[PR3] commands.skip_cleanup must be true (flips to false only in PR4).' >&2; exit 1; }
-[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'false' ]] || { echo '[PR3] recyclebin.enabled must be false (enabled only in PR4).' >&2; exit 1; }
+# [stage: PR4] skip_cleanup false so the recycle bin empties; recyclebin enabled with a
+# recovery window. rem_orphaned stays false, so no orphaned-data deletion despite skip_cleanup.
+[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'false' ]] || { echo '[PR4] commands.skip_cleanup must be false (lets the recycle bin empty).' >&2; exit 1; }
+[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'true' ]] || { echo '[PR4] recyclebin.enabled must be true (the download-side safety window).' >&2; exit 1; }
+rb_days="$(yq -r '.recyclebin.empty_after_x_days // 0' "$config")"; [[ "$rb_days" -ge 1 ]] || { echo '[PR4] recyclebin.empty_after_x_days must set a recovery window (>= 1).' >&2; exit 1; }
 [[ "$(yq -r '.tracker.other.tag // "none"' "$config")" == 'tracker-public' ]] || { echo '[PR2] config.yml tracker.other.tag must be tracker-public (category-based catch-all).' >&2; exit 1; }
 
 # --- Category-based public share-limits group (PR3+) ---
@@ -136,8 +138,9 @@ done
 [[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo '[PR3] share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
 [[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo '[PR3] share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
 [[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo '[PR3] share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
-# [stage: PR3] cleanup stays false — no deletion until PR4 clears the hardlink gate.
-[[ "$(yq -r "$sl.cleanup" "$config")" == 'false' ]] || { echo '[PR3] share_limits.public.cleanup must be false (deletion is PR4, after the hardlink proof).' >&2; exit 1; }
+# [stage: PR4] cleanup enabled — eligible public torrents are removed, download-side data to the
+# recycle bin. The /data/media hardlink survives (proven) and tracker-private is still excluded.
+[[ "$(yq -r "$sl.cleanup" "$config")" == 'true' ]] || { echo '[PR4] share_limits.public.cleanup must be true.' >&2; exit 1; }
 
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }
@@ -152,4 +155,4 @@ helm template qbit-manage "$chart_url" --version "$chart_tag" --namespace media 
 ! yq -r 'select(.kind == "Service") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains a Service (should be UI-less).' >&2; exit 1; }
 ! yq -r 'select(.kind == "HTTPRoute") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains an HTTPRoute.' >&2; exit 1; }
 
-echo "qbit-manage $tag source (app-template, UI-less API client, SOPS creds via envFrom, category-based classification with no destructive features, no Service/HTTPRoute/Gatus, pinned render) passed validation."
+echo "qbit-manage $tag source (app-template, UI-less API client, SOPS creds via envFrom, category-based classification + share limits, cleanup via 7d recycle bin with tracker-private excluded and /data/media never mounted, no Service/HTTPRoute/Gatus, pinned render) passed validation."
