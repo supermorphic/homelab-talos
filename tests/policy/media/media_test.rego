@@ -111,6 +111,34 @@ test_valid_media_app_has_no_violations if {
 	count(messages) == 0
 }
 
+# UI-less scheduled worker (qbit-manage): no config PVC, no HTTPRoute, no Service. Like the
+# stateless fixture, this must produce zero denials — the guardrail that stops the uiless
+# exemption from being "cleaned up" and silently breaking qbit_manage.
+uiless_worker_fixture := [
+	{
+		"path": "kubernetes/apps/media/qbit-manage/app/values.yaml",
+		"contents": {"controllers": {"qbit-manage": {
+			"strategy": "Recreate",
+			"containers": {"app": {
+				"image": {"tag": "v4.10.0"},
+				"securityContext": {"capabilities": {"drop": ["ALL"]}},
+			}},
+		}}},
+	},
+	{
+		"path": "kubernetes/apps/media/qbit-manage/ks.yaml",
+		"contents": {"spec": {"dependsOn": [
+			{"name": "media-storage"},
+			{"name": "qbittorrent"},
+		]}},
+	},
+]
+
+test_uiless_worker_app_has_no_violations if {
+	messages := deny with input as uiless_worker_fixture
+	count(messages) == 0
+}
+
 test_stateless_internal_app_has_no_violations if {
 	messages := deny with input as stateless_fixture
 	count(messages) == 0

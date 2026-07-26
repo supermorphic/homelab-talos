@@ -14,6 +14,10 @@ repos:
       - id: mixed-line-ending
       - id: check-yaml
         args: [--allow-multiple-documents]
+        # qbit_manage's config.yml uses the !ENV custom tag, which pyyaml's safe loader
+        # (check-yaml) cannot resolve. yamllint still lints its style and
+        # scripts/validate/qbit-manage.sh parses/asserts its contents with yq.
+        exclude: ^kubernetes/apps/media/qbit-manage/app/config\.yml$
       - id: check-json
 
   - repo: https://github.com/adrienverge/yamllint

@@ -1,0 +1,19 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./helmrelease.yaml
+  - ./qbit-manage-secret.sops.yaml
+configMapGenerator:
+  - name: qbit-manage-values
+    namespace: media
+    files:
+      - values.yaml=values.yaml
+  - name: qbit-manage-config
+    namespace: media
+    files:
+      - config.yml=config.yml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

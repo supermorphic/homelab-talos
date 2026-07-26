@@ -1,0 +1,28 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: qbit-manage
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: media-storage
+    - name: qbittorrent
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  interval: 1h
+  path: ./kubernetes/apps/media/qbit-manage/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Staged suspended: PR1 lands inert. Operator runs `just bootstrap qbit-manage`,
+  # then flips this to false durably in Git. See docs/qbit-manage.md.
+  suspend: true
+  timeout: 10m
+  wait: true

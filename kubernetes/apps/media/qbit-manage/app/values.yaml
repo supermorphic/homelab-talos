@@ -1,0 +1,89 @@
+# qbit_manage (StuffAnThings) via the bjw-s app-template chart. UI-less scheduled policy
+# engine that talks to qBittorrent's Web API over the internal Service — it does NOT join
+# Gluetun's netns and has no HTTPRoute/Service of its own (QBT_WEB_SERVER=false).
+#
+# PR1 lands it INERT: config.yml has dry_run:true, every command false, skip_cleanup:true,
+# and no tracker/share_limits rules yet (see app/config.yml). It authenticates and does
+# nothing. Classification (PR2), share limits (PR3), and cleanup (PR4) are added later.
+#
+# securityContext: the upstream image starts as root and uses a PUID/PGID + su-exec
+# entrypoint to drop privileges, but "gracefully continues" if it cannot. We run it
+# DIRECTLY as non-root 568 (the repo/media default, matching the SMB mount uid so PR4 can
+# touch /data/downloads) with capabilities dropped. The entrypoint's chown -R fails
+# harmlessly on the writable emptyDir /config (owned via fsGroup 568) and execs Python as
+# 568. We do NOT set PUID/PGID, so the entrypoint skips the su-exec path entirely.
+controllers:
+  qbit-manage:
+    type: deployment
+    # One replica; no clustering. RWO-free (no PVC), but keep Recreate for a clean
+    # single-writer swap consistent with the other media controllers.
+    strategy: Recreate
+    pod:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 568
+        runAsGroup: 568
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+    containers:
+      app:
+        image:
+          repository: ghcr.io/stuffanthings/qbit_manage
+          tag: v4.10.0
+        env:
+          TZ: America/Denver
+          # Long-running native scheduler: re-run every 15 minutes (no CronJob).
+          QBT_SCHEDULE: "15"
+          # No web API/UI: nothing connects to qbit_manage, so no Service/HTTPRoute.
+          QBT_WEB_SERVER: "false"
+          # config.yml + logs live under the writable emptyDir /config.
+          QBT_CONFIG_DIR: /config
+          QBT_LOGFILE: qbit_manage.log
+          QBT_LOG_LEVEL: INFO
+          # Python must not try to write .pyc into the read-only /app image layer.
+          PYTHONDONTWRITEBYTECODE: "1"
+        # qbt.user/qbt.pass have no env override in qbit_manage, so config.yml reads them
+        # via !ENV QBT_USER / !ENV QBT_PASS. Supply both from the SOPS-managed Secret.
+        envFrom:
+          - secretRef:
+              name: qbit-manage-secret
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        # No web server → no HTTP endpoint to probe. The container is Ready while the
+        # scheduler loop runs; a config-parse/auth failure crash-loops and is caught by
+        # the bootstrap Ready wait and qbit-manage-verify.
+        probes:
+          readiness: { enabled: false }
+          liveness: { enabled: false }
+          startup: { enabled: false }
+persistence:
+  # Writable ephemeral /config: the entrypoint copies config.yml.sample here and
+  # qbit_manage writes its logs under /config/logs. Nothing here needs to persist —
+  # policy is declarative in config.yml and all torrent state lives in qBittorrent.
+  config:
+    type: emptyDir
+    advancedMounts:
+      qbit-manage:
+        app:
+          - path: /config
+  # The declarative policy, delivered read-only as /config/config.yml (overlaid on the
+  # writable emptyDir above). Rendered from app/config.yml by the configMapGenerator.
+  config-file:
+    type: configMap
+    name: qbit-manage-config
+    advancedMounts:
+      qbit-manage:
+        app:
+          - path: /config/config.yml
+            subPath: config.yml
+            readOnly: true

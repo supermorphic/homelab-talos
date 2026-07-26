@@ -8,6 +8,7 @@ required_dependencies := {
 	"flaresolverr": {"media"},
 	"plex": {"internal-gateway", "media-storage"},
 	"prowlarr": {"internal-gateway", "media"},
+	"qbit-manage": {"media-storage", "qbittorrent"},
 	"qbittorrent": {"internal-gateway", "media-storage"},
 	"radarr": {"internal-gateway", "media-storage"},
 	"seerr": {"internal-gateway", "media"},
@@ -19,6 +20,13 @@ required_dependencies := {
 # (pinned image, drop-ALL caps, no NET_ADMIN, dependency ordering) still applies. FlareSolverr
 # is a headless-Chromium Cloudflare solver Prowlarr reaches over cluster DNS on :8191.
 stateless_internal_apps := {"flaresolverr"}
+
+# UI-less scheduled workers: no persistent config, no operator UI/Service, and nothing
+# connects to them, so they are exempt from the config-PVC and HTTPRoute requirements ONLY
+# (like stateless_internal_apps). Every other rule (pinned image, drop-ALL caps, no
+# NET_ADMIN, dependency ordering) still applies. qbit_manage is a qBittorrent seeding-policy
+# scheduler that reaches qBittorrent's Web API over the internal Service.
+uiless_worker_apps := {"qbit-manage"}
 
 shared_claim_keys := {
 	"plex": "media",
@@ -160,6 +168,7 @@ deny contains msg if {
 	app := media_app(document)
 	required_dependencies[app]
 	not app in stateless_internal_apps
+	not app in uiless_worker_apps
 	persistence := object.get(document.contents, "persistence", {})
 	config := object.get(persistence, "config", {})
 	mode := object.get(config, "accessMode", "")
@@ -212,6 +221,7 @@ deny contains msg if {
 	app := media_app(document)
 	required_dependencies[app]
 	not app in stateless_internal_apps
+	not app in uiless_worker_apps
 	suffix := sprintf("/%s/app/httproute.yaml", [app])
 	not document_exists(suffix)
 	msg := sprintf("%s: required HTTPRoute source is missing", [suffix])
