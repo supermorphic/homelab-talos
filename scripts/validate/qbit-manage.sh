@@ -54,6 +54,15 @@ tag="$(yq -r '.controllers."qbit-manage".containers.app.image.tag' "$values")"; 
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.env.QBT_WEB_SERVER' "$values")" == 'false' ]] || { echo 'qbit-manage must set QBT_WEB_SERVER=false (no UI).' >&2; exit 1; }
 # PR1: no media-data mount (API-only). PR4 adds a download-root mount; relax then. [stage: PR1]
 [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'qbit-manage must not mount media-data in PR1 (API-only).' >&2; exit 1; }
+# [invariant] qbit_manage rewrites config.yml on startup, so it MUST land on a writable
+# volume. Deliver it via the init-config copy from the read-only ConfigMap onto the writable
+# emptyDir /config — never mount the ConfigMap directly at /config/config.yml (read-only),
+# which crashes the app with "Read-only file system: '/config/config.yml'".
+[[ "$(yq -r '.persistence.config.type' "$values")" == 'emptyDir' ]] || { echo 'qbit-manage /config must be a writable emptyDir (qbit_manage rewrites config.yml).' >&2; exit 1; }
+[[ "$(yq -r '.persistence."config-src".type' "$values")" == 'configMap' ]] || { echo 'qbit-manage config.yml must come from the config-src ConfigMap (copied in by init-config).' >&2; exit 1; }
+yq -r '.controllers."qbit-manage".initContainers."init-config".command | join(" ")' "$values" | rg -q 'cp /config-src/config\.yml /config/config\.yml' || { echo 'qbit-manage init-config must copy config.yml from /config-src onto the writable /config.' >&2; exit 1; }
+# The app container must NOT receive a read-only config.yml mount (the bug that crash-looped it).
+[[ "$(yq -r '[.persistence[] | select(.advancedMounts."qbit-manage".app[]?.path == "/config/config.yml")] | length' "$values")" == '0' ]] || { echo 'qbit-manage app must not mount config.yml read-only; it is copied onto the writable /config by init-config.' >&2; exit 1; }
 
 # --- SOPS Secret shape (encryption itself is enforced by the sops-encrypted pre-commit hook) ---
 [[ "$(yq -r '.metadata.name' "$secret")" == 'qbit-manage-secret' ]]
