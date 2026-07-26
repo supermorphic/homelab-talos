@@ -10,8 +10,8 @@ This tree contains declarative, repository-owned test inputs:
 - `probes/` holds specialized read-only network/API probes — a measurement
   primitive, not an assurance tier. Each probe's pure analysis logic is
   unit-tested offline; the live capture is operator-run. Bash probes reuse the
-  in-cluster exec pattern; Python probe analyzers use `uv` (pinned via mise, no
-  third-party deps — stdlib `unittest`). Current probes: `qbittorrent/` (VPN
+  in-cluster exec pattern; Python test tools use `uv` with locked dependencies
+  and stdlib `unittest`. Current probes: `qbittorrent/` (VPN
   egress + forwarded-port point checks), `vpn/` (the continuous in-netns VPN
   leak sentinel), and `dns/` (active DNS-isolation: DNS resolves only via the
   Gluetun loopback resolver; LAN/home and cluster resolvers stay unreachable).
@@ -23,7 +23,7 @@ Chainsaw smoke routine / Chainsaw resilience controlled-failure / Sonobuoy
 `mise exec -- just test validate` is the only cluster-independent command in this
 module. It lints Chainsaw configuration and tests, parses their YAML assets, runs
 ShellCheck over `scripts/test/` and `tests/probes/`, executes the shell unit-test
-suites, and runs the Python probe unit tests via `uv run python -m unittest`. It
+suites, and runs Python unit tests via `uv run --locked python -m unittest`. It
 deliberately uses a nonexistent kubeconfig and unsets SOPS age-key variables.
 
 Live commands are operator-only:
