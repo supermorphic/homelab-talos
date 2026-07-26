@@ -26,10 +26,9 @@ commands:
   rem_orphaned: false      # destructive: stays off
   tag_nohardlinks: false   # destructive-adjacent: stays off
   share_limits: true       # PR3: apply the category-based ratio/seed-time limits below
-  # Global recyclebin-empty + orphaned-dir cleanup pass. Distinct from the per-group
-  # share_limits cleanup. Kept true (skipped) through PR1-PR3; PR4 sets it false so the
-  # recycle-bin safety window can empty.
-  skip_cleanup: true
+  # Global recyclebin-empty + orphaned-dir cleanup pass. PR4: false so the recycle bin
+  # actually empties after its retention window. (orphaned removal stays off via rem_orphaned.)
+  skip_cleanup: false
 
 qbt:
   host: http://qbittorrent.media.svc.cluster.local:8080
@@ -44,10 +43,15 @@ qbt:
 directory:
   root_dir: /data/downloads
 
-# Download-side recycle bin OFF in PR1-PR3 (no filesystem features active). PR4 enables it
-# as a 7-day safety window and mounts only the download root (never /data/media).
+# Download-side recycle bin: PR4 enables it as a 7-day safety window. When cleanup removes a
+# torrent, qbit_manage MOVES its download-side data to <root_dir>/.RecycleBin (a rename on the
+# same SMB filesystem — the shared inode is untouched, so the /data/media hardlink is
+# unaffected immediately). The name is only unlinked after empty_after_x_days, and even then
+# the library file survives as the remaining hardlink (proven: inodes 934/952, links=2).
 recyclebin:
-  enabled: false
+  enabled: true
+  empty_after_x_days: 7
+  save_torrents: false
 
 # No `cat:` section needed: share_limits.categories (PR3) filters qBittorrent's existing
 # categories directly. Confirmed at the PR1 dry-run that the pinned version runs without it.
@@ -91,4 +95,6 @@ share_limits:
     min_seeding_time: 1d
     max_seeding_time: 7d
     share_limit_action: Stop
-    cleanup: false
+    # PR4: remove eligible public torrents. Download-side data goes to the recycle bin
+    # (recoverable 7d); the /data/media hardlink survives. Never touches tracker-private.
+    cleanup: true

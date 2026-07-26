@@ -26,7 +26,7 @@ controllers:
         # the Deployment automatically. `just ci` asserts it equals the real hash, so a config
         # edit can never silently fail to deploy. Update it whenever config.yml changes:
         #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
-        config-hash: "8942288efcde886422f456f26fd1fba7d49b7eee"
+        config-hash: "135f3ed4cb1c1896b1cac409bc43897f9f8ec17c"
       securityContext:
         runAsNonRoot: true
         runAsUser: 568
@@ -117,10 +117,10 @@ persistence:
         init-config:
           - path: /config-src
             readOnly: true
-  # Download root only (never /data/media), READ-ONLY through PR3. qbit_manage requires
-  # directory.root_dir to resolve at config load; it is otherwise inert until PR4's recycle
-  # bin (which will flip this to read-write). subPath `downloads` keeps the media library
-  # entirely out of this pod's view.
+  # Download root only (never /data/media). READ-WRITE as of PR4 so the recycle bin can move
+  # cleaned-up download-side data to /data/downloads/.RecycleBin. subPath `downloads` keeps the
+  # media library entirely out of this pod's view — qbit_manage physically cannot touch
+  # /data/media, so a Plex library file can never be deleted here regardless of policy bugs.
   data:
     type: persistentVolumeClaim
     existingClaim: media-data
@@ -129,4 +129,4 @@ persistence:
         app:
           - path: /data/downloads
             subPath: downloads
-            readOnly: true
+            readOnly: false

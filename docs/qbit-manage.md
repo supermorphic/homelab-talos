@@ -67,16 +67,21 @@ maintainer (or edit it yourself) and it lands as a reviewed one-line PR.
   cleanup is off. Nothing is irreversible until PR4 (which is itself gated by the hardlink
   proof). A paused torrent is un-paused the moment you add the exclusion.
 
-## Rollout stages
+## Rollout stages (all shipped)
 
-Cleanup is gated behind several reviewed PRs. **Nothing is deleted until PR4.**
+The lifecycle was rolled out across reviewed PRs; the full policy is now live.
 
 | Stage | `config.yml` change | Effect |
 |---|---|---|
 | PR1 ✅ | `dry_run: true`, all commands off | Inert. Only proves it authenticates. |
-| PR2 | `tag_update: true`; `tracker:` (`other → tracker-public`, private → `tracker-private`) | Tags torrents. Dry-run first for a report, then a follow-up applies. No limits. |
-| PR3 | `share_limits.public` by category, `exclude_any_tags: [tracker-private]`, `share_limit_action: Stop`, `cleanup: false` | Over-limit tv/movies torrents **pause** (reversible). Private excluded. |
-| PR4 | group `cleanup: true`, `skip_cleanup: false`, recyclebin on | Removes eligible torrents + download-side file; `/data/media` hardlink survives. Gated by the hardlink proof. |
+| PR2 ✅ | `tag_update: true`; `tracker:` (`other → tracker-public`, private → `tracker-private`) | Tags torrents. |
+| PR3 ✅ | `share_limits.public` by category, `exclude_any_tags: [tracker-private]`, `share_limit_action: Stop`, `cleanup: false` | Over-limit tv/movies torrents **pause** (reversible). Private excluded. |
+| PR4 ✅ | group `cleanup: true`, `skip_cleanup: false`, recyclebin on (7d) | Removes eligible torrents; download-side data → `/data/downloads/.RecycleBin` (recoverable 7d); `/data/media` hardlink survives. |
+
+Hardlink-survival proof (the PR4 gate) was passed on real imports: a Radarr movie
+(inode 934) and a Sonarr episode (inode 952), each with `links=2` and identical
+download/library inodes — so removing the download-side name provably leaves the Plex
+library file intact.
 
 Policy target: **min seed 24h, ratio 1.5, max seed 7d.** `tracker-private` torrents are never
 touched.
@@ -141,8 +146,21 @@ Durable pause: set `suspend: true` in `ks.yaml` via PR.
 **Disable limits/cleanup quickly through GitOps.** The controls, in `config.yml`: the per-group
 `share_limits.public.cleanup` flag (deletion), the global `commands.skip_cleanup` (recyclebin
 pass), and `commands.share_limits` (limits entirely). Set the safe value, open a PR — Flux
-reconciles and the pod restarts with the safe policy. A download-side file already deleted
-cannot be restored, which is why PR4 uses a recycle-bin window and a controlled first cleanup.
+reconciles and the pod rolls with the safe policy (the `config-hash` annotation auto-rolls it).
+
+**Recover a mistakenly-cleaned torrent (within 7 days).** Cleanup *moves* download-side data to
+`/data/downloads/.RecycleBin`; it is only unlinked after `recyclebin.empty_after_x_days` (7).
+The `/data/media` Plex file is a hardlink and is unaffected regardless. To recover the
+download-side within the window, move it back out of `.RecycleBin` (from a pod that mounts
+`/data`, e.g. Radarr/Sonarr) and re-add the torrent if you want to resume seeding:
+
+```bash
+mise exec -- kubectl --kubeconfig .kube/config -n media exec deploy/radarr -- \
+  ls -la /data/downloads/.RecycleBin
+```
+
+To make cleanup even safer, raise `recyclebin.empty_after_x_days`. To stop deletion entirely,
+set `share_limits.public.cleanup: false` (via PR).
 
 ## Safety invariants (enforced by `scripts/validate/qbit-manage.sh` in `just ci`)
 
