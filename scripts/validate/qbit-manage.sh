@@ -97,10 +97,7 @@ scripts/validate/qbit-manage-policy.sh "$config"
 
 # The active policy classifies trackers, applies limits, and cleans up eligible public
 # torrents. The tracker/category safety gates above are intentionally validated separately.
-# [PHASE-GATED] dry_run is TRUE for the Phase 2 CZTeam-group review window (qbit_manage reports
-# but mutates nothing). Phase 3 flips config.yml back to dry_run: false AND flips this assertion
-# back to require 'false'. Keep this line and config.yml in lockstep.
-[[ "$(yq -r '.commands.dry_run' "$config")" == 'true' ]] || { echo '[Phase 2 dry-run] commands.dry_run must be true while the CZTeam group is under review (Phase 3 sets it false).' >&2; exit 1; }
+[[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo 'commands.dry_run must be false (the reviewed policy is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo 'commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo 'commands.share_limits must be true (limits are active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'false' ]] || { echo 'commands.skip_cleanup must be false (the recycle-bin retention pass is active).' >&2; exit 1; }

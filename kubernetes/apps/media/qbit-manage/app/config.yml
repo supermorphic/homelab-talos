@@ -12,10 +12,8 @@
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
 commands:
-  # [PHASE 2 — CZTeam dry-run] Temporarily true while the new CZTeam share-limit group is
-  # reviewed: qbit_manage REPORTS intended actions but mutates nothing — this also pauses public
-  # cleanup and re-tagging for the window. Phase 3 flips this back to false to activate.
-  dry_run: true
+  # dry-run reviewed clean (CZTeam group + public policy); qbit_manage now applies for real.
+  dry_run: false
   recheck: false
   cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
   tag_update: true         # apply tracker-public/tracker-private classification
@@ -80,9 +78,9 @@ tracker:
   # CZTeam (private tracker). Classify by its VERIFIED announce host (observed from a real
   # announce URL, host label only — never a passkey/path/query). Two tags: tracker-private is
   # the generic public-policy exclusion (also applied automatically by settings.private_tag),
-  # and tracker-czteam selects the dedicated CZTeam share-limit group added in a later phase.
-  # Until that group exists, a CZTeam torrent is simply excluded from the public policy and
-  # seeds indefinitely.
+  # and tracker-czteam selects the dedicated CZTeam share-limit group below. If that group is
+  # disabled during rollback, the private tags still exclude CZTeam from the public policy so
+  # its torrents seed indefinitely.
   "tracker.czteam.me":
     tag:
       - tracker-private

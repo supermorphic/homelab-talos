@@ -25,11 +25,10 @@ per-host list being complete.
 tracker), excluded from the public policy via both tags. It has a dedicated `czteam` share-limit
 group (priority 10, above public's 100): seed **at least 7 days**, then stop only once ratio
 **2.0** is also reached; below 2.0 it seeds indefinitely (`max_seeding_time: -1`).
-`share_limit_action: Stop` pauses (reversible); `cleanup: false` never deletes. **Currently in
-global dry-run** (Phase 2) — qbit_manage *reports* these actions but mutates nothing (this also
-pauses public cleanup for the window) until Phase 3 flips `dry_run: false`. Local seed time is
-not proof CZTeam credited the seed — still check the account/H&R pages. The mapping key is the
-bare announce host only, never a passkey or full announce URL.
+`share_limit_action: Stop` pauses (reversible); `cleanup: false` never deletes. The policy is
+**active** (`dry_run: false`) after a clean dry-run review. Local seed time is not proof CZTeam
+credited the seed — still check the account/H&R pages. The mapping key is the bare announce host
+only, never a passkey or full announce URL.
 
 Why this instead of an allow-list of public trackers? Public torrents announce to a shifting,
 flaky set of open trackers that changes with every batch of downloads — an allow-list of those
