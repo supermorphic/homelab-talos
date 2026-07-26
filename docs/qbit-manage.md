@@ -161,6 +161,57 @@ torrent names, tracker URLs, or passkeys into chat/tickets.
 mise exec -- just kube qbit-manage-verify
 ```
 
+**Run the real-download policy E2E (state-changing, operator-only):**
+
+```bash
+mise exec -- just kube qbittorrent-verify
+mise exec -- just kube qbit-manage-verify
+mise exec -- just test smoke media qbittorrent
+mise exec -- just test smoke media qbit-manage
+CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy \
+  mise exec -- just test e2e qbit-manage-policy
+```
+
+Allow up to 60 minutes. The test downloads WebTorrent's legal Sintel torrent
+(`08ada5a7a6183aae1e09d831df6748d566095a10`) through the live VPN-backed
+qBittorrent instance. It waits for the deployed 15-minute scheduler to add
+`tracker-public`, then creates isolated one-shot qbit_manage Jobs with a
+one-minute minimum and two-minute maximum seed time. It proves:
+
+- the production classifier handles a real public torrent;
+- a manually added `tracker-private` tag prevents limits and cleanup;
+- removing only that tag allows the test group to set ratio `0.01`, seed limit
+  120 seconds, its unique group tag, and Stop action;
+- cleanup removes the torrent and moves its download content to the recycle
+  bin while the representative media hardlink and unrelated sentinel survive;
+- a second cleanup run succeeds without duplicating recycle data; and
+- exact run-owned torrent, category, tags, paths, and Kubernetes resources are
+  removed on both success and failure.
+
+This is policy-plus-hardlink coverage, not a claim that Sonarr or Radarr
+performed an import. The public fixture is an explicit dependency: if it cannot
+download in 20 minutes, the run fails with
+`externalDependency.status: failed`, while teardown still runs.
+
+The shared-instance isolation boundary is deliberate. The fixture category is
+`e2e-qbm-<run-id>`, while production limits match exactly `movies` and `tv`, so
+the production worker can add `tracker-public` but cannot stop or clean the
+fixture. Test Jobs also require the unique category and tag, exclude
+`tracker-private`, set `skip_cleanup: true`, do not mutate global qBittorrent
+preferences, and mount `/data/downloads` but never `/data/media`.
+
+Results are written under the reported `.test-results/<run>/` directory.
+Inspect `summary.json`, `assertion.json`, `external-dependency.json`,
+`cleanup.json`, `recovery.json`, and `evidence.json`. Generated manifests and
+accelerated configs contain Secret references but no credential values.
+Application logs are intentionally not collected because they can contain
+torrent names or tracker URLs.
+
+If cleanup is `failed`, do not rerun until the reported run ID has been checked.
+The failure reason lists only safe run-owned roots. Confirm the fixed hash is
+not pre-existing before any manual deletion; the automated test always refuses
+to adopt a fixture that was already present.
+
 **Pause qbit_manage without touching qBittorrent** (qBittorrent/Sonarr/Radarr keep working):
 
 Set `suspend: true` in `ks.yaml` through a reviewed PR. If an immediate

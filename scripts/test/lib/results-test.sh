@@ -5,7 +5,10 @@ source scripts/test/lib/results.sh
 
 result_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-chainsaw-results-test.XXXXXX")"
 cleanup() {
-  rm -f "$result_dir/environment.json" "$result_dir/summary.json" "$result_dir/recovery.json"
+  rm -f \
+    "$result_dir/environment.json" "$result_dir/summary.json" \
+    "$result_dir/recovery.json" "$result_dir/assertion.json" \
+    "$result_dir/external-dependency.json"
   rmdir "$result_dir"
 }
 trap cleanup EXIT
@@ -116,5 +119,32 @@ printf '{"status":"unexpected","reason":"bad fixture"}\n' >"$result_dir/recovery
 printf '{invalid\n' >"$result_dir/recovery.json"
 [[ "$(recorded_recovery_status "$result_dir")" == 'not-classified' ]] || {
   echo 'Malformed recovery JSON must classify as not-classified.' >&2
+  exit 1
+}
+
+printf '{"status":"not-classified","reason":"dependency pending"}\n' \
+  >"$result_dir/assertion.json"
+printf '{"status":"failed","reason":"fixture timeout"}\n' \
+  >"$result_dir/external-dependency.json"
+assertion_status="$(recorded_phase_status "$result_dir" assertion)"
+external_status="$(recorded_phase_status "$result_dir" external-dependency)"
+write_summary "$result_dir" failed 1 "$assertion_status" passed passed passed "$external_status"
+yq -e '
+  .primary.status == "failed" and
+  .assertion.status == "not-classified" and
+  .externalDependency.status == "failed" and
+  .cleanup.status == "passed"
+' "$result_dir/summary.json" >/dev/null || {
+  echo 'External dependency failure must remain distinct from assertion and cleanup.' >&2
+  exit 1
+}
+
+printf '{"status":"unknown"}\n' >"$result_dir/assertion.json"
+[[ "$(recorded_phase_status "$result_dir" assertion)" == 'not-classified' ]] || {
+  echo 'Unknown assertion status must classify as not-classified.' >&2
+  exit 1
+}
+[[ "$(recorded_phase_status "$result_dir" wrong-phase)" == 'not-classified' ]] || {
+  echo 'Unknown phase must classify as not-classified.' >&2
   exit 1
 }

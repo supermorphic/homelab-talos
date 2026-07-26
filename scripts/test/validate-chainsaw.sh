@@ -40,6 +40,7 @@ while IFS= read -r script_file; do
 done < <(find scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort)
 
 scripts/test/safety/require-chaos-confirmation-test.sh
+scripts/test/safety/require-e2e-confirmation-test.sh
 scripts/test/lib/results-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/scenarios/media-hardlink-test.sh
@@ -49,14 +50,23 @@ scripts/test/qbit-manage-policy-validator-test.sh
 tests/probes/qbittorrent/probe-test.sh
 tests/probes/dns/isolation-test.sh
 
-# Offline Python unit tests for probe analyzers (e.g. the VPN leak sentinel). uv (pinned
-# via mise) provides the interpreter; the analyzers are pure, so this needs no cluster.
-# Discover per probe directory so each test can import its sibling module.
+# Offline Python unit tests for host-side E2E logic and probe analyzers. uv (pinned via
+# mise) provides the locked interpreter/dependencies; these modules are pure or mocked,
+# so this needs no cluster. Discover per directory so tests can import sibling modules.
 py_test_dirs=0
 while IFS= read -r py_test_dir; do
-  uv run python -m unittest discover -s "$py_test_dir" -p 'test_*.py'
+  uv run --locked python -m unittest discover -s "$py_test_dir" -p 'test_*.py'
   py_test_dirs=$((py_test_dirs + 1))
-done < <(find tests/probes -type f -name 'test_*.py' -exec dirname {} \; | LC_ALL=C sort -u)
+done < <(
+  find scripts/test/scenarios tests/probes -type f -name 'test_*.py' \
+    -exec dirname {} \; | LC_ALL=C sort -u
+)
+uv run --locked ruff check \
+  scripts/test/scenarios/qbit_manage_policy.py \
+  scripts/test/scenarios/test_qbit_manage_policy.py
+uv run --locked ruff format --check \
+  scripts/test/scenarios/qbit_manage_policy.py \
+  scripts/test/scenarios/test_qbit_manage_policy.py
 
 printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d python_test_dirs=%d.\n' \
   "$test_count" "$yaml_count" "$script_count" "$py_test_dirs"

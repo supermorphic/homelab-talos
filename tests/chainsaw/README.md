@@ -24,3 +24,11 @@ capturing application logs, which may contain torrent names or tracker URLs.
 State-changing E2E and resilience scenarios record cleanup/recovery separately
 from the primary assertion. A cleanup failure makes the command fail while
 preserving the primary result in `summary.json`.
+
+The `qbit-manage-policy` E2E is additionally guarded by the exact
+`CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy` token. It is deliberately isolated
+from production policy by a unique category and run tag; production manages only
+`movies`/`tv`. Its one-shot Jobs require both unique selectors, exclude
+`tracker-private`, disable global qBittorrent preference mutation, skip global
+recycle-bin purging, and mount downloads but never media. No qBittorrent or
+qbit_manage application logs are collected.
