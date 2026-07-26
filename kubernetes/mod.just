@@ -638,6 +638,28 @@ gatus-validate: require-bash
 gatus-verify: require-bash
     @scripts/verify/gatus.sh {{quote(kubeconfig)}}
 
+# Validate the staged Portainer Phase 1 source: encrypted bootstrap Secret,
+# read-only RBAC, Cilium isolation, internal route, retained Longhorn PVC, and
+# exact chart post-render. Cluster-independent; included in `just ci`.
+portainer-validate: require-bash
+    @scripts/validate/portainer.sh
+
+# Enforce the Portainer read-only ClusterRole and binding with Conftest.
+portainer-policy-validate:
+    @conftest test --all-namespaces \
+      --policy tests/policy/portainer \
+      kubernetes/apps/monitoring/portainer/app/rbac.yaml
+
+# Verify live Portainer readiness, storage, routing, isolation, and effective
+# impersonated Kubernetes authorization. Operator-only; not in `just ci`.
+portainer-verify: require-bash
+    @scripts/verify/portainer.sh {{quote(kubeconfig)}}
+
+# Confirmation-guarded pod recreation proving the Portainer database remains on
+# the original PVC. Operator-only and intentionally separate from bootstrap.
+portainer-persistence-test: require-bash
+    @scripts/verify/portainer-persistence.sh {{quote(kubeconfig)}}
+
 # Validate the Phase 10 Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
 homepage-validate: require-bash

@@ -1751,6 +1751,70 @@ gatus:
     bootstrap_complete=true
     echo 'Phase 10 Gatus live acceptance passed. Change the Gatus Git source to suspend=false, commit, push, and rerun just kube gatus-verify.'
 
+# Reconcile the suspended Portainer Phase 1 app after guarded source and static
+# validation, then run live read-only acceptance. On failure the Kustomization is
+# re-suspended while its PVC and other resources are preserved.
+portainer:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:portainer'
+    ks='kubernetes/apps/monitoring/portainer/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_portainer() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'Portainer did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization portainer --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_portainer EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Portainer bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/portainer
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing Portainer bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube portainer-validate
+    just kube portainer-policy-validate
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization portainer --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing Portainer bootstrap: portainer is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${PORTAINER_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile Portainer.' >&2
+      echo "Set PORTAINER_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing portainer-validate." >&2
+      exit 1
+    }
+
+    echo 'Reconciling Portainer Kustomization.'
+    resumed=true
+    flux resume kustomization portainer --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization portainer \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/portainer --timeout=15m
+
+    just kube portainer-verify
+    bootstrap_complete=true
+    echo 'Portainer Phase 1 live acceptance passed. Run the guarded persistence test, then change suspend=false and add the Gatus probe in the activation PR.'
+
 # Reconcile the suspended Phase 10 Homepage app after guarded checks, then verify.
 # On failure the resumed Kustomization is re-suspended, preserving its resources.
 homepage:

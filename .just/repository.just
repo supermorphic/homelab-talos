@@ -918,6 +918,53 @@ qbit-manage-secrets:
     mv -- "$temp_dir/qbit-manage-secret.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (qbit-manage-secret in media)."
 
+# Write only the SOPS-encrypted initial Portainer administrator password. Portainer
+# consumes this on first database initialization; rotating the live administrator
+# password later requires Portainer's supported password-change/reset workflow.
+portainer-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:portainer-admin:sops'
+    target='kubernetes/apps/monitoring/portainer/app/portainer-admin-password.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-portainer-secrets.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${PORTAINER_ADMIN_PASSWORD:-}" ]] || {
+      echo 'Set PORTAINER_ADMIN_PASSWORD to the initial Portainer administrator password.' >&2
+      exit 1
+    }
+    [[ "${#PORTAINER_ADMIN_PASSWORD}" -ge 12 ]] || {
+      echo 'Refusing: PORTAINER_ADMIN_PASSWORD must be at least 12 characters.' >&2
+      exit 1
+    }
+    [[ "${PORTAINER_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Portainer administrator Secret.' >&2
+      echo "Set PORTAINER_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export PORTAINER_ADMIN_PASSWORD
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "portainer-admin-password" |
+       .metadata.namespace = "portainer" |
+       .type = "Opaque" |
+       .stringData.password = strenv(PORTAINER_ADMIN_PASSWORD)' \
+      >"$temp_dir/portainer-admin-password.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/portainer-admin-password.yaml" >"$temp_dir/portainer-admin-password.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/portainer-admin-password.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/portainer-admin-password.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$PORTAINER_ADMIN_PASSWORD" "$temp_dir/portainer-admin-password.sops.yaml"
+
+    mv -- "$temp_dir/portainer-admin-password.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (portainer-admin-password in portainer)."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-extracted-scripts
     just talos source-validate
@@ -969,7 +1016,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 17  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 18  # Update when adding/removing a guarded rollout recipe.
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi
@@ -979,15 +1026,18 @@ verify-files: require-bash
     @test -f kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml
     @test -f kubernetes/apps/networking/external-dns/app/pihole-ca.crt
     @test -f kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml
+    @test -f kubernetes/apps/monitoring/portainer/app/portainer-admin-password.sops.yaml
     @if git check-ignore -q kubernetes/apps/flux-system/flux-canary/app/secret.sops.yaml; then echo "the encrypted Flux canary must be trackable" >&2; exit 1; fi
     @if git check-ignore -q kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml; then echo "the encrypted Cloudflare token must be trackable" >&2; exit 1; fi
     @if git check-ignore -q kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml; then echo "the encrypted Pi-hole password must be trackable" >&2; exit 1; fi
+    @if git check-ignore -q kubernetes/apps/monitoring/portainer/app/portainer-admin-password.sops.yaml; then echo "the encrypted Portainer administrator password must be trackable" >&2; exit 1; fi
     @test "$(yq -r '.creation_rules[0].encrypted_regex' .sops.yaml)" = '^(.*)$'
     @test "$(yq -r '.creation_rules[1].encrypted_regex' .sops.yaml)" = '^(data|stringData)$'
     @test "$(yq -r '[.creation_rules[].age | test("^age1")] | all' .sops.yaml)" = true
     @test "$(sops filestatus kubernetes/apps/flux-system/flux-canary/app/secret.sops.yaml | yq -r '.encrypted')" = true
     @test "$(sops filestatus kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml | yq -r '.encrypted')" = true
     @test "$(sops filestatus kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml | yq -r '.encrypted')" = true
+    @test "$(sops filestatus kubernetes/apps/monitoring/portainer/app/portainer-admin-password.sops.yaml | yq -r '.encrypted')" = true
     @if rg -q 'PRIVATE KEY' kubernetes/apps/networking/external-dns/app/pihole-ca.crt; then echo "Pi-hole CA source must not contain a private key" >&2; exit 1; fi
 
 # Scan Git history and all currently trackable files without printing secrets.

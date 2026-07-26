@@ -47,5 +47,7 @@ ci:
     just kube media-policy-validate
     just kube monitoring-validate
     just kube gatus-validate
+    just kube portainer-validate
+    just kube portainer-policy-validate
     just kube homepage-validate
     just kube trivy-validate

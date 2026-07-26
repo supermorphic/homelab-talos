@@ -1,0 +1,138 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-portainer
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Read-only deployed-state assertions. Effective authorization and HTTPS/DNS
+  # checks remain in the operator-only `just kube portainer-verify` recipe.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: flux-helm-and-workload-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: portainer
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: portainer
+                namespace: portainer
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: portainer
+                namespace: portainer
+              spec:
+                replicas: 1
+                strategy:
+                  type: Recreate
+                template:
+                  spec:
+                    serviceAccountName: portainer-readonly
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - events:
+            namespace: portainer
+    - name: storage-service-route-and-policy-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: portainer
+                namespace: portainer
+                annotations:
+                  helm.sh/resource-policy: keep
+              spec:
+                storageClassName: longhorn
+                accessModes:
+                  - ReadWriteOnce
+              status:
+                phase: Bound
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: portainer
+                namespace: portainer
+              spec:
+                type: ClusterIP
+                ports:
+                  - name: http
+                    port: 9000
+                    targetPort: 9000
+        - assert:
+            resource:
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: portainer
+                namespace: portainer
+              status:
+                (parents[0].conditions[?type == 'Accepted']):
+                  - status: "True"
+                (parents[0].conditions[?type == 'ResolvedRefs']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: cilium.io/v2
+              kind: CiliumNetworkPolicy
+              metadata:
+                name: portainer
+                namespace: portainer
+      catch:
+        - events:
+            namespace: portainer
+    - name: read-only-rbac-bound
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                name: portainer-readonly
+                namespace: portainer
+        - assert:
+            resource:
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata:
+                name: portainer-readonly
+        - assert:
+            resource:
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRoleBinding
+              metadata:
+                name: portainer-readonly
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: ClusterRole
+                name: portainer-readonly
+      catch:
+        - events:
+            namespace: portainer

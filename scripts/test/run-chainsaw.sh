@@ -80,7 +80,7 @@ case "$tier" in
           '')
             test_dir='tests/chainsaw/smoke/platform'
             ;;
-          cluster|flux|gateway|dns|cilium|longhorn|smb)
+          cluster|flux|gateway|dns|cilium|longhorn|portainer|smb)
             test_dir="tests/chainsaw/smoke/platform/${scenario}"
             ;;
           *)
