@@ -21,9 +21,9 @@ initial scope is deliberately narrow:
 - remove eligible public torrents and their download-side files; and
 - leave private or unknown trackers untouched.
 
-This plan is separate from
-`qbit-manage-private-tracker-policy-agent-plan.md`. Do not implement CZTeam or
-any other private-tracker policy here.
+This plan is separate from the deployed CZTeam policy documented in
+`docs/qbit-manage-czteam.md`. Do not implement CZTeam or any other
+private-tracker policy here.
 
 ## Outcome
 
