@@ -1380,21 +1380,27 @@ class Scenario:
         print("Limits: applying the isolated two-minute stop policy without cleanup.")
         self.run_policy_job("limits", False)
         observed: list[dict[str, Any]] = []
-        last_seen: dict[str, Any] = {}
+        history: list[dict[str, Any]] = []
 
         def applied() -> bool:
-            nonlocal observed, last_seen
+            nonlocal observed
             info = self.qbit.info(FIXTURE_HASH)
             if len(info) != 1:
                 return False
             torrent = info[0]
-            last_seen = {
+            tags = self.torrent_tags(info)
+            snap = {
                 "category": torrent.get("category"),
                 "ratioLimit": torrent.get("ratio_limit"),
                 "seedingTimeLimit": torrent.get("seeding_time_limit"),
                 "state": torrent.get("state"),
-                "tags": sorted(self.torrent_tags(info)),
+                "tags": sorted(tags),
             }
+            # Record only distinct transitions of the fixture's own state so the
+            # progression (does the limit tag ever land? does it Stop?) is visible
+            # without collecting any application logs or unrelated torrent inventory.
+            if not history or history[-1] != snap:
+                history.append(snap)
             ratio = float(torrent.get("ratio_limit", -1))
             # qBittorrent reports the share seeding-time limit for the 2m policy in
             # minutes (2); tolerate a seconds-based report (120) so the assertion
@@ -1404,16 +1410,16 @@ class Scenario:
                 and 0.009999 <= ratio <= 0.010001
                 and torrent.get("seeding_time_limit") in {2, 120}
                 and torrent.get("state") in {"stoppedUP", "pausedUP"}
-                and self.identity.limit_tag in self.torrent_tags(info)
+                and self.identity.limit_tag in tags
             ):
                 observed = info
                 return True
             return False
 
         if not self.wait_for(3 * 60, 5, applied):
-            # Record what was actually observed so any residual mismatch (limit
-            # value, Stop state, or tag) is diagnosable without re-running the chain.
-            self.recorder.phase("limits", {"status": "failed", "observed": last_seen})
+            # Record the observed progression so a matching/timing failure is
+            # diagnosable (limit tag applied? limits set? Stopped?) without a rerun.
+            self.recorder.phase("limits", {"status": "failed", "observed": history})
             self.fail("qbit_manage limits/tag/Stop state were not observed within three minutes")
         if not self.filesystem.exists_all(
             self.source_path,
