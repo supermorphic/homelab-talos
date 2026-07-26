@@ -27,6 +27,26 @@ controllers:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+    initContainers:
+      # qbit_manage rewrites its own config.yml on startup (check_for_attribute save=True)
+      # to persist defaults, so config.yml MUST live on a writable filesystem — a read-only
+      # ConfigMap mount makes it crash with "Read-only file system: '/config/config.yml'".
+      # Copy the declarative config from the read-only ConfigMap (/config-src) into the
+      # writable emptyDir /config before the app starts. The ConfigMap stays the Git source
+      # of truth and is re-copied fresh on every (re)start; qbit_manage's in-place default
+      # fill is ephemeral and never persisted back to Git.
+      init-config:
+        image:
+          repository: ghcr.io/stuffanthings/qbit_manage
+          tag: v4.10.0
+        command:
+          - /bin/sh
+          - -c
+          - cp /config-src/config.yml /config/config.yml
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
     containers:
       app:
         image:
@@ -67,23 +87,25 @@ controllers:
           liveness: { enabled: false }
           startup: { enabled: false }
 persistence:
-  # Writable ephemeral /config: the entrypoint copies config.yml.sample here and
-  # qbit_manage writes its logs under /config/logs. Nothing here needs to persist —
-  # policy is declarative in config.yml and all torrent state lives in qBittorrent.
+  # Writable ephemeral /config: the init container drops config.yml here, qbit_manage
+  # rewrites it in place with defaults, and logs go under /config/logs. Nothing here needs
+  # to persist — the ConfigMap is the source of truth and torrent state lives in qBittorrent.
+  # Mounted into both the init container (to receive the copy) and the app.
   config:
     type: emptyDir
     advancedMounts:
       qbit-manage:
+        init-config:
+          - path: /config
         app:
           - path: /config
-  # The declarative policy, delivered read-only as /config/config.yml (overlaid on the
-  # writable emptyDir above). Rendered from app/config.yml by the configMapGenerator.
-  config-file:
+  # The declarative policy, mounted read-only at /config-src for the init container to copy
+  # onto the writable /config. Rendered from app/config.yml by the configMapGenerator.
+  config-src:
     type: configMap
     name: qbit-manage-config
     advancedMounts:
       qbit-manage:
-        app:
-          - path: /config/config.yml
-            subPath: config.yml
+        init-config:
+          - path: /config-src
             readOnly: true
