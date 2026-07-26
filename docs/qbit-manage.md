@@ -15,8 +15,11 @@ Service. It mounts only the shared `/data/downloads` subpath and can never reach
 ## Classification model: category-based (read this first)
 
 The policy manages **every torrent in the `tv`/`movies` categories** (the categories
-Sonarr/Radarr assign) and **excludes anything tagged `tracker-private`**. Safety therefore
-depends on the `tracker-private` list being **complete** — not on withholding a public tag.
+Sonarr/Radarr assign) and **excludes anything tagged `tracker-private`**. Two independent layers
+apply that tag: a generic `settings.private_tag` net that auto-tags **every** private torrent,
+plus optional per-host mappings under `tracker:`. The generic net means a private torrent is
+excluded even from a tracker you have not mapped yet — basic safety no longer depends on the
+per-host list being complete.
 
 Why this instead of an allow-list of public trackers? Public torrents announce to a shifting,
 flaky set of open trackers that changes with every batch of downloads — an allow-list of those
@@ -34,9 +37,12 @@ torrent in tv/movies category
 
 ## ⚠️ SAFETY-CRITICAL: adding a private tracker
 
-**Before you download anything from a newly joined private tracker, add its announce hostname
-to the `tracker-private` list.** If you don't, its torrents are treated as public and could be
-stopped or deleted — a hit-and-run violation on a private tracker.
+**A private torrent is auto-excluded from the public policy by the `settings.private_tag` net
+as soon as qbit_manage next runs** — you no longer have to register the announce host first just
+to avoid a hit-and-run (public cleanup is now active, so this generic protection matters). You
+still add a tracker's announce hostname when it needs a **tracker-specific tag or its own
+share-limit group** (e.g. the CZTeam policy); land that mapping before relying on those bespoke
+rules.
 
 **Is this a file edit or a command?** A **file edit that goes through a PR** — there is no
 `just` recipe for it, on purpose: this is the one safety-critical change in the system, so the
@@ -61,12 +67,14 @@ maintainer (or edit it yourself) and it lands as a reviewed one-line PR.
 3. Open a PR, let `just ci` pass, and merge. Flux reconciles and qbit_manage re-tags on its
    next run; the public `share_limits` group excludes `tracker-private`.
 
-**Two built-in safety nets** reduce recovery risk (but do not rely on them):
-- **24h grace:** the policy's `min_seeding_time: 24h` means a freshly downloaded torrent can't
-  be ratio-cleaned for its first 24 hours — you have a day to register the host.
-- **7-day recycle window:** cleanup moves download-side data into `.RecycleBin` before its
-  name is unlinked. Add the private mapping promptly, then restore/re-add the torrent if a
-  mistaken cleanup already occurred.
+**Layered safety nets** make a brief delay before registering a host non-fatal:
+- **Generic `private_tag` (primary):** qbit_manage tags every private torrent `tracker-private`
+  on its next run and the public group excludes that tag, so a private torrent is kept out of
+  the public ratio/stop/cleanup path automatically — no host registration required.
+- **24h grace:** the public policy's `min_seeding_time: 1d` means a freshly downloaded torrent
+  cannot be ratio-cleaned for its first 24 hours.
+- **7-day recycle window:** cleanup moves download-side data into `.RecycleBin` before its name
+  is unlinked, and the `/data/media` Plex hardlink survives regardless.
 
 ## Rollout stages (all shipped)
 
@@ -170,6 +178,8 @@ set `share_limits.public.cleanup: false` (via PR).
 - qBittorrent's global seeding limits stay disabled.
 - The public `share_limits` group must exclude `tracker-private` (the safety gate).
   Known-private hosts map to `tracker-private`, never `tracker-public`.
+- `settings.private_tag` must be `tracker-private` — the generic net that auto-tags every
+  private torrent so an unmapped private tracker is still excluded from the public policy.
 - Destructive features off: unregistered removal, orphaned removal, no-hardlink handling,
   tracker-error deletion.
 - Credentials come only from the SOPS Secret via `!ENV`; never inline, never in logs.

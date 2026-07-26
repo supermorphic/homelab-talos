@@ -47,6 +47,15 @@ invalid_named_trackers="$(yq -r '
   exit 1
 }
 
+# Generic private-torrent safety net: settings.private_tag auto-tags EVERY private torrent
+# tracker-private, which share_limits.public excludes. This host-independent layer keeps any
+# private torrent (even from a tracker not named above) out of the public policy, so it must
+# stay set while the public group excludes tracker-private.
+[[ "$(yq -r '.settings.private_tag // "none"' "$config")" == 'tracker-private' ]] || {
+  echo 'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).' >&2
+  exit 1
+}
+
 sl='.share_limits.public'
 [[ "$(yq -r "$sl // \"none\"" "$config")" != 'none' ]] || {
   echo 'config.yml must define share_limits.public.' >&2

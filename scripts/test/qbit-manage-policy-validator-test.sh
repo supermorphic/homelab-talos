@@ -54,6 +54,16 @@ yq -i '.tracker."private.example".tag = ["tracker-private", "operator-reviewed"]
 expect_pass 'named private tracker list includes safety tag'
 
 reset_config
+yq -i '.settings.private_tag = "tracker-public"' "$test_config"
+expect_fail 'private_tag net set to the wrong tag' \
+  'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).'
+
+reset_config
+yq -i 'del(.settings.private_tag)' "$test_config"
+expect_fail 'private_tag net removed' \
+  'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).'
+
+reset_config
 yq -i '.tracker."private.example".tag = "tracker-public"' "$test_config"
 expect_fail 'named tracker mapped public' \
   'Every named tracker mapping must include tracker-private and exclude tracker-public.'
