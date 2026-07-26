@@ -43,6 +43,8 @@ scripts/test/safety/require-chaos-confirmation-test.sh
 scripts/test/lib/results-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/run-probe-dispatch-test.sh
+shellcheck scripts/validate/qbit-manage-policy.sh
+scripts/test/qbit-manage-policy-validator-test.sh
 tests/probes/qbittorrent/probe-test.sh
 tests/probes/dns/isolation-test.sh
 

@@ -4,7 +4,8 @@
 declarative seeding lifecycle to the movie/TV torrents in qBittorrent, so completed public
 torrents stop seeding forever instead of accumulating. It talks to qBittorrent's Web API over
 the internal Service only — it does **not** join Gluetun's VPN, has no web UI, HTTPRoute, or
-Service, and mounts no persistent storage.
+Service. It mounts only the shared `/data/downloads` subpath and can never reach
+`/data/media`.
 
 - App: `kubernetes/apps/media/qbit-manage/`
 - Policy (plaintext, reviewable): `kubernetes/apps/media/qbit-manage/app/config.yml`
@@ -35,7 +36,7 @@ torrent in tv/movies category
 
 **Before you download anything from a newly joined private tracker, add its announce hostname
 to the `tracker-private` list.** If you don't, its torrents are treated as public and could be
-stopped or (once PR4 lands) deleted — a hit-and-run violation on a private tracker.
+stopped or deleted — a hit-and-run violation on a private tracker.
 
 **Is this a file edit or a command?** A **file edit that goes through a PR** — there is no
 `just` recipe for it, on purpose: this is the one safety-critical change in the system, so the
@@ -60,12 +61,12 @@ maintainer (or edit it yourself) and it lands as a reviewed one-line PR.
 3. Open a PR, let `just ci` pass, and merge. Flux reconciles and qbit_manage re-tags on its
    next run; the public `share_limits` group excludes `tracker-private`.
 
-**Two built-in safety nets** make a brief delay non-fatal (but don't rely on them):
+**Two built-in safety nets** reduce recovery risk (but do not rely on them):
 - **24h grace:** the policy's `min_seeding_time: 24h` means a freshly downloaded torrent can't
   be ratio-cleaned for its first 24 hours — you have a day to register the host.
-- **Reversible until PR4:** through PR3 the limit action is **Stop (pause)**, not delete, and
-  cleanup is off. Nothing is irreversible until PR4 (which is itself gated by the hardlink
-  proof). A paused torrent is un-paused the moment you add the exclusion.
+- **7-day recycle window:** cleanup moves download-side data into `.RecycleBin` before its
+  name is unlinked. Add the private mapping promptly, then restore/re-add the torrent if a
+  mistaken cleanup already occurred.
 
 ## Rollout stages (all shipped)
 
@@ -88,7 +89,8 @@ touched.
 
 ## First-time deployment (operator)
 
-qbit_manage ships **suspended** with an inert **placeholder** credential. Activate it:
+The current cluster is already active. For a fresh-cluster deployment or credential rebuild,
+activate it with the guarded workflow:
 
 1. **Create the real credential** (the same permanent qBittorrent WebUI username/password
    Sonarr/Radarr use; source of truth is the password manager). Overwrites the placeholder
@@ -166,9 +168,10 @@ set `share_limits.public.cleanup: false` (via PR).
 
 - Categories `tv`/`movies` are owned by Sonarr/Radarr and never changed (`cat_update: false`).
 - qBittorrent's global seeding limits stay disabled.
-- The public `share_limits` group must exclude `tracker-private` (the safety gate; enforced
-  from PR3). Known-private hosts map to `tracker-private`, never `tracker-public`.
+- The public `share_limits` group must exclude `tracker-private` (the safety gate).
+  Known-private hosts map to `tracker-private`, never `tracker-public`.
 - Destructive features off: unregistered removal, orphaned removal, no-hardlink handling,
   tracker-error deletion.
 - Credentials come only from the SOPS Secret via `!ENV`; never inline, never in logs.
-- Media-side hardlinks in `/data/media` must be proven to survive cleanup before PR4.
+- qbit_manage never mounts `/data/media`; the completed rollout's hardlink proof established
+  that cleanup leaves media-side files intact.

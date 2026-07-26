@@ -2,31 +2,24 @@
 # the init-config container onto the writable /config/config.yml. Reviewable plaintext: NO
 # credentials live here (qbt.user/qbt.pass resolve from the SOPS Secret via !ENV at runtime).
 #
-# CLASSIFICATION MODEL: category-based. The public seeding policy (PR3) manages ALL torrents
+# CLASSIFICATION MODEL: category-based. The public seeding policy manages ALL torrents
 # in the tv/movies categories and EXCLUDES anything tagged `tracker-private`. Safety therefore
 # depends on the tracker-private mapping being COMPLETE — not on withholding a public tag — so
 # an `other: tracker-public` catch-all is intentionally used here. See docs/qbit-manage.md.
 #
-# Rollout stages (this is PR2):
-#   PR1  inert dry-run, no commands, no rules.                                    [done]
-#   PR2  tag_update: true + tracker: (other -> tracker-public, private -> exclude). dry-run
-#        first for a classification report; a follow-up flips dry_run: false to apply tags.
-#   PR3  share_limits.public by category, excluding tracker-private. cleanup still false.
-#   PR4  cleanup: true + skip_cleanup: false, after the hardlink safety proof.
-#
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.
 commands:
-  dry_run: false           # PR2-apply: dry-run reviewed clean; tags are now applied for real.
+  dry_run: false           # the staged dry-run was reviewed; policy now applies for real
   recheck: false
   cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
-  tag_update: true         # PR2: apply the tracker: classification (tracker-public/-private)
+  tag_update: true         # apply tracker-public/tracker-private classification
   rem_unregistered: false  # destructive: stays off
   tag_tracker_error: false # destructive-adjacent: stays off
   rem_orphaned: false      # destructive: stays off
   tag_nohardlinks: false   # destructive-adjacent: stays off
-  share_limits: true       # PR3: apply the category-based ratio/seed-time limits below
-  # Global recyclebin-empty + orphaned-dir cleanup pass. PR4: false so the recycle bin
+  share_limits: true       # apply the category-based ratio/seed-time limits below
+  # Global recyclebin-empty + orphaned-dir cleanup pass. False so the recycle bin
   # actually empties after its retention window. (orphaned removal stays off via rem_orphaned.)
   skip_cleanup: false
 
@@ -38,12 +31,11 @@ qbt:
 # qbit_manage requires a top-level `directory` section at config load (it does NOT auto-fill
 # this one). root_dir is the download root, matching qBittorrent's save paths under
 # /data/downloads. Only filesystem features (orphaned/nohardlinks/unregistered/recyclebin) use
-# it — all OFF here — so it is inert until PR4 enables the recycle bin. The pod mounts ONLY the
-# downloads subpath (read-only through PR3), never /data/media.
+# it. The pod mounts ONLY the downloads subpath, never /data/media.
 directory:
   root_dir: /data/downloads
 
-# Download-side recycle bin: PR4 enables it as a 7-day safety window. When cleanup removes a
+# Download-side recycle bin with a 7-day safety window. When cleanup removes a
 # torrent, qbit_manage MOVES its download-side data to <root_dir>/.RecycleBin (a rename on the
 # same SMB filesystem — the shared inode is untouched, so the /data/media hardlink is
 # unaffected immediately). The name is only unlinked after empty_after_x_days, and even then
@@ -53,17 +45,17 @@ recyclebin:
   empty_after_x_days: 7
   save_torrents: false
 
-# No `cat:` section needed: share_limits.categories (PR3) filters qBittorrent's existing
-# categories directly. Confirmed at the PR1 dry-run that the pinned version runs without it.
+# No `cat:` section needed: share_limits.categories filters qBittorrent's existing
+# categories directly. The pinned version was validated to run without it.
 
 # Tracker classification (category-based model).
 #
 #   SAFETY-CRITICAL — private trackers: before downloading from a newly joined private
 #   tracker, add its announce HOSTNAME here mapped to tracker-private so its torrents are
-#   excluded from the public policy (PR3's share_limits excludes tracker-private). Match the
+#   excluded from the public policy (share_limits excludes tracker-private). Match the
 #   announce host observed on a real torrent, not the Prowlarr display name. Pipe-delimit
-#   multiple hosts. qBittorrent's 24h minimum-seed floor gives a grace window, and cleanup is
-#   off until PR4, but register the host promptly. Example (uncomment + replace):
+#   multiple hosts. qBittorrent's 24h minimum-seed floor gives a grace window, but register
+#   the host before adding a private torrent. Example (uncomment + replace):
 #   "your-private-tracker.example|another-private.example":
 #     tag: tracker-private
 tracker:
@@ -81,8 +73,7 @@ tracker:
 # Behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5 and
 # seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES the
 # torrent when its limit is reached (required by the qBittorrent 5.2.x API; do not inherit the
-# implicit default). `cleanup: false` means NOTHING is removed or deleted here — pausing is
-# fully reversible. PR4 flips cleanup: true (+ recyclebin) after the hardlink-survival proof.
+# implicit default). Cleanup is enabled only after the completed hardlink-survival proof.
 share_limits:
   public:
     priority: 100
@@ -95,6 +86,6 @@ share_limits:
     min_seeding_time: 1d
     max_seeding_time: 7d
     share_limit_action: Stop
-    # PR4: remove eligible public torrents. Download-side data goes to the recycle bin
+    # Remove eligible public torrents. Download-side data goes to the recycle bin
     # (recoverable 7d); the /data/media hardlink survives. Never touches tracker-private.
     cleanup: true

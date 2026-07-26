@@ -2,13 +2,12 @@
 # engine that talks to qBittorrent's Web API over the internal Service — it does NOT join
 # Gluetun's netns and has no HTTPRoute/Service of its own (QBT_WEB_SERVER=false).
 #
-# PR1 lands it INERT: config.yml has dry_run:true, every command false, skip_cleanup:true,
-# and no tracker/share_limits rules yet (see app/config.yml). It authenticates and does
-# nothing. Classification (PR2), share limits (PR3), and cleanup (PR4) are added later.
+# The staged rollout is complete: config.yml classifies trackers, applies category-based
+# share limits, and moves eligible download-side data into the seven-day recycle bin.
 #
 # securityContext: the upstream image starts as root and uses a PUID/PGID + su-exec
 # entrypoint to drop privileges, but "gracefully continues" if it cannot. We run it
-# DIRECTLY as non-root 568 (the repo/media default, matching the SMB mount uid so PR4 can
+# DIRECTLY as non-root 568 (the repo/media default, matching the SMB mount uid so it can
 # touch /data/downloads) with capabilities dropped. The entrypoint's chown -R fails
 # harmlessly on the writable emptyDir /config (owned via fsGroup 568) and execs Python as
 # 568. We do NOT set PUID/PGID, so the entrypoint skips the su-exec path entirely.
@@ -26,7 +25,7 @@ controllers:
         # the Deployment automatically. `just ci` asserts it equals the real hash, so a config
         # edit can never silently fail to deploy. Update it whenever config.yml changes:
         #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
-        config-hash: "135f3ed4cb1c1896b1cac409bc43897f9f8ec17c"
+        config-hash: "865a52e586d6146507586f8b72ec99513efeb612"
       securityContext:
         runAsNonRoot: true
         runAsUser: 568
@@ -117,7 +116,7 @@ persistence:
         init-config:
           - path: /config-src
             readOnly: true
-  # Download root only (never /data/media). READ-WRITE as of PR4 so the recycle bin can move
+  # Download root only (never /data/media). Read-write so the recycle bin can move
   # cleaned-up download-side data to /data/downloads/.RecycleBin. subPath `downloads` keeps the
   # media library entirely out of this pod's view — qbit_manage physically cannot touch
   # /data/media, so a Plex library file can never be deleted here regardless of policy bugs.
