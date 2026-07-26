@@ -105,6 +105,18 @@ spec:
               metadata:
                 name: portainer
                 namespace: portainer
+        - assert:
+            resource:
+              apiVersion: monitoring.coreos.com/v1
+              kind: PrometheusRule
+              metadata:
+                name: portainer
+                namespace: portainer
+              spec:
+                (groups[].rules[].alert):
+                  - PortainerDown
+                  - PortainerProbeMissing
+                  - PortainerPersistentVolumeClaimNotBound
       catch:
         - events:
             namespace: portainer

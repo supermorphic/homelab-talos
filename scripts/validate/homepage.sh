@@ -30,6 +30,7 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 # Per-service split Secrets (rotate independently).
 grafana_secret="$base/app/homepage-grafana.sops.yaml"
 plex_secret="$base/app/homepage-plex.sops.yaml"
+portainer_secret="$base/app/homepage-portainer.sops.yaml"
 prowlarr_secret="$base/app/homepage-prowlarr.sops.yaml"
 qbittorrent_secret="$base/app/homepage-qbittorrent.sops.yaml"
 sonarr_secret="$base/app/homepage-sonarr.sops.yaml"
@@ -37,6 +38,7 @@ radarr_secret="$base/app/homepage-radarr.sops.yaml"
 seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
 [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
+[[ -f "$portainer_secret" ]] || { echo "Missing Homepage Portainer Secret: $portainer_secret (run just repo homepage-portainer-secrets)." >&2; exit 1; }
 [[ -f "$prowlarr_secret" ]] || { echo "Missing Homepage Prowlarr Secret: $prowlarr_secret (run just repo homepage-prowlarr-secrets)." >&2; exit 1; }
 [[ -f "$qbittorrent_secret" ]] || { echo "Missing Homepage qBittorrent Secret: $qbittorrent_secret (run just repo homepage-qbittorrent-secrets)." >&2; exit 1; }
 [[ -f "$sonarr_secret" ]] || { echo "Missing Homepage Sonarr Secret: $sonarr_secret (run just repo homepage-sonarr-secrets)." >&2; exit 1; }
@@ -48,6 +50,9 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ "$(sops filestatus "$plex_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$plex_secret")" == 'homepage-plex' ]]
 [[ "$(yq -r '.metadata.namespace' "$plex_secret")" == 'homepage' ]]
+[[ "$(sops filestatus "$portainer_secret" | yq -r '.encrypted')" == 'true' ]]
+[[ "$(yq -r '.metadata.name' "$portainer_secret")" == 'homepage-portainer' ]]
+[[ "$(yq -r '.metadata.namespace' "$portainer_secret")" == 'homepage' ]]
 [[ "$(sops filestatus "$prowlarr_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$prowlarr_secret")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '.metadata.namespace' "$prowlarr_secret")" == 'homepage' ]]
@@ -67,6 +72,9 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 ! rg -q 'homepage-secrets' "$dep"
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_USERNAME") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-qbittorrent' ]]

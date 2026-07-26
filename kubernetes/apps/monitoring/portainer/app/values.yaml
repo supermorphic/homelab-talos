@@ -10,9 +10,10 @@ image:
   tag: 2.39.5
   pullPolicy: IfNotPresent
 
-# The chart gates both its ServiceAccount assignment and its cluster-admin
-# ClusterRoleBinding behind this value. Keep it false; the HelmRelease
-# post-renderer attaches the repository-owned read-only ServiceAccount.
+# The chart gates only its ServiceAccount/RBAC rendering and assignment behind
+# this value; it does not add a flag that disables Portainer's local environment.
+# Keep it false to suppress cluster-admin, then attach the repository-owned
+# read-only ServiceAccount with the HelmRelease post-renderer.
 localMgmt: false
 serviceAccount:
   name: portainer-readonly

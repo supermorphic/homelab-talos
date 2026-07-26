@@ -55,6 +55,14 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # Portainer operational UI (black-box through internal DNS, TLS, Gateway,
+    # Service, and the isolated application pod).
+    - name: portainer
+      group: Platform
+      url: "https://portainer.lab.supermorphic.com/"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     # Longhorn UI probed in-cluster so the unauthenticated admin UI is not exposed
     # to the LAN. Longhorn engine/replica/backup health lives in Prometheus.
     - name: longhorn-ui
