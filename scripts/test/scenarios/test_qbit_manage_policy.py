@@ -11,12 +11,15 @@ import re
 import sys
 import tempfile
 import unittest
+from collections import UserDict, UserList
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "helpers"))
 
 import qbit_manage_policy as qbm
+import qbit_manage_policy_api as qbm_api
 
 RUN_ID = "abc12345def67890"
 SOURCE_YAML = """\
@@ -212,6 +215,31 @@ class PolicyConfigTests(unittest.TestCase):
             "QBT_DRY_RUN",
         ):
             self.assertNotIn(forbidden, serialized)
+
+
+class ApiBridgeTests(unittest.TestCase):
+    def test_qbittorrent_user_collections_normalize_to_plain_json_values(self):
+        response = UserList(
+            [
+                UserDict(
+                    {
+                        "hash": qbm.FIXTURE_HASH,
+                        "progress": 1.0,
+                        "tags": ["tracker-public"],
+                    }
+                )
+            ]
+        )
+        self.assertEqual(
+            qbm_api.normalize_json(response),
+            [
+                {
+                    "hash": qbm.FIXTURE_HASH,
+                    "progress": 1.0,
+                    "tags": ["tracker-public"],
+                }
+            ],
+        )
 
 
 class ResultRecorderTests(unittest.TestCase):

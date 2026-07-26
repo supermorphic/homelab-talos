@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 QBITTORRENT_URL = "http://qbittorrent.media.svc.cluster.local:8080"
@@ -16,8 +16,21 @@ def require_args(args: list[str], count: int) -> None:
         raise SystemExit(2)
 
 
+def normalize_json(value: Any) -> Any:
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): normalize_json(item) for key, item in value.items()}
+    if isinstance(value, Sequence):
+        return [normalize_json(item) for item in value]
+    data = getattr(value, "data", None)
+    if data is not None:
+        return normalize_json(data)
+    raise TypeError(f"unsupported qBittorrent response type: {type(value).__name__}")
+
+
 def emit_json(value: Any) -> None:
-    print(json.dumps(value))
+    print(json.dumps(normalize_json(value)))
 
 
 def main(argv: list[str] | None = None) -> int:
