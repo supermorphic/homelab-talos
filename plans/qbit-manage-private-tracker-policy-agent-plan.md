@@ -177,10 +177,12 @@ Manual tags are temporary protection, not the declarative end state.
 
 ### If no CZTeam torrent exists
 
-Keep it that way until Phase 1 is merged and live acceptance proves that the
-classification protects a paused fixture. Obtain the hostname by adding a legally
-obtained torrent paused, inspecting only the hostname, and preventing data
-transfer until the protection is active.
+Keep it that way until the CZTeam policy is live and active (end of Phase 3), not
+merely until Phase 1 is merged. Auto-tagging is suspended throughout Phase 2's
+global dry-run (see Phase 2), so a torrent added earlier still relies on manual
+tags for protection. Obtain the hostname by adding a legally obtained torrent
+paused, inspecting only the hostname, and preventing data transfer until the
+protection is active.
 
 ## qbit_manage semantics to validate
 
@@ -188,9 +190,21 @@ Use the pinned `v4.10.0` source/sample configuration as the implementation
 contract, not examples copied from another release:
 
 - a tracker mapping's `tag` may be a list;
-- `settings.private_tag` can generically tag torrents whose metadata is private;
+- `settings.private_tag` can generically tag torrents whose metadata is private.
+  **Confirm the exact key name and structure in the pinned `v4.10.0` sample
+  before writing any offline assertion against it** — an assertion that hard-codes
+  `settings.private_tag` will fail the whole phase if v4.10.0 spells it
+  differently. If v4.10.0 does not support it, the two-tag tracker mapping still
+  protects CZTeam specifically; `private_tag` only adds the safety net for other,
+  unmapped private trackers, so degrade to the mapping rather than blocking;
 - lower numeric `priority` wins;
 - each torrent receives only one share-limit group;
+- a share-limit group with `include_all_tags` and no `categories` matches by tag
+  across **all** categories. Verify this holds in v4.10.0, because a CZTeam torrent
+  grabbed by Sonarr/Radarr lands in `tv`/`movies` and therefore matches both the
+  tag-based `czteam` group and the category-based `public` group; priority
+  (10 vs 100) must be what resolves that overlap, on top of the public group's
+  tag exclusion;
 - `min_seeding_time` requires a positive `max_ratio`;
 - before the minimum is met, qbit_manage must remove the effective stop limit and
   resume the torrent;
@@ -237,12 +251,19 @@ manifests.
 5. Run the existing offline qbit_manage validation.
 6. Record whether live CZTeam torrents exist without exposing their names or URLs.
 7. Obtain and locally retain only the sanitized announce hostname.
+8. Confirm qbit_manage is the sole authority over pausing: qBittorrent's own
+   global ratio/seed-time share limits must be disabled (or looser than this
+   policy). The `min_seeding_time` "resume before the minimum is met" behavior
+   assumes nothing else stops a CZTeam torrent. A qBittorrent-side global limit
+   that pauses a torrent before 72h/144h is an independent hit-and-run exposure
+   this policy's checks would not catch.
 
 Stop if:
 
 - the CZTeam rules or allowed-client status changed;
 - public cleanup or its exclusion model changed;
 - qbit_manage/qBittorrent compatibility is failing;
+- qBittorrent enforces a global share limit stricter than this policy;
 - a torrent cannot be protected before download; or
 - the hostname cannot be positively identified without exposing a secret.
 
@@ -320,10 +341,13 @@ Then the operator:
 5. confirms no torrent or data was removed; and
 6. observes at least two scheduler cycles.
 
-If no existing guarded recipe can prove the required state without leaking torrent
-or tracker details, add a narrowly scoped read-only recipe that emits only
-sanitized counts/booleans. Do not put raw `kubectl`/qBittorrent API commands in the
-runbook.
+The existing `scripts/verify/qbit-manage.sh` only proves the workload is Ready,
+rolled out, not crash-looping, and authenticated — it emits **no** per-tag or
+per-group state. It therefore cannot satisfy gate items 2–3 above. Adding a
+narrowly scoped read-only recipe that emits only sanitized counts/booleans (e.g.
+"N torrents carry both private tags; 0 CZTeam torrents in the public group") is a
+**hard prerequisite for this live gate, not a conditional fallback**. Do not put
+raw `kubectl`/qBittorrent API commands in the runbook.
 
 Do not continue until classification is live and correct.
 
@@ -333,6 +357,14 @@ Use a separate PR. Temporarily set `commands.dry_run: true` while adding the
 CZTeam group. This pauses new qbit_manage mutations, including public cleanup,
 during the review window; it does not alter the existing qBittorrent, Arr, or VPN
 configuration.
+
+Note that `dry_run` is global: it also suspends Phase 1's protective *tagging*.
+Tags already applied to existing CZTeam torrents persist, but a **new** CZTeam
+torrent added during this window will not be auto-tagged and so will not be
+excluded declaratively. It stays safe only because the same switch also pauses
+public cleanup. Do not add new CZTeam torrents during Phase 2; if one is
+unavoidable, tag it manually (`tracker-private` + `tracker-czteam`) as in the
+"If a CZTeam torrent already exists" gate before it transfers data.
 
 Conceptual pinned-version configuration:
 
@@ -370,6 +402,12 @@ Extend offline validation to assert:
 - global dry-run is true for this phase; and
 - all Phase 1 and existing public-policy invariants still hold.
 
+The current `scripts/validate/qbit-manage.sh` hard-asserts `commands.dry_run ==
+false`. This phase must **invert that existing assertion** to require `true` (it
+is a phase-gated line, not an invariant). Phase 3 inverts it back. Rather than
+flipping the literal each way, prefer making the dry-run assertion explicitly
+phase-aware so the intended value is unambiguous in the diff.
+
 ### Dry-run acceptance
 
 After operator merge/reconcile, observe at least two scheduled runs and prove,
@@ -392,15 +430,23 @@ infer it from configuration parsing alone.
 
 ## Phase 3 — Activate only the reviewed policy
 
-Use a final, minimal PR that changes only:
+Use a final, minimal PR. It flips only the behavior — activation — but touches
+three coupled files:
 
 ```yaml
 commands:
   dry_run: false
 ```
 
-and the corresponding config hash. Do not combine activation with an image
-upgrade, policy-number change, new tracker, or cleanup change.
+1. `config.yml`: set `commands.dry_run: false`.
+2. `scripts/validate/qbit-manage.sh`: invert the phase-gated dry-run assertion
+   back to require `false` (it required `true` in Phase 2).
+3. `values.yaml`: update the `config-hash` annotation to
+   `git hash-object config.yml`, or the validate step fails.
+
+This is minimal in intent but is **not** a one-line diff — do not describe it as
+"only `dry_run`." Do not combine activation with an image upgrade, policy-number
+change, new tracker, or cleanup change.
 
 Before opening or updating the PR:
 
@@ -435,6 +481,9 @@ Revise `docs/qbit-manage.md` so the final state is unambiguous:
 - CZTeam gets a dedicated tag and group;
 - the effective CZTeam policy is 7d minimum + ratio 2.0 + unlimited maximum +
   Stop + no cleanup;
+- `max_ratio: 2.0` is a **per-torrent** goal, not the account ratio CZTeam's
+  rules measure; seeding each torrent to 2.0 keeps the account healthy but is not
+  a direct account-ratio guarantee;
 - local enforcement does not replace account/H&R monitoring;
 - the announce hostname is safe to commit, but passkeys/full URLs are not;
 - how to inspect sanitized status through guarded recipes;
@@ -520,7 +569,10 @@ The implementation is complete when:
 - categories remain under Sonarr/Radarr ownership;
 - no secret or torrent-identifying data is committed or reported;
 - offline CI passes for every PR;
-- dry-run and active behavior are observed through guarded checks;
+- dry-run and active behavior are observed through guarded checks — with the
+  explicit caveat that the resume-before-`min_seeding_time` edge case is likely
+  validated against the pinned source or an isolated fixture rather than observed
+  live, and that residual is recorded rather than implied as a live observation;
 - account/H&R credit is manually confirmed after an announce; and
 - documentation and rollback instructions match the final implementation.
 
