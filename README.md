@@ -276,6 +276,13 @@ available for focused developer validation.
 | `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Enabled in Phase 9; read-only |
 | `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Enabled in Phase 9; mutating after confirmation |
 | `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, recurring jobs, and a two-replica test PVC | — | Enabled in Phase 9; creates and removes a test PVC |
+| `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Portainer Phase 1; mutating tracked ciphertext after confirmation |
+| `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Portainer Phase 1; read-only and included in `just ci` |
+| `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Portainer Phase 1; read-only and included in `just ci` |
+| `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Portainer Phase 1; mutating after confirmation |
+| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Portainer Phase 1; operator-only and read-only |
+| `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Portainer Phase 1; operator-only and disruptive after confirmation |
+| `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Portainer Phase 1; operator-only |
 | `just ci` | Run the cluster-independent, secret-free validation gate (lint + verify + kubeconform + all `*-validate`) | — | Local + GitHub Actions; the PR gate |
 | `just test validate` | Lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
@@ -353,7 +360,9 @@ Phase 6 acceptance gate are in
 failure behavior, and acceptance gates are in
 [`docs/phase-7-foundation.md`](docs/phase-7-foundation.md). Pi-hole fresh-install,
 CA rotation, and application-password recovery are in
-[`docs/pihole-integration.md`](docs/pihole-integration.md).
+[`docs/pihole-integration.md`](docs/pihole-integration.md). Portainer's read-only
+boundary, staged rollout, credential lifecycle, and recovery procedure are in
+[`docs/portainer.md`](docs/portainer.md).
 
 ## Daily Cluster Health Check
 

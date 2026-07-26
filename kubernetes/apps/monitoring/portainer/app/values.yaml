@@ -1,0 +1,59 @@
+# Portainer Phase 1: internal, read-only Kubernetes viewing. Git/Flux remain the
+# deployment authority; Docker Agents and database encryption are deferred.
+replicaCount: 1
+
+enterpriseEdition:
+  enabled: false
+
+image:
+  repository: portainer/portainer-ce
+  tag: 2.39.5
+  pullPolicy: IfNotPresent
+
+# The chart gates both its ServiceAccount assignment and its cluster-admin
+# ClusterRoleBinding behind this value. Keep it false; the HelmRelease
+# post-renderer attaches the repository-owned read-only ServiceAccount.
+localMgmt: false
+serviceAccount:
+  name: portainer-readonly
+
+# The repository creates the namespace with the required Gateway and PSA labels.
+createNamespace: false
+
+service:
+  type: ClusterIP
+  httpPort: 9000
+  httpsPort: 9443
+  edgePort: 8000
+
+ingress:
+  enabled: false
+
+trusted_origins:
+  enabled: true
+  # Portainer 2.39.x expects a hostname. Re-evaluate this before upgrading to
+  # 2.41+, whose CSRF implementation requires a full URL including the scheme.
+  domains: portainer.lab.supermorphic.com
+
+adminPassword:
+  existingSecret: portainer-admin-password
+
+dbEncryption:
+  existingSecret: ""
+
+extraEnv: []
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: longhorn
+  accessMode: ReadWriteOnce
+  annotations:
+    helm.sh/resource-policy: keep
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi

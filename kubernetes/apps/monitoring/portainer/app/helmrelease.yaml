@@ -1,0 +1,60 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/helm.toolkit.fluxcd.io/helmrelease_v2.json
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: portainer
+  namespace: portainer
+spec:
+  chart:
+    spec:
+      chart: portainer
+      interval: 15m
+      sourceRef:
+        kind: HelmRepository
+        name: portainer
+      version: 239.5.0
+  driftDetection:
+    mode: enabled
+  install:
+    remediation:
+      retries: 3
+  interval: 1h
+  postRenderers:
+    - kustomize:
+        patches:
+          # Chart 239.5.0 emits serviceAccountName only when localMgmt=true,
+          # which would also create a cluster-admin binding. Keep localMgmt=false
+          # and attach the repository-owned read-only ServiceAccount here.
+          - target:
+              group: apps
+              version: v1
+              kind: Deployment
+              name: portainer
+            patch: |
+              - op: add
+                path: /spec/template/spec/serviceAccountName
+                value: portainer-readonly
+          # Standard Agents are deferred. Only the Gateway backend port belongs
+          # on the in-cluster Service in Phase 1.
+          - target:
+              version: v1
+              kind: Service
+              name: portainer
+            patch: |
+              - op: remove
+                path: /spec/ports/2
+              - op: remove
+                path: /spec/ports/1
+  releaseName: portainer
+  targetNamespace: portainer
+  timeout: 10m
+  upgrade:
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+      strategy: rollback
+  valuesFrom:
+    - kind: ConfigMap
+      name: portainer-values
+      valuesKey: values.yaml

@@ -5,3 +5,4 @@ resources:
   - ./gatus/ks.yaml
   - ./homepage/ks.yaml
   - ./kube-prometheus-stack/ks.yaml
+  - ./portainer/ks.yaml
