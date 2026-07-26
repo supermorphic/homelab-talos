@@ -74,6 +74,16 @@ settings:
 #     tag:
 #       - tracker-private
 tracker:
+  # CZTeam (private tracker). Classify by its VERIFIED announce host (observed from a real
+  # announce URL, host label only — never a passkey/path/query). Two tags: tracker-private is
+  # the generic public-policy exclusion (also applied automatically by settings.private_tag),
+  # and tracker-czteam selects the dedicated CZTeam share-limit group added in a later phase.
+  # Until that group exists, a CZTeam torrent is simply excluded from the public policy and
+  # seeds indefinitely.
+  "tracker.czteam.me":
+    tag:
+      - tracker-private
+      - tracker-czteam
   # Catch-all: everything not matched above (all current public torrents) gets tracker-public.
   # This tag is cosmetic — the public policy is gated by category + tracker-private exclusion,
   # not by this tag — so a catch-all is safe here (unlike the abandoned include-list model).
@@ -81,9 +91,11 @@ tracker:
     tag: tracker-public
 
 # Category-based share limits. The single `public` group matches every torrent in the
-# tv/movies categories and EXCLUDES anything tagged tracker-private (the safety gate — a
-# private torrent never gets these limits). Torrents with no matching group keep qBittorrent's
-# (disabled) defaults, i.e. seed indefinitely.
+# tv/movies categories and EXCLUDES anything tagged tracker-private or tracker-czteam (the
+# safety gate — a private torrent never gets these limits). tracker-czteam is excluded as
+# defense in depth: a CZTeam torrent also carries tracker-private, so either tag alone keeps
+# it out. Torrents with no matching group keep qBittorrent's (disabled) defaults, i.e. seed
+# indefinitely.
 #
 # Behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5 and
 # seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES the
@@ -97,6 +109,7 @@ share_limits:
       - tv
     exclude_any_tags:
       - tracker-private
+      - tracker-czteam
     max_ratio: 1.5
     min_seeding_time: 1d
     max_seeding_time: 7d

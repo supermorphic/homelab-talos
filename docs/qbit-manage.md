@@ -21,6 +21,12 @@ plus optional per-host mappings under `tracker:`. The generic net means a privat
 excluded even from a tracker you have not mapped yet — basic safety no longer depends on the
 per-host list being complete.
 
+**Classified today:** `tracker.czteam.me` → `tracker-private` + `tracker-czteam` (a private
+tracker). It is excluded from the public policy now (via both tags). Its dedicated CZTeam
+seeding group is added in a later phase, so for the moment CZTeam torrents simply seed
+indefinitely under that protection. The mapping key is the bare announce host only — never a
+passkey or full announce URL.
+
 Why this instead of an allow-list of public trackers? Public torrents announce to a shifting,
 flaky set of open trackers that changes with every batch of downloads — an allow-list of those
 would need constant upkeep, and any host you missed would silently seed forever. Private
