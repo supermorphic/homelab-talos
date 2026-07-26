@@ -1540,7 +1540,7 @@ class Scenario:
         config = PolicyConfig.build_czteam_isolation(self.live_config, self.identity)
         PolicyConfig.validate_czteam_isolation(config, self.identity)
         self.ledger.recycle_attempted = True
-        self.run_policy_job("cz-policy", config)
+        self.run_policy_job("cz-apply", config)
 
         observed: list[dict[str, Any]] = []
         history: list[dict[str, Any]] = []
@@ -1602,7 +1602,7 @@ class Scenario:
                 self.fail(f"CZTeam cleanup:false created run-owned recycle data after {stage}")
 
         require_survival("the first Job")
-        self.run_policy_job("cz-policy2", config)
+        self.run_policy_job("cz-repeat", config)
         require_survival("the idempotent Job")
 
         self.qbit.remove_tags(
@@ -1745,7 +1745,7 @@ class Scenario:
         ):
             self.fail("media hardlink inode, size, or digest changed during cleanup")
 
-        self.run_standard_policy_job("cleanup2", True)
+        self.run_standard_policy_job("cleanup-repeat", True)
         if self.qbit.info(FIXTURE_HASH):
             self.fail("idempotent cleanup unexpectedly recreated the torrent")
         recycle_after = self.filesystem.discover_recycle(self.identity.run_id)

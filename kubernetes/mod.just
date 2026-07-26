@@ -604,13 +604,13 @@ qbit-manage-e2e-trace run_id phase="limits": require-bash
     namespace='media'
 
     [[ "$run_id" =~ ^[a-z0-9]{8,24}$ ]] || {
-      echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|cz-policy|cz-policy2|limits|cleanup|cleanup2]' >&2
+      echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|cz-apply|cz-repeat|limits|cleanup|cleanup-repeat]' >&2
       exit 2
     }
     case "$phase" in
-      private|cz-policy|cz-policy2|limits|cleanup|cleanup2) ;;
+      private|cz-apply|cz-repeat|limits|cleanup|cleanup-repeat) ;;
       *)
-        echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|cz-policy|cz-policy2|limits|cleanup|cleanup2]' >&2
+        echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|cz-apply|cz-repeat|limits|cleanup|cleanup-repeat]' >&2
         exit 2
         ;;
     esac
@@ -672,7 +672,7 @@ qbit-manage-e2e-debug-cleanup run_id: require-bash
       exit 0
     fi
     while IFS= read -r resource; do
-      [[ "$resource" =~ ^(job\.batch|configmap)/qbm-e2e-${run_id}-(private|cz-policy|cz-policy2|limits|cleanup|cleanup2)$ ]] || {
+      [[ "$resource" =~ ^(job\.batch|configmap)/qbm-e2e-${run_id}-(private|cz-apply|cz-repeat|limits|cleanup|cleanup-repeat)$ ]] || {
         echo "Refusing cleanup: unexpected labeled resource $resource" >&2
         exit 1
       }
