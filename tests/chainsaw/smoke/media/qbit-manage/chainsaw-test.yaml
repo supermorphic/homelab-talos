@@ -1,0 +1,96 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: qbit-manage-smoke
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: media
+    homelab-talos/suite: qbit-manage
+spec:
+  # Read-only health of the UI-less policy worker. Do not collect application logs here:
+  # they can contain torrent names or tracker URLs. The guarded live verifier performs the
+  # separate sanitized authentication/run-marker check.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: flux-kustomization-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: kustomize.toolkit.fluxcd.io/v1
+              kind: Kustomization
+              metadata:
+                name: qbit-manage
+                namespace: flux-system
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: kustomize.toolkit.fluxcd.io/v1
+            kind: Kustomization
+            name: qbit-manage
+            namespace: flux-system
+        - events:
+            namespace: flux-system
+    - name: helmrelease-ready
+      try:
+        - assert:
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: qbit-manage
+                namespace: media
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: helm.toolkit.fluxcd.io/v2
+            kind: HelmRelease
+            name: qbit-manage
+            namespace: media
+        - events:
+            namespace: media
+    - name: deployment-available
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: qbit-manage
+                namespace: media
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: qbit-manage
+            namespace: media
+        - events:
+            namespace: media
+    - name: app-container-ready-with-zero-restarts
+      try:
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                namespace: media
+                labels:
+                  app.kubernetes.io/name: qbit-manage
+              status:
+                (containerStatuses[?name == 'app']):
+                  - ready: true
+                    restartCount: 0
+      catch:
+        # Events are safe evidence. Application logs are intentionally excluded because
+        # qbit_manage may log torrent names or tracker URLs.
+        - events:
+            namespace: media

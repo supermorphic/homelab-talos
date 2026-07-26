@@ -57,15 +57,37 @@ write_environment() {
     }' >"$output_dir/environment.json"
 }
 
-# Derive a resilience run's recovery/cleanup status from the recovery.json a scenario's
-# orchestrator writes into the run dir. Missing or unparseable → not-classified, so a
-# scenario that never recorded an outcome cannot silently read as a pass. This is kept
-# separate from the primary assertion so a failed recovery is reported, never masked.
-resilience_recovery_status() {
+# Derive a state-changing run's recovery/cleanup status from recovery.json. Missing,
+# unparseable, unfinished, or unknown values become not-classified so a scenario that never
+# recorded a terminal outcome cannot silently read as a pass.
+recorded_recovery_status() {
   local run_dir="$1"
   local file="$run_dir/recovery.json"
+  local status
   [[ -f "$file" ]] || { echo 'not-classified'; return; }
-  yq -r '.status // "not-classified"' "$file" 2>/dev/null || echo 'not-classified'
+  status="$(yq -r '.status // "not-classified"' "$file" 2>/dev/null)" || {
+    echo 'not-classified'
+    return
+  }
+  case "$status" in
+    passed|failed|not-required) echo "$status" ;;
+    *) echo 'not-classified' ;;
+  esac
+}
+
+# Preserve the primary command exit code. A failed/unclassified cleanup makes an otherwise
+# passing command fail, while the summary continues to report the primary assertion as passed.
+result_exit_code() {
+  local primary_exit_code="$1"
+  local cleanup_status="$2"
+  if [[ "$primary_exit_code" -ne 0 ]]; then
+    echo "$primary_exit_code"
+    return
+  fi
+  case "$cleanup_status" in
+    passed|not-required) echo 0 ;;
+    *) echo 1 ;;
+  esac
 }
 
 write_summary() {

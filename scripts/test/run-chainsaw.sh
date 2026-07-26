@@ -64,6 +64,10 @@ case "$tier" in
             test_dir='tests/chainsaw/smoke/media/qbittorrent'
             selector='homelab-talos/suite=qbittorrent'
             ;;
+          qbit-manage)
+            test_dir='tests/chainsaw/smoke/media/qbit-manage'
+            selector='homelab-talos/suite=qbit-manage'
+            ;;
           *)
             echo "Unknown smoke scenario for target ${target}: $scenario" >&2
             exit 2
@@ -208,8 +212,8 @@ if [[ "$diagnostics_only" == true ]]; then
 fi
 
 export KUBECONFIG="$kubeconfig"
-# Resilience scenarios write recovery.json here so the runner can record the recovery
-# outcome separately from the primary assertion (Phase-3 "reports failure separately").
+# State-changing scenarios write recovery.json here so the runner can record cleanup/recovery
+# separately from the primary assertion. E2E and resilience share this result contract.
 # Chainsaw runs script ops from its own working directory, so export the run dir as an
 # ABSOLUTE path (works regardless of a script op's cwd) and the repo root for scenarios
 # that invoke repo-relative guard/orchestrator scripts.
@@ -276,17 +280,17 @@ if [[ "$environment_exit_code" -ne 0 && "$primary_exit_code" -eq 0 ]]; then
   primary_exit_code=1
   primary_status='failed'
 fi
-# Resilience scenarios drive recovery in a cleanup/finally block and record its outcome
-# in recovery.json; surface it as a SEPARATE cleanup/recovery status without touching the
-# primary assertion. Other tiers never mutate, so their recovery is not-required.
+# State-changing scenarios drive cleanup/recovery in a trap/finally block and record its
+# outcome in recovery.json. Surface it separately without rewriting the primary assertion.
 cleanup_status='not-required'
 recovery_status='not-required'
-if [[ "$tier" == 'resilience' ]]; then
-  recovery_status="$(resilience_recovery_status "$run_dir")"
+if [[ "$tier" == 'e2e' || "$tier" == 'resilience' ]]; then
+  recovery_status="$(recorded_recovery_status "$run_dir")"
   cleanup_status="$recovery_status"
 fi
 write_summary "$run_dir" "$primary_status" "$primary_exit_code" \
   "$assertion_status" "$diagnostics_status" "$cleanup_status" "$recovery_status"
 
+overall_exit_code="$(result_exit_code "$primary_exit_code" "$cleanup_status")"
 echo "Chainsaw results: $run_dir"
-exit "$primary_exit_code"
+exit "$overall_exit_code"
