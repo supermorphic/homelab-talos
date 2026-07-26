@@ -1487,7 +1487,6 @@ qbit-manage:
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:qbit-manage'
     ks='kubernetes/apps/media/qbit-manage/ks.yaml'
-    secret='kubernetes/apps/media/qbit-manage/app/qbit-manage-secret.sops.yaml'
     resumed=false
     bootstrap_complete=false
     cleanup_qbit_manage() {
@@ -1500,13 +1499,11 @@ qbit-manage:
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    # Refuse if the committed Secret is still the inert placeholder — the operator must run
-    # `just repo qbit-manage-secrets` with the real qBittorrent WebUI credential first.
-    ! rg -Fq 'PLACEHOLDER_REPLACE' "$secret" || {
-      echo 'Refusing qbit-manage bootstrap: qbit-manage-secret.sops.yaml is still the placeholder.' >&2
-      echo 'Run `just repo qbit-manage-secrets` with the real credential, commit, and push first.' >&2
-      exit 1
-    }
+    # NOTE: the credential itself cannot be validated here — it is SOPS-encrypted and this
+    # recipe holds no age key (Flux decrypts in-cluster). A wrong or still-placeholder
+    # credential surfaces at qbit-manage-verify below as a qBittorrent login failure, which
+    # fails the bootstrap and re-suspends the app. Create/rotate it with
+    # `just repo qbit-manage-secrets` before bootstrapping.
     source scripts/lib/rollout.sh
     require_deployed_source 'qbit-manage bootstrap' \
       .just/bootstrap.just kubernetes/mod.just \
