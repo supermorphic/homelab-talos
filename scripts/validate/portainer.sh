@@ -12,6 +12,7 @@ ns="$app/namespace.yaml"
 rbac="$app/rbac.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 secret="$app/portainer-admin-password.sops.yaml"
+verify_script='scripts/verify/portainer.sh'
 temp_dir="$(mktemp -d /tmp/homelab-talos-portainer-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -23,6 +24,16 @@ for file in \
     exit 1
   }
 done
+
+[[ -x "$verify_script" ]]
+rg -Fq "jsonpath='{.metadata.annotations.helm\\.sh/resource-policy}'" "$verify_script" || {
+  echo 'Portainer live verification must escape the dotted PVC annotation key exactly once.' >&2
+  exit 1
+}
+! rg -Fq "jsonpath='{.metadata.annotations.helm\\\\.sh/resource-policy}'" "$verify_script" || {
+  echo 'Portainer live verification double-escapes the PVC annotation JSONPath.' >&2
+  exit 1
+}
 
 rg -qx '  - ./portainer/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./portainer/ks.yaml is not wired into the monitoring root.' >&2
