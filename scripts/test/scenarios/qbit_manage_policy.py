@@ -317,6 +317,7 @@ class PolicyConfig:
         "settings",
         "directory",
         "recyclebin",
+        "tracker",
         "share_limits",
     }
     COMMANDS: ClassVar[dict[str, bool]] = {
@@ -336,9 +337,11 @@ class PolicyConfig:
     def build(source: dict[str, Any], identity: RunIdentity, cleanup: bool) -> dict[str, Any]:
         if not isinstance(cleanup, bool):
             raise TypeError("cleanup must be a boolean")
-        for key in ("qbt", "directory", "recyclebin"):
+        for key in ("qbt", "directory", "recyclebin", "tracker"):
             if not isinstance(source.get(key), dict):
                 raise TypeError(f"deployed config is missing mapping {key}")
+        if not source["tracker"]:
+            raise ValueError("deployed config tracker mapping must not be empty")
         recyclebin = copy.deepcopy(source["recyclebin"])
         recyclebin.update({"enabled": True, "save_torrents": False})
         return {
@@ -354,18 +357,19 @@ class PolicyConfig:
             },
             "directory": copy.deepcopy(source["directory"]),
             "recyclebin": recyclebin,
-            # Select by the run-unique category alone, mirroring the deployed
-            # production `public` group (categories-only) which is proven to assign
-            # torrents live. qbit_manage v4.10.0 did not assign the fixture when the
-            # group also carried include_all_tags, even though the source's
-            # category/tag/size checks all pass; the run category
-            # (e2e-qbm-<run-id>) already guarantees isolation from production
-            # (movies/tv) and other runs, and exclude_any_tags still proves the
-            # tracker-private exclusion.
+            # qbit_manage v4.10.0 rejects a config when both `cat` and `tracker`
+            # are empty, before it evaluates share limits. Preserve the already
+            # validated deployed tracker mapping; tag_update stays false, so this
+            # satisfies the parser without granting the one-shot Job authority to
+            # mutate tracker classification.
+            "tracker": copy.deepcopy(source["tracker"]),
+            # Require both run-owned selectors. The category and tag are unique to
+            # this run, while exclude_any_tags proves the tracker-private safety net.
             "share_limits": {
                 identity.group: {
                     "priority": 1,
                     "categories": [identity.category],
+                    "include_all_tags": [identity.run_tag],
                     "exclude_any_tags": ["tracker-private"],
                     "custom_tag": identity.limit_tag,
                     "add_group_to_tag": True,
@@ -408,11 +412,14 @@ class PolicyConfig:
             recyclebin.get("enabled") is True and recyclebin.get("save_torrents") is False,
             "unsafe recycle-bin settings",
         )
+        trackers = config.get("tracker")
+        require(isinstance(trackers, dict) and bool(trackers), "tracker mapping must not be empty")
         expected_settings = PolicyConfig.build(
             {
                 "qbt": qbt,
                 "directory": config["directory"],
                 "recyclebin": recyclebin,
+                "tracker": trackers,
             },
             identity,
             cleanup,
@@ -426,6 +433,7 @@ class PolicyConfig:
         expected_group = {
             "priority": 1,
             "categories": [identity.category],
+            "include_all_tags": [identity.run_tag],
             "exclude_any_tags": ["tracker-private"],
             "custom_tag": identity.limit_tag,
             "add_group_to_tag": True,
@@ -441,9 +449,10 @@ class PolicyConfig:
 def debug_keep_jobs() -> bool:
     """Operator debug hook. When QBM_E2E_DEBUG_KEEP_JOBS is set, the qbit_manage Jobs
     run at TRACE level and are preserved (Job + ConfigMap) after the run so the
-    operator can `kubectl logs` the group-matching decision. The orchestrator itself
-    never collects application logs (test_orchestrator_never_collects_application_logs
-    forbids it); only the operator reads them, and they clean up the kept resources."""
+    operator can use the guarded trace recipe to read the group-matching decision.
+    The orchestrator itself never collects application logs
+    (test_orchestrator_never_collects_application_logs forbids it); only the operator
+    reads them, then uses the exact-token guarded cleanup recipe."""
     value = os.environ.get("QBM_E2E_DEBUG_KEEP_JOBS", "")
     return value.strip().lower() not in ("", "0", "false", "no")
 
@@ -465,6 +474,22 @@ def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str)
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
     }
+    # qbit_manage catches its own Failed exceptions and exits zero, which would make
+    # Kubernetes mark a config/auth/command failure Complete. Its writable emptyDir
+    # is fresh for every Job, so translate the current run's failure markers into a
+    # nonzero container exit without the orchestrator collecting application logs.
+    run_script = """\
+python3 qbit_manage.py --run
+log_file=/config/logs/qbit_manage.log
+if [ ! -f "$log_file" ]; then
+  echo "qbit_manage did not create its expected log file" >&2
+  exit 1
+fi
+if grep -Eq 'Exiting scheduled Run\\.|Error executing qBittorrent commands:' "$log_file"; then
+  echo "qbit_manage reported a failed one-shot run" >&2
+  exit 1
+fi
+"""
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -510,7 +535,8 @@ def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str)
                         {
                             "name": "app",
                             "image": image,
-                            "args": ["python3", "qbit_manage.py", "--run"],
+                            "command": ["/bin/sh", "-eu", "-c"],
+                            "args": [run_script],
                             "env": [
                                 {"name": "QBT_WEB_SERVER", "value": "false"},
                                 {"name": "QBT_CONFIG_DIR", "value": "/config"},
@@ -977,8 +1003,10 @@ class Teardown:
                 print(
                     "Debug: leaving run-labeled Kubernetes resources for trace "
                     f"inspection (selector {self.identity.resource_selector}). "
-                    "Delete them manually after reading the log: kubectl delete "
-                    f"job,configmap -l {self.identity.resource_selector} -n {NAMESPACE}",
+                    "Delete them after reading the log with: "
+                    f"QBM_E2E_CLEANUP_CONFIRM=delete:e2e-qbit-manage:{self.identity.run_id} "
+                    "mise exec -- just kube qbit-manage-e2e-debug-cleanup "
+                    f"{self.identity.run_id}",
                     file=sys.stderr,
                 )
             else:
@@ -1362,8 +1390,9 @@ class Scenario:
         if debug_keep_jobs():
             print(
                 f"Debug: preserving Job/ConfigMap {config_name} at TRACE level for "
-                f"inspection. Read the group-matching decision with: "
-                f"kubectl logs job/{config_name} -n {NAMESPACE}",
+                "inspection. Read the group-matching decision with: "
+                "mise exec -- just kube qbit-manage-e2e-trace "
+                f"{self.identity.run_id} {phase}",
                 file=sys.stderr,
             )
             return

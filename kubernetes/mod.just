@@ -591,6 +591,104 @@ qbit-manage-validate: require-bash
 qbit-manage-verify: require-bash
     @scripts/verify/qbit-manage.sh {{quote(kubeconfig)}}
 
+# Read the preserved application trace for one run-owned qbit_manage E2E Job.
+# The exact run/phase validation and labels prevent this diagnostic from reading
+# an unrelated qbit_manage workload. Operator-only; not in ci.
+qbit-manage-e2e-trace run_id phase="limits": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    run_id={{quote(run_id)}}
+    phase={{quote(phase)}}
+    kubeconfig='{{kubeconfig}}'
+    namespace='media'
+
+    [[ "$run_id" =~ ^[a-z0-9]{8,24}$ ]] || {
+      echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|limits|cleanup]' >&2
+      exit 2
+    }
+    case "$phase" in
+      private|limits|cleanup) ;;
+      *)
+        echo 'Usage: just kube qbit-manage-e2e-trace <run-id> [private|limits|cleanup]' >&2
+        exit 2
+        ;;
+    esac
+    [[ -f "$kubeconfig" ]] || {
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      exit 1
+    }
+
+    job="qbm-e2e-${run_id}-${phase}"
+    job_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+      get "job/$job" --output json)"
+    actual_run="$(yq -r '.metadata.labels."homelab-talos/e2e-run" // ""' <<<"$job_json")"
+    actual_target="$(yq -r '.metadata.labels."homelab-talos/e2e-target" // ""' <<<"$job_json")"
+    [[ "$actual_run" == "$run_id" && "$actual_target" == 'qbit-manage-policy' ]] || {
+      echo "Refusing trace: job/$job does not carry the exact E2E ownership labels." >&2
+      exit 1
+    }
+
+    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+      logs "job/$job" --container app | \
+      rg --ignore-case --context 3 \
+        "$run_id|share limit group|check (failed|passed)|assigning|completed|filter|config error|exiting scheduled run"
+
+# Delete only the preserved Jobs and ConfigMaps owned by one exact qbit_manage E2E run.
+# This is a live-cluster mutation, so it requires a run-bound confirmation token.
+qbit-manage-e2e-debug-cleanup run_id: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    run_id={{quote(run_id)}}
+    kubeconfig='{{kubeconfig}}'
+    namespace='media'
+    expected_confirmation="delete:e2e-qbit-manage:${run_id}"
+
+    [[ "$run_id" =~ ^[a-z0-9]{8,24}$ ]] || {
+      echo 'Usage: QBM_E2E_CLEANUP_CONFIRM=delete:e2e-qbit-manage:<run-id> just kube qbit-manage-e2e-debug-cleanup <run-id>' >&2
+      exit 2
+    }
+    [[ "${QBM_E2E_CLEANUP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing cleanup: set QBM_E2E_CLEANUP_CONFIRM=$expected_confirmation" >&2
+      exit 1
+    }
+    [[ -f "$kubeconfig" ]] || {
+      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      exit 1
+    }
+    api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
+      --output jsonpath='{.clusters[0].cluster.server}')"
+    [[ "$api_server" == 'https://192.168.90.20:6443' ]] || {
+      echo "Refusing cleanup: kubeconfig targets $api_server, not the cluster API VIP." >&2
+      exit 1
+    }
+
+    selector="homelab-talos/e2e-run=${run_id},homelab-talos/e2e-target=qbit-manage-policy"
+    resources="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+      get job,configmap --selector "$selector" --output name)"
+    if [[ -z "$resources" ]]; then
+      echo "No preserved qbit_manage E2E resources found for run $run_id."
+      exit 0
+    fi
+    while IFS= read -r resource; do
+      [[ "$resource" =~ ^(job\.batch|configmap)/qbm-e2e-${run_id}-(private|limits|cleanup)$ ]] || {
+        echo "Refusing cleanup: unexpected labeled resource $resource" >&2
+        exit 1
+      }
+    done <<<"$resources"
+
+    printf '%s\n' "$resources"
+    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+      delete job,configmap --selector "$selector" --wait=true --timeout=2m
+    remaining="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+      get job,configmap --selector "$selector" --output name)"
+    [[ -z "$remaining" ]] || {
+      echo "Cleanup failed; resources remain: $remaining" >&2
+      exit 1
+    }
+    echo "Removed preserved qbit_manage E2E resources for run $run_id."
+
 # Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.

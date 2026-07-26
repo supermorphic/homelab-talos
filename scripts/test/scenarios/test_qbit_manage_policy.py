@@ -33,6 +33,9 @@ recyclebin:
   enabled: true
   empty_after_x_days: 7
   save_torrents: true
+tracker:
+  other:
+    tag: tracker-public
 """
 
 
@@ -111,8 +114,24 @@ class PolicyConfigTests(unittest.TestCase):
                 rendered = qbm.dump_policy_yaml(config)
                 self.assertIn("user: !ENV 'QBT_USER'", rendered)
                 self.assertIn("pass: !ENV 'QBT_PASS'", rendered)
+                self.assertEqual(config["tracker"], self.source["tracker"])
+                self.assertEqual(
+                    config["share_limits"][self.identity.group]["include_all_tags"],
+                    [self.identity.run_tag],
+                )
                 reparsed = qbm.load_policy_yaml(rendered)
                 qbm.PolicyConfig.validate(reparsed, self.identity, cleanup)
+
+    def test_build_rejects_missing_or_empty_tracker_mapping(self):
+        missing = copy.deepcopy(self.source)
+        missing.pop("tracker")
+        with self.assertRaisesRegex(TypeError, "missing mapping tracker"):
+            qbm.PolicyConfig.build(missing, self.identity, False)
+
+        empty = copy.deepcopy(self.source)
+        empty["tracker"] = {}
+        with self.assertRaisesRegex(ValueError, "tracker mapping must not be empty"):
+            qbm.PolicyConfig.build(empty, self.identity, False)
 
     def test_unsafe_mutations_are_rejected(self):
         mutations = {
@@ -126,9 +145,10 @@ class PolicyConfigTests(unittest.TestCase):
             "wrong category": lambda c: c["share_limits"][self.identity.group].__setitem__(
                 "categories", ["movies"]
             ),
-            "unexpected include tag": lambda c: c["share_limits"][self.identity.group].__setitem__(
+            "wrong include tag": lambda c: c["share_limits"][self.identity.group].__setitem__(
                 "include_all_tags", ["e2e-qbm-extra"]
             ),
+            "empty tracker": lambda c: c.__setitem__("tracker", {}),
             "missing private exclusion": lambda c: c["share_limits"][
                 self.identity.group
             ].__setitem__("exclude_any_tags", []),
@@ -202,7 +222,12 @@ class PolicyConfigTests(unittest.TestCase):
         self.assertEqual(manifest["kind"], "Job")
         self.assertEqual(manifest["spec"]["activeDeadlineSeconds"], 120)
         self.assertFalse(spec["automountServiceAccountToken"])
-        self.assertEqual(app["args"], ["python3", "qbit_manage.py", "--run"])
+        self.assertEqual(app["command"], ["/bin/sh", "-eu", "-c"])
+        self.assertEqual(len(app["args"]), 1)
+        self.assertIn("python3 qbit_manage.py --run", app["args"][0])
+        self.assertIn("/config/logs/qbit_manage.log", app["args"][0])
+        self.assertIn("Exiting scheduled Run", app["args"][0])
+        self.assertIn("Error executing qBittorrent commands", app["args"][0])
         self.assertEqual(app["envFrom"], [{"secretRef": {"name": "qbit-manage-secret"}}])
         mounts = {item["mountPath"] for item in app["volumeMounts"]}
         self.assertIn("/data/downloads", mounts)
@@ -629,6 +654,10 @@ class RepositorySafetyTests(unittest.TestCase):
         source = Path(qbm.__file__).read_text(encoding="utf-8")
         self.assertNotRegex(source, r"\.(?:call|exec)\([^)]*[\"']logs[\"']")
         self.assertNotIn("podLogs", source)
+        self.assertNotIn("kubectl logs", source)
+        self.assertNotIn("kubectl delete", source)
+        self.assertIn("just kube qbit-manage-e2e-trace", source)
+        self.assertIn("just kube qbit-manage-e2e-debug-cleanup", source)
 
 
 if __name__ == "__main__":
