@@ -15,8 +15,16 @@ boundary** — Flux continuously reconciles `main` onto the live cluster.
   make the change, and open a pull request.
 - Before opening or updating a PR, **`just ci` must pass locally** — the single
   cluster-independent, secret-free validation contract.
-- Open PRs with `gh pr create`; **squash-merge** after the `ci` status check is
-  green. Flux then reconciles the merged `main` commit.
+- Open PRs with `gh pr create`. PRs are **squash-merged** after the `ci` status check
+  is green, and Flux then reconciles the merged `main` commit.
+- **Merging is the human operator's job, not the agent's.** An agent must **never**
+  merge a pull request — no `gh pr merge`, no merge via the GitHub UI/API, no
+  auto-merge — even when `ci` is green and the change looks ready. The agent's
+  responsibility ends at opening or updating the PR; the operator reviews and merges.
+  An agent merging a PR is a **workflow violation**. The **only** exception is an
+  explicit, per-merge instruction from the operator to merge that specific PR as a
+  deliberate override; a general prior authorization, a stale approval, or the
+  agent's own inference does **not** count.
 - Direct commits to `main` or rule bypasses are for **emergency recovery only** and
   must be followed by `just ci` on `main`.
 - Keep commits scoped and reviewable. Report which validation ran versus was
