@@ -16,6 +16,10 @@ This tree contains declarative, repository-owned test inputs:
   leak sentinel), and `dns/` (active DNS-isolation: DNS resolves only via the
   Gluetun loopback resolver; LAN/home and cluster resolvers stay unreachable).
 
+See `docs/testing-layers.md` for how these layers fit together (Gatus continuous /
+Chainsaw smoke routine / Chainsaw resilience controlled-failure / Sonobuoy
+`just kube conformance` on-demand). Sonobuoy is ephemeral — never scheduled or standing.
+
 `mise exec -- just test validate` is the only cluster-independent command in this
 module. It lints Chainsaw configuration and tests, parses their YAML assets, runs
 ShellCheck over `scripts/test/` and `tests/probes/`, executes the shell unit-test

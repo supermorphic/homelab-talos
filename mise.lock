@@ -668,6 +668,45 @@ checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e7
 url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
 url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
 
+[[tools.sonobuoy]]
+version = "0.57.5"
+backend = "github:vmware-tanzu/sonobuoy"
+
+[tools.sonobuoy."platforms.linux-arm64"]
+checksum = "sha256:ec482b5d1ec237f4c94b6fd7be5a69f95678a4331001b3edcb6ad7835ec40695"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463140011"
+
+[tools.sonobuoy."platforms.linux-arm64-musl"]
+checksum = "sha256:ec482b5d1ec237f4c94b6fd7be5a69f95678a4331001b3edcb6ad7835ec40695"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463140011"
+
+[tools.sonobuoy."platforms.linux-x64"]
+checksum = "sha256:7c5c2250e5103c98f4dad2bcab86baf954e319c57c419c113f28f5060e62f129"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463139984"
+
+[tools.sonobuoy."platforms.linux-x64-musl"]
+checksum = "sha256:7c5c2250e5103c98f4dad2bcab86baf954e319c57c419c113f28f5060e62f129"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463139984"
+
+[tools.sonobuoy."platforms.macos-arm64"]
+checksum = "sha256:d889c4a4485f3899f8d860506ed4da5380372f23f91cd0113e52f036d842e978"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463139985"
+
+[tools.sonobuoy."platforms.macos-x64"]
+checksum = "sha256:4202d3a960a812e68b555829eefbe0cc25de8b2e5cb2fc8e5cc38dfc83515a9d"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463139983"
+
+[tools.sonobuoy."platforms.windows-x64"]
+checksum = "sha256:041500d35af9720cb8e0ec3584b32243e6555c1e7413caadf9ddb8c336354f63"
+url = "https://github.com/vmware-tanzu/sonobuoy/releases/download/v0.57.5/sonobuoy_0.57.5_windows_amd64.tar.gz"
+url_api = "https://api.github.com/repos/vmware-tanzu/sonobuoy/releases/assets/463139986"
+
 [[tools.sops]]
 version = "3.13.2"
 backend = "aqua:getsops/sops"

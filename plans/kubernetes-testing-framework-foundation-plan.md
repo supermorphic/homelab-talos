@@ -564,6 +564,17 @@ Foundation work is followed by separate, reviewable changes:
 9. Reusable Flux, Gateway API, DNS, Cilium, Longhorn, SMB, and cluster suites.
 10. Periodic conformance testing where appropriate.
 
+    **DONE (2026-07-25) as a disposition — on-demand, not scheduled/installed.** Conformance
+    is delivered as an operator-run, ephemeral Sonobuoy capability: `just kube conformance`
+    (MODE=quick default ~5–10 min validation subset; `MODE=certified` full ~1.5–2 h upstream
+    conformance evidence) — it runs, retrieves results into `.test-results/`, and tears
+    Sonobuoy down (nothing left standing), never in `just ci`. The layered "periodic"
+    strategy is documented in `docs/testing-layers.md`: Gatus + PrometheusRule = continuous;
+    Chainsaw smoke = routine; Chainsaw resilience = controlled failure; Sonobuoy =
+    operator-initiated conformance. Per this plan's deferrals, a **standing** Sonobuoy/
+    chaos-controller install and **scheduled in-cluster** tests remain intentionally out —
+    routine suites are run by the operator or an external scheduler.
+
 Only after the replacement scenarios pass repeatedly, exercise intentional
 failure/cleanup paths, and retain sufficient artifacts may
 `qbittorrent-killswitch-verify` be retired.
