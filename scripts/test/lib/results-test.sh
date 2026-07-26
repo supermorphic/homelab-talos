@@ -5,7 +5,7 @@ source scripts/test/lib/results.sh
 
 result_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-chainsaw-results-test.XXXXXX")"
 cleanup() {
-  rm -f "$result_dir/environment.json" "$result_dir/summary.json"
+  rm -f "$result_dir/environment.json" "$result_dir/summary.json" "$result_dir/recovery.json"
   rmdir "$result_dir"
 }
 trap cleanup EXIT
@@ -61,21 +61,21 @@ if rg --fixed-strings --quiet 'must-not-appear' "$result_dir"; then
   exit 1
 fi
 
-# resilience_recovery_status: missing recovery.json must not read as a pass.
-[[ "$(resilience_recovery_status "$result_dir")" == 'not-classified' ]] || {
+# Missing recovery.json must not read as a pass.
+[[ "$(recorded_recovery_status "$result_dir")" == 'not-classified' ]] || {
   echo 'Missing recovery.json should classify as not-classified.' >&2
   exit 1
 }
 # A recorded failed recovery is surfaced verbatim.
 printf '{"status":"failed","reason":"self-test"}\n' >"$result_dir/recovery.json"
-[[ "$(resilience_recovery_status "$result_dir")" == 'failed' ]] || {
+[[ "$(recorded_recovery_status "$result_dir")" == 'failed' ]] || {
   echo 'recovery.json status=failed should be read as failed.' >&2
   exit 1
 }
 
 # The separation invariant (forced cleanup-failure, item 4b): a failed recovery is
 # recorded in summary.json WITHOUT flipping a passing primary assertion.
-recovery_status="$(resilience_recovery_status "$result_dir")"
+recovery_status="$(recorded_recovery_status "$result_dir")"
 write_summary "$result_dir" passed 0 passed passed "$recovery_status" "$recovery_status"
 yq -e '
   .primary.status == "passed" and
@@ -86,4 +86,35 @@ yq -e '
   echo 'A failed recovery must be recorded separately without masking a passing primary.' >&2
   exit 1
 }
-rm -f "$result_dir/recovery.json"
+[[ "$(result_exit_code 0 "$recovery_status")" -eq 1 ]] || {
+  echo 'A failed cleanup must fail an otherwise passing command.' >&2
+  exit 1
+}
+[[ "$(result_exit_code 7 passed)" -eq 7 ]] || {
+  echo 'Cleanup success must not replace a primary failure exit code.' >&2
+  exit 1
+}
+[[ "$(result_exit_code 0 passed)" -eq 0 ]] || {
+  echo 'Passing primary and cleanup outcomes must exit zero.' >&2
+  exit 1
+}
+[[ "$(result_exit_code 0 not-required)" -eq 0 ]] || {
+  echo 'A non-mutating/not-required cleanup outcome may exit zero.' >&2
+  exit 1
+}
+
+printf '{"status":"not-attempted","reason":"interrupted"}\n' >"$result_dir/recovery.json"
+[[ "$(recorded_recovery_status "$result_dir")" == 'not-classified' ]] || {
+  echo 'A non-terminal recovery status must classify as not-classified.' >&2
+  exit 1
+}
+printf '{"status":"unexpected","reason":"bad fixture"}\n' >"$result_dir/recovery.json"
+[[ "$(recorded_recovery_status "$result_dir")" == 'not-classified' ]] || {
+  echo 'An unknown recovery status must classify as not-classified.' >&2
+  exit 1
+}
+printf '{invalid\n' >"$result_dir/recovery.json"
+[[ "$(recorded_recovery_status "$result_dir")" == 'not-classified' ]] || {
+  echo 'Malformed recovery JSON must classify as not-classified.' >&2
+  exit 1
+}

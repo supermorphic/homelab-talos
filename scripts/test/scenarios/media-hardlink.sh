@@ -40,14 +40,11 @@ app_exec() { k exec "$1" -c app -- sh -c "$2"; }
 pod="$(k get pod -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
 [[ -n "$pod" ]] || { echo 'No sonarr pod found (is Phase 13 bootstrapped?).' >&2; write_recovery 'not-required' 'aborted; nothing created'; exit 3; }
 
-passed=false
 cleanup() {
   local cleanup_ok=true
   app_exec "$pod" "rm -rf '$src_dir' '$dst_dir'" >/dev/null 2>&1 || cleanup_ok=false
-  if [[ "$passed" == true ]]; then
-    if [[ "$cleanup_ok" == true ]]; then write_recovery 'passed' 'test hardlink pair removed from the share'
-    else write_recovery 'failed' "could not remove test dirs $src_dir / $dst_dir — remove manually"; fi
-  fi
+  if [[ "$cleanup_ok" == true ]]; then write_recovery 'passed' 'test hardlink pair removed from the share'
+  else write_recovery 'failed' "could not remove test dirs $src_dir / $dst_dir — remove manually"; fi
 }
 trap cleanup EXIT
 
@@ -88,5 +85,4 @@ SRC_LINKS="$src_links" DST_LINKS="$dst_links" \
     "dstLinkCount": (strenv(DST_LINKS) | tonumber)
   }' >"$run_dir/evidence.json"
 
-passed=true
 echo "PASS: media-data preserves hardlinks across downloads<->media (same inode $src_inode). Evidence: $run_dir"

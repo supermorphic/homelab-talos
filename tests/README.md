@@ -31,6 +31,7 @@ Live commands are operator-only:
 - `mise exec -- just test smoke cluster`
 - `mise exec -- just test smoke cluster diagnostics-self-test` (expected failure)
 - `mise exec -- just test smoke media qbittorrent`
+- `mise exec -- just test smoke media qbit-manage`
 - `mise exec -- just test smoke platform` (all platform readiness suites) or
   `mise exec -- just test smoke platform <cluster|flux|gateway|dns|cilium|longhorn|portainer|smb>` (one).
   Read-only resource-readiness per subsystem; the deep functional checks (cilium connectivity
@@ -52,9 +53,10 @@ Live commands are operator-only:
   fails closed across the outage, then pod-recreation recovery; records recovery status
   separately in `summary.json`)
 - `CLUSTER_CHAOS_CONFIRM=chaos:cleanup-failure-self-test mise exec -- just test resilience cleanup-failure-self-test`
-  (opt-in self-test, the cleanup analogue of `diagnostics-self-test`: deliberately records
-  a failed recovery while the primary assertion passes; confirm `summary.json` shows
-  `assertion.status: passed` and `recovery.status: failed`. Non-destructive.)
+  (expected failure; opt-in cleanup analogue of `diagnostics-self-test`: deliberately
+  records a failed recovery while the primary assertion passes; confirm `summary.json`
+  preserves `assertion.status: passed` and records `recovery.status: failed`.
+  Non-destructive.)
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-pod-recreation mise exec -- just test resilience qbittorrent-pod-recreation`
   (deletes the qBittorrent pod and proves startup-gating — the app container starts only
   after Gluetun's native-sidecar startup gate — and config persistence — the same Longhorn
@@ -74,13 +76,16 @@ Live commands are operator-only:
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
-names are not interchangeable. E2E and resilience have no registered targets
-yet and fail closed. Live commands must never enter `just ci`.
+names are not interchangeable. E2E currently registers `media-hardlink`;
+resilience targets are explicitly registered in the dispatcher. Unknown targets
+fail closed. Live commands must never enter `just ci`.
 
-Each smoke run writes a collision-resistant directory under `.test-results/`
+Each live Chainsaw run writes a collision-resistant directory under `.test-results/`
 containing `junit.xml`, `summary.json`, `environment.json`, the Chainsaw log, and
 allowlisted fallback diagnostics. Artifacts record only the confirmation
 variable name, never its value. Environment metadata records tier and target,
-plus the scenario when one was explicitly selected. A failed diagnostic
-collection is recorded separately and cannot turn a failed assertion into a
-pass.
+plus the scenario when one was explicitly selected. E2E and resilience read
+`recovery.json` into separate cleanup/recovery summary fields. A failed cleanup
+makes the command non-zero without replacing the primary assertion outcome. A
+failed diagnostic collection is recorded separately and cannot turn a failed
+assertion into a pass.

@@ -10,9 +10,10 @@ spec:
   # Opt-in resilience self-test (the cleanup analogue of the diagnostics-self-test). It
   # deliberately records a FAILED recovery while the primary assertion PASSES, to prove
   # end-to-end that the runner surfaces recovery.status=failed in summary.json WITHOUT
-  # masking assertion.status=passed. Non-destructive: it mutates no cluster state (only
-  # writes recovery.json into the run dir), so no finally recovery is needed. Still
-  # chaos-gated because it dispatches through the resilience tier.
+  # masking assertion.status=passed, while the overall command exits non-zero.
+  # Non-destructive: it mutates no cluster state (only writes recovery.json into the run
+  # dir), so no finally recovery is needed. Still chaos-gated because it dispatches
+  # through the resilience tier.
   namespace: flux-system
   concurrent: false
   steps:
