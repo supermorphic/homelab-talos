@@ -115,17 +115,23 @@ case "$tier" in
       echo "The E2E tier does not accept a scenario: $scenario" >&2
       exit 2
     }
-    acquire_state_lock
     case "$target" in
       media-hardlink)
         test_dir='tests/chainsaw/e2e/media-hardlink'
         selector='homelab-talos/suite=media-hardlink'
+        ;;
+      qbit-manage-policy)
+        scripts/test/safety/require-e2e-confirmation.sh "$target"
+        confirmation_type='CLUSTER_E2E_CONFIRM'
+        test_dir='tests/chainsaw/e2e/qbit-manage-policy'
+        selector='homelab-talos/suite=qbit-manage-policy'
         ;;
       *)
         echo "Unknown e2e target: $target" >&2
         exit 2
         ;;
     esac
+    acquire_state_lock
     ;;
   resilience)
     [[ -z "$scenario" ]] || {
@@ -284,12 +290,18 @@ fi
 # outcome in recovery.json. Surface it separately without rewriting the primary assertion.
 cleanup_status='not-required'
 recovery_status='not-required'
+external_dependency_status='not-applicable'
 if [[ "$tier" == 'e2e' || "$tier" == 'resilience' ]]; then
   recovery_status="$(recorded_recovery_status "$run_dir")"
   cleanup_status="$recovery_status"
 fi
+if [[ "$tier" == 'e2e' && "$target" == 'qbit-manage-policy' ]]; then
+  assertion_status="$(recorded_phase_status "$run_dir" assertion)"
+  external_dependency_status="$(recorded_phase_status "$run_dir" external-dependency)"
+fi
 write_summary "$run_dir" "$primary_status" "$primary_exit_code" \
-  "$assertion_status" "$diagnostics_status" "$cleanup_status" "$recovery_status"
+  "$assertion_status" "$diagnostics_status" "$cleanup_status" "$recovery_status" \
+  "$external_dependency_status"
 
 overall_exit_code="$(result_exit_code "$primary_exit_code" "$cleanup_status")"
 echo "Chainsaw results: $run_dir"

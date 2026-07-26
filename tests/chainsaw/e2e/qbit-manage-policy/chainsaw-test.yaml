@@ -1,0 +1,27 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: qbit-manage-policy
+  labels:
+    homelab-talos/tier: e2e
+    homelab-talos/target: qbit-manage-policy
+    homelab-talos/suite: qbit-manage-policy
+spec:
+  # Operator-only, exact-confirmation-gated, state-locked real-download E2E. The
+  # orchestrator owns all mutation, evidence classification, and exact teardown.
+  namespace: flux-system
+  concurrent: false
+  steps:
+    - name: prove-real-download-policy-lifecycle
+      try:
+        - script:
+            timeout: 60m
+            content: |
+              cd "$HOMELAB_REPO_ROOT"
+              scripts/test/safety/require-e2e-confirmation.sh qbit-manage-policy
+              scripts/test/scenarios/qbit-manage-policy.sh .kube/config
+      catch:
+        # Events are safe diagnostics. Do not collect qbit_manage/qBittorrent logs: they
+        # can contain torrent names, tracker URLs, or authentication-adjacent data.
+        - events:
+            namespace: media

@@ -36,3 +36,8 @@ expect_dispatch_rejection 'e2e rejects a scenario argument' e2e media-hardlink e
 rg -Fq "qbit-manage)" "$runner"
 rg -Fq "test_dir='tests/chainsaw/smoke/media/qbit-manage'" "$runner"
 rg -Fq "selector='homelab-talos/suite=qbit-manage'" "$runner"
+rg -Fq "qbit-manage-policy)" "$runner"
+rg -Fq "test_dir='tests/chainsaw/e2e/qbit-manage-policy'" "$runner"
+rg -Fq "selector='homelab-talos/suite=qbit-manage-policy'" "$runner"
+rg -Fq 'scripts/test/safety/require-e2e-confirmation.sh "$target"' "$runner"
+rg -Fq 'acquire_state_lock' "$runner"

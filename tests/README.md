@@ -46,7 +46,11 @@ Live commands are operator-only:
   share preserves hardlinks across `/data/downloads` ↔ `/data/media` — the filesystem
   contract every *arr "hardlink not copy" import depends on — using a throwaway test file,
   no external download; cleans up after itself)
-- `mise exec -- just test e2e <registered-target>`
+- `CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy`
+  (up to 60 minutes; downloads WebTorrent's legal Sintel fixture through qBittorrent's VPN
+  egress, observes the deployed public classification, proves private-tag exclusion, applies
+  isolated one/two-minute share limits, verifies Stop + recycle cleanup and hardlink survival,
+  reruns cleanup idempotently, and tears down only exact run-owned state)
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect`
   (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
@@ -76,16 +80,18 @@ Live commands are operator-only:
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
-names are not interchangeable. E2E currently registers `media-hardlink`;
-resilience targets are explicitly registered in the dispatcher. Unknown targets
-fail closed. Live commands must never enter `just ci`.
+names are not interchangeable. E2E registers `media-hardlink` and the exact-confirmation-gated
+`qbit-manage-policy`; resilience targets are explicitly registered in the dispatcher.
+Unknown targets fail closed. Live commands must never enter `just ci`.
 
 Each live Chainsaw run writes a collision-resistant directory under `.test-results/`
 containing `junit.xml`, `summary.json`, `environment.json`, the Chainsaw log, and
 allowlisted fallback diagnostics. Artifacts record only the confirmation
 variable name, never its value. Environment metadata records tier and target,
 plus the scenario when one was explicitly selected. E2E and resilience read
-`recovery.json` into separate cleanup/recovery summary fields. A failed cleanup
-makes the command non-zero without replacing the primary assertion outcome. A
-failed diagnostic collection is recorded separately and cannot turn a failed
-assertion into a pass.
+`recovery.json` into separate cleanup/recovery summary fields. The qbit_manage policy E2E
+also records `assertion.json`, `external-dependency.json`, `cleanup.json`, sanitized
+`evidence.json`, and generated non-secret manifests. A failed cleanup makes the command
+non-zero without replacing the primary assertion outcome; fixture unavailability is reported
+as an external-dependency failure rather than a policy assertion. A failed diagnostic
+collection is recorded separately and cannot turn a failed assertion into a pass.

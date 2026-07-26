@@ -10,7 +10,8 @@ validate:
 smoke target scenario="":
     @scripts/test/run-chainsaw.sh smoke {{quote(target)}} {{quote(scenario)}}
 
-# Run registered state-changing functional scenarios against the live cluster.
+# Run registered state-changing functional scenarios against the live cluster. Targets with
+# real external/download mutations enforce their own exact CLUSTER_E2E_CONFIRM token.
 e2e target:
     @scripts/test/run-chainsaw.sh e2e {{quote(target)}}
 

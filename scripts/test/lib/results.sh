@@ -75,6 +75,26 @@ recorded_recovery_status() {
   esac
 }
 
+recorded_phase_status() {
+  local run_dir="$1"
+  local phase="$2"
+  local file="$run_dir/${phase}.json"
+  local status
+  [[ "$phase" == 'assertion' || "$phase" == 'external-dependency' ]] || {
+    echo 'not-classified'
+    return
+  }
+  [[ -f "$file" ]] || { echo 'not-classified'; return; }
+  status="$(yq -r '.status // "not-classified"' "$file" 2>/dev/null)" || {
+    echo 'not-classified'
+    return
+  }
+  case "$status" in
+    passed|failed|not-applicable|not-classified) echo "$status" ;;
+    *) echo 'not-classified' ;;
+  esac
+}
+
 # Preserve the primary command exit code. A failed/unclassified cleanup makes an otherwise
 # passing command fail, while the summary continues to report the primary assertion as passed.
 result_exit_code() {
@@ -98,6 +118,7 @@ write_summary() {
   local diagnostics_status="$5"
   local cleanup_status="$6"
   local recovery_status="$7"
+  local external_dependency_status="${8:-not-applicable}"
 
   PRIMARY_STATUS="$primary_status" \
   PRIMARY_EXIT_CODE="$primary_exit_code" \
@@ -105,6 +126,7 @@ write_summary() {
   DIAGNOSTICS_STATUS="$diagnostics_status" \
   CLEANUP_STATUS="$cleanup_status" \
   RECOVERY_STATUS="$recovery_status" \
+  EXTERNAL_DEPENDENCY_STATUS="$external_dependency_status" \
     yq --null-input --output-format json '{
       "schemaVersion": 1,
       "primary": {
@@ -114,7 +136,7 @@ write_summary() {
       "safety": {"status": "passed"},
       "infrastructure": {"status": "not-classified"},
       "assertion": {"status": strenv(ASSERTION_STATUS)},
-      "externalDependency": {"status": "not-applicable"},
+      "externalDependency": {"status": strenv(EXTERNAL_DEPENDENCY_STATUS)},
       "cleanup": {"status": strenv(CLEANUP_STATUS)},
       "recovery": {"status": strenv(RECOVERY_STATUS)},
       "diagnostics": {"status": strenv(DIAGNOSTICS_STATUS)}
