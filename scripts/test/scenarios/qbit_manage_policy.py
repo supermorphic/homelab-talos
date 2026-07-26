@@ -438,11 +438,24 @@ class PolicyConfig:
         require(groups[identity.group] == expected_group, "unsafe run group")
 
 
+def debug_keep_jobs() -> bool:
+    """Operator debug hook. When QBM_E2E_DEBUG_KEEP_JOBS is set, the qbit_manage Jobs
+    run at TRACE level and are preserved (Job + ConfigMap) after the run so the
+    operator can `kubectl logs` the group-matching decision. The orchestrator itself
+    never collects application logs (test_orchestrator_never_collects_application_logs
+    forbids it); only the operator reads them, and they clean up the kept resources."""
+    value = os.environ.get("QBM_E2E_DEBUG_KEEP_JOBS", "")
+    return value.strip().lower() not in ("", "0", "false", "no")
+
+
 def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9-]{2,16}", phase):
         raise ValueError(f"unsafe Job phase: {phase!r}")
     if not image or not config_map:
         raise ValueError("Job image and ConfigMap are required")
+    keep = debug_keep_jobs()
+    log_level = "TRACE" if keep else "INFO"
+    ttl_seconds = 3600 if keep else 600
     name = f"qbm-e2e-{identity.run_id}-{phase}"
     labels = {
         "homelab-talos/e2e-run": identity.run_id,
@@ -459,7 +472,7 @@ def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str)
         "spec": {
             "backoffLimit": 0,
             "activeDeadlineSeconds": 120,
-            "ttlSecondsAfterFinished": 600,
+            "ttlSecondsAfterFinished": ttl_seconds,
             "template": {
                 "metadata": {"labels": labels},
                 "spec": {
@@ -502,7 +515,7 @@ def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str)
                                 {"name": "QBT_WEB_SERVER", "value": "false"},
                                 {"name": "QBT_CONFIG_DIR", "value": "/config"},
                                 {"name": "QBT_LOGFILE", "value": "qbit_manage.log"},
-                                {"name": "QBT_LOG_LEVEL", "value": "INFO"},
+                                {"name": "QBT_LOG_LEVEL", "value": log_level},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
                             ],
                             "envFrom": [{"secretRef": {"name": "qbit-manage-secret"}}],
@@ -960,16 +973,25 @@ class Teardown:
             self.ok = False
 
         if self.ledger.resources_attempted:
-            self.attempt(
-                "remove run-labeled Kubernetes resources",
-                lambda: self.kube.delete_labeled(self.identity.resource_selector),
-            )
-            remaining = self.attempt(
-                "verify Kubernetes resource cleanup",
-                lambda: self.kube.labeled_names(self.identity.resource_selector),
-            )
-            if remaining is None or remaining:
-                self.ok = False
+            if debug_keep_jobs():
+                print(
+                    "Debug: leaving run-labeled Kubernetes resources for trace "
+                    f"inspection (selector {self.identity.resource_selector}). "
+                    "Delete them manually after reading the log: kubectl delete "
+                    f"job,configmap -l {self.identity.resource_selector} -n {NAMESPACE}",
+                    file=sys.stderr,
+                )
+            else:
+                self.attempt(
+                    "remove run-labeled Kubernetes resources",
+                    lambda: self.kube.delete_labeled(self.identity.resource_selector),
+                )
+                remaining = self.attempt(
+                    "verify Kubernetes resource cleanup",
+                    lambda: self.kube.labeled_names(self.identity.resource_selector),
+                )
+                if remaining is None or remaining:
+                    self.ok = False
 
         if self.ok:
             reason = "all exact run-owned state removed"
@@ -1337,6 +1359,14 @@ class Scenario:
         self.kube.apply(job_path)
         self.wait_for_job(config_name)
         self.recorder.job(phase, config_name)
+        if debug_keep_jobs():
+            print(
+                f"Debug: preserving Job/ConfigMap {config_name} at TRACE level for "
+                f"inspection. Read the group-matching decision with: "
+                f"kubectl logs job/{config_name} -n {NAMESPACE}",
+                file=sys.stderr,
+            )
+            return
         self.kube.call(
             "delete",
             "job",

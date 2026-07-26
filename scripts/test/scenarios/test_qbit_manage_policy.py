@@ -216,6 +216,23 @@ class PolicyConfigTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
+    def _job_log_level_and_ttl(self):
+        manifest = qbm.job_manifest(self.identity, "limits", qbm.QBM_IMAGE, "cm")
+        app = next(
+            item
+            for item in manifest["spec"]["template"]["spec"]["containers"]
+            if item["name"] == "app"
+        )
+        level = next(env["value"] for env in app["env"] if env["name"] == "QBT_LOG_LEVEL")
+        return level, manifest["spec"]["ttlSecondsAfterFinished"]
+
+    def test_debug_flag_raises_job_log_level_and_ttl_but_default_is_quiet(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("QBM_E2E_DEBUG_KEEP_JOBS", None)
+            self.assertEqual(self._job_log_level_and_ttl(), ("INFO", 600))
+        with mock.patch.dict(os.environ, {"QBM_E2E_DEBUG_KEEP_JOBS": "1"}):
+            self.assertEqual(self._job_log_level_and_ttl(), ("TRACE", 3600))
+
 
 class ApiBridgeTests(unittest.TestCase):
     def test_qbittorrent_user_collections_normalize_to_plain_json_values(self):
