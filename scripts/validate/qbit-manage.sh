@@ -52,8 +52,23 @@ tag="$(yq -r '.controllers."qbit-manage".containers.app.image.tag' "$values")"; 
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.envFrom[0].secretRef.name' "$values")" == 'qbit-manage-secret' ]] || { echo 'qbit-manage must load QBT_USER/QBT_PASS via envFrom secretRef qbit-manage-secret.' >&2; exit 1; }
 # UI-less: web server disabled so no Service/route is ever needed. [invariant]
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.env.QBT_WEB_SERVER' "$values")" == 'false' ]] || { echo 'qbit-manage must set QBT_WEB_SERVER=false (no UI).' >&2; exit 1; }
-# PR1: no media-data mount (API-only). PR4 adds a download-root mount; relax then. [stage: PR1]
-[[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'qbit-manage must not mount media-data in PR1 (API-only).' >&2; exit 1; }
+# [stage: PR2+] Download-root mount. qbit_manage requires directory.root_dir at config load,
+# so the download root is mounted — but ONLY the downloads subPath (never /data/media) and
+# READ-ONLY through PR3 (PR4 flips it read-write for the recycle bin). [invariant: never /media]
+[[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo 'qbit-manage data mount must use existingClaim media-data.' >&2; exit 1; }
+dl="$(yq -r '.persistence.data.advancedMounts."qbit-manage".app[0]' "$values")"
+[[ "$(yq -r '.path' <<<"$dl")" == '/data/downloads' ]] || { echo 'qbit-manage data mount path must be /data/downloads.' >&2; exit 1; }
+[[ "$(yq -r '.subPath' <<<"$dl")" == 'downloads' ]] || { echo 'qbit-manage must mount ONLY the downloads subPath (never /data/media).' >&2; exit 1; }
+[[ "$(yq -r '.readOnly' <<<"$dl")" == 'true' ]] || { echo 'qbit-manage download-root mount must be readOnly through PR3.' >&2; exit 1; }
+[[ "$(yq -r '.directory.root_dir' "$config")" == '/data/downloads' ]] || { echo 'config.yml directory.root_dir must be /data/downloads.' >&2; exit 1; }
+
+# Auto-reload: config.yml is copied onto a writable emptyDir at pod start, so a ConfigMap-only
+# change would not roll the pod. The config-hash pod annotation (= git hash-object of config.yml)
+# is part of the pod template, so any config change rolls the Deployment. Enforce they match so a
+# config edit can never silently fail to deploy.
+want_hash="$(git hash-object "$config")"
+have_hash="$(yq -r '.controllers."qbit-manage".pod.annotations."config-hash" // "none"' "$values")"
+[[ "$have_hash" == "$want_hash" ]] || { echo "qbit-manage pod annotation config-hash ($have_hash) must equal git hash-object of config.yml ($want_hash) — update it in values.yaml." >&2; exit 1; }
 # [invariant] qbit_manage rewrites config.yml on startup, so it MUST land on a writable
 # volume. Deliver it via the init-config copy from the read-only ConfigMap onto the writable
 # emptyDir /config — never mount the ConfigMap directly at /config/config.yml (read-only),

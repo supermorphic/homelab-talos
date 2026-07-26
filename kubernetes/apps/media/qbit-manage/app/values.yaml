@@ -19,6 +19,14 @@ controllers:
     # single-writer swap consistent with the other media controllers.
     strategy: Recreate
     pod:
+      annotations:
+        # Auto-reload: the config.yml ConfigMap is copied onto a writable emptyDir at pod
+        # start, so a ConfigMap-only change would NOT roll the pod on its own. This hash of
+        # config.yml (git hash-object) is part of the pod template, so any config change rolls
+        # the Deployment automatically. `just ci` asserts it equals the real hash, so a config
+        # edit can never silently fail to deploy. Update it whenever config.yml changes:
+        #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
+        config-hash: "ae4505741bc19728f4284ae1db7f4aa031383ddb"
       securityContext:
         runAsNonRoot: true
         runAsUser: 568
@@ -108,4 +116,17 @@ persistence:
       qbit-manage:
         init-config:
           - path: /config-src
+            readOnly: true
+  # Download root only (never /data/media), READ-ONLY through PR3. qbit_manage requires
+  # directory.root_dir to resolve at config load; it is otherwise inert until PR4's recycle
+  # bin (which will flip this to read-write). subPath `downloads` keeps the media library
+  # entirely out of this pod's view.
+  data:
+    type: persistentVolumeClaim
+    existingClaim: media-data
+    advancedMounts:
+      qbit-manage:
+        app:
+          - path: /data/downloads
+            subPath: downloads
             readOnly: true

@@ -29,7 +29,9 @@ done
 # Poll logs for an authenticated run vs. a hard failure. qbit_manage runs once on startup
 # and then on its schedule, so a run marker appears within a minute. NOTE: ripgrep uses
 # regex by default; do NOT pass -E (that is --encoding in rg, not extended-regex).
-fail_re='LoginFailed|[Ff]ailed to login|[Uu]nauthorized|[Ff]orbidden|error reading.*[Cc]onfig|Traceback|not a valid|Read-only file system|Connection refused|Max retries|Unable to connect'
+# NB: match 'Config Error' (a run-aborting error) but NOT 'Config Warning' (harmless
+# default auto-fill), and 'Exiting scheduled Run' (only printed when a run aborts early).
+fail_re='LoginFailed|[Ff]ailed to login|[Uu]nauthorized|[Ff]orbidden|error reading.*[Cc]onfig|Config Error|Exiting scheduled Run|Traceback|not a valid|Read-only file system|Connection refused|Max retries|Unable to connect'
 ok_re='Finished Run|Starting Run|Using .* as config|Current Config|Executing|Uncategorized|qBittorrent|Torrents'
 outcome='unknown'
 for _ in {1..24}; do
