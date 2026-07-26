@@ -578,3 +578,38 @@ The implementation is complete when:
 
 The agent opens or updates the required PRs but does not merge them. The operator
 owns every merge and live rollout gate.
+
+## Note: file layout when a second private tracker arrives
+
+CZTeam currently costs roughly 60–70 lines spread across `config.yml`, the policy
+validator, its unit test, and the docs. That is comfortable at one tracker; the
+decision below is about the *next* one (TorrentLeech, FileList, …), not this work.
+**Do not restructure during the CZTeam rollout** — it would churn in-flight PRs.
+
+**Scripts — do NOT create per-tracker validator/test files.** The safety-critical
+checks are relational, whole-config invariants (public must exclude *every*
+private tag; every named mapping must carry `tracker-private`; no tracker key may
+contain a passkey; the `private_tag` net must be set). A per-tracker file cannot
+own these without either duplicating the public-group knowledge or leaving the
+cross-group checks homeless, and `config.yml` itself is a single file qbit_manage
+reads whole, so it cannot be split at all. The per-tracker growth is mostly
+hardcoded *parameters* (`ratio 2.0`, `7d`, `priority 10`), not per-tracker logic.
+
+When the **second** private tracker lands, generalize instead of splitting:
+refactor the validator to enforce a data-driven *private-group safety envelope*
+over **all** share-limit groups — any group selected by a private tag must have
+`cleanup: false`, `share_limit_action: Stop` (never `Remove`/`RemoveWithContent`),
+`priority` lower than public, and a positive `min_seeding_time` floor paired with
+a positive `max_ratio`. Adding tracker #3 then edits only `config.yml`. Generalize
+at N=2, not now: abstracting against a single example risks the wrong shape. If
+the operator later decides the *envelope* is sufficient and exact per-tracker
+tuning values (2.0 / 7d) need not gate CI, dropping those pinned literals removes
+most of the remaining growth.
+
+**Docs — per-tracker docs ARE the right eventual shape**, unlike the scripts.
+Tracker-specific reference (rules, H&R math, allowed-client links, onboarding,
+rollback) is self-contained and splits cleanly. Keep `docs/qbit-manage.md` as the
+*system* doc (classification model, rollout, ops, safety invariants) and move a
+tracker's reference into its own file (e.g. `docs/qbit-manage-czteam.md`) once
+that section crosses roughly one screen (~30+ lines) or at the second tracker,
+whichever comes first. Today's ~4 CZTeam lines do not yet justify a separate file.
