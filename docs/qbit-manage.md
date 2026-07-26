@@ -33,16 +33,26 @@ only, never a passkey or full announce URL.
 Why this instead of an allow-list of public trackers? Public torrents announce to a shifting,
 flaky set of open trackers that changes with every batch of downloads — an allow-list of those
 would need constant upkeep, and any host you missed would silently seed forever. Private
-trackers, by contrast, are **few and stable**: you maintain that small list instead. The trade
-is that the private list is **safety-critical** (see below).
+trackers are identified generically from private torrent metadata, while explicit hostname
+mappings add tracker-specific policy tags.
 
 ```text
-torrent in tv/movies category
-        │
-        ├─ tagged tracker-private ─────────► EXCLUDED (no limits, no cleanup, seeds per your rules)
-        │
-        └─ not tracker-private ────────────► public policy: 24h min seed, ratio 1.5, 7d max
+private torrent metadata ───────────────► tracker-private (public policy excluded)
+verified CZTeam announce hostname ──────► tracker-private + tracker-czteam
+                                                │
+                                                └─► CZTeam: 7d minimum, ratio 2.0,
+                                                    unlimited maximum, Stop, no cleanup
+
+tv/movies without tracker-private ──────► public: 24h minimum, ratio 1.5,
+                                           7d maximum, cleanup through recycle bin
 ```
+
+## CZTeam private-tracker policy
+
+CZTeam has a dedicated, active policy: priority 10, seven-day minimum seed time,
+ratio 2.0, unlimited maximum seed time, reversible `Stop`, and no cleanup.
+See [`qbit-manage-czteam.md`](qbit-manage-czteam.md) for the current tracker
+rules, policy semantics, first-real-torrent acceptance, and rollback procedure.
 
 ## ⚠️ SAFETY-CRITICAL: adding a private tracker
 
@@ -142,11 +152,8 @@ activate it with the guarded workflow:
 
 **Inspect the last run / classification report:**
 
-```bash
-mise exec -- kubectl --kubeconfig .kube/config -n media logs deployment/qbit-manage --tail=200
-```
-
-Do not paste log lines containing tracker URLs or torrent names into chat/tickets.
+Use Portainer's read-only pod log view locally. Do not paste log lines containing
+torrent names, tracker URLs, or passkeys into chat/tickets.
 
 **Verify (read-only live acceptance):**
 
@@ -156,11 +163,10 @@ mise exec -- just kube qbit-manage-verify
 
 **Pause qbit_manage without touching qBittorrent** (qBittorrent/Sonarr/Radarr keep working):
 
-```bash
-mise exec -- flux suspend kustomization qbit-manage -n flux-system
-```
-
-Durable pause: set `suspend: true` in `ks.yaml` via PR.
+Set `suspend: true` in `ks.yaml` through a reviewed PR. If an immediate
+operator action is needed, use an existing guarded recipe; do not run raw Flux
+or Kubernetes commands. Suspending qbit_manage does not stop qBittorrent from
+seeding.
 
 **Disable limits/cleanup quickly through GitOps.** The controls, in `config.yml`: the per-group
 `share_limits.public.cleanup` flag (deletion), the global `commands.skip_cleanup` (recyclebin
@@ -170,13 +176,10 @@ reconciles and the pod rolls with the safe policy (the `config-hash` annotation 
 **Recover a mistakenly-cleaned torrent (within 7 days).** Cleanup *moves* download-side data to
 `/data/downloads/.RecycleBin`; it is only unlinked after `recyclebin.empty_after_x_days` (7).
 The `/data/media` Plex file is a hardlink and is unaffected regardless. To recover the
-download-side within the window, move it back out of `.RecycleBin` (from a pod that mounts
-`/data`, e.g. Radarr/Sonarr) and re-add the torrent if you want to resume seeding:
-
-```bash
-mise exec -- kubectl --kubeconfig .kube/config -n media exec deploy/radarr -- \
-  ls -la /data/downloads/.RecycleBin
-```
+download-side within the window, move it back out of `.RecycleBin` through a
+guarded operator workflow and re-add the torrent if you want to resume seeding.
+If no guarded recipe exists for the required recovery, add one rather than
+using an ad-hoc raw cluster command.
 
 To make cleanup even safer, raise `recyclebin.empty_after_x_days`. To stop deletion entirely,
 set `share_limits.public.cleanup: false` (via PR).
@@ -187,6 +190,8 @@ set `share_limits.public.cleanup: false` (via PR).
 - qBittorrent's global seeding limits stay disabled.
 - The public `share_limits` group must exclude `tracker-private` (the safety gate).
   Known-private hosts map to `tracker-private`, never `tracker-public`.
+- The public group also excludes `tracker-czteam`; the CZTeam group has higher
+  priority, uses `Stop`, has no finite maximum seed time, and never cleans up.
 - `settings.private_tag` must be `tracker-private` — the generic net that auto-tags every
   private torrent so an unmapped private tracker is still excluded from the public policy.
 - Destructive features off: unregistered removal, orphaned removal, no-hardlink handling,
@@ -194,3 +199,26 @@ set `share_limits.public.cleanup: false` (via PR).
 - Credentials come only from the SOPS Secret via `!ENV`; never inline, never in logs.
 - qbit_manage never mounts `/data/media`; the completed rollout's hardlink proof established
   that cleanup leaves media-side files intact.
+
+## Adding another private tracker
+
+Review the new tracker's official rules, H&R policy, allowed clients, and
+announce hostname independently. Give it a unique tracker tag and share-limit
+group; do not reuse CZTeam's values or create one global “worst private tracker”
+policy.
+
+When the second private tracker is added:
+
+- keep `config.yml` as the single qbit_manage policy file;
+- do not create per-tracker validator/test scripts;
+- generalize `scripts/validate/qbit-manage-policy.sh` into a data-driven
+  private-group safety envelope over every private group: priority above public,
+  positive ratio/minimum-time pairing, `Stop`, and `cleanup: false`;
+- retain relational checks that every named private mapping includes
+  `tracker-private` and public excludes every private policy tag; and
+- keep this file as the system/operations document and put tracker-specific
+  rules and runbooks in `docs/qbit-manage-<tracker>.md`, following the existing
+  CZTeam document.
+
+Do not restructure for a single tracker; generalize when the second concrete
+policy provides the second real example.
