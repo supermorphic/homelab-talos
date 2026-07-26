@@ -57,6 +57,20 @@ qBittorrent's own global ratio/seed-time limits must remain disabled or looser
 than this policy. An independent global limit could stop a torrent before the
 CZTeam obligation is met.
 
+### Priority domains are independent
+
+The CZTeam indexer's priority in Prowlarr is unrelated to the `priority: 10`
+above. Prowlarr syncs its indexer priority into Sonarr/Radarr, where it is used
+to prefer one indexer in release tie-breaker situations. qbit_manage runs only
+after a torrent has reached qBittorrent; its group priority chooses one matching
+seeding policy for that torrent.
+
+Both systems use lower numbers as higher priority, but the numbers are never
+compared or copied between them. Moving CZTeam below public indexers in
+Prowlarr may reduce how often it wins an otherwise-equal release choice; it
+does not weaken the CZTeam seeding policy when a CZTeam torrent is selected.
+Do not rely on Prowlarr priority as an H&R safety control.
+
 ## First real torrent acceptance
 
 There were no active CZTeam torrents during rollout, so complete these checks

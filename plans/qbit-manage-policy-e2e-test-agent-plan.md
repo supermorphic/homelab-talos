@@ -7,6 +7,7 @@ policy:
 
 - classifies unmatched trackers as `tracker-public`;
 - reserves `tracker-private` as the safety exclusion;
+- selects the cleanup-disabled CZTeam policy with `tracker-czteam`;
 - manages torrents only in the `movies` and `tv` categories;
 - stops eligible torrents at ratio `1.5` after at least one day, or at seven
   days regardless of ratio;
@@ -19,6 +20,7 @@ test exist. They do not prove the real chain:
 ```text
 public torrent download
   -> deployed tracker classification
+  -> run-scoped CZTeam policy analog and public exclusion
   -> accelerated isolated share limits
   -> private-tag exclusion
   -> stop and cleanup
@@ -44,7 +46,8 @@ classification, and runs isolated one-shot Jobs using accelerated limits.
 
 Passing proves the qBittorrent API, VPN-backed download, shared storage,
 deployed tracker classification, `qbit_manage` limit application, private
-exclusion, cleanup, recycle-bin behavior, and hardlink safety worked together.
+exclusion, CZTeam policy isolation, cleanup, recycle-bin behavior, and
+hardlink safety worked together.
 
 The boundary is policy plus a representative hardlink. It does not claim that
 Sonarr or Radarr performed an import.
@@ -146,11 +149,14 @@ actual BitTorrent upload demand or the ratio branch.
     share-limit/minimum-condition tag namespaces.
 11. Temporary groups require both the run category and run tag, and exclude
     `tracker-private`.
-12. Credentials are referenced from the existing Secret and never printed or
+12. The CZTeam analog uses a separate run-owned selector; its public sentinel
+    has higher priority (a lower number) but excludes that selector, making a
+    public-policy match an observable test failure.
+13. Credentials are referenced from the existing Secret and never printed or
     persisted.
-13. Teardown deletes only the fixed hash if this run created it, exact
+14. Teardown deletes only the fixed hash if this run created it, exact
     run-labeled Kubernetes resources, and safe-validated run paths.
-14. Cleanup failure fails the command even if primary assertions passed.
+15. Cleanup failure fails the command even if primary assertions passed.
 
 ## Accelerated policy
 
@@ -210,6 +216,45 @@ share_limits:
 Validate the generated YAML before creating a Job. Use the exact deployed image
 and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 
+For the CZTeam isolation phase, replace that single group with exactly two
+run-owned accelerated groups:
+
+```yaml
+share_limits:
+  e2e_qbm_czteam_<run-id>:
+    priority: 10
+    include_all_tags:
+      - e2e-czteam-<run-id>
+    custom_tag: e2e-czteam-limit-<run-id>
+    add_group_to_tag: false
+    max_ratio: 0.01
+    min_seeding_time: 1m
+    max_seeding_time: 2m
+    share_limit_action: Stop
+    cleanup: false
+  e2e_qbm_cz_public_<run-id>:
+    priority: 1
+    categories:
+      - e2e-qbm-<run-id>
+    include_all_tags:
+      - e2e-qbm-<run-id>
+    exclude_any_tags:
+      - tracker-private
+      - e2e-czteam-<run-id>
+    custom_tag: e2e-czteam-public-limit-<run-id>
+    add_group_to_tag: false
+    max_ratio: 0.01
+    min_seeding_time: 1m
+    max_seeding_time: 2m
+    share_limit_action: Stop
+    cleanup: true
+```
+
+The public sentinel intentionally has the higher qbit_manage priority. The
+fixture can receive the CZTeam policy only if the public exclusion is honored.
+Production's CZTeam-before-public priority remains a statically validated
+defense-in-depth invariant, not a separate dynamic E2E claim.
+
 ## E2E workflow
 
 ### 1. Preflight
@@ -244,7 +289,19 @@ and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 - Require the initial inode to match and link count to be at least two.
 - Create a non-torrent sentinel adjacent to the test download.
 
-### 5. Private exclusion
+### 5. CZTeam policy isolation
+
+- Add a unique CZTeam analog tag to the completed fixture.
+- Run the two-group policy and require the CZTeam custom tag, accelerated
+  limits, `Stop`, and no public sentinel tag.
+- Require the torrent, download root and payload, media hardlink, and sentinel
+  to remain, with no run-owned recycle data.
+- Run the identical config again and require the same no-removal result.
+- Remove only the CZTeam analog tags before continuing.
+- Record this as `czteamPolicy`; do not claim real announce-host classification
+  or production-duration behavior.
+
+### 6. Private exclusion
 
 - Add `tracker-private` while retaining public/run tags.
 - Re-query immediately before the Job and abort if the premise is absent.
@@ -253,7 +310,7 @@ and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 - Require the temporary group tag to be absent.
 - Remove only `tracker-private`.
 
-### 6. Apply limits without cleanup
+### 7. Apply limits without cleanup
 
 - Run with `cleanup: false`.
 - Require the custom group tag, ratio limit `0.01`, two-minute seed limit,
@@ -261,7 +318,7 @@ and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 - Seeding age is continuous from completion; do not introduce a second
   two-minute window.
 
-### 7. Cleanup and idempotency
+### 8. Cleanup and idempotency
 
 - Run with `cleanup: true`.
 - Require the hash to disappear, original payload to disappear, and run-owned
@@ -273,7 +330,7 @@ and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 - Run cleanup again; require exit zero, no torrent, and no duplicate recycle
   entry.
 
-### 8. Teardown
+### 9. Teardown
 
 - Remove the fixture only if ownership was recorded.
 - Remove exact run category/tag and run-labeled resources.
@@ -284,14 +341,16 @@ and security context. Invoke the pinned v4.10.0 `--run` one-shot interface.
 
 ## Timeout budget
 
-Use one 60-minute overall deadline:
+Use one 75-minute overall deadline. The phase allocations total 70 minutes,
+leaving five minutes of overall scheduling margin:
 
 | Phase | Maximum |
 |---|---:|
 | preflight | 5m |
 | real download | 20m |
 | production classification | 20m |
-| policy Jobs/assertions | 10m |
+| existing policy Jobs/assertions | 10m |
+| CZTeam policy Jobs/assertions | 10m |
 | teardown | 5m |
 
 The deployed schedule is 15 minutes; the classification allowance includes
@@ -343,6 +402,12 @@ Cover:
 - run-specific tag namespaces are enforced;
 - both category and run tag are required;
 - private exclusion cannot be omitted;
+- CZTeam selector and custom tags are run-owned;
+- the two-group CZTeam config is exact and cleanup remains false;
+- the public sentinel excludes the CZTeam selector and outranks it only inside
+  the test analog;
+- the deployed production CZTeam group retains its selector, limits, action,
+  cleanup setting, and priority relationship;
 - dependency failure is distinct from assertion failure;
 - teardown runs after failure;
 - cleanup failure remains visible and non-zero;
@@ -372,5 +437,5 @@ CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy \
 ```
 
 The E2E passes only if the real fixture completes the full classification,
-private exclusion, limit, stop, cleanup, recycle, hardlink, idempotency, and
-teardown chain.
+CZTeam policy isolation, private exclusion, limit, stop, cleanup, recycle,
+hardlink, idempotency, and teardown chain.

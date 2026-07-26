@@ -172,13 +172,17 @@ CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy \
   mise exec -- just test e2e qbit-manage-policy
 ```
 
-Allow up to 60 minutes. The test downloads WebTorrent's legal Sintel torrent
+Allow up to 75 minutes. The test downloads WebTorrent's legal Sintel torrent
 (`08ada5a7a6183aae1e09d831df6748d566095a10`) through the live VPN-backed
 qBittorrent instance. It waits for the deployed 15-minute scheduler to add
 `tracker-public`, then creates isolated one-shot qbit_manage Jobs with a
 one-minute minimum and two-minute maximum seed time. It proves:
 
 - the production classifier handles a real public torrent;
+- a manually added run-scoped CZTeam analog tag selects a dedicated
+  cleanup-disabled policy while a higher-priority public sentinel excludes it;
+- two identical CZTeam analog runs stop but never remove the torrent, download
+  payload, representative media hardlink, or unrelated sentinel;
 - a manually added `tracker-private` tag prevents limits and cleanup;
 - removing only that tag allows the test group to set ratio `0.01`, seed limit
   120 seconds, its unique group tag, and Stop action;
@@ -189,16 +193,23 @@ one-minute minimum and two-minute maximum seed time. It proves:
   removed on both success and failure.
 
 This is policy-plus-hardlink coverage, not a claim that Sonarr or Radarr
-performed an import. The public fixture is an explicit dependency: if it cannot
-download in 20 minutes, the run fails with
-`externalDependency.status: failed`, while teardown still runs.
+performed an import. The CZTeam phase is a policy analog on the same public
+fixture: it does not use private-tracker credentials, prove announce-host
+classification, or wait for the production seven-day/ratio thresholds. The
+public fixture is an explicit dependency: if it cannot download in 20 minutes,
+the run fails with `externalDependency.status: failed`, while teardown still
+runs.
 
 The shared-instance isolation boundary is deliberate. The fixture category is
 `e2e-qbm-<run-id>`, while production limits match exactly `movies` and `tv`, so
 the production worker can add `tracker-public` but cannot stop or clean the
 fixture. Test Jobs also require the unique category and tag, exclude
 `tracker-private`, set `skip_cleanup: true`, do not mutate global qBittorrent
-preferences, and mount `/data/downloads` but never `/data/media`.
+preferences, and mount `/data/downloads` but never `/data/media`. The CZTeam
+analog additionally uses a unique selector and custom tag. Its public sentinel
+has higher qbit_manage priority (a lower number) but excludes that selector, so
+receiving the CZTeam limit tag proves the fixture stayed out of the public
+group.
 
 Results are written under the reported `.test-results/<run>/` directory.
 Inspect `summary.json`, `assertion.json`, `external-dependency.json`,

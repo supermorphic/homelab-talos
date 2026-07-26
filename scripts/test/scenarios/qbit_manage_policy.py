@@ -196,8 +196,28 @@ class RunIdentity:
         return f"e2e-qbm-limit-{self.run_id}"
 
     @property
+    def cz_tag(self) -> str:
+        return f"e2e-czteam-{self.run_id}"
+
+    @property
+    def cz_limit_tag(self) -> str:
+        return f"e2e-czteam-limit-{self.run_id}"
+
+    @property
+    def cz_public_limit_tag(self) -> str:
+        return f"e2e-czteam-public-limit-{self.run_id}"
+
+    @property
     def group(self) -> str:
         return f"e2e_qbm_{self.run_id}"
+
+    @property
+    def cz_group(self) -> str:
+        return f"e2e_qbm_czteam_{self.run_id}"
+
+    @property
+    def cz_public_group(self) -> str:
+        return f"e2e_qbm_cz_public_{self.run_id}"
 
     @property
     def group_tag(self) -> str:
@@ -209,6 +229,9 @@ class RunIdentity:
             self.run_tag,
             self.limit_tag,
             self.group_tag,
+            self.cz_tag,
+            self.cz_limit_tag,
+            self.cz_public_limit_tag,
             f"e2e_qbm_min_seed_{self.run_id}",
             f"e2e_qbm_min_seeds_{self.run_id}",
             f"e2e_qbm_last_active_{self.run_id}",
@@ -291,11 +314,13 @@ def validate_production_isolation(config: dict[str, Any]) -> None:
         raise AssertionFailure("deployed production category/private isolation drifted")
 
     public = share_limits.get("public")
-    if not isinstance(public, dict):
+    czteam = share_limits.get("czteam")
+    if not isinstance(public, dict) or not isinstance(czteam, dict):
         raise AssertionFailure("deployed production category/private isolation drifted")
 
     categories = public.get("categories")
     excluded_tags = public.get("exclude_any_tags")
+    czteam_tags = czteam.get("include_all_tags")
     if (
         commands.get("tag_update") is not True
         or commands.get("share_limits") is not True
@@ -306,6 +331,17 @@ def validate_production_isolation(config: dict[str, Any]) -> None:
         or set(categories) != {"movies", "tv"}
         or not isinstance(excluded_tags, list)
         or "tracker-private" not in excluded_tags
+        or "tracker-czteam" not in excluded_tags
+        or public.get("priority") != 100
+        or public.get("cleanup") is not True
+        or not isinstance(czteam_tags, list)
+        or "tracker-czteam" not in czteam_tags
+        or czteam.get("priority") != 10
+        or czteam.get("max_ratio") != 2.0
+        or czteam.get("min_seeding_time") != "7d"
+        or czteam.get("max_seeding_time") != -1
+        or czteam.get("share_limit_action") != "Stop"
+        or czteam.get("cleanup") is not False
     ):
         raise AssertionFailure("deployed production category/private isolation drifted")
 
@@ -444,6 +480,60 @@ class PolicyConfig:
             "cleanup": cleanup,
         }
         require(groups[identity.group] == expected_group, "unsafe run group")
+
+    @staticmethod
+    def build_czteam_isolation(source: dict[str, Any], identity: RunIdentity) -> dict[str, Any]:
+        config = PolicyConfig.build(source, identity, False)
+        accelerated = {
+            "add_group_to_tag": False,
+            "max_ratio": 0.01,
+            "min_seeding_time": "1m",
+            "max_seeding_time": "2m",
+            "share_limit_action": "Stop",
+        }
+        config["share_limits"] = {
+            identity.cz_group: {
+                "priority": 10,
+                "include_all_tags": [identity.cz_tag],
+                "custom_tag": identity.cz_limit_tag,
+                **accelerated,
+                "cleanup": False,
+            },
+            # This sentinel intentionally outranks CZTeam. The CZTeam analog can
+            # therefore receive its policy only when the public exclusion works.
+            identity.cz_public_group: {
+                "priority": 1,
+                "categories": [identity.category],
+                "include_all_tags": [identity.run_tag],
+                "exclude_any_tags": ["tracker-private", identity.cz_tag],
+                "custom_tag": identity.cz_public_limit_tag,
+                **accelerated,
+                "cleanup": True,
+            },
+        }
+        return config
+
+    @staticmethod
+    def validate_czteam_isolation(config: dict[str, Any], identity: RunIdentity) -> None:
+        # Reuse the proven single-group validator for the common authority,
+        # connection, directory, recycle-bin, tracker, and settings contract.
+        probe = copy.deepcopy(config)
+        try:
+            source = {
+                "qbt": config["qbt"],
+                "directory": config["directory"],
+                "recyclebin": config["recyclebin"],
+                "tracker": config["tracker"],
+            }
+        except KeyError as error:
+            raise ValueError("missing CZTeam policy top-level mapping") from error
+        probe["share_limits"] = PolicyConfig.build(source, identity, False)["share_limits"]
+        PolicyConfig.validate(probe, identity, False)
+
+        expected = PolicyConfig.build_czteam_isolation(source, identity)["share_limits"]
+        groups = config.get("share_limits")
+        if not isinstance(groups, dict) or groups != expected:
+            raise ValueError("unsafe CZTeam isolation groups")
 
 
 def debug_keep_jobs() -> bool:
@@ -818,6 +908,16 @@ find "$root" -mindepth 1 -maxdepth 2 -name "*$1*" -print
         presence = output.splitlines()
         if len(presence) != len(paths) or any(value not in {"0", "1"} for value in presence):
             raise ScenarioFailure("could not determine run-owned file presence")
+        return all(value == "1" for value in presence)
+
+    def directories_exist(self, *paths: str) -> bool:
+        output = self.script(
+            'for path do if [ -d "$path" ]; then printf "1\\n"; else printf "0\\n"; fi; done',
+            *paths,
+        )
+        presence = output.splitlines()
+        if len(presence) != len(paths) or any(value not in {"0", "1"} for value in presence):
+            raise ScenarioFailure("could not determine run-owned directory presence")
         return all(value == "1" for value in presence)
 
     def hardlink(self, source: str, media_root: str) -> tuple[int, int, int, str]:
@@ -1357,10 +1457,7 @@ class Scenario:
         if not self.wait_for(120, 5, completed):
             self.fail("qbit_manage one-shot Job exceeded its two-minute deadline")
 
-    def run_policy_job(self, phase: str, cleanup: bool) -> None:
-        assert self.live_config is not None
-        config = PolicyConfig.build(self.live_config, self.identity, cleanup)
-        PolicyConfig.validate(config, self.identity, cleanup)
+    def run_policy_job(self, phase: str, config: dict[str, Any]) -> None:
         config_name = f"qbm-e2e-{self.identity.run_id}-{phase}"
         config_text = dump_policy_yaml(config)
         atomic_write_text(self.recorder.manifest_path(f"{phase}-config.yml"), config_text)
@@ -1383,6 +1480,7 @@ class Scenario:
             f"{phase}-job.json",
             job_manifest(self.identity, phase, self.qbm_image, config_name),
         )
+        self.ledger.resources_attempted = True
         self.kube.apply(config_path)
         self.kube.apply(job_path)
         self.wait_for_job(config_name)
@@ -1415,6 +1513,125 @@ class Scenario:
             timeout=150,
         )
 
+    def run_standard_policy_job(self, phase: str, cleanup: bool) -> None:
+        assert self.live_config is not None
+        config = PolicyConfig.build(self.live_config, self.identity, cleanup)
+        PolicyConfig.validate(config, self.identity, cleanup)
+        self.run_policy_job(phase, config)
+
+    def czteam_policy(self) -> None:
+        assert (
+            self.qbit is not None and self.filesystem is not None and self.live_config is not None
+        )
+        print(
+            "CZTeam policy: proving the CZ selector is excluded from the public "
+            "sentinel and survives cleanup-disabled policy application."
+        )
+        self.qbit.create_tags(self.identity.cz_tag)
+        self.qbit.add_tags(FIXTURE_HASH, self.identity.cz_tag)
+        tags = self.torrent_tags(self.qbit.info(FIXTURE_HASH))
+        if (
+            self.identity.cz_tag not in tags
+            or self.identity.run_tag not in tags
+            or "tracker-private" in tags
+        ):
+            self.fail("CZTeam isolation premise was absent immediately before the Job")
+
+        config = PolicyConfig.build_czteam_isolation(self.live_config, self.identity)
+        PolicyConfig.validate_czteam_isolation(config, self.identity)
+        self.ledger.recycle_attempted = True
+        self.run_policy_job("cz-apply", config)
+
+        observed: list[dict[str, Any]] = []
+        history: list[dict[str, Any]] = []
+
+        def applied() -> bool:
+            nonlocal observed
+            info = self.qbit.info(FIXTURE_HASH)
+            if len(info) != 1:
+                return False
+            torrent = info[0]
+            current_tags = self.torrent_tags(info)
+            snap = {
+                "category": torrent.get("category"),
+                "ratioLimit": torrent.get("ratio_limit"),
+                "seedingTimeLimit": torrent.get("seeding_time_limit"),
+                "state": torrent.get("state"),
+                "czLimitTag": self.identity.cz_limit_tag in current_tags,
+                "publicLimitTag": self.identity.cz_public_limit_tag in current_tags,
+            }
+            if not history or history[-1] != snap:
+                history.append(snap)
+            ratio = float(torrent.get("ratio_limit", -1))
+            if (
+                torrent.get("category") == self.identity.category
+                and 0.009999 <= ratio <= 0.010001
+                and torrent.get("seeding_time_limit") in {2, 120}
+                and torrent.get("state") in {"stoppedUP", "pausedUP"}
+                and self.identity.cz_limit_tag in current_tags
+                and self.identity.cz_public_limit_tag not in current_tags
+            ):
+                observed = info
+                return True
+            return False
+
+        if not self.wait_for(3 * 60, 5, applied):
+            self.recorder.phase(
+                "czteamPolicy",
+                {"status": "failed", "stage": "policy-application", "observed": history},
+            )
+            self.fail("CZTeam policy/tag/Stop state was not observed within three minutes")
+
+        def require_survival(stage: str) -> None:
+            info = self.qbit.info(FIXTURE_HASH)
+            current_tags = self.torrent_tags(info)
+            if (
+                len(info) != 1
+                or info[0].get("category") != self.identity.category
+                or self.identity.cz_limit_tag not in current_tags
+                or self.identity.cz_public_limit_tag in current_tags
+            ):
+                self.fail(f"CZTeam fixture did not retain its isolated policy after {stage}")
+            if not self.filesystem.exists_all(
+                self.source_path,
+                self.identity.media_path,
+                self.identity.sentinel_path,
+            ) or not self.filesystem.directories_exist(self.identity.download_root):
+                self.fail(f"CZTeam cleanup:false did not preserve run-owned data after {stage}")
+            if self.filesystem.discover_recycle(self.identity.run_id):
+                self.fail(f"CZTeam cleanup:false created run-owned recycle data after {stage}")
+
+        require_survival("the first Job")
+        self.run_policy_job("cz-repeat", config)
+        require_survival("the idempotent Job")
+
+        self.qbit.remove_tags(
+            FIXTURE_HASH,
+            (
+                f"{self.identity.cz_tag},{self.identity.cz_limit_tag},"
+                f"{self.identity.cz_public_limit_tag}"
+            ),
+        )
+        remaining_tags = self.torrent_tags(self.qbit.info(FIXTURE_HASH))
+        if {
+            self.identity.cz_tag,
+            self.identity.cz_limit_tag,
+            self.identity.cz_public_limit_tag,
+        } & remaining_tags or self.identity.run_tag not in remaining_tags:
+            self.fail("failed to remove only the CZTeam analog tags")
+        self.recorder.phase(
+            "czteamPolicy",
+            {
+                "status": "passed",
+                "policyApplied": True,
+                "publicExcluded": True,
+                "cleanupFalseSurvivedRuns": 2,
+                "ratioLimit": 0.01,
+                "seedingTimeLimit": observed[0].get("seeding_time_limit"),
+                "state": observed[0].get("state"),
+            },
+        )
+
     def private_exclusion(self) -> None:
         assert self.qbit is not None and self.filesystem is not None
         print("Private exclusion: proving tracker-private prevents the isolated cleanup policy.")
@@ -1422,7 +1639,7 @@ class Scenario:
         tags = self.torrent_tags(self.qbit.info(FIXTURE_HASH))
         if "tracker-private" not in tags or self.identity.run_tag not in tags:
             self.fail("private-exclusion premise was absent immediately before the Job")
-        self.run_policy_job("private", True)
+        self.run_standard_policy_job("private", True)
         info = self.qbit.info(FIXTURE_HASH)
         if len(info) != 1 or info[0].get("category") != self.identity.category:
             self.fail("private fixture was removed or recategorized")
@@ -1443,7 +1660,7 @@ class Scenario:
     def limits(self) -> None:
         assert self.qbit is not None and self.filesystem is not None
         print("Limits: applying the isolated two-minute stop policy without cleanup.")
-        self.run_policy_job("limits", False)
+        self.run_standard_policy_job("limits", False)
         observed: list[dict[str, Any]] = []
         history: list[dict[str, Any]] = []
 
@@ -1508,7 +1725,7 @@ class Scenario:
         )
         print("Cleanup: running the recycle-bin policy and verifying hardlink survival.")
         self.ledger.recycle_attempted = True
-        self.run_policy_job("cleanup", True)
+        self.run_standard_policy_job("cleanup", True)
         if not self.wait_for(60, 5, lambda: not self.qbit.info(FIXTURE_HASH)):
             self.fail("cleanup Job did not remove the owned torrent")
         if self.filesystem.exists_all(self.source_path):
@@ -1528,7 +1745,7 @@ class Scenario:
         ):
             self.fail("media hardlink inode, size, or digest changed during cleanup")
 
-        self.run_policy_job("cleanup2", True)
+        self.run_standard_policy_job("cleanup-repeat", True)
         if self.qbit.info(FIXTURE_HASH):
             self.fail("idempotent cleanup unexpectedly recreated the torrent")
         recycle_after = self.filesystem.discover_recycle(self.identity.run_id)
@@ -1548,13 +1765,14 @@ class Scenario:
         self.download()
         self.classification()
         self.representative_hardlink()
+        self.czteam_policy()
         self.private_exclusion()
         self.limits()
         self.cleanup_policy()
         self.recorder.write_status(
             "assertion",
             "passed",
-            "classification, private exclusion, limits, recycle cleanup, hardlink survival, and idempotency passed",
+            "classification, CZTeam isolation, private exclusion, limits, recycle cleanup, hardlink survival, and idempotency passed",
         )
         print(
             f"PASS: qbit_manage real-download policy E2E completed for owned run "
