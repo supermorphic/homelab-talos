@@ -85,6 +85,23 @@ class IdentityAndPathTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 qbm.validate_owned_path(self.identity, value)
 
+    def test_czteam_identity_is_run_scoped_and_owned(self):
+        self.assertEqual(self.identity.cz_tag, f"e2e-czteam-{RUN_ID}")
+        self.assertEqual(self.identity.cz_limit_tag, f"e2e-czteam-limit-{RUN_ID}")
+        self.assertEqual(
+            self.identity.cz_public_limit_tag,
+            f"e2e-czteam-public-limit-{RUN_ID}",
+        )
+        self.assertEqual(self.identity.cz_group, f"e2e_qbm_czteam_{RUN_ID}")
+        self.assertEqual(self.identity.cz_public_group, f"e2e_qbm_cz_public_{RUN_ID}")
+        self.assertTrue(
+            {
+                self.identity.cz_tag,
+                self.identity.cz_limit_tag,
+                self.identity.cz_public_limit_tag,
+            }.issubset(self.identity.owned_tags)
+        )
+
     def test_preexisting_qbittorrent_objects_are_rejected(self):
         qbm.validate_no_qbit_collisions(self.identity, [], {}, [])
         cases = (
@@ -165,32 +182,95 @@ class PolicyConfigTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     qbm.PolicyConfig.validate(candidate, self.identity, False)
 
-    def test_production_isolation_allows_additional_private_exclusions(self):
-        config = {
+    def test_czteam_isolation_round_trip(self):
+        config = qbm.PolicyConfig.build_czteam_isolation(self.source, self.identity)
+        qbm.PolicyConfig.validate_czteam_isolation(config, self.identity)
+        self.assertEqual(
+            set(config["share_limits"]),
+            {self.identity.cz_group, self.identity.cz_public_group},
+        )
+        czteam = config["share_limits"][self.identity.cz_group]
+        public = config["share_limits"][self.identity.cz_public_group]
+        self.assertLess(public["priority"], czteam["priority"])
+        self.assertFalse(czteam["cleanup"])
+        self.assertTrue(public["cleanup"])
+        self.assertIn(self.identity.cz_tag, public["exclude_any_tags"])
+        self.assertEqual(config["tracker"], self.source["tracker"])
+        rendered = qbm.dump_policy_yaml(config)
+        reparsed = qbm.load_policy_yaml(rendered)
+        qbm.PolicyConfig.validate_czteam_isolation(reparsed, self.identity)
+
+    def test_unsafe_czteam_isolation_mutations_are_rejected(self):
+        mutations = {
+            "CZTeam cleanup": lambda c: c["share_limits"][self.identity.cz_group].__setitem__(
+                "cleanup", True
+            ),
+            "public cleanup disabled": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("cleanup", False),
+            "public sentinel no longer outranks": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("priority", 100),
+            "public CZ exclusion missing": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("exclude_any_tags", ["tracker-private"]),
+            "public run selector missing": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("include_all_tags", []),
+            "public category drift": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("categories", ["movies"]),
+            "CZ selector missing": lambda c: c["share_limits"][self.identity.cz_group].__setitem__(
+                "include_all_tags", []
+            ),
+            "custom tag collision": lambda c: c["share_limits"][
+                self.identity.cz_public_group
+            ].__setitem__("custom_tag", self.identity.cz_limit_tag),
+            "automatic group tag": lambda c: c["share_limits"][self.identity.cz_group].__setitem__(
+                "add_group_to_tag", True
+            ),
+            "extra group": lambda c: c["share_limits"].__setitem__("unrelated", {"priority": 50}),
+        }
+        base = qbm.PolicyConfig.build_czteam_isolation(self.source, self.identity)
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                candidate = copy.deepcopy(base)
+                mutate(candidate)
+                with self.assertRaises(ValueError):
+                    qbm.PolicyConfig.validate_czteam_isolation(candidate, self.identity)
+
+    @staticmethod
+    def production_config():
+        return {
             "commands": {"tag_update": True, "share_limits": True},
             "settings": {"private_tag": "tracker-private"},
             "directory": {"root_dir": "/data/downloads"},
             "share_limits": {
+                "czteam": {
+                    "priority": 10,
+                    "include_all_tags": ["tracker-czteam"],
+                    "max_ratio": 2.0,
+                    "min_seeding_time": "7d",
+                    "max_seeding_time": -1,
+                    "share_limit_action": "Stop",
+                    "cleanup": False,
+                },
                 "public": {
+                    "priority": 100,
                     "categories": ["movies", "tv"],
                     "exclude_any_tags": ["tracker-private", "tracker-czteam"],
-                }
+                    "cleanup": True,
+                },
             },
         }
+
+    def test_production_isolation_allows_additional_private_exclusions(self):
+        config = self.production_config()
+        config["share_limits"]["public"]["exclude_any_tags"].append("tracker-other")
         qbm.validate_production_isolation(config)
 
     def test_production_isolation_rejects_unsafe_drift(self):
-        base = {
-            "commands": {"tag_update": True, "share_limits": True},
-            "settings": {"private_tag": "tracker-private"},
-            "directory": {"root_dir": "/data/downloads"},
-            "share_limits": {
-                "public": {
-                    "categories": ["movies", "tv"],
-                    "exclude_any_tags": ["tracker-private"],
-                }
-            },
-        }
+        base = self.production_config()
         mutations = {
             "classification disabled": lambda c: c["commands"].__setitem__("tag_update", False),
             "private auto-tag missing": lambda c: c["settings"].__setitem__(
@@ -201,6 +281,35 @@ class PolicyConfigTests(unittest.TestCase):
             ),
             "private exclusion missing": lambda c: c["share_limits"]["public"].__setitem__(
                 "exclude_any_tags", ["tracker-czteam"]
+            ),
+            "CZ exclusion missing": lambda c: c["share_limits"]["public"].__setitem__(
+                "exclude_any_tags", ["tracker-private"]
+            ),
+            "CZ group missing": lambda c: c["share_limits"].pop("czteam"),
+            "CZ selector missing": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "include_all_tags", []
+            ),
+            "CZ priority unsafe": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "priority", 100
+            ),
+            "public priority drift": lambda c: c["share_limits"]["public"].__setitem__(
+                "priority", 99
+            ),
+            "public cleanup drift": lambda c: c["share_limits"]["public"].__setitem__(
+                "cleanup", False
+            ),
+            "CZ cleanup unsafe": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "cleanup", True
+            ),
+            "CZ ratio drift": lambda c: c["share_limits"]["czteam"].__setitem__("max_ratio", 1.0),
+            "CZ minimum drift": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "min_seeding_time", "1d"
+            ),
+            "CZ maximum drift": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "max_seeding_time", "7d"
+            ),
+            "CZ action drift": lambda c: c["share_limits"]["czteam"].__setitem__(
+                "share_limit_action", "Default"
             ),
         }
         for name, mutate in mutations.items():
