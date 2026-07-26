@@ -354,11 +354,18 @@ class PolicyConfig:
             },
             "directory": copy.deepcopy(source["directory"]),
             "recyclebin": recyclebin,
+            # Select by the run-unique category alone, mirroring the deployed
+            # production `public` group (categories-only) which is proven to assign
+            # torrents live. qbit_manage v4.10.0 did not assign the fixture when the
+            # group also carried include_all_tags, even though the source's
+            # category/tag/size checks all pass; the run category
+            # (e2e-qbm-<run-id>) already guarantees isolation from production
+            # (movies/tv) and other runs, and exclude_any_tags still proves the
+            # tracker-private exclusion.
             "share_limits": {
                 identity.group: {
                     "priority": 1,
                     "categories": [identity.category],
-                    "include_all_tags": [identity.run_tag],
                     "exclude_any_tags": ["tracker-private"],
                     "custom_tag": identity.limit_tag,
                     "add_group_to_tag": True,
@@ -419,7 +426,6 @@ class PolicyConfig:
         expected_group = {
             "priority": 1,
             "categories": [identity.category],
-            "include_all_tags": [identity.run_tag],
             "exclude_any_tags": ["tracker-private"],
             "custom_tag": identity.limit_tag,
             "add_group_to_tag": True,

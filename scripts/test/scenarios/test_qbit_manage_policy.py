@@ -126,8 +126,8 @@ class PolicyConfigTests(unittest.TestCase):
             "wrong category": lambda c: c["share_limits"][self.identity.group].__setitem__(
                 "categories", ["movies"]
             ),
-            "missing run tag": lambda c: c["share_limits"][self.identity.group].__setitem__(
-                "include_all_tags", []
+            "unexpected include tag": lambda c: c["share_limits"][self.identity.group].__setitem__(
+                "include_all_tags", ["e2e-qbm-extra"]
             ),
             "missing private exclusion": lambda c: c["share_limits"][
                 self.identity.group
