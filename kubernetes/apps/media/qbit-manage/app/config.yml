@@ -36,6 +36,14 @@ qbt:
   user: !ENV QBT_USER
   pass: !ENV QBT_PASS
 
+# qbit_manage requires a top-level `directory` section at config load (it does NOT auto-fill
+# this one). root_dir is the download root, matching qBittorrent's save paths under
+# /data/downloads. Only filesystem features (orphaned/nohardlinks/unregistered/recyclebin) use
+# it — all OFF here — so it is inert until PR4 enables the recycle bin. The pod mounts ONLY the
+# downloads subpath (read-only through PR3), never /data/media.
+directory:
+  root_dir: /data/downloads
+
 # Download-side recycle bin OFF in PR1-PR3 (no filesystem features active). PR4 enables it
 # as a 7-day safety window and mounts only the download root (never /data/media).
 recyclebin:
