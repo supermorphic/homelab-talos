@@ -42,7 +42,7 @@ for _ in {1..24}; do
 done
 
 case "$outcome" in
-  ok)   echo "qbit-manage live acceptance passed (Ready, rolled out, 0 restarts, authenticated run with no parse/login errors). Confirm dry-run mode changed nothing in qBittorrent." ;;
+  ok)   echo "qbit-manage live readiness passed (Ready, rolled out, 0 restarts, authenticated scheduled run with no parse/login errors). This check does not assert classification, limits, or cleanup behavior." ;;
   fail) echo 'qbit-manage recent logs show a config-parse or qBittorrent authentication failure. Check kubectl -n media logs deployment/qbit-manage (do not paste credentials).' >&2; exit 1 ;;
   *)    echo 'qbit-manage is Ready with 0 restarts, but no run/connect marker appeared yet. Re-run after the first scheduled run, or inspect logs manually.' >&2; exit 1 ;;
 esac

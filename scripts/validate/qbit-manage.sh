@@ -2,14 +2,9 @@
 set -euo pipefail
 
 # qbit_manage: UI-less scheduled qBittorrent policy engine (StuffAnThings). Talks to the
-# internal qBittorrent Web API only — no HTTPRoute, no Service, no Gluetun netns, no
-# media-data mount in PR1. Validates the static source; the live probe is qbit-manage-verify.
-#
-# SAFETY-FOCUSED validation. Several assertions marked "[stage: PR1]" pin this rollout stage
-# and are deliberately relaxed in later PRs (tag_update in PR2, share_limits in PR3, cleanup
-# in PR4). The assertions marked "[invariant]" must hold in EVERY stage — they encode the
-# plan's non-negotiable safety rules (no category changes, no destructive features, no
-# unknown-tracker catch-all, credentials from the Secret).
+# internal qBittorrent Web API only — no HTTPRoute, Service, or Gluetun netns. It mounts only
+# the downloads subpath for recycle-bin cleanup and can never reach /data/media. Validates the
+# active static policy; the live readiness/authentication probe is qbit-manage-verify.
 base='kubernetes/apps/media/qbit-manage'
 ks="$base/ks.yaml"; hr="$base/app/helmrelease.yaml"; values="$base/app/values.yaml"
 config="$base/app/config.yml"; secret="$base/app/qbit-manage-secret.sops.yaml"
@@ -54,7 +49,7 @@ tag="$(yq -r '.controllers."qbit-manage".containers.app.image.tag' "$values")"; 
 [[ "$(yq -r '.controllers."qbit-manage".containers.app.env.QBT_WEB_SERVER' "$values")" == 'false' ]] || { echo 'qbit-manage must set QBT_WEB_SERVER=false (no UI).' >&2; exit 1; }
 # [invariant: never /media] Download-root mount: ONLY the downloads subPath is ever mounted, so
 # qbit_manage physically cannot reach /data/media — a Plex library file can never be deleted
-# here regardless of policy. Read-write as of PR4 (the recycle bin writes to .RecycleBin).
+# here regardless of policy. It is read-write so the recycle bin can move download-side data.
 [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo 'qbit-manage data mount must use existingClaim media-data.' >&2; exit 1; }
 dl="$(yq -r '.persistence.data.advancedMounts."qbit-manage".app[0]' "$values")"
 [[ "$(yq -r '.path' <<<"$dl")" == '/data/downloads' ]] || { echo 'qbit-manage data mount path must be /data/downloads.' >&2; exit 1; }
@@ -98,49 +93,25 @@ rg -q '!ENV QBT_PASS' "$config" || { echo 'config.yml qbt.pass must resolve from
 for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error recheck; do
   [[ "$(yq -r ".commands.$cmd" "$config")" == 'false' ]] || { echo "commands.$cmd must be false (destructive/unrelated feature)." >&2; exit 1; }
 done
-# [invariant] Category-based safety model: the public policy (PR3) manages tv/movies and
-# EXCLUDES tracker-private. That exclusion is the safety gate, so private hosts must map to
-# the tracker-private tag and must NEVER be mapped to tracker-public. We cannot enumerate
-# real private hosts here, but we can forbid the obvious footgun: a private host must not be
-# assigned tracker-public anywhere in the tracker map.
-if [[ "$(yq -r '.tracker // "none"' "$config")" != 'none' ]]; then
-  # Any tracker key whose tag is tracker-private is fine; any key mapping to tracker-public is
-  # the catch-all/public bucket. Assert no key carries BOTH a private-looking name and a
-  # public tag (defense against a fat-fingered onboarding). Real private-host review is manual.
-  [[ "$(yq -r '[.tracker | to_entries[] | select(.value.tag == "tracker-private")] | length' "$config")" -ge 0 ]]
-fi
+scripts/validate/qbit-manage-policy.sh "$config"
 
-# [stage: PR2] Classification on, limits/cleanup still off. dry_run stays true until the
-# follow-up that flips it to apply tags. PR3 sets share_limits: true and adds the group;
-# PR4 sets skip_cleanup: false and the group cleanup: true. Relax these lines in those PRs.
-[[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo '[PR2-apply] commands.dry_run must be false (tags/limits are applied for real, not just reported).' >&2; exit 1; }
-[[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo '[PR2] commands.tag_update must be true (classification is active).' >&2; exit 1; }
-[[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo '[PR3] commands.share_limits must be true (limits are active).' >&2; exit 1; }
-# [stage: PR4] skip_cleanup false so the recycle bin empties; recyclebin enabled with a
-# recovery window. rem_orphaned stays false, so no orphaned-data deletion despite skip_cleanup.
-[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'false' ]] || { echo '[PR4] commands.skip_cleanup must be false (lets the recycle bin empty).' >&2; exit 1; }
-[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'true' ]] || { echo '[PR4] recyclebin.enabled must be true (the download-side safety window).' >&2; exit 1; }
-rb_days="$(yq -r '.recyclebin.empty_after_x_days // 0' "$config")"; [[ "$rb_days" -ge 1 ]] || { echo '[PR4] recyclebin.empty_after_x_days must set a recovery window (>= 1).' >&2; exit 1; }
-[[ "$(yq -r '.tracker.other.tag // "none"' "$config")" == 'tracker-public' ]] || { echo '[PR2] config.yml tracker.other.tag must be tracker-public (category-based catch-all).' >&2; exit 1; }
+# The active policy classifies trackers, applies limits, and cleans up eligible public
+# torrents. The tracker/category safety gates above are intentionally validated separately.
+[[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo 'commands.dry_run must be false (the reviewed policy is active).' >&2; exit 1; }
+[[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo 'commands.tag_update must be true (classification is active).' >&2; exit 1; }
+[[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo 'commands.share_limits must be true (limits are active).' >&2; exit 1; }
+[[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'false' ]] || { echo 'commands.skip_cleanup must be false (the recycle-bin retention pass is active).' >&2; exit 1; }
+[[ "$(yq -r '.recyclebin.enabled' "$config")" == 'true' ]] || { echo 'recyclebin.enabled must be true (download-side recovery window).' >&2; exit 1; }
+rb_days="$(yq -r '.recyclebin.empty_after_x_days // 0' "$config")"; [[ "$rb_days" -ge 1 ]] || { echo 'recyclebin.empty_after_x_days must set a recovery window (>= 1).' >&2; exit 1; }
 
-# --- Category-based public share-limits group (PR3+) ---
+# --- Category-based public share-limits group ---
 sl='.share_limits.public'
-[[ "$(yq -r "$sl // \"none\"" "$config")" != 'none' ]] || { echo '[PR3] config.yml must define share_limits.public.' >&2; exit 1; }
-# [INVARIANT — safety gate] The public group MUST exclude tracker-private, or a private torrent
-# could be stopped/deleted (hit-and-run). This is the single most important assertion here.
-yq -r "$sl.exclude_any_tags[]?" "$config" | rg -qx 'tracker-private' || { echo '[SAFETY] share_limits.public.exclude_any_tags MUST include tracker-private (excludes private trackers).' >&2; exit 1; }
-# Filters by the Sonarr/Radarr categories.
-for cat in movies tv; do
-  yq -r "$sl.categories[]?" "$config" | rg -qx "$cat" || { echo "[PR3] share_limits.public.categories must include $cat." >&2; exit 1; }
-done
 # The agreed policy numbers and the explicit (qBittorrent-5.2-required) stop action.
-[[ "$(yq -r "$sl.max_ratio" "$config")" == '1.5' ]] || { echo '[PR3] share_limits.public.max_ratio must be 1.5.' >&2; exit 1; }
-[[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo '[PR3] share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo '[PR3] share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo '[PR3] share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
-# [stage: PR4] cleanup enabled — eligible public torrents are removed, download-side data to the
-# recycle bin. The /data/media hardlink survives (proven) and tracker-private is still excluded.
-[[ "$(yq -r "$sl.cleanup" "$config")" == 'true' ]] || { echo '[PR4] share_limits.public.cleanup must be true.' >&2; exit 1; }
+[[ "$(yq -r "$sl.max_ratio" "$config")" == '1.5' ]] || { echo 'share_limits.public.max_ratio must be 1.5.' >&2; exit 1; }
+[[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo 'share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
+[[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo 'share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
+[[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo 'share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
+[[ "$(yq -r "$sl.cleanup" "$config")" == 'true' ]] || { echo 'share_limits.public.cleanup must be true.' >&2; exit 1; }
 
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }
