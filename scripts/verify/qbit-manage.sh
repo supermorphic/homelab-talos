@@ -27,14 +27,15 @@ for r in $restarts; do
 done
 
 # Poll logs for an authenticated run vs. a hard failure. qbit_manage runs once on startup
-# and then on its schedule, so a connect/run marker should appear within a minute.
-fail_re='LoginFailed|[Ff]ailed to login|[Uu]nauthorized|[Ff]orbidden|error reading.*[Cc]onfig|Traceback|not a valid|Connection refused|Max retries|Unable to connect'
-ok_re='Finished Run|Beginning Run|Current Config|Executing|Uncategorized|qBittorrent|Torrents'
+# and then on its schedule, so a run marker appears within a minute. NOTE: ripgrep uses
+# regex by default; do NOT pass -E (that is --encoding in rg, not extended-regex).
+fail_re='LoginFailed|[Ff]ailed to login|[Uu]nauthorized|[Ff]orbidden|error reading.*[Cc]onfig|Traceback|not a valid|Read-only file system|Connection refused|Max retries|Unable to connect'
+ok_re='Finished Run|Starting Run|Using .* as config|Current Config|Executing|Uncategorized|qBittorrent|Torrents'
 outcome='unknown'
 for _ in {1..24}; do
   logs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" logs deployment/qbit-manage --tail=400 2>/dev/null || true)"
-  if printf '%s' "$logs" | rg -qE "$fail_re"; then outcome='fail'; break; fi
-  if printf '%s' "$logs" | rg -qE "$ok_re"; then outcome='ok'; break; fi
+  if printf '%s' "$logs" | rg -q "$fail_re"; then outcome='fail'; break; fi
+  if printf '%s' "$logs" | rg -q "$ok_re"; then outcome='ok'; break; fi
   sleep 5
 done
 
