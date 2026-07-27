@@ -47,7 +47,9 @@ am_token="$(token_for alertmanager)"
 if [[ "${NTFY_VERIFY_PUBLISH_CONFIRM:-}" == 'publish:ntfy-verify' ]]; then
   [[ "$(code -X POST -H "Authorization: Bearer $seerr_token" -H 'Title: ntfy-verify' -d 'seerr->media ok' "$base_url/media")" == '200' ]] || { echo 'seerr token could not publish to media (should be allowed).' >&2; exit 1; }
   [[ "$(code -X POST -H "Authorization: Bearer $am_token" -H 'Title: ntfy-verify' -d 'alertmanager->critical ok' "$base_url/critical")" == '200' ]] || { echo 'alertmanager token could not publish to critical (should be allowed).' >&2; exit 1; }
-  echo 'Positive publish ACLs passed (test notifications delivered to media + critical).'
+  # The adapter publishes warnings to homelab with the same alertmanager token.
+  [[ "$(code -X POST -H "Authorization: Bearer $am_token" -H 'Title: ntfy-verify' -d 'alertmanager->homelab ok' "$base_url/homelab")" == '200' ]] || { echo 'alertmanager token could not publish to homelab (should be allowed).' >&2; exit 1; }
+  echo 'Positive publish ACLs passed (test notifications delivered to media + critical + homelab).'
 fi
 
 just kube foundation-verify

@@ -1,0 +1,35 @@
+# alertmanager-ntfy adapter configuration (non-secret). The ntfy publisher token lives
+# in the SOPS-managed auth.yml, merged at startup via
+# `--configs /config/config.yml,/auth/auth.yml`. Alertmanager owns grouping, dedup,
+# inhibition, repeat intervals, and resolved notifications; this only reshapes each
+# alert into an ntfy message.
+http:
+  # Alertmanager posts webhooks here (POST /hook). Access is restricted to the
+  # monitoring namespace by CiliumNetworkPolicy rather than basic auth.
+  addr: :8000
+ntfy:
+  # In-cluster ntfy Service (no gateway hairpin). Token auth comes from auth.yml.
+  baseurl: http://ntfy.ntfy.svc.cluster.local
+  notification:
+    # Dynamic topic (gval): critical -> critical, otherwise (warning) -> homelab.
+    topic: |
+      labels["severity"] == "critical" ? "critical" : "homelab"
+    # Priority (gval): resolved -> default; critical firing -> urgent; warning -> default.
+    priority: |
+      status == "resolved" ? "default" : (labels["severity"] == "critical" ? "urgent" : "default")
+    tags:
+      - tag: white_check_mark
+        condition: status == "resolved"
+      - tag: rotating_light
+        condition: status == "firing" && labels["severity"] == "critical"
+      - tag: warning
+        condition: status == "firing" && labels["severity"] == "warning"
+    templates:
+      title: |
+        {{ if eq .Status "resolved" }}Resolved: {{ end }}{{ index .Annotations "summary" }}
+      description: |
+        {{ index .Annotations "description" }}
+      headers:
+        # Tapping the notification opens the alert's source (Prometheus/Grafana).
+        X-Click: |
+          {{ .GeneratorURL }}

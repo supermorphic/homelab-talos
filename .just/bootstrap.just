@@ -2145,6 +2145,70 @@ ntfy:
     bootstrap_complete=true
     echo 'ntfy live acceptance passed. Change the ntfy Git source to suspend=false, commit, push, and rerun just kube ntfy-verify.'
 
+# Reconcile the suspended alertmanager-ntfy adapter after guarded checks, then verify.
+# Requires the alertmanager-ntfy-auth Secret committed (just repo alertmanager-ntfy-secrets)
+# and ntfy already rolled out. On failure the resumed Kustomization is re-suspended.
+alertmanager-ntfy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:monitoring:alertmanager-ntfy'
+    ks='kubernetes/apps/monitoring/alertmanager-ntfy/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_alertmanager_ntfy() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'alertmanager-ntfy bootstrap did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization alertmanager-ntfy --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_alertmanager_ntfy EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'alertmanager-ntfy bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/alertmanager-ntfy
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing alertmanager-ntfy bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube alertmanager-ntfy-validate
+    # Reconcile the published main source before checking Flux's artifact revision.
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization alertmanager-ntfy --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing alertmanager-ntfy bootstrap: alertmanager-ntfy is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${ALERTMANAGER_NTFY_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile alertmanager-ntfy.' >&2
+      echo "Set ALERTMANAGER_NTFY_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing alertmanager-ntfy-validate." >&2
+      exit 1
+    }
+
+    echo 'Reconciling alertmanager-ntfy Kustomization.'
+    resumed=true
+    flux resume kustomization alertmanager-ntfy --namespace flux-system --kubeconfig "$kubeconfig" --timeout 15m
+    flux reconcile kustomization alertmanager-ntfy \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/alertmanager-ntfy --timeout=15m
+
+    just kube alertmanager-ntfy-verify
+    bootstrap_complete=true
+    echo 'alertmanager-ntfy live acceptance passed. Change the alertmanager-ntfy Git source to suspend=false, commit, push, and rerun just kube alertmanager-ntfy-verify.'
+
 # Reconcile the suspended metrics-server (enables kubectl top / HPA / the Homepage
 # Kubernetes widget). On failure the resumed Kustomization is re-suspended.
 metrics-server:

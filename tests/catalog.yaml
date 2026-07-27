@@ -34,6 +34,7 @@ executions:
     - validation.trivy
     - validation.tailscale-operator
     - validation.ntfy
+    - validation.alertmanager-ntfy
 
 suites:
   - metadata: {id: validation.ci, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
@@ -156,6 +157,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube ntfy-validate", implementation: scripts/validate/ntfy.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.alertmanager-ntfy, source: validation, framework: bash, suite: ci, tier: offline, target: alertmanager-ntfy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube alertmanager-ntfy-validate", implementation: scripts/validate/alertmanager-ntfy.sh}
+    native_results: {strategy: wrapper-junit}
 
   - metadata: {id: verification.metrics-server, source: verification, framework: bash, suite: platform, tier: verification, target: metrics-server, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
@@ -252,6 +257,10 @@ suites:
   - metadata: {id: verification.ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube ntfy-verify", implementation: scripts/verify/ntfy.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.alertmanager-ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: alertmanager-ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube alertmanager-ntfy-verify", implementation: scripts/verify/alertmanager-ntfy.sh}
     native_results: {strategy: wrapper-junit}
 
   - metadata: {id: test.cilium-connectivity, source: test, framework: bash, suite: platform, tier: integration, target: cilium, scenario: connectivity, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}
