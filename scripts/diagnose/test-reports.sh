@@ -19,6 +19,26 @@ echo '=== Flux Kustomization ==='
 run kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
   get kustomization test-reports --output yaml
 
+echo '=== Publication Lease ==='
+if ! kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+  get lease homelab-test-report-publish-lock \
+  --output custom-columns='NAME:.metadata.name,HOLDER:.spec.holderIdentity,ACQUIRED:.spec.acquireTime,RENEWED:.spec.renewTime,DURATION:.spec.leaseDurationSeconds,RESOURCE_VERSION:.metadata.resourceVersion'; then
+  echo 'Publication Lease is absent or unreadable.'
+fi
+run kubectl --kubeconfig "$kubeconfig" auth can-i create leases.coordination.k8s.io \
+  --namespace flux-system
+run kubectl --kubeconfig "$kubeconfig" auth can-i update leases.coordination.k8s.io \
+  --namespace flux-system
+(
+  export TEST_LEASE_NAMESPACE='flux-system'
+  export TEST_LEASE_NAME='homelab-test-report-publish-lock'
+  # shellcheck disable=SC1091
+  source scripts/test/lib/lease.sh
+  lease_manifest diagnostics "$(lease_now)" |
+    kubectl --kubeconfig "$kubeconfig" create --dry-run=server --filename - \
+      --output name
+) || status=1
+
 echo '=== Workload and storage ==='
 run kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
   get deployment,pods,persistentvolumeclaim --output wide

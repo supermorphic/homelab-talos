@@ -17,7 +17,9 @@ lease_kubectl() {
 }
 
 lease_now() {
-  date -u +%Y-%m-%dT%H:%M:%SZ
+  # coordination.k8s.io Lease timestamps use Kubernetes MicroTime, whose API
+  # decoder requires exactly six fractional digits.
+  date -u +%Y-%m-%dT%H:%M:%S.000000Z
 }
 
 lease_timestamp_epoch() {
@@ -79,7 +81,7 @@ acquire_test_lease() {
   local kubeconfig="$1"
   local holder="$2"
   local attempts="${3:-5}"
-  local lease_json existing_holder resource_version now
+  local lease_json existing_holder resource_version now operation_error=''
 
   [[ "$holder" =~ ^[a-zA-Z0-9_.:-]+$ ]] || {
     echo "Unsafe test Lease holder identity: $holder" >&2
@@ -97,18 +99,23 @@ acquire_test_lease() {
       resource_version="$(yq -r '.metadata.resourceVersion // ""' - <<<"$lease_json")"
       [[ -n "$resource_version" ]] || return 1
       now="$(lease_now)"
-      if lease_manifest "$holder" "$now" "$resource_version" |
-        lease_kubectl "$kubeconfig" replace --filename - >/dev/null 2>&1; then
+      if operation_error="$(
+        lease_manifest "$holder" "$now" "$resource_version" |
+          lease_kubectl "$kubeconfig" replace --filename - 2>&1
+      )"; then
         return 0
       fi
     else
       now="$(lease_now)"
-      if lease_manifest "$holder" "$now" |
-        lease_kubectl "$kubeconfig" create --filename - >/dev/null 2>&1; then
+      if operation_error="$(
+        lease_manifest "$holder" "$now" |
+          lease_kubectl "$kubeconfig" create --filename - 2>&1
+      )"; then
         return 0
       fi
     fi
   done
+  [[ -z "$operation_error" ]] || echo "$operation_error" >&2
   echo "Could not acquire test Lease $TEST_LEASE_NAMESPACE/$TEST_LEASE_NAME." >&2
   return 1
 }

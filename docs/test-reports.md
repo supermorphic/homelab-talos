@@ -99,8 +99,9 @@ mise exec -- just kube test-reports-diagnostics
 ```
 
 The command is scoped to the test-report Kustomization and namespace. It prints
-Deployment, pod, PVC, events, and the static server's non-secret logs without changing
-cluster state.
+the publication Lease and permissions, validates a Lease manifest with a non-mutating
+server-side dry run, and prints Deployment, pod, PVC, events, and the static server's
+non-secret logs without changing cluster state.
 
 ## Publication and authority
 
