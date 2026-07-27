@@ -95,6 +95,11 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
+              # The official Caddy binary carries cap_net_bind_service=ep. Keep
+              # that one capability in the bounding set or Linux rejects exec
+              # before Caddy reads the configuration, even with high ports.
+              add:
+                - NET_BIND_SERVICE
               drop:
                 - ALL
             readOnlyRootFilesystem: true

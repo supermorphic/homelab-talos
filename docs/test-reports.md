@@ -44,6 +44,12 @@ The 20 GiB Longhorn claim is `ReadWriteOnce`, so the one-replica Deployment uses
 `strategy: Recreate`. The PVC has Flux prune disabled; deleting the Kustomization does
 not authorize deleting the archive.
 
+The Caddy container still drops `ALL` Linux capabilities and runs non-root with
+privilege escalation disabled. It adds back only `NET_BIND_SERVICE` because the
+official Caddy image stamps that file capability onto `/usr/bin/caddy`; omitting it
+from the capability bounding set makes Linux reject the executable before Caddy reads
+its configuration. Caddy itself listens only on the unprivileged 8080 and 9090 ports.
+
 ## Source rollout and activation
 
 The source PR deliberately stages `test-reports` with `suspend: true` and does not add a
@@ -78,6 +84,16 @@ After that merges, run `mise exec -- just kube test-reports-verify`.
 Agents stage and validate the source but do not bootstrap or publish. GitHub Actions
 does not have cluster access and never publishes here; its reports remain GitHub
 workflow artifacts.
+
+If reconciliation fails, collect the dedicated read-only diagnostics:
+
+```bash
+mise exec -- just kube test-reports-diagnostics
+```
+
+The command is scoped to the test-report Kustomization and namespace. It prints
+Deployment, pod, PVC, events, and the static server's non-secret logs without changing
+cluster state.
 
 ## Publication and authority
 
