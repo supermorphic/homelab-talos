@@ -159,3 +159,16 @@ runs use the renewable `flux-system/homelab-test-run-lock` Kubernetes Lease.
 The Lease is acquired only after the command's confirmation guard and is
 released only while the current run remains its holder. Read-only smoke and
 verification remain concurrent.
+
+The report archive's pre-activation persistence proof is a cataloged Chainsaw
+resilience scenario:
+
+```bash
+TEST_REPORT_RUN_ID=<published-run-id> \
+CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence \
+  mise exec -- just test resilience test-reports-persistence
+```
+
+It recreates only the Caddy pod and verifies that the selected authoritative
+report and its retained PVC survive. It is operator-only and must not be added
+to `just ci`.
