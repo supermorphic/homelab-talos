@@ -294,6 +294,10 @@ available for focused developer validation.
 | `just test report <run-id>` | Validate a canonical run and generate its static Allure Awesome report | `.test-results/<run-id>` | Writes `.test-reports/<run-id>/awesome/` |
 | `just test report-latest` | Generate the report with the latest finalized `summary.json` end time | `.test-results/` | Does not use filesystem modification time |
 | `just test report-open <run-id>` | Generate, serve, and open one Allure report locally | `.test-results/<run-id>`; interactive browser | Runs until interrupted with Ctrl+C |
+| `just kube test-reports-validate` | Validate the suspended persistent Caddy report host, RWO/Recreate storage, isolation, metrics, and atomic installer | — | Cluster-independent; included in `just ci` |
+| `just bootstrap test-reports` | Guardedly resume the staged report host and run live acceptance | `TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports` | Operator-only; mutating after confirmation |
+| `just test publish <run-id>` | Secret-scan and publish one canonical run plus static Allure report to the retained in-cluster archive | `.kube/config`; `TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id>` | Operator-only; no upload API |
+| `just kube test-reports-verify` | Verify the live report host, PVC, no-RBAC runtime, internal HTTPS, policy, monitoring resources, and catalog | `.kube/config` | Operator-only and read-only |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
 | `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
 | `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |

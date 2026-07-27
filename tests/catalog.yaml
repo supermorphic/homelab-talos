@@ -29,6 +29,7 @@ executions:
     - validation.gatus
     - validation.portainer
     - validation.portainer-policy
+    - validation.test-reports
     - validation.homepage
     - validation.trivy
     - validation.tailscale-operator
@@ -134,6 +135,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube portainer-policy-validate", implementation: kubernetes/mod.just}
     native_results: {strategy: native-junit}
+  - metadata: {id: validation.test-reports, source: validation, framework: bash, suite: ci, tier: offline, target: test-reports, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube test-reports-validate", implementation: scripts/validate/test-reports.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.homepage, source: validation, framework: bash, suite: ci, tier: offline, target: homepage, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube homepage-validate", implementation: scripts/validate/homepage.sh}
@@ -222,6 +227,10 @@ suites:
   - metadata: {id: verification.portainer, source: verification, framework: bash, suite: platform, tier: verification, target: portainer, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube portainer-verify", implementation: scripts/verify/portainer.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.test-reports, source: verification, framework: bash, suite: platform, tier: verification, target: test-reports, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube test-reports-verify", implementation: scripts/verify/test-reports.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.homepage, source: verification, framework: bash, suite: platform, tier: verification, target: homepage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}

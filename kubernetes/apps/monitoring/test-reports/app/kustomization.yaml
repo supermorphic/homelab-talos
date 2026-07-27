@@ -1,0 +1,23 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./ciliumnetworkpolicy.yaml
+  - ./deployment.yaml
+  - ./httproute.yaml
+  - ./namespace.yaml
+  - ./persistentvolumeclaim.yaml
+  - ./prometheusrule.yaml
+  - ./service.yaml
+  - ./servicemonitor.yaml
+configMapGenerator:
+  - name: test-reports-config
+    namespace: test-reports
+    files:
+      - Caddyfile=Caddyfile
+      - bootstrap-storage.sh=bootstrap-storage.sh
+      - install-report.sh=install-report.sh
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

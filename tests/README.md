@@ -139,6 +139,15 @@ Only canonical `junit.xml`, validated root metadata, and evidence-indexed files
 are staged for Allure, preventing native diagnostic XML from being counted
 twice and excluding unindexed files.
 
+After the persistent report host is bootstrapped, an operator can publish a
+clean finalized run with
+`TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> mise exec -- just test
+publish <run-id>`. Published reports remain continuously viewable at
+`https://tests.lab.supermorphic.com`; Caddy serves Allure's static output from a
+retained Longhorn PVC, so viewing does not require a local command or a running
+Allure process. GitHub Actions has no cluster path and does not publish there.
+See `docs/test-reports.md` for authority, retention, and activation details.
+
 `scripts/test/junit_report.py` owns JUnit XML structure; `junit_tools.py` is its
 thin CLI. The library inspects and merges native reports, creates wrapper cases,
 appends lifecycle cases, and provides ShellCheck/unittest adapters. Bash

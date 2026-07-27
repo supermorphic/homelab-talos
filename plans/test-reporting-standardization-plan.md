@@ -138,6 +138,32 @@ Phase 5 implementation status on `feat/test-allure-reports`:
   static entrypoint generation, latest selection, safe evidence attachments,
   traversal/symlink rejection, and Markdown counts.
 
+Phase 6 implementation status on `feat/test-report-server`:
+
+- A suspended `test-reports` Flux application stages a digest-pinned Caddy
+  2.11.4 static host behind the internal Gateway. Its restricted one-replica,
+  no-RBAC Deployment uses `strategy: Recreate` with a retained 20 GiB Longhorn
+  RWO claim.
+- The server exposes no upload API. The exactly confirmed operator publisher
+  validates the canonical run, deployed source and Git metadata, scans secrets,
+  holds a dedicated renewable Lease, generates Allure history, and streams a
+  checksummed allowlisted bundle through the guarded recipe.
+- Python owns catalog merge, authority classification, 90-day/200-run
+  retention, protected latest-per-key selection, monotonic counters, Homepage
+  JSON, Prometheus exposition, stable redirects, and canonical artifact
+  creation. The in-pod POSIX installer validates paths/checksums and atomically
+  swaps `state/current` last.
+- Candidate evidence remains inspectable, but only clean runs matching both
+  current `origin/main` and the deployed Flux revision drive stable latest links
+  and last-run observability.
+- Offline tests cover authority, idempotency, conflicting duplicate IDs,
+  retention, monotonic counters, unindexed/symlink exclusion, checksummed
+  installation, and failure-safe generation switching.
+- The source remains suspended and intentionally lacks Gatus until human
+  bootstrap, sanitized publication, and persistence acceptance. Activation,
+  Gatus, Homepage presentation, and Grafana dashboard are separate follow-up
+  changes.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |

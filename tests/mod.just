@@ -26,6 +26,11 @@ report-latest:
 report-open run:
     @scripts/test/open-allure-report.sh {{quote(run)}}
 
+# Guardedly publish one canonical run and its generated report to persistent
+# in-cluster storage. Operator-only; requires the exact confirmation.
+publish run:
+    @scripts/test/publish-report.sh {{quote(run)}}
+
 # Render the latest canonical run as a GitHub-compatible Markdown summary.
 summary-latest:
     @scripts/test/allure-markdown-summary.sh latest

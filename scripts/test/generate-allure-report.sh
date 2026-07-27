@@ -13,6 +13,7 @@ reports_root="${TEST_REPORTS_ROOT:-.test-reports}"
 [[ "$results_root" == /* ]] || results_root="$repo_root/$results_root"
 [[ "$reports_root" == /* ]] || reports_root="$repo_root/$reports_root"
 requested="$1"
+history_path="${ALLURE_HISTORY_PATH:-}"
 
 if [[ "$requested" == 'latest' ]]; then
   run_id="$(uv run --locked --no-dev python scripts/test/allure_report.py latest \
@@ -43,13 +44,30 @@ uv run --locked --no-dev python scripts/test/allure_report.py stage \
 cp "$repo_root/tests/config/allurerc.yaml" "$workspace/allurerc.yaml"
 
 # Allure resolves global attachment globs from the process working directory.
+allure_args=(
+  awesome
+  --config "$workspace/allurerc.yaml"
+  --output "$staged_report/awesome"
+  --report-name "Homelab Talos · $run_id"
+)
+if [[ -n "$history_path" ]]; then
+  [[ "$history_path" == /* ]] || history_path="$repo_root/$history_path"
+  [[ ! -L "$history_path" ]] || {
+    echo "Refusing unsafe Allure history symlink: $history_path" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$history_path")"
+  [[ -e "$history_path" ]] || : >"$history_path"
+  [[ -f "$history_path" ]] || {
+    echo "Allure history path is not a regular file: $history_path" >&2
+    exit 1
+  }
+  allure_args+=(--history-path "$history_path")
+fi
+allure_args+=(allure-results)
 (
   cd "$workspace"
-  allure awesome \
-    --config "$workspace/allurerc.yaml" \
-    --output "$staged_report/awesome" \
-    --report-name "Homelab Talos · $run_id" \
-    allure-results
+  allure "${allure_args[@]}"
 )
 
 [[ -f "$staged_report/awesome/index.html" ]] || {
