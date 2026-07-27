@@ -377,6 +377,11 @@ suites:
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-cross-node-reschedule mise exec -- just test resilience plex-cross-node-reschedule", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/plex-cross-node-reschedule, selector: "homelab-talos/suite=plex-cross-node-reschedule"}
+  - metadata: {id: chainsaw.resilience.test-reports-persistence, source: chainsaw, framework: chainsaw, suite: platform, tier: resilience, target: test-reports-persistence, scenario: null, scope: storage, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:test-reports-persistence"}
+    runner: {command: "TEST_REPORT_RUN_ID=<run-id> CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence mise exec -- just test resilience test-reports-persistence", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/test-reports-persistence, selector: "homelab-talos/suite=test-reports-persistence"}
   - metadata: {id: test.resilience.plex-node-reboot, source: test, framework: bash, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-node-reboot"}
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/scenarios/plex-node-reboot.sh}

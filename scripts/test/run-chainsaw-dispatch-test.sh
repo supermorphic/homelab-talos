@@ -51,6 +51,13 @@ integration_entry="$(catalog_dispatch_entry "$catalog" integration media-hardlin
 resilience_entry="$(catalog_dispatch_entry "$catalog" resilience plex-node-reboot '')"
 [[ "$(yq -r '.dispatch.mode' - <<<"$resilience_entry")" == 'direct' ]]
 
+report_persistence_entry="$(
+  catalog_dispatch_entry "$catalog" resilience test-reports-persistence ''
+)"
+[[ "$(yq -r '.dispatch.mode' - <<<"$report_persistence_entry")" == 'chainsaw' ]]
+[[ "$(yq -r '.confirmation.variable' - <<<"$report_persistence_entry")" == \
+  'CLUSTER_CHAOS_CONFIRM' ]]
+
 rg -Fq 'catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario"' "$runner"
 rg -Fq 'scripts/test/run-catalog-suite.sh "$suite_id"' "$runner"
 rg -Fq 'scripts/test/run-chainsaw.sh "$tier" "$target"' "$runner"

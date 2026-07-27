@@ -1,0 +1,133 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: test-reports-persistence
+  labels:
+    homelab-talos/tier: resilience
+    homelab-talos/target: test-reports-persistence
+    homelab-talos/suite: test-reports-persistence
+spec:
+  namespace: flux-system
+  concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: test-reports
+        namespace: test-reports
+    - describe:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: test-reports
+        namespace: test-reports
+    - podLogs:
+        namespace: test-reports
+        selector: app.kubernetes.io/name=test-reports
+    - events:
+        namespace: test-reports
+  steps:
+    - name: establish-native-readiness-and-python-baseline
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              test-reports-persistence
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: test-reports
+            namespace: test-reports
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: test-reports
+            selector: app.kubernetes.io/name=test-reports
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: test-reports
+                namespace: test-reports
+              status:
+                phase: Bound
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/test_reports_persistence.py prepare .kube/config
+    - name: delete-caddy-pod-natively-and-prove-recovery
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: test-reports
+              labels:
+                app.kubernetes.io/name: test-reports
+      finally:
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: test-reports
+            namespace: test-reports
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: test-reports
+            selector: app.kubernetes.io/name=test-reports
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            timeout: 6m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/test_reports_persistence.py recover .kube/config
+    - name: assert-replacement-runtime-and-storage
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: test-reports
+                namespace: test-reports
+              status:
+                availableReplicas: 1
+                readyReplicas: 1
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: test-reports
+                namespace: test-reports
+              status:
+                phase: Bound
+    - name: construct-exact-report-persistence-evidence
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/test_reports_persistence.py verify .kube/config

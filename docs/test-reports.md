@@ -83,9 +83,25 @@ TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> \
 ```
 
 Review the root index and report at `https://tests.lab.supermorphic.com`, the available
-Homepage rollups, and the provisioned Grafana `Cluster Verification` dashboard. Then
-create the separate activation PR that changes `suspend: false` and adds the Gatus
-endpoint.
+Homepage rollups, and the provisioned Grafana `Cluster Verification` dashboard. Before
+activation, run the exact-report persistence proof:
+
+```bash
+TEST_REPORT_RUN_ID=<published-run-id> \
+CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence \
+  mise exec -- just test resilience test-reports-persistence
+```
+
+This operator-only Chainsaw scenario holds the cluster-wide test Lease, records the
+selected authoritative report and PVC identities, deletes only the Caddy pod, waits for
+native Kubernetes recovery, and proves the exact report, canonical artifact, catalog
+entry, and bound volume survived. Its Python phase controller compares structured
+cross-phase state and writes sanitized evidence; Chainsaw owns deletion, readiness,
+resource assertions, catch diagnostics, and finally recovery.
+
+After the persistence run passes, publish its canonical result while its Git SHA still
+matches current main. Then create the separate activation PR that changes
+`suspend: false` and adds the Gatus endpoint.
 After that merges, run `mise exec -- just kube test-reports-verify`.
 
 Agents stage and validate the source but do not bootstrap or publish. GitHub Actions

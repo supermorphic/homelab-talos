@@ -177,6 +177,7 @@ uv run --locked ruff check \
   scripts/test/scenarios/plex_cross_node_reschedule.py \
   scripts/test/scenarios/qbittorrent_pod_recreation.py \
   scripts/test/scenarios/qbittorrent_vpn_disconnect.py \
+  scripts/test/scenarios/test_reports_persistence.py \
   scripts/test/scenarios/qbit_manage_policy_config.py \
   scripts/test/scenarios/qbit_manage_policy.py \
   scripts/test/scenarios/test_qbit_manage_policy.py \
@@ -194,6 +195,7 @@ uv run --locked ruff format --check \
   scripts/test/scenarios/plex_cross_node_reschedule.py \
   scripts/test/scenarios/qbittorrent_pod_recreation.py \
   scripts/test/scenarios/qbittorrent_vpn_disconnect.py \
+  scripts/test/scenarios/test_reports_persistence.py \
   scripts/test/scenarios/qbit_manage_policy_config.py \
   scripts/test/scenarios/qbit_manage_policy.py \
   scripts/test/scenarios/test_qbit_manage_policy.py \

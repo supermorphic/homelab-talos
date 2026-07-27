@@ -10,6 +10,7 @@ from pathlib import Path
 import plex_cross_node_reschedule as plex
 import qbittorrent_pod_recreation as pod_recreation
 import qbittorrent_vpn_disconnect as vpn
+import test_reports_persistence as reports
 from resilience_support import (
     InterruptedRun,
     ScenarioFailure,
@@ -228,6 +229,133 @@ class SecretPersistenceTests(unittest.TestCase):
             state = load_state(state_path)
             self.assertEqual(state["phase"], "fail-closed")
             self.assertEqual(state["recoveryValidation"]["recoveryPod"], "qbit-recovered")
+
+
+def report_snapshot(
+    pod_uid: str,
+    *,
+    pvc_uid: str = "pvc-uid",
+    volume: str = "pvc-volume",
+    report_digest: str = "a" * 64,
+    artifact_digest: str = "b" * 64,
+) -> dict[str, object]:
+    return {
+        "pod": {"name": f"test-reports-{pod_uid}", "uid": pod_uid, "node": "nuc2"},
+        "pvc": {"uid": pvc_uid, "volume": volume},
+        "generation": "generations/20260727T220000Z-deadbeef",
+        "reportIndexSha256": report_digest,
+        "artifactSha256": artifact_digest,
+        "catalogEntry": {
+            "runId": "20260727T220000Z-aaaaaaaaaaaa-operator-deadbeef",
+            "gitSha": "a" * 40,
+            "result": "passed",
+            "authoritative": True,
+        },
+        "observedAt": "2026-07-27T22:00:00Z",
+    }
+
+
+class TestReportPersistenceTests(unittest.TestCase):
+    run_id = "20260727T220000Z-aaaaaaaaaaaa-operator-deadbeef"
+
+    def test_exact_report_and_pvc_survive_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            snapshots = iter(
+                [
+                    report_snapshot("old-uid"),
+                    report_snapshot("new-uid"),
+                    report_snapshot("new-uid"),
+                ]
+            )
+            controller = reports.Controller(
+                "kubeconfig",
+                run_dir,
+                run_id=self.run_id,
+                snapshotter=lambda: next(snapshots),
+            )
+            controller.prepare()
+            controller.recover()
+            controller.verify()
+            state = load_state(run_dir / "diagnostics" / reports.STATE_NAME)
+            self.assertEqual(state["phase"], "verified")
+            self.assertEqual(state["baseline"]["pod"]["uid"], "old-uid")
+            self.assertEqual(state["final"]["pod"]["uid"], "new-uid")
+            recovery = json.loads((run_dir / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "passed")
+            self.assertTrue((run_dir / "diagnostics" / reports.EVIDENCE_NAME).is_file())
+
+    def test_unchanged_pod_identity_fails_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            snapshots = iter(
+                [
+                    report_snapshot("same-uid"),
+                    report_snapshot("same-uid"),
+                ]
+            )
+            controller = reports.Controller(
+                "kubeconfig",
+                run_dir,
+                run_id=self.run_id,
+                snapshotter=lambda: next(snapshots),
+                timeout=0,
+            )
+            controller.prepare()
+            with self.assertRaisesRegex(
+                ScenarioFailure,
+                "pod identity did not change",
+            ):
+                controller.recover()
+            recovery = json.loads((run_dir / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "failed")
+
+    def test_interrupted_recovery_is_failed_and_propagated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            calls = 0
+
+            def snapshotter() -> dict[str, object]:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return report_snapshot("old-uid")
+                raise InterruptedRun("mocked persistence interruption")
+
+            controller = reports.Controller(
+                "kubeconfig",
+                run_dir,
+                run_id=self.run_id,
+                snapshotter=snapshotter,
+            )
+            controller.prepare()
+            with self.assertRaises(InterruptedRun):
+                controller.recover()
+            recovery = json.loads((run_dir / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "failed")
+
+    def test_persistence_evidence_contains_no_secret_like_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            snapshots = iter(
+                [
+                    report_snapshot("old-uid"),
+                    report_snapshot("new-uid"),
+                    report_snapshot("new-uid"),
+                ]
+            )
+            controller = reports.Controller(
+                "kubeconfig",
+                run_dir,
+                run_id=self.run_id,
+                snapshotter=lambda: next(snapshots),
+            )
+            controller.prepare()
+            controller.recover()
+            controller.verify()
+            persisted = (run_dir / "diagnostics" / reports.EVIDENCE_NAME).read_text()
+            for forbidden in ("apikey", "api_key", "secret", "password", "token"):
+                self.assertNotIn(forbidden, persisted.lower())
 
 
 if __name__ == "__main__":
