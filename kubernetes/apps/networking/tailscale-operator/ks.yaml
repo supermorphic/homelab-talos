@@ -20,11 +20,9 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Staged suspended: the operator-oauth Secret and the tailnet-side prerequisites
-  # (OAuth client, ACL tags/grants, MagicDNS + HTTPS certs — see
-  # docs/tailscale-operator.md) must exist before reconciliation. Roll out with
-  # `just bootstrap tailscale-operator`, then flip to false durably.
-  suspend: true
+  # Rolled out via `just bootstrap tailscale-operator` and live-verified
+  # (operator + ingress ProxyGroup Ready); now durably active.
+  suspend: false
   timeout: 10m
   wait: true
 ---
