@@ -799,3 +799,14 @@ trivy-validate: require-bash
 # rolled out, report CRDs installed, and foundation green.
 trivy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.trivy -- scripts/verify/trivy.sh {{quote(kubeconfig)}}
+
+# Validate the Tailscale operator source: files, wiring, staged suspend, cilium
+# dependency, SOPS decryption, pinned chart, privileged-namespace exception, the
+# API-server-proxy scope guard, the ingress ProxyGroup, and the render.
+tailscale-operator-validate: require-bash
+    @scripts/validate/tailscale-operator.sh
+
+# Verify the live Tailscale operator: Kustomization + HelmRelease Ready, operator
+# rolled out, both ingress ProxyGroup replicas Ready, and foundation green.
+tailscale-operator-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.tailscale-operator -- scripts/verify/tailscale-operator.sh {{quote(kubeconfig)}}

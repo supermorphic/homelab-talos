@@ -1009,6 +1009,62 @@ portainer-secrets:
     mv -- "$temp_dir/portainer-admin-password.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (portainer-admin-password in portainer)."
 
+# Write ONLY the SOPS-encrypted Tailscale operator OAuth Secret (operator-oauth in the
+# tailscale namespace) from TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET. The chart
+# consumes this pre-created Secret when oauth.clientId/clientSecret are empty. Create the
+# OAuth client in the tailnet admin console first (tagged tag:k8s-operator, scopes
+# Devices/Core + Keys/Auth Keys + Services = write) — see docs/tailscale-operator.md.
+# Never echoes the values.
+tailscale-operator-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:networking:tailscale-operator:sops'
+    target='kubernetes/apps/networking/tailscale-operator/app/oauth.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-tailscale-operator.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${TS_OAUTH_CLIENT_ID:-}" ]] || {
+      echo 'Set TS_OAUTH_CLIENT_ID to the Tailscale OAuth client ID (tag:k8s-operator).' >&2
+      exit 1
+    }
+    [[ -n "${TS_OAUTH_CLIENT_SECRET:-}" ]] || {
+      echo 'Set TS_OAUTH_CLIENT_SECRET to the Tailscale OAuth client secret.' >&2
+      exit 1
+    }
+    [[ "${TS_OAUTH_CLIENT_SECRET}" == tskey-client-* ]] || {
+      echo 'Refusing: TS_OAUTH_CLIENT_SECRET does not look like a Tailscale OAuth client secret (tskey-client-*).' >&2
+      exit 1
+    }
+    [[ "${TAILSCALE_OPERATOR_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Tailscale operator OAuth Secret.' >&2
+      echo "Set TAILSCALE_OPERATOR_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "operator-oauth" |
+       .metadata.namespace = "tailscale" |
+       .type = "Opaque" |
+       .stringData.client_id = strenv(TS_OAUTH_CLIENT_ID) |
+       .stringData.client_secret = strenv(TS_OAUTH_CLIENT_SECRET)' \
+      >"$temp_dir/operator-oauth.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/operator-oauth.yaml" >"$temp_dir/operator-oauth.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/operator-oauth.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/operator-oauth.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$TS_OAUTH_CLIENT_ID" "$temp_dir/operator-oauth.sops.yaml"
+    ! rg -Fq -- "$TS_OAUTH_CLIENT_SECRET" "$temp_dir/operator-oauth.sops.yaml"
+
+    mv -- "$temp_dir/operator-oauth.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (operator-oauth in tailscale)."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
@@ -1062,7 +1118,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 18  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 19  # Update when adding/removing a guarded rollout recipe.
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi
