@@ -1115,4 +1115,3 @@ phone and off-site tests.
   <https://grafana.com/docs/grafana/latest/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/>
 - Alertmanager-to-ntfy adapter candidate:
   <https://github.com/alexbakker/alertmanager-ntfy>
-
