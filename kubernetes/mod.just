@@ -785,6 +785,12 @@ test-reports-validate: require-bash
 test-reports-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.test-reports -- scripts/verify/test-reports.sh {{quote(kubeconfig)}}
 
+# Print scoped, read-only report-host reconciliation diagnostics. The dedicated
+# namespace contains no Secrets, so pod specs, events, and static-server logs are
+# safe to inspect. Operator-only; not in `just ci`.
+test-reports-diagnostics: require-bash
+    @scripts/diagnose/test-reports.sh {{quote(kubeconfig)}}
+
 # Confirmation-guarded pod recreation proving the Portainer database remains on
 # the original PVC. Operator-only and intentionally separate from bootstrap.
 portainer-persistence-test: require-bash

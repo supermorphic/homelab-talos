@@ -14,12 +14,14 @@ policy="$app/ciliumnetworkpolicy.yaml"
 monitor="$app/servicemonitor.yaml"
 rule="$app/prometheusrule.yaml"
 dashboard="$app/dashboards/test-reports.json"
+diagnostics='scripts/diagnose/test-reports.sh'
 image='docker.io/library/caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648'
 
 for file in \
   "$ks" "$app/kustomization.yaml" "$app/namespace.yaml" "$deployment" \
   "$pvc" "$app/service.yaml" "$route" "$policy" "$monitor" "$rule" \
-  "$app/Caddyfile" "$app/bootstrap-storage.sh" "$app/install-report.sh" "$dashboard"; do
+  "$app/Caddyfile" "$app/bootstrap-storage.sh" "$app/install-report.sh" "$dashboard" \
+  "$diagnostics"; do
   [[ -f "$file" ]] || {
     echo "Missing test-report server source: $file" >&2
     exit 1
@@ -51,9 +53,18 @@ rg -qx '  - ./test-reports/ks.yaml' kubernetes/apps/monitoring/kustomization.yam
 [[ "$(yq -r '[.spec.template.spec.containers[].securityContext.readOnlyRootFilesystem,
   .spec.template.spec.initContainers[].securityContext.readOnlyRootFilesystem] | all' \
   "$deployment")" == 'true' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].securityContext.allowPrivilegeEscalation,
+  .spec.template.spec.initContainers[].securityContext.allowPrivilegeEscalation] |
+  all_c(. == false)' "$deployment")" == 'true' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].securityContext.capabilities.drop[],
   .spec.template.spec.initContainers[].securityContext.capabilities.drop[]] |
   unique | join(",")' "$deployment")" == 'ALL' ]]
+[[ "$(yq -r '.spec.template.spec.containers[] |
+  select(.name == "caddy") | .securityContext.capabilities.add | join(",")' \
+  "$deployment")" == 'NET_BIND_SERVICE' ]]
+[[ "$(yq -r \
+  '[.spec.template.spec.initContainers[].securityContext.capabilities.add[]?] | length' \
+  "$deployment")" == '0' ]]
 
 [[ "$(yq -r '.spec.accessModes[0]' "$pvc")" == 'ReadWriteOnce' ]]
 [[ "$(yq -r '.spec.storageClassName' "$pvc")" == 'longhorn' ]]
@@ -125,7 +136,7 @@ if find "$app" -maxdepth 1 -type f \
 fi
 
 sh -n "$app/bootstrap-storage.sh" "$app/install-report.sh"
-shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh"
+shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh" "$diagnostics"
 kustomize build "$app" >/dev/null
 
 echo 'Suspended Caddy test-report server, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'
