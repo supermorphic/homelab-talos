@@ -33,7 +33,7 @@ if [ ! -f "$generation/api/metrics.prom" ]; then
 fi
 if [ ! -f "$generation/index.html" ]; then
   printf '%s\n' \
-    '<!doctype html><html><head><meta charset="utf-8"><title>Test Results</title></head><body><main><h1>Test Results</h1><p>No reports have been published yet.</p></main></body></html>' \
+    '<!doctype html><html><head><meta charset="utf-8"><title>Test Reports</title></head><body><main><h1>Test Reports</h1><p>No reports have been published yet.</p></main></body></html>' \
     >"$generation/index.html"
 fi
 

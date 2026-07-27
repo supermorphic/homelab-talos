@@ -127,6 +127,10 @@ class ReportPublishTests(unittest.TestCase):
                 (generation / "latest" / "smoke" / "cilium" / "health" / "index.html").is_file()
             )
             self.assertTrue((generation / "latest" / "overall" / "index.html").is_file())
+            index = (generation / "index.html").read_text()
+            self.assertIn("<title>Homelab Test Reports</title>", index)
+            self.assertIn("<h1>Homelab Test Reports</h1>", index)
+            self.assertNotIn("Homelab Test Results", index)
             homepage = json.loads((generation / "api" / "homepage.json").read_text())
             self.assertEqual(
                 homepage,

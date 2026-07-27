@@ -9,7 +9,7 @@ metadata:
     gethomepage.dev/enabled: "true"
     gethomepage.dev/name: "Portainer"
     gethomepage.dev/description: "Read-only Kubernetes runtime visibility"
-    gethomepage.dev/group: "Monitoring"
+    gethomepage.dev/group: "Platform"
     gethomepage.dev/icon: "portainer-dark.svg"
     gethomepage.dev/href: "https://portainer.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=portainer"

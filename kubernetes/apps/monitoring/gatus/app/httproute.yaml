@@ -9,7 +9,7 @@ metadata:
     gethomepage.dev/enabled: "true"
     gethomepage.dev/name: "Gatus"
     gethomepage.dev/description: "Automated uptime and endpoint monitoring"
-    gethomepage.dev/group: "Monitoring"
+    gethomepage.dev/group: "Monitoring & Testing"
     gethomepage.dev/icon: "gatus.svg"
     gethomepage.dev/href: "https://gatus.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=gatus"
