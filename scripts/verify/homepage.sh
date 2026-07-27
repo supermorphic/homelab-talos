@@ -21,6 +21,14 @@ for _ in {1..18}; do
 done
 [[ "$accepted" == 'true' ]] || { echo 'Homepage HTTPRoute is not Accepted.' >&2; exit 1; }
 
+homepage_pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pods \
+  --selector app.kubernetes.io/name=homepage \
+  --field-selector status.phase=Running \
+  --output jsonpath='{.items[0].metadata.name}')"
+[[ -n "$homepage_pod" ]] || { echo 'Homepage has no running pod.' >&2; exit 1; }
+kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$homepage_pod" -- \
+  test -f /app/public/icons/allure.svg
+
 dns_answer=''
 for _ in {1..30}; do
   dns_answer="$(dig +short @192.168.90.2 homepage.lab.supermorphic.com A | sort -u)"
@@ -29,6 +37,13 @@ for _ in {1..30}; do
 done
 [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for homepage, not $gateway_ip." >&2; exit 1; }
 curl --silent --show-error --fail --max-time 15 --resolve "homepage.lab.supermorphic.com:443:$gateway_ip" https://homepage.lab.supermorphic.com/ >/dev/null
+allure_icon="$(curl --silent --show-error --fail --max-time 15 \
+  --resolve "homepage.lab.supermorphic.com:443:$gateway_ip" \
+  https://homepage.lab.supermorphic.com/icons/allure.svg)"
+rg -q '<svg([[:space:]>])' <<<"$allure_icon" || {
+  echo 'Homepage /icons/allure.svg did not return SVG content.' >&2
+  exit 1
+}
 
 just kube foundation-verify
-echo 'Phase 10 Homepage acceptance passed: Kustomization Ready, deployment rolled out, HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at homepage.lab.supermorphic.com.'
+echo 'Phase 10 Homepage acceptance passed: Kustomization Ready, deployment rolled out, HTTPRoute accepted, Allure icon mounted and served, and the dashboard reachable with trusted HTTPS at homepage.lab.supermorphic.com.'

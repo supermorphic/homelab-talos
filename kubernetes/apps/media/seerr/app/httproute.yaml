@@ -12,7 +12,7 @@ metadata:
     gethomepage.dev/description: "Media requests"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=seerr"
     gethomepage.dev/group: "Media"
-    gethomepage.dev/icon: "jellyseerr.svg"
+    gethomepage.dev/icon: "seerr.svg"
     gethomepage.dev/href: "https://seerr.lab.supermorphic.com"
     # Live widget uses Seerr's API key from Homepage's SOPS Secret
     # (homepage-seerr). Blank until `just repo homepage-seerr-secrets` runs.

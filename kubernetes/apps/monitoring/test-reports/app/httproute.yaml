@@ -10,7 +10,7 @@ metadata:
     gethomepage.dev/name: "Test Results"
     gethomepage.dev/description: "Persistent operator-published test reports"
     gethomepage.dev/group: "Monitoring"
-    gethomepage.dev/icon: "allure.png"
+    gethomepage.dev/icon: "/icons/allure.svg"
     gethomepage.dev/href: "https://tests.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=test-reports"
     gethomepage.dev/widget.type: "customapi"

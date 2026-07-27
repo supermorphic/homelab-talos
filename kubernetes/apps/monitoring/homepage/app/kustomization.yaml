@@ -28,3 +28,7 @@ configMapGenerator:
       - proxmox.yaml=config/proxmox.yaml
       - custom.css=config/custom.css
       - custom.js=config/custom.js
+  - name: homepage-icons
+    namespace: homepage
+    files:
+      - allure.svg=icons/allure.svg

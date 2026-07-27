@@ -10,7 +10,7 @@ metadata:
     gethomepage.dev/name: "Portainer"
     gethomepage.dev/description: "Read-only Kubernetes runtime visibility"
     gethomepage.dev/group: "Monitoring"
-    gethomepage.dev/icon: "portainer.svg"
+    gethomepage.dev/icon: "portainer-dark.svg"
     gethomepage.dev/href: "https://portainer.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=portainer"
     # Live Kubernetes widget. The API key is injected into Homepage from its

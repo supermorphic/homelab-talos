@@ -112,11 +112,21 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /app/config
+            - name: custom-icons
+              mountPath: /app/public/icons/allure.svg
+              subPath: allure.svg
+              readOnly: true
             - name: logs
               mountPath: /app/config/logs
       volumes:
         - name: config
           configMap:
             name: homepage-config
+        - name: custom-icons
+          configMap:
+            name: homepage-icons
+            items:
+              - key: allure.svg
+                path: allure.svg
         - name: logs
           emptyDir: {}

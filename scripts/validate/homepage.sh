@@ -9,11 +9,19 @@ ks="$base/ks.yaml"
 ns="$base/app/namespace.yaml"
 dep="$base/app/deployment.yaml"
 route="$base/app/httproute.yaml"
+app_kustomization="$base/app/kustomization.yaml"
+allure_icon="$base/app/icons/allure.svg"
+allure_provenance="$base/app/icons/README.md"
+seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
+portainer_route='kubernetes/apps/monitoring/portainer/app/httproute.yaml'
+test_reports_route='kubernetes/apps/monitoring/test-reports/app/httproute.yaml'
+allure_commit='fe2ea92eaab4e409a3c8cf52ba96e35df96b2298'
 
 for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.yaml" \
-  "$base/app/kustomization.yaml" "$base/app/config/settings.yaml" \
+  "$app_kustomization" "$base/app/config/settings.yaml" \
   "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
-  "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml"; do
+  "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$allure_icon" \
+  "$allure_provenance" "$seerr_route" "$portainer_route" "$test_reports_route"; do
   [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
@@ -25,10 +33,22 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
 [[ "$(yq -r '.metadata.labels."gateway.supermorphic.com/access"' "$ns")" == 'internal' ]]
 [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,internal-gateway' ]]
-[[ "$(yq -r '.spec.template.spec.containers[0].image' "$dep")" == ghcr.io/gethomepage/homepage:* ]]
+[[ "$(yq -r '.spec.template.spec.containers[0].image' "$dep")" == 'ghcr.io/gethomepage/homepage:v1.13.2' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[0].env[] | select(.name == "HOMEPAGE_ALLOWED_HOSTS") | .value] | .[0]' "$dep")" == 'homepage.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'homepage.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$portainer_route")" == 'portainer-dark.svg' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$test_reports_route")" == '/icons/allure.svg' ]]
+[[ "$(yq -r '.configMapGenerator[] | select(.name == "homepage-icons") | .files[0]' "$app_kustomization")" == 'allure.svg=icons/allure.svg' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "custom-icons") | .mountPath] | .[0]' "$dep")" == '/app/public/icons/allure.svg' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "custom-icons") | .subPath] | .[0]' "$dep")" == 'allure.svg' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "custom-icons") | .readOnly] | .[0]' "$dep")" == 'true' ]]
+[[ "$(yq -r '[.spec.template.spec.volumes[] | select(.name == "custom-icons") | .configMap.name] | .[0]' "$dep")" == 'homepage-icons' ]]
+[[ "$(yq -r '[.spec.template.spec.volumes[] | select(.name == "custom-icons") | .configMap.items[0].key] | .[0]' "$dep")" == 'allure.svg' ]]
+[[ "$(yq -r '[.spec.template.spec.volumes[] | select(.name == "custom-icons") | .configMap.items[0].path] | .[0]' "$dep")" == 'allure.svg' ]]
+rg -Fq "$allure_commit" "$allure_provenance"
+rg -Fq 'packages/web-components/src/assets/svg/report-logo.svg' "$allure_provenance"
 
 # Per-service split Secrets (rotate independently).
 grafana_secret="$base/app/homepage-grafana.sops.yaml"
