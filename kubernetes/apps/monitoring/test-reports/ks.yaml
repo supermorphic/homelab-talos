@@ -19,8 +19,8 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Bootstrap and a sanitized publication are operator-run acceptance gates. The
-  # activation PR changes this to false and adds the Gatus endpoint.
-  suspend: true
+  # Activated after guarded bootstrap, sanitized publication, and the retained
+  # report/PVC pod-recreation proof. Git now preserves that accepted live state.
+  suspend: false
   timeout: 10m
   wait: true

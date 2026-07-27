@@ -48,6 +48,14 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # Persistent test-report index (black-box through internal DNS, TLS, Gateway,
+    # Caddy, and the retained Longhorn-backed current generation).
+    - name: test-reports
+      group: Observability
+      url: "https://tests.lab.supermorphic.com/"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     # Platform edge: proves the Envoy gateway data path + wildcard TLS end to end.
     - name: echo
       group: Platform

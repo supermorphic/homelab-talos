@@ -16,13 +16,14 @@ monitor="$app/servicemonitor.yaml"
 rule="$app/prometheusrule.yaml"
 dashboard="$app/dashboards/test-reports.json"
 diagnostics='scripts/diagnose/test-reports.sh'
+gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
 image='docker.io/library/caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648'
 
 for file in \
   "$ks" "$app/kustomization.yaml" "$app/namespace.yaml" "$deployment" \
   "$pvc" "$app/service.yaml" "$route" "$policy" "$monitor" "$rule" \
   "$app/Caddyfile" "$app/bootstrap-storage.sh" "$app/install-report.sh" "$dashboard" \
-  "$diagnostics"; do
+  "$diagnostics" "$gatus_values"; do
   [[ -f "$file" ]] || {
     echo "Missing test-report server source: $file" >&2
     exit 1
@@ -32,10 +33,8 @@ rg -qx '  - ./test-reports/ks.yaml' kubernetes/apps/monitoring/kustomization.yam
   echo 'test-reports is not wired into the monitoring kustomization.' >&2
   exit 1
 }
-[[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
-  echo 'The source PR must stage test-reports suspended.' >&2
-  exit 1
-}
+suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
+[[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
 [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == \
   'cilium,internal-gateway,kube-prometheus-stack,longhorn' ]]
 [[ "$(yq -r '.metadata.labels."pod-security.kubernetes.io/enforce"' "$app/namespace.yaml")" == \
@@ -151,12 +150,26 @@ yq ea -e '
     (.data."test-reports.json" | test("\"uid\": \"cluster-verification\""))
   ' "$rendered" >/dev/null
 
-# The staged server must not create a guaranteed-failing uptime probe before the
-# operator bootstrap. The activation PR adds this endpoint after acceptance.
-! rg -q '^    - name: test-reports$' kubernetes/apps/monitoring/gatus/app/values.yaml || {
-  echo 'Suspended test-reports must not register a Gatus endpoint.' >&2
-  exit 1
-}
+# Uptime monitoring follows activation state: never probe staged-absent source,
+# and require the complete user-facing path after operator acceptance.
+if [[ "$suspend_state" == 'false' ]]; then
+  [[ "$(yq -r '[.config.endpoints[] | select(
+    .name == "test-reports" and
+    .group == "Observability" and
+    .url == "https://tests.lab.supermorphic.com/" and
+    .interval == "1m" and
+    .conditions[0] == "[STATUS] == 200" and
+    (.conditions | length) == 1
+  )] | length' "$gatus_values")" == '1' ]] || {
+    echo 'Active test-reports has no exact Gatus endpoint.' >&2
+    exit 1
+  }
+else
+  ! rg -q '^    - name: test-reports$' "$gatus_values" || {
+    echo 'Suspended test-reports must not register a Gatus endpoint.' >&2
+    exit 1
+  }
+fi
 if find "$app" -maxdepth 1 -type f \
   \( -name '*role*.yaml' -o -name '*serviceaccount*.yaml' \) -print -quit | rg -q .; then
   echo 'The static test-report server must not have Kubernetes RBAC.' >&2
@@ -166,4 +179,4 @@ fi
 sh -n "$app/bootstrap-storage.sh" "$app/install-report.sh"
 shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh" "$diagnostics"
 
-echo 'Suspended Caddy test-report server, content-addressed runtime configuration, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'
+echo 'Caddy test-report server, activation-aware Gatus probe, content-addressed runtime configuration, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'
