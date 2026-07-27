@@ -27,3 +27,31 @@ spec:
   suspend: true
   timeout: 10m
   wait: true
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: tailscale-operator-proxygroup
+  namespace: flux-system
+spec:
+  # The ProxyGroup is a tailscale.com CRD instance, so it CANNOT live in the
+  # operator Kustomization: Flux dry-runs every object in a Kustomization
+  # atomically before applying any, and the ProxyGroup dry-run fails with
+  # "no matches for kind ProxyGroup" until the operator's HelmRelease has
+  # installed the CRD — deadlocking the whole apply. dependsOn gates this
+  # Kustomization on the operator being Ready (CRD present), so it is left
+  # suspend: false and reconciles automatically once the operator rolls out.
+  dependsOn:
+    - name: tailscale-operator
+  interval: 1h
+  path: ./kubernetes/apps/networking/tailscale-operator/proxygroup
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  suspend: false
+  timeout: 10m
+  wait: true

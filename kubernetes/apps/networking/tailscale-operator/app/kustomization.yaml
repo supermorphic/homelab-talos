@@ -6,7 +6,6 @@ resources:
   - ./helmrepository.yaml
   - ./helmrelease.yaml
   - ./oauth.sops.yaml
-  - ./proxygroup.yaml
 configMapGenerator:
   - name: tailscale-operator-values
     namespace: tailscale

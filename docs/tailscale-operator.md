@@ -13,6 +13,23 @@ Any private service (starting with ntfy in a later PR) exposes itself by creatin
 `tailscale.com/proxy-group: ingress-proxies`. Treat the ProxyGroup as shared networking
 infrastructure — do not give each service its own single-replica proxy.
 
+### Two Flux Kustomizations (CRD ordering)
+
+`ks.yaml` defines **two** Flux Kustomizations, deliberately:
+
+- `tailscale-operator` (`./app`) — installs the operator, which registers the
+  `tailscale.com` CRDs (including `ProxyGroup`).
+- `tailscale-operator-proxygroup` (`./proxygroup`) — the `ProxyGroup` CR, with
+  `dependsOn: tailscale-operator`.
+
+They must be separate: Flux dry-runs every object in a Kustomization atomically before
+applying any, so a `ProxyGroup` in the operator Kustomization fails the dry-run with
+`no matches for kind "ProxyGroup"` (the CRD does not exist yet) and deadlocks the whole
+apply — the operator that would install the CRD never deploys. `dependsOn` gates the CR
+on the operator being Ready, so the CRD always exists first. The ProxyGroup Kustomization
+is left `suspend: false` (its `dependsOn` is the real gate); only the operator
+Kustomization is staged `suspend: true` for the guarded bootstrap.
+
 ## Scope (intentionally minimal)
 
 This deployment provides **operator + ingress ProxyGroup only**. The following are
