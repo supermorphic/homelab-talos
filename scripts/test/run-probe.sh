@@ -20,12 +20,15 @@ kubeconfig='.kube/config'
 
 case "$target" in
   qbittorrent)
+    suite_id='probe.qbittorrent'
     probe='tests/probes/qbittorrent/probe.sh'
     ;;
   vpn-leak)
+    suite_id='probe.vpn-leak'
     probe='tests/probes/vpn/leak-sentinel.sh'
     ;;
   dns-isolation)
+    suite_id='probe.dns-isolation'
     probe='tests/probes/dns/isolation.sh'
     ;;
   *)
@@ -39,4 +42,4 @@ esac
   exit 1
 }
 
-exec "$probe" "$kubeconfig"
+exec scripts/test/run-catalog-suite.sh "$suite_id" -- "$probe" "$kubeconfig"

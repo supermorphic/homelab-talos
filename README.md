@@ -287,15 +287,15 @@ available for focused developer validation.
 | `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Portainer Phase 1; operator-only and read-only |
 | `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Portainer Phase 1; operator-only and disruptive after confirmation |
 | `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Portainer Phase 1; operator-only |
-| `just ci` | Run the cluster-independent, secret-free validation gate (lint + verify + kubeconform + all `*-validate`) | — | Local + GitHub Actions; the PR gate |
+| `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Local + GitHub Actions; the PR gate; Actions retains the artifact for 90 days |
 | `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
-| `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency and its evidence index | `.test-results/<run-id>` | Cluster-independent; Chainsaw runners invoke it automatically |
+| `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency, evidence size/path safety, and its complete evidence index | `.test-results/<run-id>` | Cluster-independent; coordinated runners invoke it automatically |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
 | `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
 | `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |
-| `just test e2e <target>` | Run an allowlisted state-changing functional scenario under a single-run lock | `.kube/config` | Fails closed until a target is registered |
-| `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and locking guards | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |
+| `just test e2e <target>` | Run an allowlisted state-changing functional scenario under the renewable cluster-wide test Lease | `.kube/config` | Fails closed until a target is registered |
+| `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and the renewable cluster-wide test Lease | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |
 | `just repo hooks` | Install the git pre-commit hooks (idempotent) | — | Available |
 | `just repo lint` | Run all pre-commit hooks against the tree | — | Available |
 | `just kube kubeconform` | Validate the built app manifests against Kubernetes + CRD schemas | — | Available; read-only, fetches schemas over HTTPS |

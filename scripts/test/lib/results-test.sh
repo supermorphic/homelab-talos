@@ -179,6 +179,16 @@ if write_evidence_index "$run_dir" "$run_id" >/dev/null 2>&1; then
 fi
 rm "$run_dir/diagnostics/unsafe-link"
 
+printf 'oversized-fixture' >"$run_dir/diagnostics/oversized"
+write_evidence_index "$run_dir" "$run_id"
+if TEST_RESULT_MAX_FILE_BYTES=8 \
+  scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
+  echo 'Run validation must reject oversized evidence files.' >&2
+  exit 1
+fi
+rm "$run_dir/diagnostics/oversized"
+write_evidence_index "$run_dir" "$run_id"
+
 TEST_EXECUTION_ORIGIN=unknown
 export TEST_EXECUTION_ORIGIN
 if resolve_execution_origin >/dev/null 2>&1; then

@@ -32,13 +32,12 @@ MODE=certified mise exec -- just kube conformance   # full certified suite
   after substantial networking/storage/platform architecture changes, or when you
   specifically need conformance evidence.
 
-The recipe preflight-checks the cluster is reachable and no prior Sonobuoy run is still
-installed, preserves results under `.test-results/<ts>-…-conformance/` (retrieved **before**
-teardown, even on failure/interruption), prints the `sonobuoy results` summary, and always
-deletes the Sonobuoy namespace. Sonobuoy is registered in `tests/catalog.yaml`;
-normalizing its archive/JUnit into the canonical run contract is intentionally
-part of reporting Phase 3. Until then, this legacy directory is not accepted by
-`just test result-validate`.
+The recipe validates the registered mode, acquires the shared state-changing
+test Lease, checks that no prior Sonobuoy run is installed, and always attempts
+teardown. Its canonical `.test-results/<run-id>/` retains the native archive
+below `diagnostics/sonobuoy/`, extracts and merges non-vacuous E2E JUnit, records
+cleanup or harness problems as JUnit errors, and is accepted by `just test
+result-validate`.
 
 ## Intentionally out of scope
 

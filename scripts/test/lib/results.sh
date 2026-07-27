@@ -202,57 +202,37 @@ recorded_phase_status() {
 
 read_junit_counts() {
   local junit_file="$1"
-  local report_json tests failures errors skipped passed
-  report_json="$(yq --input-format xml --output-format json '.' "$junit_file")" || return 1
-  tests="$(yq -r \
-    '[.. | select((type == "!!map") and has("testcase")) | .testcase] | flatten | length' \
-    - <<<"$report_json")"
-  failures="$(yq -r \
-    '[.. | select((type == "!!map") and has("failure"))] | length' \
-    - <<<"$report_json")"
-  errors="$(yq -r \
-    '[.. | select((type == "!!map") and has("error"))] | length' \
-    - <<<"$report_json")"
-  skipped="$(yq -r \
-    '[.. | select((type == "!!map") and has("skipped"))] | length' \
-    - <<<"$report_json")"
-  for count in "$tests" "$failures" "$errors" "$skipped"; do
-    [[ "$count" =~ ^[0-9]+$ ]] || return 1
-  done
-  passed=$((tests - failures - errors - skipped))
-  [[ "$tests" -gt 0 && "$passed" -ge 0 ]] || return 1
-  printf '%s %s %s %s %s\n' "$tests" "$failures" "$errors" "$skipped" "$passed"
+  uv run --locked python scripts/test/junit_tools.py inspect \
+    --input "$junit_file"
 }
 
 write_single_case_junit() {
+  write_result_case_junit "$@"
+}
+
+write_result_case_junit() {
   local output_file="$1"
   local suite_name="$2"
   local case_name="$3"
   local result="$4"
   local duration="$5"
-  local failures=0 errors=0 body=''
-  case "$result" in
-    passed) ;;
-    failed)
-      failures=1
-      body='<failure message="diagnostic collection failed"/>'
-      ;;
-    broken)
-      errors=1
-      body='<error message="diagnostic harness failed"/>'
-      ;;
-    *) return 2 ;;
-  esac
-  {
-    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
-    printf '<testsuites name="%s" tests="1" failures="%s" errors="%s" skipped="0" time="%s">\n' \
-      "$suite_name" "$failures" "$errors" "$duration"
-    printf '  <testsuite name="%s" tests="1" failures="%s" errors="%s" skipped="0" time="%s">\n' \
-      "$suite_name" "$failures" "$errors" "$duration"
-    printf '    <testcase classname="%s" name="%s" time="%s">%s</testcase>\n' \
-      "$suite_name" "$case_name" "$duration" "$body"
-    printf '  </testsuite>\n</testsuites>\n'
-  } >"$output_file"
+  uv run --locked python scripts/test/junit_tools.py case \
+    --output "$output_file" \
+    --suite "$suite_name" \
+    --name "$case_name" \
+    --result "$result" \
+    --duration "$duration"
+}
+
+merge_junit_reports() {
+  local output_file="$1"
+  local suite_name="$2"
+  shift 2
+  [[ "$#" -gt 0 ]] || return 2
+  uv run --locked python scripts/test/junit_tools.py merge \
+    --output "$output_file" \
+    --suite "$suite_name" \
+    "$@"
 }
 
 append_lifecycle_junit() {
@@ -263,107 +243,15 @@ append_lifecycle_junit() {
   local recovery_status="$5"
   local diagnostics_status="$6"
   local run_result="$7"
-  local counts tests failures errors skipped _passed
-  local fragment output phase name status body finalization_status
-  local phase_lines='' phase_tests=0 phase_errors=0 phase_skipped=0
-
-  [[ "$suite_id" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || return 2
-  for status in "$external_dependency_status" "$cleanup_status" \
-    "$recovery_status" "$diagnostics_status"; do
-    [[ "$status" =~ ^(passed|failed|not-classified|not-applicable|not-required)$ ]] || {
-      echo "Unsupported lifecycle status '$status'." >&2
-      return 2
-    }
-  done
-  [[ "$run_result" =~ ^(passed|failed|broken)$ ]] || return 2
-  finalization_status='passed'
-  [[ "$run_result" != 'broken' ]] || finalization_status='failed'
-  for phase in \
-    "external-dependency:$external_dependency_status" \
-    "cleanup:$cleanup_status" \
-    "recovery:$recovery_status" \
-    "diagnostics:$diagnostics_status" \
-    "finalization:$finalization_status"; do
-    name="${phase%%:*}"
-    status="${phase#*:}"
-    body=''
-    case "$status" in
-      passed)
-        ;;
-      failed|not-classified)
-        body="<error message=\"phase status: ${status}\"/>"
-        phase_errors=$((phase_errors + 1))
-        ;;
-      not-applicable|not-required)
-        body="<skipped message=\"phase status: ${status}\"/>"
-        phase_skipped=$((phase_skipped + 1))
-        ;;
-    esac
-    phase_lines+="$(printf \
-      '    <testcase classname="%s.lifecycle" name="%s" time="0">%s</testcase>' \
-      "$suite_id" "$name" "$body")"$'\n'
-    phase_tests=$((phase_tests + 1))
-  done
-
-  counts="$(read_junit_counts "$junit_file")" || return 1
-  read -r tests failures errors skipped _passed <<<"$counts"
-  fragment="$(mktemp "${TMPDIR:-/tmp}/homelab-junit-fragment.XXXXXX")"
-  output="$(mktemp "${TMPDIR:-/tmp}/homelab-junit-output.XXXXXX")"
-  {
-    printf '  <testsuite name="%s.lifecycle" tests="%s" failures="0"' \
-      "$suite_id" "$phase_tests"
-    printf ' errors="%s" skipped="%s" time="0">\n' "$phase_errors" "$phase_skipped"
-    printf '%s' "$phase_lines"
-    printf '  </testsuite>\n'
-  } >"$fragment"
-
-  tests=$((tests + phase_tests))
-  errors=$((errors + phase_errors))
-  skipped=$((skipped + phase_skipped))
-  if ! awk \
-    -v tests="$tests" \
-    -v failures="$failures" \
-    -v errors="$errors" \
-    -v skipped="$skipped" '
-      FNR == NR {
-        fragment = fragment $0 ORS
-        next
-      }
-      /<testsuites([ >])/ {
-        line = $0
-        attributes[1] = "tests"
-        values[1] = tests
-        attributes[2] = "failures"
-        values[2] = failures
-        attributes[3] = "errors"
-        values[3] = errors
-        attributes[4] = "skipped"
-        values[4] = skipped
-        for (field_index = 1; field_index <= 4; field_index++) {
-          pattern = attributes[field_index] "=\"[^\"]*\""
-          replacement = attributes[field_index] "=\"" values[field_index] "\""
-          if (line ~ pattern) {
-            sub(pattern, replacement, line)
-          } else {
-            sub(/>$/, " " replacement ">", line)
-          }
-        }
-        print line
-        next
-      }
-      /<\/testsuites>/ {
-        printf "%s", fragment
-      }
-      { print }
-    ' "$fragment" "$junit_file" >"$output"; then
-    rm -f -- "$fragment" "$output"
-    return 1
-  fi
-  if ! mv "$output" "$junit_file"; then
-    rm -f -- "$fragment" "$output"
-    return 1
-  fi
-  rm -f -- "$fragment"
+  uv run --locked python scripts/test/junit_tools.py append-lifecycle \
+    --input "$junit_file" \
+    --output "$junit_file" \
+    --suite "$suite_id" \
+    --external-dependency "$external_dependency_status" \
+    --cleanup "$cleanup_status" \
+    --recovery "$recovery_status" \
+    --diagnostics "$diagnostics_status" \
+    --run-result "$run_result"
 }
 
 classify_run_result() {
@@ -472,6 +360,79 @@ write_summary() {
         "cleanup": {"status": strenv(CLEANUP_STATUS)},
         "recovery": {"status": strenv(RECOVERY_STATUS)},
         "diagnostics": {"status": strenv(DIAGNOSTICS_STATUS)}
+      }
+    }' >"$output_dir/summary.json"
+}
+
+write_multi_summary() {
+  local output_dir="$1"
+  local run_id="$2"
+  local entry_json="$3"
+  local execution_origin="$4"
+  local started_at="$5"
+  local finished_at="$6"
+  local duration_seconds="$7"
+  local result="$8"
+  local primary_exit_code="$9"
+  local suites_json="${10}"
+  local counts tests failures errors skipped passed git_sha assertion_status
+
+  counts="$(read_junit_counts "$output_dir/junit.xml")"
+  read -r tests failures errors skipped passed <<<"$counts"
+  git_sha="$(git rev-parse HEAD)"
+  assertion_status='not-classified'
+  [[ "$result" != 'passed' ]] || assertion_status='passed'
+  [[ "$result" != 'failed' ]] || assertion_status='failed'
+
+  RUN_ID="$run_id" \
+  ENTRY_JSON="$entry_json" \
+  EXECUTION_ORIGIN="$execution_origin" \
+  STARTED_AT="$started_at" \
+  FINISHED_AT="$finished_at" \
+  DURATION_SECONDS="$duration_seconds" \
+  RUN_RESULT="$result" \
+  ASSERTION_STATUS="$assertion_status" \
+  PRIMARY_EXIT_CODE="$primary_exit_code" \
+  SUITES_JSON="$suites_json" \
+  TESTS="$tests" FAILURES="$failures" ERRORS="$errors" SKIPPED="$skipped" PASSED="$passed" \
+  GIT_SHA="$git_sha" \
+    yq --null-input --output-format json '{
+      "schema_version": 1,
+      "run_id": strenv(RUN_ID),
+      "source": (strenv(ENTRY_JSON) | from_json | .metadata.source),
+      "framework": (strenv(ENTRY_JSON) | from_json | .metadata.framework),
+      "suite": (strenv(ENTRY_JSON) | from_json | .metadata.suite),
+      "tier": (strenv(ENTRY_JSON) | from_json | .metadata.tier),
+      "target": (strenv(ENTRY_JSON) | from_json | .metadata.target),
+      "scenario": (strenv(ENTRY_JSON) | from_json | .metadata.scenario),
+      "scope": (strenv(ENTRY_JSON) | from_json | .metadata.scope),
+      "intent": (strenv(ENTRY_JSON) | from_json | .metadata.intent),
+      "git_sha": strenv(GIT_SHA),
+      "execution_origin": strenv(EXECUTION_ORIGIN),
+      "cluster": null,
+      "node": null,
+      "start": strenv(STARTED_AT),
+      "end": strenv(FINISHED_AT),
+      "duration_seconds": (strenv(DURATION_SECONDS) | tonumber),
+      "result": strenv(RUN_RESULT),
+      "junit": {
+        "tests": (strenv(TESTS) | tonumber),
+        "failures": (strenv(FAILURES) | tonumber),
+        "errors": (strenv(ERRORS) | tonumber),
+        "skipped": (strenv(SKIPPED) | tonumber),
+        "passed": (strenv(PASSED) | tonumber)
+      },
+      "suites": (strenv(SUITES_JSON) | from_json),
+      "phases": {
+        "primary": {
+          "status": strenv(RUN_RESULT),
+          "exit_code": (strenv(PRIMARY_EXIT_CODE) | tonumber)
+        },
+        "assertion": {"status": strenv(ASSERTION_STATUS)},
+        "external_dependency": {"status": "not-applicable"},
+        "cleanup": {"status": "not-required"},
+        "recovery": {"status": "not-required"},
+        "diagnostics": {"status": "passed"}
       }
     }' >"$output_dir/summary.json"
 }

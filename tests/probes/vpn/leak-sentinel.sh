@@ -36,10 +36,15 @@ home_ip="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" run "qbsentinel-
   --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
 [[ -n "$home_ip" ]] || { echo 'Could not determine the node WAN IP (leak reference).' >&2; exit 1; }
 
-mkdir -p .test-results
-run_ts="$(date -u +%Y%m%dT%H%M%SZ)"
-short_revision="$(git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)"
-run_dir="$(mktemp -d ".test-results/${run_ts}-${short_revision}-vpn-leak.XXXXXX")"
+if [[ -n "${HOMELAB_TEST_RUN_DIR:-}" ]]; then
+  run_dir="$HOMELAB_TEST_RUN_DIR/diagnostics/timelines/vpn-leak"
+  mkdir -p "$run_dir"
+else
+  mkdir -p .test-results
+  run_ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  short_revision="$(git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)"
+  run_dir="$(mktemp -d ".test-results/${run_ts}-${short_revision}-vpn-leak.XXXXXX")"
+fi
 timeline="$run_dir/timeline.jsonl"
 verdict="$run_dir/verdict.json"
 

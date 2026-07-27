@@ -3,6 +3,7 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
+source scripts/test/lib/lease.sh
 source scripts/test/lib/results.sh
 require_bash
 
@@ -20,16 +21,6 @@ cd "$repo_root"
 kubeconfig='.kube/config'
 namespace='flux-system'
 catalog='tests/catalog.yaml'
-lock_dir=''
-
-acquire_state_lock() {
-  lock_dir='.test-results/state-changing.lock'
-  mkdir "$lock_dir" 2>/dev/null || {
-    echo 'Refusing concurrent state-changing test: .test-results/state-changing.lock exists.' >&2
-    exit 1
-  }
-  trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
-}
 
 entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
 dispatch_mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"
@@ -49,7 +40,6 @@ case "$confirmation_variable" in
     exit 2
     ;;
 esac
-[[ "$mutates_cluster" == 'false' ]] || acquire_state_lock
 
 [[ -f "$kubeconfig" ]] || {
   echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
@@ -64,6 +54,37 @@ started_epoch="$EPOCHSECONDS"
 cluster_name="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
   --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
+lease_acquired=false
+# Invoked indirectly by the EXIT trap below.
+# shellcheck disable=SC2329
+release_chainsaw_lease() {
+  if [[ "$lease_acquired" == 'true' ]]; then
+    release_test_lease "$kubeconfig" "$run_id" >/dev/null 2>&1 || true
+    lease_acquired=false
+  fi
+}
+trap release_chainsaw_lease EXIT
+if [[ "$mutates_cluster" == 'true' ]]; then
+  if ! acquire_test_lease "$kubeconfig" "$run_id"; then
+    finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    duration_seconds=$((EPOCHSECONDS - started_epoch))
+    write_result_case_junit "$run_dir/junit.xml" \
+      "$(yq -r '.metadata.id' - <<<"$entry_json")" lease-acquisition broken \
+      "$duration_seconds"
+    write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+      "$started_at" "$finished_at" "$namespace" "$kubeconfig" "$confirmation_variable"
+    write_evidence_index "$run_dir" "$run_id"
+    write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+      "$started_at" "$finished_at" "$duration_seconds" broken 1 \
+      not-classified passed failed not-required not-applicable "$cluster_name"
+    scripts/test/validate-run.sh "$run_dir"
+    echo "Chainsaw results: $run_dir"
+    exit 1
+  fi
+  lease_acquired=true
+  start_test_lease_renewal "$kubeconfig" "$run_id" \
+    "$(cd "$run_dir" && pwd)/diagnostics/lease-renewal-failed"
+fi
 
 if [[ "$diagnostics_only" == true ]]; then
   set +e
@@ -151,6 +172,17 @@ diagnostics_exit_code="$?"
 set -e
 diagnostics_status='passed'
 [[ "$diagnostics_exit_code" -eq 0 ]] || diagnostics_status='failed'
+if [[ "$lease_acquired" == 'true' ]]; then
+  lease_finalization_failed=false
+  [[ ! -f "$run_dir/diagnostics/lease-renewal-failed" ]] ||
+    lease_finalization_failed=true
+  release_test_lease "$kubeconfig" "$run_id" ||
+    lease_finalization_failed=true
+  if [[ "$lease_finalization_failed" == 'true' ]]; then
+    diagnostics_status='failed'
+  fi
+  lease_acquired=false
+fi
 
 # State-changing scenarios drive cleanup/recovery in a trap/finally block and record its
 # outcome in recovery.json. Surface it separately without rewriting the primary assertion.
@@ -190,4 +222,5 @@ scripts/test/validate-run.sh "$run_dir"
 
 overall_exit_code="$(result_exit_code "$primary_exit_code" "$run_result")"
 echo "Chainsaw results: $run_dir"
+trap - EXIT
 exit "$overall_exit_code"

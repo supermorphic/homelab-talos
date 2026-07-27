@@ -3,6 +3,35 @@ schema_version: 1
 # Stable assurance metadata. Phase 2 makes this catalog authoritative for `just test`
 # dispatch and canonical Chainsaw artifacts. Phase 3 will attach the remaining runners
 # to the same result coordinator.
+executions:
+  ci:
+    - validation.repo-lint
+    - validation.repo-verify
+    - validation.test-harness
+    - validation.policy-unit
+    - validation.kubeconform
+    - validation.cilium
+    - validation.metrics-server
+    - validation.flux
+    - validation.foundation
+    - validation.storage
+    - validation.csi-driver-smb
+    - validation.media-storage
+    - validation.plex
+    - validation.intel-gpu-plugin
+    - validation.qbittorrent
+    - validation.arr
+    - validation.qbit-manage
+    - validation.seerr
+    - validation.flaresolverr
+    - validation.media-policy
+    - validation.monitoring
+    - validation.gatus
+    - validation.portainer
+    - validation.portainer-policy
+    - validation.homepage
+    - validation.trivy
+
 suites:
   - metadata: {id: validation.ci, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
@@ -16,18 +45,18 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo verify", implementation: .just/repository.just}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.test-harness, source: validation, framework: bash, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.test-harness, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just test validate", implementation: scripts/test/validate-chainsaw.sh}
-    native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.policy-unit, source: validation, framework: just, suite: ci, tier: offline, target: policy, scenario: unit, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    native_results: {strategy: native-junit}
+  - metadata: {id: validation.policy-unit, source: validation, framework: conftest, suite: ci, tier: offline, target: policy, scenario: unit, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube validator-tests", implementation: kubernetes/mod.just}
-    native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.kubeconform, source: validation, framework: just, suite: ci, tier: offline, target: kubernetes, scenario: schema, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    native_results: {strategy: native-junit}
+  - metadata: {id: validation.kubeconform, source: validation, framework: kubeconform, suite: ci, tier: offline, target: kubernetes, scenario: schema, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube kubeconform", implementation: kubernetes/mod.just}
-    native_results: {strategy: wrapper-junit}
+    native_results: {strategy: native-junit}
   - metadata: {id: validation.cilium, source: validation, framework: bash, suite: ci, tier: offline, target: cilium, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-validate", implementation: scripts/validate/cilium.sh}
@@ -84,10 +113,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flaresolverr-validate", implementation: scripts/validate/flaresolverr.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.media-policy, source: validation, framework: just, suite: ci, tier: offline, target: media, scenario: policy, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.media-policy, source: validation, framework: conftest, suite: ci, tier: offline, target: media, scenario: policy, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube media-policy-validate", implementation: kubernetes/mod.just}
-    native_results: {strategy: wrapper-junit}
+    native_results: {strategy: native-junit}
   - metadata: {id: validation.monitoring, source: validation, framework: bash, suite: ci, tier: offline, target: monitoring, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube monitoring-validate", implementation: scripts/validate/monitoring.sh}
@@ -100,10 +129,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube portainer-validate", implementation: scripts/validate/portainer.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.portainer-policy, source: validation, framework: just, suite: ci, tier: offline, target: portainer, scenario: policy, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.portainer-policy, source: validation, framework: conftest, suite: ci, tier: offline, target: portainer, scenario: policy, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube portainer-policy-validate", implementation: kubernetes/mod.just}
-    native_results: {strategy: wrapper-junit}
+    native_results: {strategy: native-junit}
   - metadata: {id: validation.homepage, source: validation, framework: bash, suite: ci, tier: offline, target: homepage, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube homepage-validate", implementation: scripts/validate/homepage.sh}
@@ -155,15 +184,15 @@ suites:
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.prowlarr, source: verification, framework: bash, suite: media, tier: verification, target: prowlarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just kube arr-verify prowlarr", implementation: kubernetes/mod.just}
+    runner: {command: "mise exec -- just kube arr-verify prowlarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.sonarr, source: verification, framework: bash, suite: media, tier: verification, target: sonarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just kube arr-verify sonarr", implementation: kubernetes/mod.just}
+    runner: {command: "mise exec -- just kube arr-verify sonarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.radarr, source: verification, framework: bash, suite: media, tier: verification, target: radarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just kube arr-verify radarr", implementation: kubernetes/mod.just}
+    runner: {command: "mise exec -- just kube arr-verify radarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.seerr, source: verification, framework: bash, suite: media, tier: verification, target: seerr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
@@ -348,9 +377,9 @@ suites:
 
   - metadata: {id: conformance.quick, source: sonobuoy, framework: sonobuoy, suite: kubernetes, tier: conformance, target: quick, scenario: null, scope: cluster, intent: regression, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}
-    runner: {command: "MODE=quick mise exec -- just kube conformance", implementation: kubernetes/mod.just}
+    runner: {command: "MODE=quick mise exec -- just kube conformance", implementation: scripts/test/run-sonobuoy.sh}
     native_results: {strategy: sonobuoy-junit}
   - metadata: {id: conformance.certified, source: sonobuoy, framework: sonobuoy, suite: kubernetes, tier: conformance, target: certified, scenario: null, scope: cluster, intent: conformance, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}
-    runner: {command: "MODE=certified mise exec -- just kube conformance", implementation: kubernetes/mod.just}
+    runner: {command: "MODE=certified mise exec -- just kube conformance", implementation: scripts/test/run-sonobuoy.sh}
     native_results: {strategy: sonobuoy-junit}
