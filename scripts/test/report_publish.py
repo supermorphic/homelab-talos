@@ -62,6 +62,15 @@ def require_string(value: Any, name: str, *, segment: bool = False) -> str:
     return value
 
 
+def require_metric_label(value: Any, name: str) -> str:
+    # A canonical null scenario is represented as "_" only in metric keys and
+    # latest-path segments. Do not widen the general segment grammar or allow
+    # other dimensions to use the reserved sentinel.
+    if name == "scenario" and value == "_":
+        return value
+    return require_string(value, name, segment=True)
+
+
 def parse_utc(value: Any, name: str) -> dt.datetime:
     try:
         parsed = parse_finished_at(value)
@@ -89,7 +98,7 @@ def validate_existing(catalog: dict[str, Any], state: dict[str, Any]) -> None:
         for key, value in state[field].items():
             labels, suffix = decode_counter_key(key)
             for name, label in labels.items():
-                require_string(label, f"counter {name}", segment=True)
+                require_metric_label(label, name)
             if suffix not in RESULTS:
                 raise PublishError(f"remote publication state {field} has an invalid status")
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -97,7 +106,7 @@ def validate_existing(catalog: dict[str, Any], state: dict[str, Any]) -> None:
     for key, value in state.get("last_success", {}).items():
         labels, suffix = decode_counter_key(key)
         for name, label in labels.items():
-            require_string(label, f"last-success {name}", segment=True)
+            require_metric_label(label, name)
         if suffix != "passed":
             raise PublishError("remote publication state has an invalid last-success key")
         parse_utc(value, "stored last success")
@@ -226,6 +235,8 @@ def labels_from(summary: dict[str, Any], environment: dict[str, Any]) -> dict[st
     scenario = summary.get("scenario")
     if scenario is None:
         scenario = "_"
+    else:
+        scenario = require_string(scenario, "scenario", segment=True)
     cluster = environment.get("cluster", {}).get("name") or "unavailable"
     labels = {
         "source": summary.get("source"),
@@ -235,7 +246,7 @@ def labels_from(summary: dict[str, Any], environment: dict[str, Any]) -> dict[st
         "cluster": cluster,
         "execution_origin": summary.get("execution_origin"),
     }
-    return {name: require_string(labels[name], name, segment=True) for name in METRIC_LABELS}
+    return {name: require_metric_label(labels[name], name) for name in METRIC_LABELS}
 
 
 def make_entry(
