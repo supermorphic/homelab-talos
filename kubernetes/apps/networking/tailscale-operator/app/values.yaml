@@ -1,0 +1,21 @@
+---
+# OAuth client credentials are supplied out-of-band via the pre-created
+# `operator-oauth` Secret (oauth.sops.yaml). Leaving these empty makes the chart
+# consume that Secret rather than templating credentials from values.
+oauth:
+  clientId: ""
+  clientSecret: ""
+
+operatorConfig:
+  hostname: tailscale-operator
+  defaultTags:
+    - tag:k8s-operator
+
+# Scope guard: this deployment provides operator + ingress ProxyGroup only.
+# The Kubernetes API server proxy is intentionally disabled — exposing the API
+# server to the tailnet is a separate, out-of-scope decision.
+apiServerProxyConfig:
+  mode: "false"
+
+proxyConfig:
+  defaultTags: tag:k8s

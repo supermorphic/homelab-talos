@@ -1,0 +1,36 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/helm.toolkit.fluxcd.io/helmrelease_v2.json
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tailscale-operator
+  namespace: tailscale
+spec:
+  chart:
+    spec:
+      chart: tailscale-operator
+      interval: 15m
+      sourceRef:
+        kind: HelmRepository
+        name: tailscale
+      version: 1.98.9
+  driftDetection:
+    mode: enabled
+  install:
+    crds: Create
+    remediation:
+      retries: 3
+  interval: 1h
+  releaseName: tailscale-operator
+  targetNamespace: tailscale
+  timeout: 10m
+  upgrade:
+    cleanupOnFail: true
+    crds: CreateReplace
+    remediation:
+      retries: 3
+      strategy: rollback
+  valuesFrom:
+    - kind: ConfigMap
+      name: tailscale-operator-values
+      valuesKey: values.yaml

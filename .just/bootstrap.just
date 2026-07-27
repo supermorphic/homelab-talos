@@ -1941,6 +1941,72 @@ trivy:
     bootstrap_complete=true
     echo 'Phase 10 Trivy Operator live acceptance passed. Change the Trivy Git source to suspend=false, commit, push, and rerun just kube trivy-verify.'
 
+# Reconcile the suspended Tailscale operator after guarded checks, then verify the
+# operator and its ingress ProxyGroup. Requires the operator-oauth Secret committed
+# (just repo tailscale-operator-secrets) and the tailnet-side prerequisites in
+# docs/tailscale-operator.md already in place. On failure the resumed Kustomization is
+# re-suspended, preserving its resources.
+tailscale-operator:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:networking:tailscale-operator'
+    ks='kubernetes/apps/networking/tailscale-operator/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_tailscale_operator() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'Tailscale operator bootstrap did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization tailscale-operator --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_tailscale_operator EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Tailscale operator bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/networking/kustomization.yaml \
+      kubernetes/apps/networking/tailscale-operator
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing Tailscale operator bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube tailscale-operator-validate
+    # Reconcile the published main source before checking Flux's artifact revision.
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization tailscale-operator --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing Tailscale operator bootstrap: tailscale-operator is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${TAILSCALE_OPERATOR_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the Tailscale operator.' >&2
+      echo "Set TAILSCALE_OPERATOR_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing tailscale-operator-validate." >&2
+      exit 1
+    }
+
+    echo 'Reconciling Tailscale operator Kustomization.'
+    resumed=true
+    flux resume kustomization tailscale-operator --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization tailscale-operator \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/tailscale-operator --timeout=15m
+
+    just kube tailscale-operator-verify
+    bootstrap_complete=true
+    echo 'Tailscale operator live acceptance passed. Change the Tailscale Git source to suspend=false, commit, push, and rerun just kube tailscale-operator-verify.'
+
 # Reconcile the suspended metrics-server (enables kubectl top / HPA / the Homepage
 # Kubernetes widget). On failure the resumed Kustomization is re-suspended.
 metrics-server:

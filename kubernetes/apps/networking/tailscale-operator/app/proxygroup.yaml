@@ -1,0 +1,13 @@
+---
+# Reusable, highly-available ingress proxy pool for the tailnet. Any private
+# service (starting with ntfy) references this ProxyGroup by name via the
+# `tailscale.com/proxy-group: ingress-proxies` annotation on its Ingress, rather
+# than spawning its own single-replica proxy. Treat this as shared networking
+# infrastructure, not ntfy-specific.
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: ingress-proxies
+spec:
+  type: ingress
+  replicas: 2
