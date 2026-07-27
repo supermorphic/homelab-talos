@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 app_dir='kubernetes/apps/kube-system/cilium/app'
 values_file='kubernetes/apps/kube-system/cilium/app/values.yaml'
 chart='oci://quay.io/cilium/charts/cilium'
@@ -46,7 +49,10 @@ done
 [[ "$(yq -r '.gatewayAPI.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.l2announcements.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.bgpControlPlane.enabled' "$values_file")" == 'false' ]]
-! yq -r '.securityContext.capabilities.ciliumAgent[]' "$values_file" | rg -qx 'SYS_MODULE'
+cilium_capabilities="$(yq -r '.securityContext.capabilities.ciliumAgent[]' "$values_file")"
+assert_command_finds_nothing \
+  'Cilium agent capabilities must not include SYS_MODULE.' \
+  rg -qx 'SYS_MODULE' <<<"$cilium_capabilities"
 
 kustomize build "$app_dir" >"$temp_dir/kustomization.yaml"
 [[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "cilium-values") | .metadata.labels."reconcile.fluxcd.io/watch"' "$temp_dir/kustomization.yaml")" == 'Enabled' ]]

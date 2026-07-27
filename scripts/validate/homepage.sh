@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 base='kubernetes/apps/monitoring/homepage'
 ks="$base/ks.yaml"
 ns="$base/app/namespace.yaml"
@@ -69,7 +72,9 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ "$(yq -r '.metadata.name' "$seerr_secret")" == 'homepage-seerr' ]]
 [[ "$(yq -r '.metadata.namespace' "$seerr_secret")" == 'homepage' ]]
 # The deployment must reference the split Secrets, not the old combined one.
-! rg -q 'homepage-secrets' "$dep"
+assert_command_finds_nothing \
+  'Homepage must not reference the retired combined homepage-secrets Secret.' \
+  rg -q 'homepage-secrets' "$dep"
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]

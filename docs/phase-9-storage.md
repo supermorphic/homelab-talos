@@ -90,12 +90,15 @@ mise exec -- just bootstrap storage
 main`. Its rollout guard and storage source paths must match remote `origin/main`,
 and both Kustomizations must be staged `suspend: true` in Git and live. It re-runs
 `storage-validate` + `flux-verify`, then resumes `longhorn` → `longhorn-config` in
-order (waiting for each to become Ready), and finishes with `storage-verify`. Any
+order (waiting for each to become Ready), and finishes with the read-only
+`storage-verify` plus the state-changing `storage-provisioning-test`. Any
 failure re-suspends the resumed Kustomizations while preserving their resources.
 No operator SOPS key is needed — Flux decrypts the CIFS Secret in-cluster.
 
 After acceptance passes, set both Kustomizations to `suspend: false`, commit and
-push, and re-run `just kube storage-verify` to confirm the durable state.
+push, and re-run `just kube storage-verify` to confirm the durable state. Run
+`STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube
+storage-provisioning-test` when a fresh provisioning proof is needed.
 
 ## Recurring Jobs
 
@@ -115,8 +118,9 @@ group (so they cover every volume): `daily-snapshot` (`0 2 * * *`, retain 7) and
 ## Exit Gate
 
 - Longhorn nodes, disks, engines, and replicas healthy; disks at `/var/mnt/longhorn`.
-- Default `longhorn` StorageClass (2 replicas); a test PVC binds with replicas on
-  two distinct nodes (hard anti-affinity) — automated in `storage-verify`.
+- Default `longhorn` StorageClass (2 replicas); a run-scoped test PVC binds with
+  replicas on two distinct nodes (hard anti-affinity) — automated in
+  `storage-provisioning-test`.
 - Backup target available; a backup restores into a new PVC.
 - A replica rebuild succeeds after a single-node reboot.
 - Cilium/Talos/etcd/foundation acceptance still green (`foundation-verify`).
@@ -124,11 +128,12 @@ group (so they cover every volume): `daily-snapshot` (`0 2 * * *`, retain 7) and
 ## Acceptance Evidence (2026-07-22)
 
 `just bootstrap storage` reconciled `longhorn` → `longhorn-config` to Ready and
-`just kube storage-verify` passed:
+`just kube storage-verify` and `just kube storage-provisioning-test` passed:
 
-> Phase 9 storage acceptance passed: Longhorn healthy on three nodes (disks at
-> `/var/mnt/longhorn`), default two-replica StorageClass, backup target available,
-> recurring jobs present, and a test PVC bound with replicas on two distinct nodes.
+> Phase 9 read-only storage verification passed: Longhorn healthy on three nodes
+> (disks at `/var/mnt/longhorn`), default two-replica StorageClass, backup target
+> available, and recurring jobs present. The provisioning test separately proved
+> a temporary PVC bound with replicas on two distinct nodes.
 
 - Backup target `cifs://192.168.0.3/Longhorn` reported **available** — CIFS mounts
   from the Talos nodes without an extra kernel module.

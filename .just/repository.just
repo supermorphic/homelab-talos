@@ -9,6 +9,7 @@ tools:
 
 # Print the tool versions used by this repository.
 versions:
+    @bash --version | head -n 1
     @talosctl version --client --short
     @talhelper --version
     @kubectl version --client
@@ -1009,14 +1010,14 @@ portainer-secrets:
     echo "Wrote SOPS-encrypted $target (portainer-admin-password in portainer)."
 
 # Run repository and declarative Talos source validation.
-verify: verify-files verify-extracted-scripts
+verify: verify-files verify-shell-scripts
     just talos source-validate
     just repo secret-scan
     @echo "Repository and Phase 2 Talos source checks passed."
 
-# Fail unless running under bash >= 4. macOS /bin/bash 3.2 does not honor set -e
+# Fail unless running under bash >= 5. macOS /bin/bash 3.2 does not honor set -e
 # for a failed bare [[ ]] or (( )) mid-recipe, so validation assertions would
-# silently not gate. Recipes use #!/usr/bin/env bash, so a bash >= 4 earlier in
+# silently not gate. Recipes use #!/usr/bin/env bash, so a bash >= 5 earlier in
 # PATH (for example brew install bash) is what makes the guards effective.
 # Install the git pre-commit hooks into .git/hooks (idempotent).
 hooks:
@@ -1034,18 +1035,20 @@ require-bash:
     source scripts/lib/common.sh
     require_bash
 
-# Parse and ShellCheck mechanically extracted live-verification scripts. Their
-# cluster behavior is proven separately through operator-run parity gates.
+# Parse and ShellCheck every Bash validation, verification, test, and probe
+# entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
-verify-extracted-scripts:
-    @for script in scripts/verify/*.sh; do \
-      test -x "$script"; \
+verify-shell-scripts:
+    @for script in scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
+    @for script in $(find scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
       bash -n "$script"; \
       shellcheck --external-sources "$script"; \
     done
+    @if rg -n 'shellcheck disable=SC2251' scripts/validate scripts/verify; then echo 'SC2251 suppressions can hide non-gating absence assertions.' >&2; exit 1; fi
 
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
+    @bash --version | head -n 1
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

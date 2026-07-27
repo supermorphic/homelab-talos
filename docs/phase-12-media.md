@@ -93,10 +93,17 @@ key is used, the "don't mount `wg0.conf`" caveat, the credential-generation opti
 the **annual manual credential-renewal runbook**, and the VPN-expiry monitoring options
 (the live reactive critical VPN-down alert + an external yearly reminder).
 
-## Kill-switch acceptance gate — BLOCKING (`qbittorrent-killswitch-verify`, operator-run)
+## Kill-switch acceptance gate — BLOCKING (Chainsaw resilience, operator-run)
 
 Not in `just ci`; Phase 12 was not flipped `suspend: false` or declared complete until
-this gate passed live. The gate is **bulletproof by design**: the node's own WAN IP is
+this gate passed live. Run it with:
+
+```bash
+CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' \
+  just test resilience qbittorrent-vpn-disconnect
+```
+
+The gate is **bulletproof by design**: the node's own WAN IP is
 captured first (via a throwaway no-VPN pod) and threaded through every step as a **hard never-leak
 invariant** — if qBittorrent's egress IP ever equals the home WAN IP, the gate fails
 instantly. All egress probes run **from qBittorrent's own network namespace** (the `app`
@@ -195,10 +202,11 @@ the health route (`GET /v1/vpn/status`) is no-auth, mutating routes stay apikey-
 
 - **12-1** delivered qBittorrent+Gluetun manifests (initially staged `suspend: true`) + `just repo
   protonvpn-secrets` + `qbittorrent-validate` (→ `just ci`) + `qbittorrent-verify` +
-  `qbittorrent-killswitch-verify` + `bootstrap qbittorrent`.
+  the qBittorrent VPN-disconnect resilience scenario + `bootstrap qbittorrent`.
 - The operator rollout completed: `just repo protonvpn-secrets` → merge → `just
-  bootstrap qbittorrent` → `just kube qbittorrent-verify` → **`just kube
-  qbittorrent-killswitch-verify`** → durable `suspend: false` merged in PR #32.
+  bootstrap qbittorrent` → `just kube qbittorrent-verify` → the predecessor
+  kill-switch proof (now `just test resilience qbittorrent-vpn-disconnect`) →
+  durable `suspend: false` merged in PR #32.
 
 ## First-run / manual settings
 

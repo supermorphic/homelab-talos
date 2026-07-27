@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: foundation.sh <kubeconfig>' >&2
   exit 2
@@ -41,8 +44,8 @@ speaker="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get dae
 pool="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get ipaddresspool internal --output json)"
 [[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$pool")" == '192.168.90.30-192.168.90.39' ]]
 [[ "$(yq -r '.spec.autoAssign' - <<<"$pool")" == 'false' ]]
-# shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
-! kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset frr-k8s-daemon >/dev/null 2>&1
+frr_daemonset="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset frr-k8s-daemon --ignore-not-found --output name)"
+assert_empty "$frr_daemonset" 'The FRR DaemonSet must remain absent.'
 
 gateway_class="$(kubectl --kubeconfig "$kubeconfig" get gatewayclass internal --output json)"
 [[ "$(yq -r '[.status.conditions[] | select(.type == "Accepted") | .status][0]' - <<<"$gateway_class")" == 'True' ]]
@@ -73,8 +76,9 @@ for argument in \
   '--pihole-server=https://pi.hole'; do
   rg -Fx -- "$argument" <<<"$dns_args"
 done
-# shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
-! rg -Fx -- '--pihole-tls-skip-verify' <<<"$dns_args"
+assert_command_finds_nothing \
+  'The live external-dns arguments must not skip Pi-hole TLS verification.' \
+  rg -Fx -- '--pihole-tls-skip-verify' <<<"$dns_args"
 [[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "external-dns") | .env[] | select(.name == "SSL_CERT_FILE") | .value' - <<<"$dns_deployment")" == '/etc/ssl/pihole/tls_ca.crt' ]]
 [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "pihole-ca") | .configMap.name' - <<<"$dns_deployment")" == 'pihole-ca' ]]
 [[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "external-dns") | .volumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' - <<<"$dns_deployment")" == '/etc/ssl/pihole true' ]]

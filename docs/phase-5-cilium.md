@@ -26,7 +26,8 @@ workflow.
 | `just kube cilium-status` | Prints read-only Helm, node, workload, and Cilium status |
 | `just kube cilium-diagnostics` | Prints read-only Talos diagnostics from all three nodes |
 | `just kube cilium-postflight` | Verifies test cleanup, zero Talos diagnostics, three etcd members, and zero etcd alarms |
-| `just kube cilium-verify` | Runs the full acceptance gate and temporary IPv4 connectivity workloads |
+| `just kube cilium-verify` | Runs the read-only live-state acceptance gate |
+| `just kube cilium-connectivity-test` | Runs and removes temporary IPv4 connectivity workloads |
 | `just bootstrap cilium` | Runs preflight, requires confirmation, installs or reconciles Helm, and verifies |
 
 Without an activated mise shell, prefix each command with `mise exec --`.
@@ -81,7 +82,7 @@ and values, the recipe skips the Helm mutation and runs verification.
 
 ## Verification Contract
 
-`just kube cilium-verify` requires:
+`just kube cilium-verify` is read-only and requires:
 
 - The Helm release is deployed as `cilium-1.19.6` and its user values match Git.
 - Exactly three uncordoned nodes report Ready.
@@ -90,11 +91,15 @@ and values, the recipe skips the Helm mutation and runs verification.
 - Hubble UI, Cilium Envoy, and kube-proxy remain absent.
 - Cilium status reaches healthy without warnings, Hubble reports `Ok` on every
   agent, and Hubble Relay reports one ready replica with no errors or warnings.
-- The applicable IPv4 connectivity tests pass DNS, service, policy, pod, node,
-  and cross-node checks using a temporary privileged test namespace.
-- The test namespace is removed afterward.
 - All three Talos nodes report no diagnostics; etcd still reports three members
   and no alarms.
+
+`just kube cilium-connectivity-test` is the separate state-changing test. It
+removes stale Failed pod objects from `kube-system`, creates a temporary
+privileged test namespace, exercises DNS, service, policy, pod, node, and
+cross-node paths, removes the test resources, and then runs the postflight gate.
+It requires
+`CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity'`.
 
 Connectivity-test support bundles are written under `/tmp` only when needed and
 are never committed.

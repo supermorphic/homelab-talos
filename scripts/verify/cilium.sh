@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 [[ "$#" -eq 2 ]] || {
   echo 'Usage: cilium.sh <kubeconfig> <cilium_values>' >&2
   exit 2
@@ -9,14 +12,8 @@ set -euo pipefail
 kubeconfig="$1"
 values_file="$2"
 expected_names=$'nuc1\nnuc2\nnuc3'
-diagnostic_dir="$(mktemp -d /tmp/homelab-talos-cilium-test.XXXXXX)"
-cleanup() {
-  cilium connectivity test \
-    --kubeconfig "$kubeconfig" \
-    --test-namespace cilium-test \
-    --cleanup >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-verify.XXXXXX)"
+trap 'rm -rf -- "$temp_dir"' EXIT
 
 [[ -f "$kubeconfig" ]] || {
   echo "Missing $kubeconfig; run just talos kubeconfig." >&2
@@ -35,12 +32,12 @@ cilium_chart="$(yq -r '.[] | select(.name == "cilium") | .chart' - <<<"$release_
 helm get values cilium \
   --namespace kube-system \
   --kubeconfig "$kubeconfig" \
-  --output yaml >"$diagnostic_dir/live-values.yaml"
-yq -o=json -I=0 'sort_keys(..)' "$values_file" >"$diagnostic_dir/expected-values.json"
-yq -o=json -I=0 'sort_keys(..)' "$diagnostic_dir/live-values.yaml" >"$diagnostic_dir/normalized-live-values.json"
-cmp -s "$diagnostic_dir/expected-values.json" "$diagnostic_dir/normalized-live-values.json" || {
+  --output yaml >"$temp_dir/live-values.yaml"
+yq -o=json -I=0 'sort_keys(..)' "$values_file" >"$temp_dir/expected-values.json"
+yq -o=json -I=0 'sort_keys(..)' "$temp_dir/live-values.yaml" >"$temp_dir/normalized-live-values.json"
+cmp -s "$temp_dir/expected-values.json" "$temp_dir/normalized-live-values.json" || {
   echo "Live Cilium Helm values differ from $values_file." >&2
-  diff -u "$diagnostic_dir/expected-values.json" "$diagnostic_dir/normalized-live-values.json" || true
+  diff -u "$temp_dir/expected-values.json" "$temp_dir/normalized-live-values.json" || true
   exit 1
 }
 
@@ -62,21 +59,12 @@ relay_json="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get dep
 coredns_json="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get deployment coredns --output json)"
 [[ "$(yq -r '.status.availableReplicas // 0' - <<<"$coredns_json")" -ge 1 ]]
 
-# shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
-! kubectl --kubeconfig "$kubeconfig" --namespace kube-system get daemonset kube-proxy >/dev/null 2>&1
-# shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
-! kubectl --kubeconfig "$kubeconfig" --namespace kube-system get deployment hubble-ui >/dev/null 2>&1
-# shellcheck disable=SC2251  # preserve original non-gating negation (behavior-preserving extraction)
-! kubectl --kubeconfig "$kubeconfig" --namespace kube-system get daemonset cilium-envoy >/dev/null 2>&1
-
-# `cilium status --wait` reports every Failed pod in kube-system as an Error and will
-# never converge while stale tombstones linger — e.g. NodeShutdown-rejected replicas
-# left by rolling Talos node reboots, which Kubernetes does not garbage-collect until
-# ~12500 terminated pods accumulate. GC them first so a healthy cluster is not blocked
-# by dead pod objects (safe: controllers keep their Running replicas; these are
-# Failed-phase only).
-kubectl --kubeconfig "$kubeconfig" --namespace kube-system delete pods \
-  --field-selector status.phase=Failed --ignore-not-found >/dev/null 2>&1 || true
+kube_proxy="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get daemonset kube-proxy --ignore-not-found --output name)"
+hubble_ui="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get deployment hubble-ui --ignore-not-found --output name)"
+cilium_envoy="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get daemonset cilium-envoy --ignore-not-found --output name)"
+assert_empty "$kube_proxy" 'kube-proxy must remain absent.'
+assert_empty "$hubble_ui" 'Hubble UI must remain absent.'
+assert_empty "$cilium_envoy" 'The standalone Cilium Envoy DaemonSet must remain absent.'
 
 cilium status \
   --kubeconfig "$kubeconfig" \
@@ -92,29 +80,6 @@ cilium_status_json="$(cilium status \
 [[ "$(yq -r '[.cilium_status[].hubble.state] | unique | join(" ")' - <<<"$cilium_status_json")" == 'Ok' ]]
 [[ "$(yq -r '.errors."hubble-relay"."hubble-relay" | ((.Errors | length) + (.Warnings | length))' - <<<"$cilium_status_json")" == '0' ]]
 
-cleanup
-echo "Connectivity-test diagnostics, if required, will remain in $diagnostic_dir."
-if ! cilium connectivity test \
-  --kubeconfig "$kubeconfig" \
-  --namespace kube-system \
-  --test-namespace cilium-test \
-  --namespace-labels pod-security.kubernetes.io/enforce=privileged \
-  --ip-families ipv4 \
-  --hubble=false \
-  --flow-validation disabled \
-  --test '!no-unexpected-packet-drops' \
-  --timeout 45m \
-  --sysdump-output-filename "$diagnostic_dir/cilium-sysdump-<ts>"; then
-  cilium sysdump \
-    --kubeconfig "$kubeconfig" \
-    --namespace kube-system \
-    --output-filename "$diagnostic_dir/cilium-sysdump-<ts>" || true
-  exit 1
-fi
-
-cleanup
 just kube cilium-postflight
 
-trap - EXIT
-rm -rf -- "$diagnostic_dir"
-echo 'Phase 5 verification passed: Cilium 1.19.6, three Ready nodes, healthy DNS, Hubble, connectivity, Talos, and etcd.'
+echo 'Phase 5 read-only verification passed: Cilium 1.19.6, three Ready nodes, healthy DNS and Hubble, expected architecture, Talos, and etcd.'
