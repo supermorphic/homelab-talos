@@ -121,6 +121,7 @@ ALLURE_HISTORY_PATH="$workspace/history.jsonl" \
 }
 
 bundle="$workspace/bundle"
+archive="$workspace/bundle.tar"
 prepare_result="$(
   uv run --locked --no-dev python scripts/test/report_publish.py \
     --run-dir "$run_dir" \
@@ -131,6 +132,7 @@ prepare_result="$(
     --origin-main-sha "$origin_main_sha" \
     --flux-main-sha "$flux_main_sha" \
     --output-dir "$bundle" \
+    --archive "$archive" \
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 )"
 if [[ "$(yq -r '.status' - <<<"$prepare_result")" == 'idempotent' ]]; then
@@ -149,10 +151,10 @@ gitleaks dir --redact --no-banner --max-archive-depth 1 "$bundle"
   exit 1
 }
 
-tar -cf - -C "$bundle" . |
-  kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
-    exec -i deployment/test-reports -c caddy -- \
-    /bin/sh /opt/test-reports/install-report.sh "$run_id" "$generation"
+kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
+  exec -i deployment/test-reports -c caddy -- \
+  /bin/sh /opt/test-reports/install-report.sh "$run_id" "$generation" \
+  <"$archive"
 [[ ! -e "$lease_failure" ]] || {
   echo 'Publication Lease renewal failed during the cluster stream.' >&2
   exit 1
