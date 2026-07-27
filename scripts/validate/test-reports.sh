@@ -13,12 +13,13 @@ route="$app/httproute.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 monitor="$app/servicemonitor.yaml"
 rule="$app/prometheusrule.yaml"
+dashboard="$app/dashboards/test-reports.json"
 image='docker.io/library/caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648'
 
 for file in \
   "$ks" "$app/kustomization.yaml" "$app/namespace.yaml" "$deployment" \
   "$pvc" "$app/service.yaml" "$route" "$policy" "$monitor" "$rule" \
-  "$app/Caddyfile" "$app/bootstrap-storage.sh" "$app/install-report.sh"; do
+  "$app/Caddyfile" "$app/bootstrap-storage.sh" "$app/install-report.sh" "$dashboard"; do
   [[ -f "$file" ]] || {
     echo "Missing test-report server source: $file" >&2
     exit 1
@@ -62,10 +63,24 @@ rg -qx '  - ./test-reports/ks.yaml' kubernetes/apps/monitoring/kustomization.yam
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'tests.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == \
+  'customapi' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.display"' "$route")" == \
+  'dynamic-list' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.format"' "$route")" == \
+  'relativeDate' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.limit"' "$route")" == \
+  '6' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.target"' "$route")" == \
+  'https://tests.lab.supermorphic.com{path}' ]]
+rg -q 'test-reports\.test-reports\.svc\.cluster\.local:8080/api/homepage\.json' "$route"
 
 [[ "$(yq -r '.spec.egress | length' "$policy")" == '0' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[].port] | unique | sort | join(",")' \
   "$policy")" == '8080,9090' ]]
+[[ "$(yq -r '[.spec.ingress[].fromEndpoints[]?.matchLabels[
+  "k8s:io.kubernetes.pod.namespace"]] | sort | join(",")' "$policy")" == \
+  'envoy-gateway-system,homepage,monitoring' ]]
 [[ "$(yq -r '[.spec.endpoints[].port] | sort | join(",")' "$monitor")" == 'http,metrics' ]]
 [[ "$(yq -r '[.spec.endpoints[].path] | sort | join(",")' "$monitor")" == \
   '/api/metrics.prom,/metrics' ]]
@@ -76,6 +91,26 @@ rg -q 'current' "$app/Caddyfile"
 rg -q 'admin off' "$app/Caddyfile"
 rg -q 'auto_https off' "$app/Caddyfile"
 rg -q 'metrics' "$app/Caddyfile"
+
+jq -e '
+  .uid == "cluster-verification" and
+  .title == "Cluster Verification" and
+  .schemaVersion >= 39 and
+  ([.panels[].title] | index("Latest Run Age") != null) and
+  ([.panels[].title] | index("Passed Cases (Latest per Scenario)") != null) and
+  ([.panels[].title] | index("30-Day Run Pass Rate") != null) and
+  ([.panels[].title] | index("Run Duration") != null) and
+  ([.panels[].title] | index("Failures by Scenario (30 Days)") != null) and
+  ([.. | strings] | any(contains("homelab_test_last_run_status"))) and
+  ([.. | strings] | any(contains("homelab_test_last_success_timestamp_seconds"))) and
+  ([.. | strings] | any(contains("https://tests.lab.supermorphic.com/latest/")))
+' "$dashboard" >/dev/null
+kustomize build "$app" |
+  yq ea -e '
+    select(.kind == "ConfigMap" and .metadata.name == "test-reports-dashboard") |
+    .metadata.labels.grafana_dashboard == "1" and
+    (.data."test-reports.json" | test("\"uid\": \"cluster-verification\""))
+  ' - >/dev/null
 
 # The staged server must not create a guaranteed-failing uptime probe before the
 # operator bootstrap. The activation PR adds this endpoint after acceptance.
@@ -93,4 +128,4 @@ sh -n "$app/bootstrap-storage.sh" "$app/install-report.sh"
 shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh"
 kustomize build "$app" >/dev/null
 
-echo 'Suspended Caddy test-report server, retained RWO storage, Recreate strategy, restricted runtime, internal route, network isolation, metrics, and atomic installer passed validation.'
+echo 'Suspended Caddy test-report server, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'

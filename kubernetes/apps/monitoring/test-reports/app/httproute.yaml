@@ -13,6 +13,16 @@ metadata:
     gethomepage.dev/icon: "allure.png"
     gethomepage.dev/href: "https://tests.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=test-reports"
+    gethomepage.dev/widget.type: "customapi"
+    gethomepage.dev/widget.url: "http://test-reports.test-reports.svc.cluster.local:8080/api/homepage.json"
+    gethomepage.dev/widget.refreshInterval: "300000"
+    gethomepage.dev/widget.display: "dynamic-list"
+    gethomepage.dev/widget.mappings.items: "items"
+    gethomepage.dev/widget.mappings.name: "name"
+    gethomepage.dev/widget.mappings.label: "end"
+    gethomepage.dev/widget.mappings.limit: "6"
+    gethomepage.dev/widget.mappings.format: "relativeDate"
+    gethomepage.dev/widget.mappings.target: "https://tests.lab.supermorphic.com{path}"
 spec:
   hostnames:
     - tests.lab.supermorphic.com

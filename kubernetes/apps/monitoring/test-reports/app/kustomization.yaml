@@ -17,6 +17,13 @@ configMapGenerator:
       - Caddyfile=Caddyfile
       - bootstrap-storage.sh=bootstrap-storage.sh
       - install-report.sh=install-report.sh
+  - name: test-reports-dashboard
+    namespace: test-reports
+    files:
+      - dashboards/test-reports.json
+    options:
+      labels:
+        grafana_dashboard: "1"
 generatorOptions:
   disableNameSuffixHash: true
   labels:

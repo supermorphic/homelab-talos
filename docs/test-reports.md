@@ -35,6 +35,7 @@ The persistent layout is:
     │   ├── state.json
     │   ├── history.jsonl
     │   ├── api/{homepage.json,metrics.prom}
+    │   ├── latest/{overall,validation,platform-smoke,media-smoke,resilience,conformance}/
     │   └── latest/<tier>/<target>/<scenario>/index.html
     └── current -> generations/<generation>
 ```
@@ -68,8 +69,10 @@ TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> \
   mise exec -- just test publish <run-id>
 ```
 
-Review the root index and report at `https://tests.lab.supermorphic.com`. Then create
-the separate activation PR that changes `suspend: false` and adds the Gatus endpoint.
+Review the root index and report at `https://tests.lab.supermorphic.com`, the available
+Homepage rollups, and the provisioned Grafana `Cluster Verification` dashboard. Then
+create the separate activation PR that changes `suspend: false` and adds the Gatus
+endpoint.
 After that merges, run `mise exec -- just kube test-reports-verify`.
 
 Agents stage and validate the source but do not bootstrap or publish. GitHub Actions
@@ -108,10 +111,21 @@ No command is required to view already-published reports:
 - Canonical download: `https://tests.lab.supermorphic.com/artifacts/<run-id>.tar.gz`
 - Stable latest link:
   `https://tests.lab.supermorphic.com/latest/<tier>/<target>/<scenario-or-_>/`
+- Stable presentation rollups:
+  `/latest/{overall,validation,platform-smoke,media-smoke,resilience,conformance}/`
 
 Caddy exposes its native metrics on the internal-only metrics port. The generated
 low-cardinality test metrics are served at `/api/metrics.prom`; the ServiceMonitor
-scrapes both. The source PR includes PVC-bound and archive-capacity alerts. Homepage's
-dynamic rows, the Grafana dashboard, and the Gatus black-box probe are activated in the
-following presentation/activation phase so a suspended application cannot create a
-false alarm.
+scrapes both. Homepage consumes `/api/homepage.json` as an up-to-six-row Custom API
+dynamic list; a category appears after its first authoritative publication. Result
+markers are rendered on the left and Homepage formats completion time as a live
+relative age on the right. Each row points to its stable rollup URL.
+
+The `Cluster Verification` Grafana dashboard is provisioned from a labeled ConfigMap
+and reads only the low-cardinality Prometheus series. It shows latest status and age,
+latest passed cases, 30-day pass rate, duration history, failures by scenario, and time
+since successful resilience/conformance. Its links resolve to stable report URLs.
+
+Both presentation surfaces are staged inside the suspended application, so neither is
+discovered until guarded bootstrap. The Gatus black-box probe remains deferred to the
+activation PR to avoid a guaranteed false alarm before human acceptance.

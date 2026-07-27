@@ -28,7 +28,14 @@ MAX_PUBLISH_BYTES = 250 * 1024 * 1024
 MAX_RUNS = 200
 MAX_AGE_DAYS = 90
 METRIC_LABELS = ("source", "tier", "target", "scenario", "cluster", "execution_origin")
-REPORT_BASE_URL = "https://tests.lab.supermorphic.com"
+ROLLUPS = (
+    ("overall", "Latest Overall", {}),
+    ("validation", "Validate", {"source": "validation"}),
+    ("platform-smoke", "Platform Smoke", {"tier": "smoke", "target": "platform"}),
+    ("media-smoke", "Media Smoke", {"tier": "smoke", "target": "media"}),
+    ("resilience", "Resilience", {"tier": "resilience"}),
+    ("conformance", "Conformance", {"tier": "conformance"}),
+)
 
 
 class PublishError(RuntimeError):
@@ -425,6 +432,29 @@ def latest_authoritative(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(latest.values(), key=logical_key)
 
 
+def latest_rollups(
+    entries: list[dict[str, Any]],
+) -> list[tuple[str, str, dict[str, Any]]]:
+    authoritative = sorted(
+        (entry for entry in entries if entry.get("authoritative")),
+        key=lambda entry: (entry["end"], entry["run_id"]),
+        reverse=True,
+    )
+    rollups = []
+    for slug, label, criteria in ROLLUPS:
+        match = next(
+            (
+                entry
+                for entry in authoritative
+                if all(entry.get(field) == value for field, value in criteria.items())
+            ),
+            None,
+        )
+        if match is not None:
+            rollups.append((slug, label, match))
+    return rollups
+
+
 def render_metrics(entries: list[dict[str, Any]], state: dict[str, Any]) -> str:
     lines = [
         "# HELP homelab_test_last_run_status Whether the latest authoritative run passed.",
@@ -491,23 +521,18 @@ def render_metrics(entries: list[dict[str, Any]], state: dict[str, Any]) -> str:
 
 
 def render_homepage(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    items = []
-    for entry in sorted(
-        latest_authoritative(entries),
-        key=lambda item: (item["end"], item["run_id"]),
-        reverse=True,
-    ):
-        items.append(
+    markers = {"passed": "✓", "failed": "✗", "broken": "✗", "skipped": "!"}
+    return {
+        "items": [
             {
-                "name": f"{entry['tier']} · {entry['target']}"
-                + (f" · {entry['scenario']}" if entry.get("scenario") else ""),
-                "status": entry["result"],
+                "name": f"{markers[entry['result']]} {label}",
                 "end": entry["end"],
-                "href": f"{REPORT_BASE_URL}/latest/{entry['tier']}/{entry['target']}/"
-                f"{entry.get('scenario') or '_'}/",
+                "result": entry["result"],
+                "path": f"/latest/{slug}/",
             }
-        )
-    return {"items": items}
+            for slug, label, entry in latest_rollups(entries)
+        ]
+    }
 
 
 def render_index(entries: list[dict[str, Any]], generated_at: str) -> str:
@@ -670,6 +695,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             / latest["target"]
             / scenario
             / "index.html",
+            latest["report_url"],
+        )
+    for slug, _label, latest in latest_rollups(retained):
+        write_redirect(
+            generation_root / "latest" / slug / "index.html",
             latest["report_url"],
         )
     (bundle / "prune.txt").write_text("".join(f"{run}\n" for run in pruned), encoding="utf-8")
