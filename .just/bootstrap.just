@@ -1973,8 +1973,8 @@ tailscale-operator:
       .just/bootstrap.just kubernetes/mod.just \
       kubernetes/apps/networking/kustomization.yaml \
       kubernetes/apps/networking/tailscale-operator
-    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
-      echo 'Refusing Tailscale operator bootstrap: the Kustomization must be staged suspended in Git.' >&2
+    [[ "$(yq -r 'select(.metadata.name == "tailscale-operator") | .spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing Tailscale operator bootstrap: the operator Kustomization must be staged suspended in Git.' >&2
       exit 1
     }
 
@@ -1995,17 +1995,25 @@ tailscale-operator:
       exit 1
     }
 
-    echo 'Reconciling Tailscale operator Kustomization.'
+    echo 'Reconciling Tailscale operator Kustomization (installs the operator + tailscale.com CRDs).'
     resumed=true
-    flux resume kustomization tailscale-operator --namespace flux-system --kubeconfig "$kubeconfig"
+    flux resume kustomization tailscale-operator --namespace flux-system --kubeconfig "$kubeconfig" --timeout 15m
     flux reconcile kustomization tailscale-operator \
       --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
       --for=condition=Ready kustomization/tailscale-operator --timeout=15m
 
+    # The ProxyGroup Kustomization (suspend: false, dependsOn the operator) reconciles
+    # once the CRD exists; reconcile it explicitly and gate on it.
+    echo 'Reconciling Tailscale ProxyGroup Kustomization (CRD now present).'
+    flux reconcile kustomization tailscale-operator-proxygroup \
+      --namespace flux-system --kubeconfig "$kubeconfig" --timeout 10m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/tailscale-operator-proxygroup --timeout=10m
+
     just kube tailscale-operator-verify
     bootstrap_complete=true
-    echo 'Tailscale operator live acceptance passed. Change the Tailscale Git source to suspend=false, commit, push, and rerun just kube tailscale-operator-verify.'
+    echo 'Tailscale operator live acceptance passed. Change the operator Kustomization (tailscale-operator) Git source to suspend=false, commit, push, and rerun just kube tailscale-operator-verify.'
 
 # Reconcile the suspended metrics-server (enables kubectl top / HPA / the Homepage
 # Kubernetes widget). On failure the resumed Kustomization is re-suspended.

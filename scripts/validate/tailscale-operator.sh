@@ -7,12 +7,13 @@ values="$base/app/values.yaml"
 hr="$base/app/helmrelease.yaml"
 repo="$base/app/helmrepository.yaml"
 ns="$base/app/namespace.yaml"
-proxygroup="$base/app/proxygroup.yaml"
+proxygroup="$base/proxygroup/proxygroup.yaml"
 oauth="$base/app/oauth.sops.yaml"
 temp_dir="$(mktemp -d /tmp/homelab-talos-tailscale-operator-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for f in "$ks" "$values" "$hr" "$repo" "$ns" "$proxygroup" "$oauth" "$base/app/kustomization.yaml"; do
+for f in "$ks" "$values" "$hr" "$repo" "$ns" "$proxygroup" "$oauth" \
+  "$base/app/kustomization.yaml" "$base/proxygroup/kustomization.yaml"; do
   [[ -f "$f" ]] || { echo "Missing Tailscale operator source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./tailscale-operator/ks.yaml' kubernetes/apps/networking/kustomization.yaml || {
@@ -20,11 +21,25 @@ rg -qx '  - ./tailscale-operator/ks.yaml' kubernetes/apps/networking/kustomizati
   exit 1
 }
 
-# Flux Kustomization: suspend gate, single cilium dependency, SOPS decryption wired.
-suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
-[[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]
-[[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium' ]]
-[[ "$(yq -r '.spec.decryption.provider' "$ks")" == 'sops' ]]
+# Two Flux Kustomizations in ks.yaml: the operator (installs the tailscale.com CRDs)
+# and the ProxyGroup CR, split so the CRD exists before the CR is dry-run.
+# Operator Kustomization: suspend gate, single cilium dependency, SOPS decryption.
+op_suspend="$(yq ea 'select(.metadata.name == "tailscale-operator") | .spec.suspend // false' "$ks")"
+[[ "$op_suspend" == 'true' || "$op_suspend" == 'false' ]]
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium' ]]
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator") | .spec.decryption.provider' "$ks")" == 'sops' ]]
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator") | .spec.path' "$ks")" == './kubernetes/apps/networking/tailscale-operator/app' ]]
+
+# ProxyGroup Kustomization must depend on the operator (CRD-ordering deadlock fix) and
+# point at the proxygroup overlay.
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator-proxygroup") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'tailscale-operator' ]]
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator-proxygroup") | .spec.path' "$ks")" == './kubernetes/apps/networking/tailscale-operator/proxygroup' ]]
+
+# The operator overlay must NOT carry the ProxyGroup CR (that is the whole point).
+if rg -q 'proxygroup' "$base/app/kustomization.yaml"; then
+  echo 'Refusing: the operator overlay (app/kustomization.yaml) must not reference the ProxyGroup CR.' >&2
+  exit 1
+fi
 
 # Pinned chart from the Tailscale Helm repository.
 chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
@@ -56,8 +71,9 @@ chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 [[ "$(yq -r '.metadata.namespace' "$oauth")" == 'tailscale' ]]
 
 kustomize build "$base/app" >/dev/null
+kustomize build "$base/proxygroup" >/dev/null
 printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
 HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
   helm template tailscale-operator tailscale-operator --repo https://pkgs.tailscale.com/helmcharts --version "$chart_version" --namespace tailscale --values "$values" >/dev/null
 
-echo 'Tailscale operator source, wiring, dependency, SOPS decryption, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, and render passed validation.'
+echo 'Tailscale operator source, split operator/proxygroup Kustomizations, dependency wiring, SOPS decryption, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, and renders passed validation.'

@@ -16,6 +16,10 @@ ns='tailscale'
 # Operator Deployment rolled out.
 kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/operator --timeout=5m
 
+# The dependent ProxyGroup Kustomization (applied only after the operator installed the
+# CRD) is Ready.
+[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization tailscale-operator-proxygroup --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Tailscale ProxyGroup Kustomization is not Ready.' >&2; exit 1; }
+
 # ProxyGroup exists and both HA ingress proxy replicas are Ready.
 kubectl --kubeconfig "$kubeconfig" get proxygroup ingress-proxies >/dev/null 2>&1 || { echo 'ProxyGroup ingress-proxies is missing.' >&2; exit 1; }
 ready="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get statefulset ingress-proxies --output jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
