@@ -609,6 +609,41 @@ def checksum_manifest(bundle: Path) -> None:
     (bundle / "manifest.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_bundle_archive(bundle: Path, archive: Path) -> None:
+    bundle = bundle.resolve()
+    archive = archive.resolve()
+    if archive.is_relative_to(bundle):
+        raise PublishError("publication archive must be outside the bundle directory")
+    if archive.exists():
+        raise PublishError("publication archive path must not already exist")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as output:
+        for path in sorted(
+            bundle.rglob("*"), key=lambda item: item.relative_to(bundle).as_posix()
+        ):
+            relative = path.relative_to(bundle).as_posix()
+            if path.is_symlink():
+                raise PublishError(f"publication bundle contains a symlink: {relative}")
+            info = tarfile.TarInfo(relative)
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            info.mtime = 0
+            if path.is_dir():
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                output.addfile(info)
+            elif path.is_file():
+                info.type = tarfile.REGTYPE
+                info.mode = 0o644
+                info.size = path.stat().st_size
+                with path.open("rb") as stream:
+                    output.addfile(info, stream)
+            else:
+                raise PublishError(f"publication bundle has an unsafe entry: {relative}")
+
+
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     run_dir = args.run_dir.resolve()
     run_id = run_dir.name
@@ -715,6 +750,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         )
     (bundle / "prune.txt").write_text("".join(f"{run}\n" for run in pruned), encoding="utf-8")
     checksum_manifest(bundle)
+    write_bundle_archive(bundle, args.archive)
     return {
         "status": "prepared",
         "run_id": run_id,
@@ -735,6 +771,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--origin-main-sha", required=True)
     value.add_argument("--flux-main-sha", required=True)
     value.add_argument("--output-dir", type=Path, required=True)
+    value.add_argument("--archive", type=Path, required=True)
     value.add_argument("--now", required=True)
     return value
 

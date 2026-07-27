@@ -6,11 +6,17 @@ import argparse
 import datetime as dt
 import importlib.util
 import json
+import os
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("report_publish.py")
+REPO_ROOT = MODULE_PATH.parents[2]
+BOOTSTRAP_SCRIPT = REPO_ROOT / "kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh"
+INSTALL_SCRIPT = REPO_ROOT / "kubernetes/apps/monitoring/test-reports/app/install-report.sh"
 SPEC = importlib.util.spec_from_file_location("report_publish", MODULE_PATH)
 assert SPEC and SPEC.loader
 report_publish = importlib.util.module_from_spec(SPEC)
@@ -103,6 +109,7 @@ class ReportPublishTests(unittest.TestCase):
             origin_main_sha=MAIN_SHA,
             flux_main_sha=MAIN_SHA,
             output_dir=root / "bundle",
+            archive=root / "bundle.tar",
             now=now,
         )
 
@@ -140,6 +147,38 @@ class ReportPublishTests(unittest.TestCase):
             self.assertNotIn(MAIN_SHA, metrics)
             self.assertTrue((args.output_dir / "artifact" / f"{RUN_ID}.tar.gz").is_file())
             self.assertTrue((args.output_dir / "manifest.sha256").is_file())
+            self.assertTrue(args.archive.is_file())
+            with tarfile.open(args.archive) as archive:
+                top_level = {name.split("/", 1)[0] for name in archive.getnames()}
+            self.assertEqual(
+                top_level,
+                {"artifact", "generation", "manifest.sha256", "prune.txt", "report"},
+            )
+
+            storage = root / "storage"
+            environment = {**os.environ, "TEST_REPORTS_STORAGE_ROOT": str(storage)}
+            subprocess.run(
+                ["sh", str(BOOTSTRAP_SCRIPT)],
+                check=True,
+                env=environment,
+            )
+            with args.archive.open("rb") as archive_stream:
+                subprocess.run(
+                    [
+                        "sh",
+                        str(INSTALL_SCRIPT),
+                        RUN_ID,
+                        result["generation"],
+                    ],
+                    check=True,
+                    env=environment,
+                    stdin=archive_stream,
+                )
+            self.assertEqual(
+                (storage / "state/current").readlink(),
+                Path(f"generations/{result['generation']}"),
+            )
+            self.assertTrue((storage / f"reports/{RUN_ID}/awesome/index.html").is_file())
 
     def test_stale_or_dirty_run_is_candidate_and_has_no_latest_redirect(self):
         for git_sha, dirty in (("b" * 40, False), (MAIN_SHA, True)):

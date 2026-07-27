@@ -12,10 +12,10 @@ TLS.
   the Awesome static report.
 - `report_publish.py` (operator workstation): validates structured metadata, merges the
   catalog, applies retention, updates lifetime counters, creates stable latest links,
-  and builds a checksummed allowlisted bundle.
+  and builds a checksummed allowlisted bundle plus a deterministic portable tar stream.
 - `publish-report.sh` (operator workstation): enforces the exact confirmation and
   deployed-source guard, scans for secrets, holds the publication Lease, and streams
-  the bundle through a guarded `kubectl exec`.
+  the prebuilt archive through a guarded `kubectl exec`.
 - Caddy (cluster): serves static files only. It has no upload API, credentials,
   ServiceAccount token, or Kubernetes RBAC.
 - `install-report.sh` (cluster): rejects unsafe paths, symlinks, unexpected files, and
@@ -113,6 +113,8 @@ no cluster upload service to attack or authenticate. The recipe requires:
 - clean captured Git metadata and a locally available commit;
 - the publisher and server sources already merged to `origin/main`;
 - successful secret scans of both canonical input and exact output bundle;
+- deterministic archive construction independent of the operator host's `tar`
+  implementation or filesystem metadata;
 - the dedicated renewable `flux-system/homelab-test-report-publish-lock` Lease.
 
 A clean historical or feature-commit run may be retained as candidate evidence. Only a
