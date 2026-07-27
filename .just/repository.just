@@ -1067,6 +1067,76 @@ tailscale-operator-secrets:
     mv -- "$temp_dir/operator-oauth.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (operator-oauth in tailscale)."
 
+# Write ONLY the SOPS-encrypted ntfy declarative-auth Secret (ntfy-secret in the ntfy
+# namespace) from four bcrypt password hashes and three publisher tokens, and stamp the
+# resulting ciphertext hash into values.yaml (pod annotation sops-hash) so a token
+# rotation rolls the ntfy pod. Never echoes secret values. See docs/ntfy-startup-guide.md.
+ntfy-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:ntfy:sops'
+    target='kubernetes/apps/monitoring/ntfy/app/secret.sops.yaml'
+    values='kubernetes/apps/monitoring/ntfy/app/values.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-ntfy-secrets.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    for var in NTFY_SUBSCRIBER_PASSWORD_HASH NTFY_ALERTMANAGER_PASSWORD_HASH \
+      NTFY_SEERR_PASSWORD_HASH NTFY_AUTOMATION_PASSWORD_HASH \
+      NTFY_ALERTMANAGER_TOKEN NTFY_SEERR_TOKEN NTFY_AUTOMATION_TOKEN; do
+      [[ -n "${!var:-}" ]] || { echo "Set $var (see docs/ntfy-startup-guide.md)." >&2; exit 1; }
+    done
+    for hash in "$NTFY_SUBSCRIBER_PASSWORD_HASH" "$NTFY_ALERTMANAGER_PASSWORD_HASH" \
+      "$NTFY_SEERR_PASSWORD_HASH" "$NTFY_AUTOMATION_PASSWORD_HASH"; do
+      [[ "$hash" == '$2'*'$'* ]] || { echo 'Refusing: password hashes must be bcrypt ($2a/$2b/$2y...).' >&2; exit 1; }
+    done
+    for token in "$NTFY_ALERTMANAGER_TOKEN" "$NTFY_SEERR_TOKEN" "$NTFY_AUTOMATION_TOKEN"; do
+      [[ "$token" =~ ^tk_[a-z0-9]{29}$ ]] || { echo 'Refusing: tokens must be tk_ + 29 lowercase alphanumerics (32 chars total).' >&2; exit 1; }
+    done
+    [[ "${NTFY_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the ntfy Secret.' >&2
+      echo "Set NTFY_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    # subscriber reads all topics (iPhone/web password, no token). Producers are write-only
+    # on their topic and use distinct, independently rotatable tokens.
+    NTFY_AUTH_USERS="subscriber:${NTFY_SUBSCRIBER_PASSWORD_HASH}:user,alertmanager:${NTFY_ALERTMANAGER_PASSWORD_HASH}:user,seerr:${NTFY_SEERR_PASSWORD_HASH}:user,automation:${NTFY_AUTOMATION_PASSWORD_HASH}:user"
+    NTFY_AUTH_ACCESS="subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro,alertmanager:critical:wo,alertmanager:homelab:wo,seerr:media:wo,automation:homelab:wo"
+    NTFY_AUTH_TOKENS="alertmanager:${NTFY_ALERTMANAGER_TOKEN},seerr:${NTFY_SEERR_TOKEN},automation:${NTFY_AUTOMATION_TOKEN}"
+    export NTFY_AUTH_USERS NTFY_AUTH_ACCESS NTFY_AUTH_TOKENS
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "ntfy-secret" |
+       .metadata.namespace = "ntfy" |
+       .type = "Opaque" |
+       .stringData.NTFY_AUTH_USERS = strenv(NTFY_AUTH_USERS) |
+       .stringData.NTFY_AUTH_ACCESS = strenv(NTFY_AUTH_ACCESS) |
+       .stringData.NTFY_AUTH_TOKENS = strenv(NTFY_AUTH_TOKENS)' \
+      >"$temp_dir/ntfy-secret.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/ntfy-secret.yaml" >"$temp_dir/ntfy-secret.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/ntfy-secret.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/ntfy-secret.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    for secret in "$NTFY_SUBSCRIBER_PASSWORD_HASH" "$NTFY_ALERTMANAGER_PASSWORD_HASH" \
+      "$NTFY_SEERR_PASSWORD_HASH" "$NTFY_AUTOMATION_PASSWORD_HASH" \
+      "$NTFY_ALERTMANAGER_TOKEN" "$NTFY_SEERR_TOKEN" "$NTFY_AUTOMATION_TOKEN"; do
+      if rg -Fq -- "$secret" "$temp_dir/ntfy-secret.sops.yaml"; then
+        echo 'Refusing: a plaintext secret value appears in the encrypted output.' >&2
+        exit 1
+      fi
+    done
+
+    mv -- "$temp_dir/ntfy-secret.sops.yaml" "$target"
+    # Stamp the ciphertext hash so a rotation rolls the ntfy pod (sops-hash).
+    revision="$(git hash-object "$target")"
+    REV="$revision" yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$values"
+    echo "Wrote SOPS-encrypted $target (ntfy-secret in ntfy) and stamped sops-hash in values.yaml."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
@@ -1120,7 +1190,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 20  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 21  # Update when adding/removing a guarded rollout recipe.
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi

@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ntfy
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    # Required for the HTTPRoute here to attach to the internal gateway (its https
+    # listener only admits routes from namespaces carrying this label).
+    gateway.supermorphic.com/access: internal

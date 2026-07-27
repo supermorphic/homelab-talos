@@ -826,3 +826,15 @@ tailscale-operator-validate: require-bash
 # rolled out, both ingress ProxyGroup replicas Ready, and foundation green.
 tailscale-operator-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.tailscale-operator -- scripts/verify/tailscale-operator.sh {{quote(kubeconfig)}}
+
+# Validate the ntfy source: files, wiring, staged suspend, dependency graph, SOPS
+# decryption, pinned image, hardened non-root pod, RWO PVC, server.yml (deny-all,
+# require-login, signup off, iOS upstream, metrics listener), the internal HTTPRoute,
+# the private Tailscale Ingress, ServiceMonitor, CiliumNetworkPolicy, and the render.
+ntfy-validate: require-bash
+    @scripts/validate/ntfy.sh
+
+# Verify the live ntfy: Kustomization + HelmRelease Ready, rollout complete, health
+# endpoint healthy, anonymous access denied, per-token ACLs, and cache persistence.
+ntfy-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(kubeconfig)}}

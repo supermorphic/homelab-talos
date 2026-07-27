@@ -1,0 +1,20 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/monitoring.coreos.com/servicemonitor_v1.json
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ntfy
+  namespace: ntfy
+  labels:
+    app.kubernetes.io/name: ntfy
+spec:
+  # Prometheus discovers this cluster-wide (serviceMonitorSelectorNilUsesHelmValues:
+  # false in kube-prometheus-stack). Scrapes the dedicated metrics port only; 9090 is
+  # never exposed through the HTTPRoute or the Tailscale Ingress.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 1m

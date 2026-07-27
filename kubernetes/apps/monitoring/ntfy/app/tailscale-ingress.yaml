@@ -1,0 +1,24 @@
+---
+# Private off-site path: exposes ntfy to the tailnet over HTTPS via the shared HA
+# ingress ProxyGroup (from the tailscale-operator app). The operator publishes the
+# MagicDNS FQDN (ntfy.<tailnet>.ts.net) into the Ingress ADDRESS; that FQDN is ntfy's
+# canonical base-url and the iOS app's Default Server. Not internet-reachable.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ntfy
+  namespace: ntfy
+  annotations:
+    tailscale.com/proxy-group: ingress-proxies
+    tailscale.com/tags: tag:ntfy
+spec:
+  ingressClassName: tailscale
+  tls:
+    - hosts:
+        # Short hostname only; the operator derives the full ntfy.<tailnet>.ts.net FQDN.
+        - ntfy
+  defaultBackend:
+    service:
+      name: ntfy
+      port:
+        number: 80

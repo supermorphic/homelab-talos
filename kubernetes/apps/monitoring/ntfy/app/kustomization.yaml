@@ -1,0 +1,26 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./namespace.yaml
+  - ./ocirepository.yaml
+  - ./helmrelease.yaml
+  - ./secret.sops.yaml
+  - ./httproute.yaml
+  - ./tailscale-ingress.yaml
+  - ./servicemonitor.yaml
+  - ./ciliumnetworkpolicy.yaml
+  - ./prometheusrule.yaml
+configMapGenerator:
+  - name: ntfy-values
+    namespace: ntfy
+    files:
+      - values.yaml=values.yaml
+  - name: ntfy-config
+    namespace: ntfy
+    files:
+      - server.yml=server.yml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
