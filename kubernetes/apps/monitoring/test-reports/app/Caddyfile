@@ -1,0 +1,41 @@
+{
+	admin off
+	auto_https off
+	metrics
+	persist_config off
+}
+
+:8080 {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle /api/* {
+		root * /srv/state/current
+		file_server
+	}
+
+	handle /latest/* {
+		root * /srv/state/current
+		file_server
+	}
+
+	handle /reports/* {
+		root * /srv
+		file_server
+	}
+
+	handle /artifacts/* {
+		root * /srv
+		file_server
+	}
+
+	handle {
+		root * /srv/state/current
+		file_server
+	}
+}
+
+:9090 {
+	metrics
+}

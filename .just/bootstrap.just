@@ -1814,6 +1814,71 @@ portainer:
     bootstrap_complete=true
     echo 'Portainer Phase 1 live acceptance passed. Run the guarded persistence test, then change suspend=false and add the Gatus probe in the activation PR.'
 
+# Reconcile the suspended persistent test-report host after guarded source/static
+# validation, then run live read-only acceptance. Publication remains a separate,
+# exactly confirmed operator action.
+test-reports:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:test-reports'
+    ks='kubernetes/apps/monitoring/test-reports/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_test_reports() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'Test-report server did not pass; suspending its Kustomization while preserving the PVC.' >&2
+        flux suspend kustomization test-reports --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_test_reports EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'test-report server bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/test-reports \
+      scripts/validate/test-reports.sh scripts/verify/test-reports.sh
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing test-report bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube test-reports-validate
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get kustomization test-reports --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing test-report bootstrap: test-reports is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${TEST_REPORTS_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the test-report server.' >&2
+      echo "Set TEST_REPORTS_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing test-reports-validate." >&2
+      exit 1
+    }
+
+    echo 'Reconciling the test-reports Kustomization.'
+    resumed=true
+    flux resume kustomization test-reports --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization test-reports \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/test-reports --timeout=15m
+
+    just kube test-reports-verify
+    bootstrap_complete=true
+    echo 'Test-report server acceptance passed. Publish a sanitized current-main run, verify persistence, then activate it and add the Gatus probe in a follow-up PR.'
+
 # Reconcile the suspended Phase 10 Homepage app after guarded checks, then verify.
 # On failure the resumed Kustomization is re-suspended, preserving its resources.
 homepage:

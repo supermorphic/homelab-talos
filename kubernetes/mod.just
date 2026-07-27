@@ -775,6 +775,16 @@ portainer-policy-validate:
 portainer-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.portainer -- scripts/verify/portainer.sh {{quote(kubeconfig)}}
 
+# Validate the suspended persistent report host and guarded publishing contract.
+# Cluster-independent and included in `just ci`.
+test-reports-validate: require-bash
+    @scripts/validate/test-reports.sh
+
+# Verify the live static report host, retained PVC, route, policy, and catalog.
+# Operator-only and read-only.
+test-reports-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.test-reports -- scripts/verify/test-reports.sh {{quote(kubeconfig)}}
+
 # Confirmation-guarded pod recreation proving the Portainer database remains on
 # the original PVC. Operator-only and intentionally separate from bootstrap.
 portainer-persistence-test: require-bash

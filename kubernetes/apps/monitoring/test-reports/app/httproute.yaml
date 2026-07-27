@@ -1,0 +1,35 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: test-reports
+  namespace: test-reports
+  annotations:
+    external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "Test Results"
+    gethomepage.dev/description: "Persistent operator-published test reports"
+    gethomepage.dev/group: "Monitoring"
+    gethomepage.dev/icon: "allure.png"
+    gethomepage.dev/href: "https://tests.lab.supermorphic.com"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=test-reports"
+spec:
+  hostnames:
+    - tests.lab.supermorphic.com
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: internal
+      namespace: networking
+      sectionName: https
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: test-reports
+          port: 8080
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /

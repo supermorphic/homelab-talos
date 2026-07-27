@@ -126,6 +126,8 @@ run_shell_case catalog-suite-runner scripts/test/run-catalog-suite-test.sh
 run_shell_case ci-runner scripts/test/run-ci-test.sh
 run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
 run_shell_case allure-report scripts/test/allure-report-test.sh
+run_shell_case report-publish-install scripts/test/report-publish-install-test.sh
+run_shell_case report-publish-guard scripts/test/report-publish-guard-test.sh
 run_shell_case qbit-manage-policy-shellcheck \
   shellcheck scripts/validate/qbit-manage-policy.sh
 run_shell_case qbit-manage-policy-validator \
@@ -165,6 +167,8 @@ fi
 uv run --locked ruff check \
   scripts/test/allure_report.py \
   scripts/test/test_allure_report.py \
+  scripts/test/report_publish.py \
+  scripts/test/test_report_publish.py \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
@@ -180,6 +184,8 @@ uv run --locked ruff check \
 uv run --locked ruff format --check \
   scripts/test/allure_report.py \
   scripts/test/test_allure_report.py \
+  scripts/test/report_publish.py \
+  scripts/test/test_report_publish.py \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \

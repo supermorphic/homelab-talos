@@ -6,3 +6,4 @@ resources:
   - ./homepage/ks.yaml
   - ./kube-prometheus-stack/ks.yaml
   - ./portainer/ks.yaml
+  - ./test-reports/ks.yaml

@@ -7,6 +7,8 @@ plugins:
       reportName: Homelab Talos Test Results
       reportLanguage: en
       singleFile: false
+      historyLimit: 200
+      appendHistory: true
       groupBy:
         - parentSuite
         - suite

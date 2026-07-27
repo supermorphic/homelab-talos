@@ -1,0 +1,21 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-reports
+  namespace: test-reports
+  labels:
+    app.kubernetes.io/name: test-reports
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: test-reports
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: http
+    - name: metrics
+      port: 9090
+      protocol: TCP
+      targetPort: metrics
