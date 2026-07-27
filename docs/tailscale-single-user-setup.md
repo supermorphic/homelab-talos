@@ -35,22 +35,23 @@ Exit node:  None
 Do **not** configure an exit node. Normal internet traffic should keep using Wi-Fi /
 cellular directly — Tailscale is only your private overlay, not your internet gateway.
 
-## 3. Add the Kubernetes tags
+## 3. Create the Kubernetes tags (Visual Editor)
 
-Admin Console → **Access controls** (<https://login.tailscale.com/admin/acls>). This is a
-HuJSON (JSON-with-comments) editor. Start with:
+Admin Console → **Access controls** (<https://login.tailscale.com/admin/acls>). The
+console has two views — a **Visual Editor** and a **JSON Editor** — that edit the **same
+policy**; changes in one show up in the other. Use whichever is easier for each part.
 
-```jsonc
-{
-  "tagOwners": {
-    "tag:k8s-operator": [],
-    "tag:k8s": ["tag:k8s-operator"],
-    "tag:ntfy": ["tag:k8s-operator"]
-  }
-}
+In the **Visual Editor**, create these three tags (enter them without the `tag:` prefix;
+the console adds it):
+
+```text
+k8s-operator
+k8s
+ntfy
 ```
 
-The important relationship:
+Set ownership so `k8s-operator` owns `k8s` and `ntfy` (in the JSON this becomes the
+`tagOwners` block below). The relationship:
 
 ```text
 tag:k8s-operator
@@ -66,18 +67,13 @@ matches our `values.yaml`: `operatorConfig.defaultTags: tag:k8s-operator`,
 `tag:ntfy` so access can be granted specifically to ntfy later, not to everything
 Kubernetes exposes.
 
-## 4. Add the ntfy service policy
+## 4. Switch to the JSON Editor for the service policy and grants
 
-Because we use an HA `ProxyGroup`, the proxies advertise a separate **Tailscale Service**
-representing ntfy. Add:
+Switch to the **JSON Editor** (same policy — it now shows the three tags you just
+created). The `autoApprovers` and `grants` below are easiest to set here.
 
-```jsonc
-"autoApprovers": {
-  "services": {
-    "tag:ntfy": ["tag:k8s"]
-  }
-}
-```
+`autoApprovers.services` lets the HA `ProxyGroup` proxies advertise the ntfy Tailscale
+Service automatically:
 
 ```text
 Tailscale Service tagged tag:ntfy
@@ -87,35 +83,26 @@ Tailscale Service tagged tag:ntfy
         tag:k8s proxies
 ```
 
-This matches Tailscale's HA ProxyGroup model: ProxyGroup devices advertise Tailscale
-Services, and `autoApprovers.services` controls which tagged proxies may advertise each
-tagged service.
+## 5. Replace the policy with the complete starting policy
 
-## 5. Grant your tailnet access to ntfy
+A brand-new tailnet ships with a default **allow-all** grant and a default Tailscale SSH
+rule. Replace the entire policy in the JSON Editor with the block below (don't try to
+merge fragments into the default).
 
-For your initial personal tailnet, add:
+**This removes the default unrestricted grant:**
 
 ```jsonc
-"grants": [
-  {
-    "src": ["autogroup:member"],
-    "dst": ["tag:ntfy"],
-    "ip": ["tcp:443"]
-  },
-  {
-    "src": ["autogroup:member"],
-    "dst": ["tag:k8s:*"],
-    "ip": ["icmp:*"]
-  }
-]
+{
+  "src": ["*"],
+  "dst": ["*"],
+  "ip": ["*"]
+}
 ```
 
-The first rule is the real ntfy permission (your devices → HTTPS 443 → ntfy). The second
-grants ICMP reachability to the ProxyGroup devices: Tailscale currently requires clients
-using HA ProxyGroup-backed Services to be able to ping the proxies (a documented
-temporary limitation).
+so that access is scoped to ntfy instead of everything. It also removes the default
+Tailscale **SSH** rule — that's intentional, because we are not using Tailscale SSH yet.
 
-Your complete starting policy:
+Paste this as your complete policy:
 
 ```jsonc
 {
@@ -139,16 +126,25 @@ Your complete starting policy:
     },
     {
       "src": ["autogroup:member"],
-      "dst": ["tag:k8s:*"],
+      "dst": ["tag:k8s"],
       "ip": ["icmp:*"]
     }
   ]
 }
 ```
 
-**Save** the policy (the editor validates syntax live). You are **not** granting remote
-access to your entire cluster — only to ntfy. Later you can add `tag:grafana`,
-`tag:portainer`, `tag:plex`, etc. and grant each independently.
+The first grant is the real ntfy permission (your devices → HTTPS 443 → ntfy). The second
+grants ICMP reachability to the ProxyGroup devices: Tailscale currently requires clients
+using HA ProxyGroup-backed Services to be able to ping the proxies (a documented temporary
+limitation).
+
+> **ICMP grant `dst`:** use `"tag:k8s"`, **not** `"tag:k8s:*"`. The Admin Console rejects
+> the `:*` form with `tag not found: "tag:k8s:*"` (a port suffix is not valid on a tag
+> destination for an ICMP grant).
+
+**Save** the policy (the editor validates live). You are **not** granting remote access to
+your entire cluster — only to ntfy. Later you can add `tag:grafana`, `tag:portainer`,
+`tag:plex`, etc. and grant each independently.
 
 ## 6. Create the Kubernetes Operator OAuth client
 

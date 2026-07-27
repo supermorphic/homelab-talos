@@ -83,8 +83,9 @@ service its own tag (`tag:ntfy`), scope reachability to it, and keep tag ownersh
     // Your devices may reach ntfy over HTTPS.
     { "src": ["autogroup:member"], "dst": ["tag:ntfy"],  "ip": ["tcp:443"] },
     // HA ProxyGroup-backed Services currently also require ICMP to the proxies
-    // (documented temporary Tailscale limitation).
-    { "src": ["autogroup:member"], "dst": ["tag:k8s:*"], "ip": ["icmp:*"] }
+    // (documented temporary Tailscale limitation). dst is "tag:k8s" — NOT
+    // "tag:k8s:*" (the console rejects the :* form with `tag not found`).
+    { "src": ["autogroup:member"], "dst": ["tag:k8s"], "ip": ["icmp:*"] }
   ]
 }
 ```
