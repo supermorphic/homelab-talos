@@ -15,6 +15,14 @@ resolve_execution_origin() {
   esac
 }
 
+resolve_git_branch() {
+  local branch="${1:-}"
+  [[ -n "$branch" ]] || branch="${GITHUB_HEAD_REF:-}"
+  [[ -n "$branch" ]] || branch="${GITHUB_REF_NAME:-}"
+  [[ -n "$branch" ]] || branch='detached'
+  echo "$branch"
+}
+
 create_run_directory() {
   local results_root="$1"
   local origin="$2"
@@ -52,7 +60,7 @@ write_environment() {
   local flux_revision_json confirmation_json
 
   git_sha="$(git rev-parse HEAD)"
-  git_branch="$(git branch --show-current)"
+  git_branch="$(resolve_git_branch "$(git branch --show-current)")"
   git_dirty=false
   [[ -z "$(git status --porcelain)" ]] || git_dirty=true
   host_os="$(uname -s)"
