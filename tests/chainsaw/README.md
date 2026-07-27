@@ -27,11 +27,13 @@ capturing application logs, which may contain torrent names or tracker URLs.
 
 The VPN disconnect, qBittorrent pod recreation, and Plex cross-node scenarios use
 explicit Chainsaw steps for disruption, Kubernetes readiness, assertion, diagnostics,
-and guaranteed recovery. Their small Bash helpers retain only imperative control,
-temporal observation, and filesystem evidence that cannot be expressed declaratively.
-Chainsaw's native
-`JUNIT-STEP` output remains the test-case source; the runner adds canonical
-metadata, evidence indexing, diagnostics, and final contract validation.
+and guaranteed recovery. Bash is limited to atomic guarded actions such as marker
+create/read/remove and exact-node cordon/uncordon. Python phase controllers own
+temporal sampling, structured cross-phase state, evidence construction, and
+recovery-state validation; the VPN controller invokes `leak_sentinel.py` as a
+separate analyzer. Chainsaw's native `JUNIT-STEP` output remains the test-case
+source; the runner adds canonical metadata, evidence indexing, diagnostics, and
+final contract validation.
 
 The Python `qbit-manage-policy` E2E runs directly through the catalog coordinator and is
 guarded by the exact

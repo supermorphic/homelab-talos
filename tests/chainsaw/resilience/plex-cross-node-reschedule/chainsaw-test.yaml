@@ -9,82 +9,134 @@ metadata:
 spec:
   namespace: flux-system
   concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: plex
+        namespace: media
+    - describe:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: plex
+        namespace: media
+    - podLogs:
+        namespace: media
+        selector: app.kubernetes.io/name=plex
+    - events:
+        namespace: media
   steps:
-    - name: prepare-plex-storage-and-marker
+    - name: establish-native-readiness-and-python-baseline
       try:
-        - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh prepare .kube/config
-    - name: cordon-node-and-delete-plex-pod
-      try:
-        - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh disrupt .kube/config
-      catch:
-        - script:
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: media
+            selector: app.kubernetes.io/name=plex
             timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
-    - name: observe-ready-replacement-on-landing-node
-      try:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh observe .kube/config
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
-    - name: deployment-available-on-landing-node
-      try:
+            for:
+              condition:
+                name: Ready
+                value: "true"
         - assert:
-            timeout: 6m
             resource:
-              apiVersion: apps/v1
-              kind: Deployment
+              apiVersion: v1
+              kind: PersistentVolumeClaim
               metadata:
                 name: plex
                 namespace: media
               status:
-                (conditions[?type == 'Available']):
-                  - status: "True"
-      catch:
+                phase: Bound
         - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
-    - name: plex-pod-ready
-      try:
-        - assert:
-            timeout: 6m
-            resource:
-              apiVersion: v1
-              kind: Pod
-              metadata:
-                namespace: media
-                labels:
-                  app.kubernetes.io/name: plex
-              status:
-                (conditions[?type == 'Ready']):
-                  - status: "True"
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
-    - name: verify-cross-node-longhorn-marker-and-smb
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py prepare .kube/config
+    - name: guard-and-cordon-exact-source-node
       try:
         - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh assert .kube/config
-      catch:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              plex-cross-node-reschedule
         - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
-        - describe:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cordon .kube/config
+      cleanup:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-node .kube/config
+        - wait:
             apiVersion: apps/v1
             kind: Deployment
             name: plex
             namespace: media
-        - podLogs:
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
             namespace: media
             selector: app.kubernetes.io/name=plex
-        - events:
-            namespace: media
-      finally:
-        - script:
             timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh recover .kube/config
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-marker .kube/config
+    - name: delete-plex-pod-natively
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: media
+              labels:
+                app.kubernetes.io/name: plex
+    - name: wait-for-native-kubernetes-readiness
+      try:
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: plex
+            namespace: media
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: media
+            selector: app.kubernetes.io/name=plex
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+    - name: validate-cross-node-state
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py observe .kube/config
+    - name: construct-persistence-longhorn-and-smb-evidence
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py verify .kube/config

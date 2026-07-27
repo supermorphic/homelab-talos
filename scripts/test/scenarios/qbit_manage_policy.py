@@ -23,6 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+TEST_TOOL_DIR = Path(__file__).resolve().parents[1]
+if str(TEST_TOOL_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_TOOL_DIR))
+
+from junit_report import write_case
 from qbit_manage_policy_config import (
     PolicyConfig,
     dump_policy_yaml,
@@ -443,23 +448,12 @@ class ResultRecorder:
             return
         self.junit_index += 1
         output = Path(fragment_dir) / f"qbit-manage-{self.junit_index:02d}-{name}.xml"
-        tool = Path(__file__).resolve().parents[1] / "junit_tools.py"
-        run_command(
-            [
-                sys.executable,
-                str(tool),
-                "case",
-                "--output",
-                str(output),
-                "--suite",
-                "test.e2e.qbit-manage-policy",
-                "--name",
-                name,
-                "--result",
-                result,
-                "--duration",
-                f"{duration:.6f}",
-            ]
+        write_case(
+            output,
+            "test.e2e.qbit-manage-policy",
+            name,
+            result,
+            f"{duration:.6f}",
         )
 
     def flush_evidence(self) -> None:

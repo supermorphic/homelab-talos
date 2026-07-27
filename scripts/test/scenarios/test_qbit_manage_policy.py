@@ -120,13 +120,20 @@ class IdentityAndPathTests(unittest.TestCase):
 
 
 class JunitPhaseResultTests(unittest.TestCase):
-    def test_phase_junit_is_emitted_by_the_python_adapter(self):
+    def test_phase_junit_is_emitted_without_spawning_the_cli(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fragments = root / "fragments"
-            with mock.patch.dict(
-                os.environ,
-                {"TEST_RESULT_FRAGMENT_DIR": str(fragments)},
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"TEST_RESULT_FRAGMENT_DIR": str(fragments)},
+                ),
+                mock.patch.object(
+                    qbm,
+                    "run_command",
+                    side_effect=AssertionError("JUnit CLI subprocess was invoked"),
+                ),
             ):
                 recorder = qbm.ResultRecorder(root / "run", qbm.RunIdentity(RUN_ID))
                 recorder.junit_phase("preflight", "passed", 0.25)

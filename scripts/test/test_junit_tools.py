@@ -8,8 +8,8 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).with_name("junit_tools.py")
-SPEC = importlib.util.spec_from_file_location("junit_tools", MODULE_PATH)
+MODULE_PATH = Path(__file__).with_name("junit_report.py")
+SPEC = importlib.util.spec_from_file_location("junit_report", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 junit_tools = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(junit_tools)

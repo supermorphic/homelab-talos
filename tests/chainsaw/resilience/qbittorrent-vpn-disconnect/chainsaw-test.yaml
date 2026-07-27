@@ -9,71 +9,84 @@ metadata:
 spec:
   namespace: flux-system
   concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: qbittorrent
+        namespace: media
+    - podLogs:
+        namespace: media
+        selector: app.kubernetes.io/name=qbittorrent
+    - events:
+        namespace: media
   steps:
-    - name: establish-vpn-baseline
+    - name: establish-python-vpn-baseline
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              qbittorrent-vpn-disconnect
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py baseline .kube/config
+    - name: capture-stop-analyze-and-recover-vpn
       try:
         - script:
             timeout: 2m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh baseline .kube/config
-    - name: capture-and-stop-vpn
-      try:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py disrupt .kube/config
         - script:
-            timeout: 2m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh disrupt .kube/config
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
-    - name: assert-fail-closed-without-wan-leak
-      try:
-        - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh assert-fail-closed .kube/config
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
-    - name: recreate-pod-and-recover-vpn
-      try:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
-    - name: deployment-available-after-recovery
-      try:
-        - assert:
-            resource:
-              apiVersion: apps/v1
-              kind: Deployment
-              metadata:
-                name: qbittorrent
-                namespace: media
-              status:
-                (conditions[?type == 'Available']):
-                  - status: "True"
-      catch:
-        - script:
-            timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
-    - name: verify-final-vpn-egress
-      try:
-        - script:
-            timeout: 2m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh verify .kube/config
-      catch:
-        - describe:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py
+              assert-fail-closed .kube/config
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: media
+              labels:
+                app.kubernetes.io/name: qbittorrent
+        - wait:
             apiVersion: apps/v1
             kind: Deployment
             name: qbittorrent
             namespace: media
-        - podLogs:
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
             namespace: media
             selector: app.kubernetes.io/name=qbittorrent
-        - events:
-            namespace: media
-      finally:
-        - script:
             timeout: 6m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-vpn-disconnect.sh recover .kube/config
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py cleanup .kube/config
+    - name: analyze-recovered-vpn-and-construct-evidence
+      try:
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py verify .kube/config
