@@ -288,7 +288,9 @@ available for focused developer validation.
 | `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Portainer Phase 1; operator-only and disruptive after confirmation |
 | `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Portainer Phase 1; operator-only |
 | `just ci` | Run the cluster-independent, secret-free validation gate (lint + verify + kubeconform + all `*-validate`) | — | Local + GitHub Actions; the PR gate |
-| `just test validate` | Lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
+| `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
+| `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
+| `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency and its evidence index | `.test-results/<run-id>` | Cluster-independent; Chainsaw runners invoke it automatically |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
 | `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
 | `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |

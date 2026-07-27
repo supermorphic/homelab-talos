@@ -31,6 +31,8 @@ if [[ -z "$run_dir" ]]; then
   mkdir -p "$repo_root/.test-results"
   run_dir="$(mktemp -d "$repo_root/.test-results/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)-vpn-disconnect.XXXXXX")"
 fi
+timeline_dir="$run_dir/diagnostics/timelines"
+mkdir -p "$timeline_dir"
 write_recovery() { printf '{"status":"%s","reason":"%s"}\n' "$1" "$2" >"$run_dir/recovery.json"; }
 write_recovery 'not-attempted' 'orchestrator started'
 
@@ -93,7 +95,7 @@ home_ip="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" run "vpndis-wan-
 
 # Phase 1: ONE continuous capture spanning baseline -> stop -> outage (the app container
 # and its netns survive the VPN stop; only Gluetun's tunnel drops).
-outage_timeline="$run_dir/timeline-outage.jsonl"
+outage_timeline="$timeline_dir/outage.jsonl"
 total_capture_s=$(( baseline_s + outage_s ))
 echo "Phase 1: continuous capture ${total_capture_s}s (baseline ${baseline_s}s + outage ${outage_s}s); vpn=${vpn_ip_baseline} home=${home_ip}"
 "$here/capture.sh" "$kubeconfig" "$ns" "$pod" "$total_capture_s" >"$outage_timeline" &
@@ -108,19 +110,19 @@ wait "$capture_pid" || true
 echo "Phase 1 outage verdict (stop_ts=${stop_ts} settle=${settle_s}s):"
 uv run python "$here/leak_sentinel.py" --mode outage --timeline "$outage_timeline" \
   --home-wan "$home_ip" --vpn-ip "$vpn_ip_baseline" --stop-ts "$stop_ts" --settle "$settle_s" \
-  | tee "$run_dir/verdict-outage.json"
+  | tee "$timeline_dir/outage-verdict.json"
 [[ "${PIPESTATUS[0]}" -eq 0 ]] || { echo 'Outage verdict FAILED: the kill switch did not hold.' >&2; exit 1; }
 
 # Phase 2: recovery via pod recreation.
 recover "post-outage" || exit 1
 
 # Phase 3: recovery verification — fresh capture on the new pod, baseline mode.
-recovery_timeline="$run_dir/timeline-recovery.jsonl"
+recovery_timeline="$timeline_dir/recovery.jsonl"
 new_vpn_ip="$(vpn_ip)"
 echo "Phase 3: recovery verification capture (20s) on ${pod}; new vpn=${new_vpn_ip}"
 "$here/capture.sh" "$kubeconfig" "$ns" "$pod" 20 >"$recovery_timeline"
 uv run python "$here/leak_sentinel.py" --timeline "$recovery_timeline" \
-  --home-wan "$home_ip" --vpn-ip "$new_vpn_ip" | tee "$run_dir/verdict-recovery.json"
+  --home-wan "$home_ip" --vpn-ip "$new_vpn_ip" | tee "$timeline_dir/recovery-verdict.json"
 [[ "${PIPESTATUS[0]}" -eq 0 ]] || { echo 'Recovery verification FAILED: post-recovery egress not clean via VPN.' >&2; exit 1; }
 "$repo_root/tests/probes/qbittorrent/probe.sh" "$kubeconfig"
 

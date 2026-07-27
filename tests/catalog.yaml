@@ -1,0 +1,356 @@
+schema_version: 1
+
+# Stable assurance metadata. Phase 2 makes this catalog authoritative for `just test`
+# dispatch and canonical Chainsaw artifacts. Phase 3 will attach the remaining runners
+# to the same result coordinator.
+suites:
+  - metadata: {id: validation.ci, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just ci", implementation: .justfile}
+    native_results: {strategy: aggregate}
+  - metadata: {id: validation.repo-lint, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: lint, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just repo lint", implementation: .just/repository.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.repo-verify, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: verify, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just repo verify", implementation: .just/repository.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.test-harness, source: validation, framework: bash, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test validate", implementation: scripts/test/validate-chainsaw.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.policy-unit, source: validation, framework: just, suite: ci, tier: offline, target: policy, scenario: unit, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube validator-tests", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.kubeconform, source: validation, framework: just, suite: ci, tier: offline, target: kubernetes, scenario: schema, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube kubeconform", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.cilium, source: validation, framework: bash, suite: ci, tier: offline, target: cilium, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube cilium-validate", implementation: scripts/validate/cilium.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.metrics-server, source: validation, framework: bash, suite: ci, tier: offline, target: metrics-server, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube metrics-server-validate", implementation: scripts/validate/metrics-server.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.flux, source: validation, framework: bash, suite: ci, tier: offline, target: flux, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flux-validate", implementation: scripts/validate/flux.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.foundation, source: validation, framework: bash, suite: ci, tier: offline, target: foundation, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube foundation-validate", implementation: scripts/validate/foundation.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.storage, source: validation, framework: bash, suite: ci, tier: offline, target: storage, scenario: source, scope: storage, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube storage-validate", implementation: scripts/validate/storage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.csi-driver-smb, source: validation, framework: bash, suite: ci, tier: offline, target: csi-driver-smb, scenario: source, scope: storage, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube csi-driver-smb-validate", implementation: scripts/validate/csi-driver-smb.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.media-storage, source: validation, framework: bash, suite: ci, tier: offline, target: media-storage, scenario: source, scope: storage, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube media-storage-validate", implementation: scripts/validate/media-storage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.plex, source: validation, framework: bash, suite: ci, tier: offline, target: plex, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-validate", implementation: scripts/validate/plex.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.intel-gpu-plugin, source: validation, framework: bash, suite: ci, tier: offline, target: intel-gpu-plugin, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube intel-gpu-plugin-validate", implementation: scripts/validate/intel-gpu-plugin.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.qbittorrent, source: validation, framework: bash, suite: ci, tier: offline, target: qbittorrent, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube qbittorrent-validate", implementation: scripts/validate/qbittorrent.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.arr, source: validation, framework: bash, suite: ci, tier: offline, target: arr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube arr-validate", implementation: scripts/validate/arr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.qbit-manage, source: validation, framework: bash, suite: ci, tier: offline, target: qbit-manage, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube qbit-manage-validate", implementation: scripts/validate/qbit-manage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.seerr, source: validation, framework: bash, suite: ci, tier: offline, target: seerr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube seerr-validate", implementation: scripts/validate/seerr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.flaresolverr, source: validation, framework: bash, suite: ci, tier: offline, target: flaresolverr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flaresolverr-validate", implementation: scripts/validate/flaresolverr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.media-policy, source: validation, framework: just, suite: ci, tier: offline, target: media, scenario: policy, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube media-policy-validate", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.monitoring, source: validation, framework: bash, suite: ci, tier: offline, target: monitoring, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube monitoring-validate", implementation: scripts/validate/monitoring.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.gatus, source: validation, framework: bash, suite: ci, tier: offline, target: gatus, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube gatus-validate", implementation: scripts/validate/gatus.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.portainer, source: validation, framework: bash, suite: ci, tier: offline, target: portainer, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube portainer-validate", implementation: scripts/validate/portainer.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.portainer-policy, source: validation, framework: just, suite: ci, tier: offline, target: portainer, scenario: policy, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube portainer-policy-validate", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.homepage, source: validation, framework: bash, suite: ci, tier: offline, target: homepage, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube homepage-validate", implementation: scripts/validate/homepage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.trivy, source: validation, framework: bash, suite: ci, tier: offline, target: trivy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube trivy-validate", implementation: scripts/validate/trivy.sh}
+    native_results: {strategy: wrapper-junit}
+
+  - metadata: {id: verification.metrics-server, source: verification, framework: bash, suite: platform, tier: verification, target: metrics-server, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube metrics-server-verify", implementation: scripts/verify/metrics-server.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.cilium, source: verification, framework: bash, suite: platform, tier: verification, target: cilium, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.flux, source: verification, framework: bash, suite: platform, tier: verification, target: flux, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flux-verify", implementation: scripts/verify/flux.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.foundation, source: verification, framework: bash, suite: platform, tier: verification, target: foundation, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube foundation-verify", implementation: scripts/verify/foundation.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube storage-verify", implementation: scripts/verify/storage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.csi-driver-smb, source: verification, framework: bash, suite: media, tier: verification, target: csi-driver-smb, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube csi-driver-smb-verify", implementation: scripts/verify/csi-driver-smb.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.media-storage, source: verification, framework: bash, suite: media, tier: verification, target: media-storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube media-storage-verify", implementation: scripts/verify/media-storage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.plex, source: verification, framework: bash, suite: media, tier: verification, target: plex, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-verify", implementation: scripts/verify/plex.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.intel-gpu-plugin, source: verification, framework: bash, suite: media, tier: verification, target: intel-gpu-plugin, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube intel-gpu-plugin-verify", implementation: scripts/verify/intel-gpu-plugin.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.qbittorrent, source: verification, framework: bash, suite: media, tier: verification, target: qbittorrent, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube qbittorrent-verify", implementation: scripts/verify/qbittorrent.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.prowlarr, source: verification, framework: bash, suite: media, tier: verification, target: prowlarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube arr-verify prowlarr", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.sonarr, source: verification, framework: bash, suite: media, tier: verification, target: sonarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube arr-verify sonarr", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.radarr, source: verification, framework: bash, suite: media, tier: verification, target: radarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube arr-verify radarr", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.seerr, source: verification, framework: bash, suite: media, tier: verification, target: seerr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube seerr-verify", implementation: scripts/verify/seerr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.flaresolverr, source: verification, framework: bash, suite: media, tier: verification, target: flaresolverr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flaresolverr-verify", implementation: scripts/verify/flaresolverr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.qbit-manage, source: verification, framework: bash, suite: media, tier: verification, target: qbit-manage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube qbit-manage-verify", implementation: scripts/verify/qbit-manage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.monitoring, source: verification, framework: bash, suite: platform, tier: verification, target: monitoring, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube monitoring-verify", implementation: scripts/verify/monitoring.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.gatus, source: verification, framework: bash, suite: platform, tier: verification, target: gatus, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube gatus-verify", implementation: scripts/verify/gatus.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.portainer, source: verification, framework: bash, suite: platform, tier: verification, target: portainer, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube portainer-verify", implementation: scripts/verify/portainer.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.homepage, source: verification, framework: bash, suite: platform, tier: verification, target: homepage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube homepage-verify", implementation: scripts/verify/homepage.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.trivy, source: verification, framework: bash, suite: platform, tier: verification, target: trivy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube trivy-verify", implementation: scripts/verify/trivy.sh}
+    native_results: {strategy: wrapper-junit}
+
+  - metadata: {id: test.cilium-connectivity, source: test, framework: bash, suite: platform, tier: integration, target: cilium, scenario: connectivity, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CILIUM_CONNECTIVITY_CONFIRM, expected: "test:cilium-connectivity"}
+    runner: {command: "CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity mise exec -- just kube cilium-connectivity-test", implementation: scripts/test/scenarios/cilium-connectivity.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.storage-provisioning, source: test, framework: bash, suite: platform, tier: integration, target: storage, scenario: provisioning, scope: storage, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: STORAGE_PROVISIONING_CONFIRM, expected: "test:storage-provisioning"}
+    runner: {command: "STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning mise exec -- just kube storage-provisioning-test", implementation: scripts/test/scenarios/storage-provisioning.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.flux-canary, source: test, framework: just, suite: platform, tier: integration, target: flux, scenario: canary-recreation, scope: cluster, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: FLUX_CANARY_CONFIRM, expected: "recreate:flux-system:flux-canary"}
+    runner: {command: "FLUX_CANARY_CONFIRM=recreate:flux-system:flux-canary mise exec -- just kube flux-canary-test", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.flux-restart, source: test, framework: just, suite: platform, tier: resilience, target: flux, scenario: controller-restart, scope: cluster, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: FLUX_RESTART_CONFIRM, expected: "restart:flux-system:controllers"}
+    runner: {command: "FLUX_RESTART_CONFIRM=restart:flux-system:controllers mise exec -- just kube flux-restart", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.portainer-persistence, source: test, framework: bash, suite: platform, tier: resilience, target: portainer, scenario: persistence, scope: application, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: PORTAINER_PERSISTENCE_CONFIRM, expected: "recreate:portainer:pod:preserve-pvc"}
+    runner: {command: "PORTAINER_PERSISTENCE_CONFIRM=recreate:portainer:pod:preserve-pvc mise exec -- just kube portainer-persistence-test", implementation: scripts/verify/portainer-persistence.sh}
+    native_results: {strategy: wrapper-junit}
+
+  - metadata: {id: chainsaw.smoke.cluster.default, source: chainsaw, framework: chainsaw, suite: cluster, tier: smoke, target: cluster, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke cluster", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/cluster, selector: "homelab-talos/suite=default"}
+  - metadata: {id: chainsaw.smoke.cluster.flux-ready, source: chainsaw, framework: chainsaw, suite: cluster, tier: smoke, target: cluster, scenario: flux-ready, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke cluster flux-ready", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/cluster/flux-ready, selector: "homelab-talos/suite=default"}
+  - metadata: {id: chainsaw.smoke.cluster.diagnostics-self-test, source: chainsaw, framework: chainsaw, suite: cluster, tier: smoke, target: cluster, scenario: diagnostics-self-test, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke cluster diagnostics-self-test", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/cluster/diagnostics-self-test, selector: "homelab-talos/suite=diagnostics-self-test"}
+  - metadata: {id: chainsaw.smoke.media.qbittorrent, source: chainsaw, framework: chainsaw, suite: media, tier: smoke, target: media, scenario: qbittorrent, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke media qbittorrent", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/media/qbittorrent, selector: "homelab-talos/suite=qbittorrent"}
+  - metadata: {id: chainsaw.smoke.media.qbit-manage, source: chainsaw, framework: chainsaw, suite: media, tier: smoke, target: media, scenario: qbit-manage, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke media qbit-manage", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/media/qbit-manage, selector: "homelab-talos/suite=qbit-manage"}
+  - metadata: {id: chainsaw.smoke.platform.all, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.cluster, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: cluster, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform cluster", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/cluster, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.flux, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: flux, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform flux", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/flux, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.gateway, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: gateway, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform gateway", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/gateway, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.dns, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: dns, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform dns", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/dns, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.cilium, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: cilium, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform cilium", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/cilium, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.longhorn, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: longhorn, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform longhorn", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/longhorn, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.portainer, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: portainer, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform portainer", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/portainer, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.smb, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: smb, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform smb", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/smb, selector: "homelab-talos/suite=platform"}
+
+  - metadata: {id: diagnostics.cluster, source: diagnostics, framework: bash, suite: cluster, tier: diagnostics, target: cluster, scenario: null, scope: cluster, intent: diagnostic, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test diagnostics cluster", implementation: scripts/test/diagnostics/collect.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: diagnostics, path: scripts/test/diagnostics/collect.sh, selector: null}
+
+  - metadata: {id: chainsaw.e2e.media-hardlink, source: chainsaw, framework: chainsaw, suite: media, tier: e2e, target: media-hardlink, scenario: null, scope: storage, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "mise exec -- just test e2e media-hardlink", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/e2e/media-hardlink, selector: "homelab-talos/suite=media-hardlink"}
+  - metadata: {id: chainsaw.e2e.qbit-manage-policy, source: chainsaw, framework: chainsaw, suite: media, tier: e2e, target: qbit-manage-policy, scenario: null, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_E2E_CONFIRM, expected: "e2e:qbit-manage-policy"}
+    runner: {command: "CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/e2e/qbit-manage-policy, selector: "homelab-talos/suite=qbit-manage-policy"}
+
+  - metadata: {id: chainsaw.resilience.cleanup-failure-self-test, source: chainsaw, framework: chainsaw, suite: harness, tier: resilience, target: cleanup-failure-self-test, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:cleanup-failure-self-test"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:cleanup-failure-self-test mise exec -- just test resilience cleanup-failure-self-test", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/cleanup-failure-self-test, selector: "homelab-talos/suite=cleanup-failure-self-test"}
+  - metadata: {id: chainsaw.resilience.qbittorrent-vpn-disconnect, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: qbittorrent-vpn-disconnect, scenario: null, scope: network, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:qbittorrent-vpn-disconnect"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/qbittorrent-vpn-disconnect, selector: "homelab-talos/suite=qbittorrent-vpn-disconnect"}
+  - metadata: {id: chainsaw.resilience.qbittorrent-pod-recreation, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: qbittorrent-pod-recreation, scenario: null, scope: application, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:qbittorrent-pod-recreation"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-pod-recreation mise exec -- just test resilience qbittorrent-pod-recreation", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/qbittorrent-pod-recreation, selector: "homelab-talos/suite=qbittorrent-pod-recreation"}
+  - metadata: {id: chainsaw.resilience.plex-cross-node-reschedule, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: plex-cross-node-reschedule, scenario: null, scope: storage, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-cross-node-reschedule"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-cross-node-reschedule mise exec -- just test resilience plex-cross-node-reschedule", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/plex-cross-node-reschedule, selector: "homelab-talos/suite=plex-cross-node-reschedule"}
+  - metadata: {id: chainsaw.resilience.plex-node-reboot, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-node-reboot"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/plex-node-reboot, selector: "homelab-talos/suite=plex-node-reboot"}
+
+  - metadata: {id: probe.qbittorrent, source: probe, framework: bash, suite: media, tier: measurement, target: qbittorrent, scenario: null, scope: network, intent: measurement, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "mise exec -- just test probe qbittorrent", implementation: tests/probes/qbittorrent/probe.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: probe.vpn-leak, source: probe, framework: bash, suite: media, tier: measurement, target: vpn-leak, scenario: null, scope: network, intent: measurement, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test probe vpn-leak", implementation: tests/probes/vpn/leak-sentinel.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: probe.dns-isolation, source: probe, framework: bash, suite: media, tier: measurement, target: dns-isolation, scenario: null, scope: network, intent: measurement, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test probe dns-isolation", implementation: tests/probes/dns/isolation.sh}
+    native_results: {strategy: wrapper-junit}
+
+  - metadata: {id: conformance.quick, source: sonobuoy, framework: sonobuoy, suite: kubernetes, tier: conformance, target: quick, scenario: null, scope: cluster, intent: regression, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "MODE=quick mise exec -- just kube conformance", implementation: kubernetes/mod.just}
+    native_results: {strategy: sonobuoy-junit}
+  - metadata: {id: conformance.certified, source: sonobuoy, framework: sonobuoy, suite: kubernetes, tier: conformance, target: certified, scenario: null, scope: cluster, intent: conformance, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "MODE=certified mise exec -- just kube conformance", implementation: kubernetes/mod.just}
+    native_results: {strategy: sonobuoy-junit}

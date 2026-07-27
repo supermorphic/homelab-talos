@@ -213,9 +213,10 @@ gates `custom_tag` emission behind that setting; the explicit custom tag
 replaces the synthesized priority/group tag.
 
 Results are written under the reported `.test-results/<run>/` directory.
-Inspect `summary.json`, `assertion.json`, `external-dependency.json`,
-`cleanup.json`, `recovery.json`, and `evidence.json`. Generated manifests and
-accelerated configs contain Secret references but no credential values.
+Inspect `summary.json`, `environment.json`, and `evidence.json`. Phase records
+are under `diagnostics/phases/`; scenario evidence is under `diagnostics/`; and
+generated manifests and accelerated configs are under
+`diagnostics/manifests/`. They contain Secret references but no credential values.
 Application logs are intentionally not collected because they can contain
 torrent names or tracker URLs.
 

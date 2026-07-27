@@ -410,8 +410,8 @@ fi
 class ResultRecorder:
     def __init__(self, run_dir: Path, identity: RunIdentity):
         self.run_dir = run_dir
-        for child in ("logs", "manifests", "diagnostics"):
-            (run_dir / child).mkdir(parents=True, exist_ok=True)
+        (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+        (run_dir / "diagnostics" / "manifests").mkdir(parents=True, exist_ok=True)
         self.evidence: dict[str, Any] = {
             "schemaVersion": 1,
             "target": "qbit-manage-policy",
@@ -448,7 +448,7 @@ class ResultRecorder:
         self.flush_evidence()
 
     def manifest_path(self, name: str) -> Path:
-        return self.run_dir / "manifests" / name
+        return self.run_dir / "diagnostics" / "manifests" / name
 
     def write_manifest(self, name: str, value: dict[str, Any]) -> Path:
         path = self.manifest_path(name)
