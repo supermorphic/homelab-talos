@@ -181,6 +181,21 @@ Phase 7 implementation status on `feat/test-report-presentation`:
   application. Gatus and `suspend: false` remain the final, post-acceptance
   activation PR.
 
+Phase 8 activation status on `chore/test-reports-activation`:
+
+- Guarded bootstrap, sanitized authoritative publication, and the cataloged
+  test-report persistence scenario have passed against deployed main.
+- The persistence proof is published as canonical run
+  `20260727T224640Z-ca4bcd1e50fb-operator-e58961e6`; it proves that the exact report,
+  canonical artifact, catalog entry, PVC identity, and bound Longhorn volume survived
+  Caddy pod recreation.
+- The final source changes `test-reports` to durable `suspend: false` and adds a
+  one-minute Gatus probe for the archive index through internal DNS, TLS, Gateway,
+  Caddy, and the retained current generation.
+- Offline validation enforces the Gatus endpoint only while the application is active.
+  After this activation merges, the remaining operator action is the read-only
+  `mise exec -- just kube test-reports-verify` confirmation.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |

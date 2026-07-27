@@ -59,8 +59,8 @@ its configuration. Caddy itself listens only on the unprivileged 8080 and 9090 p
 
 ## Source rollout and activation
 
-The source PR deliberately stages `test-reports` with `suspend: true` and does not add a
-Gatus endpoint. After that PR is merged, the operator runs:
+The initial source was deliberately staged with `suspend: true` and without a Gatus
+endpoint. The operator then ran:
 
 ```bash
 git fetch origin main
@@ -100,9 +100,19 @@ cross-phase state and writes sanitized evidence; Chainsaw owns deletion, readine
 resource assertions, catch diagnostics, and finally recovery.
 
 After the persistence run passes, publish its canonical result while its Git SHA still
-matches current main. Then create the separate activation PR that changes
-`suspend: false` and adds the Gatus endpoint.
-After that merges, run `mise exec -- just kube test-reports-verify`.
+matches current main. The final activation PR changes `suspend: false` and adds a Gatus
+probe for the archive index through internal DNS, TLS, Gateway, Caddy, and the retained
+current generation. Treat the persistence run and publication as pre-merge gates for
+that PR.
+
+Recorded 2026-07-27: persistence passed on clean deployed main and was published as
+canonical run `20260727T224640Z-ca4bcd1e50fb-operator-e58961e6`.
+
+After activation merges, run:
+
+```bash
+mise exec -- just kube test-reports-verify
+```
 
 Agents stage and validate the source but do not bootstrap or publish. GitHub Actions
 does not have cluster access and never publishes here; its reports remain GitHub
@@ -169,6 +179,6 @@ and reads only the low-cardinality Prometheus series. It shows latest status and
 latest passed cases, 30-day pass rate, duration history, failures by scenario, and time
 since successful resilience/conformance. Its links resolve to stable report URLs.
 
-Both presentation surfaces are staged inside the suspended application, so neither is
-discovered until guarded bootstrap. The Gatus black-box probe remains deferred to the
-activation PR to avoid a guaranteed false alarm before human acceptance.
+Homepage and Grafana presentation are served by the active application. Gatus probes
+the archive index every minute through the complete internal user-facing path; it was
+added only at activation to avoid a guaranteed false alarm before human acceptance.
