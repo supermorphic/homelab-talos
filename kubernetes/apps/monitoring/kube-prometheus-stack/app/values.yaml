@@ -41,6 +41,41 @@ alertmanager:
         memory: 100Mi
       limits:
         memory: 256Mi
+  # First real receiver/route: forward critical+warning to the alertmanager-ntfy adapter
+  # (in the ntfy namespace), which reshapes each alert into an ntfy message and routes by
+  # severity (critical -> critical topic, warning -> homelab). Alertmanager still owns
+  # grouping, dedup, inhibition, repeat intervals, and resolved notifications. Everything
+  # else (incl. Watchdog) stays on the chart's null receiver.
+  config:
+    route:
+      group_by: ["alertname", "namespace", "severity"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "null"
+      routes:
+        - receiver: "null"
+          matchers:
+            - alertname = "Watchdog"
+        - receiver: ntfy
+          matchers:
+            - severity =~ "critical|warning"
+    receivers:
+      - name: "null"
+      - name: ntfy
+        webhook_configs:
+          - url: http://alertmanager-ntfy.ntfy.svc.cluster.local:8000/hook
+            send_resolved: true
+    inhibit_rules:
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity =~ "warning|info"']
+        equal: ["namespace", "alertname"]
+      - source_matchers: ['severity = "warning"']
+        target_matchers: ['severity = "info"']
+        equal: ["namespace", "alertname"]
+      - source_matchers: ['alertname = "InfoInhibitor"']
+        target_matchers: ['severity = "info"']
+        equal: ["namespace"]
 
 grafana:
   # KNOWN ISSUE (deferred): Grafana's PVC is ReadWriteOnce and this Deployment

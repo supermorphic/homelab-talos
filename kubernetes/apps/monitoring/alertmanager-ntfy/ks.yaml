@@ -1,0 +1,31 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: alertmanager-ntfy
+  namespace: flux-system
+spec:
+  dependsOn:
+    # ntfy provides the namespace, the app-template OCIRepository, and the publish target.
+    - name: ntfy
+    # kube-prometheus-stack provides Alertmanager (the webhook source).
+    - name: kube-prometheus-stack
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  interval: 1h
+  path: ./kubernetes/apps/monitoring/alertmanager-ntfy/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Staged suspended: the alertmanager-ntfy-auth Secret (ntfy publisher token) must exist
+  # before reconciliation. Roll out with `just bootstrap alertmanager-ntfy`, then flip
+  # to false durably.
+  suspend: true
+  timeout: 10m
+  wait: true

@@ -102,13 +102,47 @@ connected. Tapping a notification opens ntfy and shows the full message.
   `default-user: subscriber` / `default-password` in a local, git-ignored file. Never reuse a
   publisher token in a subscriber client.
 
-## F. Producers (later PRs)
+## F. Producers
 
-- **Alertmanager (PR3):** `severity=critical` → `critical`, `severity=warning` →
-  `homelab`, via the `alertmanager` token.
-- **Seerr (PR4):** its ntfy agent → `media` via the `seerr` token (in-cluster Service URL
-  `http://ntfy.ntfy.svc.cluster.local`), enabling only Media Available / Request
-  Processing Failed / Issue Reported.
+### Alertmanager (PR3)
+
+Cluster alerts flow `PrometheusRules → Alertmanager → alertmanager-ntfy → ntfy`. The
+**alertmanager-ntfy** adapter (`ghcr.io/alexbakker/alertmanager-ntfy:1.2.1`, a community
+Alertmanager→ntfy bridge — *not* an ntfy-maintained component) runs in the `ntfy`
+namespace and publishes with the `alertmanager` token, mapping `severity=critical →
+critical` (urgent priority) and `severity=warning → homelab`. Alertmanager keeps owning
+grouping, dedup, inhibition, repeat intervals, and resolved notifications; the first
+receiver/route lives in the kube-prometheus-stack values.
+
+Operator setup (the adapter needs its own SOPS-encrypted copy of the **same**
+`alertmanager` token that is in `ntfy-secret` — one logical credential, two namespace-local
+Secrets, so rotate it in both `ntfy-secrets` and here):
+
+```sh
+NTFY_ALERTMANAGER_TOKEN='tk_...' \
+ALERTMANAGER_NTFY_SECRETS_CONFIRM='write:monitoring:alertmanager-ntfy:sops' \
+mise exec -- just repo alertmanager-ntfy-secrets
+
+mise exec -- just ci
+```
+
+After the PR merges:
+
+```sh
+ALERTMANAGER_NTFY_BOOTSTRAP_CONFIRM='bootstrap:monitoring:alertmanager-ntfy' \
+mise exec -- just bootstrap alertmanager-ntfy
+
+mise exec -- just kube alertmanager-ntfy-verify
+```
+
+Then flip the alertmanager-ntfy Git source to `suspend: false`. `alertmanager-ntfy-verify`
+prints the synthetic firing+resolved alert acceptance test.
+
+### Seerr (PR4)
+
+Its ntfy agent → `media` via the `seerr` token (in-cluster Service URL
+`http://ntfy.ntfy.svc.cluster.local`), enabling only Media Available / Request Processing
+Failed / Issue Reported.
 
 Do not add direct `*arr`/qBittorrent/Plex ntfy integrations; use Seerr + Alertmanager.
 

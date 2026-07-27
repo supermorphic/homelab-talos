@@ -1137,6 +1137,66 @@ ntfy-secrets:
     REV="$revision" yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$values"
     echo "Wrote SOPS-encrypted $target (ntfy-secret in ntfy) and stamped sops-hash in values.yaml."
 
+# Write ONLY the SOPS-encrypted alertmanager-ntfy adapter auth Secret (alertmanager-ntfy-auth
+# in the ntfy namespace) from NTFY_ALERTMANAGER_TOKEN, and stamp the ciphertext hash into
+# the adapter values.yaml (sops-hash) so a rotation rolls the adapter pod. This is the same
+# ntfy 'alertmanager' publisher token as in ntfy-secret's NTFY_AUTH_TOKENS (one logical
+# credential, two namespace-local Secrets); rotate it in BOTH just repo ntfy-secrets and
+# here. Never echoes the value.
+alertmanager-ntfy-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:alertmanager-ntfy:sops'
+    target='kubernetes/apps/monitoring/alertmanager-ntfy/app/auth.sops.yaml'
+    values='kubernetes/apps/monitoring/alertmanager-ntfy/app/values.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-alertmanager-ntfy.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${NTFY_ALERTMANAGER_TOKEN:-}" ]] || {
+      echo 'Set NTFY_ALERTMANAGER_TOKEN to the ntfy alertmanager publisher token (the same one in ntfy-secret).' >&2
+      exit 1
+    }
+    [[ "${NTFY_ALERTMANAGER_TOKEN}" =~ ^tk_[a-z0-9]{29}$ ]] || {
+      echo 'Refusing: NTFY_ALERTMANAGER_TOKEN must be tk_ + 29 lowercase alphanumerics (32 chars total).' >&2
+      exit 1
+    }
+    [[ "${ALERTMANAGER_NTFY_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the alertmanager-ntfy auth Secret.' >&2
+      echo "Set ALERTMANAGER_NTFY_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    # Build the adapter's auth.yml (ntfy.auth.token) as a YAML string, then embed it as
+    # the Secret's auth.yml key. Built with yq to avoid a multiline literal in the recipe.
+    export NTFY_ALERTMANAGER_TOKEN
+    AUTH_YML="$(yq -n '.ntfy.auth.token = strenv(NTFY_ALERTMANAGER_TOKEN)')"
+    export AUTH_YML
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "alertmanager-ntfy-auth" |
+       .metadata.namespace = "ntfy" |
+       .type = "Opaque" |
+       .stringData["auth.yml"] = strenv(AUTH_YML)' \
+      >"$temp_dir/auth.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/auth.yaml" >"$temp_dir/auth.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/auth.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/auth.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    if rg -Fq -- "$NTFY_ALERTMANAGER_TOKEN" "$temp_dir/auth.sops.yaml"; then
+      echo 'Refusing: the plaintext token appears in the encrypted output.' >&2
+      exit 1
+    fi
+
+    mv -- "$temp_dir/auth.sops.yaml" "$target"
+    revision="$(git hash-object "$target")"
+    REV="$revision" yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$values"
+    echo "Wrote SOPS-encrypted $target (alertmanager-ntfy-auth in ntfy) and stamped sops-hash in values.yaml."
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
@@ -1190,7 +1250,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 21  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 22  # Update when adding/removing a guarded rollout recipe.
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi

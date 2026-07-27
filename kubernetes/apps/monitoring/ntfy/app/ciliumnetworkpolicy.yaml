@@ -10,8 +10,8 @@ spec:
       app.kubernetes.io/name: ntfy
   ingress:
     # Publish/subscribe/API + web UI + /v1/health (port 80): the internal gateway, the
-    # Tailscale ingress proxies (off-site path), the Gatus health prober, and in-cluster
-    # producers (Seerr today; the Alertmanager adapter in a later PR).
+    # Tailscale ingress proxies (off-site path), the Gatus health prober, in-namespace
+    # producers (the alertmanager-ntfy adapter), and Seerr (media namespace).
     - fromEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: envoy-gateway-system
@@ -21,6 +21,8 @@ spec:
             k8s:io.kubernetes.pod.namespace: gatus
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
+        - matchLabels:
+            app.kubernetes.io/name: alertmanager-ntfy
       toPorts:
         - ports:
             - port: "80"

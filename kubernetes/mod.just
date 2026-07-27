@@ -838,3 +838,16 @@ ntfy-validate: require-bash
 # endpoint healthy, anonymous access denied, per-token ACLs, and cache persistence.
 ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(kubeconfig)}}
+
+# Validate the alertmanager-ntfy adapter source: files, wiring, staged suspend, dependency
+# graph, SOPS decryption, pinned image, hardened pod, split config (dynamic topic/priority),
+# CNP, rollout annotations, the Alertmanager receiver/route in kube-prometheus-stack, and
+# the render.
+alertmanager-ntfy-validate: require-bash
+    @scripts/validate/alertmanager-ntfy.sh
+
+# Verify the live alertmanager-ntfy adapter: Kustomization + HelmRelease Ready, rollout
+# complete, the Alertmanager 'ntfy' receiver present, and a synthetic firing+resolved alert
+# reaches ntfy with correct topic/priority.
+alertmanager-ntfy-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(kubeconfig)}}
