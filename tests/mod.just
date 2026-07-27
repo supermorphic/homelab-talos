@@ -14,6 +14,22 @@ catalog-validate:
 result-validate run:
     @scripts/test/validate-run.sh ".test-results/{{run}}"
 
+# Generate the static Allure Awesome report for one finalized canonical run.
+report run:
+    @scripts/test/generate-allure-report.sh {{quote(run)}}
+
+# Generate the report whose finalized summary has the latest end timestamp.
+report-latest:
+    @scripts/test/generate-allure-report.sh latest
+
+# Generate and serve one report locally until the operator presses Ctrl+C.
+report-open run:
+    @scripts/test/open-allure-report.sh {{quote(run)}}
+
+# Render the latest canonical run as a GitHub-compatible Markdown summary.
+summary-latest:
+    @scripts/test/allure-markdown-summary.sh latest
+
 # Run registered read-only smoke scenarios against the live cluster.
 smoke target scenario="":
     @scripts/test/run-live-suite.sh smoke {{quote(target)}} {{quote(scenario)}}

@@ -1,0 +1,13 @@
+name: Homelab Talos Test Results
+globalAttachments:
+  - ./attachments/**
+plugins:
+  awesome:
+    options:
+      reportName: Homelab Talos Test Results
+      reportLanguage: en
+      singleFile: false
+      groupBy:
+        - parentSuite
+        - suite
+        - subSuite

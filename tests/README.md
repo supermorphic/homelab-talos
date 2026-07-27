@@ -126,14 +126,24 @@ individual findings/cases, and Bash-only commands receive wrapper cases. A
 failed suite stops execution while every remaining catalog suite is recorded as
 skipped. GitHub Actions uploads `.test-results/` on both success and failure
 with 90-day retention; open the workflow run's **Artifacts** section and
-download `canonical-test-results-<run>-<attempt>`. Local runs remain directly
-available under `.test-results/`.
+download `canonical-test-results-<run>-<attempt>`. It also generates and uploads
+`allure-test-report-<run>-<attempt>` when canonical finalization succeeded and
+writes the run/suite counts to the job summary.
 
-`scripts/test/junit_tools.py` is the sole owner of JUnit XML structure: it
-inspects and merges native reports, creates wrapper cases, appends lifecycle
-cases, and provides ShellCheck/unittest adapters. Bash runners own process and
-cluster orchestration and consume only the tool's plain count output; they do
-not parse, render, or text-edit XML.
+Node.js and Allure are pinned through mise. Generate static Awesome reports with
+`mise exec -- just test report <run-id>` or `report-latest`; output is
+`.test-reports/<run-id>/awesome/`. `report-open <run-id>` starts Allure's local
+static server and opens a browser until Ctrl+C. Latest selection uses the
+finalized `summary.json` `end` timestamp, not directory modification time.
+Only canonical `junit.xml`, validated root metadata, and evidence-indexed files
+are staged for Allure, preventing native diagnostic XML from being counted
+twice and excluding unindexed files.
+
+`scripts/test/junit_report.py` owns JUnit XML structure; `junit_tools.py` is its
+thin CLI. The library inspects and merges native reports, creates wrapper cases,
+appends lifecycle cases, and provides ShellCheck/unittest adapters. Bash
+runners own process and cluster orchestration and consume only the CLI's plain
+count output; they do not parse, render, or text-edit XML.
 
 All state-changing integration, E2E, resilience, mutating probe, and conformance
 runs use the renewable `flux-system/homelab-test-run-lock` Kubernetes Lease.

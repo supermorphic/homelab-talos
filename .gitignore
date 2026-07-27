@@ -22,6 +22,7 @@
 /helm-output/
 /support-bundles/
 /.test-results/
+/.test-reports/
 *.dec.yaml
 *.decrypted.yaml
 
