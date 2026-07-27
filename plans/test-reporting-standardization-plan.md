@@ -48,6 +48,28 @@ Phase 1 implementation status on this branch:
 - Current branch inventory after the split is 20 validation scripts and 19 live
   verification scripts.
 
+Phase 2 implementation status:
+
+- `tests/catalog.yaml` inventories 80 validation, verification, test,
+  diagnostic, probe, and conformance suites with stable reporting dimensions,
+  ownership, mutation, confirmation, runner, and native-result metadata.
+- Every one of the 26 ordered `just ci` child commands has exactly one catalog
+  entry; validation fails if either side drifts.
+- The catalog is the authoritative Chainsaw dispatcher; offline validation
+  rejects duplicate tuples, missing implementations, unsafe paths, unguarded
+  mutations, vacuous selectors, and uncataloged Chainsaw documents.
+- Chainsaw and diagnostic runs use the canonical run ID and six-entry artifact
+  root, retain native `JUNIT-STEP`, normalize native files below
+  `diagnostics/`, and index sanitized evidence paths.
+- A machine validator enforces schema, non-vacuous JUnit, count/identity
+  consistency, safe complete evidence indexing, and confirmation-variable-only
+  metadata. Contract regression tests cover malformed counts, zero tests,
+  symlinks, unsafe paths, origins, result precedence, and confirmation-value
+  leakage.
+- Phase 3 remains responsible for the shared coordinator and JUnit
+  normalization of CI validators/unit tests, live verifiers, probes, and
+  Sonobuoy.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |

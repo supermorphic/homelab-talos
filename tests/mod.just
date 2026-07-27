@@ -6,6 +6,14 @@ set working-directory := ".."
 validate:
     @scripts/test/validate-chainsaw.sh
 
+# Validate the canonical suite catalog and its dispatch safety invariants.
+catalog-validate:
+    @scripts/test/validate-catalog.sh
+
+# Validate one canonical run directory by run ID.
+result-validate run:
+    @scripts/test/validate-run.sh ".test-results/{{run}}"
+
 # Run registered read-only smoke scenarios against the live cluster.
 smoke target scenario="":
     @scripts/test/run-chainsaw.sh smoke {{quote(target)}} {{quote(scenario)}}

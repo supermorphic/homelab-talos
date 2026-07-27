@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/test/lib/catalog.sh
+
 runner='scripts/test/run-chainsaw.sh'
+catalog='tests/catalog.yaml'
 
 expect_dispatch_rejection() {
   local description="$1"
@@ -31,13 +34,16 @@ expect_dispatch_rejection 'smoke requires an explicit target' smoke
 expect_dispatch_rejection 'resilience rejects a scenario argument' resilience qbittorrent-vpn-disconnect extra
 expect_dispatch_rejection 'e2e rejects a scenario argument' e2e media-hardlink extra
 
-# Positive registration is checked statically so this offline test never crosses the
-# kubeconfig guard and contacts a live cluster.
-rg -Fq "qbit-manage)" "$runner"
-rg -Fq "test_dir='tests/chainsaw/smoke/media/qbit-manage'" "$runner"
-rg -Fq "selector='homelab-talos/suite=qbit-manage'" "$runner"
-rg -Fq "qbit-manage-policy)" "$runner"
-rg -Fq "test_dir='tests/chainsaw/e2e/qbit-manage-policy'" "$runner"
-rg -Fq "selector='homelab-talos/suite=qbit-manage-policy'" "$runner"
+# Positive registration is checked through the authoritative catalog so this offline
+# test never crosses the kubeconfig guard and contacts a live cluster.
+smoke_entry="$(catalog_dispatch_entry "$catalog" smoke media qbit-manage)"
+[[ "$(yq -r '.dispatch.path' - <<<"$smoke_entry")" == 'tests/chainsaw/smoke/media/qbit-manage' ]]
+[[ "$(yq -r '.dispatch.selector' - <<<"$smoke_entry")" == 'homelab-talos/suite=qbit-manage' ]]
+
+e2e_entry="$(catalog_dispatch_entry "$catalog" e2e qbit-manage-policy '')"
+[[ "$(yq -r '.dispatch.path' - <<<"$e2e_entry")" == 'tests/chainsaw/e2e/qbit-manage-policy' ]]
+[[ "$(yq -r '.confirmation.variable' - <<<"$e2e_entry")" == 'CLUSTER_E2E_CONFIRM' ]]
+
+rg -Fq 'catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario"' "$runner"
 rg -Fq 'scripts/test/safety/require-e2e-confirmation.sh "$target"' "$runner"
 rg -Fq 'acquire_state_lock' "$runner"

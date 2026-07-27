@@ -474,9 +474,15 @@ class ResultRecorderTests(unittest.TestCase):
             recorder = qbm.ResultRecorder(Path(directory), identity)
             recorder.phase("sample", {"status": "passed"})
             recorder.job("limits", "job-name")
+            manifest = recorder.write_manifest("job.json", {"kind": "Job"})
             evidence = json.loads((Path(directory) / "evidence.json").read_text(encoding="utf-8"))
             self.assertEqual(evidence["phases"]["sample"]["status"], "passed")
             self.assertEqual(evidence["jobs"]["limits"]["name"], "job-name")
+            self.assertEqual(
+                manifest,
+                Path(directory) / "diagnostics" / "manifests" / "job.json",
+            )
+            self.assertFalse((Path(directory) / "manifests").exists())
             self.assertFalse(list(Path(directory).glob(".evidence.json.*")))
 
 

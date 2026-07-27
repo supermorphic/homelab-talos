@@ -8,6 +8,7 @@ cd "$repo_root"
 export KUBECONFIG="$repo_root/tests/.offline-validation-no-kubeconfig"
 unset SOPS_AGE_KEY SOPS_AGE_KEY_FILE
 
+scripts/test/validate-catalog.sh
 chainsaw lint configuration --file tests/config/chainsaw.yaml
 conftest test --all-namespaces \
   --policy tests/policy/chainsaw \
@@ -43,6 +44,7 @@ scripts/test/safety/require-chaos-confirmation-test.sh
 scripts/test/safety/require-e2e-confirmation-test.sh
 scripts/test/lib/common-test.sh
 scripts/test/lib/results-test.sh
+scripts/test/validate-catalog-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/scenarios/media-hardlink-test.sh
 scripts/test/run-probe-dispatch-test.sh
