@@ -46,6 +46,86 @@ class JUnitToolsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 junit_tools.merge_reports(output, "combined", [empty])
 
+    def test_case_writer_and_inspector_preserve_all_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = []
+            for result in ("passed", "failed", "broken", "skipped"):
+                report = root / f"{result}.xml"
+                reports.append(report)
+                self.assertEqual(
+                    junit_tools.write_case(
+                        report,
+                        "validation.fixture",
+                        result,
+                        result,
+                        "1.25",
+                    ),
+                    0,
+                )
+            merged = root / "merged.xml"
+            junit_tools.merge_reports(merged, "validation.fixture", reports)
+            self.assertEqual(
+                junit_tools.inspect_report(merged),
+                {
+                    "tests": 4,
+                    "failures": 1,
+                    "errors": 1,
+                    "skipped": 1,
+                    "passed": 1,
+                },
+            )
+            with self.assertRaises(ValueError):
+                junit_tools.write_case(
+                    root / "unsafe.xml",
+                    "unsafe suite",
+                    "case",
+                    "passed",
+                    "0",
+                )
+
+    def test_lifecycle_append_is_structural_and_recalculates_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "lifecycle.xml"
+            junit_tools.write_case(
+                report,
+                "chainsaw.e2e.fixture",
+                "primary",
+                "passed",
+                "1",
+            )
+            self.assertEqual(
+                junit_tools.append_lifecycle(
+                    report,
+                    report,
+                    "chainsaw.e2e.fixture",
+                    "not-applicable",
+                    "failed",
+                    "failed",
+                    "passed",
+                    "broken",
+                ),
+                0,
+            )
+            self.assertEqual(
+                junit_tools.inspect_report(report),
+                {
+                    "tests": 6,
+                    "failures": 0,
+                    "errors": 3,
+                    "skipped": 1,
+                    "passed": 2,
+                },
+            )
+            document = ET.parse(report).getroot()
+            lifecycle = document.findall("testsuite")[-1]
+            self.assertEqual(
+                lifecycle.get("name"),
+                "chainsaw.e2e.fixture.lifecycle",
+            )
+            self.assertEqual(len(lifecycle.findall("testcase")), 5)
+
     def test_shellcheck_keeps_clean_files_and_findings_as_cases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

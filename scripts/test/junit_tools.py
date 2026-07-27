@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 import time
 import unittest
@@ -31,6 +32,19 @@ def _set_counts(element: ET.Element) -> None:
         element.set(name, str(value))
 
 
+def _validated_counts(root: ET.Element) -> dict[str, int]:
+    if root.tag not in {"testsuite", "testsuites"}:
+        raise ValueError("expected testsuite/testsuites root")
+    counts = _counts(root)
+    classified = counts["failures"] + counts["errors"] + counts["skipped"]
+    if counts["tests"] == 0:
+        raise ValueError("refusing a vacuous JUnit report")
+    if classified > counts["tests"]:
+        raise ValueError("JUnit test cases contain overlapping outcomes")
+    counts["passed"] = counts["tests"] - classified
+    return counts
+
+
 def _write_xml(root: ET.Element, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(root, space="  ")
@@ -41,6 +55,7 @@ def merge_reports(output: Path, suite_name: str, inputs: list[Path]) -> int:
     root = ET.Element("testsuites", {"name": suite_name})
     for input_path in inputs:
         document = ET.parse(input_path).getroot()
+        _validated_counts(document)
         if document.tag == "testsuite":
             suites = [document]
         elif document.tag == "testsuites":
@@ -52,8 +67,131 @@ def merge_reports(output: Path, suite_name: str, inputs: list[Path]) -> int:
             _set_counts(copied)
             root.append(copied)
     _set_counts(root)
-    if int(root.get("tests", "0")) == 0:
-        raise ValueError("refusing to write a vacuous merged JUnit report")
+    _validated_counts(root)
+    _write_xml(root, output)
+    return 0
+
+
+def inspect_report(input_path: Path) -> dict[str, int]:
+    return _validated_counts(ET.parse(input_path).getroot())
+
+
+def write_case(
+    output: Path,
+    suite_name: str,
+    case_name: str,
+    result: str,
+    duration: str,
+) -> int:
+    safe_name = re.compile(r"^[A-Za-z0-9_.:-]+$")
+    if not safe_name.fullmatch(suite_name) or not safe_name.fullmatch(case_name):
+        raise ValueError("suite and case names must use stable identifier characters")
+    try:
+        duration_value = float(duration)
+    except ValueError as error:
+        raise ValueError("case duration must be numeric") from error
+    if duration_value < 0:
+        raise ValueError("case duration must not be negative")
+
+    suite = ET.Element(
+        "testsuite",
+        {"name": suite_name, "time": duration},
+    )
+    case = ET.SubElement(
+        suite,
+        "testcase",
+        {
+            "classname": suite_name,
+            "name": case_name,
+            "time": duration,
+        },
+    )
+    if result == "failed":
+        ET.SubElement(
+            case,
+            "failure",
+            {"message": "command assertion failed"},
+        )
+    elif result == "broken":
+        ET.SubElement(
+            case,
+            "error",
+            {"message": "test harness failed"},
+        )
+    elif result == "skipped":
+        ET.SubElement(
+            case,
+            "skipped",
+            {"message": "not executed after fail-fast stop"},
+        )
+    elif result != "passed":
+        raise ValueError(f"unsupported case result: {result}")
+
+    _set_counts(suite)
+    root = ET.Element("testsuites", {"name": suite_name, "time": duration})
+    root.append(suite)
+    _set_counts(root)
+    _write_xml(root, output)
+    return 0
+
+
+def append_lifecycle(
+    input_path: Path,
+    output: Path,
+    suite_name: str,
+    external_dependency: str,
+    cleanup: str,
+    recovery: str,
+    diagnostics: str,
+    run_result: str,
+) -> int:
+    document = ET.parse(input_path).getroot()
+    _validated_counts(document)
+    if document.tag == "testsuite":
+        root = ET.Element("testsuites", {"name": suite_name})
+        root.append(document)
+    else:
+        root = document
+
+    lifecycle = ET.Element("testsuite", {"name": f"{suite_name}.lifecycle"})
+    finalization = "failed" if run_result == "broken" else "passed"
+    phases = (
+        ("external-dependency", external_dependency),
+        ("cleanup", cleanup),
+        ("recovery", recovery),
+        ("diagnostics", diagnostics),
+        ("finalization", finalization),
+    )
+    for name, status in phases:
+        case = ET.SubElement(
+            lifecycle,
+            "testcase",
+            {
+                "classname": f"{suite_name}.lifecycle",
+                "name": name,
+                "time": "0",
+            },
+        )
+        if status in {"failed", "not-classified"}:
+            ET.SubElement(
+                case,
+                "error",
+                {"message": f"phase status: {status}"},
+            )
+        elif status in {"not-applicable", "not-required"}:
+            ET.SubElement(
+                case,
+                "skipped",
+                {"message": f"phase status: {status}"},
+            )
+        elif status != "passed":
+            raise ValueError(f"unsupported lifecycle status: {status}")
+
+    if run_result not in {"passed", "failed", "broken"}:
+        raise ValueError(f"unsupported run result: {run_result}")
+    _set_counts(lifecycle)
+    root.append(lifecycle)
+    _set_counts(root)
     _write_xml(root, output)
     return 0
 
@@ -203,6 +341,34 @@ def parse_args() -> argparse.Namespace:
     merge.add_argument("--suite", required=True)
     merge.add_argument("inputs", nargs="+", type=Path)
 
+    inspect = subparsers.add_parser("inspect")
+    inspect.add_argument("--input", type=Path, required=True)
+
+    case = subparsers.add_parser("case")
+    case.add_argument("--output", type=Path, required=True)
+    case.add_argument("--suite", required=True)
+    case.add_argument("--name", required=True)
+    case.add_argument(
+        "--result",
+        choices=("passed", "failed", "broken", "skipped"),
+        required=True,
+    )
+    case.add_argument("--duration", required=True)
+
+    lifecycle = subparsers.add_parser("append-lifecycle")
+    lifecycle.add_argument("--input", type=Path, required=True)
+    lifecycle.add_argument("--output", type=Path, required=True)
+    lifecycle.add_argument("--suite", required=True)
+    lifecycle.add_argument("--external-dependency", required=True)
+    lifecycle.add_argument("--cleanup", required=True)
+    lifecycle.add_argument("--recovery", required=True)
+    lifecycle.add_argument("--diagnostics", required=True)
+    lifecycle.add_argument(
+        "--run-result",
+        choices=("passed", "failed", "broken"),
+        required=True,
+    )
+
     shellcheck = subparsers.add_parser("shellcheck")
     shellcheck.add_argument("--output", type=Path, required=True)
     shellcheck.add_argument("--suite", required=True)
@@ -222,6 +388,35 @@ def main() -> int:
     try:
         if args.command == "merge":
             return merge_reports(args.output, args.suite, args.inputs)
+        if args.command == "inspect":
+            counts = inspect_report(args.input)
+            print(
+                counts["tests"],
+                counts["failures"],
+                counts["errors"],
+                counts["skipped"],
+                counts["passed"],
+            )
+            return 0
+        if args.command == "case":
+            return write_case(
+                args.output,
+                args.suite,
+                args.name,
+                args.result,
+                args.duration,
+            )
+        if args.command == "append-lifecycle":
+            return append_lifecycle(
+                args.input,
+                args.output,
+                args.suite,
+                args.external_dependency,
+                args.cleanup,
+                args.recovery,
+                args.diagnostics,
+                args.run_result,
+            )
         if args.command == "shellcheck":
             return shellcheck_report(
                 args.output,

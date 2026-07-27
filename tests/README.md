@@ -134,6 +134,12 @@ with 90-day retention; open the workflow run's **Artifacts** section and
 download `canonical-test-results-<run>-<attempt>`. Local runs remain directly
 available under `.test-results/`.
 
+`scripts/test/junit_tools.py` is the sole owner of JUnit XML structure: it
+inspects and merges native reports, creates wrapper cases, appends lifecycle
+cases, and provides ShellCheck/unittest adapters. Bash runners own process and
+cluster orchestration and consume only the tool's plain count output; they do
+not parse, render, or text-edit XML.
+
 All state-changing integration, E2E, resilience, mutating probe, and conformance
 runs use the renewable `flux-system/homelab-test-run-lock` Kubernetes Lease.
 The Lease is acquired only after the command's confirmation guard and is

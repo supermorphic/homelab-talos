@@ -76,9 +76,11 @@ Phase 3 implementation status on `feat/test-result-coordinator`:
   behavior. Unexecuted children become explicit skipped JUnit cases.
 - Conftest and kubeconform use native JUnit; ShellCheck JSON and Python
   unittest are normalized to finding/method-level cases; Bash commands receive
-  wrapper cases. Merge, fail-fast, non-vacuous output, status precedence,
-  interruption finalization, and evidence-size behavior have offline
-  regression tests.
+  wrapper cases. The stdlib Python JUnit adapter is the sole owner of XML
+  inspection, generation, merging, and lifecycle mutation; Bash owns process
+  orchestration only. Merge, fail-fast, non-vacuous output, status precedence,
+  interruption finalization, and evidence-size behavior have offline regression
+  tests.
 - GitHub Actions sets `execution_origin=github-actions` and uploads canonical
   results after both successful and failed CI runs with 90-day retention.
 - Live Bash verifiers, focused integration/resilience scripts, and probes run
