@@ -10,7 +10,6 @@ Service. It mounts only the shared `/data/downloads` subpath and can never reach
 - App: `kubernetes/apps/media/qbit-manage/`
 - Policy (plaintext, reviewable): `kubernetes/apps/media/qbit-manage/app/config.yml`
 - Credential: SOPS Secret `qbit-manage-secret` (keys `QBT_USER`/`QBT_PASS`)
-- Full design + staged rollout: `plans/qbit-manage-public-tracker-policy-agent-plan.md`
 
 ## Classification model: category-based (read this first)
 
