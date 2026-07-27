@@ -160,9 +160,26 @@ Phase 6 implementation status on `feat/test-report-server`:
   retention, monotonic counters, unindexed/symlink exclusion, checksummed
   installation, and failure-safe generation switching.
 - The source remains suspended and intentionally lacks Gatus until human
-  bootstrap, sanitized publication, and persistence acceptance. Activation,
-  Gatus, Homepage presentation, and Grafana dashboard are separate follow-up
-  changes.
+  bootstrap, sanitized publication, and persistence acceptance. Activation and
+  Gatus are separate follow-up changes.
+
+Phase 7 implementation status on `feat/test-report-presentation`:
+
+- Publisher-owned presentation rollups select only authoritative runs for
+  Latest Overall, Validate, Platform Smoke, Media Smoke, Resilience, and
+  Conformance. Each emits a stable redirect plus a Homepage row with a result
+  marker and RFC3339 completion time for live relative-age formatting.
+- The report HTTPRoute declares an up-to-six-row Homepage Custom API
+  dynamic-list widget; a category appears after its first authoritative
+  publication. Cilium permits only the Homepage namespace to fetch its static
+  JSON over port 8080; no credential or upload path is added.
+- A provisioned, stable-UID `Cluster Verification` Grafana dashboard shows
+  latest status/age, passed cases, 30-day pass rate, durations, failures by
+  scenario, and days since successful resilience/conformance, with links back
+  to stable report URLs.
+- Homepage and Grafana source remains inside the suspended `test-reports`
+  application. Gatus and `suspend: false` remain the final, post-acceptance
+  activation PR.
 
 ## Canonical terminology and responsibility
 

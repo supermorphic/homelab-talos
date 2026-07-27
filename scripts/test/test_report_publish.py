@@ -118,6 +118,21 @@ class ReportPublishTests(unittest.TestCase):
             self.assertTrue(
                 (generation / "latest" / "smoke" / "cilium" / "health" / "index.html").is_file()
             )
+            self.assertTrue((generation / "latest" / "overall" / "index.html").is_file())
+            homepage = json.loads((generation / "api" / "homepage.json").read_text())
+            self.assertEqual(
+                homepage,
+                {
+                    "items": [
+                        {
+                            "name": "✓ Latest Overall",
+                            "end": "2026-07-27T12:00:00Z",
+                            "result": "passed",
+                            "path": "/latest/overall/",
+                        }
+                    ]
+                },
+            )
             metrics = (generation / "api" / "metrics.prom").read_text()
             self.assertIn("homelab_test_last_run_status", metrics)
             self.assertNotIn(RUN_ID, metrics)
@@ -287,6 +302,73 @@ class ReportPublishTests(unittest.TestCase):
         expected = str(int(dt.datetime(2026, 7, 27, 12, tzinfo=dt.UTC).timestamp()))
         self.assertIn("homelab_test_last_success_timestamp_seconds{", metrics)
         self.assertIn(f"}} {expected}", metrics)
+
+    def test_homepage_rollups_select_latest_authoritative_runs(self):
+        def entry(
+            run_id: str,
+            end: str,
+            result: str,
+            *,
+            source: str = "chainsaw",
+            tier: str = "smoke",
+            target: str = "platform",
+            authoritative: bool = True,
+        ):
+            return {
+                "run_id": run_id,
+                "end": end,
+                "result": result,
+                "source": source,
+                "tier": tier,
+                "target": target,
+                "scenario": None,
+                "authoritative": authoritative,
+            }
+
+        entries = [
+            entry("validation-old", "2026-07-20T12:00:00Z", "passed", source="validation"),
+            entry("validation-new", "2026-07-21T12:00:00Z", "failed", source="validation"),
+            entry("platform", "2026-07-22T12:00:00Z", "broken"),
+            entry("media", "2026-07-23T12:00:00Z", "skipped", target="media"),
+            entry(
+                "resilience",
+                "2026-07-24T12:00:00Z",
+                "passed",
+                tier="resilience",
+                target="plex-cross-node-reschedule",
+            ),
+            entry(
+                "conformance",
+                "2026-07-25T12:00:00Z",
+                "passed",
+                source="sonobuoy",
+                tier="conformance",
+                target="quick",
+            ),
+            entry(
+                "candidate-newer",
+                "2026-07-26T12:00:00Z",
+                "failed",
+                tier="resilience",
+                target="qbittorrent-vpn-disconnect",
+                authoritative=False,
+            ),
+        ]
+
+        homepage = report_publish.render_homepage(entries)
+        self.assertEqual(
+            [(item["name"], item["path"]) for item in homepage["items"]],
+            [
+                ("✓ Latest Overall", "/latest/overall/"),
+                ("✗ Validate", "/latest/validation/"),
+                ("✗ Platform Smoke", "/latest/platform-smoke/"),
+                ("! Media Smoke", "/latest/media-smoke/"),
+                ("✓ Resilience", "/latest/resilience/"),
+                ("✓ Conformance", "/latest/conformance/"),
+            ],
+        )
+        self.assertEqual(homepage["items"][0]["end"], "2026-07-25T12:00:00Z")
+        self.assertEqual(homepage["items"][1]["result"], "failed")
 
 
 if __name__ == "__main__":
