@@ -10,6 +10,12 @@
 		respond "ok" 200
 	}
 
+	handle /api/catalog.json {
+		rewrite * /catalog.json
+		root * /srv/state/current
+		file_server
+	}
+
 	handle /api/* {
 		root * /srv/state/current
 		file_server

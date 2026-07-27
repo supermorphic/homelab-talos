@@ -102,6 +102,8 @@ rg -q 'current' "$app/Caddyfile"
 rg -q 'admin off' "$app/Caddyfile"
 rg -q 'auto_https off' "$app/Caddyfile"
 rg -q 'metrics' "$app/Caddyfile"
+rg -Uq 'handle /api/catalog\.json \{\n[[:space:]]+rewrite \* /catalog\.json' \
+  "$app/Caddyfile"
 
 jq -e '
   .uid == "cluster-verification" and
