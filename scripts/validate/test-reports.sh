@@ -8,6 +8,7 @@ base='kubernetes/apps/monitoring/test-reports'
 app="$base/app"
 ks="$base/ks.yaml"
 deployment="$app/deployment.yaml"
+kustomization="$app/kustomization.yaml"
 pvc="$app/persistentvolumeclaim.yaml"
 route="$app/httproute.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
@@ -105,6 +106,32 @@ rg -q 'metrics' "$app/Caddyfile"
 rg -Uq 'handle /api/catalog\.json \{\n[[:space:]]+rewrite \* /catalog\.json' \
   "$app/Caddyfile"
 
+# Runtime configuration must be content-addressed so a Caddyfile or installer
+# change updates the Deployment pod template and forces a Recreate rollout. The
+# dashboard remains fixed-name because Grafana discovers it independently by label.
+[[ "$(yq -r '.generatorOptions.disableNameSuffixHash // false' "$kustomization")" == \
+  'false' ]]
+[[ "$(yq -r '.configMapGenerator[] | select(.name == "test-reports-dashboard") |
+  .options.disableNameSuffixHash' "$kustomization")" == 'true' ]]
+rendered="$(mktemp "${TMPDIR:-/tmp}/test-reports-render.XXXXXX")"
+trap 'rm -f "$rendered"' EXIT
+kustomize build "$app" >"$rendered"
+runtime_config="$(yq ea -r '
+  select(.kind == "ConfigMap" and
+    (.metadata.name | test("^test-reports-config-[a-z0-9]+$"))) |
+  .metadata.name
+' "$rendered")"
+deployment_config="$(yq ea -r '
+  select(.kind == "Deployment" and .metadata.name == "test-reports") |
+  .spec.template.spec.volumes[] |
+  select(.name == "config") |
+  .configMap.name
+' "$rendered")"
+[[ -n "$runtime_config" && "$runtime_config" == "$deployment_config" ]] || {
+  echo 'Rendered Deployment must reference the hashed runtime ConfigMap.' >&2
+  exit 1
+}
+
 jq -e '
   .uid == "cluster-verification" and
   .title == "Cluster Verification" and
@@ -118,12 +145,11 @@ jq -e '
   ([.. | strings] | any(contains("homelab_test_last_success_timestamp_seconds"))) and
   ([.. | strings] | any(contains("https://tests.lab.supermorphic.com/latest/")))
 ' "$dashboard" >/dev/null
-kustomize build "$app" |
-  yq ea -e '
+yq ea -e '
     select(.kind == "ConfigMap" and .metadata.name == "test-reports-dashboard") |
     .metadata.labels.grafana_dashboard == "1" and
     (.data."test-reports.json" | test("\"uid\": \"cluster-verification\""))
-  ' - >/dev/null
+  ' "$rendered" >/dev/null
 
 # The staged server must not create a guaranteed-failing uptime probe before the
 # operator bootstrap. The activation PR adds this endpoint after acceptance.
@@ -139,6 +165,5 @@ fi
 
 sh -n "$app/bootstrap-storage.sh" "$app/install-report.sh"
 shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh" "$diagnostics"
-kustomize build "$app" >/dev/null
 
-echo 'Suspended Caddy test-report server, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'
+echo 'Suspended Caddy test-report server, content-addressed runtime configuration, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'

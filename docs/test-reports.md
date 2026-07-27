@@ -44,6 +44,13 @@ The 20 GiB Longhorn claim is `ReadWriteOnce`, so the one-replica Deployment uses
 `strategy: Recreate`. The PVC has Flux prune disabled; deleting the Kustomization does
 not authorize deleting the archive.
 
+The Caddy runtime ConfigMap is content-addressed by Kustomize. A change to the
+Caddyfile or either mounted installer script therefore changes the ConfigMap name in
+the Deployment pod template and triggers a `Recreate` rollout. The Grafana dashboard
+ConfigMap intentionally keeps its stable name because it is discovered separately by
+label. This split prevents Flux from applying new server configuration without the
+running Caddy process loading it.
+
 The Caddy container still drops `ALL` Linux capabilities and runs non-root with
 privilege escalation disabled. It adds back only `NET_BIND_SERVICE` because the
 official Caddy image stamps that file capability onto `/usr/bin/caddy`; omitting it

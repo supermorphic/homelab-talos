@@ -22,9 +22,9 @@ configMapGenerator:
     files:
       - dashboards/test-reports.json
     options:
+      disableNameSuffixHash: true
       labels:
         grafana_dashboard: "1"
 generatorOptions:
-  disableNameSuffixHash: true
   labels:
     reconcile.fluxcd.io/watch: Enabled
