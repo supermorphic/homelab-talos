@@ -77,13 +77,21 @@ done
   echo "Pi-hole returned '$dns_answer' for $host, not $gateway_ip." >&2
   exit 1
 }
-curl --silent --show-error --fail --max-time 15 \
-  --resolve "$host:443:$gateway_ip" "https://$host/healthz" |
-  rg -qx 'ok'
+health="$(
+  curl --silent --show-error --fail --max-time 15 \
+    --resolve "$host:443:$gateway_ip" "https://$host/healthz"
+)" || {
+  echo 'Test-report health endpoint failed through internal DNS, TLS, and Gateway.' >&2
+  exit 1
+}
+rg -qx 'ok' <<<"$health"
 catalog="$(
   curl --silent --show-error --fail --max-time 15 \
     --resolve "$host:443:$gateway_ip" "https://$host/api/catalog.json"
-)"
+)" || {
+  echo 'Test-report catalog API failed through internal DNS, TLS, and Gateway.' >&2
+  exit 1
+}
 yq -e '.schema_version == 1 and (.runs | type == "!!seq")' - <<<"$catalog" >/dev/null
 
 echo 'Test-report server acceptance passed: Ready, retained Longhorn PVC, restricted no-RBAC runtime, accepted internal HTTPS route, health endpoint, and catalog API.'

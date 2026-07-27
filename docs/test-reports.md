@@ -123,6 +123,7 @@ when individual reports are pruned.
 No command is required to view already-published reports:
 
 - Archive/index: `https://tests.lab.supermorphic.com`
+- Machine-readable catalog: `https://tests.lab.supermorphic.com/api/catalog.json`
 - Exact report: `https://tests.lab.supermorphic.com/reports/<run-id>/awesome/`
 - Canonical download: `https://tests.lab.supermorphic.com/artifacts/<run-id>.tar.gz`
 - Stable latest link:
