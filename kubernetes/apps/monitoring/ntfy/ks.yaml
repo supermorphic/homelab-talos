@@ -26,8 +26,8 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Staged suspended: the ntfy-secret (auth users/ACLs/tokens) must exist before
-  # reconciliation. Roll out with `just bootstrap ntfy`, then flip to false durably.
-  suspend: true
+  # Rolled out via `just bootstrap ntfy` and live-verified (HelmRelease Ready,
+  # rollout complete, PVC Bound, /v1/health healthy, ACLs enforced); now durably active.
+  suspend: false
   timeout: 10m
   wait: true

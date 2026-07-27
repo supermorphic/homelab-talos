@@ -63,6 +63,15 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # ntfy notification service. Probed in-cluster because require-login is on; the
+    # unauthenticated /v1/health endpoint proves the server and its storage are up.
+    - name: ntfy
+      group: Platform
+      url: "http://ntfy.ntfy.svc.cluster.local/v1/health"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].healthy == true"
     # Longhorn UI probed in-cluster so the unauthenticated admin UI is not exposed
     # to the LAN. Longhorn engine/replica/backup health lives in Prometheus.
     - name: longhorn-ui
