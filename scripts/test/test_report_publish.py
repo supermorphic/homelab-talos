@@ -30,6 +30,7 @@ class ReportPublishTests(unittest.TestCase):
         run_id: str = RUN_ID,
         now: str = "2026-07-27T12:01:00Z",
         cluster_name: str | None = "homelab",
+        scenario: str | None = "health",
     ) -> argparse.Namespace:
         run = root / "results" / run_id
         (run / "logs").mkdir(parents=True)
@@ -43,7 +44,7 @@ class ReportPublishTests(unittest.TestCase):
             "suite": "platform",
             "tier": "smoke",
             "target": "cilium",
-            "scenario": "health",
+            "scenario": scenario,
             "scope": "network",
             "intent": "acceptance",
             "execution_origin": "operator",
@@ -163,6 +164,33 @@ class ReportPublishTests(unittest.TestCase):
             generation = args.output_dir / "generation" / result["generation"]
             catalog = json.loads((generation / "catalog.json").read_text())
             self.assertEqual(catalog["runs"][0]["cluster"], "unavailable")
+
+    def test_null_scenario_uses_reserved_metric_and_path_segment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = self.make_inputs(root, scenario=None)
+            result = report_publish.prepare(args)
+            self.assertTrue(result["authoritative"])
+            generation = args.output_dir / "generation" / result["generation"]
+            catalog = json.loads((generation / "catalog.json").read_text())
+            state = json.loads((generation / "state.json").read_text())
+            self.assertIsNone(catalog["runs"][0]["scenario"])
+            self.assertTrue(
+                (generation / "latest" / "smoke" / "cilium" / "_" / "index.html").is_file()
+            )
+            metrics = (generation / "api" / "metrics.prom").read_text()
+            self.assertIn('scenario="_"', metrics)
+            report_publish.validate_existing(catalog, state)
+
+    def test_reserved_scenario_sentinel_is_not_canonical_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = self.make_inputs(root, scenario="_")
+            with self.assertRaisesRegex(
+                report_publish.PublishError,
+                "scenario is not a safe path/metric segment",
+            ):
+                report_publish.prepare(args)
 
     def test_idempotent_republish_does_not_build_or_increment(self):
         with tempfile.TemporaryDirectory() as temporary:
