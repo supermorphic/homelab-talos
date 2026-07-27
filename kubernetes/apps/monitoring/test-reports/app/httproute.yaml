@@ -7,9 +7,9 @@ metadata:
   annotations:
     external-dns.k8s.io/audience: internal
     gethomepage.dev/enabled: "true"
-    gethomepage.dev/name: "Test Results"
-    gethomepage.dev/description: "Persistent operator-published test reports"
-    gethomepage.dev/group: "Monitoring"
+    gethomepage.dev/name: "Test Reports"
+    gethomepage.dev/description: "Persistent operator-published test results"
+    gethomepage.dev/group: "Monitoring & Testing"
     gethomepage.dev/icon: "/icons/allure.svg"
     gethomepage.dev/href: "https://tests.lab.supermorphic.com"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=test-reports"

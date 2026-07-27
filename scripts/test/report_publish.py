@@ -566,12 +566,12 @@ def render_index(entries: list[dict[str, Any]], generated_at: str) -> str:
     return (
         '<!doctype html><html><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        "<title>Homelab Test Results</title>"
+        "<title>Homelab Test Reports</title>"
         "<style>body{font:16px system-ui;margin:2rem;color:#18202a}"
         "table{border-collapse:collapse;width:100%}th,td{padding:.55rem;"
         "border-bottom:1px solid #d7dde5;text-align:left}th{background:#f3f5f8}"
         "code{background:#eef1f5;padding:.15rem .3rem}</style></head><body><main>"
-        "<h1>Homelab Test Results</h1>"
+        "<h1>Homelab Test Reports</h1>"
         f"<p>Generated <code>{html.escape(generated_at)}</code>. "
         "Authoritative rows match clean current-main test and Flux revisions; "
         "candidate rows remain inspectable but do not drive latest links or metrics.</p>"

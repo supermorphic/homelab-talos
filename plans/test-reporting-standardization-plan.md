@@ -442,7 +442,7 @@ metric counters never decrease when reports are pruned.
 
 ### 7. Homepage and Grafana presentation
 
-Generate a static Homepage Custom API response and add a "Test Results" service showing:
+Generate a static Homepage Custom API response and add a "Test Reports" service showing:
 
 - Latest overall
 - Validation

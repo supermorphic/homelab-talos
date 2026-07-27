@@ -11,6 +11,8 @@ generation='20260727T120100Z-deadbeef'
 
 TEST_REPORTS_STORAGE_ROOT="$storage" \
   sh "$repo_root/kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh"
+rg -q '<title>Test Reports</title>' "$storage/state/current/index.html"
+rg -q '<h1>Test Reports</h1>' "$storage/state/current/index.html"
 mkdir -p \
   "$bundle/artifact" \
   "$bundle/generation/$generation/api" \

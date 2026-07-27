@@ -13,6 +13,9 @@ app_kustomization="$base/app/kustomization.yaml"
 allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/README.md"
 seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
+gatus_route='kubernetes/apps/monitoring/gatus/app/httproute.yaml'
+longhorn_route='kubernetes/apps/storage/longhorn/config/httproute.yaml'
+monitoring_routes='kubernetes/apps/monitoring/kube-prometheus-stack/config/httproutes.yaml'
 portainer_route='kubernetes/apps/monitoring/portainer/app/httproute.yaml'
 test_reports_route='kubernetes/apps/monitoring/test-reports/app/httproute.yaml'
 allure_commit='fe2ea92eaab4e409a3c8cf52ba96e35df96b2298'
@@ -21,7 +24,8 @@ for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.ya
   "$app_kustomization" "$base/app/config/settings.yaml" \
   "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
   "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$allure_icon" \
-  "$allure_provenance" "$seerr_route" "$portainer_route" "$test_reports_route"; do
+  "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
+  "$monitoring_routes" "$portainer_route" "$test_reports_route"; do
   [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
@@ -40,6 +44,24 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$portainer_route")" == 'portainer-dark.svg' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$test_reports_route")" == '/icons/allure.svg' ]]
+[[ "$(yq ea -r '[select(.kind == "HTTPRoute") |
+  .metadata.annotations."gethomepage.dev/group"] | unique | join(",")' \
+  "$monitoring_routes")" == 'Monitoring & Testing' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$gatus_route")" == \
+  'Monitoring & Testing' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$test_reports_route")" == \
+  'Monitoring & Testing' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$test_reports_route")" == \
+  'Test Reports' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/description"' \
+  "$test_reports_route")" == 'Persistent operator-published test results' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$longhorn_route")" == \
+  'Platform' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$portainer_route")" == \
+  'Platform' ]]
+assert_command_finds_nothing \
+  'Homepage discovery metadata must use the renamed group taxonomy.' \
+  rg -q 'gethomepage\.dev/group: "(Monitoring|Infrastructure)"' kubernetes/apps
 [[ "$(yq -r '.configMapGenerator[] | select(.name == "homepage-icons") | .files[0]' "$app_kustomization")" == 'allure.svg=icons/allure.svg' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "custom-icons") | .mountPath] | .[0]' "$dep")" == '/app/public/icons/allure.svg' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "custom-icons") | .subPath] | .[0]' "$dep")" == 'allure.svg' ]]

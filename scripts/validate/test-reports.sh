@@ -74,6 +74,11 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'tests.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$route")" == 'Test Reports' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/description"' "$route")" == \
+  'Persistent operator-published test results' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$route")" == \
+  'Monitoring & Testing' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == \
   'customapi' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.display"' "$route")" == \
