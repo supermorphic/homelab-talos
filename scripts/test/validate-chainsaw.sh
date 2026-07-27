@@ -41,6 +41,7 @@ done < <(find scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C s
 
 scripts/test/safety/require-chaos-confirmation-test.sh
 scripts/test/safety/require-e2e-confirmation-test.sh
+scripts/test/lib/common-test.sh
 scripts/test/lib/results-test.sh
 scripts/test/run-chainsaw-dispatch-test.sh
 scripts/test/scenarios/media-hardlink-test.sh

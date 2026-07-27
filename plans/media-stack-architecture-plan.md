@@ -122,7 +122,7 @@ Always` + startup probe on the control server) so qBittorrent starts only after 
 tunnel+firewall are up; **(2) ongoing firewall** — Gluetun drops all egress except the
 tunnel + allowed cluster subnets. qBittorrent holds no NET_ADMIN, so it cannot alter
 routes — but fail-closed still *depends on* Gluetun retaining its rules, hence the
-**blocking, live `qbittorrent-killswitch-verify`** gate: VPN public IP ≠ home WAN; stop
+**blocking, live `qbittorrent-vpn-disconnect` Chainsaw resilience** gate: VPN public IP ≠ home WAN; stop
 the VPN → egress fails closed (never the home IP); a hard Gluetun-container kill also
 holds; recovery reacquires + reapplies the forwarded port. Phase 12 is not activated
 until it passes. Details: `docs/phase-12-media.md`.

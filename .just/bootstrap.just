@@ -484,6 +484,7 @@ cilium:
       --history-max 5
 
     just kube cilium-verify
+    CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity' just kube cilium-connectivity-test
 
 # Bootstrap Flux 2.9.2 with a unique read-only GitHub SSH deploy key.
 flux:
@@ -1025,8 +1026,9 @@ storage:
     done
 
     just kube storage-verify
+    STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube storage-provisioning-test
     bootstrap_complete=true
-    echo 'Phase 9 storage live acceptance passed. Change both storage Git sources to suspend=false, commit, push, and rerun just kube storage-verify.'
+    echo "Phase 9 storage live acceptance passed. Change both storage Git sources to suspend=false, commit, push, rerun just kube storage-verify, and use STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube storage-provisioning-test when a fresh provisioning proof is required."
 
 # Reconcile the suspended Phase 11 SMB CSI driver after guarded checks, then verify.
 # Run this before media-storage (which depends on it). On failure the resumed
@@ -1223,8 +1225,8 @@ plex:
 # Reconcile the suspended Phase 12 qBittorrent+Gluetun after guarded checks, then verify.
 # Requires the protonvpn Secret (just repo protonvpn-secrets) and media-storage already
 # bootstrapped. Flux decrypts the Secret in-cluster. After verify, run the BLOCKING
-# just kube qbittorrent-killswitch-verify before flipping suspend=false. On failure the
-# resumed Kustomization is re-suspended while its resources are preserved.
+# Chainsaw resilience scenario before flipping suspend=false. On failure the resumed
+# Kustomization is re-suspended while its resources are preserved.
 qbittorrent:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1280,7 +1282,7 @@ qbittorrent:
 
     just kube qbittorrent-verify
     bootstrap_complete=true
-    echo 'Phase 12 qBittorrent live acceptance passed. NOW run the BLOCKING gate: just kube qbittorrent-killswitch-verify. Only after it passes, set suspend=false in Git, commit, push, and rerun just kube qbittorrent-verify.'
+    echo "Phase 12 qBittorrent live acceptance passed. NOW run the BLOCKING gate: CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' just test resilience qbittorrent-vpn-disconnect. Only after it passes, set suspend=false in Git, commit, push, and rerun just kube qbittorrent-verify."
 
 # Reconcile a suspended Phase 13 *arr app after guarded checks, then verify:
 #   just bootstrap arr <prowlarr|sonarr|radarr>

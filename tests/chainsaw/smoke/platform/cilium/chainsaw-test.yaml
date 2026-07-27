@@ -7,8 +7,9 @@ metadata:
     homelab-talos/target: platform
     homelab-talos/suite: platform
 spec:
-  # Read-only Cilium control-plane readiness. Deep checks (cilium status --wait, connectivity
-  # test, helm-value parity) stay operator-only in `just kube cilium-verify`. Resources are in
+  # Read-only Cilium control-plane readiness. Deep checks (cilium status --wait and
+  # Helm-value parity) stay operator-only in `just kube cilium-verify`; functional
+  # traffic lives in `just kube cilium-connectivity-test`. Resources are in
   # kube-system; spec.namespace is flux-system per the smoke policy.
   namespace: flux-system
   concurrent: false

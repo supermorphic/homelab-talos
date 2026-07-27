@@ -109,10 +109,11 @@ The point of this phase: prove the single Plex replica recreates on another NUC 
 its node goes away, with the Longhorn config volume re-attaching and the SMB media
 re-mounting.
 
-- **Safe form (guarded recipe):** `just kube plex-reschedule-verify` cordons the node
-  running Plex, deletes the pod, waits for it to come back **Ready on a different
-  node**, then uncordons. This exercises the config re-attach + SMB re-mount + Recreate
-  path without a full outage.
+- **Safe form (Chainsaw resilience scenario):**
+  `CLUSTER_CHAOS_CONFIRM='chaos:plex-cross-node-reschedule' just test resilience
+  plex-cross-node-reschedule` cordons the node running Plex, deletes the pod,
+  waits for it to come back **Ready on a different node**, then uncordons. This
+  exercises the config re-attach + SMB re-mount + Recreate path without a full outage.
 - **Full node-down form:** power off the node running Plex and confirm the pod
   reschedules automatically. This requires Longhorn `nodeDownPodDeletionPolicy=
   delete-both-statefulset-and-deployment-pod` (set in the Longhorn values) — the default
@@ -123,16 +124,18 @@ Full acceptance test matrix to record before calling Phase 11 done:
 
 | Test | Expectation |
 |---|---|
-| Planned drain (`plex-reschedule-verify` / `kubectl drain`) | Plex stops cleanly, config re-attaches on another NUC, same server identity + library |
+| Controlled cross-node reschedule (`just test resilience plex-cross-node-reschedule`) | Plex stops cleanly, config re-attaches on another NUC, same server identity + library |
 | Hard node-down (power off the Plex node) | Automated recovery after Longhorn's node-down timeout; measure RTO |
 | One Longhorn replica lost | Plex keeps serving from the surviving replica; replica rebuilds |
 | SMB/NAS outage | `/config` DB stays healthy; media returns when the share is back; library not trashed |
 | Longhorn restore | Restore the `/config` backup into a throwaway PVC and start an isolated Plex against it |
 
-**Evidence — graceful (2026-07-23):** `just kube plex-reschedule-verify` passed — pod
-moved `nuc2 -> nuc1`, the RWOP config volume re-attached, SMB media re-mounted, Plex
-Ready. `plex-verify` also passed (Kustomization + HelmRelease Ready, rollout, HTTPRoute
-Accepted, Pi-hole DNS, `/identity` over TLS).
+**Evidence — graceful (2026-07-23):** the predecessor guarded reschedule proof
+passed — pod moved `nuc2 -> nuc1`, the RWOP config volume re-attached, SMB media
+re-mounted, and Plex became Ready. That proof is now owned by the richer
+`plex-cross-node-reschedule` Chainsaw resilience scenario. `plex-verify` also
+passed (Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, Pi-hole
+DNS, `/identity` over TLS).
 
 **Evidence — hard node-down (2026-07-23):** nuc2 (running Plex) was **physically powered
 off**. With `nodeDownPodDeletionPolicy=delete-both-…` set, Longhorn force-deleted the

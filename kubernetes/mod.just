@@ -18,7 +18,7 @@ cilium-render:
       --values {{cilium_values}}
 
 # Validate the app-local Cilium source and pinned Helm render.
-cilium-validate:
+cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
 # Print read-only live Cilium and Kubernetes status.
@@ -111,7 +111,7 @@ cilium-postflight:
 
     echo 'Cilium postflight passed: test resources removed, no Talos diagnostics, three etcd members, and no etcd alarms.'
 
-# Fail unless running under bash >= 4; macOS /bin/bash 3.2 does not honor set -e
+# Fail unless running under bash >= 5; macOS /bin/bash 3.2 does not honor set -e
 # for a failed bare [[ ]] mid-recipe, so these acceptance assertions would not gate.
 # Validate the metrics-server source: files, wiring, dependency, pinned chart, the
 # Talos --kubelet-insecure-tls flag, and the render (version derived from the HR).
@@ -247,12 +247,18 @@ require-bash:
     source scripts/lib/common.sh
     require_bash
 
-# Verify the complete live Phase 5 Cilium acceptance gate.
+# Verify the live Phase 5 Cilium state without changing cluster resources.
 cilium-verify: require-bash
     @scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
 
+# Run the state-changing Cilium connectivity suite and clean up its temporary
+# workloads after CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity.
+# Operator-only; intentionally separate from read-only verification.
+cilium-connectivity-test: require-bash
+    @scripts/test/scenarios/cilium-connectivity.sh {{quote(kubeconfig)}}
+
 # Validate the complete local Phase 6 source and pinned OCI render without mutating the cluster.
-flux-validate:
+flux-validate: require-bash
     @scripts/validate/flux.sh
 
 # Check the live cluster and Git publication boundary before GitHub bootstrap.
@@ -326,7 +332,7 @@ flux-verify: flux-validate require-bash
     @scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
 
 # Validate the complete local Phase 7 graph, encrypted providers, and pinned chart renders.
-foundation-validate:
+foundation-validate: require-bash
     @scripts/validate/foundation.sh
 
 # Print the read-only Phase 7 controller, certificate, address, Gateway, DNS, and echo state.
@@ -459,10 +465,16 @@ media-storage-validate: require-bash
 plex-validate: require-bash
     @scripts/validate/plex.sh
 
-# Verify the live Longhorn acceptance gate: controllers, node disks, default
-# StorageClass, backup target, recurring jobs, and a two-replica test PVC.
+# Verify live Longhorn state without changing cluster resources: controllers,
+# node disks, default StorageClass, backup target, and recurring jobs.
 storage-verify: require-bash
     @scripts/verify/storage.sh {{quote(kubeconfig)}}
+
+# Create and remove a run-scoped PVC to prove Longhorn dynamic provisioning and
+# two-node replica anti-affinity after
+# STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning. Operator-only and state-changing.
+storage-provisioning-test: require-bash
+    @scripts/test/scenarios/storage-provisioning.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
@@ -478,16 +490,8 @@ media-storage-verify: require-bash
 
 # Verify the live Phase 11 Plex: Kustomization + HelmRelease Ready, rollout complete,
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.
-# The node-failure reschedule gate is a manual operator test (docs/phase-11-media.md).
 plex-verify: require-bash
     @scripts/verify/plex.sh {{quote(kubeconfig)}}
-
-# The Phase 11 gate: prove the single Plex replica recreates on ANOTHER NUC when its
-# node becomes unschedulable, with the Longhorn RWO config volume re-attaching and the
-# SMB media re-mounting. Safe form (cordon + delete pod); the original node is always
-# uncordoned (trap). NOT in `just ci` — destructive, operator-run.
-plex-reschedule-verify: require-bash
-    @scripts/verify/plex-reschedule.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
@@ -505,20 +509,9 @@ qbittorrent-validate: require-bash
     @scripts/validate/qbittorrent.sh
 
 # Verify the live Phase 12 qBittorrent: Kustomization + HelmRelease Ready, rollout,
-# HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway. The VPN
-# kill-switch is proven separately by qbittorrent-killswitch-verify.
+# HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway.
 qbittorrent-verify: require-bash
     @scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
-
-# BLOCKING, bulletproof VPN kill-switch gate. NOT in `just ci` — operator-run; it mutates
-# the running pod (stops AND hard-kills the VPN) and needs the live ProtonVPN tunnel.
-# Proves qBittorrent egresses ONLY through ProtonVPN Sweden and fails closed on both a
-# polite stop and an unexpected crash, with the home WAN IP as a hard never-leak invariant.
-# Precondition: first-run done (permanent WebUI credential set, subnet-auth bypass
-# disabled, and "Bypass authentication for localhost" enabled for the port-forward UP
-# command). Phase 12 is not flipped suspend: false / not "done" until this passes.
-qbittorrent-killswitch-verify: require-bash
-    @scripts/verify/qbittorrent-killswitch.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 13 *arr source (Prowlarr, Sonarr, Radarr): files, wiring, dependency
 # graph, no-secret ks, app-template chartRef, config-PVC (Longhorn RWO + Recreate + keep),

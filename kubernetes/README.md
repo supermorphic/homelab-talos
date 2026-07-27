@@ -69,7 +69,8 @@ All supported Cilium workflows are Just recipes:
 | `just kube cilium-status` | Print read-only Helm, node, pod, and Cilium status |
 | `just kube cilium-diagnostics` | Print read-only Talos diagnostics from all cluster nodes |
 | `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health for routine or post-test checks |
-| `just kube cilium-verify` | Run the live Phase 5 gate and temporary connectivity workloads |
+| `just kube cilium-verify` | Run the read-only live Phase 5 acceptance gate |
+| `just kube cilium-connectivity-test` | Run and clean up temporary connectivity workloads |
 | `just bootstrap cilium` | Guard and install or reconcile the bootstrap Helm release |
 
 Flux workflows are also Just-managed:

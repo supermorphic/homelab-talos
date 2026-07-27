@@ -8,13 +8,6 @@ set -euo pipefail
 
 kubeconfig="$1"
 ns='longhorn-system'
-tpvc='storage-verify-test'
-tmp="$(mktemp -d /tmp/homelab-talos-storage-verify.XXXXXX)"
-cleanup() {
-  kubectl --kubeconfig "$kubeconfig" --namespace "$ns" delete pvc "$tpvc" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  rm -rf -- "$tmp"
-}
-trap cleanup EXIT
 
 for n in longhorn longhorn-config; do
   [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$n" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -55,25 +48,5 @@ for j in daily-snapshot daily-backup; do
   kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io "$j" >/dev/null
 done
 
-export tpvc ns
-yq -n \
-  '.apiVersion = "v1" |
-   .kind = "PersistentVolumeClaim" |
-   .metadata.name = strenv(tpvc) |
-   .metadata.namespace = strenv(ns) |
-   .spec.accessModes = ["ReadWriteOnce"] |
-   .spec.storageClassName = "longhorn" |
-   .spec.resources.requests.storage = "1Gi"' >"$tmp/pvc.yaml"
-kubectl --kubeconfig "$kubeconfig" apply --filename "$tmp/pvc.yaml" >/dev/null
-kubectl --kubeconfig "$kubeconfig" --namespace "$ns" wait --for=jsonpath='{.status.phase}'=Bound "pvc/$tpvc" --timeout=3m
-vol="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pvc "$tpvc" --output jsonpath='{.spec.volumeName}')"
-replica_nodes=0
-for _ in {1..24}; do
-  replica_nodes="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get replicas.longhorn.io --selector "longhornvolume=$vol" --output json 2>/dev/null | yq -r '[.items[].spec.nodeID] | unique | length')"
-  [[ "$replica_nodes" == '2' ]] && break
-  sleep 5
-done
-[[ "$replica_nodes" == '2' ]] || { echo "Test volume replicas span $replica_nodes nodes; expected 2 (hard anti-affinity)." >&2; exit 1; }
-
 just kube foundation-verify
-echo 'Phase 9 storage acceptance passed: Longhorn healthy on three nodes (disks at /var/mnt/longhorn), default two-replica StorageClass, backup target available, recurring jobs present, and a test PVC bound with replicas on two distinct nodes.'
+echo 'Phase 9 read-only storage verification passed: Longhorn is healthy on three nodes (disks at /var/mnt/longhorn), the default StorageClass has two replicas, the backup target is available, and recurring jobs are present.'

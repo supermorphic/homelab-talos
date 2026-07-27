@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 cert_manager_chart='oci://quay.io/jetstack/charts/cert-manager'
 metallb_repository='https://metallb.github.io/metallb'
 envoy_gateway_chart='oci://docker.io/envoyproxy/gateway-helm'
@@ -57,7 +60,9 @@ done
 [[ "$(yq -r '.metadata.namespace' "$cloudflare_secret")" == 'cert-manager' ]]
 [[ "$(yq -r '.metadata.name' "$pihole_secret")" == 'pihole-password' ]]
 [[ "$(yq -r '.metadata.namespace' "$pihole_secret")" == 'external-dns' ]]
-! rg -q 'PRIVATE KEY' "$pihole_ca"
+assert_command_finds_nothing \
+  'The tracked Pi-hole CA must not contain a private key.' \
+  rg -q 'PRIVATE KEY' "$pihole_ca"
 openssl verify -CAfile "$pihole_ca" "$pihole_ca" >/dev/null
 # CA remaining-lifetime is a time-based check: it lives in
 # `just kube foundation-ca-expiry`, kept OUT of `just ci` so it cannot turn an
@@ -174,7 +179,9 @@ rg -q '^kind: Deployment$' "$temp_dir/cert-manager.yaml"
 rg -q '^  name: cert-manager$' "$temp_dir/cert-manager.yaml"
 rg -q '^kind: DaemonSet$' "$temp_dir/metallb.yaml"
 rg -q '^  name: metallb-speaker$' "$temp_dir/metallb.yaml"
-! rg -q '^  name: .*frr' "$temp_dir/metallb.yaml"
+assert_command_finds_nothing \
+  'The rendered MetalLB resources must not include FRR.' \
+  rg -q '^  name: .*frr' "$temp_dir/metallb.yaml"
 rg -q '^  name: envoy-gateway$' "$temp_dir/envoy-gateway.yaml"
 rg -q '^  name: gatewayclasses.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
 rg -q '^  name: gateways.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
@@ -185,7 +192,9 @@ rg -q -- '--provider=pihole' "$temp_dir/external-dns.yaml"
 rg -q -- '--annotation-filter=external-dns.k8s.io/audience=internal' "$temp_dir/external-dns.yaml"
 rg -q -- '--gateway-name=internal' "$temp_dir/external-dns.yaml"
 rg -q -- '--pihole-server=https://pi.hole' "$temp_dir/external-dns.yaml"
-! rg -q -- '--pihole-tls-skip-verify' "$temp_dir/external-dns.yaml"
+assert_command_finds_nothing \
+  'The rendered external-dns arguments must not skip Pi-hole TLS verification.' \
+  rg -q -- '--pihole-tls-skip-verify' "$temp_dir/external-dns.yaml"
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.containers[] | select(.name == "external-dns") | .env[] | select(.name == "SSL_CERT_FILE") | .value' "$temp_dir/external-dns.yaml")" == '/etc/ssl/pihole/tls_ca.crt' ]]
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.volumes[] | select(.name == "pihole-ca") | .configMap.name' "$temp_dir/external-dns.yaml")" == 'pihole-ca' ]]
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.containers[] | select(.name == "external-dns") | .volumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' "$temp_dir/external-dns.yaml")" == '/etc/ssl/pihole true' ]]

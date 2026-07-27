@@ -85,6 +85,7 @@ trap '[[ "$passed" == true ]] || recover "cleanup-trap" || true' EXIT
 [[ "$(vpn_status)" == 'running' ]] || { echo 'VPN is not running at baseline.' >&2; exit 1; }
 vpn_ip_baseline="$(vpn_ip)"
 [[ -n "$vpn_ip_baseline" ]] || { echo 'No baseline VPN public IP.' >&2; exit 1; }
+"$repo_root/tests/probes/qbittorrent/probe.sh" "$kubeconfig"
 home_ip="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" run "vpndis-wan-$RANDOM" \
   --image=curlimages/curl:8.11.1 --restart=Never --rm -i --quiet \
   --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
@@ -121,6 +122,7 @@ echo "Phase 3: recovery verification capture (20s) on ${pod}; new vpn=${new_vpn_
 uv run python "$here/leak_sentinel.py" --timeline "$recovery_timeline" \
   --home-wan "$home_ip" --vpn-ip "$new_vpn_ip" | tee "$run_dir/verdict-recovery.json"
 [[ "${PIPESTATUS[0]}" -eq 0 ]] || { echo 'Recovery verification FAILED: post-recovery egress not clean via VPN.' >&2; exit 1; }
+"$repo_root/tests/probes/qbittorrent/probe.sh" "$kubeconfig"
 
 passed=true
 trap - EXIT

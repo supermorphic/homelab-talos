@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # qBittorrent/Gluetun read-only network probe (Required follow-up sequence item 1,
-# probe half). Reuses the NON-destructive baseline of qbittorrent-killswitch-verify:
+# probe half). Reuses the NON-destructive baseline of the
+# qbittorrent-vpn-disconnect resilience scenario:
 # it only reads live state (no VPN stop, no pod recreation) and asserts the
 # forwarded-port agreement and VPN egress invariants.
 #
@@ -49,6 +50,21 @@ check_no_home_leak() {
   [[ -z "$observed" || "$observed" != "$home" ]] || { echo "LEAK ($context): observed IP == home WAN IP $home." >&2; return 1; }
 }
 
+# check_loopback_resolvers <newline-separated nameservers>
+check_loopback_resolvers() {
+  local resolvers="$1" resolver
+  [[ -n "$resolvers" ]] || {
+    echo 'Could not read qBittorrent /etc/resolv.conf nameservers.' >&2
+    return 1
+  }
+  while IFS= read -r resolver; do
+    [[ -z "$resolver" || "$resolver" == '127.0.0.1' ]] || {
+      echo "DNS leak risk: qBittorrent resolver '$resolver' is not Gluetun loopback (127.0.0.1)." >&2
+      return 1
+    }
+  done <<<"$resolvers"
+}
+
 # --- live measurement (operator-run; never invoked in CI) --------------------------
 
 probe_main() {
@@ -65,13 +81,15 @@ probe_main() {
   [[ -n "$apikey" ]] || { echo 'Could not read control-server apikey from /gluetun/auth/config.toml.' >&2; exit 1; }
   ctl() { gx wget -qO- --header "X-API-Key: $apikey" "$@" 2>/dev/null; }
 
-  local vpn_status vpn_ip vpn_country forwarded listen egress home_ip
+  local vpn_status vpn_ip vpn_country forwarded listen egress home_ip resolvers
   vpn_status="$(ctl http://localhost:8000/v1/vpn/status  | yq -r '.status // "unknown"' 2>/dev/null || echo unknown)"
   vpn_ip="$(ctl http://localhost:8000/v1/publicip/ip     | yq -r '.public_ip // ""' 2>/dev/null || true)"
   vpn_country="$(ctl http://localhost:8000/v1/publicip/ip | yq -r '.country // ""' 2>/dev/null || true)"
   forwarded="$(ctl http://localhost:8000/v1/portforward  | yq -r '.port // ""' 2>/dev/null || true)"
   listen="$(gapp sh -c 'wget -qO- -T 6 http://127.0.0.1:8080/api/v2/app/preferences 2>/dev/null' | yq -r '.listen_port // ""' 2>/dev/null || true)"
   egress="$(gapp sh -c 'wget -qO- -T 6 https://ifconfig.me/ip 2>/dev/null || true' | tr -d '\r\n ')"
+  resolvers="$(gapp sh -c 'grep "^nameserver" /etc/resolv.conf' 2>/dev/null |
+    sed -E 's/^nameserver[[:space:]]+//' | tr -d '\r')"
 
   # Home/WAN reference: a throwaway no-VPN pod egresses via the node WAN. Ephemeral
   # (--rm); the only non-read action, and it changes no persistent cluster state.
@@ -80,14 +98,15 @@ probe_main() {
     --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
   [[ -n "$home_ip" ]] || { echo 'Could not determine the node WAN IP (leak reference).' >&2; exit 1; }
 
-  echo "vpn_status=$vpn_status country=$vpn_country vpn_ip=$vpn_ip forwarded_port=$forwarded listen_port=$listen app_egress=$egress home_wan=$home_ip"
+  echo "vpn_status=$vpn_status country=$vpn_country vpn_ip=$vpn_ip forwarded_port=$forwarded listen_port=$listen app_egress=$egress home_wan=$home_ip resolvers=$(tr '\n' ',' <<<"$resolvers")"
   check_vpn_running "$vpn_status"
   check_country_sweden "$vpn_country"
   check_no_home_leak "$vpn_ip" "$home_ip" 'vpn-ip'
   check_port_agreement "$forwarded" "$listen"
   check_egress_matches_vpn "$egress" "$vpn_ip"
   check_no_home_leak "$egress" "$home_ip" 'app-egress'
-  echo 'qBittorrent probe passed: VPN running via Sweden, egress == VPN IP (not home WAN), forwarded port agrees with qBittorrent listen_port.'
+  check_loopback_resolvers "$resolvers"
+  echo 'qBittorrent probe passed: VPN running via Sweden, egress == VPN IP (not home WAN), forwarded port agrees with qBittorrent listen_port, and DNS uses only Gluetun loopback.'
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

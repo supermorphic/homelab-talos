@@ -42,5 +42,11 @@ expect_pass 'no leak: egress blocked'     check_no_home_leak '' 24.8.29.48 app-e
 expect_fail 'leak: equals home'           check_no_home_leak 24.8.29.48 24.8.29.48 app-egress
 expect_fail 'no home reference'           check_no_home_leak 1.2.3.4 '' vpn-ip
 
+expect_pass 'single loopback resolver'    check_loopback_resolvers '127.0.0.1'
+expect_pass 'repeated loopback resolvers' check_loopback_resolvers $'127.0.0.1\n127.0.0.1'
+expect_fail 'cluster resolver'            check_loopback_resolvers '10.96.0.10'
+expect_fail 'mixed resolver set'          check_loopback_resolvers $'127.0.0.1\n192.168.90.2'
+expect_fail 'empty resolver set'          check_loopback_resolvers ''
+
 echo "qBittorrent probe unit tests: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

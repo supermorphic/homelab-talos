@@ -22,4 +22,4 @@ done
 [[ "$accepted" == 'true' ]] || { echo 'qbittorrent HTTPRoute was not Accepted.' >&2; exit 1; }
 [[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
 curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/" >/dev/null || { echo 'qBittorrent WebUI not reachable via the gateway.' >&2; exit 1; }
-echo 'Phase 12 qBittorrent acceptance passed. Run qbittorrent-killswitch-verify (the blocking VPN gate) before flipping suspend: false.'
+echo "Phase 12 qBittorrent acceptance passed. Run CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' just test resilience qbittorrent-vpn-disconnect before flipping suspend: false."

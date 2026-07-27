@@ -145,10 +145,11 @@ USB-A-to-USB-C adapter and use the rear USB-C port instead.
 ## Prerequisites
 
 - macOS with Homebrew and Git
-- Bash `>= 4` (`brew install bash`). Recipes use `#!/usr/bin/env bash`, and macOS's
+- Bash `>= 5` (`brew install bash`). Recipes use `#!/usr/bin/env bash`, and macOS's
   built-in `/bin/bash` 3.2 silently skips `set -e` for a failed `[[ ]]` test, so
-  validation assertions would not gate under it. The `require-bash` guard refuses
-  to run the verification recipes on an older bash.
+  validation assertions would not gate under it. Bash is a platform prerequisite
+  because mise has no supported Bash runtime entry; the `require-bash` guard refuses
+  to run validation and verification recipes on an older Bash.
 - Access to this private repository
 - The password-manager item `homelab-talos SOPS age key` when working with secrets
 - Network access to GitHub and upstream release registries when installing tools
@@ -255,7 +256,8 @@ available for focused developer validation.
 | `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Enabled in Phase 5; read-only |
 | `just kube cilium-diagnostics` | Print Talos diagnostics from all cluster nodes | — | Enabled in Phase 5; read-only |
 | `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health | — | Enabled in Phase 5; read-only |
-| `just kube cilium-verify` | Run the Phase 5 gate and temporary connectivity tests | — | Enabled in Phase 5; creates and removes test resources |
+| `just kube cilium-verify` | Verify live Cilium, node, Hubble, Talos, and etcd state | `.kube/config` | Enabled in Phase 5; operator-only and read-only |
+| `just kube cilium-connectivity-test` | Run Cilium's functional IPv4 connectivity suite and remove its temporary workloads | `.kube/config`; `CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity` | Enabled in Phase 5; operator-only and state-changing |
 | `just bootstrap cilium` | Guard and install or reconcile Cilium `1.19.6` | `CILIUM_BOOTSTRAP_CONFIRM` | Enabled in Phase 5; mutating after confirmation |
 | `just kube flux-validate` | Validate Flux sources, SOPS canary, dependencies, and Cilium adoption guards | — | Enabled in Phase 6; read-only |
 | `just kube flux-preflight` | Verify published Git, Cilium/Talos/etcd health, and Kubernetes compatibility | — | Enabled in Phase 6; read-only |
@@ -275,7 +277,8 @@ available for focused developer validation.
 | `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Enabled in Phase 9; mutating tracked ciphertext after confirmation |
 | `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Enabled in Phase 9; read-only |
 | `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Enabled in Phase 9; mutating after confirmation |
-| `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, recurring jobs, and a two-replica test PVC | — | Enabled in Phase 9; creates and removes a test PVC |
+| `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, and recurring jobs | `.kube/config` | Enabled in Phase 9; operator-only and read-only |
+| `just kube storage-provisioning-test` | Create a run-scoped Longhorn PVC and prove two-node replica placement before cleanup | `.kube/config`; `STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning` | Enabled in Phase 9; operator-only and state-changing |
 | `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Portainer Phase 1; mutating tracked ciphertext after confirmation |
 | `just repo homepage-portainer-secrets` | Write only the encrypted Portainer API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Portainer activation; mutating tracked ciphertext after confirmation |
 | `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Portainer Phase 1; read-only and included in `just ci` |
@@ -416,14 +419,16 @@ mise exec -- just bootstrap status
 mise exec -- just bootstrap status nuc1
 ```
 
-Run the full functional network suite after a networking change or when the
-status checks cannot explain a connectivity problem:
+Run read-only acceptance first. After a networking change, run the explicit
+state-changing functional suite:
 
 ```bash
 mise exec -- just kube cilium-verify
+CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity' \
+  mise exec -- just kube cilium-connectivity-test
 ```
 
-The full verifier takes approximately 15–20 minutes. It creates temporary test
+The connectivity test takes approximately 15–20 minutes. It creates temporary test
 workloads, exercises DNS, services, policy, FQDN, L7, pod, node, and cross-node
 traffic, and removes the test resources afterward. `just kube cilium-validate`
 and `just repo verify` validate local declarative sources; they do not establish

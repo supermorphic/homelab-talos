@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/common.sh
+require_bash
+
 base='kubernetes/apps/media/qbittorrent'
 ks="$base/ks.yaml"
 hr="$base/app/helmrelease.yaml"
@@ -89,7 +92,9 @@ rule="$base/app/prometheusrule.yaml"
 [[ "$(yq -r '.metadata.name' "$svc")" == 'qbittorrent-gluetun-control' ]]
 [[ "$(yq -r '.spec.ports[0].port' "$svc")" == '8000' ]]
 # The control server must never be routed to the gateway/LB.
-! rg -qi 'gluetun-control' "$route"
+assert_command_finds_nothing \
+  'The Gluetun control service must not be exposed through the HTTPRoute.' \
+  rg -qi 'gluetun-control' "$route"
 [[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
 [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentVpnDown") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
 [[ "$(yq -r '[.spec.groups[].rules[] | select(.alert == "QbittorrentGluetunRestartLoop") | .labels.severity] | .[0]' "$rule")" == 'critical' ]]
