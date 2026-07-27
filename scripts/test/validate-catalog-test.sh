@@ -24,6 +24,16 @@ yq -i '(.suites[] | select(.metadata.id == "chainsaw.smoke.cluster.default") | .
   "$temp_dir/unsafe-path.yaml"
 expect_rejection 'unsafe dispatch path' "$temp_dir/unsafe-path.yaml"
 
+cp tests/catalog.yaml "$temp_dir/direct-runtime.yaml"
+yq -i '(.suites[] | select(.metadata.id == "test.integration.media-hardlink") |
+  .dispatch.runtime) = "shell-string"' "$temp_dir/direct-runtime.yaml"
+expect_rejection 'untyped direct runtime' "$temp_dir/direct-runtime.yaml"
+
+cp tests/catalog.yaml "$temp_dir/direct-args.yaml"
+yq -i '(.suites[] | select(.metadata.id == "test.integration.media-hardlink") |
+  .dispatch.args) = ".kube/config --unsafe"' "$temp_dir/direct-args.yaml"
+expect_rejection 'direct shell string instead of argument vector' "$temp_dir/direct-args.yaml"
+
 cp tests/catalog.yaml "$temp_dir/unguarded-mutation.yaml"
 yq -i '(.suites[] | select(.metadata.id == "test.cilium-connectivity") | .confirmation) = {
   "type": "none", "variable": null, "expected": null

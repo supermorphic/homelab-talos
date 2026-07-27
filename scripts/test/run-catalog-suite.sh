@@ -170,6 +170,13 @@ if [[ "$mutates_cluster" != 'true' || "$lease_acquired" == 'true' ]]; then
   fi
 fi
 
+primary_assertion_status='failed'
+[[ "$primary_exit_code" -ne 0 ]] || primary_assertion_status='passed'
+primary_counts="$(read_junit_counts "$run_dir/junit.xml")"
+read -r _primary_tests _primary_failures primary_errors _primary_skipped _primary_passed \
+  <<<"$primary_counts"
+[[ "$primary_errors" -eq 0 ]] || primary_assertion_status='not-classified'
+
 if [[ "$lease_acquired" == 'true' ]]; then
   lease_release_status='passed'
   lease_finalization_failed=false
@@ -192,10 +199,18 @@ fi
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 duration_seconds=$((EPOCHSECONDS - started_epoch))
 cleanup_status="$lease_release_status"
+recovery_status='not-required'
+external_dependency_status='not-applicable'
 if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
-  scenario_cleanup_status="$(recorded_recovery_status "$run_dir")"
+  recovery_status="$(recorded_recovery_status "$run_dir")"
+  scenario_cleanup_status="$recovery_status"
+  if [[ -f "$run_dir/cleanup.json" ]]; then
+    scenario_cleanup_status="$(recorded_phase_status "$run_dir" cleanup)"
+  fi
   case "$scenario_cleanup_status" in
     passed|not-required)
+      [[ "$cleanup_status" != 'failed' ]] || scenario_cleanup_status='failed'
+      cleanup_status="$scenario_cleanup_status"
       ;;
     failed|not-classified)
       cleanup_status="$scenario_cleanup_status"
@@ -213,6 +228,20 @@ if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
       ;;
   esac
 fi
+if [[ -f "$run_dir/external-dependency.json" ]]; then
+  external_dependency_status="$(recorded_phase_status "$run_dir" external-dependency)"
+  if [[ "$external_dependency_status" == 'failed' ||
+    "$external_dependency_status" == 'not-classified' ]]; then
+    run_result='broken'
+  fi
+fi
+assertion_status="$primary_assertion_status"
+if [[ -f "$run_dir/assertion.json" ]]; then
+  assertion_status="$(recorded_phase_status "$run_dir" assertion)"
+fi
+append_lifecycle_junit "$run_dir/junit.xml" "$suite_id" \
+  "$external_dependency_status" "$cleanup_status" "$recovery_status" \
+  passed "$run_result"
 cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
   --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
@@ -221,13 +250,10 @@ write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$kubeconfig" "$confirmation_variable"
 normalize_native_artifacts "$run_dir" "$run_id"
 write_evidence_index "$run_dir" "$run_id"
-assertion_status='passed'
-[[ "$run_result" == 'passed' ]] || assertion_status='failed'
-[[ "$run_result" != 'broken' ]] || assertion_status='not-classified'
 write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
   "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
-  not-required not-applicable "$cluster_name"
+  "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
 
 finalized=true

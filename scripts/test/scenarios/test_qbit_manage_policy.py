@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from collections import UserDict, UserList
 from pathlib import Path
 from unittest import mock
@@ -116,6 +117,27 @@ class IdentityAndPathTests(unittest.TestCase):
                 self.assertRaises(qbm.AssertionFailure),
             ):
                 qbm.validate_no_qbit_collisions(self.identity, fixture, categories, tags)
+
+
+class JunitPhaseResultTests(unittest.TestCase):
+    def test_phase_junit_is_emitted_by_the_python_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fragments = root / "fragments"
+            with mock.patch.dict(
+                os.environ,
+                {"TEST_RESULT_FRAGMENT_DIR": str(fragments)},
+            ):
+                recorder = qbm.ResultRecorder(root / "run", qbm.RunIdentity(RUN_ID))
+                recorder.junit_phase("preflight", "passed", 0.25)
+
+            reports = list(fragments.glob("*.xml"))
+            self.assertEqual(len(reports), 1)
+            case = ET.parse(reports[0]).getroot().find(".//testcase")
+            self.assertIsNotNone(case)
+            assert case is not None
+            self.assertEqual(case.attrib["name"], "preflight")
+            self.assertEqual(case.attrib["time"], "0.250000")
 
 
 class PolicyConfigTests(unittest.TestCase):

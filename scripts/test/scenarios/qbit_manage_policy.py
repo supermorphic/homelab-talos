@@ -410,6 +410,7 @@ fi
 class ResultRecorder:
     def __init__(self, run_dir: Path, identity: RunIdentity):
         self.run_dir = run_dir
+        self.junit_index = 0
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
         (run_dir / "diagnostics" / "manifests").mkdir(parents=True, exist_ok=True)
         self.evidence: dict[str, Any] = {
@@ -435,6 +436,31 @@ class ResultRecorder:
 
     def write_status(self, name: str, status: str, reason: str) -> None:
         atomic_write_json(self.run_dir / f"{name}.json", {"status": status, "reason": reason})
+
+    def junit_phase(self, name: str, result: str, duration: float) -> None:
+        fragment_dir = os.environ.get("TEST_RESULT_FRAGMENT_DIR", "")
+        if not fragment_dir:
+            return
+        self.junit_index += 1
+        output = Path(fragment_dir) / f"qbit-manage-{self.junit_index:02d}-{name}.xml"
+        tool = Path(__file__).resolve().parents[1] / "junit_tools.py"
+        run_command(
+            [
+                sys.executable,
+                str(tool),
+                "case",
+                "--output",
+                str(output),
+                "--suite",
+                "test.e2e.qbit-manage-policy",
+                "--name",
+                name,
+                "--result",
+                result,
+                "--duration",
+                f"{duration:.6f}",
+            ]
+        )
 
     def flush_evidence(self) -> None:
         atomic_write_json(self.run_dir / "evidence.json", self.evidence)
@@ -1505,14 +1531,31 @@ class Scenario:
         )
 
     def run(self) -> None:
-        self.preflight()
-        self.download()
-        self.classification()
-        self.representative_hardlink()
-        self.czteam_policy()
-        self.private_exclusion()
-        self.limits()
-        self.cleanup_policy()
+        phases = (
+            ("preflight", self.preflight),
+            ("download", self.download),
+            ("classification", self.classification),
+            ("representative-hardlink", self.representative_hardlink),
+            ("czteam-policy", self.czteam_policy),
+            ("private-exclusion", self.private_exclusion),
+            ("limits", self.limits),
+            ("cleanup-policy", self.cleanup_policy),
+        )
+        for name, operation in phases:
+            started = time.monotonic()
+            try:
+                operation()
+            except ExternalDependencyFailure:
+                self.recorder.junit_phase(name, "broken", time.monotonic() - started)
+                raise
+            except AssertionFailure:
+                self.recorder.junit_phase(name, "failed", time.monotonic() - started)
+                raise
+            except BaseException:
+                self.recorder.junit_phase(name, "broken", time.monotonic() - started)
+                raise
+            else:
+                self.recorder.junit_phase(name, "passed", time.monotonic() - started)
         self.recorder.write_status(
             "assertion",
             "passed",
@@ -1624,6 +1667,15 @@ def main(argv: list[str] | None = None) -> int:
             scenario.recorder.write_status("recovery", "failed", reason)
         except Exception:  # noqa: BLE001, S110 - no safe secondary recovery remains
             pass
+    try:
+        scenario.recorder.junit_phase(
+            "exact-teardown",
+            "passed" if cleanup_ok else "broken",
+            0,
+        )
+    except Exception:  # noqa: BLE001 - a missing phase artifact must fail the run
+        cleanup_ok = False
+        print("Could not write the exact-teardown JUnit phase.", file=sys.stderr)
     return 0 if primary_ok and cleanup_ok else 1
 
 

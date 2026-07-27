@@ -1,9 +1,8 @@
 # Chainsaw scenarios
 
-Scenarios are organized by operational risk:
+Chainsaw scenarios are organized by operational risk:
 
 - `smoke/`: read-only assertions against existing production resources.
-- `e2e/`: guarded functional workflows that can change workload state.
 - `resilience/`: explicitly confirmed disruption and recovery workflows.
 
 `tests/catalog.yaml` is the authoritative dispatcher. Every Chainsaw document
@@ -26,16 +25,23 @@ Media readiness is split by application:
 The qbit_manage smoke suite checks reconciliation and workload health without
 capturing application logs, which may contain torrent names or tracker URLs.
 
-State-changing E2E and resilience scenarios record cleanup/recovery separately
-from the primary assertion. A cleanup failure makes the command fail while
-preserving the primary result in `summary.json`. Chainsaw's native
+The VPN disconnect, qBittorrent pod recreation, and Plex cross-node scenarios use
+explicit Chainsaw steps for disruption, Kubernetes readiness, assertion, diagnostics,
+and guaranteed recovery. Their small Bash helpers retain only imperative control,
+temporal observation, and filesystem evidence that cannot be expressed declaratively.
+Chainsaw's native
 `JUNIT-STEP` output remains the test-case source; the runner adds canonical
 metadata, evidence indexing, diagnostics, and final contract validation.
 
-The `qbit-manage-policy` E2E is additionally guarded by the exact
+The Python `qbit-manage-policy` E2E runs directly through the catalog coordinator and is
+guarded by the exact
 `CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy` token. It is deliberately isolated
 from production policy by a unique category and run tag; production manages only
 `movies`/`tv`. Its one-shot Jobs require both unique selectors, exclude
 `tracker-private`, disable global qBittorrent preference mutation, skip global
 recycle-bin purging, and mount downloads but never media. No qBittorrent or
 qbit_manage application logs are collected.
+
+The focused `media-hardlink` integration and external Talos `plex-node-reboot`
+orchestrator also run directly; wrapping either in Chainsaw would add no useful
+Kubernetes lifecycle control.

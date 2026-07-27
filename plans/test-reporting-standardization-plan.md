@@ -93,6 +93,25 @@ Phase 3 implementation status on `feat/test-result-coordinator`:
   non-vacuous native E2E JUnit is merged, and teardown/harness failures remain
   independent errors.
 
+Phase 4 implementation status on `refactor/test-runner-right-sizing`:
+
+- The catalog's live dispatcher supports typed `chainsaw`, `diagnostics`, and
+  `direct` backends without evaluating catalog shell strings. Direct Bash and
+  uv/Python paths still use the canonical coordinator and renewable Lease.
+- `media-hardlink` is a focused Bash integration; `qbit-manage-policy` is a
+  direct Python E2E with per-phase native JUnit; `plex-node-reboot` is a direct
+  guarded Bash/Talos resilience orchestrator.
+- qBittorrent pod recreation, VPN disconnect, and Plex cross-node reschedule
+  remain in Chainsaw, but now expose explicit baseline/preparation, disruption,
+  readiness, assertion, diagnostics, and recovery steps. Small Bash phase
+  helpers retain only dynamic control loops, temporal observations, and
+  filesystem evidence.
+- The live cleanup-failure Chainsaw scenario is removed. Its invariant—cleanup
+  failure produces a broken run without masking a passed primary assertion—is
+  enforced by the offline result-contract regression.
+- The catalog contains 79 suites after reclassifying three incorrectly wrapped
+  entries and removing the cluster-dependent harness self-test.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |

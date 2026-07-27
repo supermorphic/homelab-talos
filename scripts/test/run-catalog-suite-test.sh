@@ -12,7 +12,7 @@ TEST_EXECUTION_ORIGIN=agent \
 mapfile -t passed_runs < <(find "$fixture_root/passed" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#passed_runs[@]}" -eq 1 ]]
 [[ "$(yq -r '.result' "${passed_runs[0]}/summary.json")" == 'passed' ]]
-[[ "$(yq -r '.junit.tests' "${passed_runs[0]}/summary.json")" == '1' ]]
+[[ "$(yq -r '.junit.tests' "${passed_runs[0]}/summary.json")" == '6' ]]
 
 set +e
 TEST_RESULTS_ROOT="$fixture_root/failed" \
