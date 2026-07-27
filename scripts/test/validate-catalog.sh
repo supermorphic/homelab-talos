@@ -10,9 +10,15 @@ catalog="${1:-tests/catalog.yaml}"
   exit 1
 }
 
-yq -e '.schema_version == 1 and (.suites | type == "!!seq") and (.suites | length > 0)' \
+yq -e '
+  .schema_version == 1 and
+  (.suites | type == "!!seq") and
+  (.suites | length > 0) and
+  ((.executions.ci | type) == "!!seq") and
+  (.executions.ci | length > 0)
+' \
   "$catalog" >/dev/null || {
-  echo 'Test catalog must have schema_version=1 and a non-empty suites array.' >&2
+  echo 'Test catalog must have schema_version=1 plus non-empty suites and executions.ci arrays.' >&2
   exit 1
 }
 
@@ -67,7 +73,7 @@ for ((index = 0; index < suite_count; index++)); do
     echo "Catalog entry $id has invalid source '$source_name'." >&2
     exit 1
   }
-  [[ "$framework" =~ ^(just|bash|chainsaw|sonobuoy)$ ]] || {
+  [[ "$framework" =~ ^(just|bash|chainsaw|sonobuoy|conftest|kubeconform|mixed)$ ]] || {
     echo "Catalog entry $id has invalid framework '$framework'." >&2
     exit 1
   }
@@ -91,7 +97,7 @@ for ((index = 0; index < suite_count; index++)); do
     echo "Catalog entry $id has invalid execution_owner '$owner'." >&2
     exit 1
   }
-  [[ "$strategy" =~ ^(aggregate|wrapper-junit|chainsaw-junit-step|sonobuoy-junit)$ ]] || {
+  [[ "$strategy" =~ ^(aggregate|wrapper-junit|native-junit|chainsaw-junit-step|sonobuoy-junit)$ ]] || {
     echo "Catalog entry $id has invalid native result strategy '$strategy'." >&2
     exit 1
   }
@@ -177,43 +183,33 @@ for ((index = 0; index < suite_count; index++)); do
   fi
 done
 
-ci_commands="$(
-  awk '
-    $0 == "ci:" { in_ci = 1; next }
-    in_ci && /^[^[:space:]#]/ { exit }
-    in_ci && /^[[:space:]]+just / {
-      sub(/^[[:space:]]+just /, "mise exec -- just ")
-      print
-    }
-  ' .justfile
-)"
-[[ -n "$ci_commands" ]] || {
-  echo 'Could not discover the just ci command list.' >&2
+duplicate_ci_ids="$(yq -r '.executions.ci[]' "$catalog" | LC_ALL=C sort | uniq -d)"
+[[ -z "$duplicate_ci_ids" ]] || {
+  echo "Duplicate executions.ci suite IDs: $duplicate_ci_ids" >&2
   exit 1
 }
-ci_command_count=0
-while IFS= read -r ci_command; do
-  [[ -n "$ci_command" ]] || continue
-  ci_command_count=$((ci_command_count + 1))
+ci_command_count="$(yq -r '.executions.ci | length' "$catalog")"
+while IFS= read -r ci_id; do
   matches="$(
-    CI_COMMAND="$ci_command" yq -r \
+    CI_ID="$ci_id" yq -r \
       '[.suites[] |
-        select(.metadata.source == "validation" and
-          .runner.command == strenv(CI_COMMAND))] | length' \
+        select(.metadata.id == strenv(CI_ID) and
+          .metadata.source == "validation" and
+          .runner.command != "mise exec -- just ci")] | length' \
       "$catalog"
   )"
   [[ "$matches" -eq 1 ]] || {
-    echo "CI command must have exactly one validation catalog entry: $ci_command" >&2
+    echo "CI execution ID must resolve to one child validation suite: $ci_id" >&2
     exit 1
   }
-done <<<"$ci_commands"
+done < <(yq -r '.executions.ci[]' "$catalog")
 catalog_ci_count="$(
   yq -r '[.suites[] |
     select(.metadata.source == "validation" and
       .runner.command != "mise exec -- just ci")] | length' "$catalog"
 )"
 [[ "$catalog_ci_count" -eq "$ci_command_count" ]] || {
-  echo "Validation catalog/just ci count differs: catalog=$catalog_ci_count ci=$ci_command_count." >&2
+  echo "Validation catalog/executions.ci count differs: catalog=$catalog_ci_count ci=$ci_command_count." >&2
   exit 1
 }
 

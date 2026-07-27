@@ -91,7 +91,9 @@ names are not interchangeable. E2E registers `media-hardlink` and the exact-conf
 `qbit-manage-policy`; resilience targets are explicitly registered in the dispatcher.
 Unknown targets fail closed. Live commands must never enter `just ci`.
 
-Each live Chainsaw run writes a collision-resistant canonical directory:
+Every coordinated run writes a collision-resistant canonical directory. This
+includes `just ci`, live verification, focused script tests, probes, Chainsaw,
+diagnostics, and Sonobuoy:
 
 ```text
 .test-results/<UTC>-<sha12>-<origin>-<random8>/
@@ -121,6 +123,19 @@ recovery, diagnostics, and finalization lifecycle cases; non-applicable phases
 are skipped and harness failures are errors. Untouched Chainsaw `JUNIT-STEP` XML
 is retained as `diagnostics/chainsaw-junit.xml`.
 
-Phase 2 applies this canonical producer to Chainsaw-backed and diagnostic runs.
-The catalog already inventories validators, verifiers, probes, and Sonobuoy;
-their wrapper/JUnit normalization is Phase 3 of the reporting plan.
+Sonobuoy archives are retained below `diagnostics/sonobuoy/`.
+
+`just ci` is one fail-fast multi-suite run. Conftest and kubeconform emit native
+JUnit, ShellCheck JSON and Python unittest are adapted without collapsing their
+individual findings/cases, and Bash-only commands receive wrapper cases. A
+failed suite stops execution while every remaining catalog suite is recorded as
+skipped. GitHub Actions uploads `.test-results/` on both success and failure
+with 90-day retention; open the workflow run's **Artifacts** section and
+download `canonical-test-results-<run>-<attempt>`. Local runs remain directly
+available under `.test-results/`.
+
+All state-changing integration, E2E, resilience, mutating probe, and conformance
+runs use the renewable `flux-system/homelab-test-run-lock` Kubernetes Lease.
+The Lease is acquired only after the command's confirmation guard and is
+released only while the current run remains its holder. Read-only smoke and
+verification remain concurrent.

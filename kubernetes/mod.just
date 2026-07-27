@@ -121,17 +121,51 @@ metrics-server-validate: require-bash
 # Verify metrics-server: Kustomization + HelmRelease Ready, deployment rolled out,
 # the metrics.k8s.io APIService Available, and kubectl top returns data.
 metrics-server-verify: require-bash
-    @scripts/verify/metrics-server.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.metrics-server -- scripts/verify/metrics-server.sh {{quote(kubeconfig)}}
 
 # Unit-test the offline configuration policies without contacting a cluster.
 validator-tests:
-    @conftest fmt --check tests/policy
-    @conftest verify --policy tests/policy
+    #!/usr/bin/env bash
+    set -euo pipefail
+    conftest fmt --check tests/policy
+    set +e
+    conftest verify --policy tests/policy
+    result="$?"
+    set -e
+    if [[ -n "${TEST_RESULT_FRAGMENT_DIR:-}" ]]; then
+      set +e
+      conftest verify --policy tests/policy --output junit \
+        >"$TEST_RESULT_FRAGMENT_DIR/conftest-policy-unit.xml"
+      reporter_result="$?"
+      set -e
+      [[ "$reporter_result" -eq "$result" ]] || {
+        echo 'Conftest policy-unit console and JUnit executions disagreed.' >&2
+        exit 2
+      }
+    fi
+    exit "$result"
 
 # Enforce cross-application media source policy without contacting the cluster.
 media-policy-validate:
-    @conftest test --combine --all-namespaces \
-      --policy tests/policy/media kubernetes/apps/media
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(test --combine --all-namespaces --policy tests/policy/media kubernetes/apps/media)
+    set +e
+    conftest "${args[@]}"
+    result="$?"
+    set -e
+    if [[ -n "${TEST_RESULT_FRAGMENT_DIR:-}" ]]; then
+      set +e
+      conftest "${args[@]}" --output junit \
+        >"$TEST_RESULT_FRAGMENT_DIR/conftest-media-policy.xml"
+      reporter_result="$?"
+      set -e
+      [[ "$reporter_result" -eq "$result" ]] || {
+        echo 'Conftest media-policy console and JUnit executions disagreed.' >&2
+        exit 2
+      }
+    fi
+    exit "$result"
 
 # On-demand, operator-run Kubernetes conformance via Sonobuoy. NOT in `just ci` and NOT
 # scheduled — Sonobuoy is ephemeral (run -> retrieve -> delete), never a standing workload.
@@ -139,47 +173,7 @@ media-policy-validate:
 # MODE=certified runs the full certified-conformance suite (~1.5-2h) and IS upstream
 # conformance evidence — run it only for major Kubernetes upgrades / platform changes.
 conformance: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    mode="${MODE:-quick}"
-    case "$mode" in
-      quick)     sono_mode='quick'; label='quick validation subset (NOT upstream conformance)' ;;
-      certified) sono_mode='certified-conformance'; label='certified upstream Kubernetes conformance' ;;
-      *) echo "MODE must be 'quick' (default) or 'certified', got '$mode'." >&2; exit 2 ;;
-    esac
-    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-
-    # Refuse if a prior Sonobuoy run is still installed (never stack runs).
-    if kubectl --kubeconfig "$kubeconfig" get namespace sonobuoy >/dev/null 2>&1; then
-      echo 'A sonobuoy namespace already exists; a prior run is still installed. Run `sonobuoy delete --wait` first.' >&2
-      exit 1
-    fi
-
-    mkdir -p .test-results
-    run_dir="$(mktemp -d ".test-results/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)-conformance.XXXXXX")"
-
-    # Always tear Sonobuoy down — on success, failure, or interruption — after preserving
-    # whatever results are retrievable. Nothing is left standing in the cluster.
-    cleanup() {
-      sonobuoy retrieve "$run_dir" --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
-      sonobuoy delete --wait --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
-    }
-    trap cleanup EXIT
-
-    echo "Running Sonobuoy: $label (mode=$sono_mode). Evidence: $run_dir"
-    sonobuoy run --mode "$sono_mode" --wait --kubeconfig "$kubeconfig"
-
-    tarball="$(sonobuoy retrieve "$run_dir" --kubeconfig "$kubeconfig")"
-    echo "Retrieved results: $tarball"
-    sonobuoy results "$tarball" | tee "$run_dir/summary.txt"
-
-    trap - EXIT
-    sonobuoy delete --wait --kubeconfig "$kubeconfig"
-    failed="$(sonobuoy results "$tarball" --plugin e2e | rg -o 'Failed: [0-9]+' | rg -o '[0-9]+' || echo unknown)"
-    [[ "$failed" == '0' ]] || { echo "Sonobuoy e2e reported failures ($failed); see $run_dir." >&2; exit 1; }
-    echo "Sonobuoy $label passed (0 e2e failures). Sonobuoy torn down; evidence in $run_dir."
+    @scripts/test/run-conformance.sh {{quote(kubeconfig)}}
 
 # Validate the built app manifests against Kubernetes + CRD schemas, offline of the
 # cluster (schemas are fetched over HTTPS). Secrets are kept (only the SOPS metadata
@@ -213,11 +207,38 @@ kubeconform: require-bash
     done < <(find kubernetes/apps -type f -name kustomization.yaml \( -path '*/app/kustomization.yaml' -o -path '*/config/kustomization.yaml' \) | sort)
     yq ea 'del(.sops)' "$temp_dir/all.yaml" >"$temp_dir/validate.yaml"
 
-    kubeconform -strict -summary -ignore-missing-schemas \
-      -kubernetes-version "$k8s_version" \
-      -schema-location default \
-      -schema-location "$crd_catalog" \
+    kubeconform_args=(
+      -strict
+      -summary
+      -ignore-missing-schemas
+      -kubernetes-version "$k8s_version"
+      -schema-location default
+      -schema-location "$crd_catalog"
       "$temp_dir/validate.yaml"
+    )
+    set +e
+    kubeconform "${kubeconform_args[@]}"
+    result="$?"
+    set -e
+    if [[ -n "${TEST_RESULT_FRAGMENT_DIR:-}" ]]; then
+      set +e
+      kubeconform \
+        -strict \
+        -output junit \
+        -ignore-missing-schemas \
+        -kubernetes-version "$k8s_version" \
+        -schema-location default \
+        -schema-location "$crd_catalog" \
+        "$temp_dir/validate.yaml" \
+        >"$TEST_RESULT_FRAGMENT_DIR/kubeconform.xml"
+      reporter_result="$?"
+      set -e
+      [[ "$reporter_result" -eq "$result" ]] || {
+        echo 'Kubeconform console and JUnit executions disagreed.' >&2
+        exit 2
+      }
+    fi
+    [[ "$result" -eq 0 ]] || exit "$result"
 
     echo "kubeconform passed against Kubernetes v${k8s_version} schemas (CRDs absent from the catalog reported as skipped)."
 
@@ -249,13 +270,13 @@ require-bash:
 
 # Verify the live Phase 5 Cilium state without changing cluster resources.
 cilium-verify: require-bash
-    @scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
+    @scripts/test/run-catalog-suite.sh verification.cilium -- scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
 
 # Run the state-changing Cilium connectivity suite and clean up its temporary
 # workloads after CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity.
 # Operator-only; intentionally separate from read-only verification.
 cilium-connectivity-test: require-bash
-    @scripts/test/scenarios/cilium-connectivity.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.cilium-connectivity -- scripts/test/scenarios/cilium-connectivity.sh {{quote(kubeconfig)}}
 
 # Validate the complete local Phase 6 source and pinned OCI render without mutating the cluster.
 flux-validate: require-bash
@@ -329,7 +350,7 @@ flux-status:
 
 # Verify final Phase 6 ownership, source, SOPS, canary, and Cilium health.
 flux-verify: flux-validate require-bash
-    @scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
+    @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
 
 # Validate the complete local Phase 7 graph, encrypted providers, and pinned chart renders.
 foundation-validate: require-bash
@@ -368,10 +389,14 @@ foundation-status:
 
 # Verify the complete live Phase 7 internal foundation acceptance gate.
 foundation-verify: foundation-validate require-bash
-    @scripts/verify/foundation.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.foundation -- scripts/verify/foundation.sh {{quote(kubeconfig)}}
 
 # Restart the flux-system controllers and prove reconciliation resumes.
 flux-restart: require-bash
+    @scripts/test/run-catalog-suite.sh test.flux-restart -- just kube _flux-restart-raw
+
+[private]
+_flux-restart-raw: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -414,7 +439,11 @@ flux-restart: require-bash
     echo 'Flux controllers restarted; controllers are healthy and reconciliation resumed.'
 
 # Delete only the permanent canary and prove Flux recreates it from encrypted Git source.
-flux-canary-test: flux-verify
+flux-canary-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.flux-canary -- just kube _flux-canary-test-raw
+
+[private]
+_flux-canary-test-raw: flux-verify
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -468,30 +497,30 @@ plex-validate: require-bash
 # Verify live Longhorn state without changing cluster resources: controllers,
 # node disks, default StorageClass, backup target, and recurring jobs.
 storage-verify: require-bash
-    @scripts/verify/storage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.storage -- scripts/verify/storage.sh {{quote(kubeconfig)}}
 
 # Create and remove a run-scoped PVC to prove Longhorn dynamic provisioning and
 # two-node replica anti-affinity after
 # STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning. Operator-only and state-changing.
 storage-provisioning-test: require-bash
-    @scripts/test/scenarios/storage-provisioning.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.storage-provisioning -- scripts/test/scenarios/storage-provisioning.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
 csi-driver-smb-verify: require-bash
-    @scripts/verify/csi-driver-smb.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.csi-driver-smb -- scripts/verify/csi-driver-smb.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)
 # and the documented hardlink proof (docs/phase-11-media.md); binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
-    @scripts/verify/media-storage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(kubeconfig)}}
 
 # Verify the live Phase 11 Plex: Kustomization + HelmRelease Ready, rollout complete,
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.
 plex-verify: require-bash
-    @scripts/verify/plex.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.plex -- scripts/verify/plex.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
@@ -501,7 +530,7 @@ intel-gpu-plugin-validate: require-bash
 # Verify the live Phase 11 Intel GPU device plugin: Kustomization Ready, DaemonSet
 # rolled out, and every node advertising gpu.intel.com/i915 (QuickSync capacity).
 intel-gpu-plugin-verify: require-bash
-    @scripts/verify/intel-gpu-plugin.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.intel-gpu-plugin -- scripts/verify/intel-gpu-plugin.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 12 qBittorrent+Gluetun source: files, wiring, dependency,
 # encrypted ProtonVPN Secret, the sidecar/kill-switch essentials, and the pinned render.
@@ -511,7 +540,7 @@ qbittorrent-validate: require-bash
 # Verify the live Phase 12 qBittorrent: Kustomization + HelmRelease Ready, rollout,
 # HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway.
 qbittorrent-verify: require-bash
-    @scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.qbittorrent -- scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 13 *arr source (Prowlarr, Sonarr, Radarr): files, wiring, dependency
 # graph, no-secret ks, app-template chartRef, config-PVC (Longhorn RWO + Recreate + keep),
@@ -524,28 +553,7 @@ arr-validate: require-bash
 # Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, DNS, and /ping over the
 # internal gateway. Operator-only (needs the cluster); not in `just ci`.
 arr-verify app: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    app='{{app}}'
-    case "$app" in prowlarr|sonarr|radarr) ;; *) echo "Usage: just kube arr-verify <prowlarr|sonarr|radarr>" >&2; exit 1;; esac
-    kubeconfig='{{kubeconfig}}'
-    ns='media'
-    gateway_ip='192.168.90.30'
-    host="$app.lab.supermorphic.com"
-
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$app" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo "$app Kustomization not Ready." >&2; exit 1; }
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease "$app" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo "$app HelmRelease not Ready." >&2; exit 1; }
-    kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status "deployment/$app" --timeout=5m
-    accepted=false
-    for _ in {1..24}; do
-      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute "$app" --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]] && { accepted=true; break; }
-      sleep 5
-    done
-    [[ "$accepted" == 'true' ]] || { echo "$app HTTPRoute was not Accepted." >&2; exit 1; }
-    [[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
-    curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/ping" >/dev/null || { echo "$app /ping not reachable via the gateway." >&2; exit 1; }
-    echo "$app live acceptance passed (Ready, rollout, HTTPRoute Accepted, DNS, /ping)."
+    @scripts/test/run-catalog-suite.sh verification.{{app}} -- scripts/verify/arr.sh {{quote(app)}} {{quote(kubeconfig)}}
 
 # Validate the Phase 14 Seerr source: files, wiring, no-secret ks, app-template chartRef,
 # config-only PVC (Longhorn RWO + Recreate + keep at /app/config), HTTPRoute, Gatus probe,
@@ -556,7 +564,7 @@ seerr-validate: require-bash
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
-    @scripts/verify/seerr.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(kubeconfig)}}
 
 # Validate the FlareSolverr source: files, wiring, no-secret ks, app-template chartRef,
 # stateless (no config PVC, no HTTPRoute), non-root + drop-ALL caps, /dev/shm memory,
@@ -569,7 +577,7 @@ flaresolverr-validate: require-bash
 # endpoints, and an in-cluster GET / "ready" probe over a port-forward (no HTTPRoute/DNS).
 # Operator-only; not in ci. Proves the service is UP, NOT that any indexer works.
 flaresolverr-verify: require-bash
-    @scripts/verify/flaresolverr.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.flaresolverr -- scripts/verify/flaresolverr.sh {{quote(kubeconfig)}}
 
 # Validate the qbit_manage source: files, wiring, encrypted-Secret decryption, app-template
 # chartRef, non-root drop-ALL Recreate deployment, UI-less (no Service/HTTPRoute/Gatus),
@@ -582,7 +590,7 @@ qbit-manage-validate: require-bash
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash
-    @scripts/verify/qbit-manage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.qbit-manage -- scripts/verify/qbit-manage.sh {{quote(kubeconfig)}}
 
 # Read the preserved application trace for one run-owned qbit_manage E2E Job.
 # The exact run/phase validation and labels prevent this diagnostic from reading
@@ -692,7 +700,7 @@ monitoring-validate: require-bash
 # on Longhorn, HTTPRoutes accepted, all three UIs reachable with trusted HTTPS
 # through the internal gateway, and the foundation still green.
 monitoring-verify: require-bash
-    @scripts/verify/monitoring.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(kubeconfig)}}
 
 # Reset Grafana's DB admin password to the current grafana-admin Secret value. Grafana
 # only applies the admin password on first init, so a rotated/recreated Secret (e.g. the
@@ -727,7 +735,7 @@ gatus-validate: require-bash
 # Verify the live Gatus app: Kustomization + HelmRelease Ready, PVC bound,
 # HTTPRoute accepted, the dashboard reachable via HTTPS, and foundation green.
 gatus-verify: require-bash
-    @scripts/verify/gatus.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.gatus -- scripts/verify/gatus.sh {{quote(kubeconfig)}}
 
 # Validate the staged Portainer Phase 1 source: encrypted bootstrap Secret,
 # read-only RBAC, Cilium isolation, internal route, retained Longhorn PVC, and
@@ -737,19 +745,40 @@ portainer-validate: require-bash
 
 # Enforce the Portainer read-only ClusterRole and binding with Conftest.
 portainer-policy-validate:
-    @conftest test --all-namespaces \
-      --policy tests/policy/portainer \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(
+      test
+      --all-namespaces
+      --policy tests/policy/portainer
       kubernetes/apps/monitoring/portainer/app/rbac.yaml
+    )
+    set +e
+    conftest "${args[@]}"
+    result="$?"
+    set -e
+    if [[ -n "${TEST_RESULT_FRAGMENT_DIR:-}" ]]; then
+      set +e
+      conftest "${args[@]}" --output junit \
+        >"$TEST_RESULT_FRAGMENT_DIR/conftest-portainer-policy.xml"
+      reporter_result="$?"
+      set -e
+      [[ "$reporter_result" -eq "$result" ]] || {
+        echo 'Conftest Portainer-policy console and JUnit executions disagreed.' >&2
+        exit 2
+      }
+    fi
+    exit "$result"
 
 # Verify live Portainer readiness, storage, routing, isolation, and effective
 # impersonated Kubernetes authorization. Operator-only; not in `just ci`.
 portainer-verify: require-bash
-    @scripts/verify/portainer.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.portainer -- scripts/verify/portainer.sh {{quote(kubeconfig)}}
 
 # Confirmation-guarded pod recreation proving the Portainer database remains on
 # the original PVC. Operator-only and intentionally separate from bootstrap.
 portainer-persistence-test: require-bash
-    @scripts/verify/portainer-persistence.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.portainer-persistence -- scripts/verify/portainer-persistence.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 10 Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
@@ -759,7 +788,7 @@ homepage-validate: require-bash
 # Verify the live Homepage app: Kustomization Ready, deployment rolled out,
 # HTTPRoute accepted, dashboard reachable via HTTPS, and foundation green.
 homepage-verify: require-bash
-    @scripts/verify/homepage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.homepage -- scripts/verify/homepage.sh {{quote(kubeconfig)}}
 
 # Validate the Phase 10 Trivy Operator source: files, wiring, staged suspend,
 # dependency, pinned chart, key scanner settings, and the render.
@@ -769,4 +798,4 @@ trivy-validate: require-bash
 # Verify the live Trivy Operator: Kustomization + HelmRelease Ready, operator
 # rolled out, report CRDs installed, and foundation green.
 trivy-verify: require-bash
-    @scripts/verify/trivy.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.trivy -- scripts/verify/trivy.sh {{quote(kubeconfig)}}

@@ -46,4 +46,9 @@ e2e_entry="$(catalog_dispatch_entry "$catalog" e2e qbit-manage-policy '')"
 
 rg -Fq 'catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario"' "$runner"
 rg -Fq 'scripts/test/safety/require-e2e-confirmation.sh "$target"' "$runner"
-rg -Fq 'acquire_state_lock' "$runner"
+rg -Fq 'source scripts/test/lib/lease.sh' "$runner"
+rg -Fq 'acquire_test_lease "$kubeconfig" "$run_id"' "$runner"
+if rg -Fq '.test-results/state-changing.lock' "$runner"; then
+  echo 'Chainsaw still uses a worktree-local state-changing lock.' >&2
+  exit 1
+fi

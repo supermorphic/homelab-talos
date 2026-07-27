@@ -66,9 +66,30 @@ Phase 2 implementation status:
   metadata. Contract regression tests cover malformed counts, zero tests,
   symlinks, unsafe paths, origins, result precedence, and confirmation-value
   leakage.
-- Phase 3 remains responsible for the shared coordinator and JUnit
-  normalization of CI validators/unit tests, live verifiers, probes, and
-  Sonobuoy.
+- Phase 3 adds the shared coordinator and JUnit normalization of CI
+  validators/unit tests, live verifiers, probes, and Sonobuoy.
+
+Phase 3 implementation status on `feat/test-result-coordinator`:
+
+- `just ci` is driven by the catalog's ordered `executions.ci` list and emits
+  one canonical multi-suite run while retaining the existing fail-fast
+  behavior. Unexecuted children become explicit skipped JUnit cases.
+- Conftest and kubeconform use native JUnit; ShellCheck JSON and Python
+  unittest are normalized to finding/method-level cases; Bash commands receive
+  wrapper cases. Merge, fail-fast, non-vacuous output, status precedence,
+  interruption finalization, and evidence-size behavior have offline
+  regression tests.
+- GitHub Actions sets `execution_origin=github-actions` and uploads canonical
+  results after both successful and failed CI runs with 90-day retention.
+- Live Bash verifiers, focused integration/resilience scripts, and probes run
+  through the single-suite coordinator. The VPN leak timeline is stored inside
+  its canonical diagnostics tree.
+- The worktree-local disruptive lock is replaced by a renewable,
+  resourceVersion-guarded Kubernetes Lease in `flux-system`, shared by
+  state-changing script, Chainsaw, probe, and conformance runs.
+- Sonobuoy is normalized into the same contract: its archive is retained,
+  non-vacuous native E2E JUnit is merged, and teardown/harness failures remain
+  independent errors.
 
 ## Canonical terminology and responsibility
 

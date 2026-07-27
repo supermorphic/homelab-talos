@@ -255,6 +255,55 @@ write_single_case_junit() {
   } >"$output_file"
 }
 
+write_result_case_junit() {
+  local output_file="$1"
+  local suite_name="$2"
+  local case_name="$3"
+  local result="$4"
+  local duration="$5"
+  local failures=0 errors=0 skipped=0 body=''
+
+  [[ "$suite_name" =~ ^[a-zA-Z0-9_.-]+$ ]] || return 2
+  [[ "$case_name" =~ ^[a-zA-Z0-9_.:-]+$ ]] || return 2
+  case "$result" in
+    passed) ;;
+    failed)
+      failures=1
+      body='<failure message="command assertion failed"/>'
+      ;;
+    broken)
+      errors=1
+      body='<error message="test harness failed"/>'
+      ;;
+    skipped)
+      skipped=1
+      body='<skipped message="not executed after fail-fast stop"/>'
+      ;;
+    *) return 2 ;;
+  esac
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+    printf '<testsuites name="%s" tests="1" failures="%s" errors="%s" skipped="%s" time="%s">\n' \
+      "$suite_name" "$failures" "$errors" "$skipped" "$duration"
+    printf '  <testsuite name="%s" tests="1" failures="%s" errors="%s" skipped="%s" time="%s">\n' \
+      "$suite_name" "$failures" "$errors" "$skipped" "$duration"
+    printf '    <testcase classname="%s" name="%s" time="%s">%s</testcase>\n' \
+      "$suite_name" "$case_name" "$duration" "$body"
+    printf '  </testsuite>\n</testsuites>\n'
+  } >"$output_file"
+}
+
+merge_junit_reports() {
+  local output_file="$1"
+  local suite_name="$2"
+  shift 2
+  [[ "$#" -gt 0 ]] || return 2
+  uv run --locked python scripts/test/junit_tools.py merge \
+    --output "$output_file" \
+    --suite "$suite_name" \
+    "$@"
+}
+
 append_lifecycle_junit() {
   local junit_file="$1"
   local suite_id="$2"
@@ -472,6 +521,79 @@ write_summary() {
         "cleanup": {"status": strenv(CLEANUP_STATUS)},
         "recovery": {"status": strenv(RECOVERY_STATUS)},
         "diagnostics": {"status": strenv(DIAGNOSTICS_STATUS)}
+      }
+    }' >"$output_dir/summary.json"
+}
+
+write_multi_summary() {
+  local output_dir="$1"
+  local run_id="$2"
+  local entry_json="$3"
+  local execution_origin="$4"
+  local started_at="$5"
+  local finished_at="$6"
+  local duration_seconds="$7"
+  local result="$8"
+  local primary_exit_code="$9"
+  local suites_json="${10}"
+  local counts tests failures errors skipped passed git_sha assertion_status
+
+  counts="$(read_junit_counts "$output_dir/junit.xml")"
+  read -r tests failures errors skipped passed <<<"$counts"
+  git_sha="$(git rev-parse HEAD)"
+  assertion_status='not-classified'
+  [[ "$result" != 'passed' ]] || assertion_status='passed'
+  [[ "$result" != 'failed' ]] || assertion_status='failed'
+
+  RUN_ID="$run_id" \
+  ENTRY_JSON="$entry_json" \
+  EXECUTION_ORIGIN="$execution_origin" \
+  STARTED_AT="$started_at" \
+  FINISHED_AT="$finished_at" \
+  DURATION_SECONDS="$duration_seconds" \
+  RUN_RESULT="$result" \
+  ASSERTION_STATUS="$assertion_status" \
+  PRIMARY_EXIT_CODE="$primary_exit_code" \
+  SUITES_JSON="$suites_json" \
+  TESTS="$tests" FAILURES="$failures" ERRORS="$errors" SKIPPED="$skipped" PASSED="$passed" \
+  GIT_SHA="$git_sha" \
+    yq --null-input --output-format json '{
+      "schema_version": 1,
+      "run_id": strenv(RUN_ID),
+      "source": (strenv(ENTRY_JSON) | from_json | .metadata.source),
+      "framework": (strenv(ENTRY_JSON) | from_json | .metadata.framework),
+      "suite": (strenv(ENTRY_JSON) | from_json | .metadata.suite),
+      "tier": (strenv(ENTRY_JSON) | from_json | .metadata.tier),
+      "target": (strenv(ENTRY_JSON) | from_json | .metadata.target),
+      "scenario": (strenv(ENTRY_JSON) | from_json | .metadata.scenario),
+      "scope": (strenv(ENTRY_JSON) | from_json | .metadata.scope),
+      "intent": (strenv(ENTRY_JSON) | from_json | .metadata.intent),
+      "git_sha": strenv(GIT_SHA),
+      "execution_origin": strenv(EXECUTION_ORIGIN),
+      "cluster": null,
+      "node": null,
+      "start": strenv(STARTED_AT),
+      "end": strenv(FINISHED_AT),
+      "duration_seconds": (strenv(DURATION_SECONDS) | tonumber),
+      "result": strenv(RUN_RESULT),
+      "junit": {
+        "tests": (strenv(TESTS) | tonumber),
+        "failures": (strenv(FAILURES) | tonumber),
+        "errors": (strenv(ERRORS) | tonumber),
+        "skipped": (strenv(SKIPPED) | tonumber),
+        "passed": (strenv(PASSED) | tonumber)
+      },
+      "suites": (strenv(SUITES_JSON) | from_json),
+      "phases": {
+        "primary": {
+          "status": strenv(RUN_RESULT),
+          "exit_code": (strenv(PRIMARY_EXIT_CODE) | tonumber)
+        },
+        "assertion": {"status": strenv(ASSERTION_STATUS)},
+        "external_dependency": {"status": "not-applicable"},
+        "cleanup": {"status": "not-required"},
+        "recovery": {"status": "not-required"},
+        "diagnostics": {"status": "passed"}
       }
     }' >"$output_dir/summary.json"
 }

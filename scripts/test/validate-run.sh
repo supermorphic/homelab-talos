@@ -16,6 +16,11 @@ run_dir="${1:-}"
 }
 
 run_id="$(basename "$run_dir")"
+max_evidence_bytes="${TEST_RESULT_MAX_FILE_BYTES:-104857600}"
+[[ "$max_evidence_bytes" =~ ^[1-9][0-9]*$ ]] || {
+  echo 'TEST_RESULT_MAX_FILE_BYTES must be a positive integer.' >&2
+  exit 2
+}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(agent|github-actions|operator)-[0-9a-f]{8}$ ]] || {
   echo "Run directory has an invalid canonical ID: $run_id" >&2
   exit 1
@@ -113,11 +118,14 @@ id_origin="${id_origin%-*}"
   echo 'Git SHA differs between summary and environment.' >&2
   exit 1
 }
-[[ "$(yq -r '.suites[0].id' "$run_dir/summary.json")" == \
-  "$(yq -r '.suite.id' "$run_dir/environment.json")" ]] || {
-  echo 'Suite ID differs between summary and environment.' >&2
-  exit 1
-}
+summary_suite_count="$(yq -r '.suites | length' "$run_dir/summary.json")"
+if [[ "$summary_suite_count" -eq 1 ]]; then
+  [[ "$(yq -r '.suites[0].id' "$run_dir/summary.json")" == \
+    "$(yq -r '.suite.id' "$run_dir/environment.json")" ]] || {
+    echo 'Suite ID differs between summary and environment.' >&2
+    exit 1
+  }
+fi
 for field in source framework suite tier target scenario scope intent; do
   summary_value="$(FIELD="$field" yq -o=json -I=0 '.[strenv(FIELD)]' \
     "$run_dir/summary.json")"
@@ -139,6 +147,28 @@ summary_counts="$(yq -r \
   "$run_dir/summary.json")"
 [[ "$summary_counts" == "$tests $failures $errors $skipped $passed" ]] || {
   echo 'JUnit counts differ from summary.json.' >&2
+  exit 1
+}
+duplicate_suite_ids="$(yq -r '.suites[].id' "$run_dir/summary.json" |
+  LC_ALL=C sort | uniq -d)"
+[[ -z "$duplicate_suite_ids" ]] || {
+  echo "summary.json contains duplicate suite IDs: $duplicate_suite_ids" >&2
+  exit 1
+}
+suite_tests=0
+suite_failures=0
+suite_errors=0
+suite_skipped=0
+while IFS=$'\t' read -r suite_test suite_failure suite_error suite_skip; do
+  suite_tests=$((suite_tests + suite_test))
+  suite_failures=$((suite_failures + suite_failure))
+  suite_errors=$((suite_errors + suite_error))
+  suite_skipped=$((suite_skipped + suite_skip))
+done < <(yq -r '.suites[] |
+  [.tests, .failures, .errors, .skipped] | @tsv' "$run_dir/summary.json")
+[[ "$suite_tests $suite_failures $suite_errors $suite_skipped" == \
+  "$tests $failures $errors $skipped" ]] || {
+  echo 'Per-suite counts do not sum to the canonical JUnit totals.' >&2
   exit 1
 }
 
@@ -166,6 +196,11 @@ while IFS= read -r relative; do
   }
   [[ -f "$run_dir/$relative" && ! -L "$run_dir/$relative" ]] || {
     echo "Evidence path is missing, not regular, or a symlink: $relative" >&2
+    exit 1
+  }
+  evidence_size="$(wc -c <"$run_dir/$relative" | tr -d '[:space:]')"
+  [[ "$evidence_size" -le "$max_evidence_bytes" ]] || {
+    echo "Evidence file exceeds ${max_evidence_bytes} bytes: $relative" >&2
     exit 1
   }
   printf '%s\n' "$relative" >>"$indexed"
