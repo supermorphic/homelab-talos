@@ -125,6 +125,7 @@ run_shell_case lease scripts/test/lease-test.sh
 run_shell_case catalog-suite-runner scripts/test/run-catalog-suite-test.sh
 run_shell_case ci-runner scripts/test/run-ci-test.sh
 run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
+run_shell_case allure-report scripts/test/allure-report-test.sh
 run_shell_case qbit-manage-policy-shellcheck \
   shellcheck scripts/validate/qbit-manage-policy.sh
 run_shell_case qbit-manage-policy-validator \
@@ -154,14 +155,16 @@ done < <(
 )
 if [[ -n "$fragment_root" ]]; then
   uv run --locked python scripts/test/junit_tools.py unittest \
-    --output "$fragment_root/python-junit-tools.xml" \
-    --suite validation.test-harness.junit-tools \
+    --output "$fragment_root/python-test-tools.xml" \
+    --suite validation.test-harness.python-tools \
     --start-directory scripts/test \
-    --pattern test_junit_tools.py
+    --pattern 'test_*.py'
 else
-  uv run --locked python -m unittest scripts/test/test_junit_tools.py
+  uv run --locked python -m unittest discover -s scripts/test -p 'test_*.py'
 fi
 uv run --locked ruff check \
+  scripts/test/allure_report.py \
+  scripts/test/test_allure_report.py \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
@@ -175,6 +178,8 @@ uv run --locked ruff check \
   scripts/test/scenarios/test_qbit_manage_policy.py \
   scripts/test/scenarios/test_resilience_controllers.py
 uv run --locked ruff format --check \
+  scripts/test/allure_report.py \
+  scripts/test/test_allure_report.py \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \

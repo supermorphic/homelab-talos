@@ -121,6 +121,23 @@ Phase 4 implementation status on `refactor/test-runner-right-sizing`:
 - The catalog contains 79 suites after reclassifying three incorrectly wrapped
   entries and removing the cluster-dependent harness self-test.
 
+Phase 5 implementation status on `feat/test-allure-reports`:
+
+- Node.js 24.18.0 and Allure 3.14.3 are pinned through mise, with the Awesome UI
+  configured as the static report output.
+- `just test report <run-id>`, `report-latest`, and `report-open <run-id>`
+  validate canonical inputs, stage only canonical JUnit plus allowlisted
+  attachments, and generate/serve `.test-reports/<run-id>/awesome/`.
+- Latest selection uses the finalized summary end timestamp rather than
+  filesystem mtime. Staged JUnit is copied byte-for-byte so package, suite,
+  class, and case identities remain stable for later history aggregation.
+- GitHub Actions keeps `just ci` unchanged, then best-effort generates the
+  static report and Markdown job summary on success or failure. Canonical and
+  static report artifacts are retained separately for 90 days.
+- Offline coverage exercises passed, failed, broken, and skipped Allure output,
+  static entrypoint generation, latest selection, safe evidence attachments,
+  traversal/symlink rejection, and Markdown counts.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |
@@ -294,8 +311,8 @@ Add coverage in this order:
 
 ### 5. Generate local and CI Allure reports
 
-Pin Node.js 24.18.0 and Allure 3.9.0 through mise. Allure 3 has a built-in
-[generic JUnit XML reader](https://github.com/allure-framework/allure3/blob/v3.9.0/packages/reader/src/junitxml/index.ts),
+Pin Node.js 24.18.0 and Allure 3.14.3 through mise. Allure 3 has a built-in
+[generic JUnit XML reader](https://github.com/allure-framework/allure3/blob/v3.14.3/packages/reader/src/junitxml/index.ts),
 generates the Awesome static report by default, and can open generated reports locally.
 Its static output is appropriate for Caddy hosting.
 [Allure 3 documentation](https://allurereport.org/docs/v3/),

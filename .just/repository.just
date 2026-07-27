@@ -17,6 +17,8 @@ versions:
     @flux --version
     @cilium version --client
     @chainsaw version
+    @node --version
+    @allure --version
     @conftest --version
     @kustomize version
     @sops --version
