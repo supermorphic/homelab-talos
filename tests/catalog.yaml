@@ -325,22 +325,16 @@ suites:
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: diagnostics, path: scripts/test/diagnostics/collect.sh, selector: null}
 
-  - metadata: {id: chainsaw.e2e.media-hardlink, source: chainsaw, framework: chainsaw, suite: media, tier: e2e, target: media-hardlink, scenario: null, scope: storage, intent: feature, mutates_cluster: true, execution_owner: human}
+  - metadata: {id: test.integration.media-hardlink, source: test, framework: bash, suite: media, tier: integration, target: media-hardlink, scenario: null, scope: storage, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}
-    runner: {command: "mise exec -- just test e2e media-hardlink", implementation: scripts/test/run-chainsaw.sh}
-    native_results: {strategy: chainsaw-junit-step}
-    dispatch: {mode: chainsaw, path: tests/chainsaw/e2e/media-hardlink, selector: "homelab-talos/suite=media-hardlink"}
-  - metadata: {id: chainsaw.e2e.qbit-manage-policy, source: chainsaw, framework: chainsaw, suite: media, tier: e2e, target: qbit-manage-policy, scenario: null, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
+    runner: {command: "mise exec -- just test integration media-hardlink", implementation: scripts/test/scenarios/media-hardlink.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/media-hardlink.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.e2e.qbit-manage-policy, source: test, framework: python, suite: media, tier: e2e, target: qbit-manage-policy, scenario: null, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_E2E_CONFIRM, expected: "e2e:qbit-manage-policy"}
-    runner: {command: "CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy", implementation: scripts/test/run-chainsaw.sh}
-    native_results: {strategy: chainsaw-junit-step}
-    dispatch: {mode: chainsaw, path: tests/chainsaw/e2e/qbit-manage-policy, selector: "homelab-talos/suite=qbit-manage-policy"}
-
-  - metadata: {id: chainsaw.resilience.cleanup-failure-self-test, source: chainsaw, framework: chainsaw, suite: harness, tier: resilience, target: cleanup-failure-self-test, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: human}
-    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:cleanup-failure-self-test"}
-    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:cleanup-failure-self-test mise exec -- just test resilience cleanup-failure-self-test", implementation: scripts/test/run-chainsaw.sh}
-    native_results: {strategy: chainsaw-junit-step}
-    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/cleanup-failure-self-test, selector: "homelab-talos/suite=cleanup-failure-self-test"}
+    runner: {command: "CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy", implementation: scripts/test/scenarios/qbit_manage_policy.py}
+    native_results: {strategy: native-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/qbit_manage_policy.py, args: [.kube/config], selector: null}
   - metadata: {id: chainsaw.resilience.qbittorrent-vpn-disconnect, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: qbittorrent-vpn-disconnect, scenario: null, scope: network, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:qbittorrent-vpn-disconnect"}
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect", implementation: scripts/test/run-chainsaw.sh}
@@ -356,11 +350,11 @@ suites:
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-cross-node-reschedule mise exec -- just test resilience plex-cross-node-reschedule", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/plex-cross-node-reschedule, selector: "homelab-talos/suite=plex-cross-node-reschedule"}
-  - metadata: {id: chainsaw.resilience.plex-node-reboot, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+  - metadata: {id: test.resilience.plex-node-reboot, source: test, framework: bash, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-node-reboot"}
-    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/run-chainsaw.sh}
-    native_results: {strategy: chainsaw-junit-step}
-    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/plex-node-reboot, selector: "homelab-talos/suite=plex-node-reboot"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/scenarios/plex-node-reboot.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/plex-node-reboot.sh, args: [.kube/config], selector: null}
 
   - metadata: {id: probe.qbittorrent, source: probe, framework: bash, suite: media, tier: measurement, target: qbittorrent, scenario: null, scope: network, intent: measurement, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}

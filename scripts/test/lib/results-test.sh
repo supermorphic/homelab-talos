@@ -116,7 +116,7 @@ fi
 cp "$result_root/summary.valid.json" "$run_dir/summary.json"
 
 exact_entry_json="$(yq -o=json -I=0 \
-  '.suites[] | select(.metadata.id == "chainsaw.e2e.qbit-manage-policy")' \
+  '.suites[] | select(.metadata.id == "test.e2e.qbit-manage-policy")' \
   tests/catalog.yaml)"
 secret_environment_dir="$result_root/secret-environment"
 mkdir "$secret_environment_dir"
@@ -144,6 +144,8 @@ unset CLUSTER_E2E_CONFIRM
 
 lifecycle_junit="$result_root/lifecycle.xml"
 write_single_case_junit "$lifecycle_junit" cluster primary passed 1
+# Offline cleanup-failure regression: the primary assertion remains passed while
+# cleanup/recovery/finalization are separately represented as harness errors.
 append_lifecycle_junit "$lifecycle_junit" chainsaw.e2e.fixture \
   not-applicable failed failed passed broken
 [[ "$(read_junit_counts "$lifecycle_junit")" == '6 0 3 1 2' ]]
@@ -153,7 +155,9 @@ yq --input-format xml --output-format json '.' "$lifecycle_junit" |
     .testsuites."+@errors" == "3" and
     .testsuites."+@skipped" == "1" and
     ([.. | select((type == "!!map") and
-      .["+@classname"] == "chainsaw.e2e.fixture.lifecycle")] | length) == 5
+      .["+@classname"] == "chainsaw.e2e.fixture.lifecycle")] | length) == 5 and
+    ([.. | select((type == "!!map") and .["+@name"] == "primary" and
+      .failure == null and .error == null)] | length) == 1
   ' - >/dev/null
 
 attribute_free_junit="$result_root/attribute-free.xml"

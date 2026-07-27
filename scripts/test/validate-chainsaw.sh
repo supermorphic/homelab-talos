@@ -162,19 +162,31 @@ else
   uv run --locked python -m unittest scripts/test/test_junit_tools.py
 fi
 uv run --locked ruff check \
+  scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
+  scripts/test/scenarios/resilience_support.py \
+  scripts/test/scenarios/plex_cross_node_reschedule.py \
+  scripts/test/scenarios/qbittorrent_pod_recreation.py \
+  scripts/test/scenarios/qbittorrent_vpn_disconnect.py \
   scripts/test/scenarios/qbit_manage_policy_config.py \
   scripts/test/scenarios/qbit_manage_policy.py \
-  scripts/test/scenarios/test_qbit_manage_policy.py
+  scripts/test/scenarios/test_qbit_manage_policy.py \
+  scripts/test/scenarios/test_resilience_controllers.py
 uv run --locked ruff format --check \
+  scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
+  scripts/test/scenarios/resilience_support.py \
+  scripts/test/scenarios/plex_cross_node_reschedule.py \
+  scripts/test/scenarios/qbittorrent_pod_recreation.py \
+  scripts/test/scenarios/qbittorrent_vpn_disconnect.py \
   scripts/test/scenarios/qbit_manage_policy_config.py \
   scripts/test/scenarios/qbit_manage_policy.py \
-  scripts/test/scenarios/test_qbit_manage_policy.py
+  scripts/test/scenarios/test_qbit_manage_policy.py \
+  scripts/test/scenarios/test_resilience_controllers.py
 
 printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d python_test_dirs=%d.\n' \
   "$test_count" "$yaml_count" "$script_count" "$py_test_dirs"

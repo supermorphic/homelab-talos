@@ -7,7 +7,7 @@ other — nothing here replaces the production monitoring.
 |---|---|---|---|
 | **Continuous** | Live service health + alerting | Gatus + the qBittorrent/etc. `PrometheusRule`s | Always-on, in-cluster |
 | **Routine** | Read-only platform + app readiness assertions | Chainsaw **smoke** (`just test smoke platform [<subsystem>]`, `just test smoke media <app>`) | Operator- or **external-cron**-driven |
-| **Controlled failure** | Disruption + recovery scenarios (VPN stop, pod recreation, node reschedule/reboot) with recorded evidence | Chainsaw **resilience** (`just test resilience <target>`, chaos-token gated) | Operator, on demand |
+| **Controlled failure** | Disruption + recovery scenarios (VPN stop, pod recreation, node reschedule/reboot) with recorded evidence | Catalog-dispatched **resilience** (`just test resilience <target>`, Chainsaw for Kubernetes lifecycles and a direct orchestrator for Talos reboot) | Operator, on demand |
 | **Deep validation** | Upstream Kubernetes conformance | **Sonobuoy** (`just kube conformance`) | Operator, on demand |
 
 Offline correctness (source/render validation, Conftest policy, ShellCheck, probe unit

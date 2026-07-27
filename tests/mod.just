@@ -16,21 +16,23 @@ result-validate run:
 
 # Run registered read-only smoke scenarios against the live cluster.
 smoke target scenario="":
-    @scripts/test/run-chainsaw.sh smoke {{quote(target)}} {{quote(scenario)}}
+    @scripts/test/run-live-suite.sh smoke {{quote(target)}} {{quote(scenario)}}
 
-# Run registered state-changing functional scenarios against the live cluster. Targets with
-# real external/download mutations enforce their own exact CLUSTER_E2E_CONFIRM token.
+# Run a registered state-changing integration against the live cluster.
+integration target:
+    @scripts/test/run-live-suite.sh integration {{quote(target)}}
+
+# Run registered state-changing functional scenarios against the live cluster.
 e2e target:
-    @scripts/test/run-chainsaw.sh e2e {{quote(target)}}
+    @scripts/test/run-live-suite.sh e2e {{quote(target)}}
 
 # Run a registered disruptive scenario after validating the exact confirmation.
 resilience target:
-    @scripts/test/safety/require-chaos-confirmation.sh {{quote(target)}}
-    @scripts/test/run-chainsaw.sh resilience {{quote(target)}}
+    @scripts/test/run-live-suite.sh resilience {{quote(target)}}
 
 # Collect allowlisted read-only diagnostics from the live cluster.
 diagnostics target:
-    @scripts/test/run-chainsaw.sh diagnostics {{quote(target)}}
+    @scripts/test/run-live-suite.sh diagnostics {{quote(target)}}
 
 # Run a single registered read-only network/API probe interactively (a measurement
 # primitive, not an assurance tier). Operator-run; needs the live cluster.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# media-hardlink E2E: proves the shared media-data SMB filesystem preserves HARDLINKS
+# media-hardlink integration: proves the shared media-data SMB filesystem preserves HARDLINKS
 # across the /data/downloads <-> /data/media subtrees — the exact filesystem property the
 # Servarr "Use Hardlinks instead of Copy" import depends on. If this ever breaks (SMB
 # remount options change; downloads/media land on different filesystems), every *arr import
@@ -10,8 +10,8 @@
 # report the SAME inode with link count >= 2 (the same-inode proof from
 # docs/phase-11-media.md), then removes the test files. It does NOT touch real media.
 #
-# This is the first e2e-tier target. e2e is operator-only + state-locked but needs no chaos
-# token (it is non-destructive to real data). An orchestrator, so it lives under
+# This integration target is operator-only + Lease-serialized but needs no chaos token
+# (it is non-destructive to real data). A focused filesystem runner, so it lives under
 # scripts/test/scenarios/. Cleanup is recorded separately from the primary assertion.
 set -euo pipefail
 

@@ -73,7 +73,7 @@ for ((index = 0; index < suite_count; index++)); do
     echo "Catalog entry $id has invalid source '$source_name'." >&2
     exit 1
   }
-  [[ "$framework" =~ ^(just|bash|chainsaw|sonobuoy|conftest|kubeconform|mixed)$ ]] || {
+  [[ "$framework" =~ ^(just|bash|python|chainsaw|sonobuoy|conftest|kubeconform|mixed)$ ]] || {
     echo "Catalog entry $id has invalid framework '$framework'." >&2
     exit 1
   }
@@ -154,7 +154,7 @@ for ((index = 0; index < suite_count; index++)); do
   if yq -e 'has("dispatch")' - <<<"$entry" >/dev/null 2>&1; then
     mode="$(yq -r '.dispatch.mode // ""' - <<<"$entry")"
     path="$(yq -r '.dispatch.path // ""' - <<<"$entry")"
-    [[ "$mode" == 'chainsaw' || "$mode" == 'diagnostics' ]] || {
+    [[ "$mode" == 'chainsaw' || "$mode" == 'diagnostics' || "$mode" == 'direct' ]] || {
       echo "Catalog entry $id has invalid dispatch mode '$mode'." >&2
       exit 1
     }
@@ -177,6 +177,33 @@ for ((index = 0; index < suite_count; index++)); do
       done < <(find "$path" -type f -name 'chainsaw-test.yaml' -print | LC_ALL=C sort)
       [[ "$matching_tests" -gt 0 ]] || {
         echo "Chainsaw entry $id selects no test documents." >&2
+        exit 1
+      }
+    elif [[ "$mode" == 'direct' ]]; then
+      runtime="$(yq -r '.dispatch.runtime // ""' - <<<"$entry")"
+      [[ "$runtime" == 'bash' || "$runtime" == 'uv-python' ]] || {
+        echo "Direct entry $id has unsupported runtime '$runtime'." >&2
+        exit 1
+      }
+      if [[ "$runtime" == 'bash' ]]; then
+        [[ "$framework" == 'bash' && -x "$path" ]] || {
+          echo "Direct Bash entry $id must name an executable Bash implementation." >&2
+          exit 1
+        }
+      else
+        [[ "$framework" == 'python' && "$path" == *.py ]] || {
+          echo "Direct Python entry $id must name a Python implementation." >&2
+          exit 1
+        }
+      fi
+      [[ "$path" == scripts/test/scenarios/* || "$path" == tests/probes/* ]] || {
+        echo "Direct entry $id must use an allowlisted scenario/probe path." >&2
+        exit 1
+      }
+      yq -e '(.dispatch.args | type) == "!!seq" and
+        ([.dispatch.args[] | select(type != "!!str")] | length) == 0 and
+        .dispatch.selector == null' - <<<"$entry" >/dev/null || {
+        echo "Direct entry $id must use a string argument vector and no selector." >&2
         exit 1
       }
     fi

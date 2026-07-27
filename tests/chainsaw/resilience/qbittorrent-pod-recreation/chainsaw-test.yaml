@@ -7,36 +7,142 @@ metadata:
     homelab-talos/target: qbittorrent-pod-recreation
     homelab-talos/suite: qbittorrent-pod-recreation
 spec:
-  # Operator-only, chaos-gated. Deletes the qBittorrent pod and proves startup-gating
-  # (app starts only after Gluetun's native-sidecar startup gate) and config persistence
-  # (same Longhorn PV re-attaches + a marker survives) across the recreation. The
-  # destructive control loop lives in the guarded orchestrator (Decision 3).
   namespace: flux-system
   concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: qbittorrent
+        namespace: media
+    - describe:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: qbittorrent
+        namespace: media
+    - podLogs:
+        namespace: media
+        selector: app.kubernetes.io/name=qbittorrent
+    - events:
+        namespace: media
   steps:
-    - name: recreate-and-verify-gating-and-persistence
+    - name: establish-native-structural-gate-and-python-baseline
       try:
-        # Guard step 2: re-invoke the chaos guard before any mutation.
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                namespace: media
+                labels:
+                  app.kubernetes.io/name: qbittorrent
+              spec:
+                (initContainers[?name == 'gluetun']):
+                  - restartPolicy: Always
+                    startupProbe: {}
+                (containers[?name == 'app']):
+                  - name: app
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: qbittorrent
+                namespace: media
+              status:
+                phase: Bound
         - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/safety/require-chaos-confirmation.sh qbittorrent-pod-recreation
-        # The experiment. Exit code is the primary assertion; recovery outcome is written
-        # to recovery.json for the runner to record separately.
-        - script:
-            timeout: 8m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/qbittorrent-pod-recreation.sh .kube/config
-      catch:
-        - describe:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_pod_recreation.py prepare .kube/config
+      cleanup:
+        - wait:
             apiVersion: apps/v1
             kind: Deployment
             name: qbittorrent
             namespace: media
-        - podLogs:
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
             namespace: media
             selector: app.kubernetes.io/name=qbittorrent
-        - events:
-            namespace: media
-      finally:
-        # Guard step 5: guaranteed teardown — ensure a healthy rollout even on failure.
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_pod_recreation.py cleanup .kube/config
+    - name: guard-and-delete-qbittorrent-pod-natively
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              qbittorrent-pod-recreation
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: media
+              labels:
+                app.kubernetes.io/name: qbittorrent
+    - name: sample-vpn-before-app-startup-order
+      try:
         - script:
             timeout: 6m
-            content: kubectl --namespace media rollout status deployment/qbittorrent --timeout=5m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_pod_recreation.py observe .kube/config
+    - name: wait-for-native-kubernetes-readiness
+      try:
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: qbittorrent
+            namespace: media
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: media
+            selector: app.kubernetes.io/name=qbittorrent
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                namespace: media
+                labels:
+                  app.kubernetes.io/name: qbittorrent
+              status:
+                (initContainerStatuses[?name == 'gluetun']):
+                  - ready: true
+                (containerStatuses[?name == 'app']):
+                  - ready: true
+    - name: construct-persistence-and-longhorn-evidence
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_pod_recreation.py verify .kube/config

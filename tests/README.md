@@ -49,7 +49,7 @@ Live commands are operator-only:
 - `mise exec -- just test probe qbittorrent`
 - `mise exec -- just test probe vpn-leak`
 - `mise exec -- just test probe dns-isolation`
-- `mise exec -- just test e2e media-hardlink` (non-destructive: proves the media-data SMB
+- `mise exec -- just test integration media-hardlink` (run-owned mutation only: proves the media-data SMB
   share preserves hardlinks across `/data/downloads` ↔ `/data/media` — the filesystem
   contract every *arr "hardlink not copy" import depends on — using a throwaway test file,
   no external download; cleans up after itself)
@@ -63,11 +63,6 @@ Live commands are operator-only:
   (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
   fails closed across the outage, then pod-recreation recovery; records recovery status
   separately in `summary.json`)
-- `CLUSTER_CHAOS_CONFIRM=chaos:cleanup-failure-self-test mise exec -- just test resilience cleanup-failure-self-test`
-  (expected failure; opt-in cleanup analogue of `diagnostics-self-test`: deliberately
-  records a failed recovery while the primary assertion passes; confirm `summary.json`
-  preserves `assertion.status: passed` and records `recovery.status: failed`.
-  Non-destructive.)
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-pod-recreation mise exec -- just test resilience qbittorrent-pod-recreation`
   (deletes the qBittorrent pod and proves startup-gating — the app container starts only
   after Gluetun's native-sidecar startup gate — and config persistence — the same Longhorn
@@ -87,8 +82,8 @@ Live commands are operator-only:
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
-names are not interchangeable. E2E registers `media-hardlink` and the exact-confirmation-gated
-`qbit-manage-policy`; resilience targets are explicitly registered in the dispatcher.
+names are not interchangeable. Integration registers `media-hardlink`; E2E registers the
+exact-confirmation-gated `qbit-manage-policy`; resilience targets are explicitly registered.
 Unknown targets fail closed. Live commands must never enter `just ci`.
 
 Every coordinated run writes a collision-resistant canonical directory. This

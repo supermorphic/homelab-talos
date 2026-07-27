@@ -9,7 +9,7 @@
 # Responsibility boundary (per review): `just bootstrap reboot` owns the node lifecycle +
 # quorum/TPM/etcd/foundation recovery; this scenario owns only the workload-level contract
 # + evidence. Two tokens, different purposes: CLUSTER_CHAOS_CONFIRM authorizes THIS
-# scenario (checked by run-chainsaw.sh + re-checked below); TALOS_REBOOT_CONFIRM authorizes
+# scenario (checked by the catalog coordinator + re-checked below); TALOS_REBOOT_CONFIRM authorizes
 # the reboot primitive and must name the exact node Plex is on.
 #
 # Unlike 7a there is no cordon to undo — the reboot recipe self-recovers the node.

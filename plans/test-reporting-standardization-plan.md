@@ -93,6 +93,34 @@ Phase 3 implementation status on `feat/test-result-coordinator`:
   non-vacuous native E2E JUnit is merged, and teardown/harness failures remain
   independent errors.
 
+Phase 4 implementation status on `refactor/test-runner-right-sizing`:
+
+- The catalog's live dispatcher supports typed `chainsaw`, `diagnostics`, and
+  `direct` backends without evaluating catalog shell strings. Direct Bash and
+  uv/Python paths still use the canonical coordinator and renewable Lease.
+- `media-hardlink` is a focused Bash integration; `qbit-manage-policy` is a
+  direct Python E2E with per-phase native JUnit; `plex-node-reboot` is a direct
+  guarded Bash/Talos resilience orchestrator.
+- qBittorrent pod recreation, VPN disconnect, and Plex cross-node reschedule
+  remain in Chainsaw, but now expose explicit baseline/preparation, disruption,
+  readiness, assertion, diagnostics, and recovery steps. Chainsaw owns pod
+  deletion, Kubernetes readiness/resource assertions, diagnostics, and
+  catch/cleanup. Atomic Bash actions own guards, marker operations, and
+  cordon/uncordon. Python phase controllers own temporal sampling, structured
+  cross-phase JSON, evidence, and recovery-state validation; the VPN controller
+  invokes the existing `leak_sentinel.py` analyzer.
+- The stdlib JUnit writer is an importable Python module with a thin CLI adapter;
+  the direct qbit_manage E2E writes phase cases through the module rather than
+  launching the CLI for every phase.
+- Mocked offline controller tests cover state transitions, interrupted cordons,
+  exact-node uncordon, cleanup failure propagation, startup-order sampling, and
+  VPN API-key non-persistence.
+- The live cleanup-failure Chainsaw scenario is removed. Its invariant—cleanup
+  failure produces a broken run without masking a passed primary assertion—is
+  enforced by the offline result-contract regression.
+- The catalog contains 79 suites after reclassifying three incorrectly wrapped
+  entries and removing the cluster-dependent harness self-test.
+
 ## Canonical terminology and responsibility
 
 | Class | Contract | Proper implementation |
@@ -240,7 +268,8 @@ Refactor live scenarios as follows:
 - `media-hardlink`: reclassify as integration, retaining a focused filesystem runner.
 - `qbittorrent-pod-recreation` and `plex-cross-node-reschedule`: move Kubernetes deletion,
   readiness, Longhorn assertions, and guaranteed recovery into explicit Chainsaw steps;
-  retain small scripts only for marker/filesystem evidence.
+  use Python for temporal/structured evidence and retain Bash only for atomic marker and
+  node-scheduling actions.
 - `qbittorrent-vpn-disconnect`: split baseline, disruption, fail-closed observation,
   recovery, and final state into reportable Chainsaw steps while reusing the probe
   analyzer.

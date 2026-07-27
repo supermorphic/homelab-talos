@@ -185,7 +185,7 @@ recorded_phase_status() {
   local phase="$2"
   local file="$run_dir/${phase}.json"
   local status
-  [[ "$phase" == 'assertion' || "$phase" == 'external-dependency' ]] || {
+  [[ "$phase" =~ ^(assertion|external-dependency|cleanup|recovery)$ ]] || {
     echo 'not-classified'
     return
   }
@@ -195,7 +195,7 @@ recorded_phase_status() {
     return
   }
   case "$status" in
-    passed|failed|not-applicable|not-classified) echo "$status" ;;
+    passed|failed|not-applicable|not-required|not-classified) echo "$status" ;;
     *) echo 'not-classified' ;;
   esac
 }

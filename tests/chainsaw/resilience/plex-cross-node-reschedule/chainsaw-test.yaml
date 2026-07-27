@@ -7,46 +7,136 @@ metadata:
     homelab-talos/target: plex-cross-node-reschedule
     homelab-talos/suite: plex-cross-node-reschedule
 spec:
-  # Operator-only, chaos-gated. Cordons the node hosting Plex and deletes the pod so it
-  # reschedules onto another node, proving the Longhorn RWOP config volume re-attaches on
-  # the landing node, the SMB share re-mounts, and data survives. Controlled cross-node
-  # reschedule under cordon — NOT kubectl drain (item 7b covers node-away). The destructive
-  # control loop lives in the guarded orchestrator (Decision 3).
   namespace: flux-system
   concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: plex
+        namespace: media
+    - describe:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: plex
+        namespace: media
+    - podLogs:
+        namespace: media
+        selector: app.kubernetes.io/name=plex
+    - events:
+        namespace: media
   steps:
-    - name: cordon-reschedule-and-verify-stateful-recovery
+    - name: establish-native-readiness-and-python-baseline
       try:
-        # Guard step 2: re-invoke the chaos guard before any mutation.
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: media
+            selector: app.kubernetes.io/name=plex
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: plex
+                namespace: media
+              status:
+                phase: Bound
         - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/safety/require-chaos-confirmation.sh plex-cross-node-reschedule
-        # The experiment. Exit code is the primary assertion; cleanup/recovery outcomes go
-        # to recovery.json for the runner to record separately.
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py prepare .kube/config
+    - name: guard-and-cordon-exact-source-node
+      try:
         - script:
-            timeout: 12m
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/scenarios/plex-cross-node-reschedule.sh .kube/config
-      catch:
-        - describe:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              plex-cross-node-reschedule
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cordon .kube/config
+      cleanup:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-node .kube/config
+        - wait:
             apiVersion: apps/v1
             kind: Deployment
             name: plex
             namespace: media
-        - podLogs:
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
             namespace: media
             selector: app.kubernetes.io/name=plex
-        - events:
-            namespace: media
-      finally:
-        # Guaranteed teardown even if the orchestrator was SIGKILLed before its own trap:
-        # uncordon ONLY the node this run cordoned (recorded in the run dir) — never
-        # uncordon-all, so an operator's pre-existing cordon elsewhere is untouched — then
-        # wait for a healthy Plex rollout.
-        - script:
             timeout: 6m
-            content: |
-              node_file="$HOMELAB_TEST_RUN_DIR/cordoned-node"
-              if [ -f "$node_file" ]; then
-                node="$(cat "$node_file")"
-                [ -n "$node" ] && kubectl uncordon "$node" >/dev/null 2>&1 || true
-              fi
-              kubectl --namespace media rollout status deployment/plex --timeout=5m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-marker .kube/config
+    - name: delete-plex-pod-natively
+      try:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: media
+              labels:
+                app.kubernetes.io/name: plex
+    - name: wait-for-native-kubernetes-readiness
+      try:
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: plex
+            namespace: media
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
+            namespace: media
+            selector: app.kubernetes.io/name=plex
+            timeout: 6m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+    - name: validate-cross-node-state
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py observe .kube/config
+    - name: construct-persistence-longhorn-and-smb-evidence
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/plex_cross_node_reschedule.py verify .kube/config

@@ -7,42 +7,86 @@ metadata:
     homelab-talos/target: qbittorrent-vpn-disconnect
     homelab-talos/suite: qbittorrent-vpn-disconnect
 spec:
-  # Resilience is operator-only and chaos-gated; it is NOT subject to the smoke read-only
-  # Conftest policy, so command/script ops are allowed. The destructive control loop lives
-  # in the guarded bash orchestrator (Decision 3: just does guard + dispatch only).
   namespace: flux-system
   concurrent: false
+  catch:
+    - describe:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: qbittorrent
+        namespace: media
+    - podLogs:
+        namespace: media
+        selector: app.kubernetes.io/name=qbittorrent
+    - events:
+        namespace: media
   steps:
-    - name: controlled-vpn-stop-recovery
+    - name: establish-python-vpn-baseline
       try:
-        # Guard step 2: the scenario's first operation re-invokes the chaos guard before
-        # any mutation (belt-and-suspenders with the dispatch + recipe token checks).
-        # Chainsaw runs script ops from its own working dir, so cd to the repo root that
-        # the runner exported before invoking repo-relative scripts.
         - script:
-            content: cd "$HOMELAB_REPO_ROOT" && scripts/test/safety/require-chaos-confirmation.sh qbittorrent-vpn-disconnect
-        # The experiment: baseline -> continuous capture across a controlled VPN stop ->
-        # outage verdict -> pod-recreation recovery -> recovery verification. Exit code is
-        # the primary assertion; recovery outcome is written to recovery.json separately.
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              qbittorrent-vpn-disconnect
         - script:
-            timeout: 10m
-            content: cd "$HOMELAB_REPO_ROOT" && tests/probes/vpn/orchestrate-vpn-disconnect.sh .kube/config
-      catch:
-        - describe:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py baseline .kube/config
+    - name: capture-stop-analyze-and-recover-vpn
+      try:
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py disrupt .kube/config
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py
+              assert-fail-closed .kube/config
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              namespace: media
+              labels:
+                app.kubernetes.io/name: qbittorrent
+        - wait:
             apiVersion: apps/v1
             kind: Deployment
             name: qbittorrent
             namespace: media
-        - podLogs:
+            timeout: 6m
+            for:
+              condition:
+                name: Available
+                value: "true"
+        - wait:
+            apiVersion: v1
+            kind: Pod
             namespace: media
             selector: app.kubernetes.io/name=qbittorrent
-        - events:
-            namespace: media
-      finally:
-        # Guard step 5: guaranteed teardown — force a fresh healthy tunnel (pod recreation
-        # is the exact recovery operation) even if the orchestrator was killed mid-run.
-        - script:
             timeout: 6m
-            content: |
-              kubectl --namespace media delete pod --selector app.kubernetes.io/name=qbittorrent --wait=false >/dev/null 2>&1 || true
-              kubectl --namespace media rollout status deployment/qbittorrent --timeout=5m
+            for:
+              condition:
+                name: Ready
+                value: "true"
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py cleanup .kube/config
+    - name: analyze-recovered-vpn-and-construct-evidence
+      try:
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py verify .kube/config

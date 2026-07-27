@@ -294,6 +294,7 @@ available for focused developer validation.
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
 | `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
 | `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |
+| `just test integration media-hardlink` | Run the focused media-data hardlink filesystem integration under the renewable cluster-wide test Lease | `.kube/config` | Operator-only; run-owned files only |
 | `just test e2e <target>` | Run an allowlisted state-changing functional scenario under the renewable cluster-wide test Lease | `.kube/config` | Fails closed until a target is registered |
 | `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and the renewable cluster-wide test Lease | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |
 | `just repo hooks` | Install the git pre-commit hooks (idempotent) | — | Available |
