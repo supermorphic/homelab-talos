@@ -9,8 +9,10 @@ trap 'rm -rf -- "$result_root"' EXIT
 
 entry_json="$(catalog_dispatch_entry tests/catalog.yaml smoke cluster flux-ready)"
 export TEST_EXECUTION_ORIGIN=agent
-[[ "$(GITHUB_HEAD_REF=feat/ci-fixture resolve_git_branch '')" == 'feat/ci-fixture' ]]
-[[ "$(GITHUB_REF_NAME=main resolve_git_branch '')" == 'main' ]]
+[[ "$(GITHUB_HEAD_REF=feat/ci-fixture GITHUB_REF_NAME='' \
+  resolve_git_branch '')" == 'feat/ci-fixture' ]]
+[[ "$(GITHUB_HEAD_REF='' GITHUB_REF_NAME=main \
+  resolve_git_branch '')" == 'main' ]]
 [[ "$(GITHUB_HEAD_REF='' GITHUB_REF_NAME='' resolve_git_branch '')" == 'detached' ]]
 run_dir="$(create_run_directory "$result_root" "$(resolve_execution_origin)")"
 run_id="$(basename "$run_dir")"
