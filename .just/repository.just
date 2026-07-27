@@ -1197,6 +1197,25 @@ alertmanager-ntfy-secrets:
     REV="$revision" yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$values"
     echo "Wrote SOPS-encrypted $target (alertmanager-ntfy-auth in ntfy) and stamped sops-hash in values.yaml."
 
+# Decrypt ntfy-secret and print ONLY the requested producer's publisher token, for pasting
+# into a producer's UI (e.g. Seerr's ntfy agent). Deliberately prints a secret to stdout;
+# needs the age key and never writes to disk. Usage: just repo ntfy-token seerr
+ntfy-token user:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    just repo secrets
+    case '{{user}}' in
+      alertmanager|seerr|automation) ;;
+      *) echo "Refusing: '{{user}}' is not a known ntfy producer (alertmanager|seerr|automation)." >&2; exit 1 ;;
+    esac
+    secret='kubernetes/apps/monitoring/ntfy/app/secret.sops.yaml'
+    [[ -f "$secret" ]] || { echo "Missing $secret." >&2; exit 1; }
+    tokens="$(sops --decrypt "$secret" | yq -r '.stringData.NTFY_AUTH_TOKENS')"
+    token="$(awk -F, -v u='{{user}}' '{for(i=1;i<=NF;i++){split($i,a,":"); if(a[1]==u){print a[2]; exit}}}' <<<"$tokens")"
+    [[ -n "$token" ]] || { echo "No token for '{{user}}' in ntfy-secret." >&2; exit 1; }
+    printf '%s\n' "$token"
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
