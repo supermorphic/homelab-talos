@@ -1,0 +1,25 @@
+# ntfy server configuration (non-secret). Declarative auth users/ACLs/tokens live in the
+# SOPS Secret (ntfy-secret) via NTFY_AUTH_USERS/NTFY_AUTH_ACCESS/NTFY_AUTH_TOKENS env vars.
+#
+# base-url is the canonical Tailscale MagicDNS FQDN and MUST equal the iOS app's Default
+# Server (ntfy's iOS APNs poll derives from base-url). LAN browser/CLI reach the same
+# server via https://ntfy.lab.supermorphic.com, but that is not the canonical URL.
+base-url: "https://ntfy.tail163214.ts.net"
+listen-http: ":80"
+behind-proxy: true
+
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "168h"
+auth-file: "/var/lib/ntfy/auth.db"
+auth-default-access: "deny-all"
+
+enable-login: true
+require-login: true
+enable-signup: false
+
+# iOS instant notifications: the self-hosted server sends ntfy.sh a poll request (message
+# ID + hashed topic) so APNs can wake the app; the message body stays self-hosted.
+upstream-base-url: "https://ntfy.sh"
+
+# Dedicated metrics listener (scraped by Prometheus; never exposed via the gateway/Ingress).
+metrics-listen-http: ":9090"

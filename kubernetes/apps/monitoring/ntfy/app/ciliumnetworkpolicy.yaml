@@ -1,0 +1,64 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ntfy
+  namespace: ntfy
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  ingress:
+    # Publish/subscribe/API + web UI + /v1/health (port 80): the internal gateway, the
+    # Tailscale ingress proxies (off-site path), the Gatus health prober, and in-cluster
+    # producers (Seerr today; the Alertmanager adapter in a later PR).
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: envoy-gateway-system
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: tailscale
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: gatus
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    # Kubelet liveness/readiness/startup probes hit /v1/health on port 80.
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+    # Prometheus scrapes the dedicated metrics port.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  egress:
+    # Cluster DNS.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+    # iOS instant-notification upstream poll to ntfy.sh (HTTPS). The cluster has no
+    # FQDN-egress baseline, so this is the broad world:443 rule rather than a brittle
+    # DNS-proxy FQDN policy.
+    - toEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

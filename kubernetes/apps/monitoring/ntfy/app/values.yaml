@@ -1,0 +1,102 @@
+# ntfy via the bjw-s app-template chart. Single replica, Recreate on a Longhorn RWO PVC
+# (SQLite cache/auth DBs are single-writer). The official image has no USER directive and
+# the static binary only writes /var/lib/ntfy, so it runs as a fixed non-root UID with the
+# PVC made writable via fsGroup (no init-copy needed). server.yml is a read-only ConfigMap
+# mount; declarative auth (users/ACLs/tokens) comes from the SOPS ntfy-secret via envFrom.
+controllers:
+  ntfy:
+    type: deployment
+    strategy: Recreate
+    pod:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      annotations:
+        # Roll the pod when server.yml or the auth Secret change. config-hash is
+        # `git hash-object app/server.yml`; sops-hash is `git hash-object
+        # app/secret.sops.yaml`, stamped by `just repo ntfy-secrets`. Both CI-verified.
+        # (Named sops-hash, not *-secret-*, so gitleaks does not flag the blob hash.)
+        config-hash: "2f6c4d846569ba1a4d5122db2fb738662ebb0bf8"
+        sops-hash: "8ccf69b4ea6cb725e876a7f163633cb8674fa587"
+    containers:
+      app:
+        image:
+          repository: docker.io/binwiederhier/ntfy
+          tag: v2.26.3
+        args: ["serve"]
+        env:
+          TZ: America/Denver
+        envFrom:
+          - secretRef:
+              name: ntfy-secret
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            # Memory-only limit per repo convention.
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        probes:
+          # /v1/health is unauthenticated and returns {"healthy":true}.
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /v1/health
+                port: 80
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /v1/health
+                port: 80
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /v1/health
+                port: 80
+              periodSeconds: 5
+              failureThreshold: 30
+service:
+  app:
+    controller: ntfy
+    ports:
+      http:
+        port: 80
+      metrics:
+        port: 9090
+persistence:
+  # RWO Longhorn PVC (renders as PVC "ntfy") holding cache.db + auth.db.
+  config:
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: 2Gi
+    storageClass: longhorn
+    annotations:
+      helm.sh/resource-policy: keep
+    globalMounts:
+      - path: /var/lib/ntfy
+  # Read-only server.yml from the generated ntfy-config ConfigMap.
+  server-config:
+    type: configMap
+    name: ntfy-config
+    globalMounts:
+      - path: /etc/ntfy
+        readOnly: true

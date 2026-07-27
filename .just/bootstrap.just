@@ -2080,6 +2080,71 @@ tailscale-operator:
     bootstrap_complete=true
     echo 'Tailscale operator live acceptance passed. Change the operator Kustomization (tailscale-operator) Git source to suspend=false, commit, push, and rerun just kube tailscale-operator-verify.'
 
+# Reconcile the suspended ntfy notification service after guarded checks, then verify.
+# Requires the ntfy-secret committed (just repo ntfy-secrets) and the tailscale-operator
+# already rolled out. On failure the resumed Kustomization is re-suspended, preserving
+# its resources (the Longhorn PVC and SOPS Secret are never deleted).
+ntfy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:monitoring:ntfy'
+    ks='kubernetes/apps/monitoring/ntfy/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_ntfy() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'ntfy bootstrap did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization ntfy --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_ntfy EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'ntfy bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/monitoring/kustomization.yaml \
+      kubernetes/apps/monitoring/ntfy
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing ntfy bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube ntfy-validate
+    # Reconcile the published main source before checking Flux's artifact revision.
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization ntfy --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing ntfy bootstrap: ntfy is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${NTFY_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile ntfy.' >&2
+      echo "Set NTFY_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing ntfy-validate." >&2
+      exit 1
+    }
+
+    echo 'Reconciling ntfy Kustomization.'
+    resumed=true
+    flux resume kustomization ntfy --namespace flux-system --kubeconfig "$kubeconfig" --timeout 15m
+    flux reconcile kustomization ntfy \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/ntfy --timeout=15m
+
+    just kube ntfy-verify
+    bootstrap_complete=true
+    echo 'ntfy live acceptance passed. Change the ntfy Git source to suspend=false, commit, push, and rerun just kube ntfy-verify.'
+
 # Reconcile the suspended metrics-server (enables kubectl top / HPA / the Homepage
 # Kubernetes widget). On failure the resumed Kustomization is re-suspended.
 metrics-server:

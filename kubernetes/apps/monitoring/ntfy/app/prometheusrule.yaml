@@ -1,0 +1,55 @@
+---
+# ntfy black-box availability and persistence coverage. Gatus proves the internal
+# /v1/health path and exports gatus_results_endpoint_success; kube-state-metrics
+# independently proves the retained SQLite claim is Bound. Prometheus discovers this
+# rule cluster-wide (ruleSelectorNilUsesHelmValues: false in kube-prometheus-stack).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ntfy
+  namespace: ntfy
+  labels:
+    app.kubernetes.io/name: ntfy
+spec:
+  groups:
+    - name: ntfy
+      rules:
+        - alert: NtfyDown
+          expr: gatus_results_endpoint_success{name="ntfy", group="Platform"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: ntfy is unavailable
+            description: >-
+              The ntfy /v1/health Gatus probe has failed for more than five minutes.
+              Alert and media notifications will not be delivered. Check the ntfy
+              Deployment, its PVC/Longhorn volume, and its CiliumNetworkPolicy.
+        - alert: NtfyProbeMissing
+          expr: absent(gatus_results_endpoint_success{name="ntfy", group="Platform"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: ntfy probe data is missing
+            description: >-
+              The ntfy Gatus metric has been absent for more than 15 minutes, so
+              NtfyDown cannot fire. Check Gatus and its ServiceMonitor.
+        - alert: NtfyPersistentVolumeClaimNotBound
+          expr: >-
+            absent(
+              kube_persistentvolumeclaim_status_phase{
+                namespace="ntfy",
+                persistentvolumeclaim="ntfy",
+                phase="Bound"
+              } == 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: ntfy database claim is absent or unbound
+            description: >-
+              The ntfy/ntfy PVC has not reported Bound for more than five minutes.
+              The message cache and auth database continuity is at risk; inspect the
+              PVC, Longhorn volume, and the ntfy Deployment.

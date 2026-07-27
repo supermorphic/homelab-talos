@@ -1,0 +1,33 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ntfy
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cilium
+    - name: internal-gateway
+    - name: longhorn
+    # ServiceMonitor + PrometheusRule CRDs (monitoring.coreos.com) come from here.
+    - name: kube-prometheus-stack
+    # Operator + ingress ProxyGroup for the private Tailscale exposure.
+    - name: tailscale-operator
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  interval: 1h
+  path: ./kubernetes/apps/monitoring/ntfy/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Staged suspended: the ntfy-secret (auth users/ACLs/tokens) must exist before
+  # reconciliation. Roll out with `just bootstrap ntfy`, then flip to false durably.
+  suspend: true
+  timeout: 10m
+  wait: true
