@@ -853,7 +853,8 @@ ntfy-validate: require-bash
     @scripts/validate/ntfy.sh
 
 # Verify the live ntfy: Kustomization + HelmRelease Ready, rollout complete, health
-# endpoint healthy, anonymous access denied, per-token ACLs, and cache persistence.
+# endpoint healthy, anonymous access denied, the subscriber's exact runtime read-only
+# ACLs, per-token ACLs, and cache persistence.
 ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(kubeconfig)}}
 
