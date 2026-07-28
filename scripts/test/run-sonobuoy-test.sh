@@ -141,17 +141,23 @@ standalone_private="$fixture_root/standalone-private"
 standalone_reports="$fixture_root/standalone-reports"
 standalone_run_id_file="$fixture_root/standalone.run-id"
 lease_state="$fixture_root/standalone-lease.json"
-FAKE_SONOBUOY_ARCHIVE="$archive" \
-FAKE_TEST_LEASE_STATE="$lease_state" \
-TEST_LEASE_KUBECTL="$PWD/tests/fixtures/result-coordinator/fake-lease-kubectl.sh" \
-TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
-TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
-TEST_SONOBUOY_PRIVATE_ROOT="$standalone_private" \
-TEST_RESULTS_ROOT="$standalone_results" \
-TEST_KUBECONFIG="$fixture_root/kubeconfig" \
-TEST_EXECUTION_ORIGIN=agent \
-TEST_RUN_ID_FILE="$standalone_run_id_file" \
-  scripts/test/run-conformance.sh "$fixture_root/kubeconfig" >/dev/null
+# Simulate this unit test running inside a campaign, then isolate the nested
+# standalone coordinator from the outer campaign's Lease channels.
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:outer-fixture \
+TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$fixture_root/outer-lease-renewal-failed" \
+  env -u TEST_CAMPAIGN_LEASE_HOLDER \
+  -u TEST_CAMPAIGN_LEASE_FAILURE_MARKER \
+  FAKE_SONOBUOY_ARCHIVE="$archive" \
+  FAKE_TEST_LEASE_STATE="$lease_state" \
+  TEST_LEASE_KUBECTL="$PWD/tests/fixtures/result-coordinator/fake-lease-kubectl.sh" \
+  TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
+  TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
+  TEST_SONOBUOY_PRIVATE_ROOT="$standalone_private" \
+  TEST_RESULTS_ROOT="$standalone_results" \
+  TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  TEST_EXECUTION_ORIGIN=agent \
+  TEST_RUN_ID_FILE="$standalone_run_id_file" \
+    scripts/test/run-conformance.sh "$fixture_root/kubeconfig" >/dev/null
 
 standalone_run_id="$(cat "$standalone_run_id_file")"
 standalone_run="$standalone_results/$standalone_run_id"
