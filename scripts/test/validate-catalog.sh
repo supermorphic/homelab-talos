@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+source scripts/test/lib/catalog.sh
 require_bash
 
 catalog="${1:-tests/catalog.yaml}"
@@ -11,14 +12,16 @@ catalog="${1:-tests/catalog.yaml}"
 }
 
 yq -e '
-  .schema_version == 1 and
+  .schema_version == 2 and
   (.suites | type == "!!seq") and
   (.suites | length > 0) and
   ((.executions.ci | type) == "!!seq") and
-  (.executions.ci | length > 0)
+  (.executions.ci | length > 0) and
+  (.campaigns | type == "!!map") and
+  (.campaigns | length > 0)
 ' \
   "$catalog" >/dev/null || {
-  echo 'Test catalog must have schema_version=1 plus non-empty suites and executions.ci arrays.' >&2
+  echo 'Test catalog must have schema_version=2 plus suites, executions.ci, and campaigns.' >&2
   exit 1
 }
 
@@ -135,6 +138,10 @@ for ((index = 0; index < suite_count; index++)); do
     echo "Catalog entry $id must expose a pinned mise + just command." >&2
     exit 1
   }
+  [[ "$command" =~ ^([A-Z][A-Z0-9_]*=[a-zA-Z0-9._:/\<\>-]+[[:space:]]+)*mise[[:space:]]exec[[:space:]]--[[:space:]]just[[:space:]][a-zA-Z0-9_.-]+([[:space:]][a-zA-Z0-9._:/\<\>-]+)*$ ]] || {
+    echo "Catalog entry $id runner command is not a safe literal mise + just invocation." >&2
+    exit 1
+  }
   [[ -e "$implementation" ]] || {
     echo "Catalog entry $id points to missing implementation '$implementation'." >&2
     exit 1
@@ -209,6 +216,152 @@ for ((index = 0; index < suite_count; index++)); do
     fi
   fi
 done
+
+expected_campaign_names=$'conformance-certified\nconformance-quick\ne2e\nfull\nintegration\nprobes\nresilience\nsmoke\nstandard\nvalidation\nverification\nweekly'
+actual_campaign_names="$(catalog_campaign_names "$catalog" | LC_ALL=C sort)"
+[[ "$actual_campaign_names" == "$expected_campaign_names" ]] || {
+  echo 'Test catalog campaign names differ from the supported public interface.' >&2
+  diff -u <(printf '%s\n' "$expected_campaign_names") \
+    <(printf '%s\n' "$actual_campaign_names") >&2 || true
+  exit 1
+}
+
+while IFS= read -r campaign; do
+  [[ -n "$campaign" ]] || continue
+  campaign_entry="$(catalog_campaign_entry "$catalog" "$campaign")"
+  yq -e '
+    (.description | type == "!!str" and length > 0) and
+    (.mutates_cluster | type == "!!bool") and
+    (.disruptive | type == "!!bool") and
+    ((.members // []) | type == "!!seq") and
+    ((.includes // []) | type == "!!seq") and
+    (((.members // []) | length) + ((.includes // []) | length) > 0) and
+    ([.members[]? | select(type != "!!str")] | length == 0) and
+    ([.includes[]? | select(type != "!!str")] | length == 0) and
+    ((.coverage // []) | type == "!!seq") and
+    ([.coverage[]? | select(type != "!!str")] | length == 0)
+  ' - <<<"$campaign_entry" >/dev/null || {
+    echo "Campaign $campaign has invalid metadata or member/include arrays." >&2
+    exit 1
+  }
+
+  while IFS= read -r member; do
+    [[ -n "$member" ]] || continue
+    catalog_entry_by_id "$catalog" "$member" >/dev/null || {
+      echo "Campaign $campaign references an unknown suite: $member" >&2
+      exit 1
+    }
+  done < <(yq -r '.members[]?, .coverage[]?' - <<<"$campaign_entry")
+  while IFS= read -r include; do
+    [[ -n "$include" ]] || continue
+    catalog_campaign_entry "$catalog" "$include" >/dev/null || {
+      echo "Campaign $campaign includes an unknown campaign: $include" >&2
+      exit 1
+    }
+  done < <(yq -r '.includes[]?' - <<<"$campaign_entry")
+
+  resolved_ids="$(catalog_campaign_ids "$catalog" "$campaign")" || exit "$?"
+  duplicate_members="$(printf '%s\n' "$resolved_ids" | LC_ALL=C sort | uniq -d)"
+  [[ -z "$duplicate_members" ]] || {
+    echo "Campaign $campaign resolves duplicate suite IDs: $duplicate_members" >&2
+    exit 1
+  }
+
+  derived_mutates=false
+  derived_disruptive=false
+  while IFS= read -r member; do
+    [[ -n "$member" ]] || continue
+    member_entry="$(catalog_entry_by_id "$catalog" "$member")"
+    [[ "$(yq -r '.metadata.mutates_cluster' - <<<"$member_entry")" != 'true' ]] ||
+      derived_mutates=true
+    [[ "$(yq -r '.metadata.tier' - <<<"$member_entry")" != 'resilience' ]] ||
+      derived_disruptive=true
+  done <<<"$resolved_ids"
+  [[ "$(yq -r '.mutates_cluster' - <<<"$campaign_entry")" == "$derived_mutates" ]] || {
+    echo "Campaign $campaign mutates_cluster does not match its resolved members." >&2
+    exit 1
+  }
+  [[ "$(yq -r '.disruptive' - <<<"$campaign_entry")" == "$derived_disruptive" ]] || {
+    echo "Campaign $campaign disruptive does not match its resolved members." >&2
+    exit 1
+  }
+done < <(catalog_campaign_names "$catalog")
+
+assert_exact_lines() {
+  local description="$1"
+  local expected="$2"
+  local actual="$3"
+  [[ "$actual" == "$expected" ]] || {
+    echo "$description differs from the explicit catalog contract." >&2
+    diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
+    return 1
+  }
+}
+
+assert_campaign_covers_tier() {
+  local campaign="$1"
+  local tier="$2"
+  local field="${3:-members}"
+  local expected actual
+  expected="$(TIER="$tier" CAMPAIGN="$campaign" yq -r '
+    .suites[] |
+    select(.metadata.tier == strenv(TIER)) |
+    select(
+      strenv(CAMPAIGN) != "smoke" or
+      .metadata.id != "chainsaw.smoke.cluster.diagnostics-self-test"
+    ) |
+    .metadata.id
+  ' "$catalog" | LC_ALL=C sort)"
+  actual="$(CAMPAIGN="$campaign" FIELD="$field" yq -r \
+    '.campaigns[strenv(CAMPAIGN)][strenv(FIELD)][]' "$catalog" | LC_ALL=C sort)"
+  assert_exact_lines "Campaign $campaign $field" "$expected" "$actual"
+}
+
+assert_campaign_covers_tier verification verification
+assert_campaign_covers_tier integration integration
+assert_campaign_covers_tier e2e e2e
+assert_campaign_covers_tier resilience resilience
+assert_campaign_covers_tier probes measurement
+assert_campaign_covers_tier smoke smoke coverage
+
+conformance_expected="$(yq -r \
+  '.suites[] | select(.metadata.tier == "conformance") | .metadata.id' \
+  "$catalog" | LC_ALL=C sort)"
+conformance_actual="$(
+  {
+    catalog_campaign_ids "$catalog" conformance-quick
+    catalog_campaign_ids "$catalog" conformance-certified
+  } | LC_ALL=C sort
+)"
+assert_exact_lines 'Conformance campaigns' "$conformance_expected" "$conformance_actual"
+
+[[ "$(yq -r '.campaigns.validation.members | join("\n")' "$catalog")" == \
+  'validation.ci' ]] || {
+  echo 'Campaign validation must execute only the aggregate validation.ci suite.' >&2
+  exit 1
+}
+[[ "$(yq -r '.campaigns.standard.includes | join("\n")' "$catalog")" == \
+  $'validation\nsmoke\ne2e\nconformance-quick' ]] || {
+  echo 'Campaign standard must be validation, smoke, e2e, then conformance-quick.' >&2
+  exit 1
+}
+[[ "$(yq -r '.campaigns.weekly.includes | join("\n")' "$catalog")" == \
+  $'standard\nverification\nintegration\nprobes\nresilience' ]] || {
+  echo 'Campaign weekly has an unexpected composition.' >&2
+  exit 1
+}
+[[ "$(yq -r '.campaigns.full.includes | join("\n")' "$catalog")" == \
+  $'weekly\nconformance-certified' ]] || {
+  echo 'Campaign full must extend weekly with certified conformance.' >&2
+  exit 1
+}
+expected_smoke=$'chainsaw.smoke.cluster.default\nchainsaw.smoke.media.qbittorrent\nchainsaw.smoke.media.qbit-manage\nchainsaw.smoke.platform.all'
+actual_smoke="$(yq -r '.campaigns.smoke.members[]' "$catalog")"
+assert_exact_lines 'Campaign smoke aggregate ordering' "$expected_smoke" "$actual_smoke"
+expected_resilience=$'test.flux-restart\ntest.portainer-persistence\nchainsaw.resilience.qbittorrent-vpn-disconnect\nchainsaw.resilience.qbittorrent-pod-recreation\nchainsaw.resilience.plex-cross-node-reschedule\nchainsaw.resilience.test-reports-persistence\ntest.resilience.plex-node-reboot'
+actual_resilience="$(yq -r '.campaigns.resilience.members[]' "$catalog")"
+assert_exact_lines 'Campaign resilience ordering' \
+  "$expected_resilience" "$actual_resilience"
 
 duplicate_ci_ids="$(yq -r '.executions.ci[]' "$catalog" | LC_ALL=C sort | uniq -d)"
 [[ -z "$duplicate_ci_ids" ]] || {

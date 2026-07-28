@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 
 # Stable assurance metadata. Phase 2 makes this catalog authoritative for `just test`
 # dispatch and canonical Chainsaw artifacts. Phase 3 will attach the remaining runners
@@ -35,6 +35,140 @@ executions:
     - validation.tailscale-operator
     - validation.ntfy
     - validation.alertmanager-ntfy
+
+campaigns:
+  validation:
+    description: Cluster-independent repository validation.
+    mutates_cluster: false
+    disruptive: false
+    members:
+      - validation.ci
+  verification:
+    description: Read-only live acceptance checks for deployed services.
+    mutates_cluster: false
+    disruptive: false
+    members:
+      - verification.metrics-server
+      - verification.cilium
+      - verification.flux
+      - verification.foundation
+      - verification.storage
+      - verification.csi-driver-smb
+      - verification.media-storage
+      - verification.plex
+      - verification.intel-gpu-plugin
+      - verification.qbittorrent
+      - verification.prowlarr
+      - verification.sonarr
+      - verification.radarr
+      - verification.seerr
+      - verification.flaresolverr
+      - verification.qbit-manage
+      - verification.monitoring
+      - verification.gatus
+      - verification.portainer
+      - verification.test-reports
+      - verification.homepage
+      - verification.trivy
+      - verification.tailscale-operator
+      - verification.ntfy
+      - verification.alertmanager-ntfy
+  smoke:
+    description: Non-overlapping aggregate entrypoints covering every smoke scenario.
+    mutates_cluster: false
+    disruptive: false
+    members:
+      - chainsaw.smoke.cluster.default
+      - chainsaw.smoke.media.qbittorrent
+      - chainsaw.smoke.media.qbit-manage
+      - chainsaw.smoke.platform.all
+    coverage:
+      - chainsaw.smoke.cluster.default
+      - chainsaw.smoke.cluster.flux-ready
+      - chainsaw.smoke.media.qbittorrent
+      - chainsaw.smoke.media.qbit-manage
+      - chainsaw.smoke.platform.all
+      - chainsaw.smoke.platform.cluster
+      - chainsaw.smoke.platform.flux
+      - chainsaw.smoke.platform.gateway
+      - chainsaw.smoke.platform.dns
+      - chainsaw.smoke.platform.cilium
+      - chainsaw.smoke.platform.longhorn
+      - chainsaw.smoke.platform.portainer
+      - chainsaw.smoke.platform.smb
+  integration:
+    description: Focused state-changing integration tests.
+    mutates_cluster: true
+    disruptive: false
+    members:
+      - test.cilium-connectivity
+      - test.storage-provisioning
+      - test.flux-canary
+      - test.integration.media-hardlink
+  e2e:
+    description: State-changing end-to-end functional tests.
+    mutates_cluster: true
+    disruptive: false
+    members:
+      - test.e2e.qbit-manage-policy
+  resilience:
+    description: Ordered disruptive recovery tests.
+    mutates_cluster: true
+    disruptive: true
+    members:
+      - test.flux-restart
+      - test.portainer-persistence
+      - chainsaw.resilience.qbittorrent-vpn-disconnect
+      - chainsaw.resilience.qbittorrent-pod-recreation
+      - chainsaw.resilience.plex-cross-node-reschedule
+      - chainsaw.resilience.test-reports-persistence
+      - test.resilience.plex-node-reboot
+  probes:
+    description: Network and application measurement probes.
+    mutates_cluster: true
+    disruptive: false
+    members:
+      - probe.qbittorrent
+      - probe.vpn-leak
+      - probe.dns-isolation
+  conformance-quick:
+    description: Quick Kubernetes conformance regression.
+    mutates_cluster: true
+    disruptive: false
+    members:
+      - conformance.quick
+  conformance-certified:
+    description: Certified Kubernetes conformance suite.
+    mutates_cluster: true
+    disruptive: false
+    members:
+      - conformance.certified
+  standard:
+    description: Nightly validation, smoke, E2E, and quick conformance contract.
+    mutates_cluster: true
+    disruptive: false
+    includes:
+      - validation
+      - smoke
+      - e2e
+      - conformance-quick
+  weekly:
+    description: Weekly full operational coverage except certified conformance.
+    mutates_cluster: true
+    disruptive: true
+    includes:
+      - standard
+      - verification
+      - integration
+      - probes
+      - resilience
+  full:
+    description: Every campaign suite, including certified conformance.
+    mutates_cluster: true
+    disruptive: true
+    includes:
+      - weekly
+      - conformance-certified
 
 suites:
   - metadata: {id: validation.ci, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}

@@ -40,9 +40,37 @@ yq -i '(.suites[] | select(.metadata.id == "test.cilium-connectivity") | .confir
 }' "$temp_dir/unguarded-mutation.yaml"
 expect_rejection 'mutation without confirmation classification' "$temp_dir/unguarded-mutation.yaml"
 
+cp tests/catalog.yaml "$temp_dir/unsafe-runner-command.yaml"
+yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
+  .runner.command) = "mise exec -- just kube metrics-server-verify; touch /tmp/unsafe"' \
+  "$temp_dir/unsafe-runner-command.yaml"
+expect_rejection 'shell operators in catalog runner command' \
+  "$temp_dir/unsafe-runner-command.yaml"
+
 cp tests/catalog.yaml "$temp_dir/missing-ci-command.yaml"
 yq -i 'del(.suites[] | select(.metadata.id == "validation.trivy"))' \
   "$temp_dir/missing-ci-command.yaml"
 expect_rejection 'just ci child without a catalog suite' "$temp_dir/missing-ci-command.yaml"
+
+cp tests/catalog.yaml "$temp_dir/unknown-campaign-member.yaml"
+yq -i '.campaigns.e2e.members += ["test.e2e.not-registered"]' \
+  "$temp_dir/unknown-campaign-member.yaml"
+expect_rejection 'unknown campaign member' "$temp_dir/unknown-campaign-member.yaml"
+
+cp tests/catalog.yaml "$temp_dir/campaign-cycle.yaml"
+yq -i '.campaigns.standard.includes += ["full"]' "$temp_dir/campaign-cycle.yaml"
+expect_rejection 'campaign include cycle' "$temp_dir/campaign-cycle.yaml"
+
+cp tests/catalog.yaml "$temp_dir/missing-tier-member.yaml"
+yq -i '.campaigns.verification.members = .campaigns.verification.members[:-1]' \
+  "$temp_dir/missing-tier-member.yaml"
+expect_rejection 'catalog suite omitted from explicit campaign' \
+  "$temp_dir/missing-tier-member.yaml"
+
+cp tests/catalog.yaml "$temp_dir/duplicate-campaign-member.yaml"
+yq -i '.campaigns.e2e.members += [.campaigns.e2e.members[0]]' \
+  "$temp_dir/duplicate-campaign-member.yaml"
+expect_rejection 'duplicate resolved campaign member' \
+  "$temp_dir/duplicate-campaign-member.yaml"
 
 echo 'Test catalog negative fixtures passed.'

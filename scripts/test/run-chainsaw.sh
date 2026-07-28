@@ -18,9 +18,10 @@ scenario="${3:-}"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-kubeconfig='.kube/config'
+kubeconfig="${TEST_KUBECONFIG:-.kube/config}"
 namespace='flux-system'
-catalog='tests/catalog.yaml'
+catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
+results_root="${TEST_RESULTS_ROOT:-.test-results}"
 
 entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
 dispatch_mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"
@@ -47,7 +48,7 @@ esac
 }
 
 execution_origin="$(resolve_execution_origin)"
-run_dir="$(create_run_directory '.test-results' "$execution_origin")"
+run_dir="$(create_run_directory "$results_root" "$execution_origin")"
 run_id="$(basename "$run_dir")"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_epoch="$EPOCHSECONDS"
@@ -55,6 +56,7 @@ cluster_name="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
   --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
 lease_acquired=false
+lease_joined=false
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 release_chainsaw_lease() {
@@ -64,8 +66,21 @@ release_chainsaw_lease() {
   fi
 }
 trap release_chainsaw_lease EXIT
+write_run_id_output "$run_id"
 if [[ "$mutates_cluster" == 'true' ]]; then
-  if ! acquire_test_lease "$kubeconfig" "$run_id"; then
+  lease_ready=false
+  if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
+      lease_joined=true
+      lease_ready=true
+    fi
+  elif acquire_test_lease "$kubeconfig" "$run_id"; then
+    lease_acquired=true
+    lease_ready=true
+    start_test_lease_renewal "$kubeconfig" "$run_id" \
+      "$(cd "$run_dir" && pwd)/diagnostics/lease-renewal-failed"
+  fi
+  if [[ "$lease_ready" != 'true' ]]; then
     finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     duration_seconds=$((EPOCHSECONDS - started_epoch))
     write_result_case_junit "$run_dir/junit.xml" \
@@ -81,9 +96,6 @@ if [[ "$mutates_cluster" == 'true' ]]; then
     echo "Chainsaw results: $run_dir"
     exit 1
   fi
-  lease_acquired=true
-  start_test_lease_renewal "$kubeconfig" "$run_id" \
-    "$(cd "$run_dir" && pwd)/diagnostics/lease-renewal-failed"
 fi
 
 if [[ "$diagnostics_only" == true ]]; then
@@ -182,6 +194,15 @@ if [[ "$lease_acquired" == 'true' ]]; then
     diagnostics_status='failed'
   fi
   lease_acquired=false
+elif [[ "$lease_joined" == 'true' ]]; then
+  if ! verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
+    diagnostics_status='failed'
+  fi
+  if [[ -n "${TEST_CAMPAIGN_LEASE_FAILURE_MARKER:-}" &&
+    -e "$TEST_CAMPAIGN_LEASE_FAILURE_MARKER" ]]; then
+    diagnostics_status='failed'
+  fi
+  lease_joined=false
 fi
 
 # State-changing scenarios drive cleanup/recovery in a trap/finally block and record its

@@ -23,6 +23,7 @@
 /support-bundles/
 /.test-results/
 /.test-reports/
+/.test-campaigns/
 *.dec.yaml
 *.decrypted.yaml
 

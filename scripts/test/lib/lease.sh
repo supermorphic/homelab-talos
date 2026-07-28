@@ -140,6 +140,29 @@ renew_test_lease() {
     lease_kubectl "$kubeconfig" replace --filename - >/dev/null
 }
 
+verify_test_lease_holder() {
+  local kubeconfig="$1"
+  local holder="$2"
+  local lease_json existing_holder
+
+  [[ "$holder" =~ ^[a-zA-Z0-9_.:-]+$ ]] || {
+    echo "Unsafe test Lease holder identity: $holder" >&2
+    return 2
+  }
+  lease_json="$(lease_kubectl "$kubeconfig" --namespace "$TEST_LEASE_NAMESPACE" \
+    get lease "$TEST_LEASE_NAME" --output json)" || return 1
+  existing_holder="$(yq -r '.spec.holderIdentity // ""' - <<<"$lease_json")"
+  [[ "$existing_holder" == "$holder" ]] || {
+    echo "Expected test Lease holder '$holder', found '${existing_holder:-<none>}'." >&2
+    return 1
+  }
+  if lease_is_expired "$lease_json"; then
+    echo "Test Lease held by '$holder' is expired." >&2
+    return 1
+  fi
+  return 0
+}
+
 start_test_lease_renewal() {
   local kubeconfig="$1"
   local holder="$2"
