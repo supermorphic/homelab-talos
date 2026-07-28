@@ -77,8 +77,11 @@ Then flip the ntfy Git source to `suspend: false` (and add the Gatus `/v1/health
 endpoint), commit, push, and re-run `mise exec -- just kube ntfy-verify`.
 
 `ntfy-verify` proves: Flux/HelmRelease Ready, rollout, PVC Bound, gateway `/v1/health`
-healthy, anonymous access denied, and least-privilege token ACLs. To also send positive
-test notifications, re-run with `NTFY_VERIFY_PUBLISH_CONFIRM=publish:ntfy-verify`.
+healthy, anonymous access denied, the live `subscriber` account has exactly read-only
+access to `critical`, `homelab`, and `media`, and producer/Homepage token ACLs are
+least-privilege. The subscriber assertion reads ntfy's runtime auth database and neither
+requires the password nor sends a notification. To also send positive test notifications,
+re-run with `NTFY_VERIFY_PUBLISH_CONFIRM=publish:ntfy-verify`.
 
 ## D. Configure the iPhone
 

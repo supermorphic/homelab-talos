@@ -29,7 +29,18 @@ health="$(curl -sS --max-time 15 "$base_url/v1/health")"
 [[ "$(code -X POST -d 'verify' "$base_url/critical")" == '403' ]] || { echo 'Anonymous publish to critical was not denied.' >&2; exit 1; }
 [[ "$(code "$base_url/critical/json?poll=1")" == '403' ]] || { echo 'Anonymous poll of critical was not denied.' >&2; exit 1; }
 
-# 8-9. Least-privilege token ACLs. Read the publisher tokens from the live Secret via
+# 8. Inspect ntfy's live auth database through its read-only CLI path. Exact output
+# proves the provisioned subscriber remains a regular user with only the three intended
+# read-only grants; any added topic or write permission fails this assertion.
+subscriber_acl="$("${kc[@]}" --namespace "$ns" exec deployment/ntfy -c app -- \
+  ntfy --log-level=ERROR access --config=/etc/ntfy/server.yml subscriber)"
+expected_subscriber_acl=$'user subscriber (role: user, tier: none, server config)\n- read-only access to topic critical (server config)\n- read-only access to topic homelab (server config)\n- read-only access to topic media (server config)'
+[[ "$subscriber_acl" == "$expected_subscriber_acl" ]] || {
+  echo 'subscriber runtime ACLs do not exactly match read-only access to critical, homelab, and media.' >&2
+  exit 1
+}
+
+# 9-10. Least-privilege token ACLs. Read the publisher tokens from the live Secret via
 # kubectl's own base64decode (portable; never echoed). Negative tests are side-effect
 # free (ntfy rejects before delivering).
 tokens="$("${kc[@]}" --namespace "$ns" get secret ntfy-secret -o go-template='{{ index .data "NTFY_AUTH_TOKENS" | base64decode }}')"
@@ -69,10 +80,9 @@ if [[ "${NTFY_VERIFY_PUBLISH_CONFIRM:-}" == 'publish:ntfy-verify' ]]; then
 fi
 
 just kube foundation-verify
-echo 'ntfy acceptance passed: Flux + HelmRelease Ready, rollout complete, PVC Bound, gateway /v1/health healthy, anonymous access denied, and producer/Homepage least-privilege token ACLs enforced.'
+echo 'ntfy acceptance passed: Flux + HelmRelease Ready, rollout complete, PVC Bound, gateway /v1/health healthy, anonymous access denied, and subscriber/producer/Homepage least-privilege ACLs enforced.'
 echo
 echo 'MANUAL (human acceptance, not automatable here):'
-echo '  - subscriber password login can READ all topics and CANNOT publish (enter password on a client).'
 echo '  - a unique marker survives a Pod recreation via the persistent cache.'
 echo '  - iPhone receives a push on Wi-Fi and off-site via Tailscale VPN On Demand.'
 echo '  - re-run with NTFY_VERIFY_PUBLISH_CONFIRM=publish:ntfy-verify to send positive-path test notifications.'
