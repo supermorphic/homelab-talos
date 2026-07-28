@@ -52,11 +52,11 @@ gateway_class="$(kubectl --kubeconfig "$kubeconfig" get gatewayclass internal --
 [[ "$(yq -r '[.status.conditions[] | select(.type == "Accepted") | .status][0]' - <<<"$gateway_class")" == 'True' ]]
 gateway="$(kubectl --kubeconfig "$kubeconfig" --namespace networking get gateway internal --output json)"
 [[ "$(yq -r '[.status.conditions[] | select(.type == "Programmed") | .status][0]' - <<<"$gateway")" == 'True' ]]
-[[ "$(yq -r '.status.addresses[].value' - <<<"$gateway" | sort -u)" == '192.168.90.30' ]]
+[[ "$(yq -r '.status.addresses[].value' - <<<"$gateway" | sort -u)" == "$HOMELAB_GATEWAY_VIP" ]]
 [[ "$(yq -r '.status.listeners[] | select(.name == "https") | [.conditions[] | select(.type == "Accepted") | .status][0]' - <<<"$gateway")" == 'True' ]]
 
 envoy_services="$(kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system get services --output json)"
-envoy_service="$(yq -r '.items[] | select(.spec.type == "LoadBalancer" and (.status.loadBalancer.ingress[]?.ip == "192.168.90.30")) | .metadata.name' - <<<"$envoy_services")"
+envoy_service="$(HOMELAB_GATEWAY_VIP="$HOMELAB_GATEWAY_VIP" yq -r '.items[] | select(.spec.type == "LoadBalancer" and (.status.loadBalancer.ingress[]?.ip == strenv(HOMELAB_GATEWAY_VIP))) | .metadata.name' - <<<"$envoy_services")"
 [[ -n "$envoy_service" && "$(wc -l <<<"$envoy_service" | tr -d ' ')" == '1' ]]
 envoy_deployments="$(kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system get deployments --output json)"
 envoy_ready="$(yq -r '.items[] | select(.metadata.labels."gateway.envoyproxy.io/owning-gateway-name" == "internal") | [.spec.replicas, (.status.availableReplicas // 0)] | join(" ")' - <<<"$envoy_deployments")"
@@ -96,15 +96,15 @@ route="$(kubectl --kubeconfig "$kubeconfig" --namespace testing get httproute ec
 dns_answer=''
 for _ in {1..30}; do
   dns_answer="$(dig +short @"$HOMELAB_DNS_RESOLVER" echo.lab.supermorphic.com A | sort -u)"
-  [[ "$dns_answer" == '192.168.90.30' ]] && break
+  [[ "$dns_answer" == "$HOMELAB_GATEWAY_VIP" ]] && break
   sleep 10
 done
-[[ "$dns_answer" == '192.168.90.30' ]] || {
-  echo "Pi-hole returned '$dns_answer' instead of 192.168.90.30." >&2
+[[ "$dns_answer" == "$HOMELAB_GATEWAY_VIP" ]] || {
+  echo "Pi-hole returned '$dns_answer' instead of $HOMELAB_GATEWAY_VIP." >&2
   exit 1
 }
 response="$(curl --silent --show-error --fail --max-time 15 \
-  --resolve echo.lab.supermorphic.com:443:192.168.90.30 \
+  --resolve "echo.lab.supermorphic.com:443:$HOMELAB_GATEWAY_VIP" \
   https://echo.lab.supermorphic.com/)"
 [[ -n "$response" ]]
 

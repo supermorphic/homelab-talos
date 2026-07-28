@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: portainer-persistence.sh <kubeconfig>' >&2
   exit 2
@@ -10,7 +12,7 @@ kubeconfig="$1"
 namespace='portainer'
 expected_confirmation='recreate:portainer:pod:preserve-pvc'
 host='portainer.lab.supermorphic.com'
-gateway_ip='192.168.90.30'
+gateway_ip="$HOMELAB_GATEWAY_VIP"
 
 [[ "${PORTAINER_PERSISTENCE_CONFIRM:-}" == "$expected_confirmation" ]] || {
   echo 'Refusing to recreate the Portainer pod.' >&2

@@ -10,7 +10,7 @@ source scripts/lib/network.sh
 
 kubeconfig="$1"
 ns='monitoring'
-gateway_ip='192.168.90.30'
+gateway_ip="$HOMELAB_GATEWAY_VIP"
 
 for k in kube-prometheus-stack kube-prometheus-stack-config; do
   [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$k" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
