@@ -831,6 +831,19 @@ tailscale-operator-validate: require-bash
 tailscale-operator-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.tailscale-operator -- scripts/verify/tailscale-operator.sh {{quote(kubeconfig)}}
 
+# Validate the Tailscale subnet-router source: files, staged Kustomization wiring +
+# operator dependency, hostnamePrefix HA Connector referencing the node-spread ProxyClass,
+# the dedicated tag:lab-router, the exact-two-/32 least-privilege route allowlist (rejecting
+# LAN/Pod/Service CIDRs), the hard topology-spread ProxyClass, no Funnel, and the render.
+tailscale-subnet-router-validate: require-bash
+    @scripts/validate/tailscale-subnet-router.sh
+
+# Verify the live Tailscale subnet router: Kustomization Ready, ConnectorReady, two managed
+# devices, exactly the two /32 routes, two Ready replicas on distinct nodes, Envoy Gateway
+# Programmed, and a representative HTTPRoute Accepted. Route approval stays a manual step.
+tailscale-subnet-router-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.tailscale-subnet-router -- scripts/verify/tailscale-subnet-router.sh {{quote(kubeconfig)}}
+
 # Validate the ntfy source: files, wiring, staged suspend, dependency graph, SOPS
 # decryption, pinned image, hardened non-root pod, RWO PVC, server.yml (deny-all,
 # require-login, signup off, iOS upstream, metrics listener), the internal HTTPRoute,

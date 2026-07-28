@@ -2080,6 +2080,75 @@ tailscale-operator:
     bootstrap_complete=true
     echo 'Tailscale operator live acceptance passed. Change the operator Kustomization (tailscale-operator) Git source to suspend=false, commit, push, and rerun just kube tailscale-operator-verify.'
 
+# Reconcile the suspended lab-subnet-router Connector after guarded checks, then verify.
+# PREREQUISITE (tailnet, operator-owned): tag:lab-router must already be owned by
+# tag:k8s-operator and the DNS/Gateway grants saved in the tailnet policy BEFORE this runs,
+# or the operator cannot create the Connector devices. The Connector CRD is installed by the
+# already-active tailscale-operator. On failure the resumed Kustomization is re-suspended,
+# preserving its resources. After success, approve both /32 routes on BOTH devices and
+# configure split DNS per docs/tailscale-lab-domain.md, then open the activation PR.
+tailscale-subnet-router:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:networking:tailscale-subnet-router'
+    ks='kubernetes/apps/networking/tailscale-operator/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_tailscale_subnet_router() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'Tailscale subnet-router bootstrap did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization tailscale-operator-subnet-router --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_tailscale_subnet_router EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'Tailscale subnet-router bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just \
+      kubernetes/apps/networking/kustomization.yaml \
+      kubernetes/apps/networking/tailscale-operator/ks.yaml \
+      kubernetes/apps/networking/tailscale-operator/subnet-router
+    [[ "$(yq -r 'select(.metadata.name == "tailscale-operator-subnet-router") | .spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing Tailscale subnet-router bootstrap: the subnet-router Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube tailscale-subnet-router-validate
+    # Reconcile the published main source before checking Flux's artifact revision.
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization tailscale-operator-subnet-router --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing Tailscale subnet-router bootstrap: tailscale-operator-subnet-router is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${TAILSCALE_SUBNET_ROUTER_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the Tailscale subnet router.' >&2
+      echo "Set TAILSCALE_SUBNET_ROUTER_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing tailscale-subnet-router-validate and confirming tag:lab-router ownership is saved in the tailnet policy." >&2
+      exit 1
+    }
+
+    echo 'Reconciling Tailscale subnet-router Kustomization (creates the HA Connector + ProxyClass).'
+    resumed=true
+    flux resume kustomization tailscale-operator-subnet-router --namespace flux-system --kubeconfig "$kubeconfig" --timeout 10m
+    flux reconcile kustomization tailscale-operator-subnet-router \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/tailscale-operator-subnet-router --timeout=10m
+
+    just kube tailscale-subnet-router-verify
+    bootstrap_complete=true
+    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/tailscale-lab-domain.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
+
 # Reconcile the suspended ntfy notification service after guarded checks, then verify.
 # Requires the ntfy-secret committed (just repo ntfy-secrets) and the tailscale-operator
 # already rolled out. On failure the resumed Kustomization is re-suspended, preserving
