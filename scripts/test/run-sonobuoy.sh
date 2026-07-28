@@ -17,10 +17,14 @@ case "$mode" in
   quick)
     sono_mode='quick'
     label='quick validation subset (NOT upstream conformance)'
+    aggregator_timeout_seconds=900
+    cli_wait_minutes=20
     ;;
   certified)
     sono_mode='certified-conformance'
     label='certified upstream Kubernetes conformance'
+    aggregator_timeout_seconds=10800
+    cli_wait_minutes=190
     ;;
   *) exit 2 ;;
 esac
@@ -94,7 +98,12 @@ fi
 echo "Running Sonobuoy: $label (mode=$sono_mode)."
 cleanup_required=true
 set +e
-"$sonobuoy_bin" run --mode "$sono_mode" --wait --kubeconfig "$kubeconfig"
+"$sonobuoy_bin" run \
+  --mode "$sono_mode" \
+  --plugin e2e \
+  --timeout "$aggregator_timeout_seconds" \
+  --wait="$cli_wait_minutes" \
+  --kubeconfig "$kubeconfig"
 run_exit="$?"
 set -e
 if [[ "$run_exit" -ne 0 ]]; then

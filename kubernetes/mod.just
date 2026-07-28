@@ -175,6 +175,10 @@ media-policy-validate:
 conformance: require-bash
     @scripts/test/run-conformance.sh {{quote(kubeconfig)}}
 
+# Inspect an active Sonobuoy run without retrieving, deleting, or changing it.
+conformance-status: require-bash
+    @scripts/diagnose/sonobuoy.sh {{quote(kubeconfig)}}
+
 # Validate the built app manifests against Kubernetes + CRD schemas, offline of the
 # cluster (schemas are fetched over HTTPS). Secrets are kept (only the SOPS metadata
 # is stripped); CRDs absent from the schema sources are reported as skipped, not
