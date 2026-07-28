@@ -23,9 +23,8 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Staged suspended: the alertmanager-ntfy-auth Secret (ntfy publisher token) must exist
-  # before reconciliation. Roll out with `just bootstrap alertmanager-ntfy`, then flip
-  # to false durably.
-  suspend: true
+  # Rolled out via `just bootstrap alertmanager-ntfy` and live-verified (Kustomization +
+  # HelmRelease Ready, adapter rolled out, Alertmanager ntfy receiver present); now active.
+  suspend: false
   timeout: 10m
   wait: true
