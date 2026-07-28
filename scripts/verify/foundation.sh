@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+source scripts/lib/network.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -94,7 +95,7 @@ route="$(kubectl --kubeconfig "$kubeconfig" --namespace testing get httproute ec
 
 dns_answer=''
 for _ in {1..30}; do
-  dns_answer="$(dig +short @192.168.90.2 echo.lab.supermorphic.com A | sort -u)"
+  dns_answer="$(dig +short @"$HOMELAB_DNS_RESOLVER" echo.lab.supermorphic.com A | sort -u)"
   [[ "$dns_answer" == '192.168.90.30' ]] && break
   sleep 10
 done

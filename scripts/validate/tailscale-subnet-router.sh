@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 base='kubernetes/apps/networking/tailscale-operator'
 ks="$base/ks.yaml"
 connector="$base/subnet-router/connector.yaml"
@@ -45,10 +47,10 @@ yq -r '.spec.tags[]' "$connector" | rg -qx 'tag:lab-router' || {
 # Least-privilege gate (security-critical): advertise EXACTLY the Pi-hole and Gateway /32s.
 # Never the LAN /24, the Pod CIDR (10.244.), the Service CIDR (10.96.), or any non-/32.
 mapfile -t routes < <(yq -r '.spec.subnetRouter.advertiseRoutes[]' "$connector" | sort)
-expected_routes=$'192.168.90.2/32\n192.168.90.30/32'
+expected_routes="${HOMELAB_DNS_RESOLVER}/32"$'\n'"192.168.90.30/32"
 got_routes="$(printf '%s\n' "${routes[@]}")"
 [[ "$got_routes" == "$expected_routes" ]] || {
-  echo 'Refusing: advertiseRoutes must be exactly 192.168.90.2/32 and 192.168.90.30/32.' >&2
+  echo "Refusing: advertiseRoutes must be exactly ${HOMELAB_DNS_RESOLVER}/32 and 192.168.90.30/32." >&2
   echo "Found:" >&2; printf '  %s\n' "${routes[@]}" >&2
   exit 1
 }

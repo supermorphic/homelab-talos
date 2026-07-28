@@ -16,9 +16,11 @@
 # unit-tests them offline in `just ci`. The live main is BASH_SOURCE-guarded.
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 # The Gluetun in-netns resolver, and the two non-tunnel resolvers that MUST stay blocked.
 GLUETUN_RESOLVER='127.0.0.1'
-LAN_RESOLVER='192.168.90.2'     # home/LAN Pi-hole
+LAN_RESOLVER="$HOMELAB_DNS_RESOLVER"   # home/LAN Pi-hole
 CLUSTER_RESOLVER='10.96.0.10'   # Kubernetes CoreDNS ClusterIP
 
 # --- pure, cluster-free assertions (unit-tested by isolation-test.sh) --------------
@@ -58,17 +60,19 @@ probe_main() {
   # One exec: read the configured resolver, then actively resolve via the default
   # (Gluetun) resolver and directly against each non-tunnel resolver. Each direct query
   # is time-bounded so a blocked resolver reports quickly instead of hanging.
+  # The heredoc is quoted so its $(...) stays pod-side; the LAN resolver is therefore
+  # passed in as $1 (the pod has no access to this host-side constant).
   local remote
   remote="$(cat <<'REMOTE'
 printf 'nameserver=%s\n' "$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
-timeout 8 nslookup github.com                >/dev/null 2>&1 && echo 'loopback=ok'       || echo 'loopback=fail'
-timeout 8 nslookup github.com 192.168.90.2   >/dev/null 2>&1 && echo 'lan=resolved'      || echo 'lan=blocked'
-timeout 8 nslookup github.com 10.96.0.10      >/dev/null 2>&1 && echo 'cluster=resolved'  || echo 'cluster=blocked'
-timeout 8 nslookup github.com 8.8.8.8         >/dev/null 2>&1 && echo 'public=resolved'   || echo 'public=blocked'
+timeout 8 nslookup github.com           >/dev/null 2>&1 && echo 'loopback=ok'       || echo 'loopback=fail'
+timeout 8 nslookup github.com "$1"      >/dev/null 2>&1 && echo 'lan=resolved'      || echo 'lan=blocked'
+timeout 8 nslookup github.com 10.96.0.10 >/dev/null 2>&1 && echo 'cluster=resolved' || echo 'cluster=blocked'
+timeout 8 nslookup github.com 8.8.8.8   >/dev/null 2>&1 && echo 'public=resolved'   || echo 'public=blocked'
 REMOTE
 )"
   local results
-  results="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c app -- sh -c "$remote")"
+  results="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c app -- sh -c "$remote" sh "$LAN_RESOLVER")"
 
   local nameserver loopback lan cluster public
   nameserver="$(grep -m1 '^nameserver=' <<<"$results" | cut -d= -f2)"
