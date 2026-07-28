@@ -57,14 +57,43 @@ tailnet.
 ### Operator gate 1 — tailnet ACL (BEFORE bootstrap)
 
 The operator can only create the Connector devices if the OAuth client (tagged
-`tag:k8s-operator`) **already owns** `tag:lab-router`. In the Admin Console **Access
-Controls**, add (see `docs/tailscale-operator.md` / `docs/tailscale-single-user-setup.md`):
+`tag:k8s-operator`) **already owns** `tag:lab-router`, so this ACL change must be saved
+**before** the guarded bootstrap. These steps are **additive** — do not replace the
+existing policy (the full annotated policy lives in `docs/tailscale-operator.md`; the
+initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
 
-- `tagOwners`: `"tag:lab-router": ["tag:k8s-operator"]`
-- `grants`: `autogroup:member` → `192.168.90.2/32` `tcp:53,udp:53`, and → `192.168.90.30/32`
-  `tcp:443`.
+1. Open Admin Console → **Access controls** (<https://login.tailscale.com/admin/acls>).
+   The console has two views — a **Visual Editor** and a **JSON Editor** — that edit the
+   **same policy**; changes in one show up in the other. The steps below use the JSON
+   Editor.
+2. Create the tag and set its owner. In `tagOwners`, add one line so the operator's tag
+   owns `tag:lab-router` (same ownership model as `tag:ntfy`):
 
-Save the policy. No OAuth-client change is needed (same ownership model as `tag:ntfy`).
+   ```jsonc
+   "tagOwners": {
+     // ...keep every existing entry (tag:k8s, tag:ntfy, ...)...
+     "tag:lab-router": ["tag:k8s-operator"]
+   },
+   ```
+
+   (Visual Editor equivalent: create the tag `lab-router` — enter it without the `tag:`
+   prefix; the console adds it — and set `k8s-operator` as its owner.)
+3. In `grants`, add the two least-privilege subnet-router rules — DNS to the Pi-hole
+   resolver, HTTPS to the Envoy Gateway VIP. Never the LAN /24 or the Pod/Service CIDRs:
+
+   ```jsonc
+   { "src": ["autogroup:member"], "dst": ["192.168.90.2/32"],  "ip": ["tcp:53", "udp:53"] },
+   { "src": ["autogroup:member"], "dst": ["192.168.90.30/32"], "ip": ["tcp:443"] }
+   ```
+
+4. **Save** the policy. The console validates the JSON and shows a preview diff — confirm
+   it contains only these additions. No OAuth-client change is needed.
+
+> `autogroup:member` is intentional **only** for the current single-user tailnet. Before
+> onboarding another user, replace it with a dedicated group whose membership is
+> explicitly reviewed — a member who can reach one `*.lab.supermorphic.com` host over the
+> shared Gateway VIP :443 can reach them all (shared-IP L4 limitation; per-app isolation
+> stays with app authentication).
 
 ### Operator gate 2 — guarded rollout
 
