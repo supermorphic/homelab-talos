@@ -14,14 +14,19 @@ printf '%s\n' \
   >"$archive_root/junit_01.xml"
 archive="$fixture_root/sonobuoy.tar.gz"
 tar -czf "$archive" -C "$fixture_root/archive" .
+calls="$fixture_root/sonobuoy-calls"
 
 FAKE_SONOBUOY_ARCHIVE="$archive" \
+FAKE_SONOBUOY_CALLS="$calls" \
 TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
 TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
 HOMELAB_TEST_RUN_DIR="$run_dir" \
 TEST_RESULT_FRAGMENT_DIR="$fragment_dir" \
   scripts/test/run-sonobuoy.sh quick "$fixture_root/kubeconfig" >/dev/null
 
+rg -q --fixed-strings \
+  "run --mode quick --plugin e2e --timeout 900 --wait=20 --kubeconfig $fixture_root/kubeconfig " \
+  "$calls"
 [[ -f "$run_dir/diagnostics/sonobuoy/summary.txt" ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/e2e-summary.txt" ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/sonobuoy-results.tar.gz" ]]

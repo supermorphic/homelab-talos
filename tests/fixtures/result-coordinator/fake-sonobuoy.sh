@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ -z "${FAKE_SONOBUOY_CALLS:-}" ]] ||
+  printf '%q ' "$@" >>"$FAKE_SONOBUOY_CALLS"
+[[ -z "${FAKE_SONOBUOY_CALLS:-}" ]] ||
+  printf '\n' >>"$FAKE_SONOBUOY_CALLS"
+
 case "$1" in
   run|delete)
     exit 0

@@ -21,6 +21,7 @@ demand and torn down afterward (`run → retrieve → delete`), leaving nothing 
 ```
 mise exec -- just kube conformance                 # MODE=quick (default)
 MODE=certified mise exec -- just kube conformance   # full certified suite
+mise exec -- just kube conformance-status          # read-only active-run diagnosis
 ```
 
 - **`quick` (default, ~5–10 min)** — Sonobuoy's quick E2E subset (a couple of sanity
@@ -38,6 +39,12 @@ teardown. Its canonical `.test-results/<run-id>/` retains the native archive
 below `diagnostics/sonobuoy/`, extracts and merges non-vacuous E2E JUnit, records
 cleanup or harness problems as JUnit errors, and is accepted by `just test
 result-validate`.
+
+Both modes explicitly run only Sonobuoy's `e2e` plugin. The default
+`systemd-logs` plugin requires `journalctl`, which Talos does not provide, and can
+otherwise leave its result worker waiting indefinitely. Quick runs have a
+15-minute aggregator timeout and 20-minute CLI wait; certified runs have a
+3-hour aggregator timeout and 190-minute CLI wait.
 
 ## Intentionally out of scope
 
