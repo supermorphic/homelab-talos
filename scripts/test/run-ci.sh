@@ -93,7 +93,8 @@ while IFS= read -r suite_id; do
   suite_started="$EPOCHSECONDS"
   echo "=== $suite_id: just $command_args ==="
   set +e
-  TEST_RESULT_FRAGMENT_DIR="$(cd "$fragment_dir" && pwd)" \
+  env -u TEST_RUN_ID_FILE \
+    TEST_RESULT_FRAGMENT_DIR="$(cd "$fragment_dir" && pwd)" \
     "$just_bin" "${just_args[@]}" 2>&1 | tee "$suite_log"
   command_exit_code="${PIPESTATUS[0]}"
   set -e
@@ -167,6 +168,7 @@ write_multi_summary "$run_dir" "$run_id" "$aggregate_entry" "$execution_origin" 
   "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
   "$primary_exit_code" "$suites_json"
 scripts/test/validate-run.sh "$run_dir"
+write_run_id_output "$run_id"
 
 echo "CI results: $run_dir"
 if [[ "$primary_exit_code" -ne 0 ]]; then
