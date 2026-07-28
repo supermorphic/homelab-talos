@@ -47,10 +47,10 @@ yq -r '.spec.tags[]' "$connector" | rg -qx 'tag:lab-router' || {
 # Least-privilege gate (security-critical): advertise EXACTLY the Pi-hole and Gateway /32s.
 # Never the LAN /24, the Pod CIDR (10.244.), the Service CIDR (10.96.), or any non-/32.
 mapfile -t routes < <(yq -r '.spec.subnetRouter.advertiseRoutes[]' "$connector" | sort)
-expected_routes="${HOMELAB_DNS_RESOLVER}/32"$'\n'"192.168.90.30/32"
+expected_routes="${HOMELAB_DNS_RESOLVER}/32"$'\n'"${HOMELAB_GATEWAY_VIP}/32"
 got_routes="$(printf '%s\n' "${routes[@]}")"
 [[ "$got_routes" == "$expected_routes" ]] || {
-  echo "Refusing: advertiseRoutes must be exactly ${HOMELAB_DNS_RESOLVER}/32 and 192.168.90.30/32." >&2
+  echo "Refusing: advertiseRoutes must be exactly ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32." >&2
   echo "Found:" >&2; printf '  %s\n' "${routes[@]}" >&2
   exit 1
 }

@@ -29,8 +29,8 @@ kc=(kubectl --kubeconfig "$kubeconfig")
 device_count="$("${kc[@]}" get connector lab-subnet-router --output jsonpath='{.status.devices}' 2>/dev/null | yq -p json -r 'length' 2>/dev/null || echo 0)"
 [[ "${device_count:-0}" -eq 2 ]] || { echo "Connector reports ${device_count:-0} devices (want 2)." >&2; exit 1; }
 routes="$("${kc[@]}" get connector lab-subnet-router --output jsonpath='{.status.subnetRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
-[[ "$routes" == "${HOMELAB_DNS_RESOLVER}/32,192.168.90.30/32" ]] || {
-  echo "Connector exposes routes [$routes]; want exactly ${HOMELAB_DNS_RESOLVER}/32,192.168.90.30/32." >&2
+[[ "$routes" == "${HOMELAB_DNS_RESOLVER}/32,${HOMELAB_GATEWAY_VIP}/32" ]] || {
+  echo "Connector exposes routes [$routes]; want exactly ${HOMELAB_DNS_RESOLVER}/32,${HOMELAB_GATEWAY_VIP}/32." >&2
   exit 1
 }
 
@@ -60,10 +60,10 @@ distinct_nodes="$("${kc[@]}" --namespace "$ns" get pods --selector "$sel" \
 # Soft: the restricted resolver answers the lab zone (best-effort; needs LAN/tailnet path).
 if command -v dig >/dev/null 2>&1; then
   answer="$(dig +short +time=3 +tries=1 @"$HOMELAB_DNS_RESOLVER" homepage.lab.supermorphic.com A 2>/dev/null || true)"
-  if [[ "$answer" == *'192.168.90.30'* ]]; then
-    echo 'Pi-hole resolver answers homepage.lab.supermorphic.com -> 192.168.90.30.'
+  if [[ "$answer" == *"$HOMELAB_GATEWAY_VIP"* ]]; then
+    echo "Pi-hole resolver answers homepage.lab.supermorphic.com -> $HOMELAB_GATEWAY_VIP."
   else
-    echo "WARN: Pi-hole $HOMELAB_DNS_RESOLVER did not return 192.168.90.30 for homepage.lab.supermorphic.com (got: ${answer:-none}); check from a host with LAN/tailnet access." >&2
+    echo "WARN: Pi-hole $HOMELAB_DNS_RESOLVER did not return $HOMELAB_GATEWAY_VIP for homepage.lab.supermorphic.com (got: ${answer:-none}); check from a host with LAN/tailnet access." >&2
   fi
 fi
 
@@ -72,11 +72,11 @@ echo 'Tailscale subnet-router acceptance passed: Kustomization Ready, ConnectorR
 echo
 echo 'MANUAL (mandatory — Kubernetes status CANNOT prove Tailscale Admin Console approval):'
 echo '  1. In Admin Console -> Machines, open BOTH lab-subnet-router-* devices and approve'
-echo "     ONLY ${HOMELAB_DNS_RESOLVER}/32 and 192.168.90.30/32 on EACH replica (both must be approved"
+echo "     ONLY ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 on EACH replica (both must be approved"
 echo '     for real failover). Confirm neither advertises any other subnet.'
 echo "  2. Ensure the restricted split-DNS nameserver ${HOMELAB_DNS_RESOLVER} is configured for search"
 echo '     domain lab.supermorphic.com.'
 echo '  3. From a tailnet client OFF the home LAN, run the client acceptance probe in'
 echo '     docs/tailscale-lab-domain.md (scutil --dns / tailscale dns status, route -n get'
-echo '     192.168.90.30, dscacheutil, curl -I without -k), then the Tailscale-off negative'
+echo "     ${HOMELAB_GATEWAY_VIP}, dscacheutil, curl -I without -k), then the Tailscale-off negative"
 echo '     test. See docs/tailscale-lab-domain.md.'

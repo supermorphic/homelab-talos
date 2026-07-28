@@ -11,7 +11,7 @@ source scripts/lib/network.sh
 kubeconfig="$1"
 namespace='portainer'
 host='portainer.lab.supermorphic.com'
-gateway_ip='192.168.90.30'
+gateway_ip="$HOMELAB_GATEWAY_VIP"
 subject='system:serviceaccount:portainer:portainer-readonly'
 
 fail() {

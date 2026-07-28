@@ -17,7 +17,7 @@ case "$app" in
     ;;
 esac
 namespace='media'
-gateway_ip='192.168.90.30'
+gateway_ip="$HOMELAB_GATEWAY_VIP"
 host="$app.lab.supermorphic.com"
 
 [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \

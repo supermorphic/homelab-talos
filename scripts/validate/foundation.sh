@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+source scripts/lib/network.sh
 require_bash
 
 cert_manager_chart='oci://quay.io/jetstack/charts/cert-manager'
@@ -118,7 +119,7 @@ gateway='kubernetes/apps/networking/internal-gateway/app/gateway.yaml'
 [[ "$(yq ea -r 'select(.kind == "Gateway") | .spec.listeners[0].tls.certificateRefs[0].name' "$gateway")" == 'wildcard-lab-supermorphic-com-tls' ]]
 proxy='kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml'
 [[ "$(yq -r '.spec.provider.kubernetes.envoyDeployment.replicas' "$proxy")" == '2' ]]
-[[ "$(yq -r '.spec.provider.kubernetes.envoyService.annotations."metallb.io/loadBalancerIPs"' "$proxy")" == '192.168.90.30' ]]
+[[ "$(yq -r '.spec.provider.kubernetes.envoyService.annotations."metallb.io/loadBalancerIPs"' "$proxy")" == "$HOMELAB_GATEWAY_VIP" ]]
 [[ "$(yq -r '.spec.provider.kubernetes.envoyService.externalTrafficPolicy' "$proxy")" == 'Local' ]]
 
 dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'

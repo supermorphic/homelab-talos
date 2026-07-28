@@ -569,8 +569,8 @@ Use `mise install --locked` when consuming the repository. Use unlocked
   the Talos machine API.
 - `.just/` holds repository and cross-domain bootstrap command modules.
 - `scripts/lib/common.sh` holds validator-safe shared shell helpers;
-  `scripts/lib/network.sh` holds shared network constants (e.g. the Pi-hole
-  resolver IP) for host-run scripts; `scripts/lib/rollout.sh` holds operator
+  `scripts/lib/network.sh` holds shared network constants (the Pi-hole resolver
+  IP, the internal Gateway VIP) for host-run scripts; `scripts/lib/rollout.sh` holds operator
   rollout guards; `scripts/validate/` holds the cluster-independent validators
   invoked by Just recipes.
 - `talos/mod.just` and `kubernetes/mod.just` colocate domain commands with their

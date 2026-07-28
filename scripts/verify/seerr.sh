@@ -10,7 +10,7 @@ source scripts/lib/network.sh
 
 kubeconfig="$1"
 ns='media'
-gateway_ip='192.168.90.30'
+gateway_ip="$HOMELAB_GATEWAY_VIP"
 host='seerr.lab.supermorphic.com'
 
 [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization seerr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'seerr Kustomization not Ready.' >&2; exit 1; }
