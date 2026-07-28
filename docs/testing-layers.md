@@ -41,9 +41,10 @@ JUnit errors and accepted by `just test result-validate`.
 
 Sonobuoy's raw archive includes broad cluster resources and pod logs that may
 contain secret-like or sensitive values. It is therefore never placed in the
-canonical result or uploaded to Allure. The archive remains available locally at
-`.test-private-results/<run-id>/sonobuoy/sonobuoy-results.tar.gz`, which is
-gitignored and must be treated as private diagnostic material.
+canonical result or uploaded to Allure. Successful runs discard it after safe
+JUnit extraction. Failed or broken runs retain it locally at
+`.test-private-results/<run-id>/sonobuoy/sonobuoy-results.tar.gz`; that location
+is gitignored and must be treated as private diagnostic material.
 
 Both modes explicitly run only Sonobuoy's `e2e` plugin. The default
 `systemd-logs` plugin requires `journalctl`, which Talos does not provide, and can

@@ -16,7 +16,8 @@ case "$1" in
     printf '%s\n' "$destination"
     ;;
   results)
-    printf '%s\n' 'Plugin: e2e' 'Status: complete' 'Failed: 0'
+    printf '%s\n' 'Plugin: e2e' 'Status: complete' \
+      "Failed: ${FAKE_SONOBUOY_FAILED:-0}"
     ;;
   *) exit 2 ;;
 esac
