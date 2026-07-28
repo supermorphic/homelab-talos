@@ -24,6 +24,7 @@
 /.test-results/
 /.test-reports/
 /.test-campaigns/
+/.test-private-results/
 *.dec.yaml
 *.decrypted.yaml
 
