@@ -53,3 +53,37 @@ spec:
   suspend: false
   timeout: 10m
   wait: true
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: tailscale-operator-subnet-router
+  namespace: flux-system
+spec:
+  # HA subnet router giving tailnet clients a private path to the Pi-hole resolver and
+  # the Envoy Gateway VIP for *.lab.supermorphic.com (split-DNS design). Connector +
+  # ProxyClass are tailscale.com CRD instances, so — like the ProxyGroup above — they
+  # CANNOT share the operator Kustomization (Flux dry-runs atomically and the CR would
+  # fail "no matches for kind" until the operator installs the CRD). dependsOn gates this
+  # on the operator being Ready.
+  #
+  # Staged suspend: true. Reasons this is NOT auto-reconciled like the ProxyGroup:
+  #   1) the operator must own tag:lab-router in the tailnet ACL BEFORE it may create the
+  #      Connector devices (tag ownership must precede device creation); and
+  #   2) it has an external side effect (registers tailnet devices + advertises routes).
+  # Rolled out via `just bootstrap tailscale-subnet-router` after the ACL is configured,
+  # then flipped to suspend: false in a durable activation PR.
+  dependsOn:
+    - name: tailscale-operator
+  interval: 1h
+  path: ./kubernetes/apps/networking/tailscale-operator/subnet-router
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  suspend: true
+  timeout: 10m
+  wait: true

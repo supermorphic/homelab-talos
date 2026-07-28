@@ -33,6 +33,7 @@ executions:
     - validation.homepage
     - validation.trivy
     - validation.tailscale-operator
+    - validation.tailscale-subnet-router
     - validation.ntfy
     - validation.alertmanager-ntfy
 
@@ -71,6 +72,7 @@ campaigns:
       - verification.homepage
       - verification.trivy
       - verification.tailscale-operator
+      - verification.tailscale-subnet-router
       - verification.ntfy
       - verification.alertmanager-ntfy
   smoke:
@@ -287,6 +289,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-operator-validate", implementation: scripts/validate/tailscale-operator.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.tailscale-subnet-router, source: validation, framework: bash, suite: ci, tier: offline, target: tailscale-subnet-router, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube tailscale-subnet-router-validate", implementation: scripts/validate/tailscale-subnet-router.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.ntfy, source: validation, framework: bash, suite: ci, tier: offline, target: ntfy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube ntfy-validate", implementation: scripts/validate/ntfy.sh}
@@ -387,6 +393,10 @@ suites:
   - metadata: {id: verification.tailscale-operator, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-operator, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-operator-verify", implementation: scripts/verify/tailscale-operator.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.tailscale-subnet-router, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-subnet-router, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube tailscale-subnet-router-verify", implementation: scripts/verify/tailscale-subnet-router.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}

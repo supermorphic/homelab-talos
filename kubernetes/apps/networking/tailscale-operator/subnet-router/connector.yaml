@@ -1,0 +1,25 @@
+---
+# HA subnet router that gives authorized tailnet clients a private path to the two
+# LAN endpoints needed for the `*.lab.supermorphic.com` split-DNS design:
+#   - the internal Pi-hole resolver (answers the lab zone), and
+#   - the internal Envoy Gateway VIP (terminates TLS + routes by hostname).
+# Only these two /32s are advertised — never the LAN /24, Pod CIDR, or Service CIDR.
+# Cluster-scoped CRD (like ProxyGroup); the operator installs the CRD, so this lives in
+# a separate Flux Kustomization that dependsOn tailscale-operator.
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: lab-subnet-router
+spec:
+  # hostnamePrefix (NOT hostname) is required for replicas > 1: each replica appends its
+  # StatefulSet ordinal (lab-subnet-router-0, -1) to form a unique tailnet hostname.
+  hostnamePrefix: lab-subnet-router
+  replicas: 2
+  # Node-level topology spread + explicit pod label for accurate skew counting.
+  proxyClass: lab-subnet-router
+  tags:
+    - tag:lab-router
+  subnetRouter:
+    advertiseRoutes:
+      - 192.168.90.2/32   # Pi-hole DNS resolver
+      - 192.168.90.30/32  # Envoy internal Gateway VIP

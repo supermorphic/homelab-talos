@@ -1,0 +1,24 @@
+---
+# Applied to the lab-subnet-router Connector's StatefulSet. Tailscale applies NO topology
+# spread by default, so the two HA replicas could co-locate on one Talos node and defeat
+# node-level failover. This pins one replica per node (hard constraint). The pod carries an
+# explicit component label, and the spread constraint selects that exact label so Kubernetes
+# counts skew correctly. Do NOT weaken whenUnsatisfiable to ScheduleAnyway: if the replicas
+# cannot land on distinct nodes, scheduling should stop and the availability decision goes to
+# the operator (see docs/tailscale-lab-domain.md).
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: lab-subnet-router
+spec:
+  statefulSet:
+    pod:
+      labels:
+        tailscale.supermorphic.com/component: lab-subnet-router
+      topologySpreadConstraints:
+        - labelSelector:
+            matchLabels:
+              tailscale.supermorphic.com/component: lab-subnet-router
+          maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule

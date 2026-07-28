@@ -88,13 +88,18 @@ service its own tag (`tag:ntfy`), scope reachability to it, and keep tag ownersh
   "tagOwners": {
     "tag:k8s-operator": [],
     "tag:k8s":          ["tag:k8s-operator"],
-    "tag:ntfy":         ["tag:k8s-operator"]
+    "tag:ntfy":         ["tag:k8s-operator"],
+    // Subnet router for the *.lab.supermorphic.com split-DNS design.
+    "tag:lab-router":   ["tag:k8s-operator"]
   },
   "autoApprovers": {
     // Auto-approve the Tailscale Service the ingress ProxyGroup advertises for ntfy.
     "services": {
       "tag:ntfy": ["tag:k8s"]
     }
+    // NOTE: the lab-subnet-router /32 routes are approved MANUALLY on each replica
+    // device (see docs/tailscale-lab-domain.md). `autoApprovers.routes` is a deferred
+    // hardening step, added only after the manual workflow is proven.
   },
   "grants": [
     // Your devices may reach ntfy over HTTPS.
@@ -102,13 +107,25 @@ service its own tag (`tag:ntfy`), scope reachability to it, and keep tag ownersh
     // HA ProxyGroup-backed Services currently also require ICMP to the proxies
     // (documented temporary Tailscale limitation). dst is "tag:k8s" — NOT
     // "tag:k8s:*" (the console rejects the :* form with `tag not found`).
-    { "src": ["autogroup:member"], "dst": ["tag:k8s"], "ip": ["icmp:*"] }
+    { "src": ["autogroup:member"], "dst": ["tag:k8s"], "ip": ["icmp:*"] },
+    // lab-subnet-router: reach ONLY the Pi-hole resolver (DNS) and the Envoy Gateway VIP
+    // (HTTPS) behind the subnet router. Never the LAN /24, Pod, or Service CIDRs.
+    { "src": ["autogroup:member"], "dst": ["192.168.90.2/32"],  "ip": ["tcp:53", "udp:53"] },
+    { "src": ["autogroup:member"], "dst": ["192.168.90.30/32"], "ip": ["tcp:443"] }
   ]
 }
 ```
 
 Add a new `tag:<service>` + grant for each future private service rather than widening
 access. See the walkthrough for the full annotated policy.
+
+The `autogroup:member` source above is intentional **only** because this tailnet is
+single-user today. Before onboarding any additional user, replace `autogroup:member`
+with a dedicated group whose membership is explicitly reviewed — a member who can reach
+one `lab.supermorphic.com` host over the shared Gateway IP:443 can reach them all
+(shared-IP L4 limitation; per-app isolation stays with app authentication). The
+subnet-router grants and the `*.lab.supermorphic.com` runbook are documented in
+`docs/tailscale-lab-domain.md`.
 
 ### 3. MagicDNS and HTTPS certificates
 

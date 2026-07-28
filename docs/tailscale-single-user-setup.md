@@ -109,7 +109,8 @@ Paste this as your complete policy:
   "tagOwners": {
     "tag:k8s-operator": [],
     "tag:k8s": ["tag:k8s-operator"],
-    "tag:ntfy": ["tag:k8s-operator"]
+    "tag:ntfy": ["tag:k8s-operator"],
+    "tag:lab-router": ["tag:k8s-operator"]
   },
 
   "autoApprovers": {
@@ -128,6 +129,16 @@ Paste this as your complete policy:
       "src": ["autogroup:member"],
       "dst": ["tag:k8s"],
       "ip": ["icmp:*"]
+    },
+    {
+      "src": ["autogroup:member"],
+      "dst": ["192.168.90.2/32"],
+      "ip": ["tcp:53", "udp:53"]
+    },
+    {
+      "src": ["autogroup:member"],
+      "dst": ["192.168.90.30/32"],
+      "ip": ["tcp:443"]
     }
   ]
 }
@@ -136,7 +147,10 @@ Paste this as your complete policy:
 The first grant is the real ntfy permission (your devices → HTTPS 443 → ntfy). The second
 grants ICMP reachability to the ProxyGroup devices: Tailscale currently requires clients
 using HA ProxyGroup-backed Services to be able to ping the proxies (a documented temporary
-limitation).
+limitation). The last two grants belong to the `*.lab.supermorphic.com` subnet-router
+feature — your devices → DNS (Pi-hole `192.168.90.2`) and HTTPS (Envoy Gateway VIP
+`192.168.90.30`) reached over the `tag:lab-router` subnet router. Its `/32` routes are
+approved **manually** on each replica device; see `docs/tailscale-lab-domain.md`.
 
 > **ICMP grant `dst`:** use `"tag:k8s"`, **not** `"tag:k8s:*"`. The Admin Console rejects
 > the `:*` form with `tag not found: "tag:k8s:*"` (a port suffix is not valid on a tag
