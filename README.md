@@ -47,19 +47,29 @@ Use this cadence so "full test suite" has one unambiguous meaning:
 | Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
 | Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
 
-Preview and run a campaign from clean, deployed `origin/main`:
+Preview the desired campaign from clean, deployed `origin/main`:
 
 ```bash
 mise exec -- just test campaign-plan standard
-TEST_CAMPAIGN_CONFIRM=run-publish:standard \
-  mise exec -- just test campaign standard
+mise exec -- just test campaign-plan weekly
+mise exec -- just test campaign-plan full
 ```
 
-For `weekly` and `full`, use the source- and plan-digest confirmation printed by
-`campaign-plan`; both include disruptive recovery and a Plex node reboot. Campaigns
-capture run IDs and publish each child automatically—there is no manual run-ID upload
-loop. See [`docs/test-campaigns.md`](docs/test-campaigns.md) for focused campaigns,
-failure behavior, resume, exact membership, and the operator safety boundary.
+Then run the exact confirmation command printed by its plan:
+
+```bash
+TEST_CAMPAIGN_CONFIRM=run-publish:standard \
+  mise exec -- just test campaign standard
+TEST_CAMPAIGN_CONFIRM='<weekly token printed by campaign-plan>' \
+  mise exec -- just test campaign weekly
+TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
+  mise exec -- just test campaign full
+```
+
+The `weekly` and `full` tokens bind the source and plan digest because both include
+disruptive recovery and a Plex node reboot. Campaigns capture and publish every child
+run automatically. See [`docs/test-campaigns.md`](docs/test-campaigns.md) for focused
+campaigns, failure behavior, resume, and exact membership.
 
 AI agents follow the same rules via [`AGENTS.md`](AGENTS.md) (canonical) and
 [`CLAUDE.md`](CLAUDE.md) (a thin `@AGENTS.md` adapter).
@@ -348,6 +358,23 @@ stored in `.mise.toml`; recipes fail fast when they are absent.
 
 Future-phase cluster mutations are added only with their validation, guard, and
 documentation boundary. Do not replace a missing workflow with an ad hoc apply.
+
+### Confirmation safety model
+
+A `*_CONFIRM` value is a deliberate second operator act, not a credential or a
+replacement for preflight checks. Require one when a recipe crosses a meaningful
+shared or durable boundary: live rollouts or deletion, disruption or destruction,
+tracked secret/trust writes, shared-state tests, report publication, or exceptional
+cleanup. Read-only checks, planning, validation, and run-owned local output do not
+require one.
+
+Tokens bind the authorized action to its target; higher-risk operations also bind
+fresh context such as a run ID, node/IP, disk serial, source commit, or campaign
+digest. This prevents accidental invocation and reuse against a different target.
+The test catalog permits either an `exact` token or a narrowly scoped `command`
+guard with bounded ownership and cleanup, but never `none` for a mutating test.
+Campaign confirmation delegates only the frozen, source-reviewed child sequence;
+standalone and target-specific guards remain intact.
 
 ## Operational notes
 
