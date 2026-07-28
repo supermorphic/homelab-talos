@@ -140,9 +140,36 @@ prints the synthetic firing+resolved alert acceptance test.
 
 ### Seerr (PR4)
 
-Its ntfy agent → `media` via the `seerr` token (in-cluster Service URL
-`http://ntfy.ntfy.svc.cluster.local`), enabling only Media Available / Request Processing
-Failed / Issue Reported.
+Seerr's ntfy agent is configured in **Seerr's own web UI** (stored in its database, not
+GitOps). The `seerr` write-only token and its `media` ACL already exist in `ntfy-secret`,
+and the ntfy CiliumNetworkPolicy already admits the `media` namespace — Seerr just needs
+to be pointed at ntfy.
+
+1. Retrieve the seerr token (prints only that token; needs the age key; no disk write):
+
+   ```sh
+   mise exec -- just repo ntfy-token seerr
+   ```
+
+2. In Seerr, open **Settings → Notifications → ntfy** and set:
+
+   ```text
+   Enable Agent:  On
+   Server URL:    http://ntfy.ntfy.svc.cluster.local   # in-cluster; no gateway hairpin
+   Topic:         media
+   Token:         <paste the seerr token>              # token auth, not username/password
+   Priority:      Default (3)
+   ```
+
+3. Enable **only** these notification types: **Media Available**, **Request Processing
+   Failed**, **Issue Reported**. Leave request-created/approval/download-progress off.
+4. Click **Test** → confirm a message arrives under `media` on your phone, then **Save**.
+5. Review per-user Seerr notification preferences so the same availability event isn't sent
+   twice (ntfy *and* Seerr's own web push).
+
+If your Seerr version's ntfy agent offers only username/password (no token field), tell me
+— the `seerr` account's password was a throwaway, so we'd provision a known one via
+`ntfy-secrets`. Everything else stays the same.
 
 Do not add direct `*arr`/qBittorrent/Plex ntfy integrations; use Seerr + Alertmanager.
 
