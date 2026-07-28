@@ -35,10 +35,15 @@ mise exec -- just kube conformance-status          # read-only active-run diagno
 
 The recipe validates the registered mode, acquires the shared state-changing
 test Lease, checks that no prior Sonobuoy run is installed, and always attempts
-teardown. Its canonical `.test-results/<run-id>/` retains the native archive
-below `diagnostics/sonobuoy/`, extracts and merges non-vacuous E2E JUnit, records
-cleanup or harness problems as JUnit errors, and is accepted by `just test
-result-validate`.
+teardown. Its canonical `.test-results/<run-id>/` retains publish-safe summaries
+and merged, non-vacuous E2E JUnit; cleanup or harness problems are recorded as
+JUnit errors and accepted by `just test result-validate`.
+
+Sonobuoy's raw archive includes broad cluster resources and pod logs that may
+contain secret-like or sensitive values. It is therefore never placed in the
+canonical result or uploaded to Allure. The archive remains available locally at
+`.test-private-results/<run-id>/sonobuoy/sonobuoy-results.tar.gz`, which is
+gitignored and must be treated as private diagnostic material.
 
 Both modes explicitly run only Sonobuoy's `e2e` plugin. The default
 `systemd-logs` plugin requires `journalctl`, which Talos does not provide, and can

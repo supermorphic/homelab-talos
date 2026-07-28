@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Sonobuoy lifecycle backend. The catalog coordinator supplies the canonical run and
-# cluster Lease; this script retains the archive and exports its E2E JUnit fragments.
+# cluster Lease. Publish-safe summaries and E2E JUnit fragments enter the canonical
+# run; the raw cluster capture is retained only in ignored local-private storage.
 set -euo pipefail
 
 source scripts/test/lib/results.sh
@@ -32,9 +33,26 @@ esac
 [[ -f "$kubeconfig" ]] || exit 1
 run_dir="${HOMELAB_TEST_RUN_DIR:?canonical result coordinator is required}"
 fragment_dir="${TEST_RESULT_FRAGMENT_DIR:?JUnit fragment directory is required}"
+repo_root="${HOMELAB_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+private_root="${TEST_SONOBUOY_PRIVATE_ROOT:-$repo_root/.test-private-results}"
+[[ "$private_root" == /* ]] || private_root="$repo_root/$private_root"
 sonobuoy_dir="$run_dir/diagnostics/sonobuoy"
-native_dir="$sonobuoy_dir/native"
-mkdir -p "$sonobuoy_dir" "$native_dir"
+run_id="$(basename "$run_dir")"
+mkdir -p "$sonobuoy_dir" "$private_root"
+private_root="$(cd "$private_root" && pwd -P)"
+run_dir="$(cd "$run_dir" && pwd -P)"
+case "$private_root" in
+  "$run_dir"|"$run_dir"/*)
+    echo 'Sonobuoy private results must be outside the canonical run directory.' >&2
+    exit 2
+    ;;
+esac
+private_dir="$private_root/$run_id/sonobuoy"
+private_archive="$private_dir/sonobuoy-results.tar.gz"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/homelab-sonobuoy.XXXXXX")"
+retrieve_dir="$workspace/retrieved"
+native_dir="$workspace/native"
+mkdir -p "$private_dir" "$retrieve_dir" "$native_dir"
 tarball=''
 cleanup_required=false
 
@@ -52,14 +70,18 @@ record_cleanup_status() {
 }
 
 retrieve_results() {
-  local retrieved
+  local retrieved temporary_archive
   set +e
-  retrieved="$("$sonobuoy_bin" retrieve "$sonobuoy_dir" \
+  retrieved="$("$sonobuoy_bin" retrieve "$retrieve_dir" \
     --kubeconfig "$kubeconfig" 2>/dev/null)"
   retrieve_exit="$?"
   set -e
   if [[ "$retrieve_exit" -eq 0 && -f "$retrieved" ]]; then
     tarball="$retrieved"
+    [[ ! -L "$tarball" ]] || return 1
+    temporary_archive="${private_archive}.tmp.$$"
+    cp "$tarball" "$temporary_archive"
+    mv "$temporary_archive" "$private_archive"
     return 0
   fi
   return 1
@@ -85,6 +107,7 @@ cleanup_sonobuoy() {
 
 finalize_on_exit() {
   cleanup_sonobuoy >/dev/null 2>&1 || true
+  rm -rf -- "$workspace"
 }
 trap finalize_on_exit EXIT
 
@@ -117,7 +140,7 @@ if ! retrieve_results; then
   record_harness_error retrieval
   exit 2
 fi
-echo "Retrieved results: $tarball"
+echo "Raw Sonobuoy archive retained locally (never published): $private_archive"
 "$sonobuoy_bin" results "$tarball" | tee "$sonobuoy_dir/summary.txt"
 
 if tar -tzf "$tarball" | awk '
@@ -164,9 +187,10 @@ failed="$(printf '%s\n' "$plugin_results" |
 if ! cleanup_sonobuoy; then
   exit 2
 fi
+rm -rf -- "$workspace"
 trap - EXIT
 if [[ "$failed" -ne 0 ]]; then
   echo "Sonobuoy e2e reported failures ($failed); see $sonobuoy_dir." >&2
   exit 1
 fi
-echo "Sonobuoy $label passed (0 e2e failures); archive retained in $sonobuoy_dir."
+echo "Sonobuoy $label passed (0 e2e failures); publish-safe evidence retained in $sonobuoy_dir."

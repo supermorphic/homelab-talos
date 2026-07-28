@@ -55,6 +55,29 @@ Available focused campaigns are:
 - `weekly`
 - `full`
 
+To run and publish only quick Sonobuoy rather than the complete `standard`
+campaign:
+
+```bash
+mise exec -- just test campaign-plan conformance-quick
+TEST_CAMPAIGN_CONFIRM=run-publish:conformance-quick \
+  mise exec -- just test campaign conformance-quick
+```
+
+For a standalone quick run without automatic publication, use:
+
+```bash
+mise exec -- just kube conformance
+```
+
+Its final output prints the canonical run ID. To publish only that result
+afterward:
+
+```bash
+TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> \
+  mise exec -- just test publish <run-id>
+```
+
 `resilience`, `weekly`, and `full` include the Plex node-reboot scenario. Their
 confirmation contains the current source SHA and resolved campaign digest, so
 always copy the exact command printed by `campaign-plan` rather than constructing
