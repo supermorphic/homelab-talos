@@ -10,6 +10,7 @@ ns="$base/app/namespace.yaml"
 dep="$base/app/deployment.yaml"
 route="$base/app/httproute.yaml"
 app_kustomization="$base/app/kustomization.yaml"
+custom_js="$base/app/config/custom.js"
 allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/README.md"
 seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
@@ -23,7 +24,8 @@ allure_commit='fe2ea92eaab4e409a3c8cf52ba96e35df96b2298'
 for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.yaml" \
   "$app_kustomization" "$base/app/config/settings.yaml" \
   "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
-  "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$allure_icon" \
+  "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$custom_js" \
+  "$allure_icon" \
   "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
   "$monitoring_routes" "$portainer_route" "$test_reports_route"; do
   [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
@@ -43,6 +45,12 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$portainer_route")" == 'portainer-dark.svg' ]]
+for mapping in \
+  '["portainer.applications", "Applications"]' \
+  '["portainer.services", "Services"]' \
+  '["portainer.namespaces", "Namespaces"]'; do
+  rg -Fq "$mapping" "$custom_js"
+done
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$test_reports_route")" == '/icons/allure.svg' ]]
 [[ "$(yq ea -r '[select(.kind == "HTTPRoute") |
   .metadata.annotations."gethomepage.dev/group"] | unique | join(",")' \
