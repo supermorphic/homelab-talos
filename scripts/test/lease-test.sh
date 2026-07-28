@@ -53,6 +53,7 @@ lease_kubectl() {
 }
 
 acquire_test_lease fake-kubeconfig run-one
+verify_test_lease_holder fake-kubeconfig run-one
 [[ "$(yq -r '.spec.holderIdentity' "$state_file")" == 'run-one' ]]
 [[ "$(yq -r '.spec.acquireTime' "$state_file")" =~ \
   ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]]
@@ -60,6 +61,10 @@ acquire_test_lease fake-kubeconfig run-one
   ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]]
 if acquire_test_lease fake-kubeconfig run-two >/dev/null 2>&1; then
   echo 'A live Lease held by another run was acquired.' >&2
+  exit 1
+fi
+if verify_test_lease_holder fake-kubeconfig run-two >/dev/null 2>&1; then
+  echo 'A non-holder joined the test Lease.' >&2
   exit 1
 fi
 

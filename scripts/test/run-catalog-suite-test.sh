@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root="$(git rev-parse --show-toplevel)"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-catalog-runner-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
 touch "$fixture_root/kubeconfig"
+run_id_file="$fixture_root/passed.run-id"
 
 TEST_RESULTS_ROOT="$fixture_root/passed" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
 TEST_EXECUTION_ORIGIN=agent \
+TEST_RUN_ID_FILE="$run_id_file" \
   scripts/test/run-catalog-suite.sh verification.metrics-server -- true >/dev/null
 mapfile -t passed_runs < <(find "$fixture_root/passed" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#passed_runs[@]}" -eq 1 ]]
+[[ "$(cat "$run_id_file")" == "$(basename "${passed_runs[0]}")" ]]
 [[ "$(yq -r '.result' "${passed_runs[0]}/summary.json")" == 'passed' ]]
 [[ "$(yq -r '.junit.tests' "${passed_runs[0]}/summary.json")" == '6' ]]
 
@@ -55,5 +59,36 @@ mapfile -t interrupted_runs < <(
 [[ "${#interrupted_runs[@]}" -eq 1 ]]
 [[ "$(yq -r '.result' "${interrupted_runs[0]}/summary.json")" == 'broken' ]]
 [[ "$(yq -r '.junit.errors' "${interrupted_runs[0]}/summary.json")" == '1' ]]
+
+lease_state="$fixture_root/campaign-lease.json"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
+  yq --null-input --output-format json '{
+    "apiVersion": "coordination.k8s.io/v1",
+    "kind": "Lease",
+    "metadata": {
+      "name": "homelab-test-run-lock",
+      "namespace": "flux-system",
+      "resourceVersion": "1"
+    },
+    "spec": {
+      "holderIdentity": "campaign:fixture",
+      "leaseDurationSeconds": 90,
+      "acquireTime": strenv(NOW),
+      "renewTime": strenv(NOW)
+    }
+  }' >"$lease_state"
+CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
+CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+TEST_RESULTS_ROOT="$fixture_root/joined" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+TEST_EXECUTION_ORIGIN=agent \
+  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- true >/dev/null
+mapfile -t joined_runs < <(find "$fixture_root/joined" -mindepth 1 -maxdepth 1 -type d)
+[[ "${#joined_runs[@]}" -eq 1 ]]
+[[ "$(yq -r '.result' "${joined_runs[0]}/summary.json")" == 'passed' ]]
+[[ "$(yq -r '.phases.cleanup.status' "${joined_runs[0]}/summary.json")" == 'passed' ]]
+[[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == 'campaign:fixture' ]]
 
 echo 'Single-suite result coordinator tests passed.'

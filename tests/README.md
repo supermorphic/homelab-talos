@@ -33,6 +33,13 @@ via `uv run --locked python -m unittest`. It deliberately uses a nonexistent
 kubeconfig and unsets SOPS age-key variables. `mise exec -- just test
 catalog-validate` runs only the catalog checks.
 
+For routine grouped execution and automatic Allure publication, use
+`mise exec -- just test campaign-plan <name>` followed by its printed
+`mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
+`full` compositions provide nightly, weekly, and complete coverage respectively.
+See `docs/test-campaigns.md` for membership, cadence, safety stops, and resume
+behavior.
+
 Live commands are operator-only:
 
 - `mise exec -- just test smoke cluster`
@@ -158,7 +165,9 @@ All state-changing integration, E2E, resilience, mutating probe, and conformance
 runs use the renewable `flux-system/homelab-test-run-lock` Kubernetes Lease.
 The Lease is acquired only after the command's confirmation guard and is
 released only while the current run remains its holder. Read-only smoke and
-verification remain concurrent.
+verification remain concurrent when run individually. A campaign holds this Lease
+for its complete ordered sequence; mutating child runners verify and join the
+campaign holder without releasing it.
 
 The report archive's pre-activation persistence proof is a cataloged Chainsaw
 resilience scenario:

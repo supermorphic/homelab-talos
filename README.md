@@ -36,6 +36,31 @@ dependent checks (`*-verify`, `*-status`, `bootstrap`, `pihole-status`) remain
 local/operator-only. Squash-merge once the `ci` check is green; emergency
 direct-to-`main` commits are exceptional and must be followed by `just ci` on `main`.
 
+### Test cadence and campaigns
+
+Use this cadence so "full test suite" has one unambiguous meaning:
+
+| Cadence | Run | Purpose |
+| --- | --- | --- |
+| Every commit and PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
+| Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
+| Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
+| Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
+
+Preview and run a campaign from clean, deployed `origin/main`:
+
+```bash
+mise exec -- just test campaign-plan standard
+TEST_CAMPAIGN_CONFIRM=run-publish:standard \
+  mise exec -- just test campaign standard
+```
+
+For `weekly` and `full`, use the source- and plan-digest confirmation printed by
+`campaign-plan`; both include disruptive recovery and a Plex node reboot. Campaigns
+capture run IDs and publish each child automatically—there is no manual run-ID upload
+loop. See [`docs/test-campaigns.md`](docs/test-campaigns.md) for focused campaigns,
+failure behavior, resume, exact membership, and the operator safety boundary.
+
 AI agents follow the same rules via [`AGENTS.md`](AGENTS.md) (canonical) and
 [`CLAUDE.md`](CLAUDE.md) (a thin `@AGENTS.md` adapter).
 
@@ -294,6 +319,9 @@ available for focused developer validation.
 | `just test report <run-id>` | Validate a canonical run and generate its static Allure Awesome report | `.test-results/<run-id>` | Writes `.test-reports/<run-id>/awesome/` |
 | `just test report-latest` | Generate the report with the latest finalized `summary.json` end time | `.test-results/` | Does not use filesystem modification time |
 | `just test report-open <run-id>` | Generate, serve, and open one Allure report locally | `.test-results/<run-id>`; interactive browser | Runs until interrupted with Ctrl+C |
+| `just test campaign-plan <name>` | Preview explicit campaign membership, source authority, mutation scope, and the exact confirmation | Clean deployed `origin/main`; `.kube/config` | Operator-only and read-only |
+| `just test campaign <name>` | Run an ordered catalog campaign and automatically publish every canonical child report | `TEST_CAMPAIGN_CONFIRM`; `.kube/config` | Operator-only; may be disruptive according to campaign |
+| `just test campaign-resume <campaign-run-id>` | Retry failed publication and continue unstarted campaign members without rerunning completed suites | `TEST_CAMPAIGN_CONFIRM=resume-publish:<campaign-run-id>` | Only publication-failed campaigns are resumable |
 | `just kube test-reports-validate` | Validate the suspended persistent Caddy report host, RWO/Recreate storage, isolation, metrics, and atomic installer | — | Cluster-independent; included in `just ci` |
 | `just bootstrap test-reports` | Guardedly resume the staged report host and run live acceptance | `TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports` | Operator-only; mutating after confirmation |
 | `just test publish <run-id>` | Secret-scan and publish one canonical run plus static Allure report to the retained in-cluster archive | `.kube/config`; `TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id>` | Operator-only; no upload API |

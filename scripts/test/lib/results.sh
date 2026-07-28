@@ -44,6 +44,26 @@ create_run_directory() {
   echo "$run_dir"
 }
 
+write_run_id_output() {
+  local run_id="$1"
+  local output="${TEST_RUN_ID_FILE:-}"
+  local output_dir temporary
+
+  [[ -n "$output" ]] || return 0
+  [[ "$output" == /* ]] || {
+    echo 'TEST_RUN_ID_FILE must be an absolute path.' >&2
+    return 2
+  }
+  output_dir="$(dirname "$output")"
+  [[ -d "$output_dir" ]] || {
+    echo "TEST_RUN_ID_FILE parent directory does not exist: $output_dir" >&2
+    return 2
+  }
+  temporary="${output}.tmp.$$"
+  printf '%s\n' "$run_id" >"$temporary"
+  mv "$temporary" "$output"
+}
+
 write_environment() {
   local output_dir="$1"
   local run_id="$2"

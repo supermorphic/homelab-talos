@@ -16,6 +16,9 @@ TLS.
 - `publish-report.sh` (operator workstation): enforces the exact confirmation and
   deployed-source guard, scans for secrets, holds the publication Lease, and streams
   the prebuilt archive through a guarded `kubectl exec`.
+- `run-campaign.sh` (operator workstation): resolves an explicit catalog campaign,
+  captures each canonical run ID, and invokes the guarded publisher automatically.
+  Child reports remain authoritative instead of being replaced by an aggregate run.
 - Caddy (cluster): serves static files only. It has no upload API, credentials,
   ServiceAccount token, or Kubernetes RBAC.
 - `install-report.sh` (cluster): rejects unsafe paths, symlinks, unexpected files, and
@@ -147,6 +150,11 @@ A clean historical or feature-commit run may be retained as candidate evidence. 
 run whose Git SHA equals both current `origin/main` and the Flux artifact revision is
 authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
+
+For routine multi-suite publication, use the catalog-backed campaigns documented in
+[`docs/test-campaigns.md`](test-campaigns.md). Campaign publication requires exact
+current-main authority and therefore never uploads candidate children. Standalone
+`just test publish` keeps the historical and candidate workflow above.
 
 Republishing the same run ID and digest is a no-op. Reusing a run ID with different
 content is rejected. Normal retention keeps reports that are both among the newest 200

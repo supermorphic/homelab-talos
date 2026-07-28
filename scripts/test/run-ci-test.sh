@@ -5,6 +5,7 @@ fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-ci-runner-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
 calls="$fixture_root/calls.txt"
 touch "$calls"
+run_id_file="$fixture_root/ci.run-id"
 
 set +e
 FAKE_JUST_CALLS="$calls" \
@@ -13,6 +14,7 @@ TEST_CATALOG_PATH=tests/fixtures/result-coordinator/catalog.yaml \
 TEST_RESULTS_ROOT="$fixture_root/results" \
 TEST_JUST_BIN=tests/fixtures/result-coordinator/fake-just.sh \
 TEST_EXECUTION_ORIGIN=agent \
+TEST_RUN_ID_FILE="$run_id_file" \
   scripts/test/run-ci.sh >/dev/null 2>&1
 runner_exit="$?"
 set -e
@@ -22,6 +24,7 @@ set -e
 mapfile -t runs < <(find "$fixture_root/results" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#runs[@]}" -eq 1 ]]
 run_dir="${runs[0]}"
+[[ "$(cat "$run_id_file")" == "$(basename "$run_dir")" ]]
 scripts/test/validate-run.sh "$run_dir" >/dev/null
 [[ "$(yq -r '.result' "$run_dir/summary.json")" == 'failed' ]]
 [[ "$(yq -r '.junit.tests' "$run_dir/summary.json")" == '3' ]]

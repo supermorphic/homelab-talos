@@ -31,6 +31,33 @@ reports_root="${TEST_REPORTS_ROOT:-$repo_root/.test-reports}"
 run_dir="$results_root/$run_id"
 report_dir="$reports_root/$run_id"
 kubeconfig="${KUBECONFIG:-$repo_root/.kube/config}"
+report_url="https://tests.lab.supermorphic.com/reports/$run_id/awesome/"
+
+write_publish_result() {
+  local status="$1"
+  local output="${TEST_PUBLISH_RESULT_FILE:-}"
+  local output_dir temporary
+
+  [[ -n "$output" ]] || return 0
+  [[ "$output" == /* ]] || {
+    echo 'TEST_PUBLISH_RESULT_FILE must be an absolute path.' >&2
+    return 2
+  }
+  output_dir="$(dirname "$output")"
+  [[ -d "$output_dir" ]] || {
+    echo "TEST_PUBLISH_RESULT_FILE parent directory does not exist: $output_dir" >&2
+    return 2
+  }
+  temporary="${output}.tmp.$$"
+  RUN_ID="$run_id" STATUS="$status" REPORT_URL="$report_url" \
+    yq --null-input --output-format json '{
+      "schema_version": 1,
+      "run_id": strenv(RUN_ID),
+      "status": strenv(STATUS),
+      "url": strenv(REPORT_URL)
+    }' >"$temporary"
+  mv "$temporary" "$output"
+}
 
 scripts/test/validate-run.sh "$run_dir"
 [[ "$(yq -r '.git.dirty' "$run_dir/environment.json")" == 'false' ]] || {
@@ -99,19 +126,34 @@ for document in catalog.json state.json history.jsonl; do
     cat "/srv/state/current/$document" >"$workspace/$document"
 done
 
-remote_ref="$(git ls-remote --exit-code origin refs/heads/main)"
-read -r origin_main_sha _ <<<"$remote_ref"
-[[ "$origin_main_sha" =~ ^[0-9a-f]{40}$ ]]
-flux_revision="$(
-  kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
-    get gitrepository flux-system \
-    --output jsonpath='{.status.artifact.revision}'
-)"
-flux_main_sha="${flux_revision##*:}"
-[[ "$flux_main_sha" =~ ^[0-9a-f]{40}$ ]] || {
-  echo "Flux artifact revision does not end in a full Git SHA: $flux_revision" >&2
-  exit 1
+read_deployed_revisions() {
+  local remote_ref flux_revision
+  remote_ref="$(git ls-remote --exit-code origin refs/heads/main)"
+  read -r origin_main_sha _ <<<"$remote_ref"
+  [[ "$origin_main_sha" =~ ^[0-9a-f]{40}$ ]]
+  flux_revision="$(
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get gitrepository flux-system \
+      --output jsonpath='{.status.artifact.revision}'
+  )"
+  flux_main_sha="${flux_revision##*:}"
+  [[ "$flux_main_sha" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "Flux artifact revision does not end in a full Git SHA: $flux_revision" >&2
+    return 1
+  }
 }
+
+require_authoritative_revisions() {
+  [[ "$origin_main_sha" == "$run_sha" && "$flux_main_sha" == "$run_sha" ]] || {
+    echo "Refusing campaign publication: run=$run_sha origin/main=$origin_main_sha Flux=$flux_main_sha." >&2
+    return 1
+  }
+}
+
+read_deployed_revisions
+if [[ "${TEST_REPORT_REQUIRE_AUTHORITATIVE:-false}" == 'true' ]]; then
+  require_authoritative_revisions
+fi
 
 ALLURE_HISTORY_PATH="$workspace/history.jsonl" \
   scripts/test/generate-allure-report.sh "$run_id"
@@ -139,6 +181,7 @@ if [[ "$(yq -r '.status' - <<<"$prepare_result")" == 'idempotent' ]]; then
   echo "Report is already published with identical canonical content: $run_id"
   release_test_lease "$kubeconfig" "publish:$run_id"
   lease_acquired=false
+  write_publish_result idempotent
   exit 0
 fi
 generation="$(yq -r '.generation' - <<<"$prepare_result")"
@@ -150,6 +193,10 @@ gitleaks dir --redact --no-banner --max-archive-depth 1 "$bundle"
   echo 'Publication Lease renewal failed before the cluster stream.' >&2
   exit 1
 }
+if [[ "${TEST_REPORT_REQUIRE_AUTHORITATIVE:-false}" == 'true' ]]; then
+  read_deployed_revisions
+  require_authoritative_revisions
+fi
 
 kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
   exec -i deployment/test-reports -c caddy -- \
@@ -174,4 +221,5 @@ local_digest="$(sha256sum "$bundle/artifact/$run_id.tar.gz" | awk '{print $1}')"
 
 release_test_lease "$kubeconfig" "publish:$run_id"
 lease_acquired=false
-echo "Published $run_id at https://tests.lab.supermorphic.com/reports/$run_id/awesome/"
+write_publish_result published
+echo "Published $run_id at $report_url"

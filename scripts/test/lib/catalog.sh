@@ -24,6 +24,64 @@ catalog_execution_ids() {
     '.executions[strenv(EXECUTION)][]' "$catalog"
 }
 
+catalog_campaign_names() {
+  local catalog="$1"
+  yq -r '.campaigns | keys | .[]' "$catalog"
+}
+
+catalog_campaign_entry() {
+  local catalog="$1"
+  local campaign="$2"
+  local entry
+
+  entry="$(
+    CAMPAIGN="$campaign" yq -o=json -I=0 \
+      '.campaigns[strenv(CAMPAIGN)] // null' "$catalog"
+  )"
+  [[ "$entry" != 'null' ]] || {
+    echo "Unknown test campaign: $campaign." >&2
+    return 2
+  }
+  printf '%s\n' "$entry"
+}
+
+_catalog_campaign_ids() {
+  local catalog="$1"
+  local campaign="$2"
+  local ancestry="$3"
+  local entry include member
+
+  [[ "|$ancestry|" != *"|$campaign|"* ]] || {
+    echo "Test campaign include cycle: ${ancestry//|/ -> } -> $campaign." >&2
+    return 2
+  }
+  entry="$(catalog_campaign_entry "$catalog" "$campaign")" || return "$?"
+  while IFS= read -r include; do
+    [[ -n "$include" ]] || continue
+    _catalog_campaign_ids "$catalog" "$include" "${ancestry:+$ancestry|}$campaign" ||
+      return "$?"
+  done < <(yq -r '.includes[]?' - <<<"$entry")
+  while IFS= read -r member; do
+    [[ -n "$member" ]] || continue
+    printf '%s\n' "$member"
+  done < <(yq -r '.members[]?' - <<<"$entry")
+}
+
+catalog_campaign_ids() {
+  local catalog="$1"
+  local campaign="$2"
+  _catalog_campaign_ids "$catalog" "$campaign" ''
+}
+
+catalog_campaign_digest() {
+  local catalog="$1"
+  local campaign="$2"
+  local resolved
+
+  resolved="$(catalog_campaign_ids "$catalog" "$campaign")" || return "$?"
+  printf '%s\n' "$resolved" | sha256sum | awk '{print $1}'
+}
+
 catalog_dispatch_entry() {
   local catalog="$1"
   local tier="$2"

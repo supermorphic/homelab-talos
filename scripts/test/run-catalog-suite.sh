@@ -60,6 +60,7 @@ export TEST_RESULT_FRAGMENT_DIR="$fragment_dir"
 
 signal_exit_code=0
 lease_acquired=false
+lease_joined=false
 lease_release_status='not-required'
 finalized=false
 
@@ -76,6 +77,9 @@ finalize_incomplete_run() {
     release_test_lease "$kubeconfig" "$run_id" >/dev/null 2>&1
     emergency_cleanup='failed'
     lease_acquired=false
+  elif [[ "$lease_joined" == 'true' ]]; then
+    emergency_cleanup='failed'
+    lease_joined=false
   fi
   emergency_finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   emergency_duration=$((EPOCHSECONDS - started_epoch))
@@ -109,10 +113,20 @@ handle_signal() {
 }
 trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
+write_run_id_output "$run_id"
 
 if [[ "$mutates_cluster" == 'true' ]]; then
   lease_release_status='failed'
-  if acquire_test_lease "$kubeconfig" "$run_id"; then
+  if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
+      lease_joined=true
+      lease_release_status='passed'
+    else
+      write_result_case_junit "$run_dir/junit.xml" "$suite_id" lease-join broken 0
+      primary_exit_code=1
+      run_result='broken'
+    fi
+  elif acquire_test_lease "$kubeconfig" "$run_id"; then
     lease_acquired=true
     start_test_lease_renewal "$kubeconfig" "$run_id" \
       "$run_dir_abs/diagnostics/lease-renewal-failed"
@@ -123,7 +137,8 @@ if [[ "$mutates_cluster" == 'true' ]]; then
   fi
 fi
 
-if [[ "$mutates_cluster" != 'true' || "$lease_acquired" == 'true' ]]; then
+if [[ "$mutates_cluster" != 'true' ||
+  "$lease_acquired" == 'true' || "$lease_joined" == 'true' ]]; then
   set +e
   "$@" 2>&1 | tee "$run_dir/logs/console.log"
   primary_exit_code="${PIPESTATUS[0]}"
@@ -177,23 +192,31 @@ read -r _primary_tests _primary_failures primary_errors _primary_skipped _primar
   <<<"$primary_counts"
 [[ "$primary_errors" -eq 0 ]] || primary_assertion_status='not-classified'
 
+lease_finalization_failed=false
 if [[ "$lease_acquired" == 'true' ]]; then
   lease_release_status='passed'
-  lease_finalization_failed=false
   [[ ! -f "$run_dir/diagnostics/lease-renewal-failed" ]] ||
     lease_finalization_failed=true
   release_test_lease "$kubeconfig" "$run_id" ||
     lease_finalization_failed=true
   lease_acquired=false
-  if [[ "$lease_finalization_failed" == 'true' ]]; then
-    lease_release_status='failed'
-    run_result='broken'
-    lease_error="$run_dir/diagnostics/lease-release.xml"
-    write_result_case_junit "$lease_error" "$suite_id" lease-finalization broken 0
-    cp "$run_dir/junit.xml" "$run_dir/diagnostics/primary-junit.xml"
-    merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
-      "$run_dir/diagnostics/primary-junit.xml" "$lease_error"
+elif [[ "$lease_joined" == 'true' ]]; then
+  verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER" ||
+    lease_finalization_failed=true
+  if [[ -n "${TEST_CAMPAIGN_LEASE_FAILURE_MARKER:-}" &&
+    -e "$TEST_CAMPAIGN_LEASE_FAILURE_MARKER" ]]; then
+    lease_finalization_failed=true
   fi
+  lease_joined=false
+fi
+if [[ "$lease_finalization_failed" == 'true' ]]; then
+  lease_release_status='failed'
+  run_result='broken'
+  lease_error="$run_dir/diagnostics/lease-release.xml"
+  write_result_case_junit "$lease_error" "$suite_id" lease-finalization broken 0
+  cp "$run_dir/junit.xml" "$run_dir/diagnostics/primary-junit.xml"
+  merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+    "$run_dir/diagnostics/primary-junit.xml" "$lease_error"
 fi
 
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

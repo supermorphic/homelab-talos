@@ -31,6 +31,19 @@ report-open run:
 publish run:
     @scripts/test/publish-report.sh {{quote(run)}}
 
+# Preview an ordered campaign and print its exact run-and-publish confirmation.
+campaign-plan campaign:
+    @scripts/test/run-campaign.sh plan {{quote(campaign)}}
+
+# Run every explicit member of a campaign and publish each canonical child report.
+# Operator-only; mutating campaigns share one renewable cluster-wide test Lease.
+campaign campaign:
+    @scripts/test/run-campaign.sh run {{quote(campaign)}}
+
+# Resume only a campaign stopped by publication failure; completed suites are not rerun.
+campaign-resume campaign_run:
+    @scripts/test/run-campaign.sh resume {{quote(campaign_run)}}
+
 # Render the latest canonical run as a GitHub-compatible Markdown summary.
 summary-latest:
     @scripts/test/allure-markdown-summary.sh latest
