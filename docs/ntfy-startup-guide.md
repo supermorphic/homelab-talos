@@ -15,7 +15,7 @@ Topics:
 | `media` | Seerr availability / request / issue events | Seerr (PR4) |
 
 `subscriber` reads all three (iPhone/web password); each producer is write-only on its topic
-with its own rotatable token.
+with its own rotatable token. Homepage uses a separate token that can only read `critical`.
 
 ## A. Generate credentials (local, never commit or paste)
 
@@ -50,12 +50,17 @@ NTFY_AUTOMATION_TOKEN='tk_...' \
 NTFY_SECRETS_CONFIRM='write:monitoring:ntfy:sops' \
 mise exec -- just repo ntfy-secrets
 
+HOMEPAGE_NTFY_SECRETS_CONFIRM='write:monitoring:ntfy-homepage:sops' \
+mise exec -- just repo homepage-ntfy-secrets
+
 mise exec -- just ci
 ```
 
-This writes only the encrypted `kubernetes/apps/monitoring/ntfy/app/secret.sops.yaml`
-(`Secret/ntfy-secret`) and stamps its hash into `values.yaml` (`sops-hash`) so a
-future rotation rolls the pod. CI stays red until the Secret exists.
+The first recipe writes the encrypted base ntfy auth Secret. The second generates the
+Homepage identity, updates that ntfy Secret, writes the matching
+`Secret/homepage-ntfy`, and stamps the ntfy ciphertext hash into `values.yaml`
+(`sops-hash`) so a future rotation rolls the pod. CI stays red until both encrypted
+Secrets exist.
 
 ## C. Roll out
 
@@ -102,7 +107,40 @@ connected. Tapping a notification opens ntfy and shows the full message.
   `default-user: subscriber` / `default-password` in a local, git-ignored file. Never reuse a
   publisher token in a subscriber client.
 
-## F. Producers
+## F. Homepage dashboard
+
+Homepage discovers ntfy from its HTTPRoute and polls the in-cluster Service with the
+dedicated `homepage` token. The card shows only the latest cached `critical` notification
+using the compact fields `title`, `priority`, and `lastReceived`; open the card for the
+full ntfy web UI.
+
+To add or rotate the identity on an already-running installation without re-entering any
+existing subscriber or producer credentials, run:
+
+```sh
+HOMEPAGE_NTFY_SECRETS_CONFIRM='write:monitoring:ntfy-homepage:sops' \
+mise exec -- just repo homepage-ntfy-secrets
+
+mise exec -- just ci
+```
+
+The recipe generates a random throwaway password, bcrypt hash, and token internally. It
+decrypts only into a private temporary directory, replaces only the `homepage` entries
+in the three auth lists, prepares both encrypted Secrets before replacing either tracked
+file, and never prints or persists plaintext credentials.
+
+Alertmanager assigns an active critical alert `urgent` / priority 5 and assigns its
+resolved notification `default` / priority 3. Priority is a useful cue for the latest
+message, but the card is not active-alert state: after resolution, the newest message is
+the `Resolved:` title at default priority. Warning (`homelab`) and Seerr (`media`) messages
+remain default priority and are intentionally not included on this card.
+
+Rerun the same guarded `just repo homepage-ntfy-secrets` command to rotate the generated
+Homepage identity and both encrypted token copies together.
+After Flux reconciles both applications, `mise exec -- just kube ntfy-verify` proves the
+token can read only `critical` and cannot publish.
+
+## G. Producers
 
 ### Alertmanager (PR3)
 
@@ -173,7 +211,7 @@ If your Seerr version's ntfy agent offers only username/password (no token field
 
 Do not add direct `*arr`/qBittorrent/Plex ntfy integrations; use Seerr + Alertmanager.
 
-## G. Troubleshooting and rotation
+## H. Troubleshooting and rotation
 
 Missing iPhone notification, in order: can Safari reach the ntfy URL on the current
 network (Tailscale up)? Does `/v1/health` return healthy? Correct server + subscribed

@@ -36,12 +36,28 @@ tokens="$("${kc[@]}" --namespace "$ns" get secret ntfy-secret -o go-template='{{
 token_for() { awk -F, -v u="$1" '{for(i=1;i<=NF;i++){n=split($i,a,":"); if(a[1]==u){print a[2]; exit}}}' <<<"$tokens"; }
 seerr_token="$(token_for seerr)"
 am_token="$(token_for alertmanager)"
-[[ -n "$seerr_token" && -n "$am_token" ]] || { echo 'Could not read seerr/alertmanager tokens from ntfy-secret.' >&2; exit 1; }
+registered_homepage_token="$(token_for homepage)"
+homepage_token="$("${kc[@]}" --namespace homepage get secret homepage-ntfy \
+  -o go-template='{{ index .data "token" | base64decode }}')"
+[[ -n "$seerr_token" && -n "$am_token" && -n "$registered_homepage_token" &&
+  -n "$homepage_token" ]] || {
+  echo 'Could not read the expected seerr/alertmanager/homepage tokens.' >&2
+  exit 1
+}
+[[ "$homepage_token" == "$registered_homepage_token" ]] || {
+  echo 'homepage-ntfy does not contain the token registered to the ntfy homepage user.' >&2
+  exit 1
+}
 
 # seerr is write-only on media: it must NOT be able to publish to critical.
 [[ "$(code -X POST -H "Authorization: Bearer $seerr_token" -d 'verify' "$base_url/critical")" == '403' ]] || { echo 'seerr token could publish to critical (should be denied).' >&2; exit 1; }
 # alertmanager is write-only: it must NOT be able to read a topic.
 [[ "$(code -H "Authorization: Bearer $am_token" "$base_url/critical/json?poll=1")" == '403' ]] || { echo 'alertmanager token could read critical (should be denied).' >&2; exit 1; }
+# Homepage is read-only on critical and has no access to the other dashboard topics.
+[[ "$(code -H "Authorization: Bearer $homepage_token" "$base_url/critical/json?poll=1")" == '200' ]] || { echo 'Homepage token could not read critical (should be allowed).' >&2; exit 1; }
+[[ "$(code -X POST -H "Authorization: Bearer $homepage_token" -d 'verify' "$base_url/critical")" == '403' ]] || { echo 'Homepage token could publish to critical (should be denied).' >&2; exit 1; }
+[[ "$(code -H "Authorization: Bearer $homepage_token" "$base_url/homelab/json?poll=1")" == '403' ]] || { echo 'Homepage token could read homelab (should be denied).' >&2; exit 1; }
+[[ "$(code -H "Authorization: Bearer $homepage_token" "$base_url/media/json?poll=1")" == '403' ]] || { echo 'Homepage token could read media (should be denied).' >&2; exit 1; }
 
 # Optional positive publish tests actually deliver a notification, so they are guarded.
 if [[ "${NTFY_VERIFY_PUBLISH_CONFIRM:-}" == 'publish:ntfy-verify' ]]; then
@@ -53,7 +69,7 @@ if [[ "${NTFY_VERIFY_PUBLISH_CONFIRM:-}" == 'publish:ntfy-verify' ]]; then
 fi
 
 just kube foundation-verify
-echo 'ntfy acceptance passed: Flux + HelmRelease Ready, rollout complete, PVC Bound, gateway /v1/health healthy, anonymous access denied, and least-privilege token ACLs enforced.'
+echo 'ntfy acceptance passed: Flux + HelmRelease Ready, rollout complete, PVC Bound, gateway /v1/health healthy, anonymous access denied, and producer/Homepage least-privilege token ACLs enforced.'
 echo
 echo 'MANUAL (human acceptance, not automatable here):'
 echo '  - subscriber password login can READ all topics and CANNOT publish (enter password on a client).'

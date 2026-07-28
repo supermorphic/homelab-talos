@@ -18,6 +18,7 @@ gatus_route='kubernetes/apps/monitoring/gatus/app/httproute.yaml'
 longhorn_route='kubernetes/apps/storage/longhorn/config/httproute.yaml'
 monitoring_routes='kubernetes/apps/monitoring/kube-prometheus-stack/config/httproutes.yaml'
 portainer_route='kubernetes/apps/monitoring/portainer/app/httproute.yaml'
+ntfy_route='kubernetes/apps/monitoring/ntfy/app/httproute.yaml'
 test_reports_route='kubernetes/apps/monitoring/test-reports/app/httproute.yaml'
 allure_commit='fe2ea92eaab4e409a3c8cf52ba96e35df96b2298'
 
@@ -27,7 +28,7 @@ for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.ya
   "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$custom_js" \
   "$allure_icon" \
   "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
-  "$monitoring_routes" "$portainer_route" "$test_reports_route"; do
+  "$monitoring_routes" "$portainer_route" "$ntfy_route" "$test_reports_route"; do
   [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
@@ -45,6 +46,22 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$portainer_route")" == 'portainer-dark.svg' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$ntfy_route")" == 'ntfy' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$ntfy_route")" == \
+  'Monitoring & Testing' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$ntfy_route")" == 'ntfy.svg' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/href"' "$ntfy_route")" == \
+  'https://ntfy.lab.supermorphic.com' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$ntfy_route")" == \
+  'ntfy' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$ntfy_route")" == \
+  'http://ntfy.ntfy.svc.cluster.local' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.topic"' "$ntfy_route")" == \
+  'critical' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$ntfy_route")" == \
+  '{{HOMEPAGE_VAR_NTFY_TOKEN}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields"' "$ntfy_route")" == \
+  '["title","priority","lastReceived"]' ]]
 for mapping in \
   '["portainer.applications", "Applications"]' \
   '["portainer.services", "Services"]' \
@@ -82,6 +99,7 @@ rg -Fq 'packages/web-components/src/assets/svg/report-logo.svg' "$allure_provena
 
 # Per-service split Secrets (rotate independently).
 grafana_secret="$base/app/homepage-grafana.sops.yaml"
+ntfy_secret="$base/app/homepage-ntfy.sops.yaml"
 plex_secret="$base/app/homepage-plex.sops.yaml"
 portainer_secret="$base/app/homepage-portainer.sops.yaml"
 prowlarr_secret="$base/app/homepage-prowlarr.sops.yaml"
@@ -90,6 +108,7 @@ sonarr_secret="$base/app/homepage-sonarr.sops.yaml"
 radarr_secret="$base/app/homepage-radarr.sops.yaml"
 seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
+[[ -f "$ntfy_secret" ]] || { echo "Missing Homepage ntfy Secret: $ntfy_secret (run just repo homepage-ntfy-secrets)." >&2; exit 1; }
 [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
 [[ -f "$portainer_secret" ]] || { echo "Missing Homepage Portainer Secret: $portainer_secret (run just repo homepage-portainer-secrets)." >&2; exit 1; }
 [[ -f "$prowlarr_secret" ]] || { echo "Missing Homepage Prowlarr Secret: $prowlarr_secret (run just repo homepage-prowlarr-secrets)." >&2; exit 1; }
@@ -100,6 +119,9 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ "$(sops filestatus "$grafana_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$grafana_secret")" == 'homepage-grafana' ]]
 [[ "$(yq -r '.metadata.namespace' "$grafana_secret")" == 'homepage' ]]
+[[ "$(sops filestatus "$ntfy_secret" | yq -r '.encrypted')" == 'true' ]]
+[[ "$(yq -r '.metadata.name' "$ntfy_secret")" == 'homepage-ntfy' ]]
+[[ "$(yq -r '.metadata.namespace' "$ntfy_secret")" == 'homepage' ]]
 [[ "$(sops filestatus "$plex_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$plex_secret")" == 'homepage-plex' ]]
 [[ "$(yq -r '.metadata.namespace' "$plex_secret")" == 'homepage' ]]
@@ -126,6 +148,9 @@ assert_command_finds_nothing \
   'Homepage must not reference the retired combined homepage-secrets Secret.' \
   rg -q 'homepage-secrets' "$dep"
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_GRAFANA_USER") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-grafana' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-ntfy' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'token' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]

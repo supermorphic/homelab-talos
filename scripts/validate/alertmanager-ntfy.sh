@@ -59,6 +59,9 @@ yq -e '.' "$config" >/dev/null
 [[ "$(yq -r '.http.addr' "$config")" == ':8000' ]]
 topic="$(yq -r '.ntfy.notification.topic' "$config")"
 [[ "$topic" == *'"critical"'* && "$topic" == *'"homelab"'* ]]
+priority="$(yq -r '.ntfy.notification.priority' "$config")"
+[[ "$priority" == *'status == "resolved" ? "default"'* ]]
+[[ "$priority" == *'labels["severity"] == "critical" ? "urgent" : "default"'* ]]
 
 # Auth Secret shape (encryption enforced by verify-files).
 [[ "$(yq -r '.kind' "$auth")" == 'Secret' ]]

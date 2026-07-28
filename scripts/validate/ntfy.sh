@@ -111,6 +111,8 @@ fi
 
 # CNP restricts metrics to the monitoring namespace and allows egress to ntfy.sh.
 rg -q 'k8s:io.kubernetes.pod.namespace: monitoring' "$app/ciliumnetworkpolicy.yaml"
+rg -q 'k8s:io.kubernetes.pod.namespace: homepage' "$app/ciliumnetworkpolicy.yaml"
+rg -q 'app.kubernetes.io/name: homepage' "$app/ciliumnetworkpolicy.yaml"
 rg -q 'world' "$app/ciliumnetworkpolicy.yaml"
 
 # SOPS Secret shape (encryption itself is enforced by verify-files).
