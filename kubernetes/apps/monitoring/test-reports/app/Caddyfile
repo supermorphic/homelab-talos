@@ -16,6 +16,16 @@
 		file_server
 	}
 
+	# Caddy's file_server has no MIME mapping for .prom, so it serves the
+	# published metrics with a blank Content-Type. Prometheus 3.x rejects a
+	# blank Content-Type unless a fallback protocol is set, marking this scrape
+	# target down. Stamp the classic text-exposition type so the scrape passes.
+	handle /api/metrics.prom {
+		root * /srv/state/current
+		header Content-Type "text/plain; version=0.0.4; charset=utf-8"
+		file_server
+	}
+
 	handle /api/* {
 		root * /srv/state/current
 		file_server
