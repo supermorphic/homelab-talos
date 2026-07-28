@@ -7,6 +7,20 @@ metadata:
   namespace: ntfy
   annotations:
     external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "ntfy"
+    gethomepage.dev/description: "Private cluster notifications"
+    gethomepage.dev/group: "Monitoring & Testing"
+    gethomepage.dev/icon: "ntfy.svg"
+    gethomepage.dev/href: "https://ntfy.lab.supermorphic.com"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=ntfy"
+    # Latest critical notification only. Homepage authenticates directly to the
+    # in-cluster Service with a dedicated read-only ntfy token.
+    gethomepage.dev/widget.type: "ntfy"
+    gethomepage.dev/widget.url: "http://ntfy.ntfy.svc.cluster.local"
+    gethomepage.dev/widget.topic: "critical"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_NTFY_TOKEN}}"
+    gethomepage.dev/widget.fields: '["title","priority","lastReceived"]'
 spec:
   # LAN browser/CLI path. Off-site delivery uses the private Tailscale Ingress
   # (tailscale-ingress.yaml); the canonical iOS/base-url host is the tailnet FQDN.

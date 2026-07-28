@@ -648,6 +648,115 @@ homepage-portainer-secrets:
     mv -- "$temp_dir/homepage-portainer.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-portainer in homepage)."
 
+# Add or rotate the dedicated Homepage identity in the existing ntfy auth Secret and
+# write the matching Homepage widget Secret. Generates the throwaway password, bcrypt
+# hash, and token internally; no credential inputs are accepted or printed. Existing
+# subscribers and producers are preserved. Both encrypted outputs are prepared before
+# either tracked file is replaced.
+homepage-ntfy-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:ntfy-homepage:sops'
+    ntfy_target='kubernetes/apps/monitoring/ntfy/app/secret.sops.yaml'
+    homepage_target='kubernetes/apps/monitoring/homepage/app/homepage-ntfy.sops.yaml'
+    values='kubernetes/apps/monitoring/ntfy/app/values.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-ntfy.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -f "$ntfy_target" ]] || {
+      echo "Missing $ntfy_target; use just repo ntfy-secrets for initial bootstrap." >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_NTFY_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to update the ntfy auth and Homepage widget Secrets.' >&2
+      echo "Set HOMEPAGE_NTFY_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    entropy="$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"
+    [[ "$entropy" =~ ^[a-f0-9]{64}$ ]] || {
+      echo 'Refusing: could not generate cryptographically random Homepage credentials.' >&2
+      exit 1
+    }
+    homepage_password_hash_line="$(printf '%s\n' "$entropy" | htpasswd -niBC 10 homepage)"
+    homepage_password_hash="${homepage_password_hash_line#*:}"
+    homepage_token="tk_${entropy:0:29}"
+    [[ "$homepage_password_hash" == '$2'*'$'* ]] || {
+      echo 'Refusing: generated Homepage password hash is not bcrypt.' >&2
+      exit 1
+    }
+    [[ "$homepage_token" =~ ^tk_[a-z0-9]{29}$ ]] || {
+      echo 'Refusing: generated Homepage token has the wrong format.' >&2
+      exit 1
+    }
+
+    sops --decrypt "$ntfy_target" >"$temp_dir/ntfy-secret.yaml"
+    auth_users="$(yq -r '.stringData.NTFY_AUTH_USERS' "$temp_dir/ntfy-secret.yaml")"
+    auth_access="$(yq -r '.stringData.NTFY_AUTH_ACCESS' "$temp_dir/ntfy-secret.yaml")"
+    auth_tokens="$(yq -r '.stringData.NTFY_AUTH_TOKENS' "$temp_dir/ntfy-secret.yaml")"
+    [[ -n "$auth_users" && "$auth_users" != 'null' &&
+      -n "$auth_access" && "$auth_access" != 'null' &&
+      -n "$auth_tokens" && "$auth_tokens" != 'null' ]] || {
+      echo 'Refusing: the existing ntfy Secret does not contain all declarative auth lists.' >&2
+      exit 1
+    }
+
+    update_entry() {
+      local current="$1" prefix="$2" replacement="$3"
+      CURRENT="$current" PREFIX="$prefix" REPLACEMENT="$replacement" yq -n -r \
+        'strenv(CURRENT) | split(",") |
+         map(select(test("^" + strenv(PREFIX)) | not)) +
+         [strenv(REPLACEMENT)] | join(",")'
+    }
+    auth_users="$(update_entry "$auth_users" 'homepage:' \
+      "homepage:${homepage_password_hash}:user")"
+    auth_access="$(update_entry "$auth_access" 'homepage:' 'homepage:critical:ro')"
+    auth_tokens="$(update_entry "$auth_tokens" 'homepage:' \
+      "homepage:${homepage_token}")"
+    export auth_users auth_access auth_tokens homepage_token
+
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "ntfy-secret" |
+       .metadata.namespace = "ntfy" |
+       .type = "Opaque" |
+       .stringData.NTFY_AUTH_USERS = strenv(auth_users) |
+       .stringData.NTFY_AUTH_ACCESS = strenv(auth_access) |
+       .stringData.NTFY_AUTH_TOKENS = strenv(auth_tokens)' \
+      >"$temp_dir/ntfy-secret.updated.yaml"
+
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-ntfy" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData.token = strenv(homepage_token)' \
+      >"$temp_dir/homepage-ntfy.yaml"
+
+    sops --encrypt --filename-override "$ntfy_target" \
+      "$temp_dir/ntfy-secret.updated.yaml" >"$temp_dir/ntfy-secret.sops.yaml"
+    sops --encrypt --filename-override "$homepage_target" \
+      "$temp_dir/homepage-ntfy.yaml" >"$temp_dir/homepage-ntfy.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/ntfy-secret.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(sops filestatus "$temp_dir/homepage-ntfy.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/ntfy-secret.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-ntfy.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    for secret in "$entropy" "$homepage_password_hash" "$homepage_token"; do
+      ! rg -Fq -- "$secret" "$temp_dir/ntfy-secret.sops.yaml"
+      ! rg -Fq -- "$secret" "$temp_dir/homepage-ntfy.sops.yaml"
+    done
+
+    mv -- "$temp_dir/ntfy-secret.sops.yaml" "$ntfy_target"
+    mv -- "$temp_dir/homepage-ntfy.sops.yaml" "$homepage_target"
+    revision="$(git hash-object "$ntfy_target")"
+    REV="$revision" yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$values"
+    echo "Updated encrypted $ntfy_target and $homepage_target with generated Homepage read-only access; stamped sops-hash."
+
 # Write ONLY the SOPS-encrypted Homepage Plex widget Secret (homepage-plex in the homepage
 # namespace) from PLEX_TOKEN. Independent of the Grafana Secret. Never echoes the value.
 homepage-plex-secrets:
