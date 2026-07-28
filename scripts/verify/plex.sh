@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: plex.sh <kubeconfig>' >&2
   exit 2
@@ -31,7 +33,7 @@ for _ in {1..24}; do
 done
 [[ "$accepted" == 'true' ]] || { echo 'plex HTTPRoute was not Accepted.' >&2; exit 1; }
 
-[[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || {
+[[ "$(dig +short @"$HOMELAB_DNS_RESOLVER" "$host" A | sort -u)" == "$gateway_ip" ]] || {
   echo "DNS for $host does not resolve to $gateway_ip via Pi-hole." >&2
   exit 1
 }

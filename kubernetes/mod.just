@@ -365,6 +365,7 @@ foundation-status:
     #!/usr/bin/env bash
     set -u
 
+    source scripts/lib/network.sh
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
@@ -388,7 +389,7 @@ foundation-status:
     kubectl --kubeconfig "$kubeconfig" --namespace external-dns get deployments,pods --output wide || status=1
     kubectl --kubeconfig "$kubeconfig" --namespace testing get deployments,pods,services,httproutes --output wide || status=1
     echo '=== Pi-hole resolution ==='
-    dig +short @192.168.90.2 echo.lab.supermorphic.com A || status=1
+    dig +short @"$HOMELAB_DNS_RESOLVER" echo.lab.supermorphic.com A || status=1
     exit "$status"
 
 # Verify the complete live Phase 7 internal foundation acceptance gate.

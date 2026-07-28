@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: gatus.sh <kubeconfig>' >&2
   exit 2
@@ -24,7 +26,7 @@ done
 
 dns_answer=''
 for _ in {1..30}; do
-  dns_answer="$(dig +short @192.168.90.2 gatus.lab.supermorphic.com A | sort -u)"
+  dns_answer="$(dig +short @"$HOMELAB_DNS_RESOLVER" gatus.lab.supermorphic.com A | sort -u)"
   [[ "$dns_answer" == "$gateway_ip" ]] && break
   sleep 10
 done

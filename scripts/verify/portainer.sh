@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: portainer.sh <kubeconfig>' >&2
   exit 2
@@ -94,7 +96,7 @@ done
   exit 1
 }
 
-[[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || {
+[[ "$(dig +short @"$HOMELAB_DNS_RESOLVER" "$host" A | sort -u)" == "$gateway_ip" ]] || {
   echo "DNS for $host does not resolve to $gateway_ip." >&2
   exit 1
 }

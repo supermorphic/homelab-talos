@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: monitoring.sh <kubeconfig>' >&2
   exit 2
@@ -43,13 +45,13 @@ done
 
 dns_answer=''
 for _ in {1..30}; do
-  dns_answer="$(dig +short @192.168.90.2 grafana.lab.supermorphic.com A | sort -u)"
+  dns_answer="$(dig +short @"$HOMELAB_DNS_RESOLVER" grafana.lab.supermorphic.com A | sort -u)"
   [[ "$dns_answer" == "$gateway_ip" ]] && break
   sleep 10
 done
 [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for grafana, not $gateway_ip." >&2; exit 1; }
 for host in prometheus alertmanager; do
-  [[ "$(dig +short @192.168.90.2 "$host.lab.supermorphic.com" A | sort -u)" == "$gateway_ip" ]] || { echo "Pi-hole has no $gateway_ip record for $host." >&2; exit 1; }
+  [[ "$(dig +short @"$HOMELAB_DNS_RESOLVER" "$host.lab.supermorphic.com" A | sort -u)" == "$gateway_ip" ]] || { echo "Pi-hole has no $gateway_ip record for $host." >&2; exit 1; }
 done
 
 health="$(curl --silent --show-error --fail --max-time 15 --resolve "grafana.lab.supermorphic.com:443:$gateway_ip" https://grafana.lab.supermorphic.com/api/health)"

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/network.sh
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: seerr.sh <kubeconfig>' >&2
   exit 2
@@ -20,6 +22,6 @@ for _ in {1..24}; do
   sleep 5
 done
 [[ "$accepted" == 'true' ]] || { echo 'seerr HTTPRoute was not Accepted.' >&2; exit 1; }
-[[ "$(dig +short @192.168.90.2 "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
+[[ "$(dig +short @"$HOMELAB_DNS_RESOLVER" "$host" A | sort -u)" == "$gateway_ip" ]] || { echo "DNS for $host does not resolve to $gateway_ip." >&2; exit 1; }
 curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/api/v1/status" >/dev/null || { echo 'seerr /api/v1/status not reachable via the gateway.' >&2; exit 1; }
 echo 'Phase 14 Seerr acceptance passed. First-run: connect Plex + Sonarr/Radarr (URLs + API keys) in the Seerr UI.'
