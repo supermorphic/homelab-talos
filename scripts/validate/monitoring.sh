@@ -68,10 +68,16 @@ render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanage
 fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 cfg="$base/config"
 fksm_values="$fksm/app/values.yaml"
+flux_alerts_lib='scripts/lib/flux-alerts.sh'
+flux_alerts_diagnostics='scripts/diagnose/flux-alerts.sh'
+flux_alerts_promql='scripts/validate/flux-alerts-promql.sh'
+flux_alerts_promql_test='tests/prometheus/flux-alerts.test.yaml'
 
 for f in "$fksm/ks.yaml" "$fksm/app/kustomization.yaml" "$fksm/app/helmrelease.yaml" \
   "$fksm_values" "$fksm/app/rbac.yaml" "$fksm/README.md" \
-  "$cfg/flux-podmonitor.yaml" "$cfg/flux-alerts.yaml"; do
+  "$cfg/flux-podmonitor.yaml" "$cfg/flux-alerts.yaml" \
+  "$flux_alerts_lib" "$flux_alerts_diagnostics" \
+  "$flux_alerts_promql" "$flux_alerts_promql_test"; do
   [[ -f "$f" ]] || {
     echo "Missing Flux monitoring source: $f" >&2
     exit 1
@@ -103,9 +109,11 @@ rg -q -- '--custom-resource-state-only=true' "$fksm_values"
 fksm_ver="$(yq -r '.spec.chart.spec.version' "$fksm/app/helmrelease.yaml")"
 [[ -n "$fksm_ver" && "$fksm_ver" != 'null' ]]
 
-# Minimal RBAC: only the Flux API groups, list/watch, no wildcards.
-[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].apiGroups[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'helm.toolkit.fluxcd.io,kustomize.toolkit.fluxcd.io,source.toolkit.fluxcd.io' ]]
+# Minimal RBAC: CRD discovery plus only the exported Flux API groups, list/watch,
+# no wildcards.
+[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].apiGroups[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'apiextensions.k8s.io,helm.toolkit.fluxcd.io,kustomize.toolkit.fluxcd.io,source.toolkit.fluxcd.io' ]]
 [[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].verbs[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'list,watch' ]]
+[[ "$(yq ea -r 'select(.kind == "ClusterRole") | .rules[] | select(.apiGroups[] == "apiextensions.k8s.io") | .resources | join(",")' "$fksm/app/rbac.yaml")" == 'customresourcedefinitions' ]]
 if rg -q '\*' "$fksm/app/rbac.yaml"; then
   echo 'Refusing: flux-kube-state-metrics RBAC must not use wildcards.' >&2
   exit 1
@@ -147,5 +155,18 @@ if yq -r '.spec.groups[].rules[].expr' "$fr" | rg -q 'gotk_reconcile_condition';
   echo 'Refusing: Flux alert expressions must use gotk_resource_info, not the removed gotk_reconcile_condition.' >&2
   exit 1
 fi
+
+rg -q '^flux-alerts-diagnostics: require-bash$' kubernetes/mod.just
+yq -e '
+  .suites[] |
+  select(.metadata.id == "diagnostics.flux-alerts") |
+  select(.metadata.tier == "diagnostics") |
+  select(.metadata.mutates_cluster == false) |
+  select(.runner.implementation == "scripts/diagnose/flux-alerts.sh")
+' tests/catalog.yaml >/dev/null
+bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics" "$flux_alerts_promql"
+shellcheck --external-sources \
+  "$flux_alerts_lib" "$flux_alerts_diagnostics" "$flux_alerts_promql"
+"$flux_alerts_promql"
 
 echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'

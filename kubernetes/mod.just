@@ -701,11 +701,17 @@ qbit-manage-e2e-debug-cleanup run_id: require-bash
 monitoring-validate: require-bash
     @scripts/validate/monitoring.sh
 
-# Verify the live monitoring stack: HelmRelease + workloads healthy, PVCs bound
-# on Longhorn, HTTPRoutes accepted, all three UIs reachable with trusted HTTPS
-# through the internal gateway, and the foundation still green.
+# Verify the live monitoring stack: HelmReleases + workloads healthy, PVCs bound,
+# HTTPRoutes accepted, Prometheus has an up Flux-exporter target with every configured
+# resource kind, both Flux rules loaded and healthy, an active Alertmanager connection,
+# the expected ntfy route loaded, and the foundation still green. Does not send alerts.
 monitoring-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(kubeconfig)}}
+
+# Diagnose the Flux resource-alert signal path stage by stage, preserving targeted,
+# sanitized evidence in a canonical test result. Read-only; never sends an alert.
+flux-alerts-diagnostics: require-bash
+    @scripts/test/run-catalog-suite.sh diagnostics.flux-alerts -- scripts/diagnose/flux-alerts.sh {{quote(kubeconfig)}}
 
 # Reset Grafana's DB admin password to the current grafana-admin Secret value. Grafana
 # only applies the admin password on first init, so a rotated/recreated Secret (e.g. the
@@ -866,8 +872,8 @@ alertmanager-ntfy-validate: require-bash
     @scripts/validate/alertmanager-ntfy.sh
 
 # Verify the live alertmanager-ntfy adapter: Kustomization + HelmRelease Ready, rollout
-# complete, the Alertmanager 'ntfy' receiver present, and a synthetic firing+resolved alert
-# reaches ntfy with correct topic/priority.
+# complete, and the Alertmanager 'ntfy' receiver present. A synthetic notification remains
+# a separate explicit, confirmation-guarded E2E test.
 alertmanager-ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(kubeconfig)}}
 

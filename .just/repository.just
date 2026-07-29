@@ -27,6 +27,7 @@ versions:
     @just --version
     @gh --version | head -n 1
     @gitleaks version
+    @promtool --version | head -n 1
     @shellcheck --version
     @uv --version
     @sonobuoy version

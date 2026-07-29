@@ -1,8 +1,9 @@
 ---
 # Minimal RBAC for the dedicated Flux kube-state-metrics exporter: list/watch ONLY the
-# Decision-9 Flux resource kinds it turns into gotk_resource_info. No wildcards, and no
-# notification/image API groups (not exported). The chart runs with rbac.create: false and
-# binds this ClusterRole to its ServiceAccount (flux-kube-state-metrics, from
+# Decision-9 Flux resource kinds it turns into gotk_resource_info, plus CRD discovery
+# required by kube-state-metrics' custom-resource collector. No wildcards, and no
+# notification/image API groups (not exported). The chart runs with rbac.create: false
+# and binds this ClusterRole to its ServiceAccount (flux-kube-state-metrics, from
 # fullnameOverride).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -11,6 +12,9 @@ metadata:
   labels:
     app.kubernetes.io/name: flux-kube-state-metrics
 rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["list", "watch"]
   - apiGroups: ["kustomize.toolkit.fluxcd.io"]
     resources: ["kustomizations"]
     verbs: ["list", "watch"]

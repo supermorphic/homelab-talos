@@ -1,0 +1,55 @@
+rule_files:
+  - flux-alerts.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: reconciliation failure fires only for an unsuspended Ready=False resource
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="broken",ready="False",suspended=""}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="HelmRelease",exported_namespace="monitoring",name="suspended",ready="False",suspended="true"}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="GitRepository",exported_namespace="flux-system",name="healthy",ready="True",suspended=""}'
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FluxReconciliationFailure
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: FluxReconciliationFailure
+        exp_alerts:
+          - exp_labels:
+              customresource_kind: Kustomization
+              exported_namespace: flux-system
+              name: broken
+              ready: "False"
+              severity: warning
+            exp_annotations:
+              summary: Flux Kustomization flux-system/broken is failing to reconcile
+              description: >-
+                The Flux Kustomization flux-system/broken has reported Ready=False for more
+                than 15 minutes, so Git is no longer being applied to the cluster. Inspect it
+                (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+                repository) and rendered manifests. Intentionally suspended resources are
+                excluded.
+
+  - name: missing resource metric triggers the watchdog
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FluxResourceMetricsMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: FluxResourceMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Flux resource-state metrics are missing
+              description: >-
+                gotk_resource_info has been absent for more than 15 minutes, so
+                FluxReconciliationFailure cannot fire and Flux reconciliation failures are
+                undetectable. Check the flux-kube-state-metrics Deployment, its
+                ServiceMonitor, and its RBAC (list/watch on the Flux APIs).
