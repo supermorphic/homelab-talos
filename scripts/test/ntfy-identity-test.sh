@@ -13,6 +13,18 @@ trap 'rm -rf -- "$fixture"' EXIT
 stub_bin="$fixture/bin"
 mkdir -p "$stub_bin"
 ntfy_write_stub_sops "$stub_bin"
+cat >"$stub_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target="${*: -1}"
+if [[ -n "${STUB_MV_FAIL_TARGET:-}" && "$target" == "$STUB_MV_FAIL_TARGET" &&
+  ! -e "${STUB_MV_FAIL_MARKER:-}" ]]; then
+  : >"$STUB_MV_FAIL_MARKER"
+  exit 73
+fi
+exec /bin/mv "$@"
+EOF
+chmod +x "$stub_bin/mv"
 export PATH="$stub_bin:$PATH"
 export NTFY_SOPS_POLICY_FILE="$repo_root/.sops.yaml"
 
@@ -201,6 +213,13 @@ run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
 assert_status 1
 assert_contains 'ntfy-subscriber-password'
 
+new_case reconcile-missing-list
+yq -i 'del(.stringData.NTFY_AUTH_TOKENS)' "$case_dir/plain.yaml"
+ntfy_stub_encrypt "$case_dir/plain.yaml" "$NTFY_SECRET_FILE" "$NTFY_SOPS_POLICY_FILE"
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_status 1
+assert_contains 'does not contain all declarative auth lists'
+
 # --- Rotation: Git-managed consumer switches immediately ------------------------
 new_case rotate-alertmanager
 run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
@@ -232,6 +251,13 @@ pending_token="$(cut -d: -f2 <<<"$pending_entry")"
   fail 'pending token missing or malformed'
 assert_contains 'ntfy-consumer-sync seerr'
 assert_contains 'finalize seerr'
+staged_revision="$(git hash-object "$NTFY_SECRET_FILE")"
+run_id 'rotate:monitoring:ntfy:seerr:sops' rotate seerr
+assert_status 1
+assert_contains 'already has a pending token'
+assert_contains 'ntfy-consumer-sync seerr'
+[[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$staged_revision" ]] ||
+  fail 'a second staged rotation changed the canonical Secret'
 run_id 'finalize:monitoring:ntfy:seerr:sops' finalize seerr
 assert_ok
 tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
@@ -285,6 +311,47 @@ assert_status 1
 assert_contains 'plaintext credential'
 [[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$before" ]] || fail 'original Secret was replaced'
 
+# --- Annotation-only drift is repaired without rewriting ciphertext ------------
+new_case stamp-repair
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_ok
+secret_revision="$(git hash-object "$NTFY_SECRET_FILE")"
+homepage_revision="$(git hash-object "$NTFY_HOMEPAGE_SECRET_FILE")"
+yq -i '.controllers.ntfy.pod.annotations.sops-hash = "stale"' "$NTFY_VALUES_FILE"
+yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = "stale"' \
+  "$NTFY_ADAPTER_VALUES_FILE"
+yq -i '.spec.template.metadata.annotations["sops-hash"] = "stale"' \
+  "$NTFY_HOMEPAGE_DEPLOYMENT_FILE"
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_ok
+assert_contains 'Repaired ntfy and alertmanager-ntfy'
+assert_contains 'Repaired the Homepage'
+[[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$secret_revision" ]] ||
+  fail 'annotation repair rewrote canonical ciphertext'
+[[ "$(git hash-object "$NTFY_HOMEPAGE_SECRET_FILE")" == "$homepage_revision" ]] ||
+  fail 'annotation repair rewrote Homepage ciphertext'
+assert_stamps
+
+# --- A failed later install rolls back Secrets and annotation targets -----------
+new_case transaction-rollback
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_ok
+before_secret="$(git hash-object "$NTFY_SECRET_FILE")"
+before_values="$(git hash-object "$NTFY_VALUES_FILE")"
+before_adapter="$(git hash-object "$NTFY_ADAPTER_VALUES_FILE")"
+export STUB_MV_FAIL_TARGET="$NTFY_ADAPTER_VALUES_FILE"
+export STUB_MV_FAIL_MARKER="$case_dir/mv-failed"
+run_id 'rotate:monitoring:ntfy:alertmanager:sops' rotate alertmanager
+unset STUB_MV_FAIL_TARGET STUB_MV_FAIL_MARKER
+assert_status 73
+assert_contains 'Restored every ntfy lifecycle target'
+[[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$before_secret" ]] ||
+  fail 'transaction rollback did not restore the canonical Secret'
+[[ "$(git hash-object "$NTFY_VALUES_FILE")" == "$before_values" ]] ||
+  fail 'transaction rollback did not restore ntfy values'
+[[ "$(git hash-object "$NTFY_ADAPTER_VALUES_FILE")" == "$before_adapter" ]] ||
+  fail 'transaction rollback did not restore adapter values'
+
 # --- Subscriber password lifecycle ------------------------------------------------
 new_case password-guard
 run_pw - $'long-enough-password\nlong-enough-password\n'
@@ -328,5 +395,41 @@ users="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_USERS)"
 [[ "$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_ACCESS)" == \
   'subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro' ]] || fail 'bootstrap ACLs mismatch'
 [[ "$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)" == '' ]] || fail 'bootstrap tokens must be empty'
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_ok
+users="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_USERS)"
+tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
+for id in alertmanager homepage seerr subscriber; do
+  rg -q "^${id}:" < <(tr ',' '\n' <<<"$users") || fail "bootstrap reconcile omitted user $id"
+done
+for id in alertmanager homepage seerr; do
+  entry="$(tr ',' '\n' <<<"$tokens" | rg "^${id}:")"
+  [[ "${entry#*:}" =~ ^tk_[a-z0-9]{29}$ ]] || fail "bootstrap reconcile token malformed for $id"
+done
+bootstrap_am_token="$(tr ',' '\n' <<<"$tokens" | rg '^alertmanager:' | cut -d: -f2)"
+assert_auth_yml_token "$bootstrap_am_token"
+[[ "$(ntfy_secret_key "$NTFY_HOMEPAGE_SECRET_FILE" token)" == \
+  "$(tr ',' '\n' <<<"$tokens" | rg '^homepage:' | cut -d: -f2)" ]] ||
+  fail 'bootstrap reconcile did not mirror the Homepage token'
+assert_stamps
 
-echo 'ntfy-identity unit tests passed (guard, reconcile, migration, idempotency, generation, drift, rotation, staging, finalize, malformed registries, leak guard, subscriber password).'
+new_case password-transaction-rollback
+run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
+assert_ok
+before_secret="$(git hash-object "$NTFY_SECRET_FILE")"
+before_values="$(git hash-object "$NTFY_VALUES_FILE")"
+before_adapter="$(git hash-object "$NTFY_ADAPTER_VALUES_FILE")"
+export STUB_MV_FAIL_TARGET="$NTFY_ADAPTER_VALUES_FILE"
+export STUB_MV_FAIL_MARKER="$case_dir/mv-failed"
+run_pw 'write:monitoring:ntfy-subscriber:sops' $'another secure password\nanother secure password\n'
+unset STUB_MV_FAIL_TARGET STUB_MV_FAIL_MARKER
+assert_status 73
+assert_contains 'Restored every ntfy subscriber-password target'
+[[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$before_secret" ]] ||
+  fail 'subscriber rollback did not restore the canonical Secret'
+[[ "$(git hash-object "$NTFY_VALUES_FILE")" == "$before_values" ]] ||
+  fail 'subscriber rollback did not restore ntfy values'
+[[ "$(git hash-object "$NTFY_ADAPTER_VALUES_FILE")" == "$before_adapter" ]] ||
+  fail 'subscriber rollback did not restore adapter values'
+
+echo 'ntfy-identity unit tests passed (guard, reconcile, bootstrap, migration, idempotency, generation, drift, rotation, pending safety, rollback, stamp repair, malformed registries, leak guard, subscriber password).'

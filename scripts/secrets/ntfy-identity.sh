@@ -142,8 +142,54 @@ expected_confirmation="${action}:monitoring:ntfy:${identity_arg}:sops"
 }
 
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-ntfy-identity.XXXXXX")"
-trap 'rm -rf -- "$temp_dir"' EXIT
 umask 077
+
+transaction_active=false
+declare -a transaction_targets=() transaction_backups=() transaction_existed=()
+declare -a install_siblings=()
+
+rollback_transaction() {
+  local index target backup sibling rollback_failed=false
+  set +e
+  for ((index = ${#transaction_targets[@]} - 1; index >= 0; index--)); do
+    target="${transaction_targets[$index]}"
+    backup="${transaction_backups[$index]}"
+    if [[ "${transaction_existed[$index]}" == 'true' ]]; then
+      sibling="$(mktemp "$(dirname "$target")/.ntfy-rollback.XXXXXX")" || {
+        rollback_failed=true
+        continue
+      }
+      install_siblings+=("$sibling")
+      cp -- "$backup" "$sibling" && mv -- "$sibling" "$target" || rollback_failed=true
+    else
+      rm -f -- "$target" || rollback_failed=true
+    fi
+  done
+  [[ "$rollback_failed" == false ]]
+}
+
+cleanup() {
+  local status=$? sibling rollback_status=0
+  trap - EXIT HUP INT TERM
+  if [[ "$transaction_active" == true && "$status" -ne 0 ]]; then
+    rollback_transaction || rollback_status=$?
+    if [[ "$rollback_status" -eq 0 ]]; then
+      echo 'Restored every ntfy lifecycle target after the failed transaction.' >&2
+    else
+      echo 'WARNING: the ntfy lifecycle transaction failed and at least one target could not be restored.' >&2
+      status=1
+    fi
+  fi
+  for sibling in "${install_siblings[@]}"; do
+    rm -f -- "$sibling"
+  done
+  rm -rf -- "$temp_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------
 # Credential helpers. Every generated or read secret value is registered in
@@ -189,15 +235,24 @@ auth_access=''
 auth_tokens=''
 if [[ -f "$secret_file" ]]; then
   sops --decrypt "$secret_file" >"$temp_dir/current-secret.yaml"
+  yq -e '
+    .stringData |
+    (
+      has("NTFY_AUTH_USERS") and
+      has("NTFY_AUTH_ACCESS") and
+      has("NTFY_AUTH_TOKENS")
+    )
+  ' "$temp_dir/current-secret.yaml" >/dev/null ||
+    fail 'Refusing: the existing ntfy Secret does not contain all declarative auth lists.'
   auth_users="$(yq -r '.stringData.NTFY_AUTH_USERS // ""' "$temp_dir/current-secret.yaml")"
   auth_access="$(yq -r '.stringData.NTFY_AUTH_ACCESS // ""' "$temp_dir/current-secret.yaml")"
   auth_tokens="$(yq -r '.stringData.NTFY_AUTH_TOKENS // ""' "$temp_dir/current-secret.yaml")"
-  if [[ -z "$auth_users" || -z "$auth_access" || -z "$auth_tokens" ]]; then
-    fail 'Refusing: the existing ntfy Secret does not contain all declarative auth lists.'
-  fi
+  [[ -n "$auth_users" && -n "$auth_access" ]] ||
+    fail 'Refusing: the existing ntfy Secret has empty user or access declarations.'
 
   IFS=',' read -ra entries <<<"$auth_users"
   for entry in "${entries[@]}"; do
+    [[ -n "$entry" ]] || continue
     name="${entry%%:*}"
     cur_user_entry[$name]="$entry"
     cur_known[$name]=1
@@ -207,6 +262,7 @@ if [[ -f "$secret_file" ]]; then
 
   IFS=',' read -ra entries <<<"$auth_access"
   for entry in "${entries[@]}"; do
+    [[ -n "$entry" ]] || continue
     name="${entry%%:*}"
     cur_acl_entries[$name]+="${cur_acl_entries[$name]:+$'\n'}$entry"
     cur_known[$name]=1
@@ -214,6 +270,7 @@ if [[ -f "$secret_file" ]]; then
 
   IFS=',' read -ra entries <<<"$auth_tokens"
   for entry in "${entries[@]}"; do
+    [[ -n "$entry" ]] || continue
     name="${entry%%:*}"
     rest="${entry#*:}"
     cur_token_entries[$name]+="${cur_token_entries[$name]:+$'\n'}$entry"
@@ -264,6 +321,12 @@ for id in "${touched_ids[@]}"; do
   # Token entries.
   if [[ "${reg_credential[$id]}" == 'token' ]]; then
     if [[ "$action" == 'rotate' && "$id" == "$identity_arg" ]]; then
+      if [[ "${reg_consumer[$id]}" == 'seerr-api' ]]; then
+        while IFS= read -r entry; do
+          [[ "$entry" != *':pending' ]] ||
+            fail "Refusing: identity '$id' already has a pending token. Synchronize it with 'just kube ntfy-consumer-sync $id', then run 'just repo ntfy-identity finalize $id' before rotating again."
+        done <<<"${cur_token_entries[$id]:-}"
+      fi
       new_token="$(generate_token)"
       if [[ "${reg_consumer[$id]}" == 'seerr-api' ]]; then
         # Staged rotation: keep the current token valid, stage the pending one.
@@ -427,13 +490,9 @@ if [[ -n "$homepage_token" ]]; then
   fi
 fi
 
-if [[ "$changed_secret" == false && "$changed_homepage" == false ]]; then
-  echo "ntfy credentials for '$identity_arg' are already synchronized; nothing to do."
-  exit 0
-fi
-
 # ---------------------------------------------------------------------------
-# Build, encrypt, and verify every output before replacing any tracked file.
+# Build, encrypt, hash, and verify every output before replacing any tracked file.
+# Annotation drift is part of the transaction even when credentials are unchanged.
 # ---------------------------------------------------------------------------
 expected_recipient="$(yq -r '.creation_rules[1].age' "$sops_policy_file")"
 verify_encrypted() {
@@ -450,7 +509,7 @@ verify_encrypted() {
   done
 }
 
-declare -a pending_moves=()
+declare -a pending_candidates=() pending_targets=()
 if [[ "$changed_secret" == true ]]; then
   AUTH_USERS="$new_auth_users" AUTH_ACCESS="$new_auth_access" AUTH_TOKENS="$new_auth_tokens" \
     yq -n '
@@ -470,7 +529,11 @@ if [[ "$changed_secret" == true ]]; then
   sops --encrypt --filename-override "$secret_file" \
     "$temp_dir/ntfy-secret.yaml" >"$temp_dir/ntfy-secret.sops.yaml"
   verify_encrypted "$temp_dir/ntfy-secret.sops.yaml"
-  pending_moves+=("$temp_dir/ntfy-secret.sops.yaml:$secret_file")
+  pending_candidates+=("$temp_dir/ntfy-secret.sops.yaml")
+  pending_targets+=("$secret_file")
+  desired_secret_revision="$(git hash-object "$temp_dir/ntfy-secret.sops.yaml")"
+else
+  desired_secret_revision="$(git hash-object "$secret_file")"
 fi
 
 if [[ "$changed_homepage" == true ]]; then
@@ -485,42 +548,112 @@ if [[ "$changed_homepage" == true ]]; then
   sops --encrypt --filename-override "$homepage_secret_file" \
     "$temp_dir/homepage-ntfy.yaml" >"$temp_dir/homepage-ntfy.sops.yaml"
   verify_encrypted "$temp_dir/homepage-ntfy.sops.yaml"
-  pending_moves+=("$temp_dir/homepage-ntfy.sops.yaml:$homepage_secret_file")
+  pending_candidates+=("$temp_dir/homepage-ntfy.sops.yaml")
+  pending_targets+=("$homepage_secret_file")
+  desired_homepage_revision="$(git hash-object "$temp_dir/homepage-ntfy.sops.yaml")"
+elif [[ -f "$homepage_secret_file" ]]; then
+  desired_homepage_revision="$(git hash-object "$homepage_secret_file")"
+else
+  desired_homepage_revision=''
 fi
 
-# Install atomically; restore already-installed originals if a later move fails.
-declare -a installed=()
-for move in "${pending_moves[@]}"; do
-  candidate="${move%%:*}"
-  target="${move#*:}"
+# Prepare annotation candidates. A stale/missing stamp is repaired without
+# re-encrypting an otherwise unchanged Secret.
+changed_ntfy_stamp=false
+current_ntfy_stamp="$(yq -r '.controllers.ntfy.pod.annotations.sops-hash // ""' "$values_file")"
+if [[ "$current_ntfy_stamp" != "$desired_secret_revision" ]]; then
+  changed_ntfy_stamp=true
+  cp -- "$values_file" "$temp_dir/ntfy-values.yaml"
+  REV="$desired_secret_revision" \
+    yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$temp_dir/ntfy-values.yaml"
+  pending_candidates+=("$temp_dir/ntfy-values.yaml")
+  pending_targets+=("$values_file")
+fi
+
+changed_adapter_stamp=false
+current_adapter_stamp="$(yq -r '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] // ""' "$adapter_values_file")"
+if [[ "$current_adapter_stamp" != "$desired_secret_revision" ]]; then
+  changed_adapter_stamp=true
+  cp -- "$adapter_values_file" "$temp_dir/adapter-values.yaml"
+  REV="$desired_secret_revision" \
+    yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$temp_dir/adapter-values.yaml"
+  pending_candidates+=("$temp_dir/adapter-values.yaml")
+  pending_targets+=("$adapter_values_file")
+fi
+
+changed_homepage_stamp=false
+current_homepage_stamp="$(yq -r '.spec.template.metadata.annotations["sops-hash"] // ""' "$homepage_deployment_file")"
+if [[ -n "$desired_homepage_revision" &&
+  "$current_homepage_stamp" != "$desired_homepage_revision" ]]; then
+  changed_homepage_stamp=true
+  cp -- "$homepage_deployment_file" "$temp_dir/homepage-deployment.yaml"
+  REV="$desired_homepage_revision" \
+    yq -i '.spec.template.metadata.annotations["sops-hash"] = strenv(REV)' "$temp_dir/homepage-deployment.yaml"
+  pending_candidates+=("$temp_dir/homepage-deployment.yaml")
+  pending_targets+=("$homepage_deployment_file")
+fi
+
+if [[ "$changed_secret" == false && "$changed_homepage" == false &&
+  "$changed_ntfy_stamp" == false && "$changed_adapter_stamp" == false &&
+  "$changed_homepage_stamp" == false ]]; then
+  echo "ntfy credentials for '$identity_arg' are already synchronized; nothing to do."
+  exit 0
+fi
+
+# Back up every target before the first write, then install each prepared output
+# through a sibling file so the final replacement is a same-filesystem rename.
+for index in "${!pending_targets[@]}"; do
+  target="${pending_targets[$index]}"
+  backup="$temp_dir/backup-$index"
+  transaction_targets+=("$target")
+  transaction_backups+=("$backup")
   if [[ -f "$target" ]]; then
-    cp -- "$target" "$temp_dir/backup-$(basename "$target")"
+    cp -- "$target" "$backup"
+    transaction_existed+=('true')
+  else
+    transaction_existed+=('false')
   fi
-  if ! mv -- "$candidate" "$target"; then
-    for done_move in "${installed[@]}"; do
-      done_target="${done_move#*:}"
-      if [[ -f "$temp_dir/backup-$(basename "$done_target")" ]]; then
-        cp -- "$temp_dir/backup-$(basename "$done_target")" "$done_target"
-      fi
-    done
-    fail "Refusing: installing $target failed; restored previously installed originals."
-  fi
-  installed+=("$move")
 done
 
-# Stamp every credential consumer's pod-template hash so rotations restart them:
-# the ntfy pod (env), the alertmanager adapter (mounted auth.yml from the same
-# Secret), and the Homepage pod (its own Secret).
+transaction_active=true
+for index in "${!pending_targets[@]}"; do
+  candidate="${pending_candidates[$index]}"
+  target="${pending_targets[$index]}"
+  sibling="$(mktemp "$(dirname "$target")/.ntfy-install.XXXXXX")"
+  install_siblings+=("$sibling")
+  cp -- "$candidate" "$sibling"
+  mv -- "$sibling" "$target"
+done
+
+# Verify the installed transaction before making it durable.
+[[ "$(git hash-object "$secret_file")" == "$desired_secret_revision" ]] ||
+  fail "Refusing: installed $secret_file does not match the prepared candidate."
+verify_encrypted "$secret_file"
+installed_ntfy_stamp="$(yq -r '.controllers.ntfy.pod.annotations.sops-hash' "$values_file")"
+[[ "$installed_ntfy_stamp" == "$desired_secret_revision" ]] ||
+  fail 'Refusing: the installed ntfy sops-hash does not match the canonical Secret.'
+installed_adapter_stamp="$(yq -r '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"]' "$adapter_values_file")"
+[[ "$installed_adapter_stamp" == "$desired_secret_revision" ]] ||
+  fail 'Refusing: the installed alertmanager-ntfy sops-hash does not match the canonical Secret.'
+if [[ -n "$desired_homepage_revision" ]]; then
+  [[ "$(git hash-object "$homepage_secret_file")" == "$desired_homepage_revision" ]] ||
+    fail "Refusing: installed $homepage_secret_file does not match the prepared candidate."
+  verify_encrypted "$homepage_secret_file"
+  installed_homepage_stamp="$(yq -r '.spec.template.metadata.annotations["sops-hash"]' "$homepage_deployment_file")"
+  [[ "$installed_homepage_stamp" == "$desired_homepage_revision" ]] ||
+    fail 'Refusing: the installed Homepage sops-hash does not match its mirrored Secret.'
+fi
+transaction_active=false
+
 if [[ "$changed_secret" == true ]]; then
-  revision="$(git hash-object "$secret_file")"
-  REV="$revision" yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$values_file"
-  REV="$revision" yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$adapter_values_file"
   echo "Updated encrypted $secret_file; stamped sops-hash in the ntfy and alertmanager-ntfy values."
+elif [[ "$changed_ntfy_stamp" == true || "$changed_adapter_stamp" == true ]]; then
+  echo 'Repaired ntfy and alertmanager-ntfy sops-hash annotations without changing credentials.'
 fi
 if [[ "$changed_homepage" == true ]]; then
-  revision="$(git hash-object "$homepage_secret_file")"
-  REV="$revision" yq -i '.spec.template.metadata.annotations["sops-hash"] = strenv(REV)' "$homepage_deployment_file"
   echo "Updated encrypted $homepage_secret_file; stamped sops-hash in the Homepage deployment."
+elif [[ "$changed_homepage_stamp" == true ]]; then
+  echo 'Repaired the Homepage sops-hash annotation without changing credentials.'
 fi
 
 case "$action" in

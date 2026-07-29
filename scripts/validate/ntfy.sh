@@ -105,6 +105,17 @@ rg -q '^ntfy-consumer-sync consumer:' kubernetes/mod.just || {
   echo 'Refusing: the ntfy-consumer-sync recipe is missing from kubernetes/mod.just.' >&2
   exit 1
 }
+ntfy_sync_recipe="$(sed -n '/^ntfy-consumer-sync consumer:/,/^[^[:space:]#]/p' kubernetes/mod.just)"
+for required_guard in \
+  "require_deployed_source 'ntfy consumer sync'" \
+  'get gitrepository flux-system' \
+  'for app in ntfy homepage seerr' \
+  'status.lastAppliedRevision'; do
+  rg -Fq -- "$required_guard" <<<"$ntfy_sync_recipe" || {
+    echo "Refusing: ntfy-consumer-sync is missing its deployed-source guard: $required_guard" >&2
+    exit 1
+  }
+done
 # The adapter consumes auth.yml from the canonical Secret; its standalone Secret is gone.
 [[ ! -e kubernetes/apps/monitoring/alertmanager-ntfy/app/auth.sops.yaml ]] || {
   echo 'Refusing: alertmanager-ntfy/app/auth.sops.yaml must stay deleted; auth.yml lives in ntfy-secret.' >&2
@@ -175,6 +186,10 @@ rg -q 'world' "$app/ciliumnetworkpolicy.yaml"
 [[ "$(yq -r '.kind' "$secret")" == 'Secret' ]]
 [[ "$(yq -r '.metadata.name' "$secret")" == 'ntfy-secret' ]]
 [[ "$(yq -r '.metadata.namespace' "$secret")" == 'ntfy' ]]
+[[ "$(yq -r '.stringData | has("auth.yml")' "$secret")" == 'true' ]] || {
+  echo 'Refusing: ntfy-secret must carry stringData.auth.yml for alertmanager-ntfy.' >&2
+  exit 1
+}
 
 # Activation-aware Gatus probe: present iff ntfy is active (avoids probe noise while staged).
 if [[ "$suspend_state" == 'false' ]]; then

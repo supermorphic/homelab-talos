@@ -64,6 +64,10 @@ image_tag="$(yq -r '.controllers["alertmanager-ntfy"].containers.app.image.tag' 
 [[ "$(yq -r '.persistence.auth.items[0].key' "$values")" == 'auth.yml' ]]
 [[ "$(yq -r '.persistence.auth.items[0].path' "$values")" == 'auth.yml' ]]
 [[ "$(yq -r '.persistence.auth.items | length' "$values")" == '1' ]]
+[[ -f "$ntfy_secret" && "$(yq -r '.stringData | has("auth.yml")' "$ntfy_secret")" == 'true' ]] || {
+  echo 'Refusing: the canonical ntfy-secret does not contain the mounted auth.yml key.' >&2
+  exit 1
+}
 
 # Rollout annotations track config.yml and the canonical ntfy Secret (which carries
 # auth.yml), so a token rotation restarts the adapter.

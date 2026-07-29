@@ -94,7 +94,7 @@ EOF
   export NTFY_SEERR_BASE_URL='http://stub.test'
   export STUB_DIR="$case_dir"
   export STUB_SEERR_GET="$case_dir/get.json"
-  export STUB_SEERR_TEST_CODE='200'
+  export STUB_SEERR_TEST_CODE='204'
   : >"$case_dir/calls.log"
 }
 
@@ -207,6 +207,15 @@ cmp -s "$STUB_DIR/test-body.json" "$STUB_DIR/saved-body.json" ||
   fail 'the saved settings differ from the tested candidate'
 assert_no_secret_echo
 
+# --- Compatibility: Seerr versions returning 200 from test are also accepted ---
+new_case sync-test-200
+write_get_drifted
+export STUB_SEERR_TEST_CODE='200'
+run_sync 'sync:media:seerr:ntfy'
+assert_ok
+[[ -f "$STUB_DIR/saved-body.json" ]] || fail 'HTTP 200 test success was not saved'
+assert_no_secret_echo
+
 # --- Already synchronized: no test, no save --------------------------------------
 new_case sync-idempotent
 write_get_synchronized
@@ -227,6 +236,15 @@ assert_contains 'NOT modified'
 [[ ! -e "$STUB_DIR/saved-body.json" ]] || fail 'settings were saved after a failed test'
 [[ "$(count_calls '^POST .*/settings/notifications/ntfy$')" == '0' ]] ||
   fail 'save was attempted after a failed test'
+assert_no_secret_echo
+
+new_case sync-test-unexpected
+write_get_drifted
+export STUB_SEERR_TEST_CODE='202'
+run_sync 'sync:media:seerr:ntfy'
+assert_status 1
+assert_contains 'NOT modified'
+[[ ! -e "$STUB_DIR/saved-body.json" ]] || fail 'settings were saved after an unexpected test response'
 assert_no_secret_echo
 
 # --- Staged rotation: the pending token is synchronized ----------------------------

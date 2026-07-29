@@ -20,7 +20,7 @@ controllers:
         # git hash-object of the canonical ntfy secret.sops.yaml (which carries auth.yml),
         # stamped by `just repo ntfy-identity`.
         config-hash: "770fcf8118334be79c8fecedcd945a29d33e1755"
-        sops-hash: "f3f436d9c14cb48c69e607ac90e519c4607b2b14"
+        sops-hash: "1bde80fa91807b861efc5df6397e0039e8900709"
     containers:
       app:
         image:

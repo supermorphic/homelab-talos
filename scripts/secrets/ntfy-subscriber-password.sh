@@ -40,8 +40,54 @@ expected_confirmation='write:monitoring:ntfy-subscriber:sops'
 }
 
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-ntfy-subscriber.XXXXXX")"
-trap 'rm -rf -- "$temp_dir"' EXIT
 umask 077
+
+transaction_active=false
+declare -a transaction_targets=() transaction_backups=() transaction_existed=()
+declare -a install_siblings=()
+
+rollback_transaction() {
+  local index target backup sibling rollback_failed=false
+  set +e
+  for ((index = ${#transaction_targets[@]} - 1; index >= 0; index--)); do
+    target="${transaction_targets[$index]}"
+    backup="${transaction_backups[$index]}"
+    if [[ "${transaction_existed[$index]}" == 'true' ]]; then
+      sibling="$(mktemp "$(dirname "$target")/.ntfy-rollback.XXXXXX")" || {
+        rollback_failed=true
+        continue
+      }
+      install_siblings+=("$sibling")
+      cp -- "$backup" "$sibling" && mv -- "$sibling" "$target" || rollback_failed=true
+    else
+      rm -f -- "$target" || rollback_failed=true
+    fi
+  done
+  [[ "$rollback_failed" == false ]]
+}
+
+cleanup() {
+  local status=$? sibling rollback_status=0
+  trap - EXIT HUP INT TERM
+  if [[ "$transaction_active" == true && "$status" -ne 0 ]]; then
+    rollback_transaction || rollback_status=$?
+    if [[ "$rollback_status" -eq 0 ]]; then
+      echo 'Restored every ntfy subscriber-password target after the failed transaction.' >&2
+    else
+      echo 'WARNING: the ntfy subscriber-password transaction failed and at least one target could not be restored.' >&2
+      status=1
+    fi
+  fi
+  for sibling in "${install_siblings[@]}"; do
+    rm -f -- "$sibling"
+  done
+  rm -rf -- "$temp_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 password_first=''
 password_second=''
@@ -65,6 +111,15 @@ auth_tokens=''
 auth_yml_present=false
 if [[ -f "$secret_file" ]]; then
   sops --decrypt "$secret_file" >"$temp_dir/current-secret.yaml"
+  yq -e '
+    .stringData |
+    (
+      has("NTFY_AUTH_USERS") and
+      has("NTFY_AUTH_ACCESS") and
+      has("NTFY_AUTH_TOKENS")
+    )
+  ' "$temp_dir/current-secret.yaml" >/dev/null ||
+    fail 'Refusing: the existing ntfy Secret does not contain all declarative auth lists.'
   auth_users="$(yq -r '.stringData.NTFY_AUTH_USERS // ""' "$temp_dir/current-secret.yaml")"
   auth_access="$(yq -r '.stringData.NTFY_AUTH_ACCESS // ""' "$temp_dir/current-secret.yaml")"
   auth_tokens="$(yq -r '.stringData.NTFY_AUTH_TOKENS // ""' "$temp_dir/current-secret.yaml")"
@@ -124,8 +179,55 @@ if rg -Fq -- "$password_hash" "$temp_dir/ntfy-secret.sops.yaml"; then
   exit 1
 fi
 
-mv -- "$temp_dir/ntfy-secret.sops.yaml" "$secret_file"
-revision="$(git hash-object "$secret_file")"
-REV="$revision" yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$values_file"
-REV="$revision" yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$adapter_values_file"
+revision="$(git hash-object "$temp_dir/ntfy-secret.sops.yaml")"
+cp -- "$values_file" "$temp_dir/ntfy-values.yaml"
+REV="$revision" \
+  yq -i '.controllers.ntfy.pod.annotations.sops-hash = strenv(REV)' "$temp_dir/ntfy-values.yaml"
+cp -- "$adapter_values_file" "$temp_dir/adapter-values.yaml"
+REV="$revision" \
+  yq -i '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"] = strenv(REV)' "$temp_dir/adapter-values.yaml"
+
+pending_candidates=(
+  "$temp_dir/ntfy-secret.sops.yaml"
+  "$temp_dir/ntfy-values.yaml"
+  "$temp_dir/adapter-values.yaml"
+)
+pending_targets=("$secret_file" "$values_file" "$adapter_values_file")
+
+# Back up all targets before the first write and install through sibling files so
+# each final replacement is a same-filesystem rename.
+for index in "${!pending_targets[@]}"; do
+  target="${pending_targets[$index]}"
+  backup="$temp_dir/backup-$index"
+  transaction_targets+=("$target")
+  transaction_backups+=("$backup")
+  if [[ -f "$target" ]]; then
+    cp -- "$target" "$backup"
+    transaction_existed+=('true')
+  else
+    transaction_existed+=('false')
+  fi
+done
+
+transaction_active=true
+for index in "${!pending_targets[@]}"; do
+  candidate="${pending_candidates[$index]}"
+  target="${pending_targets[$index]}"
+  sibling="$(mktemp "$(dirname "$target")/.ntfy-install.XXXXXX")"
+  install_siblings+=("$sibling")
+  cp -- "$candidate" "$sibling"
+  mv -- "$sibling" "$target"
+done
+
+[[ "$(git hash-object "$secret_file")" == "$revision" ]] ||
+  fail "Refusing: installed $secret_file does not match the prepared candidate."
+[[ "$(sops filestatus "$secret_file" | yq -r '.encrypted')" == 'true' ]] ||
+  fail 'Refusing: the installed Secret is not SOPS-encrypted.'
+[[ "$(yq -r '.controllers.ntfy.pod.annotations.sops-hash' "$values_file")" == "$revision" ]] ||
+  fail 'Refusing: the installed ntfy sops-hash does not match the canonical Secret.'
+installed_adapter_stamp="$(yq -r '.controllers["alertmanager-ntfy"].pod.annotations["sops-hash"]' "$adapter_values_file")"
+[[ "$installed_adapter_stamp" == "$revision" ]] ||
+  fail 'Refusing: the installed alertmanager-ntfy sops-hash does not match the canonical Secret.'
+transaction_active=false
+
 echo "Updated encrypted $secret_file with the new '$subscriber' password hash; stamped sops-hash. Update the iPhone/web/CLI clients after Flux reconciles."

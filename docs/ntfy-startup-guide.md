@@ -10,9 +10,9 @@ Topics:
 
 | Topic | Purpose | Who writes |
 |---|---|---|
-| `critical` | Failures needing prompt attention | Alertmanager (PR3) |
-| `homelab` | Warnings, degraded state, operator events | Alertmanager (PR3) |
-| `media` | Seerr availability / request / issue events | Seerr (PR4) |
+| `critical` | Failures needing prompt attention | Alertmanager |
+| `homelab` | Warnings, degraded state, operator events | Alertmanager |
+| `media` | Seerr availability / request / issue events | Seerr |
 
 `subscriber` reads all three (iPhone/web password); each producer is write-only on its
 topic with its own rotatable token. Homepage uses a separate token that can only read
@@ -32,9 +32,9 @@ and managed through one guarded lifecycle. The canonical store is the SOPS-encry
 
 The `homepage` token is additionally mirrored into `Secret/homepage-ntfy` (namespace
 `homepage`) because Secrets cannot cross namespaces. Seerr receives its token through
-its settings API instead (section G). Every write stamps a pod-template `sops-hash`
-into **all three** credential consumers (ntfy, alertmanager-ntfy, Homepage) so a
-rotation restarts each of them.
+its settings API instead (section G). A canonical-Secret change stamps ntfy and
+alertmanager-ntfy; a Homepage mirror change stamps Homepage. Each workload therefore
+restarts only when the Secret it consumes changes.
 
 Lifecycle commands (the scripts preserve existing bcrypt hashes and tokens by default,
 generate credentials only for missing or explicitly rotated identities, and never
@@ -94,19 +94,17 @@ registry (tombstone it first to authorize removal). Running `reconcile all` when
 subscriber hash is absent fails with the instruction above rather than inventing a
 password.
 
-## C. Roll out
+## C. Verify the active deployment
 
-The app is committed `suspend: true`. After the PR merges:
+ntfy and alertmanager-ntfy are active (`suspend: false`) and reconcile continuously
+from `main`. After a credential change is committed, merged, and reconciled:
 
 ```sh
-NTFY_BOOTSTRAP_CONFIRM='bootstrap:monitoring:ntfy' \
-mise exec -- just bootstrap ntfy
-
 mise exec -- just kube ntfy-verify
 ```
 
-Then flip the ntfy Git source to `suspend: false` (and add the Gatus `/v1/health`
-endpoint), commit, push, and re-run `mise exec -- just kube ntfy-verify`.
+The guarded `just bootstrap ntfy` recipe is retained only for rebuilding a deliberately
+suspended installation; it is not part of normal credential rotation.
 
 `ntfy-verify` proves: Flux/HelmRelease Ready, rollout, PVC Bound, gateway `/v1/health`
 healthy, anonymous access denied, the live `subscriber` account has exactly read-only
@@ -151,7 +149,8 @@ full ntfy web UI.
 
 The identity is created (on an installation that predates it) or rotated with the same
 lifecycle — the canonical Secret and the mirrored `Secret/homepage-ntfy` are updated
-together and all three consumers' `sops-hash` annotations are stamped:
+together. ntfy, alertmanager-ntfy, and Homepage are consequently stamped for this
+specific identity change:
 
 ```sh
 NTFY_IDENTITY_CONFIRM='ensure:monitoring:ntfy:homepage:sops' \
@@ -171,7 +170,7 @@ token can read only `critical` and cannot publish.
 
 ## G. Producers
 
-### Alertmanager (PR3)
+### Alertmanager
 
 Cluster alerts flow `PrometheusRules → Alertmanager → alertmanager-ntfy → ntfy`. The
 **alertmanager-ntfy** adapter (`ghcr.io/alexbakker/alertmanager-ntfy:1.2.1`, a community
@@ -184,23 +183,12 @@ receiver/route lives in the kube-prometheus-stack values.
 The adapter reads the token from the `auth.yml` key of the canonical `ntfy-secret`
 (mounted read-only at `/auth`) — one Secret serves both pods, so there is nothing
 adapter-specific to materialize: `reconcile all` keeps it in sync. Rotate with
-`just repo ntfy-identity rotate alertmanager`; ntfy, the adapter, and Homepage roll
-together on the stamped hashes, and Alertmanager retries notifications across the brief
-restart window.
+`just repo ntfy-identity rotate alertmanager`; ntfy and the adapter roll on the
+canonical Secret hash, while Homepage is unchanged. Alertmanager retries notifications
+across the brief restart window. After Flux reconciles, `mise exec -- just kube
+alertmanager-ntfy-verify` runs the synthetic firing+resolved alert acceptance test.
 
-After the PR merges:
-
-```sh
-ALERTMANAGER_NTFY_BOOTSTRAP_CONFIRM='bootstrap:monitoring:alertmanager-ntfy' \
-mise exec -- just bootstrap alertmanager-ntfy
-
-mise exec -- just kube alertmanager-ntfy-verify
-```
-
-Then flip the alertmanager-ntfy Git source to `suspend: false`. `alertmanager-ntfy-verify`
-prints the synthetic firing+resolved alert acceptance test.
-
-### Seerr (PR4)
+### Seerr
 
 Seerr's ntfy agent lives in Seerr's own database, so it is synchronized through Seerr's
 settings API rather than a Kubernetes Secret. The `seerr` write-only token and its
@@ -219,7 +207,9 @@ agent **enabled**, token authentication (not username/password), server URL
 priority `3` (default), and the notification mask `280` (**Media Available**, **Request
 Processing Failed**, **Issue Reported** — nothing else). Seerr's test endpoint must
 deliver a test notification with the candidate settings **before** anything is saved;
-a failed test changes nothing. API responses and credentials are never printed.
+a failed test changes nothing. The command also refuses unless its source matches the
+current `origin/main` and Flux has applied that commit to ntfy, Homepage, and Seerr.
+API responses and credentials are never printed.
 
 After saving, review per-user Seerr notification preferences so the same availability
 event isn't sent twice (ntfy *and* Seerr's own web push).
@@ -240,8 +230,9 @@ NTFY_IDENTITY_CONFIRM='rotate:monitoring:ntfy:<identity>:sops' \
   mise exec -- just repo ntfy-identity rotate <identity>
 ```
 
-Commit, push, let Flux reconcile — the stamped `sops-hash` annotations roll ntfy, the
-adapter, and Homepage together, and the old token is revoked when ntfy restarts.
+Commit, push the feature branch, merge its PR, and let Flux reconcile — the stamped
+`sops-hash` annotations roll the credential consumers affected by that identity, and
+the old token is revoked when ntfy restarts.
 
 **Rotate `seerr`** (API-managed consumer) is staged so publishing never breaks: the
 pending token is provisioned alongside the current one (ntfy accepts multiple tokens
@@ -250,15 +241,19 @@ per user), Seerr is switched over, and only then is the previous token revoked:
 ```sh
 NTFY_IDENTITY_CONFIRM='rotate:monitoring:ntfy:seerr:sops' \
   mise exec -- just repo ntfy-identity rotate seerr
-# commit + push + Flux reconcile (both tokens are now valid)
+# commit + push + merge + Flux reconcile (both tokens are now valid)
 
 NTFY_CONSUMER_SYNC_CONFIRM='sync:media:seerr:ntfy' \
   mise exec -- just kube ntfy-consumer-sync seerr   # syncs the pending token, test-first
 
 NTFY_IDENTITY_CONFIRM='finalize:monitoring:ntfy:seerr:sops' \
   mise exec -- just repo ntfy-identity finalize seerr
-# commit + push + Flux reconcile (previous token revoked)
+# commit + push + merge + Flux reconcile (previous token revoked)
 ```
+
+Only one pending Seerr rotation may exist. If rotation reports that a pending token is
+already staged, do not generate another: let Flux reconcile it, rerun the guarded
+consumer sync, and finalize that existing rotation.
 
 **Change the subscriber password** with `just repo ntfy-subscriber-password` (guarded;
 prompts twice, never echoes), then update the iPhone/web/CLI clients after Flux

@@ -116,7 +116,7 @@ fi
 # Prove the candidate with Seerr's test endpoint (delivers one test notification to
 # the media topic) and save only after the test succeeds.
 code="$(request POST settings/notifications/ntfy/test "$temp_dir/candidate.json")"
-[[ "$code" == '200' ]] ||
+[[ "$code" == '200' || "$code" == '204' ]] ||
   fail "Refusing: Seerr's test notification with the candidate settings failed (HTTP $code). Seerr settings were NOT modified; check that ntfy is reachable from the media namespace and the token is provisioned."
 
 code="$(request POST settings/notifications/ntfy "$temp_dir/candidate.json")"

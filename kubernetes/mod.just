@@ -878,5 +878,55 @@ alertmanager-ntfy-verify: require-bash
 ntfy-consumer-sync consumer: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    expected_origin='https://github.com/{{github_owner}}/{{github_repository}}.git'
+    [[ -f "$kubeconfig" ]] || {
+      echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+      exit 1
+    }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
+      echo "Refusing ntfy consumer sync: origin must be $expected_origin." >&2
+      exit 1
+    }
+
+    source scripts/lib/rollout.sh
+    require_deployed_source 'ntfy consumer sync' \
+      kubernetes/mod.just \
+      scripts/secrets/ntfy-consumer-sync.sh \
+      kubernetes/apps/monitoring/ntfy \
+      kubernetes/apps/monitoring/homepage/app/homepage-seerr.sops.yaml \
+      kubernetes/apps/media/seerr
+
+    remote_ref="$(git ls-remote --exit-code origin refs/heads/main)"
+    read -r remote_sha _ <<<"$remote_ref"
+    [[ "$remote_sha" =~ ^[0-9a-f]{40}$ ]] || {
+      echo "Refusing ntfy consumer sync: invalid origin/main revision '$remote_sha'." >&2
+      exit 1
+    }
+    flux_revision="$(
+      kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+        get gitrepository flux-system \
+        --output jsonpath='{.status.artifact.revision}'
+    )"
+    flux_sha="${flux_revision##*:}"
+    [[ "$flux_sha" == "$remote_sha" ]] || {
+      echo "Refusing ntfy consumer sync: origin/main=$remote_sha Flux=$flux_sha." >&2
+      exit 1
+    }
+    for app in ntfy homepage seerr; do
+      state="$(
+        kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+          get kustomization "$app" --output json
+      )"
+      ready="$(yq -r '[(.status.conditions // [])[] | select(.type == "Ready") | .status][0] // ""' - <<<"$state")"
+      applied="$(yq -r '.status.lastAppliedRevision // ""' - <<<"$state")"
+      suspended="$(yq -r '.spec.suspend // false' - <<<"$state")"
+      [[ "$ready" == 'True' && "$suspended" == 'false' && "$applied" == *"$remote_sha" ]] || {
+        echo "Refusing ntfy consumer sync: Flux Kustomization $app is not Ready and applied at origin/main $remote_sha." >&2
+        exit 1
+      }
+    done
+
     just repo secrets
     exec scripts/secrets/ntfy-consumer-sync.sh '{{consumer}}'

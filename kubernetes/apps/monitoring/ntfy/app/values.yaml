@@ -24,7 +24,7 @@ controllers:
         # app/secret.sops.yaml`, stamped by `just repo ntfy-identity`. Both CI-verified.
         # (Named sops-hash, not *-secret-*, so gitleaks does not flag the blob hash.)
         config-hash: "2f6c4d846569ba1a4d5122db2fb738662ebb0bf8"
-        sops-hash: "f3f436d9c14cb48c69e607ac90e519c4607b2b14"
+        sops-hash: "1bde80fa91807b861efc5df6397e0039e8900709"
     containers:
       app:
         image:
