@@ -12,8 +12,10 @@ oauth="$base/app/oauth.sops.yaml"
 temp_dir="$(mktemp -d /tmp/homelab-talos-tailscale-operator-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for f in "$ks" "$values" "$hr" "$repo" "$ns" "$proxygroup" "$oauth" \
-  "$base/app/kustomization.yaml" "$base/proxygroup/kustomization.yaml"; do
+prometheusrule="$base/monitoring/prometheusrule.yaml"
+for f in "$ks" "$values" "$hr" "$repo" "$ns" "$proxygroup" "$oauth" "$prometheusrule" \
+  "$base/app/kustomization.yaml" "$base/proxygroup/kustomization.yaml" \
+  "$base/monitoring/kustomization.yaml"; do
   [[ -f "$f" ]] || { echo "Missing Tailscale operator source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./tailscale-operator/ks.yaml' kubernetes/apps/networking/kustomization.yaml || {
@@ -40,6 +42,21 @@ if rg -q 'proxygroup' "$base/app/kustomization.yaml"; then
   echo 'Refusing: the operator overlay (app/kustomization.yaml) must not reference the ProxyGroup CR.' >&2
   exit 1
 fi
+
+# Monitoring Kustomization: PrometheusRule needs the monitoring.coreos.com CRDs, so it must
+# depend on kube-prometheus-stack (NOT the core operator Kustomization) and point at the
+# monitoring overlay.
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator-monitoring") | [.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'kube-prometheus-stack' ]]
+[[ "$(yq ea 'select(.metadata.name == "tailscale-operator-monitoring") | .spec.path' "$ks")" == './kubernetes/apps/networking/tailscale-operator/monitoring' ]]
+[[ "$(yq -r '.kind' "$prometheusrule")" == 'PrometheusRule' ]]
+[[ "$(yq -r '.metadata.namespace' "$prometheusrule")" == 'tailscale' ]]
+# Alerts must cover the operator and both proxy StatefulSets (subnet router + ntfy ingress).
+for a in TailscaleOperatorDown TailscaleSubnetRouterDown TailscaleNtfyIngressDown; do
+  yq -r '.spec.groups[].rules[].alert' "$prometheusrule" | rg -qx "$a" || {
+    echo "Refusing: PrometheusRule is missing the $a alert." >&2
+    exit 1
+  }
+done
 
 # Pinned chart from the Tailscale Helm repository.
 chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
@@ -72,8 +89,9 @@ chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 
 kustomize build "$base/app" >/dev/null
 kustomize build "$base/proxygroup" >/dev/null
+kustomize build "$base/monitoring" >/dev/null
 printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
 HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
   helm template tailscale-operator tailscale-operator --repo https://pkgs.tailscale.com/helmcharts --version "$chart_version" --namespace tailscale --values "$values" >/dev/null
 
-echo 'Tailscale operator source, split operator/proxygroup Kustomizations, dependency wiring, SOPS decryption, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, and renders passed validation.'
+echo 'Tailscale operator source, split operator/proxygroup/monitoring Kustomizations, dependency wiring, SOPS decryption, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, PrometheusRule alerts (operator + both proxy StatefulSets), and renders passed validation.'

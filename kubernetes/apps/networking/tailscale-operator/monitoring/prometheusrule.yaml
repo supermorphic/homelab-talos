@@ -1,0 +1,106 @@
+---
+# Health/availability alerts for the Tailscale data paths, driven by kube-state-metrics
+# (already scraped cluster-wide by kube-prometheus-stack). Prometheus discovers this rule
+# cluster-wide (ruleSelectorNilUsesHelmValues: false).
+#
+# Scope note: this covers the KUBERNETES-level health of the operator and its proxies
+# (Deployment/StatefulSet readiness). Tailnet-level state — Connector ConnectorReady, the
+# number of registered devices, and whether the /32 routes are still APPROVED/exposed —
+# lives in the Connector CRD `.status`, which is not a Prometheus metric; surfacing that
+# would need a kube-state-metrics CustomResourceState exporter (deferred). The operator-run
+# `just kube tailscale-subnet-router-verify` remains the source of truth for route exposure.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tailscale-operator
+  namespace: tailscale
+  labels:
+    app.kubernetes.io/name: tailscale-operator
+spec:
+  groups:
+    - name: tailscale-operator
+      rules:
+        - alert: TailscaleOperatorDown
+          expr: kube_deployment_status_replicas_available{namespace="tailscale", deployment="operator"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Tailscale operator is down
+            description: >-
+              The tailscale operator Deployment has 0 available replicas for over 10
+              minutes. Tailnet proxies, the ntfy Ingress, and the lab subnet router are no
+              longer reconciled, and new/replaced devices will not be provisioned. Check
+              the operator Deployment and its HelmRelease (docs/tailscale-operator.md).
+        - alert: TailscaleOperatorMetricsMissing
+          expr: absent(kube_deployment_status_replicas_available{namespace="tailscale", deployment="operator"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tailscale operator metrics are missing
+            description: >-
+              kube-state-metrics has reported no data for the tailscale operator Deployment
+              for 15 minutes, so TailscaleOperatorDown cannot fire. The Deployment may be
+              deleted, or kube-state-metrics/the tailscale namespace may be unhealthy.
+    - name: tailscale-subnet-router
+      rules:
+        - alert: TailscaleSubnetRouterDown
+          expr: kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset=~"ts-lab-subnet-router-.*"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Tailscale lab subnet router is down
+            description: >-
+              No lab-subnet-router replicas are Ready for over 10 minutes. Remote access to
+              *.lab.supermorphic.com over Tailscale is DOWN (no tailnet path to Pi-hole or
+              the Envoy gateway VIP). Check the Connector pods in the tailscale namespace
+              and docs/tailscale-lab-domain.md.
+        - alert: TailscaleSubnetRouterHADegraded
+          expr: kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset=~"ts-lab-subnet-router-.*"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tailscale lab subnet router HA degraded (1 of 2 replicas)
+            description: >-
+              Only one lab-subnet-router replica is Ready for over 15 minutes. Remote
+              *.lab.supermorphic.com access still works, but there is no failover — a single
+              node failure would cut it. The ProxyClass enforces one replica per node
+              (DoNotSchedule), so a Pending replica usually means a node is unavailable.
+        - alert: TailscaleSubnetRouterMetricsMissing
+          expr: absent(kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset=~"ts-lab-subnet-router-.*"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tailscale lab subnet router metrics are missing
+            description: >-
+              kube-state-metrics reports no lab-subnet-router StatefulSet for 15 minutes, so
+              the down/degraded alerts cannot fire. The Connector may have been removed or
+              never reconciled — confirm the tailscale-operator-subnet-router Kustomization
+              is Ready and not suspended.
+    - name: tailscale-ntfy-ingress
+      rules:
+        - alert: TailscaleNtfyIngressDown
+          expr: kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ingress-proxies"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Tailscale ntfy ingress proxies are down
+            description: >-
+              No ingress-proxies replicas are Ready for over 10 minutes. Off-site ntfy
+              notifications over the tailnet (iPhone via Tailscale) will not be delivered.
+              Check the ingress-proxies StatefulSet in the tailscale namespace.
+        - alert: TailscaleNtfyIngressHADegraded
+          expr: kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ingress-proxies"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tailscale ntfy ingress HA degraded (1 of 2 replicas)
+            description: >-
+              Only one ingress-proxies replica is Ready for over 15 minutes. Off-site ntfy
+              delivery still works but has no failover until the second replica recovers.
