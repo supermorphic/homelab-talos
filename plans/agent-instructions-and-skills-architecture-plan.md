@@ -8,9 +8,12 @@
   revision 6 (1 BLOCKER, 5 MAJOR, 1 MINOR). All dispositions are recorded in "Plan
   review disposition", including the findings the amendments decline or partly
   decline on verified evidence. **Revision 7 closes every technical finding from
-  the fifth pass.**
-- Status: **Draft — pending a fresh-context independent plan review and explicit
-  operator approval of the reviewed revision. No implementation performed.**
+  the fifth pass.** Its fresh-context approval review returned **APPROVE WITH MINOR
+  REVISIONS** (0 BLOCKER, 0 MAJOR, 4 MINOR).
+- Status: **Approved for implementation.** The operator explicitly approved
+  revision 7 on 2026-07-29. The four non-blocking MINOR findings remain recorded
+  below and must be honored in their named implementation phases. No implementation
+  performed.
 - Baseline: `origin/main` at `c1201e6`
 - Approval-record branch baseline: `origin/main` at `e2f007e`
 - Working branch for this revision:
@@ -1317,6 +1320,38 @@ Verdict: **REVISE AND RESUBMIT** (1 BLOCKER, 5 MAJOR, 1 MINOR).
 | MAJOR — adapter and symlink-containment checks incomplete | **Accepted in full.** `CLAUDE.md` has an exact one-line byte contract; canonical skill trees reject every symlink; relative links must resolve inside the repository; `.claude/skills` adapters must resolve to their exact canonical directories inside the active worktree | "Canonical location and the Claude adapter"; bucket 1 |
 | MINOR — historical frontmatter disposition contradicts current decision | **Accepted.** The stale third-pass text now says frontmatter widening is Significant, matching the normative authoring contract | Third-pass disposition |
 
+## Final approval review — revision 7
+
+Review basis: clean artifact
+`plans/agent-instructions-and-skills-architecture-plan.md` at
+`1fdf24c2d2c12a9b5850fc666ff3c476c9d68166` against `origin/main`
+`e2f007ea7e4afa15303eb92e99dcd4c08507d567`. Author: Codex CLI 0.146.0,
+Sol model family, effort unknown because the client did not surface it. Reviewer:
+Claude Code 2.1.220, Opus model family, high effort. Recorded at
+`2026-07-29T19:36:45Z`.
+
+The reviewer attested that the session received neither the prior review transcripts
+nor the author's accumulated conversation; it inspected the repository and formed
+an independent view before opening the plan. Sol author versus Opus reviewer
+satisfied the model-family independence requirement. Inputs were `AGENTS.md`,
+`CLAUDE.md`, relevant `README.md` sections, `.justfile`, the complete repository
+recipe list, validation and CI scripts, the catalog, workflow and pre-commit
+configuration, `.gitignore`, relevant Git history, `just --summary`, a tracked
+symlink scan, the clean artifact-matched CI summary, and all 1,388 lines of revision
+7 including the historical dispositions.
+
+Verdict: **APPROVE WITH MINOR REVISIONS** (0 BLOCKER, 0 MAJOR, 4 MINOR). The
+operator explicitly approved revision 7 for implementation. Per the evidence
+contract above, the findings remain recorded rather than being silently remediated
+into an unreviewed revision:
+
+| Finding | Open implementation obligation |
+|---|---|
+| MINOR-1 — the always-on enumeration lacks an explicit class for `CLAUDE.md`'s repository-scope rule while saying "exactly these classes and nothing else" | Phase 1C must preserve repository scope within the worktree-invariants class instead of dropping the rule |
+| MINOR-2 — the `MEMORY.md` dangling-reference premise is factually wrong and outside the specified validator's reach | Phase 1C must not rely on that premise or claim validator coverage for it when applying the exact `CLAUDE.md` adapter contract |
+| MINOR-3 — `.claude/settings.json` is listed as modified although it does not exist | Phase 2 must account for it as a new adapter file |
+| MINOR-4 — the Phase 1 client-observation acceptance criterion names no owner | The operator owns and records that observation |
+
 ## Plan review disposition — fourth pass (revision 4 → 5)
 
 | Finding | Disposition | Where |
@@ -1373,11 +1408,12 @@ No implementation proceeds until:
    recorded above; both passed, so no fallback is required;
 2. **Complete:** decisions 1–4 and 6–8 remain accepted, and amended cross-client
    hook decision 5 is separately accepted;
-3. **Pending:** a **fresh-context** independent plan review — a new session in the
+3. **Complete:** a **fresh-context** independent plan review — a new session in the
    independent model family, without the prior review transcript — returns APPROVE
-   or APPROVE WITH MINOR REVISIONS. The existing reviewer may separately verify
-   that each finding was closed, but may not perform the approving review;
-4. **Pending:** the operator explicitly approves the resulting reviewed revision.
+   WITH MINOR REVISIONS. The existing reviewer may separately verify remediation,
+   but may not perform the approving review;
+4. **Complete:** the operator explicitly approved reviewed revision 7 for
+   implementation on 2026-07-29.
 
 The approving reviewer should form its own view from the repository and the
 requirements first, then compare it against the architecture proposed here.
