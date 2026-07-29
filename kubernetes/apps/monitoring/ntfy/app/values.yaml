@@ -2,7 +2,9 @@
 # (SQLite cache/auth DBs are single-writer). The official image has no USER directive and
 # the static binary only writes /var/lib/ntfy, so it runs as a fixed non-root UID with the
 # PVC made writable via fsGroup (no init-copy needed). server.yml is a read-only ConfigMap
-# mount; declarative auth (users/ACLs/tokens) comes from the SOPS ntfy-secret via envFrom.
+# mount; declarative auth (users/ACLs/tokens) comes from the SOPS ntfy-secret through
+# explicitly mapped env keys — never envFrom, so the Secret's auth.yml key (consumed by
+# the alertmanager-ntfy adapter) cannot leak into this container's environment.
 controllers:
   ntfy:
     type: deployment
@@ -19,7 +21,7 @@ controllers:
       annotations:
         # Roll the pod when server.yml or the auth Secret change. config-hash is
         # `git hash-object app/server.yml`; sops-hash is `git hash-object
-        # app/secret.sops.yaml`, stamped by `just repo ntfy-secrets`. Both CI-verified.
+        # app/secret.sops.yaml`, stamped by `just repo ntfy-identity`. Both CI-verified.
         # (Named sops-hash, not *-secret-*, so gitleaks does not flag the blob hash.)
         config-hash: "2f6c4d846569ba1a4d5122db2fb738662ebb0bf8"
         sops-hash: "f3f436d9c14cb48c69e607ac90e519c4607b2b14"
@@ -31,9 +33,21 @@ controllers:
         args: ["serve"]
         env:
           TZ: America/Denver
-        envFrom:
-          - secretRef:
-              name: ntfy-secret
+          NTFY_AUTH_USERS:
+            valueFrom:
+              secretKeyRef:
+                name: ntfy-secret
+                key: NTFY_AUTH_USERS
+          NTFY_AUTH_ACCESS:
+            valueFrom:
+              secretKeyRef:
+                name: ntfy-secret
+                key: NTFY_AUTH_ACCESS
+          NTFY_AUTH_TOKENS:
+            valueFrom:
+              secretKeyRef:
+                name: ntfy-secret
+                key: NTFY_AUTH_TOKENS
         resources:
           requests:
             cpu: 25m
