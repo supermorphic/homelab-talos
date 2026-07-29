@@ -9,9 +9,8 @@
   review disposition", including the findings the amendments decline or partly
   decline on verified evidence. **Revision 7 closes every technical finding from
   the fifth pass.**
-- Status: **Draft — pending renewed operator confirmation of amended decision 5, a
-  fresh-context independent plan review, and explicit operator approval of the
-  reviewed revision. No implementation performed.**
+- Status: **Draft — pending a fresh-context independent plan review and explicit
+  operator approval of the reviewed revision. No implementation performed.**
 - Baseline: `origin/main` at `c1201e6`
 - Approval-record branch baseline: `origin/main` at `e2f007e`
 - Working branch for this revision:
@@ -22,8 +21,9 @@
 - Operator evidence recorded 2026-07-29: Codex CLI 0.146.0 and Claude Code 2.1.220
   each discovered the canonical probe skill through their planned repository
   surface and returned `PROBE-7F3A`. Decisions 1–7 and decision 8 were accepted as
-  recommended. Revision 7 reopens decision 5 only because current Codex hook support
-  materially changes its premise; decisions 1–4 and 6–8 remain unchanged.
+  recommended. Revision 7 amended decision 5 because current Codex hook support
+  materially changes its premise; the operator accepted that amendment on
+  2026-07-29.
 
 ## Executive summary
 
@@ -1286,8 +1286,8 @@ buys nothing. Decision 8 is separate because it constrains who may approve the
 result.
 
 **Operator record (2026-07-29): decisions 1–7 accepted as a bundle; decision 8
-accepted.** Revision 7 preserves decisions 1–4 and 6–8. **Decision 5 is amended and
-pending renewed operator confirmation** because the fifth review proved its
+accepted.** Revision 7 preserves decisions 1–4 and 6–8. **The operator separately
+accepted amended decision 5 on 2026-07-29** after the fifth review proved its
 Claude-only premise false.
 
 | # | Decision | Recommendation | Rationale |
@@ -1296,7 +1296,7 @@ Claude-only premise false.
 | 2 | Bundled `/code-review` | Do **not** replace it | Replacing a client's built-in review skill repository-wide is a large, surprising side effect for a change whose purpose is clarity. Prefixing costs nothing |
 | 3 | `when_to_use` | Keep all activation information in `description` | Portable, spec-conformant, and avoids depending on a Claude extension in a file shared byte-for-byte with Codex. Revisit only if the gate shows the extension materially improves activation |
 | 4 | `skills-ref` | Implement the spec checks natively in Bash; do not pin a new tool | With Phase 1 frontmatter closed to `name` and `description`, the native contract is a key-set equality check, the `name` character rules, a directory-name comparison, and one length check — small and fully specified. (Revision 3's rationale understated this by omitting the key-set check; it is still well under the cost of a new pinned dependency and its `.mise.toml` / `mise.lock` / `just repo versions` churn.) Revisit if the allowlist widens |
-| 5 | Cross-client hooks — **amended; confirmation pending** | Implement in Phase 2 as one canonical blocking policy script with thin Codex and Claude adapters; keep the same rules in `AGENTS.md` because project hooks are trust-dependent and disableable | Codex CLI 0.146.0 supports blocking `PreToolUse` hooks across shell, patch, MCP, and most local tools, so a Claude-only design would duplicate policy and leave available coverage unused. Phase 2 keeps Phase 1 portable while making the cross-client backstop a required deliverable rather than an option |
+| 5 | Cross-client hooks — **amended and accepted 2026-07-29** | Implement in Phase 2 as one canonical blocking policy script with thin Codex and Claude adapters; keep the same rules in `AGENTS.md` because project hooks are trust-dependent and disableable | Codex CLI 0.146.0 supports blocking `PreToolUse` hooks across shell, patch, MCP, and most local tools, so a Claude-only design would duplicate policy and leave available coverage unused. Phase 2 keeps Phase 1 portable while making the cross-client backstop a required deliverable rather than an option |
 | 6 | Client version floors | Record observed versions; adopt Claude Code **v2.1.203** as the documented skill-symlink floor | Current Claude documentation states the floor directly, and the observed 2.1.220 passes |
 | 7 | Plan retention | Codify existing practice: a plan is removed only when its durable content has been migrated to `docs/`, and the removing commit names the migration target | Matches the evidenced behavior of the nine retired plans without inventing a new convention, and prevents losing architectural traceability |
 | 8 | Final approval review | **Two distinct roles.** *Remediation verification* may be performed by the existing reviewer, which has the context to confirm each finding was actually closed. *Final approval* must come from a **fresh session** in the independent model family, without the prior review transcript or accumulated conversation | Revision 3 recommended reviewer continuity "for accumulated context", which directly contradicted this plan's own fresh-context independence requirement — an anchored reviewer effectively approves its own reading of the revisions. The review *lane* may be reused; the contextualized conversation may not |
@@ -1371,8 +1371,8 @@ No implementation proceeds until:
 
 1. **Complete:** the two client-discovery observations and client versions are
    recorded above; both passed, so no fallback is required;
-2. **Pending in part:** decisions 1–4 and 6–8 remain accepted; amended cross-client
-   hook decision 5 requires renewed operator confirmation;
+2. **Complete:** decisions 1–4 and 6–8 remain accepted, and amended cross-client
+   hook decision 5 is separately accepted;
 3. **Pending:** a **fresh-context** independent plan review — a new session in the
    independent model family, without the prior review transcript — returns APPROVE
    or APPROVE WITH MINOR REVISIONS. The existing reviewer may separately verify
