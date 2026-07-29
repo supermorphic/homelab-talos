@@ -1,0 +1,28 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-kube-state-metrics
+  namespace: flux-system
+spec:
+  dependsOn:
+    # kube-prometheus-stack provides the Prometheus Operator + ServiceMonitor CRD and is
+    # the scrape engine that consumes the gotk_resource_info series this app exports.
+    - name: kube-prometheus-stack
+  interval: 1h
+  path: ./kubernetes/apps/monitoring/flux-kube-state-metrics/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Add-only, secret-free observability. Deploys on merge alongside the Flux PodMonitor and
+  # PrometheusRule in kube-prometheus-stack/config (which cannot be per-resource suspended):
+  # staging this suspended while FluxResourceMetricsMissing is live would guarantee a false
+  # warning to the phone. The rule's 15m `for` absorbs the normal startup race, so the app
+  # and its alerts deploy together. No `*-secrets`/bootstrap step is required.
+  suspend: false
+  timeout: 10m
+  wait: true

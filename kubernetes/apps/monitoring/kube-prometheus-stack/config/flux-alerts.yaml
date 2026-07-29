@@ -1,0 +1,52 @@
+---
+# Flux reconciliation alerting. Readiness comes from gotk_resource_info, exported by the
+# dedicated flux-kube-state-metrics instance — Flux v2.9.2 no longer exposes the per-object
+# gotk_reconcile_condition controller metric, so it must not be used. Controller/target
+# scrape failure is covered by the active KPS general.rules "TargetDown" alert, so no
+# controller-down rule is defined here. Prometheus discovers this rule cluster-wide
+# (ruleSelectorNilUsesHelmValues: false); severity "warning" routes to the ntfy "homelab"
+# topic via the existing Alertmanager -> alertmanager-ntfy path (no routing change).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: flux
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: flux
+spec:
+  groups:
+    - name: flux
+      rules:
+        - alert: FluxReconciliationFailure
+          expr: >-
+            gotk_resource_info{
+              customresource_kind=~"Kustomization|HelmRelease|GitRepository|OCIRepository|HelmRepository",
+              ready="False",
+              suspended!="true"
+            } == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Flux {{ $labels.customresource_kind }}
+              {{ $labels.exported_namespace }}/{{ $labels.name }} is failing to reconcile
+            description: >-
+              The Flux {{ $labels.customresource_kind }}
+              {{ $labels.exported_namespace }}/{{ $labels.name }} has reported Ready=False for
+              more than 15 minutes, so Git is no longer being applied to the cluster. Inspect
+              it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+              repository) and rendered manifests. Intentionally suspended resources are
+              excluded.
+        - alert: FluxResourceMetricsMissing
+          expr: absent(gotk_resource_info)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Flux resource-state metrics are missing
+            description: >-
+              gotk_resource_info has been absent for more than 15 minutes, so
+              FluxReconciliationFailure cannot fire and Flux reconciliation failures are
+              undetectable. Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
+              and its RBAC (list/watch on the Flux APIs).

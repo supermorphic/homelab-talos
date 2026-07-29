@@ -1,0 +1,26 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/monitoring.coreos.com/podmonitor_v1.json
+# Scrapes the Flux controllers' /metrics (http-prom :8080) in flux-system for
+# controller-runtime and scrape-health signals ONLY. Flux custom-resource readiness comes
+# from the dedicated flux-kube-state-metrics instance (gotk_resource_info), NOT from this
+# PodMonitor. Controller/target-down is covered by the active KPS general.rules "TargetDown"
+# alert, so no controller-down rule is added. Prometheus discovers this cluster-wide
+# (podMonitorSelectorNilUsesHelmValues: false in kube-prometheus-stack).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: flux
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: flux
+spec:
+  namespaceSelector:
+    matchNames:
+      - flux-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: flux
+  podMetricsEndpoints:
+    - port: http-prom
+      path: /metrics
+      interval: 60s

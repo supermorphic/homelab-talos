@@ -1,0 +1,141 @@
+# Dedicated kube-state-metrics for Flux custom-resource state ONLY (gotk_resource_info).
+#
+# This is deliberately NOT the kube-state-metrics bundled inside kube-prometheus-stack:
+# any change to the KPS HelmRelease values currently triggers a helm-controller upgrade
+# wedge ("failed to wait for object to sync in-cache after patching"), so bundled-KSM
+# values are left untouched. See ./README.md for the future consolidation path.
+#
+# CRS-only: every built-in collector is disabled (collectors: []) and
+# --custom-resource-state-only is set, so this instance emits only gotk_* series and does
+# not duplicate the bundled KSM's kube_* metrics or its API-server load.
+fullnameOverride: flux-kube-state-metrics
+
+# Adds the `release` label so the chart-rendered ServiceMonitor is scraped out of the box.
+releaseLabel: true
+
+# Disable all standard kube_* collectors — this exporter is for Flux CR state only.
+collectors: []
+
+extraArgs:
+  - --custom-resource-state-only=true
+
+# RBAC is provided out-of-band by ./rbac.yaml (minimal list/watch on the Flux APIs), so the
+# chart creates only the ServiceAccount, never a broad ClusterRole.
+rbac:
+  create: false
+serviceAccount:
+  create: true
+  name: flux-kube-state-metrics
+
+selfMonitor:
+  enabled: false
+
+# Chart-rendered ServiceMonitor (label parity with its Service). Prometheus discovers it
+# cluster-wide via serviceMonitorSelectorNilUsesHelmValues: false in kube-prometheus-stack.
+prometheus:
+  monitor:
+    enabled: true
+    honorLabels: false
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+# Produce gotk_resource_info{customresource_kind,exported_namespace,name,ready,suspended}=1
+# for the Decision-9 Flux kinds. Info-type metric: value is always 1; readiness lives in the
+# `ready` label (True/False/Unknown from the Ready condition) and `suspended` in the
+# `suspended` label (spec.suspend). The FluxReconciliationFailure rule selects ready="False".
+customResourceState:
+  enabled: true
+  config:
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: kustomize.toolkit.fluxcd.io
+            version: v1
+            kind: Kustomization
+          metricNamePrefix: gotk
+          metrics:
+            - name: resource_info
+              help: The current state of a Flux resource.
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    name: [metadata, name]
+              labelsFromPath:
+                exported_namespace: [metadata, namespace]
+                ready: [status, conditions, "[type=Ready]", status]
+                suspended: [spec, suspend]
+        - groupVersionKind:
+            group: helm.toolkit.fluxcd.io
+            version: v2
+            kind: HelmRelease
+          metricNamePrefix: gotk
+          metrics:
+            - name: resource_info
+              help: The current state of a Flux resource.
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    name: [metadata, name]
+              labelsFromPath:
+                exported_namespace: [metadata, namespace]
+                ready: [status, conditions, "[type=Ready]", status]
+                suspended: [spec, suspend]
+        - groupVersionKind:
+            group: source.toolkit.fluxcd.io
+            version: v1
+            kind: GitRepository
+          metricNamePrefix: gotk
+          metrics:
+            - name: resource_info
+              help: The current state of a Flux resource.
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    name: [metadata, name]
+              labelsFromPath:
+                exported_namespace: [metadata, namespace]
+                ready: [status, conditions, "[type=Ready]", status]
+                suspended: [spec, suspend]
+        - groupVersionKind:
+            group: source.toolkit.fluxcd.io
+            version: v1
+            kind: OCIRepository
+          metricNamePrefix: gotk
+          metrics:
+            - name: resource_info
+              help: The current state of a Flux resource.
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    name: [metadata, name]
+              labelsFromPath:
+                exported_namespace: [metadata, namespace]
+                ready: [status, conditions, "[type=Ready]", status]
+                suspended: [spec, suspend]
+        - groupVersionKind:
+            group: source.toolkit.fluxcd.io
+            version: v1
+            kind: HelmRepository
+          metricNamePrefix: gotk
+          metrics:
+            - name: resource_info
+              help: The current state of a Flux resource.
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    name: [metadata, name]
+              labelsFromPath:
+                exported_namespace: [metadata, namespace]
+                ready: [status, conditions, "[type=Ready]", status]
+                suspended: [spec, suspend]

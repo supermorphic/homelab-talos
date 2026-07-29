@@ -64,4 +64,88 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanager") | .kind] | .[]' "$temp_dir/kps.yaml" | sort -u | tr '\n' ' ')"
 [[ "$render_kinds" == 'Alertmanager Prometheus ' ]]
 
-echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, and pinned kube-prometheus-stack render passed validation.'
+# --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
+fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
+cfg="$base/config"
+fksm_values="$fksm/app/values.yaml"
+
+for f in "$fksm/ks.yaml" "$fksm/app/kustomization.yaml" "$fksm/app/helmrelease.yaml" \
+  "$fksm_values" "$fksm/app/rbac.yaml" "$fksm/README.md" \
+  "$cfg/flux-podmonitor.yaml" "$cfg/flux-alerts.yaml"; do
+  [[ -f "$f" ]] || {
+    echo "Missing Flux monitoring source: $f" >&2
+    exit 1
+  }
+done
+
+# Wiring into the respective kustomizations.
+rg -qx '  - ./flux-kube-state-metrics/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
+  echo 'Refusing: flux-kube-state-metrics is not wired into monitoring/kustomization.yaml.' >&2
+  exit 1
+}
+rg -qx '  - ./flux-podmonitor.yaml' "$cfg/kustomization.yaml"
+rg -qx '  - ./flux-alerts.yaml' "$cfg/kustomization.yaml"
+
+# The bundled kube-state-metrics MUST stay untouched — changing KPS HelmRelease values trips
+# the documented helm-controller upgrade wedge, which is exactly why the Flux exporter is a
+# separate instance.
+[[ "$(yq -r '.["kube-state-metrics"].customResourceState // "absent"' "$values")" == 'absent' ]] || {
+  echo 'Refusing: kube-prometheus-stack values must not configure customResourceState (KPS upgrade wedge).' >&2
+  exit 1
+}
+
+# Dedicated exporter is custom-resource-state-only with chart RBAC disabled.
+[[ "$(yq -r '.customResourceState.enabled' "$fksm_values")" == 'true' ]]
+[[ "$(yq -r '.collectors | length' "$fksm_values")" == '0' ]]
+rg -q -- '--custom-resource-state-only=true' "$fksm_values"
+[[ "$(yq -r '.rbac.create' "$fksm_values")" == 'false' ]]
+[[ "$(yq -r '.prometheus.monitor.enabled' "$fksm_values")" == 'true' ]]
+fksm_ver="$(yq -r '.spec.chart.spec.version' "$fksm/app/helmrelease.yaml")"
+[[ -n "$fksm_ver" && "$fksm_ver" != 'null' ]]
+
+# Minimal RBAC: only the Flux API groups, list/watch, no wildcards.
+[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].apiGroups[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'helm.toolkit.fluxcd.io,kustomize.toolkit.fluxcd.io,source.toolkit.fluxcd.io' ]]
+[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].verbs[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'list,watch' ]]
+if rg -q '\*' "$fksm/app/rbac.yaml"; then
+  echo 'Refusing: flux-kube-state-metrics RBAC must not use wildcards.' >&2
+  exit 1
+fi
+
+kustomize build "$fksm/app" >/dev/null
+
+# Render the dedicated KSM chart: proves the ServiceMonitor + custom-resource-state-only wiring
+# and that the chart emits no broad ClusterRole (rbac.create: false).
+HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
+  helm template flux-kube-state-metrics kube-state-metrics --repo https://prometheus-community.github.io/helm-charts --version "$fksm_ver" --namespace monitoring --values "$fksm_values" >"$temp_dir/fksm.yaml"
+[[ "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$temp_dir/fksm.yaml")" -ge 1 ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole")] | length' "$temp_dir/fksm.yaml")" == '0' ]]
+rg -q -- '--custom-resource-state-only=true' "$temp_dir/fksm.yaml"
+
+# Flux controller PodMonitor: flux-system, part-of=flux, http-prom port.
+pm="$cfg/flux-podmonitor.yaml"
+[[ "$(yq -r '.kind' "$pm")" == 'PodMonitor' ]]
+[[ "$(yq -r '.spec.namespaceSelector.matchNames[0]' "$pm")" == 'flux-system' ]]
+[[ "$(yq -r '.spec.selector.matchLabels."app.kubernetes.io/part-of"' "$pm")" == 'flux' ]]
+[[ "$(yq -r '.spec.podMetricsEndpoints[0].port' "$pm")" == 'http-prom' ]]
+
+# Flux PrometheusRule: gotk_resource_info based, warning severity, excludes suspended, and
+# never references the metric Flux v2 removed. (Exact alert-name set is intentionally not
+# asserted until live verification confirms KPS TargetDown covers controller scrape-down.)
+fr="$cfg/flux-alerts.yaml"
+[[ "$(yq -r '.kind' "$fr")" == 'PrometheusRule' ]]
+[[ "$(yq -r '.metadata.name' "$fr")" == 'flux' ]]
+for a in FluxReconciliationFailure FluxResourceMetricsMissing; do
+  yq -e ".spec.groups[].rules[] | select(.alert == \"$a\")" "$fr" >/dev/null
+done
+[[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure") | .labels.severity' "$fr")" == 'warning' ]]
+frf_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure") | .expr' "$fr")"
+[[ "$frf_expr" == *gotk_resource_info* ]]
+[[ "$frf_expr" == *'suspended!="true"'* ]]
+# Inspect the rule expressions only (not explanatory comments): none may use the metric
+# Flux v2 removed.
+if yq -r '.spec.groups[].rules[].expr' "$fr" | rg -q 'gotk_reconcile_condition'; then
+  echo 'Refusing: Flux alert expressions must use gotk_resource_info, not the removed gotk_reconcile_condition.' >&2
+  exit 1
+fi
+
+echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
