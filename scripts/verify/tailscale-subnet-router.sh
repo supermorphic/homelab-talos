@@ -89,8 +89,8 @@ fi
   echo 'Envoy Gateway internal is not Programmed.' >&2
   exit 1
 }
-[[ "$("${kc[@]}" --namespace monitoring get httproute homepage --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]] || {
-  echo 'Representative HTTPRoute monitoring/homepage is not Accepted.' >&2
+[[ "$("${kc[@]}" --namespace homepage get httproute homepage --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]] || {
+  echo 'Representative HTTPRoute homepage/homepage is not Accepted.' >&2
   exit 1
 }
 
