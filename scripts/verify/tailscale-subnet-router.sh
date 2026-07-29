@@ -10,6 +10,9 @@ source scripts/lib/network.sh
 
 kubeconfig="$1"
 ns='tailscale'
+connector='lab-subnet-router'
+sel='tailscale.supermorphic.com/component=lab-subnet-router'
+expected_routes="${HOMELAB_DNS_RESOLVER}/32,${HOMELAB_GATEWAY_VIP}/32"
 kc=(kubectl --kubeconfig "$kubeconfig")
 
 # Flux: the staged subnet-router Kustomization is Ready (i.e. activated / resumed).
@@ -18,34 +21,68 @@ kc=(kubectl --kubeconfig "$kubeconfig")
   exit 1
 }
 
-# Connector: exists and ConnectorReady=True.
-"${kc[@]}" get connector lab-subnet-router >/dev/null 2>&1 || { echo 'Connector lab-subnet-router is missing.' >&2; exit 1; }
-[[ "$("${kc[@]}" get connector lab-subnet-router --output jsonpath='{.status.conditions[?(@.type=="ConnectorReady")].status}' 2>/dev/null)" == 'True' ]] || {
-  echo 'Connector lab-subnet-router is not ConnectorReady.' >&2
-  exit 1
-}
+"${kc[@]}" get connector "$connector" >/dev/null 2>&1 || { echo "Connector $connector is missing." >&2; exit 1; }
 
-# HA: two managed devices, and exactly the two intended /32 routes exposed to the tailnet.
-device_count="$("${kc[@]}" get connector lab-subnet-router --output jsonpath='{.status.devices}' 2>/dev/null | yq -p json -r 'length' 2>/dev/null || echo 0)"
-[[ "${device_count:-0}" -eq 2 ]] || { echo "Connector reports ${device_count:-0} devices (want 2)." >&2; exit 1; }
-routes="$("${kc[@]}" get connector lab-subnet-router --output jsonpath='{.status.subnetRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
-[[ "$routes" == "${HOMELAB_DNS_RESOLVER}/32,${HOMELAB_GATEWAY_VIP}/32" ]] || {
-  echo "Connector exposes routes [$routes]; want exactly ${HOMELAB_DNS_RESOLVER}/32,${HOMELAB_GATEWAY_VIP}/32." >&2
+# The Connector, its two devices, and its two pods are eventually consistent: the operator
+# creates the tailnet devices and Pods asynchronously after the object applies, so poll
+# rather than one-shot (a fresh `just bootstrap` reconcile reaches Ready before the second
+# replica has registered). ~2 min budget each.
+connector_ready=false
+device_count=0
+for _ in {1..24}; do
+  [[ "$("${kc[@]}" get connector "$connector" --output jsonpath='{.status.conditions[?(@.type=="ConnectorReady")].status}' 2>/dev/null)" == 'True' ]] || { sleep 5; continue; }
+  device_count="$("${kc[@]}" get connector "$connector" --output jsonpath='{.status.devices}' 2>/dev/null | yq -p json -r 'length' 2>/dev/null || echo 0)"
+  [[ "${device_count:-0}" -eq 2 ]] && { connector_ready=true; break; }
+  sleep 5
+done
+[[ "$connector_ready" == 'true' ]] || {
+  echo "Connector $connector is not ConnectorReady with 2 devices (last device count: ${device_count:-0})." >&2
   exit 1
 }
 
 # HA node spread: two Ready subnet-router pods on two DISTINCT Talos nodes. Pods are found
 # by the ProxyClass-applied component label, independent of the operator's StatefulSet name.
-sel='tailscale.supermorphic.com/component=lab-subnet-router'
-ready_pods="$("${kc[@]}" --namespace "$ns" get pods --selector "$sel" \
-  --output jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
-[[ "${ready_pods:-0}" -ge 2 ]] || { echo "Only ${ready_pods:-0} running subnet-router pods (want 2)." >&2; exit 1; }
-distinct_nodes="$("${kc[@]}" --namespace "$ns" get pods --selector "$sel" \
-  --output jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' 2>/dev/null | sort -u | grep -c . || true)"
-[[ "${distinct_nodes:-0}" -ge 2 ]] || {
-  echo "subnet-router pods share a node (distinct nodes: ${distinct_nodes:-0}); node-level HA is not satisfied." >&2
+running=0
+distinct=0
+for _ in {1..24}; do
+  running="$("${kc[@]}" --namespace "$ns" get pods --selector "$sel" \
+    --output jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
+  distinct="$("${kc[@]}" --namespace "$ns" get pods --selector "$sel" \
+    --output jsonpath='{range .items[?(@.status.phase=="Running")]}{.spec.nodeName}{"\n"}{end}' 2>/dev/null | sort -u | grep -c . || true)"
+  [[ "${running:-0}" -ge 2 && "${distinct:-0}" -ge 2 ]] && break
+  sleep 5
+done
+[[ "${running:-0}" -ge 2 ]] || { echo "Only ${running:-0} running subnet-router pods (want 2)." >&2; exit 1; }
+[[ "${distinct:-0}" -ge 2 ]] || {
+  echo "subnet-router pods share a node (distinct nodes: ${distinct:-0}); the ProxyClass hard node spread is not satisfied — a node is likely unavailable." >&2
   exit 1
 }
+
+# Config correctness (always present, independent of tailnet approval): the Connector must
+# ADVERTISE exactly the two /32s. Route *exposure* additionally requires manual approval and
+# is checked separately below.
+spec_routes="$("${kc[@]}" get connector "$connector" --output jsonpath='{.spec.subnetRouter.advertiseRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
+[[ "$spec_routes" == "$expected_routes" ]] || {
+  echo "Connector advertises [$spec_routes]; want exactly $expected_routes." >&2
+  exit 1
+}
+
+# Route EXPOSURE (`.status.subnetRoutes`) reflects only routes APPROVED in the Admin Console.
+# Approval is a manual gate (docs/tailscale-lab-domain.md, gate 3) that Kubernetes/Flux
+# cannot perform, so an empty value here is EXPECTED right after bootstrap and is reported,
+# not failed. A non-empty value that does not match, however, is a real misconfiguration.
+exposed_routes="$("${kc[@]}" get connector "$connector" --output jsonpath='{.status.subnetRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
+routes_exposed=false
+if [[ -z "$exposed_routes" || "$exposed_routes" == 'null' ]]; then
+  echo "NOTE: no routes exposed to the tailnet yet — the two /32s are advertised but await manual approval."
+  echo "      Approve ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 on BOTH lab-subnet-router-* devices (gate 3)."
+elif [[ "$exposed_routes" == "$expected_routes" ]]; then
+  routes_exposed=true
+  echo "Routes exposed to the tailnet (approved): $exposed_routes."
+else
+  echo "Connector exposes routes [$exposed_routes]; expected exactly $expected_routes (or none, pre-approval)." >&2
+  exit 1
+fi
 
 # The application path the routes serve must itself be healthy.
 [[ "$("${kc[@]}" --namespace networking get gateway internal --output jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -68,12 +105,13 @@ if command -v dig >/dev/null 2>&1; then
 fi
 
 just kube foundation-verify
-echo 'Tailscale subnet-router acceptance passed: Kustomization Ready, ConnectorReady, 2 devices, exactly the two /32 routes, 2 pods on distinct nodes, Gateway Programmed, homepage HTTPRoute Accepted.'
+echo "Tailscale subnet-router acceptance passed: Kustomization Ready, ConnectorReady, 2 devices, 2 pods on distinct nodes, advertises exactly the two /32s, Gateway Programmed, homepage HTTPRoute Accepted (routes exposed to tailnet: $routes_exposed)."
 echo
-echo 'MANUAL (mandatory — Kubernetes status CANNOT prove Tailscale Admin Console approval):'
+echo 'MANUAL (mandatory — Kubernetes status CANNOT drive Tailscale Admin Console approval):'
 echo '  1. In Admin Console -> Machines, open BOTH lab-subnet-router-* devices and approve'
 echo "     ONLY ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 on EACH replica (both must be approved"
-echo '     for real failover). Confirm neither advertises any other subnet.'
+echo '     for real failover). Confirm neither advertises any other subnet. Re-run this verify'
+echo '     afterward to see "routes exposed to tailnet: true".'
 echo "  2. Ensure the restricted split-DNS nameserver ${HOMELAB_DNS_RESOLVER} is configured for search"
 echo '     domain lab.supermorphic.com.'
 echo '  3. From a tailnet client OFF the home LAN, run the client acceptance probe in'

@@ -109,6 +109,14 @@ This validates, confirms the Kustomization is suspended in Git and live, resumes
 `tailscale-subnet-router-verify`. On failure it re-suspends the Kustomization (resources
 preserved).
 
+The verify confirms **structural** readiness — Connector `ConnectorReady`, **2** devices,
+**2** pods on distinct nodes, and that the Connector *advertises* exactly the two `/32`s —
+and polls those (they are eventually consistent after reconcile). It does **not** gate on
+route *exposure*: the two `/32`s are advertised but **await manual approval** (gate 3), which
+Kubernetes/Flux cannot perform, so `.status.subnetRoutes` is empty here and the verify
+reports `routes exposed to tailnet: false` **without failing**. Re-running the verify after
+gate 3 flips that to `true`.
+
 ### Operator gate 3 — route approval (MANUAL, per replica)
 
 Two replicas create **two** tailnet devices; both must have both routes approved for real
@@ -120,10 +128,14 @@ failover.
    - `192.168.90.2/32` (DNS resolver)
    - `192.168.90.30/32` (Gateway VIP)
 4. Confirm neither advertises any other subnet. Save both.
+5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` — it should now report
+   `routes exposed to tailnet: true`, confirming both `/32`s are approved and live.
 
-> Kubernetes status cannot prove Admin Console approval — that is why this stays manual.
-> `autoApprovers.routes` is a deferred hardening step, added only after this manual flow is
-> proven.
+> Kubernetes status cannot prove Admin Console approval — that is why this stays manual, and
+> why `.status.subnetRoutes` (route *exposure*) only populates after this step. The guarded
+> bootstrap's verify therefore passes on structural readiness alone (routes advertised); this
+> gate is what makes them usable. `autoApprovers.routes` is a deferred hardening step, added
+> only after this manual flow is proven.
 
 ### Operator gate 4 — split DNS (MANUAL)
 
