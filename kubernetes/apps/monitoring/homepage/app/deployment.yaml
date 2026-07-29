@@ -14,6 +14,11 @@ spec:
       app.kubernetes.io/name: homepage
   template:
     metadata:
+      annotations:
+        # Roll the pod when the ntfy widget token rotates: sops-hash is
+        # `git hash-object homepage-ntfy.sops.yaml`, stamped by `just repo ntfy-identity`.
+        # (Named sops-hash, not *-secret-*, so gitleaks does not flag the blob hash.)
+        sops-hash: "bdc1eae298928f309760b7fef47a15b5f3743f7e"
       labels:
         app.kubernetes.io/name: homepage
     spec:
@@ -58,7 +63,7 @@ spec:
                   key: apiKey
                   optional: true
             # ntfy widget token (optional: widget blank until
-            # `just repo homepage-ntfy-secrets` creates the encrypted Secret).
+            # `just repo ntfy-identity ensure homepage` creates the encrypted Secret).
             - name: HOMEPAGE_VAR_NTFY_TOKEN
               valueFrom:
                 secretKeyRef:

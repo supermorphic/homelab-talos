@@ -86,7 +86,7 @@ while IFS= read -r script_file; do
   bash -n "$script_file"
   shell_scripts+=("$script_file")
   script_count=$((script_count + 1))
-done < <(find scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort)
+done < <(find scripts/secrets scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort)
 
 shellcheck_exit_code=0
 for script_file in "${shell_scripts[@]}"; do
@@ -135,6 +135,8 @@ run_shell_case qbit-manage-policy-validator \
   scripts/test/qbit-manage-policy-validator-test.sh
 run_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh
 run_shell_case dns-isolation tests/probes/dns/isolation-test.sh
+run_shell_case ntfy-identity scripts/test/ntfy-identity-test.sh
+run_shell_case ntfy-consumer-sync scripts/test/ntfy-consumer-sync-test.sh
 
 # Offline Python unit tests for host-side E2E logic and probe analyzers. uv (pinned via
 # mise) provides the locked interpreter/dependencies; these modules are pure or mocked,

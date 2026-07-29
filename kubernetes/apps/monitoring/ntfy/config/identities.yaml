@@ -1,0 +1,49 @@
+---
+# ntfy credential registry — the single source of truth for declarative auth.
+# Consumed only by `just repo ntfy-identity` (scripts/secrets/ntfy-identity.sh);
+# it is not deployed to the cluster (the ntfy Flux Kustomization reconciles app/).
+#
+# - active identities are preserved by default: reconcile never rotates an existing
+#   bcrypt hash or token; credentials are generated only for missing identities or
+#   explicit `rotate`.
+# - credential: password marks the human-known account whose hash is written only by
+#   `just repo ntfy-subscriber-password`; reconcile fails instead of inventing one.
+# - consumer selects how the credential reaches its workload:
+#     none              human clients (iPhone/web/CLI password login)
+#     alertmanager-auth auth.yml key inside ntfy-secret, mounted by the adapter
+#     homepage-secret   copied into Secret/homepage-ntfy (homepage namespace)
+#     seerr-api         pushed to Seerr via `just kube ntfy-consumer-sync seerr`
+# - status: retired is a tombstone: reconcile removes the identity's users, ACLs, and
+#   tokens from the Secret (ntfy then deletes them from auth.db on restart) and the
+#   tombstone blocks accidental recreation. Removing an identity from this file
+#   without tombstoning it first makes reconcile fail on the unknown leftover.
+identities:
+  subscriber:
+    status: active
+    credential: password
+    access:
+      - { topic: critical, permission: ro }
+      - { topic: homelab, permission: ro }
+      - { topic: media, permission: ro }
+    consumer: none
+  alertmanager:
+    status: active
+    credential: token
+    access:
+      - { topic: critical, permission: wo }
+      - { topic: homelab, permission: wo }
+    consumer: alertmanager-auth
+  seerr:
+    status: active
+    credential: token
+    access:
+      - { topic: media, permission: wo }
+    consumer: seerr-api
+  homepage:
+    status: active
+    credential: token
+    access:
+      - { topic: critical, permission: ro }
+    consumer: homepage-secret
+  automation:
+    status: retired
