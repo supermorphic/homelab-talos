@@ -47,7 +47,12 @@ resources:
 # Produce gotk_resource_info{customresource_kind,exported_namespace,name,ready,suspended}=1
 # for the Decision-9 Flux kinds. Info-type metric: value is always 1; readiness lives in the
 # `ready` label (True/False/Unknown from the Ready condition) and `suspended` in the
-# `suspended` label (spec.suspend). The FluxReconciliationFailure rule selects ready="False".
+# `suspended` label (spec.suspend). The FluxReconciliationFailure rule selects every
+# unsuspended resource that has not reported Ready=True.
+#
+# Keep each help string unique even though every resource contributes to the same metric
+# family. kube-state-metrics' header sanitization otherwise drops resource families when
+# multiple custom-resource collectors use the same metric name and help text.
 customResourceState:
   enabled: true
   config:
@@ -61,7 +66,7 @@ customResourceState:
           metricNamePrefix: gotk
           metrics:
             - name: resource_info
-              help: The current state of a Flux resource.
+              help: The current state of a Flux Kustomization resource.
               each:
                 type: Info
                 info:
@@ -78,7 +83,7 @@ customResourceState:
           metricNamePrefix: gotk
           metrics:
             - name: resource_info
-              help: The current state of a Flux resource.
+              help: The current state of a Flux HelmRelease resource.
               each:
                 type: Info
                 info:
@@ -95,7 +100,7 @@ customResourceState:
           metricNamePrefix: gotk
           metrics:
             - name: resource_info
-              help: The current state of a Flux resource.
+              help: The current state of a Flux GitRepository resource.
               each:
                 type: Info
                 info:
@@ -112,7 +117,7 @@ customResourceState:
           metricNamePrefix: gotk
           metrics:
             - name: resource_info
-              help: The current state of a Flux resource.
+              help: The current state of a Flux OCIRepository resource.
               each:
                 type: Info
                 info:
@@ -129,7 +134,7 @@ customResourceState:
           metricNamePrefix: gotk
           metrics:
             - name: resource_info
-              help: The current state of a Flux resource.
+              help: The current state of a Flux HelmRepository resource.
               each:
                 type: Info
                 info:

@@ -504,6 +504,10 @@ suites:
     runner: {command: "mise exec -- just test diagnostics cluster", implementation: scripts/test/diagnostics/collect.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: diagnostics, path: scripts/test/diagnostics/collect.sh, selector: null}
+  - metadata: {id: diagnostics.flux-alerts, source: diagnostics, framework: bash, suite: monitoring, tier: diagnostics, target: flux-alerts, scenario: signal-path, scope: system, intent: diagnostic, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flux-alerts-diagnostics", implementation: scripts/diagnose/flux-alerts.sh}
+    native_results: {strategy: native-junit}
 
   - metadata: {id: test.integration.media-hardlink, source: test, framework: bash, suite: media, tier: integration, target: media-hardlink, scenario: null, scope: storage, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}
