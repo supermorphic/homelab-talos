@@ -1,0 +1,58 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tailscale-subnet-router-replica-recovery
+  labels:
+    homelab-talos/tier: resilience
+    homelab-talos/target: tailscale-subnet-router-replica-recovery
+    homelab-talos/suite: tailscale-subnet-router-replica-recovery
+spec:
+  namespace: flux-system
+  concurrent: false
+  catch:
+    - describe:
+        apiVersion: tailscale.com/v1alpha1
+        kind: Connector
+        name: lab-subnet-router
+    - events:
+        namespace: tailscale
+  steps:
+    - name: establish-two-replica-cross-node-baseline
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
+              baseline .kube/config
+      cleanup:
+        - script:
+            timeout: 6m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
+              cleanup .kube/config
+    - name: guard-and-delete-one-recorded-replica
+      try:
+        - script:
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              scripts/test/safety/require-chaos-confirmation.sh
+              tailscale-subnet-router-replica-recovery
+        - script:
+            timeout: 2m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
+              disrupt .kube/config
+    - name: verify-two-replica-cross-node-recovery
+      try:
+        - script:
+            timeout: 6m
+            content: >-
+              cd "$HOMELAB_REPO_ROOT" &&
+              uv run --locked --no-dev python
+              scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
+              verify .kube/config
