@@ -29,7 +29,7 @@ HTTPRoute (`external-dns.k8s.io/audience: internal`) exists, it is remotely reac
 |---|---|
 | Connector `lab-subnet-router` (HA `replicas: 2`, `hostnamePrefix`, `tag:lab-router`, two `/32`s) | `kubernetes/apps/networking/tailscale-operator/subnet-router/connector.yaml` |
 | ProxyClass `lab-subnet-router` (hard node spread) | `.../subnet-router/proxyclass.yaml` |
-| Flux Kustomization `tailscale-operator-subnet-router` (staged `suspend: true`) | `.../tailscale-operator/ks.yaml` |
+| Flux Kustomization `tailscale-operator-subnet-router` (active, `suspend: false`) | `.../tailscale-operator/ks.yaml` |
 | Static validation (in `just ci`) | `scripts/validate/tailscale-subnet-router.sh` |
 | Guarded rollout | `just bootstrap tailscale-subnet-router` |
 | Live verification (operator) | `scripts/verify/tailscale-subnet-router.sh` |
@@ -147,7 +147,13 @@ failover.
 
 ### Operator gate 5 — client acceptance
 
-Run the checks below from a real client. Only after they pass, open **PR B**.
+> **Nothing under `*.lab.supermorphic.com` resolves off-LAN until gates 3 AND 4 are done,
+> and only while Tailscale is Connected.** If a page won't load, you have almost certainly
+> skipped route approval (gate 3) or split DNS (gate 4), or Tailscale is off — see the
+> checklist in each client section below and Troubleshooting.
+
+Run the checks below from a real client (MacBook and/or iPhone). Only after they pass, open
+**PR B**.
 
 ### PR B — durable activation
 
@@ -176,11 +182,25 @@ unreachable (the public Internet must not be a fallback).
 
 ### iPhone (primary acceptance)
 
-1. Connect Tailscale; confirm the device accepts Tailscale DNS.
-2. Turn off Wi-Fi so the test uses cellular.
-3. Open `https://homepage.lab.supermorphic.com` in Safari; open representative services.
-4. Confirm: no cert warning; Grafana/Portainer/Seerr authenticate normally; ntfy still works.
-5. Turn Tailscale off (still on cellular) → confirm the hosts are unreachable.
+**Prerequisites (must all be true first):** gate 3 done — both `/32`s approved on **both**
+`lab-subnet-router-*` devices; gate 4 done — split-DNS nameserver `192.168.90.2` restricted
+to `lab.supermorphic.com`; and the Tailscale app **Connected**. Without these the pages will
+not load (by design — nothing is public).
+
+1. Open the **Tailscale app** and confirm it is **Connected** (toggle ON). Off-LAN with
+   Tailscale **off**, `*.lab.supermorphic.com` is intentionally unreachable.
+2. Confirm the device is using Tailscale DNS: Tailscale app → the device should show DNS is
+   in use (the split-DNS nameserver from gate 4 applies automatically once Connected).
+3. Turn **Wi-Fi off** so the test uses cellular (proves it works off the home LAN).
+4. In Safari open `https://homepage.lab.supermorphic.com`; from Homepage open representative
+   services (Grafana, Portainer, Seerr, ntfy).
+5. Confirm: no certificate warning; apps authenticate normally.
+6. **Negative test:** turn Tailscale **off** (still on cellular) → confirm the hosts are now
+   unreachable (the public Internet must not be a fallback).
+
+> If a page does not load with Tailscale Connected: it's almost always gate 3 (routes not
+> approved on **both** devices) or gate 4 (split DNS not set / device not yet using Tailscale
+> DNS — toggle Tailscale off/on). See Troubleshooting.
 
 ### On-LAN overlap test
 
