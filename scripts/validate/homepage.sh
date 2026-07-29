@@ -108,7 +108,7 @@ sonarr_secret="$base/app/homepage-sonarr.sops.yaml"
 radarr_secret="$base/app/homepage-radarr.sops.yaml"
 seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
-[[ -f "$ntfy_secret" ]] || { echo "Missing Homepage ntfy Secret: $ntfy_secret (run just repo homepage-ntfy-secrets)." >&2; exit 1; }
+[[ -f "$ntfy_secret" ]] || { echo "Missing Homepage ntfy Secret: $ntfy_secret (run just repo ntfy-identity ensure homepage)." >&2; exit 1; }
 [[ -f "$plex_secret" ]] || { echo "Missing Homepage Plex Secret: $plex_secret (run just repo homepage-plex-secrets)." >&2; exit 1; }
 [[ -f "$portainer_secret" ]] || { echo "Missing Homepage Portainer Secret: $portainer_secret (run just repo homepage-portainer-secrets)." >&2; exit 1; }
 [[ -f "$prowlarr_secret" ]] || { echo "Missing Homepage Prowlarr Secret: $prowlarr_secret (run just repo homepage-prowlarr-secrets)." >&2; exit 1; }
@@ -151,6 +151,12 @@ assert_command_finds_nothing \
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-ntfy' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'token' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_NTFY_TOKEN") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
+# The ntfy widget token rotates via `just repo ntfy-identity rotate homepage`; the
+# pod-template sops-hash annotation restarts Homepage so the new token is picked up.
+[[ "$(yq -r '.spec.template.metadata.annotations["sops-hash"]' "$dep")" == "$(git hash-object "$ntfy_secret")" ]] || {
+  echo 'Refusing: the Homepage deployment sops-hash annotation must equal git hash-object of homepage-ntfy.sops.yaml.' >&2
+  exit 1
+}
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PLEX_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-plex' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]

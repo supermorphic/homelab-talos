@@ -52,8 +52,64 @@ image_tag="$(yq -r '.controllers.ntfy.containers.app.image.tag' "$values")"
 [[ "$(yq -r '.controllers.ntfy.pod.securityContext.seccompProfile.type' "$values")" == 'RuntimeDefault' ]]
 [[ "$(yq -r '.controllers.ntfy.containers.app.securityContext.capabilities.drop | join(",")' "$values")" == 'ALL' ]]
 
-# Declarative auth from the SOPS Secret.
-[[ "$(yq -r '.controllers.ntfy.containers.app.envFrom[].secretRef.name' "$values")" == 'ntfy-secret' ]]
+# Declarative auth from the SOPS Secret: only the three NTFY_AUTH_* keys are mapped
+# into the container (never envFrom), so the Secret's auth.yml key — mounted by the
+# alertmanager-ntfy adapter — cannot leak into this pod's environment.
+[[ "$(yq -r '.controllers.ntfy.containers.app | has("envFrom")' "$values")" == 'false' ]] || {
+  echo 'Refusing: the ntfy container must not use envFrom; map NTFY_AUTH_* keys explicitly.' >&2
+  exit 1
+}
+for auth_key in NTFY_AUTH_USERS NTFY_AUTH_ACCESS NTFY_AUTH_TOKENS; do
+  [[ "$(yq -r ".controllers.ntfy.containers.app.env.$auth_key.valueFrom.secretKeyRef.name" "$values")" == 'ntfy-secret' ]] || {
+    echo "Refusing: env $auth_key must come from the ntfy-secret Secret." >&2
+    exit 1
+  }
+  [[ "$(yq -r ".controllers.ntfy.containers.app.env.$auth_key.valueFrom.secretKeyRef.key" "$values")" == "$auth_key" ]] || {
+    echo "Refusing: env $auth_key must map the same-named Secret key." >&2
+    exit 1
+  }
+done
+
+# The credential registry drives `just repo ntfy-identity`; it is tooling input only
+# (not deployed — the Flux Kustomization reconciles app/).
+identities="$base/config/identities.yaml"
+[[ -f "$identities" ]] || { echo "Missing ntfy identity registry: $identities" >&2; exit 1; }
+[[ "$(yq -r '[.identities | keys | .[]] | sort | join(",")' "$identities")" == \
+  'alertmanager,automation,homepage,seerr,subscriber' ]] || {
+  echo 'Refusing: the registry must hold exactly subscriber/alertmanager/seerr/homepage/automation.' >&2
+  exit 1
+}
+[[ "$(yq -r '.identities.subscriber.status + ":" + .identities.subscriber.credential + ":" + .identities.subscriber.consumer' "$identities")" == 'active:password:none' ]]
+[[ "$(yq -r '.identities.alertmanager.status + ":" + .identities.alertmanager.credential + ":" + .identities.alertmanager.consumer' "$identities")" == 'active:token:alertmanager-auth' ]]
+[[ "$(yq -r '.identities.seerr.status + ":" + .identities.seerr.credential + ":" + .identities.seerr.consumer' "$identities")" == 'active:token:seerr-api' ]]
+[[ "$(yq -r '.identities.homepage.status + ":" + .identities.homepage.credential + ":" + .identities.homepage.consumer' "$identities")" == 'active:token:homepage-secret' ]]
+[[ "$(yq -r '.identities.automation.status' "$identities")" == 'retired' ]] || {
+  echo 'Refusing: the retired automation identity must remain tombstoned.' >&2
+  exit 1
+}
+
+# The per-integration secret recipes are replaced by the one registry-backed lifecycle.
+if rg -n '^ntfy-secrets:|^alertmanager-ntfy-secrets:|^homepage-ntfy-secrets:|^ntfy-token ' .just/repository.just; then
+  echo 'Refusing: legacy ntfy secret recipes must stay removed; use just repo ntfy-identity.' >&2
+  exit 1
+fi
+rg -q '^ntfy-identity action identity:' .just/repository.just || {
+  echo 'Refusing: the ntfy-identity lifecycle recipe is missing from repository.just.' >&2
+  exit 1
+}
+rg -q '^ntfy-subscriber-password:' .just/repository.just || {
+  echo 'Refusing: the ntfy-subscriber-password recipe is missing from repository.just.' >&2
+  exit 1
+}
+rg -q '^ntfy-consumer-sync consumer:' kubernetes/mod.just || {
+  echo 'Refusing: the ntfy-consumer-sync recipe is missing from kubernetes/mod.just.' >&2
+  exit 1
+}
+# The adapter consumes auth.yml from the canonical Secret; its standalone Secret is gone.
+[[ ! -e kubernetes/apps/monitoring/alertmanager-ntfy/app/auth.sops.yaml ]] || {
+  echo 'Refusing: alertmanager-ntfy/app/auth.sops.yaml must stay deleted; auth.yml lives in ntfy-secret.' >&2
+  exit 1
+}
 
 # RWO Longhorn config PVC at /var/lib/ntfy, retained across teardown.
 [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOnce' ]]
@@ -69,7 +125,7 @@ image_tag="$(yq -r '.controllers.ntfy.containers.app.image.tag' "$values")"
 [[ "$(yq -r '.controllers.ntfy.containers.app.probes.readiness.spec.httpGet.path' "$values")" == '/v1/health' ]]
 
 # Rollout annotations track server.yml (config-hash) and the encrypted Secret
-# (sops-hash, stamped by `just repo ntfy-secrets`) so either change rolls the pod.
+# (sops-hash, stamped by `just repo ntfy-identity`) so either change rolls the pod.
 [[ "$(yq -r '.controllers.ntfy.pod.annotations.config-hash' "$values")" == "$(git hash-object "$server")" ]]
 [[ "$(yq -r '.controllers.ntfy.pod.annotations.sops-hash' "$values")" == "$(git hash-object "$secret")" ]]
 
