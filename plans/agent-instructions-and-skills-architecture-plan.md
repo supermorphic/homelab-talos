@@ -2,28 +2,26 @@
 
 ## Status
 
-- Revision: 5 (2026-07-29). Reviewed REVISE AND RESUBMIT four times: revision 1
+- Revision: 6 (2026-07-29). Reviewed REVISE AND RESUBMIT four times: revision 1
   (7 MAJOR, 1 MINOR), revision 2 (1 BLOCKER, 4 MAJOR, 4 MINOR), revision 3
   (1 BLOCKER, 2 MAJOR, 2 MINOR), revision 4 (1 BLOCKER, 1 MAJOR, 3 MINOR). All
   dispositions are recorded in "Plan review disposition", including the findings the
   amendments decline or partly decline on verified evidence. **Every technical
-  finding across all four passes is now closed; the sole remaining blocker is
-  operator evidence that no agent can produce.**
-- Status: **Draft — blocked on two operator client-discovery observations, one
-  seven-item decision bundle, and decision 8 recorded separately; then a
-  fresh-context independent plan review and operator approval. No implementation
-  performed.**
+  finding across all four passes is closed, and the operator-only evidence and
+  decision gates are now closed.**
+- Status: **Draft — pending a fresh-context independent plan review and explicit
+  operator approval of the reviewed revision. No implementation performed.**
 - Baseline: `origin/main` at `c1201e6`
-- Working branch for this plan document: `docs/agent-skills-architecture-plan`
+- Approval-record branch baseline: `origin/main` at `e2f007e`
+- Working branch for this revision:
+  `docs/agent-skills-architecture-approval`
 - Assignment: an operator-supplied planning handoff brief, held outside version
   control. Its requirements are reproduced in this document; no repository file
   depends on it.
-- **The remaining blocker is not closable by an agent.** It requires launching both
-  clients against a scratch repository outside this worktree, which is operator-run
-  by the repository's own boundary rules. Revision 4 reduces it to the smallest
-  honest form: **two observations with a ready-to-paste fixture**, and **one
-  accept-or-override decision bundle**. Everything else that revision 3 gated on has
-  been made conditional or moved to implementation-time validation where it belongs.
+- Operator evidence recorded 2026-07-29: Codex CLI 0.146.0 and Claude Code 2.1.220
+  each discovered the canonical probe skill through their planned repository
+  surface and returned `PROBE-7F3A`. Decisions 1–7 and decision 8 were accepted as
+  recommended.
 
 ## Executive summary
 
@@ -827,6 +825,16 @@ preceding paragraph about nested-variant invocation rather than inside the symli
 paragraph, so the reading is genuinely ambiguous — the risk is asymmetric and the
 test settles it.
 
+**Recorded operator observations (2026-07-29):**
+
+| Client | Observed version | Result | Observed response |
+|---|---|---|---|
+| Codex | `codex-cli 0.146.0` | **PASS** — discovered `.agents/skills/homelab-probe` | `PROBE-7F3A` |
+| Claude Code | `2.1.220` | **PASS** — discovered the canonical skill through `.claude/skills/homelab-probe` | `PROBE-7F3A` |
+
+Both approval-critical observations pass. No fallback or conditional
+`when_to_use` experiment is required.
+
 The other three become conditional or implementation-time:
 
 - `when_to_use` tolerance in Codex — tested **only if** the bundle is overridden to
@@ -1111,14 +1119,15 @@ more than an optional complement to `pr-readiness`; Forgejo migration (the
 architecture avoids Git-provider coupling, so this stays open); Renovate; CI
 redesign; per-app scoped instruction files below the domain level.
 
-## Operator decisions — all required before approval
+## Operator decisions — recorded
 
 **Decisions 1–7 are a single accept-or-override bundle.** They are mutually
 consistent — each recommendation assumes the others — so accepting them individually
-buys nothing. The operator records either "bundle accepted" or the specific
-overrides. Decision 8 is separate because it constrains who may approve the result.
+buys nothing. Decision 8 is separate because it constrains who may approve the
+result.
 
-Nothing is treated as decided until the operator records it here.
+**Operator record (2026-07-29): decisions 1–7 accepted as a bundle; decision 8
+accepted.** The recommendations below are therefore the selected decisions.
 
 | # | Decision | Recommendation | Rationale |
 |---|---|---|---|
@@ -1183,15 +1192,14 @@ Nothing is treated as decided until the operator records it here.
 
 No implementation proceeds until:
 
-1. the two client-discovery observations are executed and their results and client
-   versions recorded here, and **any failed observation has a verified, supported
-   resolution** — not an undocumented workaround;
-2. the decision bundle 1–7 is accepted or overridden, and decision 8 recorded;
-3. a **fresh-context** independent plan review — a new session in the independent
-   model family, without the prior review transcript — returns APPROVE or APPROVE
-   WITH MINOR REVISIONS. The existing reviewer may separately verify that each
-   finding was closed, but may not perform the approving review;
-4. the operator explicitly approves the resulting revision.
+1. **Complete:** the two client-discovery observations and client versions are
+   recorded above; both passed, so no fallback is required;
+2. **Complete:** the decision bundle 1–7 and decision 8 are accepted as recommended;
+3. **Pending:** a **fresh-context** independent plan review — a new session in the
+   independent model family, without the prior review transcript — returns APPROVE
+   or APPROVE WITH MINOR REVISIONS. The existing reviewer may separately verify
+   that each finding was closed, but may not perform the approving review;
+4. **Pending:** the operator explicitly approves the resulting reviewed revision.
 
 The approving reviewer should form its own view from the repository and the
 requirements first, then compare it against the architecture proposed here.
