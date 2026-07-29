@@ -29,7 +29,7 @@ HTTPRoute (`external-dns.k8s.io/audience: internal`) exists, it is remotely reac
 |---|---|
 | Connector `lab-subnet-router` (HA `replicas: 2`, `hostnamePrefix`, `tag:lab-router`, two `/32`s) | `kubernetes/apps/networking/tailscale-operator/subnet-router/connector.yaml` |
 | ProxyClass `lab-subnet-router` (hard node spread) | `.../subnet-router/proxyclass.yaml` |
-| Flux Kustomization `tailscale-operator-subnet-router` (staged `suspend: true`) | `.../tailscale-operator/ks.yaml` |
+| Flux Kustomization `tailscale-operator-subnet-router` (active, `suspend: false`) | `.../tailscale-operator/ks.yaml` |
 | Static validation (in `just ci`) | `scripts/validate/tailscale-subnet-router.sh` |
 | Guarded rollout | `just bootstrap tailscale-subnet-router` |
 | Live verification (operator) | `scripts/verify/tailscale-subnet-router.sh` |

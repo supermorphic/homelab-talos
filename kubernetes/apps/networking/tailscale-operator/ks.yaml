@@ -68,12 +68,13 @@ spec:
   # fail "no matches for kind" until the operator installs the CRD). dependsOn gates this
   # on the operator being Ready.
   #
-  # Staged suspend: true. Reasons this is NOT auto-reconciled like the ProxyGroup:
+  # Was staged suspend: true because (unlike the ProxyGroup) it must NOT auto-reconcile:
   #   1) the operator must own tag:lab-router in the tailnet ACL BEFORE it may create the
   #      Connector devices (tag ownership must precede device creation); and
   #   2) it has an external side effect (registers tailnet devices + advertises routes).
-  # Rolled out via `just bootstrap tailscale-subnet-router` after the ACL is configured,
-  # then flipped to suspend: false in a durable activation PR.
+  # Rolled out via `just bootstrap tailscale-subnet-router`, then the operator approved both
+  # /32 routes on both replicas and configured split DNS and client acceptance passed; now
+  # durably active (suspend: false).
   dependsOn:
     - name: tailscale-operator
   interval: 1h
@@ -84,6 +85,6 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  suspend: true
+  suspend: false
   timeout: 10m
   wait: true
