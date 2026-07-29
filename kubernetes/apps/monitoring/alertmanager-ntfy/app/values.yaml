@@ -19,7 +19,7 @@ controllers:
         # only at startup). config-hash = git hash-object config.yml; sops-hash =
         # git hash-object of the canonical ntfy secret.sops.yaml (which carries auth.yml),
         # stamped by `just repo ntfy-identity`.
-        config-hash: "770fcf8118334be79c8fecedcd945a29d33e1755"
+        config-hash: "60e2b9c5dc299ee5aa38253265ab69c4f6bb56b6"
         sops-hash: "1bde80fa91807b861efc5df6397e0039e8900709"
     containers:
       app:

@@ -65,6 +65,10 @@ Live commands are operator-only:
   egress, observes the deployed public classification, proves private-tag exclusion, applies
   isolated one/two-minute share limits, verifies Stop + recycle cleanup and hardlink survival,
   reruns cleanup idempotently, and tears down only exact run-owned state)
+- `FLUX_ALERT_E2E_CONFIRM=test:flux-alert:firing-resolved mise exec -- just kube flux-alert-delivery-test`
+  (about 25 minutes; creates one labeled Flux Kustomization with a deliberately nonexistent
+  source, waits through the production 15-minute alert timer, proves the firing and resolved
+  notifications synchronously reached ntfy, and deletes only that run-owned resource)
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect`
   (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
@@ -91,7 +95,9 @@ Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
 names are not interchangeable. Integration registers `media-hardlink`; E2E registers the
 exact-confirmation-gated `qbit-manage-policy`; resilience targets are explicitly registered.
-Unknown targets fail closed. Live commands must never enter `just ci`.
+The Flux alert E2E is exposed as a guarded `just kube` recipe because it exercises the
+production alert duration rather than the generic direct-test dispatcher. Unknown targets
+fail closed. Live commands must never enter `just ci`.
 
 Every coordinated run writes a collision-resistant canonical directory. This
 includes `just ci`, live verification, focused script tests, probes, Chainsaw,

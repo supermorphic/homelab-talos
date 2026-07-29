@@ -77,6 +77,7 @@ image_tag="$(yq -r '.controllers["alertmanager-ntfy"].containers.app.image.tag' 
 # Non-secret adapter config: in-cluster ntfy target, :8000 listener, dynamic topic mapping.
 yq -e '.' "$config" >/dev/null
 [[ "$(yq -r '.ntfy.baseurl' "$config")" == 'http://ntfy.ntfy.svc.cluster.local' ]]
+[[ "$(yq -r '.ntfy.async' "$config")" == 'false' ]]
 [[ "$(yq -r '.http.addr' "$config")" == ':8000' ]]
 topic="$(yq -r '.ntfy.notification.topic' "$config")"
 [[ "$topic" == *'"critical"'* && "$topic" == *'"homelab"'* ]]

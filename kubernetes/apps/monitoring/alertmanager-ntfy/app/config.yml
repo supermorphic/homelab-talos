@@ -10,6 +10,9 @@ http:
 ntfy:
   # In-cluster ntfy Service (no gateway hairpin). Token auth comes from auth.yml.
   baseurl: http://ntfy.ntfy.svc.cluster.local
+  # Keep delivery synchronous: ntfy publish failures return 5xx to Alertmanager, which
+  # retries them and exposes the failure in its notification metrics.
+  async: false
   notification:
     # Dynamic topic (gval): critical -> critical, otherwise (warning) -> homelab.
     topic: |

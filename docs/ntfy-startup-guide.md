@@ -186,7 +186,17 @@ adapter-specific to materialize: `reconcile all` keeps it in sync. Rotate with
 `just repo ntfy-identity rotate alertmanager`; ntfy and the adapter roll on the
 canonical Secret hash, while Homepage is unchanged. Alertmanager retries notifications
 across the brief restart window. After Flux reconciles, `mise exec -- just kube
-alertmanager-ntfy-verify` runs the synthetic firing+resolved alert acceptance test.
+alertmanager-ntfy-verify` proves the read-only adapter wiring. Run the full delivery test
+only with its explicit confirmation:
+
+```sh
+FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+mise exec -- just kube flux-alert-delivery-test
+```
+
+The test owns one temporary Flux Kustomization with a deliberately nonexistent source,
+waits through the production 15-minute failure window, proves the synchronous firing and
+resolved webhooks, and deletes that exact resource. Confirm both messages on the phone.
 
 ### Seerr
 
