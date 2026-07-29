@@ -24,7 +24,8 @@ does not duplicate the bundled KSM.
 ## Scope
 
 - **Metrics:** `gotk_resource_info` for `Kustomization`, `HelmRelease`, `GitRepository`,
-  `OCIRepository`, `HelmRepository` (the Decision-9 kinds).
+  `OCIRepository`, `HelmRepository` (the Decision-9 kinds). Each collector uses a unique
+  help string as required by kube-state-metrics' metric-header sanitization.
 - **RBAC:** minimal `list`/`watch` on those Flux APIs plus CRDs, which kube-state-metrics
   must discover before constructing custom-resource collectors (`./rbac.yaml`); no wildcards.
 - **Scrape:** chart-rendered ServiceMonitor; Prometheus discovers it cluster-wide.
@@ -37,6 +38,8 @@ does not duplicate the bundled KSM.
 Prometheus to discover an up exporter target, ingest `gotk_resource_info` for every
 configured Flux kind, load both Flux alert rules without evaluation errors, and maintain an
 active Alertmanager connection with the expected ntfy route. It does not send a notification.
+The PrometheusRule treats every unsuspended resource without `Ready=True` as failed and
+independently watches for missing metrics from each configured resource kind.
 
 When that gate fails, run `mise exec -- just kube flux-alerts-diagnostics`. The read-only
 diagnostic follows the signal path from Flux objects through exporter RBAC/workload/raw

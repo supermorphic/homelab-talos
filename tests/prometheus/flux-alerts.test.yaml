@@ -4,10 +4,14 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  - name: reconciliation failure fires only for an unsuspended Ready=False resource
+  - name: reconciliation failure fires for every unsuspended resource not Ready=True
     interval: 1m
     input_series:
       - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="broken",ready="False",suspended=""}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="OCIRepository",exported_namespace="flux-system",name="unknown",ready="Unknown",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="HelmRepository",exported_namespace="monitoring",name="missing-ready",suspended="false"}'
         values: 1x20
       - series: 'gotk_resource_info{customresource_kind="HelmRelease",exported_namespace="monitoring",name="suspended",ready="False",suspended="true"}'
         values: 1x20
@@ -29,14 +33,52 @@ tests:
             exp_annotations:
               summary: Flux Kustomization flux-system/broken is failing to reconcile
               description: >-
-                The Flux Kustomization flux-system/broken has reported Ready=False for more
-                than 15 minutes, so Git is no longer being applied to the cluster. Inspect it
-                (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+                The Flux Kustomization flux-system/broken has not reported Ready=True for
+                more than 15 minutes, so its desired state may no longer be reconciling.
+                Inspect it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+                repository) and rendered manifests. Intentionally suspended resources are
+                excluded.
+          - exp_labels:
+              customresource_kind: OCIRepository
+              exported_namespace: flux-system
+              name: unknown
+              ready: Unknown
+              severity: warning
+              suspended: "false"
+            exp_annotations:
+              summary: Flux OCIRepository flux-system/unknown is failing to reconcile
+              description: >-
+                The Flux OCIRepository flux-system/unknown has not reported Ready=True for
+                more than 15 minutes, so its desired state may no longer be reconciling.
+                Inspect it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+                repository) and rendered manifests. Intentionally suspended resources are
+                excluded.
+          - exp_labels:
+              customresource_kind: HelmRepository
+              exported_namespace: monitoring
+              name: missing-ready
+              severity: warning
+              suspended: "false"
+            exp_annotations:
+              summary: Flux HelmRepository monitoring/missing-ready is failing to reconcile
+              description: >-
+                The Flux HelmRepository monitoring/missing-ready has not reported Ready=True
+                for more than 15 minutes, so its desired state may no longer be reconciling.
+                Inspect it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
                 repository) and rendered manifests. Intentionally suspended resources are
                 excluded.
 
-  - name: missing resource metric triggers the watchdog
+  - name: one missing resource kind triggers the watchdog independently
     interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{customresource_kind="Kustomization",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="HelmRelease",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="GitRepository",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{customresource_kind="HelmRepository",ready="True",suspended="false"}'
+        values: 1x20
     alert_rule_test:
       - eval_time: 14m
         alertname: FluxResourceMetricsMissing
@@ -45,11 +87,13 @@ tests:
         alertname: FluxResourceMetricsMissing
         exp_alerts:
           - exp_labels:
+              customresource_kind: OCIRepository
               severity: warning
             exp_annotations:
-              summary: Flux resource-state metrics are missing
+              summary: Flux OCIRepository resource-state metrics are missing
               description: >-
-                gotk_resource_info has been absent for more than 15 minutes, so
-                FluxReconciliationFailure cannot fire and Flux reconciliation failures are
-                undetectable. Check the flux-kube-state-metrics Deployment, its
-                ServiceMonitor, and its RBAC (list/watch on the Flux APIs).
+                gotk_resource_info has contained no OCIRepository series for more than 15
+                minutes, so reconciliation failures for that resource kind are undetectable.
+                Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
+                custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
+                the Flux APIs).

@@ -108,6 +108,40 @@ rg -q -- '--custom-resource-state-only=true' "$fksm_values"
 [[ "$(yq -r '.prometheus.monitor.enabled' "$fksm_values")" == 'true' ]]
 fksm_ver="$(yq -r '.spec.chart.spec.version' "$fksm/app/helmrelease.yaml")"
 [[ -n "$fksm_ver" && "$fksm_ver" != 'null' ]]
+fksm_resource_count="$(
+  yq -r '.customResourceState.config.spec.resources | length' "$fksm_values"
+)"
+fksm_unique_help_count="$(
+  yq -r '
+    [
+      .customResourceState.config.spec.resources[].metrics[].help
+    ] |
+    unique |
+    length
+  ' "$fksm_values"
+)"
+[[ "$fksm_unique_help_count" -eq "$fksm_resource_count" ]] || {
+  echo 'Refusing: every Flux custom-resource collector must use a unique help string.' >&2
+  exit 1
+}
+# `$resource` is a yq variable and must not be expanded by the shell.
+# shellcheck disable=SC2016
+yq -e '
+  [
+    .customResourceState.config.spec.resources[] |
+    . as $resource |
+    .metrics[] |
+    .help == (
+      "The current state of a Flux " +
+      $resource.groupVersionKind.kind +
+      " resource."
+    )
+  ] |
+  all
+' "$fksm_values" >/dev/null || {
+  echo 'Refusing: Flux collector help strings must identify their resource kind.' >&2
+  exit 1
+}
 
 # Minimal RBAC: CRD discovery plus only the exported Flux API groups, list/watch,
 # no wildcards.
@@ -148,7 +182,20 @@ done
 [[ "$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure") | .labels.severity' "$fr")" == 'warning' ]]
 frf_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure") | .expr' "$fr")"
 [[ "$frf_expr" == *gotk_resource_info* ]]
+[[ "$frf_expr" == *'ready!="True"'* ]]
 [[ "$frf_expr" == *'suspended!="true"'* ]]
+frm_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxResourceMetricsMissing") | .expr' "$fr")"
+while IFS= read -r expected_kind; do
+  [[ -n "$expected_kind" ]] || continue
+  [[ "$frm_expr" == *"customresource_kind=\"$expected_kind\""* ]] || {
+    echo "Refusing: FluxResourceMetricsMissing does not watch $expected_kind metrics." >&2
+    exit 1
+  }
+done < <(
+  yq -r '
+    .customResourceState.config.spec.resources[].groupVersionKind.kind
+  ' "$fksm_values"
+)
 # Inspect the rule expressions only (not explanatory comments): none may use the metric
 # Flux v2 removed.
 if yq -r '.spec.groups[].rules[].expr' "$fr" | rg -q 'gotk_reconcile_condition'; then

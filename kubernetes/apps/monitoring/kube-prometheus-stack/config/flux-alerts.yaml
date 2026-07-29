@@ -21,7 +21,7 @@ spec:
           expr: >-
             gotk_resource_info{
               customresource_kind=~"Kustomization|HelmRelease|GitRepository|OCIRepository|HelmRepository",
-              ready="False",
+              ready!="True",
               suspended!="true"
             } == 1
           for: 15m
@@ -33,20 +33,27 @@ spec:
               {{ $labels.exported_namespace }}/{{ $labels.name }} is failing to reconcile
             description: >-
               The Flux {{ $labels.customresource_kind }}
-              {{ $labels.exported_namespace }}/{{ $labels.name }} has reported Ready=False for
-              more than 15 minutes, so Git is no longer being applied to the cluster. Inspect
-              it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+              {{ $labels.exported_namespace }}/{{ $labels.name }} has not reported Ready=True
+              for more than 15 minutes, so its desired state may no longer be reconciling.
+              Inspect it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
               repository) and rendered manifests. Intentionally suspended resources are
               excluded.
         - alert: FluxResourceMetricsMissing
-          expr: absent(gotk_resource_info)
+          expr: >-
+            absent(gotk_resource_info{customresource_kind="Kustomization"})
+            or absent(gotk_resource_info{customresource_kind="HelmRelease"})
+            or absent(gotk_resource_info{customresource_kind="GitRepository"})
+            or absent(gotk_resource_info{customresource_kind="OCIRepository"})
+            or absent(gotk_resource_info{customresource_kind="HelmRepository"})
           for: 15m
           labels:
             severity: warning
           annotations:
-            summary: Flux resource-state metrics are missing
+            summary: >-
+              Flux {{ $labels.customresource_kind }} resource-state metrics are missing
             description: >-
-              gotk_resource_info has been absent for more than 15 minutes, so
-              FluxReconciliationFailure cannot fire and Flux reconciliation failures are
+              gotk_resource_info has contained no {{ $labels.customresource_kind }} series for
+              more than 15 minutes, so reconciliation failures for that resource kind are
               undetectable. Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
-              and its RBAC (list/watch on the Flux APIs).
+              custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
+              the Flux APIs).

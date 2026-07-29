@@ -1,7 +1,8 @@
 # Handoff: complete Flux reconciliation alerting (Decision 9)
 
-**Status: ~75% — merged & deployed, but the core metric `gotk_resource_info` is not being
-produced, so the primary alert cannot fire. One runtime bug blocks completion.**
+**Status: fix staged in PR #156, not yet deployed. Live diagnostics confirmed the first
+broken boundary is kube-state-metrics CRD discovery RBAC. Independent review also found and
+addressed a known KSM duplicate-help-text failure mode plus two alert coverage gaps.**
 
 Original design/decisions: `plans/ntfy-flux-implementation-plan.md` (Decision 9). This
 feature was built and merged as **PR #154** (`feat(monitoring): alert on Flux reconciliation
@@ -13,11 +14,11 @@ Notify the phone when Flux fails: a wedged `Kustomization`/`HelmRelease` or an u
 Git/OCI/Helm source must raise a `warning` that routes to the ntfy **`homelab`** topic via
 the existing `Alertmanager → alertmanager-ntfy` path (no routing change).
 
-## Architecture (as shipped)
+## Architecture
 
 ```
-Flux controllers ──> PodMonitor ─────────────> Prometheus            (scrape health; KPS TargetDown covers controller-down)  ✅ WORKING
-Flux CRDs ──> dedicated flux-kube-state-metrics ──> gotk_resource_info ──> Prometheus ──> flux PrometheusRule ──> Alertmanager ──> ntfy/homelab   ❌ metric not produced
+Flux controllers ──> PodMonitor ─────────────> Prometheus            (scrape health; KPS TargetDown covers controller-down)  ✅ LIVE
+Flux CRDs ──> dedicated flux-kube-state-metrics ──> gotk_resource_info ──> Prometheus ──> flux PrometheusRule ──> Alertmanager ──> ntfy/homelab   ⏳ PR #156
 ```
 
 Why a dedicated kube-state-metrics (not the bundled one): the **kube-prometheus-stack
@@ -25,7 +26,7 @@ HelmRelease has a confirmed upgrade wedge** — any change to KPS values hangs i
 upgrade. So **KPS values must stay untouched** and Flux CR metrics come from a separate,
 `--custom-resource-state-only` KSM instance. Do not "fix" this by editing KPS values.
 
-## What is TRUE right now (verified on cluster)
+## Live diagnosis before PR #156
 
 - Everything reconciled; `flux-kube-state-metrics` Kustomization + HelmRelease Ready.
 - **KPS untouched** (still revision .v52) — the wedge was avoided. Keep it that way.
@@ -35,99 +36,69 @@ upgrade. So **KPS values must stay untouched** and Flux CR metrics come from a s
   `gotk_resource_info` returns empty; `{__name__=~"kube_customresource.*"}` is also empty
   (so the `gotk` prefix DID apply — it's not a naming problem, the metric simply isn't
   emitted).
-- Manifests render correctly and match the canonical Flux CRS config, so this is a **runtime
-  rejection inside kube-state-metrics v2.19.1** (config parse OR RBAC), not a manifest typo.
+- The repository's guarded diagnostic proved the service account can list/watch all five Flux
+  resource kinds but **cannot list/watch CRDs**. The exporter log contains the corresponding
+  `customresourcedefinitions.apiextensions.k8s.io is forbidden` error.
+- KSM reports a successful custom-resource config load. Therefore the current zero-series
+  failure is CRD discovery RBAC, not YAML parsing or Prometheus discovery.
+- Independent comparison with the canonical Flux example found that the five collectors used
+  one repeated help string. KSM's metric-header sanitization has historically dropped resource
+  families in that configuration; canonical Flux uses a kind-specific help string.
 - Side effect: `FluxResourceMetricsMissing` (the watchdog) will fire a `warning` to `homelab`
-  until the metric flows — that is correct behavior, not a new bug. It self-resolves once
-  fixed.
+  until metrics flow. PR #156 changes the watchdog to remain active if any configured kind is
+  missing instead of only when the entire metric family disappears.
 
-## STEP 1 — Assess current state (run these first; state may have changed)
+## Changes staged in PR #156
 
-Kubeconfig is at repo-root `.kube/config`. Run tools via mise.
+- Minimal `list`/`watch` access to
+  `customresourcedefinitions.apiextensions.k8s.io`, which KSM requires before constructing its
+  custom-resource collectors.
+- A unique help string for each Flux kind contributing to `gotk_resource_info`, with a CI
+  assertion preventing regression to repeated help strings.
+- `FluxReconciliationFailure` selects every unsuspended resource with `ready!="True"`, covering
+  `False`, `Unknown`, and a missing Ready label.
+- `FluxResourceMetricsMissing` checks each Decision-9 kind independently.
+- Promtool behavior tests for readiness, suspension, and partial metric loss.
+- `mise exec -- just kube monitoring-verify` as the fail-fast live acceptance gate.
+- `mise exec -- just kube flux-alerts-diagnostics` as the read-only, stage-by-stage diagnostic.
 
-```
-# The definitive diagnostic — exporter startup logs (parse error vs forbidden):
-mise exec -- kubectl --kubeconfig .kube/config -n monitoring \
-  logs -l app.kubernetes.io/instance=flux-kube-state-metrics --tail=120
+KPS values remain untouched.
 
-# RBAC yes/no — can the SA list Flux resources?
-mise exec -- kubectl --kubeconfig .kube/config auth can-i \
-  list kustomizations.kustomize.toolkit.fluxcd.io \
-  --as=system:serviceaccount:monitoring:flux-kube-state-metrics
+## Next execution steps
 
-# What the exporter actually serves at the source (rules out Prometheus-side issues):
-mise exec -- kubectl --kubeconfig .kube/config -n monitoring \
-  exec deploy/flux-kube-state-metrics -- wget -qO- localhost:8080/metrics | grep -c gotk_resource_info
-
-# Is the config actually mounted/what did it load:
-mise exec -- kubectl --kubeconfig .kube/config -n monitoring \
-  exec deploy/flux-kube-state-metrics -- cat /etc/customresourcestate/config.yaml | head -40
-
-# Confirm the ClusterRole/Binding + SA exist and match:
-mise exec -- kubectl --kubeconfig .kube/config get clusterrole flux-kube-state-metrics -o yaml
-mise exec -- kubectl --kubeconfig .kube/config get clusterrolebinding flux-kube-state-metrics -o yaml
-mise exec -- kubectl --kubeconfig .kube/config -n monitoring get sa
-```
-
-## STEP 2 — Fix based on the diagnosis
-
-Branch off fresh `origin/main`: `feat/flux-ksm-fix` (see workflow rules below). All edits stay
-in `kubernetes/apps/monitoring/flux-kube-state-metrics/`. **Do not touch kube-prometheus-stack
-values.**
-
-- **`auth can-i` → `no`, or logs show `forbidden ... cannot list kustomizations`** → RBAC.
-  The SA name is `flux-kube-state-metrics` (from `fullnameOverride`). Verify the rendered
-  Deployment `serviceAccountName`, the actual SA name on-cluster, and that
-  `app/rbac.yaml`'s ClusterRoleBinding subject matches (name + `namespace: monitoring`). Fix
-  `app/rbac.yaml`.
-
-- **Logs show `failed to parse ... custom resource state ... config`** → CRS schema. Compare
-  `app/values.yaml` `customResourceState.config` against the **current**
-  `fluxcd/flux2-monitoring-example` KSM config for a KSM version matching `v2.19.1` (chart
-  `8.0.0`). Likely suspects: the `each`/`labelsFromPath` placement, the `Info` metric shape,
-  or the `'[type=Ready]'` path-selector syntax. Fix `app/values.yaml`.
-
-- **Logs clean, `can-i` = `yes`, but metric still absent** → confirm the config file is
-  actually being read (check the `--custom-resource-state-config-file` flag in logs and the
-  mounted file), and curl the `/metrics` endpoint directly. Consider whether KSM emitted the
-  metric under a different name than expected.
-
-After the fix: `mise exec -- just ci` must pass (it runs `scripts/validate/monitoring.sh`,
-which already asserts the architecture and that KPS values are unchanged — extend those
-assertions if the fix changes shape). Open a PR; **do not merge** (operator's job).
-
-## STEP 3 — Verify the live label schema (after the metric flows)
-
-The alert in `kube-prometheus-stack/config/flux-alerts.yaml` assumes `ready="False"`,
-`suspended!="true"`, and label `exported_namespace`. Confirm against real series:
+1. Rebase PR #156 onto fresh `origin/main`, run `mise exec -- just ci`, and update the PR.
+2. The operator reviews and merges PR #156.
+3. Wait for Flux reconciliation, then run:
 
 ```
-count by (__name__) ({__name__=~"gotk.*"})        # expect gotk_resource_info present
-count by (ready) (gotk_resource_info)             # expect "True"/"False"/"Unknown"
-count by (suspended) (gotk_resource_info)         # expect "false"/"true"
-count by (exported_namespace) (gotk_resource_info)# expect your namespaces
-gotk_resource_info{ready="False", suspended!="true"}   # expect empty on a healthy cluster
+mise exec -- just kube monitoring-verify
 ```
 
-If any casing differs, adjust `flux-alerts.yaml` (`FluxReconciliationFailure.expr` and the
-`monitoring.sh` assertion) and re-run `just ci`.
+4. If it fails, run:
 
-## STEP 4 — End-to-end proof (operator, optional but closes the plan)
+```
+mise exec -- just kube flux-alerts-diagnostics
+```
 
-Hold a safe Flux resource `Ready=False` for >15 min (e.g. point a throwaway `GitRepository`
-at a bad URL). Confirm `FluxReconciliationFailure` → `warning` → ntfy `homelab` → phone, then
-restore → resolves. Confirm a genuinely *suspended* resource does NOT trip it, and that
-`FluxResourceMetricsMissing` is inactive while metrics exist.
+The live gate requires an up exporter target, all five configured kinds in Prometheus, both
+healthy alert rules, an active Alertmanager connection, and the expected ntfy receiver/route.
+
+## End-to-end proof (operator, deferred)
+
+A synthetic failure that is held for more than 15 minutes would close the plan by proving
+`FluxReconciliationFailure` → `warning` → ntfy `homelab` → phone and subsequent resolution.
+No guarded recipe currently exists for that cluster mutation, so do not create or modify a
+Flux resource ad hoc. Add a confirmation-guarded recipe before performing this test.
 
 ## Workflow constraints (must follow)
 
 - This checkout is a **linked worktree**; it is the absolute boundary. No new worktrees.
-- Branch off `origin/main`; never commit/push to `main`; **never merge** (no `gh pr merge`) —
-  the operator merges.
+- Work only on `fix/flux-alert-signal-validation`; never commit/push to `main`; **never merge**
+  (no `gh pr merge`) — the operator merges.
 - `mise exec -- just ci` must pass locally before opening/updating the PR. Prefix all
   operator commands with `mise exec --`.
 - Do not touch `kube-prometheus-stack/app/values.yaml` (upgrade wedge).
-- Never run raw cluster mutations; diagnostics above are read-only.
+- Never run raw cluster mutations or health checks; use the guarded `just` recipes above.
 
 ## Key files
 
