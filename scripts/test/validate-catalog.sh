@@ -358,7 +358,7 @@ assert_exact_lines 'Conformance campaigns' "$conformance_expected" "$conformance
 expected_smoke=$'chainsaw.smoke.cluster.default\nchainsaw.smoke.media.qbittorrent\nchainsaw.smoke.media.qbit-manage\nchainsaw.smoke.platform.all'
 actual_smoke="$(yq -r '.campaigns.smoke.members[]' "$catalog")"
 assert_exact_lines 'Campaign smoke aggregate ordering' "$expected_smoke" "$actual_smoke"
-expected_resilience=$'test.flux-restart\ntest.portainer-persistence\nchainsaw.resilience.qbittorrent-vpn-disconnect\nchainsaw.resilience.qbittorrent-pod-recreation\nchainsaw.resilience.plex-cross-node-reschedule\nchainsaw.resilience.test-reports-persistence\ntest.resilience.plex-node-reboot'
+expected_resilience=$'test.flux-restart\ntest.portainer-persistence\nchainsaw.resilience.qbittorrent-vpn-disconnect\nchainsaw.resilience.qbittorrent-pod-recreation\nchainsaw.resilience.plex-cross-node-reschedule\nchainsaw.resilience.test-reports-persistence\nchainsaw.resilience.tailscale-subnet-router-replica-recovery\ntest.resilience.plex-node-reboot'
 actual_resilience="$(yq -r '.campaigns.resilience.members[]' "$catalog")"
 assert_exact_lines 'Campaign resilience ordering' \
   "$expected_resilience" "$actual_resilience"

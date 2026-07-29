@@ -1,0 +1,194 @@
+# promtool unit tests for the Tailscale PrometheusRule alerts
+# (kubernetes/apps/networking/tailscale-operator/monitoring/prometheusrule.yaml).
+#
+# scripts/validate/tailscale-alerts.sh extracts the live rule .spec into rules.yaml next to
+# this file and runs `promtool test rules`, so the PromQL is single-sourced (no duplication).
+#
+# Each alert is exercised across three temporal states — before its `for:` (silent),
+# at/after (firing), and after recovery (silent) — so a `for:` regression fails as surely as a
+# metric typo. Each `absent()` MetricsMissing alert also gets an "unrelated object present but
+# the target series absent" case, proving the label matchers INSIDE absent() are correct rather
+# than merely that absent() works. eval interval is 1m throughout. exp_annotations are matched
+# too (promtool requires it), so alert text is covered as a bonus.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # --- TailscaleOperatorDown (deployment available == 0, for 10m) -----------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="tailscale", deployment="operator"}'
+        # healthy(0-2), down(3-17 = 15m), recovered(18-22)
+        values: '1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 11m # down held 8m (< 10m) -> pending, not firing
+        alertname: TailscaleOperatorDown
+        exp_alerts: []
+      - eval_time: 14m # down held 11m (>= 10m) -> firing
+        alertname: TailscaleOperatorDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: tailscale, deployment: operator}
+            exp_annotations:
+              summary: Tailscale operator is down
+              description: >-
+                The tailscale operator Deployment has 0 available replicas for over 10
+                minutes. Tailnet proxies, the ntfy Ingress, and the lab subnet router are no
+                longer reconciled, and new/replaced devices will not be provisioned. Check
+                the operator Deployment and its HelmRelease (docs/tailscale-operator.md).
+      - eval_time: 20m # recovered -> not firing
+        alertname: TailscaleOperatorDown
+        exp_alerts: []
+
+  # --- TailscaleOperatorMetricsMissing: metric present -> silent ------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="tailscale", deployment="operator"}'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TailscaleOperatorMetricsMissing
+        exp_alerts: []
+
+  # --- TailscaleOperatorMetricsMissing: UNRELATED deployment present, target absent -> fires ---
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="tailscale", deployment="something-else"}'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 14m # target absent < 15m -> pending
+        alertname: TailscaleOperatorMetricsMissing
+        exp_alerts: []
+      - eval_time: 16m # target absent >= 15m -> firing (labels from the equality matchers)
+        alertname: TailscaleOperatorMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: tailscale, deployment: operator}
+            exp_annotations:
+              summary: Tailscale operator metrics are missing
+              description: >-
+                kube-state-metrics has reported no data for the tailscale operator Deployment
+                for 15 minutes, so TailscaleOperatorDown cannot fire. The Deployment may be
+                deleted, or kube-state-metrics/the tailscale namespace may be unhealthy.
+
+  # --- TailscaleSubnetRouterDown (ts-lab-subnet-router-* ready == 0, for 10m) -----------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ts-lab-subnet-router-abc123"}'
+        values: '2 2 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: TailscaleSubnetRouterDown
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: TailscaleSubnetRouterDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: tailscale, statefulset: ts-lab-subnet-router-abc123}
+            exp_annotations:
+              summary: Tailscale lab subnet router is down
+              description: >-
+                No lab-subnet-router replicas are Ready for over 10 minutes. Remote access to
+                *.lab.supermorphic.com over Tailscale is DOWN (no tailnet path to Pi-hole or
+                the Envoy gateway VIP). Check the Connector pods in the tailscale namespace
+                and docs/tailscale-lab-domain.md.
+      - eval_time: 20m
+        alertname: TailscaleSubnetRouterDown
+        exp_alerts: []
+
+  # --- TailscaleSubnetRouterHADegraded (ready == 1, for 15m) ----------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ts-lab-subnet-router-abc123"}'
+        # healthy(0-2), degraded 1 replica(3-20 = 18m), recovered(21-23)
+        values: '2 2 2 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2'
+    alert_rule_test:
+      - eval_time: 14m # degraded held 11m (< 15m) -> not firing
+        alertname: TailscaleSubnetRouterHADegraded
+        exp_alerts: []
+      - eval_time: 19m # degraded held 16m (>= 15m) -> firing
+        alertname: TailscaleSubnetRouterHADegraded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: tailscale, statefulset: ts-lab-subnet-router-abc123}
+            exp_annotations:
+              summary: Tailscale lab subnet router HA degraded (1 of 2 replicas)
+              description: >-
+                Only one lab-subnet-router replica is Ready for over 15 minutes. Remote
+                *.lab.supermorphic.com access still works, but there is no failover — a single
+                node failure would cut it. The ProxyClass enforces one replica per node
+                (DoNotSchedule), so a Pending replica usually means a node is unavailable.
+      - eval_time: 23m # recovered -> not firing
+        alertname: TailscaleSubnetRouterHADegraded
+        exp_alerts: []
+
+  # --- TailscaleSubnetRouterMetricsMissing: a matching STS present -> silent ------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ts-lab-subnet-router-abc123"}'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TailscaleSubnetRouterMetricsMissing
+        exp_alerts: []
+
+  # --- TailscaleSubnetRouterMetricsMissing: UNRELATED STS present, no match -> fires ----------
+  # Proves the regex matcher `statefulset=~"ts-lab-subnet-router-.*"` inside absent() is correct.
+  # absent() over a regex matcher carries only the equality-matched labels (namespace), no statefulset.
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ingress-proxies"}'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TailscaleSubnetRouterMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: tailscale}
+            exp_annotations:
+              summary: Tailscale lab subnet router metrics are missing
+              description: >-
+                kube-state-metrics reports no lab-subnet-router StatefulSet for 15 minutes, so
+                the down/degraded alerts cannot fire. The Connector may have been removed or
+                never reconciled — confirm the tailscale-operator-subnet-router Kustomization
+                is Ready and not suspended.
+
+  # --- TailscaleNtfyIngressDown (ingress-proxies ready == 0, for 10m) -------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ingress-proxies"}'
+        values: '2 2 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: TailscaleNtfyIngressDown
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: TailscaleNtfyIngressDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: tailscale, statefulset: ingress-proxies}
+            exp_annotations:
+              summary: Tailscale ntfy ingress proxies are down
+              description: >-
+                No ingress-proxies replicas are Ready for over 10 minutes. Off-site ntfy
+                notifications over the tailnet (iPhone via Tailscale) will not be delivered.
+                Check the ingress-proxies StatefulSet in the tailscale namespace.
+      - eval_time: 20m
+        alertname: TailscaleNtfyIngressDown
+        exp_alerts: []
+
+  # --- TailscaleNtfyIngressHADegraded (ingress-proxies ready == 1, for 15m) -------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset="ingress-proxies"}'
+        values: '2 2 2 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TailscaleNtfyIngressHADegraded
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: TailscaleNtfyIngressHADegraded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: tailscale, statefulset: ingress-proxies}
+            exp_annotations:
+              summary: Tailscale ntfy ingress HA degraded (1 of 2 replicas)
+              description: >-
+                Only one ingress-proxies replica is Ready for over 15 minutes. Off-site ntfy
+                delivery still works but has no failover until the second replica recovers.
+      - eval_time: 23m
+        alertname: TailscaleNtfyIngressHADegraded
+        exp_alerts: []

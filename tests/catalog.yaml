@@ -34,6 +34,7 @@ executions:
     - validation.trivy
     - validation.tailscale-operator
     - validation.tailscale-subnet-router
+    - validation.tailscale-alerts
     - validation.ntfy
     - validation.alertmanager-ntfy
 
@@ -98,6 +99,7 @@ campaigns:
       - chainsaw.smoke.platform.longhorn
       - chainsaw.smoke.platform.portainer
       - chainsaw.smoke.platform.smb
+      - chainsaw.smoke.platform.tailscale
   integration:
     description: Focused state-changing integration tests.
     mutates_cluster: true
@@ -124,6 +126,7 @@ campaigns:
       - chainsaw.resilience.qbittorrent-pod-recreation
       - chainsaw.resilience.plex-cross-node-reschedule
       - chainsaw.resilience.test-reports-persistence
+      - chainsaw.resilience.tailscale-subnet-router-replica-recovery
       - test.resilience.plex-node-reboot
   probes:
     description: Network and application measurement probes.
@@ -292,6 +295,10 @@ suites:
   - metadata: {id: validation.tailscale-subnet-router, source: validation, framework: bash, suite: ci, tier: offline, target: tailscale-subnet-router, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-subnet-router-validate", implementation: scripts/validate/tailscale-subnet-router.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.tailscale-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: tailscale-alerts, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube tailscale-alerts-validate", implementation: scripts/validate/tailscale-alerts.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.ntfy, source: validation, framework: bash, suite: ci, tier: offline, target: ntfy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
@@ -498,6 +505,11 @@ suites:
     runner: {command: "mise exec -- just test smoke platform smb", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/smb, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.tailscale, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: tailscale, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform tailscale", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/tailscale, selector: "homelab-talos/suite=platform"}
 
   - metadata: {id: diagnostics.cluster, source: diagnostics, framework: bash, suite: cluster, tier: diagnostics, target: cluster, scenario: null, scope: cluster, intent: diagnostic, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
@@ -539,6 +551,11 @@ suites:
     runner: {command: "TEST_REPORT_RUN_ID=<run-id> CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence mise exec -- just test resilience test-reports-persistence", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/test-reports-persistence, selector: "homelab-talos/suite=test-reports-persistence"}
+  - metadata: {id: chainsaw.resilience.tailscale-subnet-router-replica-recovery, source: chainsaw, framework: chainsaw, suite: networking, tier: resilience, target: tailscale-subnet-router-replica-recovery, scenario: null, scope: network, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:tailscale-subnet-router-replica-recovery"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:tailscale-subnet-router-replica-recovery mise exec -- just test resilience tailscale-subnet-router-replica-recovery", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/tailscale-subnet-router-replica-recovery, selector: "homelab-talos/suite=tailscale-subnet-router-replica-recovery"}
   - metadata: {id: test.resilience.plex-node-reboot, source: test, framework: bash, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-node-reboot"}
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/scenarios/plex-node-reboot.sh}

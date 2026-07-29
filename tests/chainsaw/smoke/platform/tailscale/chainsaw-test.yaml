@@ -1,0 +1,67 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-tailscale
+  labels:
+    homelab-talos/tier: smoke
+    homelab-talos/target: platform
+    homelab-talos/suite: platform
+spec:
+  # Tailscale data-plane structural health: the operator is up, the ntfy ingress ProxyGroup and
+  # the lab subnet router are reconciled, and the Connector ADVERTISES exactly the two /32s.
+  # This proves the operator CONFIGURED the routes — NOT that tailnet clients are permitted to
+  # use them: route approval is control-plane state outside Kubernetes, validated by the
+  # operator-side/manual acceptance (docs/tailscale-lab-domain.md), not Chainsaw. HA node-spread
+  # and route exposure stay in `just kube tailscale-subnet-router-verify` / the resilience test.
+  namespace: flux-system
+  concurrent: false
+  timeouts:
+    assert: 2m
+  steps:
+    - name: operator-and-proxies-healthy
+      try:
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: operator
+                namespace: tailscale
+              status:
+                (conditions[?type == 'Available']):
+                  - status: "True"
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: StatefulSet
+              metadata:
+                name: ingress-proxies
+                namespace: tailscale
+              status:
+                readyReplicas: 2
+      catch:
+        - events:
+            namespace: tailscale
+    - name: subnet-router-connector-reconciled
+      try:
+        - assert:
+            resource:
+              apiVersion: tailscale.com/v1alpha1
+              kind: Connector
+              metadata:
+                name: lab-subnet-router
+              spec:
+                subnetRouter:
+                  advertiseRoutes:
+                    - 192.168.90.2/32
+                    - 192.168.90.30/32
+              status:
+                (conditions[?type == 'ConnectorReady']):
+                  - status: "True"
+      catch:
+        - describe:
+            apiVersion: tailscale.com/v1alpha1
+            kind: Connector
+            name: lab-subnet-router
+        - events:
+            namespace: tailscale
