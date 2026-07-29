@@ -2,28 +2,31 @@
 
 ## Status
 
-- Revision: 5 (2026-07-29). Reviewed REVISE AND RESUBMIT four times: revision 1
+- Revision: 7 (2026-07-29). Reviewed REVISE AND RESUBMIT five times: revision 1
   (7 MAJOR, 1 MINOR), revision 2 (1 BLOCKER, 4 MAJOR, 4 MINOR), revision 3
-  (1 BLOCKER, 2 MAJOR, 2 MINOR), revision 4 (1 BLOCKER, 1 MAJOR, 3 MINOR). All
-  dispositions are recorded in "Plan review disposition", including the findings the
-  amendments decline or partly decline on verified evidence. **Every technical
-  finding across all four passes is now closed; the sole remaining blocker is
-  operator evidence that no agent can produce.**
-- Status: **Draft — blocked on two operator client-discovery observations, one
-  seven-item decision bundle, and decision 8 recorded separately; then a
-  fresh-context independent plan review and operator approval. No implementation
-  performed.**
+  (1 BLOCKER, 2 MAJOR, 2 MINOR), revision 4 (1 BLOCKER, 1 MAJOR, 3 MINOR),
+  revision 6 (1 BLOCKER, 5 MAJOR, 1 MINOR). All dispositions are recorded in "Plan
+  review disposition", including the findings the amendments decline or partly
+  decline on verified evidence. **Revision 7 closes every technical finding from
+  the fifth pass.** Its fresh-context approval review returned **APPROVE WITH MINOR
+  REVISIONS** (0 BLOCKER, 0 MAJOR, 4 MINOR).
+- Status: **Approved for implementation.** The operator explicitly approved
+  revision 7 on 2026-07-29. The four non-blocking MINOR findings remain recorded
+  below and must be honored in their named implementation phases. No implementation
+  performed.
 - Baseline: `origin/main` at `c1201e6`
-- Working branch for this plan document: `docs/agent-skills-architecture-plan`
+- Approval-record branch baseline: `origin/main` at `e2f007e`
+- Working branch for this revision:
+  `docs/agent-skills-architecture-approval`
 - Assignment: an operator-supplied planning handoff brief, held outside version
   control. Its requirements are reproduced in this document; no repository file
   depends on it.
-- **The remaining blocker is not closable by an agent.** It requires launching both
-  clients against a scratch repository outside this worktree, which is operator-run
-  by the repository's own boundary rules. Revision 4 reduces it to the smallest
-  honest form: **two observations with a ready-to-paste fixture**, and **one
-  accept-or-override decision bundle**. Everything else that revision 3 gated on has
-  been made conditional or moved to implementation-time validation where it belongs.
+- Operator evidence recorded 2026-07-29: Codex CLI 0.146.0 and Claude Code 2.1.220
+  each discovered the canonical probe skill through their planned repository
+  surface and returned `PROBE-7F3A`. Decisions 1–7 and decision 8 were accepted as
+  recommended. Revision 7 amended decision 5 because current Codex hook support
+  materially changes its premise; the operator accepted that amendment on
+  2026-07-29.
 
 ## Executive summary
 
@@ -215,6 +218,24 @@ checks frontmatter and naming conformance.
 | Claude Code skills | `.claude/skills/<name>/`; **enterprise overrides personal overrides project**, and any of these overrides a bundled skill of the same name. A skill-name entry may be a symlink, which Claude Code follows, loading a shared target once. Nested `.claude/skills/` load after a file in that subtree is touched | Client-enforced |
 | Root-prohibition-wins, nearest-wins, fail-closed conflict handling | Repository policy that nested guidance and skills must honor | **Instruction-only** |
 
+### Per-client hook behavior
+
+Revision 7 corrects the plan's claim that Codex had no pre-tool hook mechanism.
+That was true of an earlier client generation but is false for the observed Codex
+CLI 0.146.0. Current primary documentation establishes:
+
+| Surface | Behavior | Residual |
+|---|---|---|
+| Codex hooks | Project hooks load from `.codex/hooks.json` or inline `.codex/config.toml`; `PreToolUse` can block shell, `exec_command`, `apply_patch`, MCP, and most local function tools | Project hooks run only after project-layer trust and exact-definition hook trust, can be disabled individually or globally, and specialized tool paths may bypass the default hook path |
+| Claude Code hooks | Project hooks load from `.claude/settings.json`; `PreToolUse` can block Bash, Write, Edit, Read, Agent, MCP, and other documented tools | Project hooks depend on workspace trust and can be disabled with `disableAllHooks`; managed policy is the only non-user-disableable tier |
+
+Both clients can therefore use **one repository-owned policy script with thin
+client adapters**. Neither client's project hook is an unconditional security
+boundary: trust can be withheld, hooks can be disabled, and client tool coverage is
+not complete. The canonical compatibility references are the current
+[Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks).
+
 Three corrections to revision 1 follow from this. Codex **does not** let a global
 file outrank the repository — the reverse is true. Codex skills **do not** shadow by
 name. And the "8 KB Codex skill cap" was a secondary-source error: Codex applies a
@@ -263,10 +284,11 @@ authoritative.
 
 | Residual | Why enforcement is unavailable | Mitigation |
 |---|---|---|
-| An agent may edit files without loading `worktree-management` | Codex has no pre-tool hook mechanism; Claude Code hooks are client-specific and optional | The prohibition and stop condition live in `AGENTS.md`; where hooks are available they turn it into a hard stop; `just repo agent-preflight` gives the operator the same facts |
+| An agent may edit files without loading `homelab-worktree-management` | Repository hooks in both clients require trust, can be disabled outside managed policy, and documented hook coverage has exceptions | The prohibition and stop condition live in `AGENTS.md`; Phase 2 adds a shared blocking policy script with Codex and Claude adapters; `just repo agent-preflight` reports whether the canonical skills resolve, while the operator verifies hook trust separately |
 | A personal Claude Code skill can shadow a repository skill | Precedence is client-enforced in the wrong direction and not configurable per repository | Distinctive `homelab-` prefix makes collision improbable; no instruction is the sole control for anything irreversible |
 | An agent may read another worktree slot | The boundary is instruction, not a sandbox | The explicit `AGENTS.md` prohibition; runtime filesystem sandboxing where the client offers it; the rule that agents consume only operator-supplied derived slot output; and a prohibition on any recipe or skill that exposes another slot's content. **No deterministic detection exists where the runtime lacks filesystem isolation** — `just repo slots` detects overlapping *changed paths*, which is not the same thing and is not a mitigation for unauthorized reads |
 | Skill content can be ignored once loaded | No platform enforces adherence to loaded text | Deterministic gates (`just ci`, `*_CONFIRM`, branch protection) sit downstream of every skill; behavioral evaluation measures adherence as a trend |
+| Reviewer model-family identity and fresh-session isolation are attested rather than proven | Clients expose version and active model but no repository mechanism can prove that a reviewer lacks prior conversational context or that a reported family is independent | Every gate records the evidence contract below; the operator attests the author family and fresh-session boundary; `homelab-pr-readiness` checks the record and artifact/base commits and stops on missing or inconsistent evidence |
 
 Anything not on this list that lacks a deterministic backstop is a gap to be fixed,
 not a residual to be accepted.
@@ -312,7 +334,7 @@ behavior.**
 Two consequences:
 
 - **No `docs/` worktree runbook.** The complete procedure and every recovery case
-  live in the worktree skill. `AGENTS.md` keeps the prohibition and the
+  live in `homelab-worktree-management`. `AGENTS.md` keeps the prohibition and the
   skill-loading requirement.
 - **`README.md` stops restating agent-only workflow.** Removed and replaced with a
   link: the agent-side worktree/rebase paragraphs (L131–141), the agent PR-loop
@@ -331,26 +353,46 @@ Two consequences:
    operator-override carve-out, stated once, authoritatively.
 3. Worktree invariants: the active slot is an absolute filesystem boundary; never
    run a `git worktree` lifecycle subcommand; never start work in a slot parked on
-   an unmerged branch; **do not modify any file before loading the worktree skill,
-   and if it cannot be loaded, stop and report.**
+   an unmerged branch; **do not modify any file before loading
+   `homelab-worktree-management`, and if it cannot be loaded, stop and report.**
 4. Concurrency invariants: one slot ⇒ one agent ⇒ one branch; fetch before final
    validation and before every push; rebase, never merge; `--force-with-lease` only,
    and a failed lease is a full stop; the human owns merge order.
-5. Cluster interface: all mutation and health checks go through guarded `just`
-   recipes; never run raw `kubectl`, `talosctl`, `helm`, or `flux` against the live
-   cluster; `*_CONFIRM` recipes are operator-run and agents never invent or guess a
-   confirmation value.
-6. Secrets: never handle the age private key, decrypt or rewrite `*.sops.yaml`, or
-   print secret material in any output.
+5. Pinned and guarded interface: run repository tooling through `mise` and `just`;
+   all mutation and health checks go through guarded `just` recipes; never run raw
+   `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster; add a guarded
+   recipe when an operation lacks one; `*_CONFIRM` recipes are operator-run and
+   agents never invent or guess a confirmation value; cluster-dependent
+   `*-verify`, `*-status`, `*-preflight`, and diagnostic recipe families are
+   operator-only.
+6. Secrets: all secrets are SOPS-encrypted; never handle the age private key,
+   decrypt or rewrite `*.sops.yaml`, copy legacy ciphertext, print secret material,
+   or commit plaintext credentials.
 7. Validation contract: `just ci` is authoritative, cluster-independent, and
-   secret-free; the cluster-dependent recipe families never enter it.
-8. Precedence and conflict resolution, labelled as repository policy.
-9. The skill index — one line per skill: name, when to load it, what it owns.
-10. Change classification and the mandatory review boundaries: which gates apply to
+   secret-free, must pass before a PR is opened or updated, and never includes the
+   cluster-dependent recipe families.
+8. Talos source and compatibility invariants: never hand-edit generated
+   `clusterconfig/`; change `talos/talconfig.yaml` and `talos/patches/` through the
+   generation flow; preserve Talos, Kubernetes, and Cilium compatibility.
+9. GitOps safety invariants: preserve the established app layout and `dependsOn`
+   ordering; reuse the existing HelmRelease, Kustomization, and OCIRepository
+   patterns; stage new apps suspended before operator rollout; never suspend an
+   existing Flux resource without authorization; use `Recreate` or a StatefulSet
+   for any `ReadWriteOnce` workload. These remain always-on after
+   `homelab-gitops-change` lands; that skill owns procedure, not permission.
+10. Precedence and conflict resolution, labelled as repository policy.
+11. The skill index — one line per skill: name, when to load it, what it owns.
+12. Change classification and the mandatory review boundaries: which gates apply to
     which class, the independence requirement, escalation when a gate cannot be
     satisfied, and the fail-closed rule for ambiguous cases.
-11. Routing rules, and the human operator's sole authority over plan approval,
+13. Routing rules, and the human operator's sole authority over plan approval,
     merge, and rollout.
+
+This set deliberately retains every safety rule currently under `AGENTS.md`'s
+Talos, Flux/app-layout, validation, and cluster-operation headings. Phase 4 moves
+repeatable domain procedure into skills; it does **not** remove these invariants.
+The 1C rule-by-rule mapping is therefore implementable without a temporary policy
+gap.
 
 Size is a **maintainability signal, not an acceptance criterion** — with one
 evidence-based exception now available: Codex truncates the concatenated instruction
@@ -385,13 +427,21 @@ level in Codex.
   `../../.agents/skills/<name>`. Both clients document following symlinked skill
   directories, and Claude Code loads a shared target once. **There is no generated
   artifact and no drift to detect** — there is one file.
+- Canonical `.agents/skills/` content contains **no symlinks at any depth**. Every
+  relative file or Markdown-link target must resolve inside the repository root;
+  absolute filesystem links and `file:` URLs are rejected. The only permitted
+  instruction-layer symlinks are the named `.claude/skills/<name>` adapters, whose
+  resolved targets must be the corresponding canonical directories inside this
+  worktree.
 - **No `.codex/skills/` tree**, and none as a fallback either — the path is not a
   documented Codex discovery location. See "Failure policy".
-- `CLAUDE.md` remains a thin adapter importing `AGENTS.md`, with its dangling
-  `MEMORY.md` reference removed.
-- The minimum supported client versions for both tools are recorded at the
-  pre-approval evidence gate and written into `docs/`, so a future discovery-behavior
-  change is diagnosable rather than mysterious.
+- `CLAUDE.md` becomes an exact one-line adapter: `@AGENTS.md` plus a final newline.
+  It contains no client-specific normative rules. The validator compares its bytes,
+  not Markdown-link semantics, so the client-specific `@` import and any accidental
+  appended content are both covered.
+- The observed client versions and any documented minimums are recorded at the
+  pre-approval evidence gate and written into `docs/`, so a future discovery or
+  hook-behavior change is diagnosable rather than mysterious.
 
 ### Skill authoring contract
 
@@ -455,34 +505,36 @@ planning, review, remediation, and readiness foundation exists.
 
 | Skill | Owns | Does not own |
 |---|---|---|
-| `worktree-management` | Checkout and slot detection, branch creation and resume, pre-edit verification, the fetch/rebase/revalidate loop, `--force-with-lease` handling, recovery cases, stale-slot detection and escalation | Multi-slot planning; what to change; any review verdict |
-| `project-planning` | Turning an approved architecture into an implementation plan: `plans/` house style, phase and exit-gate structure, sequencing, rollback design, validation strategy, acceptance criteria | Deciding whether the plan is good enough; approving anything |
-| `plan-review` | The pre-implementation gate: independent assessment of architecture, sequencing, risk, rollback, validation strategy, and acceptance criteria; its evidence requirements, severity criteria, and verdict format | Implementation correctness; branch or CI state; authoring the fix |
-| `code-review` | The post-implementation gate: does the diff correctly and safely implement the approved plan; its evidence requirements, severity criteria, and verdict format | Re-litigating the plan; branch completeness; merge decisions |
-| `pr-readiness` | The final pre-merge gate: complete branch and diff state, captured validation evidence, CI status, outstanding operator-only checks, documentation, and confirmation that earlier gates were satisfied and their findings closed | Performing code review again; fixing findings; merging |
+| `homelab-worktree-management` | Checkout and slot detection, branch creation and resume, pre-edit verification, the fetch/rebase/revalidate loop, `--force-with-lease` handling, recovery cases, stale-slot detection and escalation | Multi-slot planning; what to change; any review verdict |
+| `homelab-project-planning` | Turning an approved architecture into an implementation plan: `plans/` house style, phase and exit-gate structure, sequencing, rollback design, validation strategy, acceptance criteria | Deciding whether the plan is good enough; approving anything |
+| `homelab-plan-review` | The pre-implementation gate in two explicit modes: independently challenge a significant-change architecture, or assess an implementation plan's sequencing, risk, rollback, validation strategy, and acceptance criteria; owns the shared evidence requirements, severity criteria, and verdict format | Implementation correctness; branch or CI state; authoring the fix |
+| `homelab-code-review` | The post-implementation gate: does the diff correctly and safely implement the approved plan; its evidence requirements, severity criteria, and verdict format | Re-litigating the plan; branch completeness; merge decisions |
+| `homelab-pr-readiness` | The final pre-merge gate: complete branch and diff state, captured validation and review evidence, CI status, outstanding operator-only checks, documentation, and confirmation that earlier gates were satisfied and their findings closed | Performing code review again; fixing findings; merging |
 
 **Later phases:**
 
 | Skill | Phase | Owns |
 |---|---|---|
-| `parallel-work-coordination` | 2 | Wave decomposition, task ownership, collision detection, integration order, handoff evidence |
-| `gitops-change` | 4 | App layout, `dependsOn` ordering, RWO → `Recreate`, the stage-inert-then-activate pattern, the validator-wiring pattern |
-| `cluster-diagnosis` | 4 | Guarded read-only live investigation; escalation when no recipe exists |
+| `homelab-parallel-work-coordination` | 2 | Wave decomposition, task ownership, collision detection, integration order, handoff evidence |
+| `homelab-gitops-change` | 4 | Procedure within the always-on app-layout, `dependsOn`, RWO, and staged-activation invariants; the validator-wiring pattern |
+| `homelab-cluster-diagnosis` | 4 | Agent-to-operator diagnostic handoff, selection of existing guarded read-only recipes, and interpretation of operator-supplied redacted output; never executes cluster-dependent recipes |
 
 Rejected: a skill per lifecycle verb beyond the three gates; a separate
-`validation-authoring` skill (folded into `gitops-change`); Rust, Linux/systemd, and
-generic Python-AI skills; anything that would restate `docs/`.
+`validation-authoring` skill (folded into `homelab-gitops-change`); Rust,
+Linux/systemd, and generic Python-AI skills; anything that would restate `docs/`.
 
-**Naming.** Given Claude Code's personal-over-project shadowing and its bundled
-`/code-review`, skill directory names should carry a repository-distinctive prefix.
-The prefix, and the specific decision about whether to deliberately replace the
-bundled `/code-review`, are locked before approval (operator decision 1).
+**Naming.** Every literal skill name, directory, frontmatter `name`, adapter entry,
+index entry, fixture, and cross-reference uses the selected `homelab-` prefix.
+`homelab-code-review` is distinct from Claude Code's bundled `/code-review`, which
+this repository does not replace. Unprefixed gate labels such as "code review" in
+ordinary prose name the lifecycle concept, never a filesystem path or invocable
+skill.
 
 ### The three review gates
 
 | | **Plan review** | **Code review** | **PR readiness** |
 |---|---|---|---|
-| When | Before implementation | After implementation | After code-review remediation |
+| When | Before implementation | After implementation | After review remediation |
 | Question | Is this the right change, sequenced and de-risked well enough for human approval? | Does this diff correctly and safely implement the **approved** plan? | Is the complete branch ready to merge? |
 | Inputs | Architecture, proposed plan, repository state | Approved plan, full diff against the correct base, validation output | Whole branch, both prior verdicts and their remediation, CI state, evidence, docs |
 | Out of scope | Implementation detail the plan legitimately defers | Whether the plan itself was wise — settled at gate 1 | Re-reviewing code |
@@ -506,6 +558,48 @@ Common properties, owned by the skills:
 - **Fail-closed escalation.** If an independent reviewer is unavailable, work
   **stops at the gate and is handed to the operator.** Self-review is never a
   substitute.
+
+**Review evidence contract.** Every gate emits a Markdown record with exactly these
+fields; `unknown` is allowed only where stated and never satisfies independence:
+
+| Field | Contract |
+|---|---|
+| `gate` | `homelab-plan-review:architecture`, `homelab-plan-review:plan`, `homelab-code-review`, or `homelab-pr-readiness` |
+| `artifact` | Repository-relative path or PR number plus the exact artifact/head commit SHA |
+| `base` | Exact `origin/main` commit SHA used for the review |
+| `author` | Client, client version, model family, and effort for the model that made the current submitted revision's last substantive change; family may be an operator attestation, and effort may be `unknown` only when the client did not surface it |
+| `reviewer` | Client, client version, model family, and effort; effort has the same narrowly allowed `unknown` case |
+| `fresh_context` | Operator/reviewer attestation that this session received neither the prior review transcript nor the author's accumulated conversation |
+| `independence` | Explicit comparison of author and reviewer model families; mismatch required |
+| `inputs` | Paths, diff range, validation run IDs, and prior gate records actually inspected |
+| `findings` | Stable finding IDs, severity, deterministic evidence, reviewer judgment, and disposition or `open` |
+| `verdict` | One of the verdicts defined by that gate |
+| `recorded_at` | UTC timestamp |
+
+For a repository plan, the record is appended to that plan's review-disposition
+section. For implementation work, the record is placed in the PR description or a
+PR comment and referenced by the subsequent gate; no checked-in coordination file
+is created. `homelab-pr-readiness` verifies that the artifact and base SHAs match
+the current PR, that every required field is present, that the family comparison
+passes, and that each blocker/major has a closure or explicit operator acceptance.
+Commit and base matching are deterministic observations. Author identity, model
+family, and fresh-context isolation remain operator/reviewer attestations and are
+the accepted residual recorded above.
+
+Remediating a finding is substantive authorship; it updates `author` for the next
+approval review. Appending only the already-issued review record or operator
+approval is administrative and does not. This makes independence evaluable across
+alternating revisions instead of pretending a multi-revision artifact has one
+author forever. The reviewer for revision 7 must therefore use a model family other
+than the Sol family that authored its substantive remediation.
+
+The `homelab-plan-review:architecture` and `homelab-plan-review:plan` records are
+two invocation modes of `homelab-plan-review`, not a sixth skill or a fourth
+lifecycle boundary. A
+Significant change that begins with a separately authored architecture uses the
+architecture mode first; the later implementation plan uses the plan mode. If one
+artifact combines both, one plan-mode review covers the complete artifact and says
+so in `inputs`.
 
 ### Change classification and abbreviated paths
 
@@ -534,8 +628,8 @@ model. The split by risk:
 
 | Skill change | Path | Requires |
 |---|---|---|
-| Adding or editing a skill that follows the established schema and alters no safety policy, permission, human authority, secret handling, live-operation workflow, review gate, model routing, or discovery adapter | **Standard** | Independent `code-review`, `pr-readiness`, `just ci`, human merge. **No separate pre-implementation approval** |
-| Changing the skill framework itself, the adapter or discovery layer, `AGENTS.md`, permissions, approval boundaries, safety controls, secret handling, live-operation workflows, or the review architecture | **Significant** | Independent `plan-review` and operator approval before implementation, then the full lifecycle |
+| Adding or editing a skill that follows the established schema and alters no safety policy, permission, human authority, secret handling, live-operation workflow, review gate, model routing, or discovery adapter | **Standard** | Independent `homelab-code-review`, `homelab-pr-readiness`, `just ci`, human merge. **No separate pre-implementation approval** |
+| Changing the skill framework itself, the adapter or discovery layer, `AGENTS.md`, permissions, approval boundaries, safety controls, secret handling, live-operation workflows, or the review architecture | **Significant** | Independent `homelab-plan-review` and operator approval before implementation, then the full lifecycle |
 
 **Skill activation is never gated.** An agent loading an existing repository skill
 requires no approval of any kind — that is the mechanism working as designed, not a
@@ -549,10 +643,17 @@ at any time; only the operator may lower one.**
 
 - **Skills** carry procedure and are the only new instruction artifact.
 - **Subagents** stay an execution tactic chosen per session; no skill requires one.
-- **Hooks** are the deterministic client-side backstop and live in the adapter layer
-  only: a pre-tool guard rejecting writes outside the active slot path, and one
-  rejecting raw cluster commands. Because Codex has no equivalent, **every
-  hook-enforced rule must also exist as an `AGENTS.md` invariant.**
+- **Hooks** are an optional deterministic client-side backstop. One canonical
+  repository-owned script implements the policy; `.codex/hooks.json` and
+  `.claude/settings.json` are thin adapters for their respective `PreToolUse`
+  schemas. It rejects writes outside the active slot and raw live-cluster commands.
+  Phase 2 fixtures replay equivalent allowed and denied tool payloads from both
+  clients against the same script.
+- **Hooks never replace policy.** Both clients allow project hooks to be untrusted
+  or disabled, and Codex documents specialized tool paths that can bypass its
+  default hook path. Every hook-enforced rule therefore remains an `AGENTS.md`
+  invariant and the absence of an active hook is reported, never mistaken for
+  enforcement.
 - **Agent teams** are out of scope.
 
 ### Parallel work: the safe initial boundary
@@ -561,7 +662,8 @@ The initial boundary is **safe parallel sessions, not orchestration.** A human o
 N client windows on N slots. Nothing spawns, supervises, or messages another agent.
 
 Placement: concurrency invariants in `AGENTS.md`; single-slot mechanics in
-`worktree-management`; wave-level concerns in `parallel-work-coordination`.
+`homelab-worktree-management`; wave-level concerns in
+`homelab-parallel-work-coordination`.
 
 **Shared-file collision hot spots**, named because they are structural:
 
@@ -619,17 +721,20 @@ rather than continued if a merge changes a file another slot owns.
 
 | Artifact | Produced by | Independent gate |
 |---|---|---|
-| Architecture for a significant change | Opus, high | Sol, high — forms its own view first |
-| Implementation plan | Sol, high | Opus, high — `plan-review` |
-| Significant implementation | Sol, high | Opus, high — `code-review` |
-| Mechanical implementation | Sol, medium | `code-review` only when risk warrants |
-| Final readiness for Sol-authored work | — | Opus, high — `pr-readiness`, atop deterministic CI |
+| Architecture for a significant change | Opus, high | Sol, high — `homelab-plan-review` in architecture mode, forming its own view first |
+| Implementation plan | Sol, high | Opus, high — `homelab-plan-review` in plan mode |
+| Significant implementation | Sol, high | Opus, high — `homelab-code-review` |
+| Mechanical implementation | Sol, medium | `homelab-code-review` only when risk warrants |
+| Final readiness for Sol-authored work | — | Opus, high — `homelab-pr-readiness`, atop deterministic CI |
 | Merge and rollout | — | Human operator, exclusively |
 
 **Claude proposes or reviews what should be built; Sol independently challenges
 architecture. Sol decides how to implement and performs most execution; Claude
 independently challenges the plan and the implementation.** Effort escalation is
-justified per change, never a default.
+justified per change, never a default. The table describes the default first-pass
+lane. After substantive remediation changes the current revision's author family,
+the next approval review uses the other family according to the evidence contract;
+revision 7 is therefore reviewed by a fresh Opus session.
 
 ### Deterministic enforcement
 
@@ -644,14 +749,17 @@ them into three explicit buckets, and **only bucket 1 gates CI.**
 - frontmatter parses; keys are **exactly** `name` and `description`, with any other
   key — spec-optional or not — rejected in Phase 1;
 - `name` matches directory and satisfies the spec's character rules;
+- every repository skill name begins with the selected `homelab-` prefix;
 - `description` non-empty and ≤1024 characters;
 - `SKILL.md` ≤500 lines;
 - `allowed-tools` is **absent** — its presence is a failure in Phase 1;
 - every canonical skill has exactly one `.claude/skills/<name>` symlink whose
-  resolved target equals the canonical directory; no regular files or orphan
-  symlinks under `.claude/skills/`;
-- every relative markdown link in `AGENTS.md`, `CLAUDE.md`, and skills resolves to
-  an existing path;
+  resolved target equals the canonical directory inside the active repository; no
+  regular files, extra entries, or orphan symlinks under `.claude/skills/`;
+- no symlink exists anywhere below `.agents/skills/`; relative Markdown links in
+  `AGENTS.md` and skills resolve to existing targets inside the repository, while
+  absolute filesystem paths and `file:` URLs are rejected;
+- `CLAUDE.md` is byte-for-byte `@AGENTS.md` plus one final newline;
 - every recipe reference in agent instructions resolves against `just --summary`,
   using an exactly specified grammar (below);
 - `AGENTS.md` contains each required always-on section heading, matched as exact
@@ -676,11 +784,12 @@ invent exclusions.
 
 Revision 3 therefore constrains the list to **agent-only normative sentences that
 have no human-documentation purpose** — the self-merge prohibition sentence, the
-worktree pre-edit stop condition, the "do not modify files before loading the
-worktree skill" rule. It **explicitly excludes** recipe names, confirmation variable
-names, confirmation values, and any operational command. Where a token legitimately
-belongs in both agent and human documentation, the model is *one authoritative
-normative home plus approved descriptive references*, not absence.
+worktree pre-edit stop condition, the "do not modify files before loading
+`homelab-worktree-management`" rule. It **explicitly excludes** recipe names,
+confirmation variable names, confirmation values, and any operational command.
+Where a token legitimately belongs in both agent and human documentation, the model
+is *one authoritative normative home plus approved descriptive references*, not
+absence.
 
 The final list is **tested against the tree before it is enabled**, and 1C does not
 merge unless the enabled list passes against unmodified `README.md` and `docs/`
@@ -688,12 +797,30 @@ content that is meant to survive.
 
 **Recipe-reference grammar, specified exactly.** `just --summary` emits root recipes
 as bare tokens (`ci`) and module recipes with a `::` separator (`repo::lint`,
-`bootstrap::cilium`), while prose writes them as `just ci` and `just repo lint`. The
-validator therefore: matches `` `just <tokens>` `` inside backticks only; drops a
-leading `mise exec --`; takes the first one or two tokens as the recipe path and
-treats any remainder as arguments; normalizes a two-token form `<module> <recipe>`
-to `<module>::<recipe>`; and requires the result to appear in `just --summary`.
-Fixtures cover root, namespaced, and argument-bearing forms in both directions.
+`bootstrap::cilium`), while prose writes them as `just ci` and `just repo lint`.
+The validator parses single-backtick code spans, including spans split across
+Markdown line wraps, normalizes internal whitespace, and divides them into two
+classes:
+
+1. **Executable references.** A span whose normalized content begins with either
+   `just ` or `mise exec -- just ` and contains no placeholder token, ellipsis, or
+   glob metacharacter is validated. The optional `mise exec -- ` prefix is removed.
+   If the first token after `just` is an exact root recipe from `just --summary`,
+   that token is the recipe and the remainder is arguments. Otherwise the first two
+   tokens must normalize to `<module>::<recipe>` in the summary, with the remainder
+   treated as arguments.
+2. **Illustrative families.** A command-shaped span containing a token of the form
+   `<name>`, Unicode `…`, an ASCII `...` token, or `*`, `?`, `[` or `]` is not
+   claimed to be executable and is excluded from recipe existence checks. Its exact
+   normalized text must instead appear in a maintained allowlist. Phase 1 seeds only
+   the starting-tree families such as `mise exec -- just …`, `just kube
+   *-validate`, and `just bootstrap <app>`; adding an exclusion requires a validator
+   fixture and code review.
+
+Fixtures cover root and namespaced recipes, arguments, both pinned and bare forms,
+multiline spans, and rejection/allowlisting behavior for ellipses, wildcards, and
+placeholders. Thus 1A validates the existing `AGENTS.md` without silently inventing
+exceptions, and 1C may later rewrite those expressions without changing the parser.
 
 **Bucket 2 — advisory, reported and non-gating.** Total description length against
 the 8,000-character listing budget; `AGENTS.md` line count; per-skill body size
@@ -702,15 +829,17 @@ trend.
 **Bucket 3 — judgment, moved out of CI entirely.** Whether a description usefully
 states "what and when"; whether two skills' triggers overlap; whether prose
 "normalizes" a forbidden command versus mentioning it in a prohibition; whether gate
-boundaries are respected. These are **review responsibilities** — `plan-review` and
-`code-review` own them for skill changes — and **evaluation targets** once that tier
-exists. Revision 1 proposed them as validator assertions; a Bash implementation
-would have required inventing semantic heuristics, with false positives and trivial
-bypasses as the likely outcome.
+boundaries are respected. These are **review responsibilities** —
+`homelab-plan-review` and `homelab-code-review` own them for skill changes — and
+**evaluation targets** once that tier exists. Revision 1 proposed them as validator
+assertions; a Bash implementation would have required inventing semantic heuristics,
+with false positives and trivial bypasses as the likely outcome.
 
 **Fixtures are part of the deliverable.** The validator ships with fixture skills
 proving both directions: malformed inputs that must be rejected, and legitimate
-negative-context wording — a skill that *prohibits* raw `kubectl` must pass.
+negative-context wording — a skill that *prohibits* raw `kubectl` must pass. Valid
+fixture skills use `homelab-` names; a spec-valid but unprefixed skill is a required
+negative fixture.
 
 **Phase 1 uses the native closed-schema validator.** With frontmatter closed to
 `name` and `description`, the whole spec-conformance contract is a key-set equality
@@ -735,20 +864,20 @@ than a wiring task:
   execution path, no model invocation, and no trace capture.
 
 **Revision 2 therefore removes the evaluation design from this plan and makes it a
-separate architecture and implementation plan**, authored under `project-planning`
-and passing `plan-review` before any of it is built. That plan must specify: catalog
-schema changes and ownership vocabulary; the operator recipe and runner; supported
-client and model adapters and the authentication boundary; fresh-context isolation
-and client-version capture; the trace and evidence schema with secret scanning,
-retention, and an explicit prohibition on publishing traces to the cluster without
-separate approval; the grading oracle, repetition count, and treatment of variance;
-and a mechanical proof that behavioral suites cannot enter `executions.ci` or an
-existing campaign.
+separate architecture and implementation plan**, authored under
+`homelab-project-planning` and passing `homelab-plan-review` before any of it is
+built. That plan must specify: catalog schema changes and ownership vocabulary; the
+operator recipe and runner; supported client and model adapters and the
+authentication boundary; fresh-context isolation and client-version capture; the
+trace and evidence schema with secret scanning, retention, and an explicit
+prohibition on publishing traces to the cluster without separate approval; the
+grading oracle, repetition count, and treatment of variance; and a mechanical proof
+that behavioral suites cannot enter `executions.ci` or an existing campaign.
 
 The scenario classes this plan hands over as requirements: positive activation;
 **negative activation, where a near-miss prompt must not load the skill**; refusal
 fidelity, preserving exact `*_CONFIRM` variables and values unparaphrased; boundary
-compliance, where editing before the worktree skill loads must produce a
+compliance, where editing before `homelab-worktree-management` loads must produce a
 stop-and-report; and secret-boundary refusal. In all cases a regression is a signal
 to investigate, **never a build failure**.
 
@@ -774,7 +903,9 @@ Deferred to Phase 5 with a decision required either way.
 
 **Adapter drift prevention — structural.** Symlinks make drift impossible rather
 than detectable. The parity check guards the weaker failure mode: a missing,
-orphaned, or accidentally-materialized adapter entry.
+orphaned, accidentally-materialized, or out-of-repository adapter entry. Canonical
+skill content itself may not contain symlinks, and `CLAUDE.md` has an exact
+one-line byte contract.
 
 **Skill activation quality.** Governed by the authoring contract, and now by a
 sharper constraint: Codex shortens descriptions first when the listing budget is
@@ -786,12 +917,18 @@ description quality are review and evaluation concerns, not validator assertions
 `just repo agent-preflight` reports checkout type, slot path, branch, clean/dirty
 state, whether `origin/main` is an ancestor, whether the slot is parked on a merged
 branch, and which skills resolve from the canonical tree. Local-only, never in
-`just ci`. Where hooks are supported, the two highest-risk invariants become hard
-stops.
+`just ci`. Phase 2's shared hook script makes the two highest-risk invariants hard
+stops when the project hook is trusted and enabled. Preflight reports the repository
+configuration but cannot prove client trust state; the operator verifies each
+client's hook browser/status, and disabled or untrusted hooks remain an accepted
+residual.
 
-**Cross-model review boundaries.** Three gates, independent lane per gate, own view
-formed before reading the artifact, author responds but never approves, fail-closed
-when no reviewer is available, human merges.
+**Cross-model review boundaries.** Three gates, with architecture and implementation
+plan review as two modes of `homelab-plan-review`; independent lane per gate; own
+view formed before reading the artifact; the evidence record captures exact artifact
+and base commits, client versions, families, effort, and freshness attestation;
+author responds but never approves; fail-closed when no reviewer is available;
+human merges.
 
 **Behavioral test scenarios.** Enumerated above and handed to a separate plan.
 
@@ -821,11 +958,20 @@ genuinely approval-critical — the two the entire adapter strategy rests on:
 2. **Claude Code discovers the same canonical skill through a `.claude/skills`
    symlink.**
 
-Record each client's version alongside the result. **Treat Claude Code v2.1.203 as
-the conservative documented floor**: the version marker sits at the end of the
-preceding paragraph about nested-variant invocation rather than inside the symlink
-paragraph, so the reading is genuinely ambiguous — the risk is asymmetric and the
-test settles it.
+Record each client's version alongside the result. **Claude Code v2.1.203 is the
+documented floor for skill-directory symlinks.** The current primary documentation
+now states that requirement directly; the earlier ambiguity recorded in the
+historical dispositions no longer controls the target design.
+
+**Recorded operator observations (2026-07-29):**
+
+| Client | Observed version | Result | Observed response |
+|---|---|---|---|
+| Codex | `codex-cli 0.146.0` | **PASS** — discovered `.agents/skills/homelab-probe` | `PROBE-7F3A` |
+| Claude Code | `2.1.220` | **PASS** — discovered the canonical skill through `.claude/skills/homelab-probe` | `PROBE-7F3A` |
+
+Both approval-critical observations pass. No fallback or conditional
+`when_to_use` experiment is required.
 
 The other three become conditional or implementation-time:
 
@@ -903,25 +1049,29 @@ prerequisite for the others; Phases 3 and 4 may proceed in either order.
   planning/review/readiness lifecycle in one coherent phase, so every later phase is
   developed under the gates it defines.
 - **Scope.** Skill substrate and validator; five lifecycle skills; `AGENTS.md`
-  refactor; README de-duplication. Domain knowledge deliberately excluded.
+  refactor; README de-duplication. Repeatable domain procedure is deferred, but all
+  current Talos, GitOps, storage, validation, and operator-only diagnostic safety
+  invariants remain in `AGENTS.md`.
 - **Dependencies.** The pre-approval evidence gate, closed.
 
 **1A — Substrate.** `.agents/skills/` scaffold; `.claude/skills/` symlink adapter;
 `scripts/validate/agent-instructions.sh` with its fixtures; the
 `just repo agent-instructions-validate` recipe; its catalog suite and `executions.ci`
 entry; the read-only `just repo agent-preflight` recipe; README recipe-table rows.
-Ships with `worktree-management` as the first real skill.
+Ships with `homelab-worktree-management` as the first real skill.
 
-**1B — Lifecycle skills.** `project-planning`, `plan-review`, `code-review`,
-`pr-readiness`, each with its ownership boundary, evidence requirements, severity
-criteria, and verdict format. Authored together because their boundaries are defined
-by mutual exclusion.
+**1B — Lifecycle skills.** `homelab-project-planning`,
+`homelab-plan-review`, `homelab-code-review`, and `homelab-pr-readiness`, each with
+its ownership boundary, the review evidence contract, severity criteria, and verdict
+format. Authored together because their boundaries are defined by mutual exclusion.
 
 **1C — Instruction refactor.** Rewrite `AGENTS.md` to the always-on set plus skill
 index, precedence, change classification, review boundaries, and routing matrix;
 remove agent-only workflow from `README.md` and link instead; correct the slot count;
-fix `CLAUDE.md`'s dangling reference; activate the marker-phrase and required-section
-assertions.
+replace `CLAUDE.md` with its exact one-line adapter; activate the marker-phrase and
+required-section assertions. The rule-by-rule mapping explicitly retains the Talos,
+GitOps, RWO, validation, and operator-only diagnostic invariants in the always-on
+set.
 
 **Skills are live the moment they land — 1A and 1B are behavior-changing.** Both
 clients discover repository skills directly from the filesystem; no `AGENTS.md`
@@ -958,19 +1108,28 @@ references them", which was wrong. Three consequences, all adopted:
 ### Phase 2 — Parallel-work coordination (1 PR)
 
 - **Purpose.** Make concurrent work across the four slots safe.
-- **Scope.** `parallel-work-coordination`; the read-only `just repo slots` recipe
-  with its fail-closed semantics; optionally the Claude-side hooks.
+- **Scope.** `homelab-parallel-work-coordination`; the read-only
+  `just repo slots` recipe with its fail-closed semantics; one shared
+  repository-owned `scripts/agent-hooks/pre-tool-use.sh` policy script; and thin
+  `.codex/hooks.json` and `.claude/settings.json` adapters. Each adapter invokes the
+  script through `mise exec -- bash`, passes an explicit `codex` or `claude` client
+  argument, and resolves the script from the repository root rather than the
+  session's current subdirectory.
 - **Dependencies.** Phase 1.
 - **Deterministic validation.** `just ci` green; `just repo slots` reports a
   synthetic overlap between two scratch branches; reports collisions correctly while
   slots are dirty; and returns *unknown* with a non-zero exit when a slot is
-  detached, unreadable, or the fetch did not complete.
+  detached, unreadable, or the fetch did not complete. Hook fixtures replay both
+  clients' Bash/write payloads and demonstrate identical allow/deny decisions;
+  adapter validation checks that each points to the canonical script.
 - **Review.** Full lifecycle; independent review required.
 - **Acceptance.** Collision detection demonstrated across all four path classes —
   committed, staged, unstaged, untracked — with dirty slots **included in** rather
   than suppressing the report; the four output concepts (enumeration completeness,
   collision result, slot cleanliness, proceed verdict) are separately observable;
-  and the *unknown* path is demonstrated to fail closed.
+  the *unknown* path is demonstrated to fail closed; Codex and Claude each
+  demonstrate a trusted/enabled blocking hook; and the operator handoff explicitly
+  records how to detect and handle an untrusted or disabled hook.
 - **Rollback.** Additive; single revert.
 
 ### Phase 3 — Behavioral evaluation (separate plan first)
@@ -978,7 +1137,7 @@ references them", which was wrong. Three consequences, all adopted:
 - **Purpose.** Measure observed reliability of the lifecycle.
 - **Scope.** **Gated on a separate approved architecture plan** covering the
   contracts enumerated above. Nothing is built in this repository until that plan
-  passes `plan-review` and operator approval.
+  passes `homelab-plan-review` and operator approval.
 - **Dependencies.** Phase 1. Independent of Phase 4.
 - **Acceptance.** Every scenario class has positive and negative cases; a baseline is
   recorded; a mechanical proof that evaluation suites cannot enter `executions.ci`.
@@ -988,14 +1147,19 @@ references them", which was wrong. Three consequences, all adopted:
 
 - **Purpose.** Move repeated domain procedure out of prose, now that a common
   planning, review, and evidence foundation exists.
-- **Scope.** `gitops-change` and `cluster-diagnosis`. Any Talos, Flux-diagnostic, or
-  observability skill is justified individually against the belonging test rather
-  than assumed here.
+- **Scope.** `homelab-gitops-change` and `homelab-cluster-diagnosis`.
+  `homelab-cluster-diagnosis` is an agent-to-operator handoff skill: it selects
+  existing guarded recipes and interprets operator-supplied redacted evidence, but
+  agents never run cluster-dependent diagnostic recipes. Any Talos or observability
+  skill is justified individually against the belonging test rather than assumed.
 - **Dependencies.** Phase 1.
 - **Deterministic validation.** `just ci` green across the full roster.
-- **Review.** Full lifecycle; `plan-review` confirms each skill earns its place
-  rather than restating `docs/`.
-- **Acceptance.** No skill duplicates documentation; ownership entries hold.
+- **Review.** Full lifecycle; `homelab-plan-review` confirms each skill earns its
+  place rather than restating `docs/`.
+- **Acceptance.** No skill duplicates documentation; ownership entries hold; the
+  always-on domain safety invariants remain in `AGENTS.md`; and
+  `homelab-cluster-diagnosis` contains no instruction for an agent to execute a live
+  recipe.
 - **Rollback.** Individually revertable.
 
 ### Phase 5 — Scoped instructions and plan retention (1 PR)
@@ -1015,19 +1179,22 @@ references them", which was wrong. Three consequences, all adopted:
 
 ## Files and areas expected to change
 
-New, Phase 1: `.agents/skills/{worktree-management, project-planning, plan-review,
-code-review, pr-readiness}/SKILL.md` plus `references/`; matching
+New, Phase 1: `.agents/skills/{homelab-worktree-management,
+homelab-project-planning, homelab-plan-review, homelab-code-review,
+homelab-pr-readiness}/SKILL.md` plus `references/`; matching
 `.claude/skills/<name>` symlinks; `scripts/validate/agent-instructions.sh` plus its
 fixture tree.
 
-New, later: `.agents/skills/{parallel-work-coordination, gitops-change,
-cluster-diagnosis}/`; a separate evaluation architecture plan under `plans/`.
+New, later: `.agents/skills/{homelab-parallel-work-coordination,
+homelab-gitops-change, homelab-cluster-diagnosis}/`;
+`scripts/agent-hooks/pre-tool-use.sh`; `.codex/hooks.json`; a separate evaluation
+architecture plan under `plans/`.
 
 Modified: `AGENTS.md` (rewrite), `CLAUDE.md` (dangling reference), `README.md`
 (remove agent-only workflow, correct slot count, add recipe rows),
 `.just/repository.just` (three read-only recipes), `tests/catalog.yaml` (one CI
-suite), `docs/` (recorded client versions and compatibility notes), optionally
-`.claude/settings.json` (hooks, Phase 2 decision).
+suite), `docs/` (recorded client versions and compatibility notes), and
+`.claude/settings.json` (Phase 2 hook adapter).
 
 **`.mise.toml` is not modified.** Phase 1 uses the native validator, so no new tool
 is pinned; adopting `skills-ref` later would be a separate Significant change.
@@ -1079,16 +1246,19 @@ Each phase's PR description carries its own revert order and file list.
 
 ## Risks and tradeoffs
 
-- **Skill bypass is real.** A session that never loads the worktree skill still edits
-  files. Mitigated by keeping the prohibition in `AGENTS.md` and by hooks where
-  available — but in Codex this remains instruction-only, and the plan says so.
+- **Skill and hook bypass are real.** A session that never loads
+  `homelab-worktree-management` can still edit files, and either client can skip a
+  project hook that is untrusted or disabled. Mitigated by keeping the prohibition
+  in `AGENTS.md`, adding one cross-client hook policy in Phase 2, and reporting hook
+  state in the operator handoff; the residual remains instruction-only where the
+  hook is inactive or a tool path is uncovered.
 - **Claude personal-skill shadowing.** Not eliminable; mitigated by a distinctive
   prefix and by never making instructions the sole control.
-- **Gate overlap is the main way this design fails in practice.** If `code-review`
-  drifts into re-litigating the plan, or `pr-readiness` into re-reviewing code, the
-  gates stop meaning anything. Mitigated by authoring the three together and by
-  explicit "does not own" lines — but this is a review and evaluation concern, not
-  something a validator can catch.
+- **Gate overlap is the main way this design fails in practice.** If
+  `homelab-code-review` drifts into re-litigating the plan, or
+  `homelab-pr-readiness` into re-reviewing code, the gates stop meaning anything.
+  Mitigated by authoring the three together and by explicit "does not own" lines —
+  but this is a review and evaluation concern, not something a validator can catch.
 - **Roster growth degrades activation** via Codex's description-shortening behavior.
   An argument for restraint that did not exist in revision 1.
 - **1C is the highest-regression edit**, because it touches the self-merge exception
@@ -1107,18 +1277,21 @@ Each phase's PR description carries its own revert order and file list.
 ## Deferred work
 
 Autonomous orchestration and agent teams; an external review service as anything
-more than an optional complement to `pr-readiness`; Forgejo migration (the
+more than an optional complement to `homelab-pr-readiness`; Forgejo migration (the
 architecture avoids Git-provider coupling, so this stays open); Renovate; CI
 redesign; per-app scoped instruction files below the domain level.
 
-## Operator decisions — all required before approval
+## Operator decisions — recorded
 
 **Decisions 1–7 are a single accept-or-override bundle.** They are mutually
 consistent — each recommendation assumes the others — so accepting them individually
-buys nothing. The operator records either "bundle accepted" or the specific
-overrides. Decision 8 is separate because it constrains who may approve the result.
+buys nothing. Decision 8 is separate because it constrains who may approve the
+result.
 
-Nothing is treated as decided until the operator records it here.
+**Operator record (2026-07-29): decisions 1–7 accepted as a bundle; decision 8
+accepted.** Revision 7 preserves decisions 1–4 and 6–8. **The operator separately
+accepted amended decision 5 on 2026-07-29** after the fifth review proved its
+Claude-only premise false.
 
 | # | Decision | Recommendation | Rationale |
 |---|---|---|---|
@@ -1126,10 +1299,58 @@ Nothing is treated as decided until the operator records it here.
 | 2 | Bundled `/code-review` | Do **not** replace it | Replacing a client's built-in review skill repository-wide is a large, surprising side effect for a change whose purpose is clarity. Prefixing costs nothing |
 | 3 | `when_to_use` | Keep all activation information in `description` | Portable, spec-conformant, and avoids depending on a Claude extension in a file shared byte-for-byte with Codex. Revisit only if the gate shows the extension materially improves activation |
 | 4 | `skills-ref` | Implement the spec checks natively in Bash; do not pin a new tool | With Phase 1 frontmatter closed to `name` and `description`, the native contract is a key-set equality check, the `name` character rules, a directory-name comparison, and one length check — small and fully specified. (Revision 3's rationale understated this by omitting the key-set check; it is still well under the cost of a new pinned dependency and its `.mise.toml` / `mise.lock` / `just repo versions` churn.) Revisit if the allowlist widens |
-| 5 | Claude-side hooks | Defer the decision to Phase 2 | They are Claude-only and additive; deciding now would front-load client-specific machinery into the phase that should stay portable |
-| 6 | Client version floors | Record observed versions; adopt Claude Code **v2.1.203** as the conservative documented floor | Asymmetric risk: assuming no floor and being wrong breaks discovery silently |
+| 5 | Cross-client hooks — **amended and accepted 2026-07-29** | Implement in Phase 2 as one canonical blocking policy script with thin Codex and Claude adapters; keep the same rules in `AGENTS.md` because project hooks are trust-dependent and disableable | Codex CLI 0.146.0 supports blocking `PreToolUse` hooks across shell, patch, MCP, and most local tools, so a Claude-only design would duplicate policy and leave available coverage unused. Phase 2 keeps Phase 1 portable while making the cross-client backstop a required deliverable rather than an option |
+| 6 | Client version floors | Record observed versions; adopt Claude Code **v2.1.203** as the documented skill-symlink floor | Current Claude documentation states the floor directly, and the observed 2.1.220 passes |
 | 7 | Plan retention | Codify existing practice: a plan is removed only when its durable content has been migrated to `docs/`, and the removing commit names the migration target | Matches the evidenced behavior of the nine retired plans without inventing a new convention, and prevents losing architectural traceability |
 | 8 | Final approval review | **Two distinct roles.** *Remediation verification* may be performed by the existing reviewer, which has the context to confirm each finding was actually closed. *Final approval* must come from a **fresh session** in the independent model family, without the prior review transcript or accumulated conversation | Revision 3 recommended reviewer continuity "for accumulated context", which directly contradicted this plan's own fresh-context independence requirement — an anchored reviewer effectively approves its own reading of the revisions. The review *lane* may be reused; the contextualized conversation may not |
+
+## Plan review disposition — fifth pass (revision 6 → 7)
+
+Review basis: clean commit `cf824352859c4fe12e4ab272b5fb22171bcee3f3`
+against `origin/main` `e2f007ea7e4afa15303eb92e99dcd4c08507d567`.
+Verdict: **REVISE AND RESUBMIT** (1 BLOCKER, 5 MAJOR, 1 MINOR).
+
+| Finding | Disposition | Where |
+|---|---|---|
+| BLOCKER — Phase 1 cannot satisfy "no safety rule dropped" | **Accepted in full.** The always-on set now explicitly retains current Talos source/version, GitOps layout/ordering/suspension, RWO strategy, cluster-interface, and operator-only diagnostic invariants. Phase 4 moves procedure only. `homelab-cluster-diagnosis` is explicitly an agent-to-operator handoff and never executes live recipes | "The always-on set"; skill roster; Phase 1; Phase 4 |
+| MAJOR — Codex hook support invalidates the safety premise | **Accepted in full.** Verified against the documentation for observed Codex CLI 0.146.0: project `PreToolUse` hooks can block shell, patch, MCP, and most local tools. The architecture now uses one canonical script with two client adapters in Phase 2 and records the trust, disable, and coverage residuals; decision 5 is reopened for operator confirmation | "Per-client hook behavior"; residuals; "Skills, subagents, hooks, and teams"; Phase 2; decision 5 |
+| MAJOR — selected `homelab-` naming not propagated | **Accepted in full.** Every operative skill name, path, adapter, phase deliverable, ownership entry, and review reference now uses the prefix. Unprefixed prose is explicitly non-invocable lifecycle terminology | Skill roster and all phased/file lists |
+| MAJOR — review independence lacks evidence and residual contracts | **Accepted in full.** A required record schema captures exact artifact/base commits, client/version/family/effort, fresh-context and independence attestations, inputs, findings, verdict, and timestamp. `homelab-pr-readiness` verifies the record; unprovable family/freshness claims are an explicit accepted residual. Architecture challenge is a named mode of `homelab-plan-review` | "Review evidence contract"; residuals; routing |
+| MAJOR — recipe validation cannot handle the starting tree | **Accepted in full.** The grammar now separates exact executable commands from mechanically allowlisted illustrative families, handles multiline spans and the `mise exec --` prefix, resolves root versus namespaced recipes by summary membership, and requires fixtures for arguments, ellipses, globs, and placeholders | "Recipe-reference grammar" |
+| MAJOR — adapter and symlink-containment checks incomplete | **Accepted in full.** `CLAUDE.md` has an exact one-line byte contract; canonical skill trees reject every symlink; relative links must resolve inside the repository; `.claude/skills` adapters must resolve to their exact canonical directories inside the active worktree | "Canonical location and the Claude adapter"; bucket 1 |
+| MINOR — historical frontmatter disposition contradicts current decision | **Accepted.** The stale third-pass text now says frontmatter widening is Significant, matching the normative authoring contract | Third-pass disposition |
+
+## Final approval review — revision 7
+
+Review basis: clean artifact
+`plans/agent-instructions-and-skills-architecture-plan.md` at
+`1fdf24c2d2c12a9b5850fc666ff3c476c9d68166` against `origin/main`
+`e2f007ea7e4afa15303eb92e99dcd4c08507d567`. Author: Codex CLI 0.146.0,
+Sol model family, effort unknown because the client did not surface it. Reviewer:
+Claude Code 2.1.220, Opus model family, high effort. Recorded at
+`2026-07-29T19:36:45Z`.
+
+The reviewer attested that the session received neither the prior review transcripts
+nor the author's accumulated conversation; it inspected the repository and formed
+an independent view before opening the plan. Sol author versus Opus reviewer
+satisfied the model-family independence requirement. Inputs were `AGENTS.md`,
+`CLAUDE.md`, relevant `README.md` sections, `.justfile`, the complete repository
+recipe list, validation and CI scripts, the catalog, workflow and pre-commit
+configuration, `.gitignore`, relevant Git history, `just --summary`, a tracked
+symlink scan, the clean artifact-matched CI summary, and all 1,388 lines of revision
+7 including the historical dispositions.
+
+Verdict: **APPROVE WITH MINOR REVISIONS** (0 BLOCKER, 0 MAJOR, 4 MINOR). The
+operator explicitly approved revision 7 for implementation. Per the evidence
+contract above, the findings remain recorded rather than being silently remediated
+into an unreviewed revision:
+
+| Finding | Open implementation obligation |
+|---|---|
+| MINOR-1 — the always-on enumeration lacks an explicit class for `CLAUDE.md`'s repository-scope rule while saying "exactly these classes and nothing else" | Phase 1C must preserve repository scope within the worktree-invariants class instead of dropping the rule |
+| MINOR-2 — the `MEMORY.md` dangling-reference premise is factually wrong and outside the specified validator's reach | Phase 1C must not rely on that premise or claim validator coverage for it when applying the exact `CLAUDE.md` adapter contract |
+| MINOR-3 — `.claude/settings.json` is listed as modified although it does not exist | Phase 2 must account for it as a new adapter file |
+| MINOR-4 — the Phase 1 client-observation acceptance criterion names no owner | The operator owns and records that observation |
 
 ## Plan review disposition — fourth pass (revision 4 → 5)
 
@@ -1148,7 +1369,7 @@ Nothing is treated as decided until the operator records it here.
 | BLOCKER — evidence and decisions unrecorded, and the gate is wider than the architecture needs | **Accepted.** The gate narrows from five observations to the two the adapter strategy actually rests on, with an exact disposable fixture and copy-paste commands; the other three become conditional (`when_to_use`, `skills-ref`) or implementation-time (`just ci` in the Phase 1 branch). Decisions 1–7 become one accept-or-override bundle. Still not agent-closable — it requires running both clients outside this worktree | "Pre-approval evidence gate" incl. "Fixture and commands"; "Operator decisions" |
 | MAJOR — routine skill changes wrongly require human pre-approval | **Accepted in full.** Skill changes now split by risk: schema-conforming, policy-preserving skill work is **Standard** (independent code review, PR readiness, `just ci`, human merge — no separate pre-implementation approval), while framework, adapter, policy, permission, safety, and review-architecture changes stay Significant. **Skill activation is explicitly never gated** | "Change classification and abbreviated paths" |
 | MAJOR — reviewer continuity conflicts with fresh-context independence | **Accepted in full; this was a self-contradiction.** Revision 3 recommended reusing the reviewer "for accumulated context" while the gate contract demands fresh context. Decision 8 now splits the roles: the existing reviewer may verify remediation; **final approval requires a fresh session in the independent lane without the prior transcript.** Same model family permitted, same conversation not | Decision 8; "Approval boundary" |
-| MINOR — native frontmatter validation incomplete | **Accepted, resolved by narrowing rather than enumerating.** Phase 1 frontmatter is closed to exactly `name` and `description`; every other key, spec-optional or not, is rejected. Widening is a Standard change that must ship the constraint checks and fixtures for the field it adds. Decision 4's rationale is corrected to include the key-set check | "Skill authoring contract"; bucket 1; decision 4 |
+| MINOR — native frontmatter validation incomplete | **Accepted, resolved by narrowing rather than enumerating.** Phase 1 frontmatter is closed to exactly `name` and `description`; every other key, spec-optional or not, is rejected. Widening is a Significant change that must ship the constraint checks and fixtures for the field it adds. Decision 4's rationale is corrected to include the key-set check | "Skill authoring contract"; bucket 1; decision 4 |
 | MINOR — deterministic-enforcement principle contradicts accepted residuals | **Accepted in full.** Reworded to "wherever the platform supports it", with a table enumerating the four accepted instruction-only residuals, why enforcement is unavailable, and each mitigation — plus the rule that anything not on that list is a gap, not a residual | "The six distinctions", distinction 4 |
 
 ## Plan review disposition — second pass (revision 2 → 3)
@@ -1183,15 +1404,16 @@ Nothing is treated as decided until the operator records it here.
 
 No implementation proceeds until:
 
-1. the two client-discovery observations are executed and their results and client
-   versions recorded here, and **any failed observation has a verified, supported
-   resolution** — not an undocumented workaround;
-2. the decision bundle 1–7 is accepted or overridden, and decision 8 recorded;
-3. a **fresh-context** independent plan review — a new session in the independent
-   model family, without the prior review transcript — returns APPROVE or APPROVE
-   WITH MINOR REVISIONS. The existing reviewer may separately verify that each
-   finding was closed, but may not perform the approving review;
-4. the operator explicitly approves the resulting revision.
+1. **Complete:** the two client-discovery observations and client versions are
+   recorded above; both passed, so no fallback is required;
+2. **Complete:** decisions 1–4 and 6–8 remain accepted, and amended cross-client
+   hook decision 5 is separately accepted;
+3. **Complete:** a **fresh-context** independent plan review — a new session in the
+   independent model family, without the prior review transcript — returns APPROVE
+   WITH MINOR REVISIONS. The existing reviewer may separately verify remediation,
+   but may not perform the approving review;
+4. **Complete:** the operator explicitly approved reviewed revision 7 for
+   implementation on 2026-07-29.
 
 The approving reviewer should form its own view from the repository and the
 requirements first, then compare it against the architecture proposed here.
