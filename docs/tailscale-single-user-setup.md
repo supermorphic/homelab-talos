@@ -116,6 +116,10 @@ Paste this as your complete policy:
   "autoApprovers": {
     "services": {
       "tag:ntfy": ["tag:k8s"]
+    },
+    "routes": {
+      "192.168.90.2/32": ["tag:lab-router"],
+      "192.168.90.30/32": ["tag:lab-router"]
     }
   },
 

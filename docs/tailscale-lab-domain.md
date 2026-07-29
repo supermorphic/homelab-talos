@@ -131,11 +131,19 @@ failover.
 5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` — it should now report
    `routes exposed to tailnet: true`, confirming both `/32`s are approved and live.
 
-> Kubernetes status cannot prove Admin Console approval — that is why this stays manual, and
-> why `.status.subnetRoutes` (route *exposure*) only populates after this step. The guarded
+> Kubernetes status cannot prove Admin Console approval — that is why this reads as manual,
+> and why `.status.subnetRoutes` (route *exposure*) only populates after approval. The guarded
 > bootstrap's verify therefore passes on structural readiness alone (routes advertised); this
-> gate is what makes them usable. `autoApprovers.routes` is a deferred hardening step, added
-> only after this manual flow is proven.
+> gate is what makes them usable.
+>
+> **Auto-approval (now enabled):** `autoApprovers.routes` maps the two exact `/32`s to
+> `tag:lab-router`, so a device tagged `tag:lab-router` advertising them is approved
+> automatically — a recreated Connector or a second replica no longer needs manual
+> re-approval. See the `autoApprovers` block in `docs/tailscale-operator.md` /
+> `docs/tailscale-single-user-setup.md`. With it in your policy, this gate becomes a
+> **verification** step (re-run the verify and confirm `routes exposed to tailnet: true`)
+> rather than a manual click. Keep the scope to the exact `/32`s — never broaden to the LAN
+> `/24` or Pod/Service CIDRs.
 
 ### Operator gate 4 — split DNS (MANUAL)
 

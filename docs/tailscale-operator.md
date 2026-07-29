@@ -96,10 +96,15 @@ service its own tag (`tag:ntfy`), scope reachability to it, and keep tag ownersh
     // Auto-approve the Tailscale Service the ingress ProxyGroup advertises for ntfy.
     "services": {
       "tag:ntfy": ["tag:k8s"]
+    },
+    // Auto-approve the two lab-subnet-router /32 routes when advertised by a device
+    // tagged tag:lab-router. Exact /32s only — no LAN /24, Pod, or Service CIDR — so a
+    // recreated Connector (or a second replica) never needs manual re-approval. Enabled
+    // after the manual per-replica flow was proven end-to-end.
+    "routes": {
+      "192.168.90.2/32":  ["tag:lab-router"],
+      "192.168.90.30/32": ["tag:lab-router"]
     }
-    // NOTE: the lab-subnet-router /32 routes are approved MANUALLY on each replica
-    // device (see docs/tailscale-lab-domain.md). `autoApprovers.routes` is a deferred
-    // hardening step, added only after the manual workflow is proven.
   },
   "grants": [
     // Your devices may reach ntfy over HTTPS.
