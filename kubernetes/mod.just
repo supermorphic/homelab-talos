@@ -870,3 +870,13 @@ alertmanager-ntfy-validate: require-bash
 # reaches ntfy with correct topic/priority.
 alertmanager-ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(kubeconfig)}}
+
+# Synchronize an API-managed ntfy consumer (seerr) with its token from the canonical
+# ntfy Secret: enforce the managed ntfy settings through Seerr's settings API, proving
+# the candidate with Seerr's test endpoint before saving. Operator-only; needs the age
+# key and LAN reachability. Guard: NTFY_CONSUMER_SYNC_CONFIRM='sync:media:seerr:ntfy'.
+ntfy-consumer-sync consumer: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just repo secrets
+    exec scripts/secrets/ntfy-consumer-sync.sh '{{consumer}}'

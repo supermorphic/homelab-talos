@@ -2150,9 +2150,10 @@ tailscale-subnet-router:
     echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/tailscale-lab-domain.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
 
 # Reconcile the suspended ntfy notification service after guarded checks, then verify.
-# Requires the ntfy-secret committed (just repo ntfy-secrets) and the tailscale-operator
-# already rolled out. On failure the resumed Kustomization is re-suspended, preserving
-# its resources (the Longhorn PVC and SOPS Secret are never deleted).
+# Requires the ntfy-secret committed (just repo ntfy-identity reconcile all) and the
+# tailscale-operator already rolled out. On failure the resumed Kustomization is
+# re-suspended, preserving its resources (the Longhorn PVC and SOPS Secret are never
+# deleted).
 ntfy:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2215,8 +2216,9 @@ ntfy:
     echo 'ntfy live acceptance passed. Change the ntfy Git source to suspend=false, commit, push, and rerun just kube ntfy-verify.'
 
 # Reconcile the suspended alertmanager-ntfy adapter after guarded checks, then verify.
-# Requires the alertmanager-ntfy-auth Secret committed (just repo alertmanager-ntfy-secrets)
-# and ntfy already rolled out. On failure the resumed Kustomization is re-suspended.
+# Requires the canonical ntfy-secret (with its auth.yml key) committed (just repo
+# ntfy-identity reconcile all) and ntfy already rolled out. On failure the resumed
+# Kustomization is re-suspended.
 alertmanager-ntfy:
     #!/usr/bin/env bash
     set -euo pipefail
