@@ -72,6 +72,10 @@ RUN_ID="$run_id" yq -e '
       .junit.passed == 0 and .junit.skipped > 0)
   ) and
   ((.suites | type) == "!!seq" and (.suites | length) > 0) and
+  ((.suites | length) == 1 or
+    ([.suites[] | has("duration_ms")] | all)) and
+  ([.suites[].duration_ms | select(. != null)] |
+    map((type == "!!int") and (. >= 0)) | all) and
   ([.suites[] |
     (.id != null and .id != "") and
     (.result | test("^(passed|failed|broken|skipped)$")) and

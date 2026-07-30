@@ -33,5 +33,19 @@ scripts/test/validate-run.sh "$run_dir" >/dev/null
 [[ "$(yq -r '.suites[0].result' "$run_dir/summary.json")" == 'passed' ]]
 [[ "$(yq -r '.suites[1].result' "$run_dir/summary.json")" == 'failed' ]]
 [[ "$(yq -r '.suites[2].result' "$run_dir/summary.json")" == 'skipped' ]]
+[[ "$(yq -r '.suites[0].duration_ms >= 20' "$run_dir/summary.json")" == 'true' ]]
+[[ "$(yq -r '.suites[1].duration_ms >= 20' "$run_dir/summary.json")" == 'true' ]]
+[[ "$(yq -r '.suites[2].duration_ms' "$run_dir/summary.json")" == '0' ]]
+yq -i '.suites[0].duration_ms = -1' "$run_dir/summary.json"
+if scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
+  echo 'Canonical validation must reject a negative suite duration.' >&2
+  exit 1
+fi
+yq -i '.suites[0].duration_ms = 0 | del(.suites[1].duration_ms)' \
+  "$run_dir/summary.json"
+if scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
+  echo 'Canonical validation must reject a missing multi-suite duration.' >&2
+  exit 1
+fi
 
 echo 'CI result coordinator fail-fast tests passed.'
