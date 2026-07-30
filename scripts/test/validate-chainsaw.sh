@@ -122,6 +122,7 @@ run_shell_case flux-alerts-diagnostics \
   scripts/test/flux-alerts-diagnostics-test.sh
 run_shell_case flux-alert-delivery \
   scripts/test/flux-alert-delivery-test.sh
+run_shell_case tailscale-routes scripts/test/tailscale-routes-test.sh
 run_shell_case chainsaw-dispatch scripts/test/run-chainsaw-dispatch-test.sh
 run_shell_case media-hardlink scripts/test/scenarios/media-hardlink-test.sh
 run_shell_case probe-dispatch scripts/test/run-probe-dispatch-test.sh

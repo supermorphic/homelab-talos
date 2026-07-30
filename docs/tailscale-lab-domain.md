@@ -46,15 +46,9 @@ CIDR (`10.96.0.0/12`).
 
 ---
 
-## Rollout sequence
+## Setup sequence
 
-### PR A — infrastructure (staged, merged first)
-
-Ships the Connector/ProxyClass, the `suspend: true` Kustomization, validation, the guarded
-bootstrap, verify, and this doc. `just ci` gates it. Merged before anything reaches the
-tailnet.
-
-### Operator gate 1 — tailnet ACL (BEFORE bootstrap)
+### Step 1 — tailnet policy (before bootstrap)
 
 The operator can only create the Connector devices if the OAuth client (tagged
 `tag:k8s-operator`) **already owns** `tag:lab-router`, so this ACL change must be saved
@@ -78,7 +72,21 @@ initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
 
    (Visual Editor equivalent: create the tag `lab-router` — enter it without the `tag:`
    prefix; the console adds it — and set `k8s-operator` as its owner.)
-3. In `grants`, add the two least-privilege subnet-router rules — DNS to the Pi-hole
+3. In `autoApprovers.routes`, map each exact route to `tag:lab-router`. This makes route
+   approval part of the policy, so every tagged replica is approved automatically,
+   including replacement devices:
+
+   ```jsonc
+   "autoApprovers": {
+     // ...keep every existing entry...
+     "routes": {
+       "192.168.90.2/32": ["tag:lab-router"],
+       "192.168.90.30/32": ["tag:lab-router"]
+     }
+   },
+   ```
+
+4. In `grants`, add the two least-privilege subnet-router rules — DNS to the Pi-hole
    resolver, HTTPS to the Envoy Gateway VIP. Never the LAN /24 or the Pod/Service CIDRs:
 
    ```jsonc
@@ -86,7 +94,7 @@ initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
    { "src": ["autogroup:member"], "dst": ["192.168.90.30/32"], "ip": ["tcp:443"] }
    ```
 
-4. **Save** the policy. The console validates the JSON and shows a preview diff — confirm
+5. **Save** the policy. The console validates the JSON and shows a preview diff — confirm
    it contains only these additions. No OAuth-client change is needed.
 
 > `autogroup:member` is intentional **only** for the current single-user tailnet. Before
@@ -95,9 +103,9 @@ initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
 > shared Gateway VIP :443 can reach them all (shared-IP L4 limitation; per-app isolation
 > stays with app authentication).
 
-### Operator gate 2 — guarded rollout
+### Step 2 — guarded rollout
 
-From a clean checkout of the merged PR A source:
+From a clean checkout synchronized with the current `origin/main` source:
 
 ```bash
 TAILSCALE_SUBNET_ROUTER_BOOTSTRAP_CONFIRM='bootstrap:networking:tailscale-subnet-router' \
@@ -110,42 +118,35 @@ This validates, confirms the Kustomization is suspended in Git and live, resumes
 preserved).
 
 The verify confirms **structural** readiness — Connector `ConnectorReady`, **2** devices,
-**2** pods on distinct nodes, and that the Connector *advertises* exactly the two `/32`s —
-and polls those (they are eventually consistent after reconcile). It does **not** gate on
-route *exposure*: the two `/32`s are advertised but **await manual approval** (gate 3), which
-Kubernetes/Flux cannot perform, so `.status.subnetRoutes` is empty here and the verify
-reports `routes exposed to tailnet: false` **without failing**. Re-running the verify after
-gate 3 flips that to `true`.
+**2** pods on distinct nodes, and that the Connector spec and status both report exactly
+the two `/32`s — and polls those (they are eventually consistent after reconcile). In
+operator v1.98.9, `.status.subnetRoutes` is a comma-separated copy of the configured spec
+routes; it does **not** prove tailnet route approval. Confirm automatic approval in step 3;
+the off-LAN client acceptance in step 5 proves that the routes carry real traffic.
 
-### Operator gate 3 — route approval (MANUAL, per replica)
+### Step 3 — verify automatic route approval
 
-Two replicas create **two** tailnet devices; both must have both routes approved for real
-failover.
+The `autoApprovers.routes` policy from step 1 automatically approves both exact `/32`s for
+every device tagged `tag:lab-router`. Two replicas create **two** tailnet devices, and both
+must show both routes for real failover, but no per-device approval click is required.
 
 1. Admin Console → **Machines**.
 2. Locate **both** `lab-subnet-router-*` devices.
-3. For **each** device → **Edit route settings** → approve **only**:
+3. Confirm each device shows these routes as approved/enabled:
    - `192.168.90.2/32` (DNS resolver)
    - `192.168.90.30/32` (Gateway VIP)
-4. Confirm neither advertises any other subnet. Save both.
-5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` — it should now report
-   `routes exposed to tailnet: true`, confirming both `/32`s are approved and live.
+4. Confirm neither device advertises any other subnet.
+5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` to confirm the Connector
+   remains reconciled, then use step 5 to prove the routes carry real client traffic.
 
-> Kubernetes status cannot prove Admin Console approval — that is why this reads as manual,
-> and why `.status.subnetRoutes` (route *exposure*) only populates after approval. The guarded
-> bootstrap's verify therefore passes on structural readiness alone (routes advertised); this
-> gate is what makes them usable.
->
-> **Auto-approval (now enabled):** `autoApprovers.routes` maps the two exact `/32`s to
-> `tag:lab-router`, so a device tagged `tag:lab-router` advertising them is approved
-> automatically — a recreated Connector or a second replica no longer needs manual
-> re-approval. See the `autoApprovers` block in `docs/tailscale-operator.md` /
-> `docs/tailscale-single-user-setup.md`. With it in your policy, this gate becomes a
-> **verification** step (re-run the verify and confirm `routes exposed to tailnet: true`)
-> rather than a manual click. Keep the scope to the exact `/32`s — never broaden to the LAN
-> `/24` or Pod/Service CIDRs.
+> Kubernetes status cannot prove tailnet approval — `.status.subnetRoutes` mirrors the
+> configured `advertiseRoutes` string. The guarded verifier proves reconciliation, the Admin
+> Console confirms the auto-approval policy took effect, and client acceptance proves route
+> usability. If either route is pending, fix `autoApprovers.routes` or the device's
+> `tag:lab-router`; do not use a manual approval to hide a policy error. Keep the policy
+> scoped to the exact `/32`s — never broaden it to the LAN `/24` or Pod/Service CIDRs.
 
-### Operator gate 4 — split DNS (MANUAL)
+### Step 4 — split DNS
 
 1. Admin Console → **DNS**.
 2. Keep **MagicDNS** enabled.
@@ -153,20 +154,15 @@ failover.
 4. Enable **Restrict to search domain** → `lab.supermorphic.com`.
 5. Save. Do **not** enable a global DNS override.
 
-### Operator gate 5 — client acceptance
+### Step 5 — client acceptance
 
-> **Nothing under `*.lab.supermorphic.com` resolves off-LAN until gates 3 AND 4 are done,
+> **Nothing under `*.lab.supermorphic.com` resolves off-LAN until steps 3 and 4 are done,
 > and only while Tailscale is Connected.** If a page won't load, you have almost certainly
-> skipped route approval (gate 3) or split DNS (gate 4), or Tailscale is off — see the
-> checklist in each client section below and Troubleshooting.
+> encountered a route auto-approval problem (step 3), missed split DNS (step 4), or turned
+> Tailscale off — see the checklist in each client section below and Troubleshooting.
 
-Run the checks below from a real client (MacBook and/or iPhone). Only after they pass, open
-**PR B**.
-
-### PR B — durable activation
-
-Flip `tailscale-operator-subnet-router` to `suspend: false`, rerun `just ci`, merge, then
-rerun `mise exec -- just kube tailscale-subnet-router-verify`.
+Run the checks below from a real client (MacBook and/or iPhone). Complete durable activation
+only after they pass.
 
 ---
 
@@ -190,15 +186,15 @@ unreachable (the public Internet must not be a fallback).
 
 ### iPhone (primary acceptance)
 
-**Prerequisites (must all be true first):** gate 3 done — both `/32`s approved on **both**
-`lab-subnet-router-*` devices; gate 4 done — split-DNS nameserver `192.168.90.2` restricted
-to `lab.supermorphic.com`; and the Tailscale app **Connected**. Without these the pages will
-not load (by design — nothing is public).
+**Prerequisites (must all be true first):** step 3 confirms both `/32`s were automatically
+approved on **both** `lab-subnet-router-*` devices; step 4 configured split-DNS nameserver
+`192.168.90.2` restricted to `lab.supermorphic.com`; and the Tailscale app is **Connected**.
+Without these the pages will not load (by design — nothing is public).
 
 1. Open the **Tailscale app** and confirm it is **Connected** (toggle ON). Off-LAN with
    Tailscale **off**, `*.lab.supermorphic.com` is intentionally unreachable.
 2. Confirm the device is using Tailscale DNS: Tailscale app → the device should show DNS is
-   in use (the split-DNS nameserver from gate 4 applies automatically once Connected).
+   in use (the split-DNS nameserver from step 4 applies automatically once Connected).
 3. Turn **Wi-Fi off** so the test uses cellular (proves it works off the home LAN).
 4. In Safari open `https://homepage.lab.supermorphic.com`; from Homepage open representative
    services (Grafana, Portainer, Seerr, ntfy).
@@ -206,9 +202,9 @@ not load (by design — nothing is public).
 6. **Negative test:** turn Tailscale **off** (still on cellular) → confirm the hosts are now
    unreachable (the public Internet must not be a fallback).
 
-> If a page does not load with Tailscale Connected: it's almost always gate 3 (routes not
-> approved on **both** devices) or gate 4 (split DNS not set / device not yet using Tailscale
-> DNS — toggle Tailscale off/on). See Troubleshooting.
+> If a page does not load with Tailscale Connected: it is usually step 3
+> (`autoApprovers.routes` did not approve both devices) or step 4 (split DNS is unset or the
+> device is not yet using Tailscale DNS — toggle Tailscale off/on). See Troubleshooting.
 
 ### On-LAN overlap test
 
@@ -217,6 +213,17 @@ is more specific than the local `192.168.90.0/24`, the client routes Pi-hole and
 **through the Connector** (a documented Tailscale overlapping-subnet behavior). Confirm it
 still succeeds — and note that home access to those two IPs then depends on Connector
 availability while Tailscale is up.
+
+### Step 6 — durable activation
+
+For an initially staged deployment, make the tested state durable after client acceptance:
+
+1. Set `tailscale-operator-subnet-router` to `suspend: false` in
+   `kubernetes/apps/networking/tailscale-operator/ks.yaml`.
+2. Run `mise exec -- just ci`.
+3. Publish the validated change through the repository's normal Git workflow and wait for
+   Flux to reconcile it.
+4. Run `mise exec -- just kube tailscale-subnet-router-verify`.
 
 ---
 
@@ -238,18 +245,22 @@ availability while Tailscale is up.
 ### DNS resolver replacement (Pi-hole → Technitium)
 
 1. Deploy/validate Technitium and confirm it answers `lab.supermorphic.com` locally.
-2. Add Technitium's `/32`(s) to the Connector `advertiseRoutes`; re-run `just ci`; roll out;
-   approve the new route(s) on both devices.
-3. Add the new restricted split-DNS nameserver(s); test tailnet resolution.
-4. Remove the Pi-hole restricted resolver, then remove the old `192.168.90.2/32` route once
-   no client depends on it. If Technitium has two resolvers, configure two restricted
-   nameservers.
+2. Add Technitium's exact `/32` route(s) to `autoApprovers.routes` and the required DNS
+   grants in the tailnet policy.
+3. Add the same `/32` route(s) to the Connector `advertiseRoutes`; run `just ci`; roll out;
+   confirm both devices show the new routes as automatically approved.
+4. Add the new restricted split-DNS nameserver(s); test tailnet resolution.
+5. Remove the Pi-hole restricted resolver, then remove the old `192.168.90.2/32` route and
+   its policy entries once no client depends on it. If Technitium has two resolvers,
+   configure two restricted nameservers.
 
 ### Gateway VIP change
 
 1. Update authoritative internal DNS as normal.
-2. Update the Connector `advertiseRoutes` `/32`; re-run `just ci`; roll out; approve on both
-   devices; validate from a client; remove the old route.
+2. Add the new exact `/32` to `autoApprovers.routes` and the HTTPS grant.
+3. Update the Connector `advertiseRoutes`; run `just ci`; roll out; confirm both devices
+   show the route as automatically approved; validate from a client.
+4. Remove the old route and its policy entries.
 
 ### New client onboarding
 
@@ -261,12 +272,12 @@ No per-application configuration is required.
 ## Troubleshooting
 
 - **DNS works on LAN but not on Tailscale:** client accepts Tailscale DNS; restricted domain
-  is exactly `lab.supermorphic.com`; the `192.168.90.2/32` route is approved on a *connected*
-  replica; grant permits `tcp/udp:53`; Pi-hole DNS-rebinding protection is not dropping the
-  private-IP answer for the zone.
-- **DNS resolves but HTTPS fails:** the `192.168.90.30/32` route is approved; grant permits
-  `tcp:443`; Envoy Gateway `internal` is Programmed; the app's HTTPRoute is Accepted; TLS/
-  backend healthy.
+  is exactly `lab.supermorphic.com`; `autoApprovers.routes` approved
+  `192.168.90.2/32` on a *connected* replica; the grant permits `tcp/udp:53`; Pi-hole
+  DNS-rebinding protection is not dropping the private-IP answer for the zone.
+- **DNS resolves but HTTPS fails:** `autoApprovers.routes` approved `192.168.90.30/32`; the
+  grant permits `tcp:443`; Envoy Gateway `internal` is Programmed; the app's HTTPRoute is
+  Accepted; TLS/backend is healthy.
 - **One app fails, others work:** routing/DNS are fine — check that app's HTTPRoute hostname,
   backend Service, auth, and base-URL/Host handling.
 - **Works on Wi-Fi but not cellular:** a Tailscale path/DNS issue — re-check on-device tailnet
