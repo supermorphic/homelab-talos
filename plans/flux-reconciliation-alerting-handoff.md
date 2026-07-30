@@ -1,8 +1,9 @@
 # Handoff: complete Flux reconciliation alerting (Decision 9)
 
-**Status: fix staged in PR #156, not yet deployed. Live diagnostics confirmed the first
-broken boundary is kube-state-metrics CRD discovery RBAC. Independent review also found and
-addressed a known KSM duplicate-help-text failure mode plus two alert coverage gaps.**
+**Status: PR #156 merged as `dd17d79`; Flux reconciled it and live acceptance passes.
+Prometheus now has 82 `gotk_resource_info` series across all five configured kinds, both
+Flux alert rules are healthy/inactive, and every guarded diagnostic stage passes. The
+remaining work is the confirmation-guarded firing/resolved phone-delivery E2E.**
 
 Original design/decisions: `plans/ntfy-flux-implementation-plan.md` (Decision 9). This
 feature was built and merged as **PR #154** (`feat(monitoring): alert on Flux reconciliation
@@ -18,7 +19,7 @@ the existing `Alertmanager → alertmanager-ntfy` path (no routing change).
 
 ```
 Flux controllers ──> PodMonitor ─────────────> Prometheus            (scrape health; KPS TargetDown covers controller-down)  ✅ LIVE
-Flux CRDs ──> dedicated flux-kube-state-metrics ──> gotk_resource_info ──> Prometheus ──> flux PrometheusRule ──> Alertmanager ──> ntfy/homelab   ⏳ PR #156
+Flux CRDs ──> dedicated flux-kube-state-metrics ──> gotk_resource_info ──> Prometheus ──> flux PrometheusRule ──> Alertmanager ──> ntfy/homelab   ✅ LIVE
 ```
 
 Why a dedicated kube-state-metrics (not the bundled one): the **kube-prometheus-stack
@@ -64,36 +65,38 @@ upgrade. So **KPS values must stay untouched** and Flux CR metrics come from a s
 
 KPS values remain untouched.
 
-## Next execution steps
+## Completed live acceptance
 
-1. Rebase PR #156 onto fresh `origin/main`, run `mise exec -- just ci`, and update the PR.
-2. The operator reviews and merges PR #156.
-3. Wait for Flux reconciliation, then run:
+After PR #156 reconciled, these guarded checks passed:
 
 ```
 mise exec -- just kube monitoring-verify
-```
-
-4. If it fails, run:
-
-```
 mise exec -- just kube flux-alerts-diagnostics
 ```
 
-The live gate requires an up exporter target, all five configured kinds in Prometheus, both
-healthy alert rules, an active Alertmanager connection, and the expected ntfy receiver/route.
+The live gate found an up exporter target, all five configured kinds in Prometheus, both
+healthy/inactive alert rules, an active Alertmanager connection, and the expected ntfy
+receiver/route.
 
-## End-to-end proof (operator, deferred)
+## End-to-end proof (operator confirmation required)
 
-A synthetic failure that is held for more than 15 minutes would close the plan by proving
-`FluxReconciliationFailure` → `warning` → ntfy `homelab` → phone and subsequent resolution.
-No guarded recipe currently exists for that cluster mutation, so do not create or modify a
-Flux resource ad hoc. Add a confirmation-guarded recipe before performing this test.
+Run the guarded, run-owned failure test after its follow-up PR has merged:
+
+```
+FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+mise exec -- just kube flux-alert-delivery-test
+```
+
+It creates one labeled Flux Kustomization referencing a deliberately nonexistent source,
+waits through the real 15-minute `FluxReconciliationFailure` window, proves that Alertmanager
+routed both firing and resolved events through a synchronous successful ntfy webhook, and
+deletes that exact test resource. Confirm the two messages arrived on the phone's `homelab`
+topic to close the plan.
 
 ## Workflow constraints (must follow)
 
 - This checkout is a **linked worktree**; it is the absolute boundary. No new worktrees.
-- Work only on `fix/flux-alert-signal-validation`; never commit/push to `main`; **never merge**
+- Work only on the assigned feature branch; never commit/push to `main`; **never merge**
   (no `gh pr merge`) — the operator merges.
 - `mise exec -- just ci` must pass locally before opening/updating the PR. Prefix all
   operator commands with `mise exec --`.

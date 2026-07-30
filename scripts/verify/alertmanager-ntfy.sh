@@ -27,12 +27,8 @@ fi
 just kube foundation-verify
 echo 'alertmanager-ntfy acceptance passed: Kustomization + HelmRelease Ready, adapter rolled out, and the Alertmanager ntfy receiver is present.'
 echo
-echo 'MANUAL (human acceptance — proves the full alert path + formatting):'
-echo '  Fire a synthetic firing+resolved alert through Alertmanager and confirm the phone'
-echo '  receives them with the correct topic/priority. Example (port-forward Alertmanager,'
-echo '  then post via its v2 API), critical -> critical topic (urgent), warning -> homelab:'
-echo '    kubectl -n monitoring port-forward svc/kube-prometheus-stack-alertmanager 9093:9093 &'
-echo "    amtool alert add alertname=NtfyPipelineTest severity=critical summary='ntfy pipeline test' \\"
-echo "      description='synthetic critical' --alertmanager.url=http://localhost:9093"
-echo '  Repeat with severity=warning (-> homelab). Resolve by letting them expire or adding'
-echo '  --end. Confirm both firing and resolved notifications arrive with the right topic.'
+echo 'E2E (operator confirmation required; allow about 25 minutes):'
+echo "  FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \\"
+echo '    mise exec -- just kube flux-alert-delivery-test'
+echo '  This creates and deletes only a run-owned failing Flux Kustomization, exercises the'
+echo '  production 15-minute rule, and verifies synchronous firing + resolved ntfy webhooks.'

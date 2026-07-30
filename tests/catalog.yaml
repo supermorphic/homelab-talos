@@ -114,6 +114,7 @@ campaigns:
     mutates_cluster: true
     disruptive: false
     members:
+      - test.e2e.flux-alert-delivery
       - test.e2e.qbit-manage-policy
   resilience:
     description: Ordered disruptive recovery tests.
@@ -531,6 +532,10 @@ suites:
     runner: {command: "CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy", implementation: scripts/test/scenarios/qbit_manage_policy.py}
     native_results: {strategy: native-junit}
     dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/qbit_manage_policy.py, args: [.kube/config], selector: null}
+  - metadata: {id: test.e2e.flux-alert-delivery, source: test, framework: bash, suite: monitoring, tier: e2e, target: flux-alert-delivery, scenario: firing-resolved, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: FLUX_ALERT_E2E_CONFIRM, expected: "test:flux-alert:firing-resolved"}
+    runner: {command: "FLUX_ALERT_E2E_CONFIRM=test:flux-alert:firing-resolved mise exec -- just kube flux-alert-delivery-test", implementation: scripts/test/scenarios/flux-alert-delivery.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: chainsaw.resilience.qbittorrent-vpn-disconnect, source: chainsaw, framework: chainsaw, suite: media, tier: resilience, target: qbittorrent-vpn-disconnect, scenario: null, scope: network, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:qbittorrent-vpn-disconnect"}
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect", implementation: scripts/test/run-chainsaw.sh}

@@ -120,6 +120,8 @@ run_shell_case result-contract scripts/test/lib/results-test.sh
 run_shell_case catalog-negative scripts/test/validate-catalog-test.sh
 run_shell_case flux-alerts-diagnostics \
   scripts/test/flux-alerts-diagnostics-test.sh
+run_shell_case flux-alert-delivery \
+  scripts/test/flux-alert-delivery-test.sh
 run_shell_case chainsaw-dispatch scripts/test/run-chainsaw-dispatch-test.sh
 run_shell_case media-hardlink scripts/test/scenarios/media-hardlink-test.sh
 run_shell_case probe-dispatch scripts/test/run-probe-dispatch-test.sh
