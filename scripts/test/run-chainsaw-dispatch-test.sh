@@ -62,6 +62,6 @@ rg -Fq 'catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario"' "$runne
 rg -Fq 'scripts/test/run-catalog-suite.sh "$suite_id"' "$runner"
 rg -Fq 'scripts/test/run-chainsaw.sh "$tier" "$target"' "$runner"
 if rg -Fq '.test-results/state-changing.lock' "$runner"; then
-  echo 'Live dispatch still uses a worktree-local state-changing lock.' >&2
+  echo 'Live dispatch still uses a checkout-local state-changing lock.' >&2
   exit 1
 fi

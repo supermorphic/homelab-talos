@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Allow an operator to run a guarded rollout from any clean branch/worktree while
+# Allow an operator to run a guarded rollout from any clean checkout while
 # proving that the guard and rollout-specific sources are already published on
 # origin/main. Callers still reconcile and verify the live Flux artifact afterward.
 # This is an operational drift check for trusted local code, not tamper-resistant
@@ -15,7 +15,7 @@ require_deployed_source() {
   shift
 
   [[ -z "$(git status --porcelain)" ]] || {
-    echo "Refusing $label: commit or stash all worktree changes first." >&2
+    echo "Refusing $label: commit or stash all checkout changes first." >&2
     return 1
   }
 
@@ -33,7 +33,7 @@ require_deployed_source() {
 
   git cat-file -e "${remote_head}^{commit}" 2>/dev/null || {
     echo "Refusing $label: origin/main at $remote_head is not available locally." >&2
-    echo "Run 'git fetch origin main' and retry from this worktree." >&2
+    echo "Run 'git fetch origin main' and retry from this checkout." >&2
     return 1
   }
 
@@ -41,7 +41,7 @@ require_deployed_source() {
   if ! git diff --quiet "$remote_head" -- "${guard_paths[@]}"; then
     echo "Refusing $label: the rollout source below differs from deployed origin/main at $remote_head:" >&2
     git diff --name-only "$remote_head" -- "${guard_paths[@]}" >&2
-    echo "Merge those paths to main, then run 'git fetch origin main' and retry from any clean branch/worktree." >&2
+    echo "Merge those paths to main, then run 'git fetch origin main' and retry from any clean checkout." >&2
     return 1
   fi
 }

@@ -28,7 +28,7 @@ Immediate correctness defects:
 - `scripts/validate` is not comprehensively ShellChecked by `just ci`.
 - Mutating operations are incorrectly named `*-verify`, notably Cilium connectivity,
   storage provisioning, Plex rescheduling, and qBittorrent kill-switch testing.
-- The disruptive-test lock is worktree-local, not cluster-wide.
+- The disruptive-test lock is checkout-local, not cluster-wide.
 - Several Chainsaw E2E/resilience documents are primarily one large shell/Python script
   operation, producing poor Chainsaw step reporting.
 - The latest qbit-manage policy E2E, Plex node-reboot recovery, and current conformance
@@ -86,7 +86,7 @@ Phase 3 implementation status on `feat/test-result-coordinator`:
 - Live Bash verifiers, focused integration/resilience scripts, and probes run
   through the single-suite coordinator. The VPN leak timeline is stored inside
   its canonical diagnostics tree.
-- The worktree-local disruptive lock is replaced by a renewable,
+- The checkout-local disruptive lock is replaced by a renewable,
   resourceVersion-guarded Kubernetes Lease in `flux-system`, shared by
   state-changing script, Chainsaw, probe, and conformance runs.
 - Sonobuoy is normalized into the same contract: its archive is retained,

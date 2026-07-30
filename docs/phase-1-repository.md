@@ -59,7 +59,7 @@ backend to select and attest the native ARM64 upstream artifact instead.
 - Every pinned command reported the expected version; the active `yq` binary is
   native macOS ARM64.
 - `just repo verify` passes ignore-boundary, SOPS-policy, Git-history, diff, and
-  trackable-worktree secret checks.
+  tracked-file secret checks.
 - The new age identity matched the committed recipient and completed an isolated
   SOPS encrypt/decrypt round-trip.
 - The then-disabled Talos generation recipe failed at its Phase 2 prerequisite

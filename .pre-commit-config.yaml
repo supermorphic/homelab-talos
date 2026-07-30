@@ -35,7 +35,7 @@ repos:
         language: system
         pass_filenames: false
 
-      # Refuse a plaintext *.sops.yaml (validates the staged blob, not the worktree).
+      # Refuse a plaintext *.sops.yaml (validates the staged blob, not the local file).
       - id: sops-encrypted
         name: SOPS files are encrypted (staged)
         entry: scripts/check-sops-encrypted.sh

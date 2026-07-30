@@ -86,7 +86,7 @@ export STORAGE_BOOTSTRAP_CONFIRM='bootstrap:phase9:storage:longhorn'
 mise exec -- just bootstrap storage
 ```
 
-`bootstrap storage` may run from any clean branch/worktree after `git fetch origin
+`bootstrap storage` may run from any clean checkout after `git fetch origin
 main`. Its rollout guard and storage source paths must match remote `origin/main`,
 and both Kustomizations must be staged `suspend: true` in Git and live. It re-runs
 `storage-validate` + `flux-verify`, then resumes `longhorn` → `longhorn-config` in

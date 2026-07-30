@@ -61,7 +61,7 @@ write_publish_result() {
 
 scripts/test/validate-run.sh "$run_dir"
 [[ "$(yq -r '.git.dirty' "$run_dir/environment.json")" == 'false' ]] || {
-  echo 'Refusing to publish a run captured from a dirty worktree.' >&2
+  echo 'Refusing to publish a run captured from a dirty checkout.' >&2
   exit 1
 }
 run_sha="$(yq -r '.git.sha' "$run_dir/environment.json")"

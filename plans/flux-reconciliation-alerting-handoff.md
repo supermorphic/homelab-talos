@@ -95,7 +95,7 @@ topic to close the plan.
 
 ## Workflow constraints (must follow)
 
-- This checkout is a **linked worktree**; it is the absolute boundary. No new worktrees.
+- This checkout is the absolute filesystem boundary. Do not use another checkout.
 - Work only on the assigned feature branch; never commit/push to `main`; **never merge**
   (no `gh pr merge`) — the operator merges.
 - `mise exec -- just ci` must pass locally before opening/updating the PR. Prefix all
