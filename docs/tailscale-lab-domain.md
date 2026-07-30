@@ -110,12 +110,11 @@ This validates, confirms the Kustomization is suspended in Git and live, resumes
 preserved).
 
 The verify confirms **structural** readiness — Connector `ConnectorReady`, **2** devices,
-**2** pods on distinct nodes, and that the Connector *advertises* exactly the two `/32`s —
-and polls those (they are eventually consistent after reconcile). It does **not** gate on
-route *exposure*: the two `/32`s are advertised but **await manual approval** (gate 3), which
-Kubernetes/Flux cannot perform, so `.status.subnetRoutes` is empty here and the verify
-reports `routes exposed to tailnet: false` **without failing**. Re-running the verify after
-gate 3 flips that to `true`.
+**2** pods on distinct nodes, and that the Connector spec and status both report exactly
+the two `/32`s — and polls those (they are eventually consistent after reconcile). In
+operator v1.98.9, `.status.subnetRoutes` is a comma-separated copy of the configured spec
+routes; it does **not** prove Admin Console approval. Route approval remains gate 3 and is
+ultimately proven by the off-LAN client acceptance in gate 5.
 
 ### Operator gate 3 — route approval (MANUAL, per replica)
 
@@ -128,22 +127,20 @@ failover.
    - `192.168.90.2/32` (DNS resolver)
    - `192.168.90.30/32` (Gateway VIP)
 4. Confirm neither advertises any other subnet. Save both.
-5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` — it should now report
-   `routes exposed to tailnet: true`, confirming both `/32`s are approved and live.
+5. Re-run `mise exec -- just kube tailscale-subnet-router-verify` to confirm the Connector
+   remains reconciled, then use gate 5 to prove the approved routes carry real client traffic.
 
-> Kubernetes status cannot prove Admin Console approval — that is why this reads as manual,
-> and why `.status.subnetRoutes` (route *exposure*) only populates after approval. The guarded
-> bootstrap's verify therefore passes on structural readiness alone (routes advertised); this
-> gate is what makes them usable.
+> Kubernetes status cannot prove Admin Console approval — `.status.subnetRoutes` mirrors the
+> configured `advertiseRoutes` string. The guarded bootstrap's verify proves reconciliation;
+> this gate and the client acceptance are what prove the routes are actually usable.
 >
 > **Auto-approval (now enabled):** `autoApprovers.routes` maps the two exact `/32`s to
 > `tag:lab-router`, so a device tagged `tag:lab-router` advertising them is approved
 > automatically — a recreated Connector or a second replica no longer needs manual
 > re-approval. See the `autoApprovers` block in `docs/tailscale-operator.md` /
 > `docs/tailscale-single-user-setup.md`. With it in your policy, this gate becomes a
-> **verification** step (re-run the verify and confirm `routes exposed to tailnet: true`)
-> rather than a manual click. Keep the scope to the exact `/32`s — never broaden to the LAN
-> `/24` or Pod/Service CIDRs.
+> **verification** step in the Admin Console rather than a manual click. Keep the scope to
+> the exact `/32`s — never broaden to the LAN `/24` or Pod/Service CIDRs.
 
 ### Operator gate 4 — split DNS (MANUAL)
 

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/network.sh
+source scripts/lib/tailscale-routes.sh
 
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: tailscale-subnet-router.sh <kubeconfig>' >&2
@@ -58,31 +59,26 @@ done
   exit 1
 }
 
-# Config correctness (always present, independent of tailnet approval): the Connector must
-# ADVERTISE exactly the two /32s. Route *exposure* additionally requires manual approval and
-# is checked separately below.
-spec_routes="$("${kc[@]}" get connector "$connector" --output jsonpath='{.spec.subnetRouter.advertiseRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
+# Config correctness: the Connector spec must advertise exactly the two /32s.
+connector_json="$("${kc[@]}" get connector "$connector" --output json)"
+spec_routes="$(yq -p=json -r '.spec.subnetRouter.advertiseRoutes | sort | join(",")' <<<"$connector_json")"
 [[ "$spec_routes" == "$expected_routes" ]] || {
   echo "Connector advertises [$spec_routes]; want exactly $expected_routes." >&2
   exit 1
 }
 
-# Route EXPOSURE (`.status.subnetRoutes`) reflects only routes APPROVED in the Admin Console.
-# Approval is a manual gate (docs/tailscale-lab-domain.md, gate 3) that Kubernetes/Flux
-# cannot perform, so an empty value here is EXPECTED right after bootstrap and is reported,
-# not failed. A non-empty value that does not match, however, is a real misconfiguration.
-exposed_routes="$("${kc[@]}" get connector "$connector" --output jsonpath='{.status.subnetRoutes}' 2>/dev/null | yq -p json -r '. | sort | join(",")' 2>/dev/null || true)"
-routes_exposed=false
-if [[ -z "$exposed_routes" || "$exposed_routes" == 'null' ]]; then
-  echo "NOTE: no routes exposed to the tailnet yet — the two /32s are advertised but await manual approval."
-  echo "      Approve ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 on BOTH lab-subnet-router-* devices (gate 3)."
-elif [[ "$exposed_routes" == "$expected_routes" ]]; then
-  routes_exposed=true
-  echo "Routes exposed to the tailnet (approved): $exposed_routes."
-else
-  echo "Connector exposes routes [$exposed_routes]; expected exactly $expected_routes (or none, pre-approval)." >&2
+# Operator v1.98.9 copies the spec routes into `.status.subnetRoutes` using a
+# comma-separated string. This is a reconciliation signal, not proof that the
+# routes are approved in the Admin Console; approval remains a client/manual gate.
+if ! status_routes="$(tailscale_connector_status_routes <<<"$connector_json")"; then
+  echo 'Connector status.subnetRoutes is not the expected comma-separated string.' >&2
   exit 1
 fi
+[[ "$status_routes" == "$expected_routes" ]] || {
+  echo "Connector status reports routes [$status_routes]; expected exactly $expected_routes." >&2
+  exit 1
+}
+echo "Connector status reports the configured subnet routes: $status_routes."
 
 # The application path the routes serve must itself be healthy.
 [[ "$("${kc[@]}" --namespace networking get gateway internal --output jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -105,13 +101,12 @@ if command -v dig >/dev/null 2>&1; then
 fi
 
 just kube foundation-verify
-echo "Tailscale subnet-router acceptance passed: Kustomization Ready, ConnectorReady, 2 devices, 2 pods on distinct nodes, advertises exactly the two /32s, Gateway Programmed, homepage HTTPRoute Accepted (routes exposed to tailnet: $routes_exposed)."
+echo 'Tailscale subnet-router acceptance passed: Kustomization Ready, ConnectorReady, 2 devices, 2 pods on distinct nodes, spec/status report exactly the two /32s, Gateway Programmed, and homepage HTTPRoute Accepted.'
 echo
 echo 'MANUAL (mandatory — Kubernetes status CANNOT drive Tailscale Admin Console approval):'
-echo '  1. In Admin Console -> Machines, open BOTH lab-subnet-router-* devices and approve'
-echo "     ONLY ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 on EACH replica (both must be approved"
-echo '     for real failover). Confirm neither advertises any other subnet. Re-run this verify'
-echo '     afterward to see "routes exposed to tailnet: true".'
+echo '  1. In Admin Console -> Machines, confirm BOTH lab-subnet-router-* devices have'
+echo "     ONLY ${HOMELAB_DNS_RESOLVER}/32 and ${HOMELAB_GATEWAY_VIP}/32 approved (autoApprovers normally handles"
+echo '     this). Both replicas must be approved for real failover.'
 echo "  2. Ensure the restricted split-DNS nameserver ${HOMELAB_DNS_RESOLVER} is configured for search"
 echo '     domain lab.supermorphic.com.'
 echo '  3. From a tailnet client OFF the home LAN, run the client acceptance probe in'
