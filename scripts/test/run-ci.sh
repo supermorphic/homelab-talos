@@ -30,6 +30,14 @@ run_result='passed'
 primary_exit_code=0
 signal_exit_code=0
 
+epoch_milliseconds() {
+  local now seconds fraction
+  now="$EPOCHREALTIME"
+  seconds="${now%%.*}"
+  fraction="${now#*.}"
+  echo "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
+}
+
 handle_signal() {
   local signal="$1"
   case "$signal" in
@@ -44,12 +52,14 @@ append_suite_record() {
   local suite_id="$1"
   local suite_result="$2"
   local report="$3"
+  local duration_ms="$4"
   local counts tests failures errors skipped _passed record
   counts="$(read_junit_counts "$report")"
   read -r tests failures errors skipped _passed <<<"$counts"
   record="$(
     SUITE_ID="$suite_id" \
     SUITE_RESULT="$suite_result" \
+    DURATION_MS="$duration_ms" \
     TESTS="$tests" \
     FAILURES="$failures" \
     ERRORS="$errors" \
@@ -57,6 +67,7 @@ append_suite_record() {
       yq --null-input --output-format json --indent 0 '{
         "id": strenv(SUITE_ID),
         "result": strenv(SUITE_RESULT),
+        "duration_ms": (strenv(DURATION_MS) | tonumber),
         "tests": (strenv(TESTS) | tonumber),
         "failures": (strenv(FAILURES) | tonumber),
         "errors": (strenv(ERRORS) | tonumber),
@@ -85,12 +96,12 @@ while IFS= read -r suite_id; do
   if [[ "$fail_fast" == true ]]; then
     printf 'Skipped after earlier CI suite failure.\n' >"$suite_log"
     write_result_case_junit "$suite_report" "$suite_id" fail-fast skipped 0
-    append_suite_record "$suite_id" skipped "$suite_report"
+    append_suite_record "$suite_id" skipped "$suite_report" 0
     suite_reports+=("$suite_report")
     continue
   fi
 
-  suite_started="$EPOCHSECONDS"
+  suite_started_ms="$(epoch_milliseconds)"
   echo "=== $suite_id: just $command_args ==="
   set +e
   env -u TEST_RUN_ID_FILE \
@@ -101,7 +112,9 @@ while IFS= read -r suite_id; do
   if [[ "$signal_exit_code" -ne 0 ]]; then
     command_exit_code="$signal_exit_code"
   fi
-  suite_duration=$((EPOCHSECONDS - suite_started))
+  suite_duration_ms=$(($(epoch_milliseconds) - suite_started_ms))
+  printf -v suite_duration_seconds '%d.%03d' \
+    "$((suite_duration_ms / 1000))" "$((suite_duration_ms % 1000))"
 
   mapfile -t native_fragments < <(
     find "$fragment_dir" -type f -name '*.xml' -print | LC_ALL=C sort
@@ -114,7 +127,7 @@ while IFS= read -r suite_id; do
     set -e
     if [[ "$merge_exit_code" -ne 0 ]]; then
       write_result_case_junit "$suite_report" "$suite_id" junit-merge broken \
-        "$suite_duration"
+        "$suite_duration_seconds"
       suite_result='broken'
     else
       counts="$(read_junit_counts "$suite_report")"
@@ -125,24 +138,24 @@ while IFS= read -r suite_id; do
         suite_result='failed'
       elif [[ "$command_exit_code" -ne 0 ]]; then
         write_result_case_junit "$suite_report" "$suite_id" exit-mismatch broken \
-          "$suite_duration"
+          "$suite_duration_seconds"
         suite_result='broken'
       fi
     fi
   elif [[ "$signal_exit_code" -ne 0 ]]; then
     write_result_case_junit "$suite_report" "$suite_id" signal broken \
-      "$suite_duration"
+      "$suite_duration_seconds"
     suite_result='broken'
   elif [[ "$command_exit_code" -eq 0 ]]; then
     write_result_case_junit "$suite_report" "$suite_id" command passed \
-      "$suite_duration"
+      "$suite_duration_seconds"
   else
     write_result_case_junit "$suite_report" "$suite_id" command failed \
-      "$suite_duration"
+      "$suite_duration_seconds"
     suite_result='failed'
   fi
 
-  append_suite_record "$suite_id" "$suite_result" "$suite_report"
+  append_suite_record "$suite_id" "$suite_result" "$suite_report" "$suite_duration_ms"
   suite_reports+=("$suite_report")
   if [[ "$command_exit_code" -ne 0 || "$suite_result" != 'passed' ]]; then
     fail_fast=true
