@@ -72,7 +72,7 @@ source_state() {
     return
   fi
   [[ -z "$(git status --porcelain)" ]] || {
-    echo 'Refusing test campaign: commit or stash all worktree changes first.' >&2
+    echo 'Refusing test campaign: commit or stash all checkout changes first.' >&2
     return 1
   }
   [[ -f "$kubeconfig" ]] || {

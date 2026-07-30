@@ -103,7 +103,7 @@ the SOPS key exists and Cilium adoption succeeds.
 
 Run all commands from the repository root. First merge the reviewed Phase 6
 implementation to `origin/main`, then fetch that commit into the current clean
-worktree. The checked-out branch may be any feature branch: the guarded workflow
+checkout. The checked-out branch may be any feature branch: the guarded workflow
 compares the Phase 6 rollout paths with remote `origin/main` instead of requiring
 local `HEAD` to equal it. Git review, commit, and push remain explicit
 source-control actions; every cluster mutation is encapsulated by a guarded Just

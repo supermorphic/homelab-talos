@@ -134,7 +134,7 @@ addresses, but it still requires the operator's explicit DHCP confirmation.
 ## Guarded Rollout
 
 After the suspended source commit is on `origin/main`, fetch it into any clean
-branch/worktree, keep the age identity loaded, and run:
+checkout, keep the age identity loaded, and run:
 
 ```bash
 git fetch origin main

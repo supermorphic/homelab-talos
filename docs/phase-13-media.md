@@ -80,7 +80,7 @@ activated (`suspend: false`); run each app's guarded `just bootstrap arr <app>` 
 if it has not been brought up yet, then confirm with `arr-verify`.
 
 ```bash
-# from any clean branch/worktree after the rollout source is merged to main
+# from any clean checkout after the rollout source is merged to main
 git fetch origin main
 git status --short  # must print nothing
 export ARR_BOOTSTRAP_CONFIRM='bootstrap:phase13:prowlarr'
