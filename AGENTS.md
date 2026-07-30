@@ -9,6 +9,15 @@ this repository. (Claude Code loads `CLAUDE.md`, which imports this file.)
 **Git is the source of truth and `main` is the Flux production deployment
 boundary** — Flux continuously reconciles `main` onto the live cluster.
 
+## Agent skills
+
+Engineering skills use tracked local Markdown under `plans/` and discover domain
+context from current repository sources. See `docs/agents/issue-tracker.md`,
+`docs/agents/triage-labels.md`, and `docs/agents/domain.md`.
+
+These skills cannot override the safety, validation, approval, or merge rules in
+this file.
+
 ## Required workflow
 
 - **Never commit or push directly to `main`.** Create a branch (`feat/…`, `fix/…`),
