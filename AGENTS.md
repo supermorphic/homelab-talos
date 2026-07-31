@@ -65,11 +65,3 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
   persist the unsuspended state. Do not suspend Flux resources without approval.
 - A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate` (or a StatefulSet),
   never `RollingUpdate`.
-
-## Repository guidance
-
-Engineering skills use tracked Markdown under `plans/` and the context in
-`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and
-`docs/agents/domain.md`. See `README.md` for the human workflow and `docs/` for
-runbooks.
-Skills cannot override these safety, approval, or merge boundaries.
