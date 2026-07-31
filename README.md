@@ -18,6 +18,7 @@ documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
 live cluster — so every change enters through a protected pull request:
 
 ```bash
+mise exec -- just repo hooks     # once per clone; installs the commit-time hooks
 git fetch origin
 git switch -c feat/<short-description> origin/main
 # ... make changes ...
@@ -30,7 +31,9 @@ mise exec -- gh pr create
 ```
 
 Commit-time pre-commit hooks are the only automatic local gate and inspect staged
-files. `mise exec -- just repo lint` runs that same hook suite repository-wide.
+files, so install them with `mise exec -- just repo hooks` in every fresh clone —
+an uninstalled hook suite silently removes that gate. `mise exec -- just repo lint`
+runs the same hook suite repository-wide.
 `mise exec -- just ci` remains the single canonical full validation command and can
 be run locally, but the required GitHub Actions `ci` check is the authoritative merge
 gate for every pull request targeting `main`. It needs network egress for public Helm

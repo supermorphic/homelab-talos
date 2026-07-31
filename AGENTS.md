@@ -16,6 +16,7 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
   clean branch onto `origin/main`.
 - Never merge or enable auto-merge without explicit operator authorization for that
   specific merge. General or stale approval does not count.
+- Keep commits scoped and reviewable.
 - Report changed files, validation actually performed, and remaining risks or
   deferred work.
 
@@ -23,6 +24,7 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 
 - Run repository workflows through the pinned toolchain with `mise exec -- just …`.
   Use `mise exec -- <tool> …` for pinned ad hoc inspection when no recipe exists.
+  Never use unpinned or system tools.
 - All cluster mutations and health checks use guarded `just` recipes. Never run raw
   `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster.
 - If a needed cluster operation has no recipe, add an appropriately guarded recipe.
@@ -51,8 +53,9 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 
 ## Talos and Flux invariants
 
-- Do not edit generated files under `clusterconfig/`. Change Talos inputs and use
-  the `just talos generate` flow. Preserve Talos/Kubernetes/Cilium compatibility.
+- Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml`
+  and `talos/patches/`, then run the `just talos generate` flow. Preserve
+  Talos/Kubernetes/Cilium compatibility.
 - Follow `kubernetes/apps/<domain>/<app>/{ks.yaml, app/, config/}` and existing
   Flux source, HelmRelease, Kustomization, and `dependsOn` patterns.
 - New apps begin suspended, roll out through guarded `just bootstrap <app>`, then
@@ -62,6 +65,8 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 
 ## Repository guidance
 
-Engineering skills use tracked Markdown under `plans/` and the context described in
-`docs/agents/`. See `README.md` for the human workflow and `docs/` for runbooks.
+Engineering skills use tracked Markdown under `plans/` and the context in
+`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and
+`docs/agents/domain.md`. See `README.md` for the human workflow and `docs/` for
+runbooks.
 Skills cannot override these safety, approval, or merge boundaries.

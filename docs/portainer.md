@@ -51,9 +51,8 @@ unset PORTAINER_ADMIN_PASSWORD PORTAINER_SECRETS_CONFIRM
 ```
 
 The recipe requires the repository SOPS age identity and writes only
-`portainer-admin-password.sops.yaml`. Review the ciphertext diff and run the
-focused `mise exec -- just kube portainer-validate` check before committing; the
-pull request's required `ci` check remains the authoritative full gate.
+`portainer-admin-password.sops.yaml`. Review the ciphertext diff before
+committing; the pull request's required `ci` check is the authoritative gate.
 
 Portainer's `--admin-password-file` applies only while creating the first
 administrator in a new database. Updating the Kubernetes Secret does **not**

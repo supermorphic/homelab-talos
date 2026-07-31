@@ -1,6 +1,7 @@
 name: CI
 
-# Authoritative cluster-independent, secret-free pull-request validation. No
+# Authoritative cluster-independent, secret-free validation for pull requests
+# targeting `main`, plus manual dispatch for operator-initiated reruns. No
 # kubeconfig, SOPS age key, or cluster access is used or required.
 
 on:

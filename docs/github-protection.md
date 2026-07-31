@@ -118,8 +118,8 @@ tests:
    squash merge.
 4. After the operator explicitly authorizes and performs that specific merge,
    confirm no push-to-`main` workflow reruns the same full validation.
-5. Confirm Flux observes the approved revision using the repository's guarded,
-   read-only status recipe.
+5. Confirm Flux observes the approved revision with the guarded, read-only
+   `mise exec -- just kube flux-status`.
 
 Do not intentionally push to `main`, introduce a failing commit, or open a second
 test pull request solely to probe protection. Those scenarios should remain review
