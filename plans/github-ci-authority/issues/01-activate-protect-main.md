@@ -24,8 +24,7 @@ configuration through API read-back rather than trusting submitted settings.
 - [x] Complete API read-back verifies repository merge settings, the full active
       ruleset, and the rules applying to `main`, including the empty bypass list
       and GitHub Actions source for `ci`.
-- [x] No exported ruleset payload, apply script, or declarative GitHub-settings
-      artifact is committed.
+- [x] No exported GitHub response or ruleset-ID-bound payload is committed.
 
 ## Comments
 
@@ -36,3 +35,8 @@ Authenticated API read-back confirmed squash-only repository merging, the exact
 linear history, deletion protection, and non-fast-forward protection. The effective
 branch rules contain no additional rule types. Implementation is complete and awaits
 maintainer review.
+
+2026-07-31: Follow-up review selected a tracked deterministic checker and guarded,
+idempotent repair path. It resolves the current ruleset and GitHub Actions source at
+runtime rather than retaining the initial ruleset ID or an exported response as
+desired state.

@@ -1,153 +1,178 @@
-# GitHub Protection Operator Runbook
+# GitHub Main Protection
 
-This runbook is **non-authoritative operational guidance**. GitHub's effective
-repository settings and active ruleset are the authority. This file is neither
-desired state nor a reconciliation mechanism.
+GitHub protects `main`, the Flux production deployment boundary. The repository
+tracks a deterministic checker and guarded repair mechanism; GitHub's effective
+repository settings and active rules remain the enforcement authority.
 
-## Purpose and prerequisites
+The control objective is:
 
-The `main` branch is the Flux production deployment boundary. GitHub must admit only
-a current pull-request candidate that passed the repository's canonical `ci` check.
+> `refs/heads/main` can be updated only by GitHub completing a current, successful
+> pull-request merge.
 
-Maintenance requires:
+## What was configured
 
-- repository Administration permission;
-- an authenticated, mise-pinned GitHub CLI;
-- a recent successful `ci` check from GitHub Actions so its expected source can be
-  selected; and
-- the current GitHub REST API documentation for repository and ruleset endpoints.
+On 2026-07-31, an agent configured the repository through the GitHub REST API after
+receiving explicit operator authorization for that operation. It did not come from
+`.github/workflows/ci.yml`: that workflow publishes the `ci` check but cannot create
+repository rulesets or change merge settings.
 
-Never store an exported ruleset, REST request payload, or apply script in the
-repository. If durable reconciliation is needed, adopt a reviewed controller such
-as Terraform as a separate architectural change.
+The initial API read-back reported:
 
-## Required effective state
+- repository merge methods: squash enabled, merge commits and rebase disabled;
+- active repository ruleset: `Protect main`, ID `20116777` at creation time;
+- target: only `refs/heads/main`, with no excluded refs and no bypass actors;
+- required pull request: zero approvals and squash as its only merge method;
+- optional review gates: all off;
+- required status check: `ci` from GitHub Actions, with the branch required to be up
+  to date;
+- linear history required; and
+- deletion and force pushes blocked.
 
-Repository merge settings allow squash merging and disable merge commits and rebase
-merging. One active repository branch ruleset named `Protect main`:
+The ruleset ID is historical information, not a stable identifier. GitHub assigns a
+new ID if the ruleset is deleted and recreated. The checker discovers the current ID
+by name and verifies the complete ruleset.
 
-- targets only `refs/heads/main`;
-- has no bypass actors;
-- requires a pull request with zero approvals and none of the optional review gates;
-- permits only squash merging;
-- requires the `ci` check from GitHub Actions with strict up-to-date enforcement;
-- requires linear history; and
-- blocks force pushes and branch deletion.
+The tracked implementation is
+[`scripts/repository/github_protection.py`](../scripts/repository/github_protection.py).
+It dynamically obtains the GitHub Actions integration ID from a recent successful
+`ci` check rather than retaining `15368` as a global constant.
 
-Do not enable update restrictions, merge queue, required deployments, required
-signatures, or other rules unless a later decision explicitly adds them.
+## Where to inspect it in GitHub
 
-## Configure through GitHub
+Use these GitHub pages for a visual inspection:
 
-In **Settings → General → Pull Requests**, enable squash merging and disable merge
-commits and rebase merging.
+1. **Settings → General → Pull Requests** shows the repository merge methods.
+   **Allow squash merging** should be on; merge commits and rebase merging should be
+   off.
+2. **Settings → Rules → Rulesets → Protect main** shows the ruleset target, bypass
+   list, enforcement state, and individual rules.
+3. **Actions → CI** shows workflow runs that produce the required `ci` check.
+4. A pull request targeting `main` shows the effective merge gate: `ci` must pass,
+   the branch must be current, and squash must be the only offered merge method.
 
-In **Settings → Rules → Rulesets**, create or edit the repository branch ruleset:
+The ruleset's visible top-level settings should be:
 
-1. Name it `Protect main`, set enforcement to **Active**, and leave bypass actors
-   empty.
-2. Include `refs/heads/main` and no other ref.
-3. Require pull requests with zero approvals, no stale-review dismissal, no Code
-   Owner review, no last-push approval, and no conversation-resolution requirement.
-4. Permit only squash merging.
-5. Require status check `ci`, select **GitHub Actions** as its source, and require
-   branches to be up to date before merging.
-6. Require linear history, block force pushes, and restrict deletion.
+| Rule | Setting |
+| --- | --- |
+| Restrict creations | Off |
+| Restrict updates | Off |
+| Restrict deletions | On |
+| Require linear history | On |
+| Require deployments to succeed | Off |
+| Require signed commits | Off |
+| Require a pull request before merging | On |
+| Require status checks to pass | On |
+| Block force pushes | On |
+| Require code scanning results | Off |
+| Require code quality results | Off |
+| Restrict code coverage | Off |
+| Automatically request Copilot code review | Off |
 
-The REST API can configure the same state without committing an apply mechanism.
-Update merge methods with `PATCH /repos/{owner}/{repo}` and the boolean fields
-`allow_squash_merge`, `allow_merge_commit`, and `allow_rebase_merge`. Create the
-ruleset with `POST /repos/{owner}/{repo}/rulesets`; update an existing one with
-`PUT /repos/{owner}/{repo}/rulesets/<ruleset-id>`.
+Keep **Restrict updates** off. The pull-request rule rejects direct pushes. An
+update restriction with no bypass actors would also prevent GitHub from completing
+valid pull-request merges.
 
-For a one-time ruleset request, create a temporary file outside the checkout, edit
-it from GitHub's current API schema using the required-effective-state list above,
-submit it, then remove it:
+Under **Require a pull request before merging**, verify:
+
+- required approvals: `0`;
+- stale-review dismissal, Code Owner review, restricted review dismissal,
+  last-push approval, and conversation resolution: off;
+- required reviewers: none; and
+- allowed merge methods: squash only.
+
+Under **Require status checks to pass**, verify:
+
+- required check: `ci`;
+- expected source: GitHub Actions;
+- require branches to be up to date before merging: on; and
+- do not require status checks on creation: off.
+
+## Check the complete live state
+
+From a checkout with an authenticated GitHub CLI and repository Administration
+access, run:
 
 ```bash
-ruleset_request="$(mktemp)"
-${EDITOR:?Set EDITOR to prepare the one-time ruleset request} "$ruleset_request"
-mise exec -- gh api --method POST repos/{owner}/{repo}/rulesets \
-  --input "$ruleset_request"
-rm -- "$ruleset_request"
+mise exec -- just repo github-protection-check
 ```
 
-The request must set the branch target, active enforcement, empty bypass array,
-exact `main` ref condition, and only the five rules listed above. Select the
-integration ID from a recent GitHub Actions `ci` check rather than assuming a
-global constant. Do not create the temporary file inside the repository or retain
-it as desired state. Read back the complete effective state after either UI or API
-submission.
+This is read-only. It reads repository merge settings, finds the repository-owned
+`Protect main` ruleset, reads its complete definition, resolves the expected GitHub
+Actions source from a recent successful `ci` run, and reads every effective rule on
+`main`. Administration access is needed because GitHub omits the bypass list from
+ruleset read-back for less-privileged callers. The command exits nonzero and reports
+drift if any part differs.
 
-## Complete API read-back
+For this repository, a passing result resembles:
 
-Run these read-only commands from a checkout of this repository:
+```text
+Repository: 7yXwscXEzv6phzUnKfrw/homelab-talos
+GitHub Actions source: integration 15368 from successful commit <sha>
+Ruleset: Protect main (ID 20116777)
+GitHub protection check: PASS
+main accepts squash-merged pull requests only after strict GitHub Actions ci.
+```
+
+Run the check after changes to repository ownership, GitHub plans, merge settings,
+rulesets, or the `ci` workflow. It deliberately stays outside `just ci`: live GitHub
+state requires authentication and is not part of the cluster-independent,
+secret-free repository validation contract.
+
+## Preview and repair drift
+
+Preview is also read-only:
 
 ```bash
-mise exec -- gh api repos/{owner}/{repo} \
-  --jq '{allow_squash_merge,allow_merge_commit,allow_rebase_merge}'
-
-mise exec -- gh api repos/{owner}/{repo}/rulesets \
-  --jq '[.[] | {id,name,target,enforcement,source_type}]'
-
-mise exec -- gh api repos/{owner}/{repo}/rulesets/<ruleset-id>
-
-mise exec -- gh api repos/{owner}/{repo}/rules/branches/main
+mise exec -- just repo github-protection-plan
 ```
 
-Inspect the complete ruleset, not only its list summary. Confirm the ref condition,
-empty bypass list, all pull-request parameters, squash-only merge method, strict
-required check, and GitHub Actions integration ID. The effective-branch response
-must contain only the intended deletion, linear-history, pull-request,
-required-status-check, and non-fast-forward rules from `Protect main`.
+The plan reports whether it would change repository merge methods and create or
+update `Protect main`. It makes no GitHub changes.
 
-Ruleset history supports recent inspection and rollback only; it is retained for a
-limited period and is not permanent audit storage. Downloaded ruleset JSON may omit
-the bypass list, so it is not a substitute for authenticated API read-back.
+Applying a plan is a live repository-administration mutation. An operator may run
+it or explicitly authorize an agent to run it for that invocation. After reviewing
+the plan, use the exact repository-scoped guard:
+
+```bash
+GITHUB_PROTECTION_CONFIRM='apply:github-protection:7yXwscXEzv6phzUnKfrw/homelab-talos' \
+  mise exec -- just repo github-protection-apply
+```
+
+Apply is idempotent:
+
+- when everything matches, it performs no mutation;
+- when merge methods drift, it restores squash-only merging;
+- when `Protect main` drifts, it updates that ruleset;
+- when `Protect main` was deleted, it recreates it and accepts GitHub's new ID; and
+- after a mutation, it performs the same complete read-back as `check`.
+
+For safety, apply refuses to guess when duplicate `Protect main` rulesets exist or
+when another ruleset already contributes effective rules to `main`. Inspect and
+resolve those cases deliberately in **Settings → Rules → Rulesets**, then rerun the
+plan. The confirmation value authorizes only this guarded GitHub-protection action;
+it does not authorize merging a pull request or any other repository mutation.
 
 ## Safe functional verification
 
-Use the normal implementation pull request rather than manufacturing destructive
-tests:
+Use a normal implementation pull request rather than probing the production branch
+with a direct push:
 
-1. Confirm the pull request automatically starts the `ci` check and cannot merge
-   while it is pending or failing.
-2. If a real follow-up commit is needed, confirm its push cancels the superseded run
-   and starts `ci` for the new candidate.
+1. Confirm the pull request starts `ci` and cannot merge while it is pending or
+   failing.
+2. Confirm a real follow-up commit starts `ci` for the new candidate and supersedes
+   the older run.
 3. Confirm GitHub requires the branch to be current with `main` and offers only
    squash merge.
-4. After the operator explicitly authorizes and performs that specific merge,
-   confirm no push-to-`main` workflow reruns the same full validation.
-5. Confirm Flux observes the approved revision with the guarded, read-only
+4. After the operator authorizes and performs that specific merge, confirm no
+   push-to-`main` workflow reruns the same full validation.
+5. Confirm Flux observes the approved revision with
    `mise exec -- just kube flux-status`.
 
-Do not intentionally push to `main`, introduce a failing commit, or open a second
-test pull request solely to probe protection. Those scenarios should remain review
-procedures, not production experiments.
+Do not intentionally test a direct push against this production repository. If the
+rule were broken, Flux could deploy the pushed commit. The complete API read-back,
+ruleset insights, and normal pull-request behavior are the safe verification seams.
 
-### Documented negative scenarios
-
-Use these only when the operator deliberately schedules protection testing; they
-are not implementation prerequisites:
-
-- **Intentional failure:** On a disposable pull-request branch, introduce a
-  harmless validation failure, open a draft pull request targeting `main`, and
-  confirm `ci` fails and the merge control remains blocked. Close the pull request
-  and delete the branch without merging. Never place the failing commit on `main`.
-- **Stale branch:** Prefer a naturally concurrent pull request. After another pull
-  request changes `main`, confirm the older pull request reports that its branch
-  must be updated and cannot merge despite its previous `ci` result. Update it from
-  current `main` and confirm a new `ci` result is required.
-- **Direct push:** Do not test this against the production repository because a
-  misconfigured rule would deploy the pushed commit through Flux. Exercise a direct
-  push only against a disposable repository with the same ruleset, where GitHub
-  should reject it with a repository-rule violation. On production, use complete
-  API read-back and ruleset insights as the safe verification seam.
-
-## Periodic audit and recovery
-
-Periodically repeat the full read-back, particularly after ownership, GitHub plan,
-workflow, or ruleset changes. If observed behavior differs from the intended state,
-inspect the complete repository settings, active ruleset, rules applying to `main`,
-recent ruleset history, and the source of the latest `ci` check before editing
-anything. Re-read the API state after every correction.
+GitHub ruleset history supports recent inspection and rollback only; it is not
+permanent audit storage. The tracked checker and guarded apply path provide the
+repeatable verification and recovery mechanism if the live ruleset is later changed
+or deleted.

@@ -32,6 +32,20 @@ versions:
     @uv --version
     @sonobuoy version
 
+# Read GitHub merge settings, the complete Protect main ruleset, and rules effective
+# on main; fail when they differ from the tracked protection contract.
+github-protection-check:
+    uv run --locked --no-dev python scripts/repository/github_protection.py check
+
+# Show the GitHub protection changes the guarded apply recipe would make.
+github-protection-plan:
+    uv run --locked --no-dev python scripts/repository/github_protection.py plan
+
+# Reconcile squash-only merging and Protect main after explicit authorization.
+# Guard: GITHUB_PROTECTION_CONFIRM='apply:github-protection:7yXwscXEzv6phzUnKfrw/homelab-talos'.
+github-protection-apply:
+    uv run --locked --no-dev python scripts/repository/github_protection.py apply
+
 # Verify that the loaded private age identity matches this repository.
 secrets:
     #!/usr/bin/env bash

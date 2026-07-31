@@ -36,10 +36,15 @@ agent lifecycle policy.
 - [x] Agent instructions no longer mandate local full CI, describe emergency
       direct-to-`main` procedures, or retain the lifecycle and handoff policy
       explicitly removed by the spec.
-- [x] A clearly non-authoritative operator runbook covers prerequisites, merge
-      settings, UI and REST ruleset creation, complete read-back, safe functional
-      verification, periodic audit, limited ruleset-history retention, and the
-      future-controller boundary.
+- [x] A human-facing guide records what was configured, where to inspect it, exact
+      settings, complete verification, guarded recovery, safe functional
+      verification, and limited ruleset-history retention.
+- [x] Read-only check and plan recipes report drift, while an exactly guarded,
+      idempotent apply recipe can update or recreate protection after explicit
+      authorization and complete API read-back.
+- [x] Offline tests cover expected-state comparison, recovery planning, unexpected
+      effective-rule refusal, exact confirmation, and dynamic GitHub Actions source
+      resolution; live GitHub checks remain outside `just ci`.
 - [x] Existing documentation is corrected where it contradicts the authority model,
       without creating another general CI-policy document.
 - [x] Structural inspection and the unchanged `mise exec -- just ci` regression seam
@@ -55,3 +60,8 @@ all 32 ordered `mise exec -- just ci` suites passed without cluster or secret
 access; canonical run ID
 `20260731T110115Z-e8a86fda43aa-operator-8b0be5f9` records the local result.
 Implementation is complete and awaits maintainer review.
+
+2026-07-31: Follow-up review selected deterministic repository-owned verification
+and recovery rather than prose-only UI reconstruction. Read operations need no
+mutation approval; each guarded apply requires explicit authorization for that
+invocation and refuses ambiguous effective state.

@@ -44,8 +44,8 @@ Actions `ci` check to pass, and squash as the only merge method. Actions validat
 GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
 has different commit identity but the equivalent source tree. The operator reviews
 and merges, then Flux reconciles the resulting `main`. See the
-[GitHub protection operator runbook](docs/github-protection.md) for non-authoritative
-maintenance and verification guidance.
+[GitHub protection guide](docs/github-protection.md) for the applied settings, GitHub
+inspection locations, complete verification, and guarded recovery.
 
 ### Test cadence and campaigns
 

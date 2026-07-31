@@ -32,6 +32,9 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
   are operator-run. Agents stage and validate source, then hand off the rollout.
 - Guarded rollouts must verify their implementation and rollout-specific sources
   match the current remote `origin/main` commit.
+- GitHub protection checks and plans are read-only. Any protection mutation requires
+  explicit authorization for that invocation and must use the guarded
+  `mise exec -- just repo github-protection-apply` recipe; never use ad-hoc API calls.
 
 ## Validation
 
