@@ -36,9 +36,9 @@ actually needs at runtime — storage, gateway, namespace — before writing it.
 | Source validation for one app | `mise exec -- just kube <app>-validate` |
 | Full PR gate | `mise exec -- just ci` |
 
-`*-validate` recipes are cluster-independent and run in CI. `*-verify`,
-`*-status`, `*-preflight`, and `*-diagnostics` need a live cluster and are
-operator-only — never add them to `just ci`.
+`*-validate` recipes are cluster-independent and run in CI; their cluster-dependent
+counterparts are operator-only. `scripts/AGENTS.md` owns that split — check it
+before adding a recipe to either side.
 
 ## Conventions
 
@@ -47,6 +47,9 @@ operator-only — never add them to `just ci`.
   `sourceRef` the `flux-system` `GitRepository`, `prune: true`, and `wait: true`.
 - `app/kustomization.yaml` must list every sibling manifest under `resources:`.
   A file that is not listed is silently not deployed.
+- Chart and manifest sources follow the existing pattern: an `OCIRepository` (or
+  `HelmRepository`/`GitRepository`) beside the `HelmRelease` that references it.
+  Match a neighbouring app rather than introducing a new source kind.
 - Chart values go in `values.yaml`, mounted via `configMapGenerator` with
   `disableNameSuffixHash: true` and the `reconcile.fluxcd.io/watch: Enabled`
   label — not inlined into the HelmRelease.

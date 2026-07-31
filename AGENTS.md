@@ -62,17 +62,12 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 - Secrets are created under this repository's age key through guarded,
   operator-run `*-secrets` recipes.
 
-## Talos and Flux invariants
+## Platform invariants
 
-- Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml`
-  and `talos/patches/`, then run the `just talos generate` flow. Preserve
-  Talos/Kubernetes/Cilium compatibility.
-- Follow `kubernetes/apps/<domain>/<app>/{ks.yaml, app/, config/}` and existing
-  Flux source, HelmRelease, Kustomization, and `dependsOn` patterns.
-- New apps begin suspended, roll out through guarded `just bootstrap <app>`, then
-  persist the unsuspended state. Do not suspend Flux resources without approval.
-- A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate` (or a StatefulSet),
-  never `RollingUpdate`.
+Talos, Flux, and Kubernetes procedure lives in the scoped files below — read the
+one for the directory you are editing before you change anything in it. Two
+boundaries apply everywhere and are not delegated: never suspend a Flux resource
+without approval, and cluster rollouts stay operator-run.
 
 ## Scoped AGENTS.md (MUST read when working in these directories)
 
