@@ -78,10 +78,10 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 
 | Directory | File | Covers |
 |-----------|------|--------|
-| `kubernetes/` | [kubernetes/AGENTS.md](kubernetes/AGENTS.md) | Flux app layout, `ks.yaml`, gateway label, RWO rule |
-| `scripts/` | [scripts/AGENTS.md](scripts/AGENTS.md) | Which subdirectory may run in `just ci`; shared `lib/` helpers |
-| `talos/` | [talos/AGENTS.md](talos/AGENTS.md) | `talconfig.yaml` → `clusterconfig/` generation; version matrix |
-| `tests/` | [tests/AGENTS.md](tests/AGENTS.md) | Test layer taxonomy; `catalog.yaml` registration |
+| `kubernetes/` | [kubernetes/AGENTS.md](./kubernetes/AGENTS.md) | Flux app layout, `ks.yaml`, gateway label, RWO rule |
+| `scripts/` | [scripts/AGENTS.md](./scripts/AGENTS.md) | Which subdirectory may run in `just ci`; shared `lib/` helpers |
+| `talos/` | [talos/AGENTS.md](./talos/AGENTS.md) | `talconfig.yaml` → `clusterconfig/` generation; version matrix |
+| `tests/` | [tests/AGENTS.md](./tests/AGENTS.md) | Test layer taxonomy; `catalog.yaml` registration |
 
 The invariants above are the boundary and always apply; the scoped file tells you
 how to satisfy them in that directory. `docs/`, `plans/`, and `.github/` have no
