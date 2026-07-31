@@ -1103,6 +1103,10 @@ ntfy-subscriber-password:
     just repo secrets
     exec scripts/secrets/ntfy-subscriber-password.sh
 
+# Reject broken relative Markdown links and bare repository documentation paths.
+links-validate:
+    scripts/validate/links-test.sh
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
