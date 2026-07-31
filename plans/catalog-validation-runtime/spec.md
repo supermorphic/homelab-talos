@@ -1,6 +1,6 @@
 # Catalog Validation Runtime Refactor
 
-Status: ready-for-agent
+Status: needs-triage
 
 ## Problem Statement
 

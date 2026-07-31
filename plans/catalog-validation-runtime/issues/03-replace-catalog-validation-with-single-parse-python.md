@@ -7,18 +7,24 @@ sequence without changing what contributors invoke or observe.
 
 **Blocked by:** 01 — Characterize the catalog validator compatibility boundary.
 
-**Status:** ready-for-agent
+**Status:** needs-triage
 
-- [ ] The shell-facing command, accepted arguments, standard output, standard
+- [x] The shell-facing command, accepted arguments, standard output, standard
       error, exit statuses, and success message remain compatible.
-- [ ] The catalog and every referenced YAML manifest are parsed no more than once
+- [x] The catalog and every referenced YAML manifest are parsed no more than once
       per validator invocation and reused across rule evaluation.
-- [ ] Every existing assertion executes in the established order and stops at the
+- [x] Every existing assertion executes in the established order and stops at the
       same first failure for the same input.
-- [ ] The executable compatibility contract passes for accepted catalogs, all
+- [x] The executable compatibility contract passes for accepted catalogs, all
       negative fixtures, rejection reasons, output streams, exit statuses, and
       compound fail-fast cases.
-- [ ] Catalog and artifact-contract harness coverage remains intact; no fixture,
+- [x] Catalog and artifact-contract harness coverage remains intact; no fixture,
       assertion, suite, or diagnostic is weakened, removed, reordered, or skipped.
-- [ ] The complete cluster-independent validation contract passes with all 32
+- [x] The complete cluster-independent validation contract passes with all 32
       suites in their existing order and without cluster-dependent access.
+
+## Comments
+
+2026-07-31: `catalog_validator.py` now implements ordered, single-parse validation
+behind the retained shell entrypoint. The black-box compatibility contract and three
+complete 32-suite post-refactor CI runs passed.
