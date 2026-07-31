@@ -6,5 +6,5 @@
 - Use read-only Explore subagents for repo-wide analysis instead of reading many
   files into the main context.
 - Stay within this repository unless explicitly directed otherwise.
-- The persistent memory index (`MEMORY.md`) records hard-won lessons — recall it,
-  but verify any file/recipe it names still exists before acting on it.
+- Your external persistent memory index (`MEMORY.md`, outside this repository)
+  records hard-won lessons; verify every repository path or recipe it names before acting.

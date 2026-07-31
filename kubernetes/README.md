@@ -3,37 +3,12 @@
 This directory holds resources reconciled by Flux. Cilium bootstrap begins in
 Phase 5 and the guarded production Flux entrypoint is implemented in Phase 6.
 
-## Layout Rules
+Binding rules for this directory are in [`AGENTS.md`](AGENTS.md); this file is explanatory.
 
-- Flux cluster entrypoints belong under `flux/clusters/prod/`.
-- Components own their manifests, chart source, Helm configuration, first-party
-  configuration, routing, monitoring, and local documentation under
-  `apps/<namespace>/<app>/`.
-- Each application has an explicit `ks.yaml` entrypoint and an `app/` directory.
-  A directory is not deployed merely because it exists; a parent Flux
-  Kustomization must include it.
-- Shared bases and overlays are deferred until the Pi staging cluster creates
-  actual duplication.
-- Rendered Helm output is validation material, not declarative source, and remains
-  ignored.
-
-Use a `HelmRelease` for infrastructure controllers and applications with a
-healthy maintained chart. Use focused native Deployments, Services, HTTPRoutes,
-PVCs, and related resources when no trustworthy chart exists. Do not commit the
-output of `helm template`, Kompose, or another third-party generator as the
-declarative source.
-
-Flux dependencies replace implicit directory ordering and numeric sync waves.
-Split controllers from the custom resources that depend on them, then use
-`dependsOn`, readiness waiting, and health checks. Examples include cert-manager
-before issuers, MetalLB before address-pool resources, Envoy Gateway before
-Gateways and HTTPRoutes, and Longhorn before PVC consumers.
-
-The production root at `flux/clusters/prod/apps.yaml` creates the `cluster-apps`
-Kustomization. Explicit native Kustomization files under `apps/` select the child
-Flux Kustomizations; Flux does not recursively deploy arbitrary directories.
-`cluster-apps` uses `deletionPolicy: Orphan` so loss of the root object does not
-cascade into live workloads.
+Shared bases and overlays are deferred until the Pi staging cluster creates
+actual duplication. The `cluster-apps` Kustomization uses
+`deletionPolicy: Orphan` so loss of the root object does not cascade into live
+workloads.
 
 ## Cilium Bootstrap Boundary
 
@@ -57,8 +32,7 @@ it to Helm during Phase 5. In Phase 6, the app Kustomization publishes the same
 file as a watched ConfigMap and the HelmRelease adopts the existing `cilium`
 release in `kube-system`. Cilium begins suspended and protected from pruning;
 the guarded adoption recipe records pod UIDs and restarts across the transfer
-before staging the permanent Git unsuspend. Do not apply `ks.yaml`,
-`ocirepository.yaml`, or `helmrelease.yaml` manually.
+before staging the permanent Git unsuspend.
 
 All supported Cilium workflows are Just recipes:
 
@@ -99,29 +73,25 @@ Phase 7 foundation workflows preserve the same boundary:
 | `just bootstrap foundation` | Guard and reconcile the nine suspended Phase 7 units in dependency order |
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
-The Gateway owns one wildcard certificate in `networking`; application routes do
-not copy TLS private keys. ExternalDNS publishes only routes carrying
-`external-dns.k8s.io/audience=internal`. See
-[`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md) for credentials,
+See [`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md) for credentials,
 confirmations, rollout order, failure behavior, and acceptance gates.
 
-Kubernetes Secret manifests use the `*.sops.yaml` suffix. SOPS encrypts only
-their `data` and `stringData` fields so metadata remains reviewable by Flux. Load
-and validate the repository identity before editing an encrypted manifest:
+SOPS encrypts only Secret `data` and `stringData` fields so metadata remains
+reviewable by Flux. Load and validate the repository identity before editing an
+encrypted manifest:
 
 ```bash
-just repo secrets
+mise exec -- just repo secrets
 mise exec -- sops kubernetes/path/to/secret.sops.yaml
-just repo verify
+mise exec -- just repo verify
 ```
 
 There is not yet a Just recipe for interactive SOPS editing, so this is an
-intentional direct use of a mise-pinned CLI. Never commit a decrypted Secret or
-place the private age identity in this tree.
+intentional direct use of a mise-pinned CLI.
 
-After Flux bootstrap, normal Kubernetes changes are made in Git and reconciled by
-Flux. Direct `kubectl apply` is reserved for documented bootstrap or recovery
-steps; it is not the steady-state deployment workflow.
+Bootstrap and recovery applies are performed through documented guarded `just`
+recipes, which invoke the required client internally; they are not direct agent
+commands.
 
 See the root [`README.md`](../README.md) for workstation setup and
 [`docs/phase-6-flux.md`](../docs/phase-6-flux.md) for the staged bootstrap and

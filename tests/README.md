@@ -1,6 +1,10 @@
 # Kubernetes test framework
 
-This tree contains declarative, repository-owned test inputs:
+This tree contains declarative, repository-owned test inputs.
+
+Binding rules for this directory are in [`AGENTS.md`](AGENTS.md); this file is explanatory.
+
+The inputs are:
 
 - `catalog.yaml` is the machine-validated inventory of validation, verification,
   test, diagnostic, probe, and conformance suites. It owns stable reporting
@@ -23,7 +27,7 @@ This tree contains declarative, repository-owned test inputs:
 
 See `docs/testing-layers.md` for how these layers fit together (Gatus continuous /
 Chainsaw smoke routine / Chainsaw resilience controlled-failure / Sonobuoy
-`just kube conformance` on-demand). Sonobuoy is ephemeral — never scheduled or standing.
+`just kube conformance` on-demand).
 
 `mise exec -- just test validate` is the complete cluster-independent command in
 this module. It validates `catalog.yaml`, lints Chainsaw configuration and tests,
@@ -97,7 +101,7 @@ names are not interchangeable. Integration registers `media-hardlink`; E2E regis
 exact-confirmation-gated `qbit-manage-policy`; resilience targets are explicitly registered.
 The Flux alert E2E is exposed as a guarded `just kube` recipe because it exercises the
 production alert duration rather than the generic direct-test dispatcher. Unknown targets
-fail closed. Live commands must never enter `just ci`.
+are rejected by the dispatcher.
 
 Every coordinated run writes a collision-resistant canonical directory. This
 includes `just ci`, live verification, focused script tests, probes, Chainsaw,
@@ -121,9 +125,8 @@ result-validate <run-id>` to validate a stored run.
 
 `summary.json` carries the catalog dimensions, result classification, JUnit
 counts, and independent assertion/diagnostic/cleanup/recovery phases.
-`environment.json` carries Git, host, tool, and cluster context. Artifacts record
-only a confirmation variable name, never its value. A failed cleanup makes the
-command non-zero without replacing the primary assertion outcome; fixture
+`environment.json` carries Git, host, tool, and cluster context. A failed cleanup
+makes the command non-zero without replacing the primary assertion outcome; fixture
 unavailability is an external-dependency failure rather than a policy assertion.
 A failed diagnostic collection is recorded separately and cannot turn a failed
 assertion into a pass. Canonical JUnit adds stable external-dependency, cleanup,
@@ -185,5 +188,4 @@ CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence \
 ```
 
 It recreates only the Caddy pod and verifies that the selected authoritative
-report and its retained PVC survive. It is operator-only and must not be added
-to `just ci`.
+report and its retained PVC survive. It is operator-run.
