@@ -174,6 +174,7 @@ else
 fi
 uv run --locked ruff check \
   scripts/repository/github_protection.py \
+  scripts/test/catalog_compatibility.py \
   scripts/test/allure_report.py \
   scripts/test/test_allure_report.py \
   scripts/test/report_publish.py \
@@ -196,6 +197,7 @@ uv run --locked ruff check \
   scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
 uv run --locked ruff format --check \
   scripts/repository/github_protection.py \
+  scripts/test/catalog_compatibility.py \
   scripts/test/allure_report.py \
   scripts/test/test_allure_report.py \
   scripts/test/report_publish.py \

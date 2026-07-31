@@ -8,25 +8,37 @@ running duplicate full CI after merge.
 **Blocked by:** 02 — Align repository workflows and guidance with GitHub CI
 authority.
 
-**Status:** ready-for-human
+**Status:** needs-triage
 
-- [ ] The implementation pull request starts the `ci` check automatically and
+- [x] The implementation pull request starts the `ci` check automatically and
       cannot merge while that check is pending or failing.
-- [ ] If an additional implementation commit is naturally required, its push
+- [x] If an additional implementation commit is naturally required, its push
       supersedes the obsolete run and starts `ci` for the updated candidate; no
       artificial commit is created only to exercise this behavior.
-- [ ] GitHub requires the branch to be current with `main` and exposes squash as
+- [x] GitHub requires the branch to be current with `main` and exposes squash as
       the only merge method.
-- [ ] The operator reviews and explicitly authorizes the specific squash merge;
+- [x] The operator reviews and explicitly authorizes the specific squash merge;
       no agent merges, enables auto-merge, or treats prior authorization as current
       permission.
-- [ ] After the operator merges, Actions history shows no duplicate full-CI run
+- [x] After the operator merges, Actions history shows no duplicate full-CI run
       caused by the resulting push to `main`.
-- [ ] Flux observes the approved merged revision after GitHub permits it across the
+- [x] Flux observes the approved merged revision after GitHub permits it across the
       protected boundary.
-- [ ] Repository merge settings and the complete active ruleset are read back again
+- [x] Repository merge settings and the complete active ruleset are read back again
       if functional behavior differs from the documented configuration.
-- [ ] Intentional-failure, stale-branch, and direct-push scenarios remain documented
+- [x] Intentional-failure, stale-branch, and direct-push scenarios remain documented
       procedures rather than destructive implementation-time experiments.
-- [ ] The final handoff reports the changed files, validation actually performed,
+- [x] The final handoff reports the changed files, validation actually performed,
       observed GitHub and Flux evidence, and any remaining risks or deferred work.
+
+## Comments
+
+2026-07-31: PR #165 passed the required pull-request `ci` check and remained blocked
+while that check was pending. The operator squash-merged it as
+`11d200680d29c148882f94bc4190b8a14e126483`. Actions history contained no
+push-to-`main` full-CI run for the merge. Complete GitHub protection read-back passed
+afterward with active ruleset `Protect main` (ID `20116777`), no bypass actors, and
+strict GitHub Actions `ci`. The operator ran the guarded Flux status check and
+confirmed the merged revision reconciled successfully. The GitHub CI authority
+effort is complete; destructive negative scenarios remain documented rather than
+executed against production.
