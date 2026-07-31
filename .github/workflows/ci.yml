@@ -1,15 +1,11 @@
 name: CI
 
-# Cluster-independent, secret-free validation. Runs the same `just ci` contract
-# that developers run locally. No kubeconfig, SOPS age key, or cluster access is
-# used or required. The push trigger validates the exact merged commit Flux consumes
-# (and catches emergency direct-to-main bypasses).
+# Authoritative cluster-independent, secret-free validation for pull requests
+# targeting `main`, plus manual dispatch for operator-initiated reruns. No
+# kubeconfig, SOPS age key, or cluster access is used or required.
 
 on:
   pull_request:
-    branches:
-      - main
-  push:
     branches:
       - main
   workflow_dispatch:

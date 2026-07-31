@@ -1,101 +1,75 @@
 # Agent Instructions
 
-Canonical, vendor-neutral operating rules for AI agents and contributors working in
-this repository. (Claude Code loads `CLAUDE.md`, which imports this file.)
+Canonical, vendor-neutral rules for agents and contributors. `CLAUDE.md` imports
+this file.
 
 ## Repository purpose
 
 `homelab-talos` manages a three-node Talos Linux + Flux GitOps Kubernetes cluster.
-**Git is the source of truth and `main` is the Flux production deployment
-boundary** — Flux continuously reconciles `main` onto the live cluster.
+Git is the source of truth, and `main` is the Flux production deployment boundary.
 
-## Agent skills
+## Git and worktrees
 
-Engineering skills use tracked local Markdown under `plans/` and discover domain
-context from current repository sources. See `docs/agents/issue-tracker.md`,
-`docs/agents/triage-labels.md`, and `docs/agents/domain.md`.
+- Never commit or push directly to `main`; work on the assigned feature branch.
+- Stay within the assigned worktree and branch. Preserve unrelated user changes.
+- Immediately before every push, fetch `origin` and, when needed, safely rebase a
+  clean branch onto `origin/main`.
+- Never merge or enable auto-merge without explicit operator authorization for that
+  specific merge. General or stale approval does not count.
+- Keep commits scoped and reviewable.
+- Report changed files, validation actually performed, and remaining risks or
+  deferred work.
 
-These skills cannot override the safety, validation, approval, or merge rules in
-this file.
+## Tools and cluster access
 
-## Required workflow
-
-- **Never commit or push directly to `main`.** Create a branch (`feat/…`, `fix/…`),
-  make the change, and open a pull request.
-- Before opening or updating a PR, **`just ci` must pass locally** — the single
-  cluster-independent, secret-free validation contract.
-- Open PRs with `gh pr create`. PRs are **squash-merged** after the `ci` status check
-  is green, and Flux then reconciles the merged `main` commit.
-- **Merging is the human operator's job, not the agent's.** An agent must **never**
-  merge a pull request — no `gh pr merge`, no merge via the GitHub UI/API, no
-  auto-merge — even when `ci` is green and the change looks ready. The agent's
-  responsibility ends at opening or updating the PR; the operator reviews and merges.
-  An agent merging a PR is a **workflow violation**. The **only** exception is an
-  explicit, per-merge instruction from the operator to merge that specific PR as a
-  deliberate override; a general prior authorization, a stale approval, or the
-  agent's own inference does **not** count.
-- Direct commits to `main` or rule bypasses are for **emergency recovery only** and
-  must be followed by `just ci` on `main`.
-- Keep commits scoped and reviewable. Report which validation ran versus was
-  skipped, and why.
-
-## Interface: `mise` + `just`
-
-- Run every tool through the pinned toolchain: `mise exec -- just …`. Do not use
-  unpinned or system tools.
-- **All cluster mutations and health checks are guarded `just` recipes — never run
-  raw `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster.** If a
-  needed operation has no recipe, add a guarded recipe rather than an ad-hoc command.
+- Run repository workflows through the pinned toolchain with `mise exec -- just …`.
+  Use `mise exec -- <tool> …` for pinned ad hoc inspection when no recipe exists.
+  Never use unpinned or system tools.
+- All cluster mutations and health checks use guarded `just` recipes. Never run raw
+  `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster.
+- If a needed cluster operation has no recipe, add an appropriately guarded recipe.
 - Cluster-mutating `bootstrap …` recipes require an explicit `*_CONFIRM` value and
-  are **operator-run**. Agents stage the source, validate, commit, and hand off the
-  rollout — they do not run live rollouts.
-- An operator may run a guarded rollout from any clean checkout after
-  `git fetch origin main`; a local `main` branch is not required. The recipe must
-  verify that its guard implementation and rollout-specific source paths match the
-  current remote `origin/main` commit. This permits unrelated committed feature
-  work without allowing feature-branch manifests to become the deployment source.
+  are operator-run. Agents stage and validate source, then hand off the rollout.
+- Guarded rollouts must verify their implementation and rollout-specific sources
+  match the current remote `origin/main` commit.
+- GitHub protection checks and plans are read-only. Any protection mutation requires
+  explicit authorization for that invocation and must use the guarded
+  `mise exec -- just repo github-protection-apply` recipe; never use ad-hoc API calls.
 
 ## Validation
 
-`just ci` is authoritative and cluster-independent (no kubeconfig, no age key, no
-cluster/DNS access; it does need network egress to pull public Helm charts). It
-aggregates `just repo lint`, `just repo verify`, and the per-app `just kube
-*-validate` recipes. The cluster-dependent `*-verify`, `*-status`, `*-preflight`,
-and diagnostic recipes are **local/operator-only** and must not be added to `just
-ci`.
+- Commit-time pre-commit hooks are staged-file fast feedback. Run the same hooks
+  repository-wide with `mise exec -- just repo lint` when useful.
+- `mise exec -- just ci` is the canonical full, cluster-independent, secret-free
+  validation command used by the required GitHub pull-request check.
+- Keep cluster-dependent `*-verify`, `*-status`, `*-preflight`, and diagnostics out
+  of `just ci`; they remain operator-only.
 
 ## Secrets
 
-- All secrets are **SOPS-encrypted** (`*.sops.yaml`). The age **private** key lives
-  only with the operator (password manager + their shell).
-- Never handle the age key, decrypt or rewrite `*.sops.yaml`, or print secret values
-  in output, diffs, plans, or summaries.
-- Never copy legacy ciphertext from other repositories — recreate secrets under this
-  repo's age key via the guarded, operator-run `*-secrets` recipes.
-- Never commit plaintext credentials.
+- All secrets are SOPS-encrypted (`*.sops.yaml`); the age private key remains only
+  with the operator.
+- Never handle the age key, decrypt or rewrite encrypted manifests, expose secret
+  values, copy legacy ciphertext, or commit plaintext credentials.
+- Secrets are created under this repository's age key through guarded,
+  operator-run `*-secrets` recipes.
 
-## Talos
+## Talos and Flux invariants
 
-- Do not hand-edit generated files under `clusterconfig/` (gitignored). Change Talos
-  config via `talos/talconfig.yaml` + `talos/patches/` and the `just talos generate`
-  flow.
-- Preserve Talos / Kubernetes / Cilium version compatibility.
+- Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml`
+  and `talos/patches/`, then run the `just talos generate` flow. Preserve
+  Talos/Kubernetes/Cilium compatibility.
+- Follow `kubernetes/apps/<domain>/<app>/{ks.yaml, app/, config/}` and existing
+  Flux source, HelmRelease, Kustomization, and `dependsOn` patterns.
+- New apps begin suspended, roll out through guarded `just bootstrap <app>`, then
+  persist the unsuspended state. Do not suspend Flux resources without approval.
+- A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate` (or a StatefulSet),
+  never `RollingUpdate`.
 
-## Flux and app layout
+## Repository guidance
 
-- Follow the existing layout: `kubernetes/apps/<domain>/<app>/{ks.yaml, app/,
-  config/}`. New apps stage `suspend: true`, roll out via a guarded `just bootstrap
-  <app>`, then flip to `suspend: false` durably.
-- Reuse existing HelmRelease / Kustomization / OCIRepository patterns; preserve
-  `dependsOn` ordering; do not suspend Flux resources unless explicitly authorized.
-- A `Deployment` mounting a `ReadWriteOnce` PVC must use `strategy: Recreate` (or a
-  StatefulSet), never RollingUpdate — see README "ReadWriteOnce volumes".
-
-## Completion criteria
-
-Review the final diff, run `just ci` (and any relevant local `*-verify` if you have
-cluster access), and summarize changed files, validation performed, and remaining
-risks or deferred work.
-
-See `README.md` for the human workflow and `docs/` for phase runbooks. Detailed
-procedures live in `just` recipes and `docs/`, not in this file.
+Engineering skills use tracked Markdown under `plans/` and the context in
+`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and
+`docs/agents/domain.md`. See `README.md` for the human workflow and `docs/` for
+runbooks.
+Skills cannot override these safety, approval, or merge boundaries.

@@ -1,6 +1,6 @@
 ---
-# Local fast-feedback hooks. The authoritative gate is `just ci` (also run in CI).
-# Install with `just repo hooks`; run all with `just repo lint`.
+# Local staged-file fast feedback. The authoritative full gate is the pull-request
+# `ci` check. Install with `just repo hooks`; run all with `just repo lint`.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
