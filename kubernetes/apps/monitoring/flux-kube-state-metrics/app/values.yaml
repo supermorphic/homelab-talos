@@ -3,7 +3,7 @@
 # This is deliberately NOT the kube-state-metrics bundled inside kube-prometheus-stack:
 # any change to the KPS HelmRelease values currently triggers a helm-controller upgrade
 # wedge ("failed to wait for object to sync in-cache after patching"), so bundled-KSM
-# values are left untouched. See ./README.md for the future consolidation path.
+# values are left untouched. See ../README.md for the future consolidation path.
 #
 # CRS-only: every built-in collector is disabled (collectors: []) and
 # --custom-resource-state-only is set, so this instance emits only gotk_* series and does

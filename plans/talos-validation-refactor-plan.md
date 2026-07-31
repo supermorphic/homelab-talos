@@ -176,8 +176,7 @@ The `just ci` recipe list stays the same order; only recipe bodies change (plus 
 - **Edit:** `.justfile` — add `just kube media-validate` to `ci`.
 - **Reference (reuse, don't duplicate):** `kubernetes/mod.just:248` (`kubeconform`),
   `kubernetes/mod.just:1214` (`plex-validate`, the pattern source),
-  `kubernetes/apps/media/plex/**` (the app layout), `plans/media-stack-architecture-plan.md`
-  and `plans/talos-media-stack.md` (the documented invariants encoded above).
+  `kubernetes/apps/media/plex/**` (the app layout), `plans/media-stack-architecture-plan.md` (the documented invariants encoded above).
 
 ## Out of scope / deferred
 

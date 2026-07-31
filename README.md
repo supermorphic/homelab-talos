@@ -278,6 +278,7 @@ available for focused developer validation.
 | `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and the renewable cluster-wide test Lease | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |
 | `just repo hooks` | Install the git pre-commit hooks (idempotent) | — | Available |
 | `just repo lint` | Run all pre-commit hooks against the tree | — | Available |
+| `just repo links-validate` | Reject broken relative Markdown links, absolute/file Markdown targets, and missing bare repository documentation paths | — | Cluster-independent; included in `just ci` |
 | `just kube kubeconform` | Validate the built app manifests against Kubernetes + CRD schemas | — | Available; read-only, fetches schemas over HTTPS |
 | `just kube foundation-ca-expiry` | Warn if the committed Pi-hole CA is within 30 days of expiry | — | Operational; time-based, kept out of `just ci` |
 | `just kube metrics-server-validate` | Validate the metrics-server source, insecure-TLS flag, and pinned render | — | Available; read-only |
