@@ -207,11 +207,17 @@ the 7-day recycle bin while the `/data/media/music` hardlink survives.
 
 Two properties make this correct rather than merely plausible:
 
-- **`priority: 50` is load-bearing.** It must exceed czteam's 10 so a CZTeam music
-  torrent — carrying category `music` *and* tag `tracker-czteam` — still selects the
-  CZTeam policy and its indefinite, H&R-safe seeding. It differs from public's 100
-  to avoid an ambiguous tie, though the two never compete since their categories are
-  disjoint.
+- **CZTeam music is protected twice over, independently.** Per the qbit_manage
+  matching rules ([Config-Setup wiki](https://github.com/StuffAnThings/qbit_manage/wiki/Config-Setup)):
+  groups are evaluated in priority order, lowest
+  number first; a torrent matches exactly one group; and an *excluded* torrent falls
+  through to be evaluated against the remaining groups. A CZTeam music torrent
+  therefore hits `czteam` (10) first and matches on `include_all_tags`, never
+  reaching the music group. Were the priorities ever inverted, `music`'s
+  `exclude_any_tags` would exclude it and it would fall through to `czteam` anyway.
+  Neither mechanism is the sole protection — see §7.3 for why both are still worth
+  asserting. `priority: 50` differs from public's 100 only to keep resolution
+  deterministic; the two never compete, since their categories are disjoint.
 - **The 7-day floor behaves as intended.** `min_seeding_time` is a hard floor that
   requires a positive `max_ratio`; 2.0 satisfies it. Reaching ratio 2.0 early does
   not stop the torrent — qbit_manage clears the limit and resumes until day 7.
@@ -239,10 +245,21 @@ order, not a principle. Adding a music block to each file would propagate it.
 The change that makes this necessary rather than cosmetic:
 `qbit-manage-policy.sh:114-119` asserts czteam's precedence **pairwise** against
 `public`. With two groups, "czteam < public" and "czteam is highest precedence" are
-the same statement. With three they diverge — a later edit setting
-`music.priority: 5` would still pass, and a CZTeam music torrent would then select
-the music group, inherit `cleanup: true`, and be removed after 30 days. That is the
-hit-and-run outcome the czteam group exists to prevent.
+the same statement. With three or more they diverge, and nothing then checks czteam
+against the newer groups.
+
+The two set-wide invariants below are kept because they catch **different** failure
+classes. Neither subsumes the other:
+
+| Failure | Priority invariant | Exclusion invariant |
+|---|---|---|
+| A future group at priority < 10 with `cleanup: false` but a finite `max_seeding_time` stops a CZTeam torrent early → hit-and-run at the tracker | catches it | misses it — invariant 2 only constrains `cleanup: true` groups |
+| A future `cleanup: true` group without exclusions matches a *generic* private torrent (`tracker-private` only, no `tracker-czteam`, so `czteam` never applies) → private torrent removed | misses it | catches it |
+
+Note what is deliberately *not* claimed: raising a group above czteam does not by
+itself expose a CZTeam torrent to that group's cleanup, because the exclusion tags
+would cause fall-through. The priority invariant earns its place through the first
+row above, not through a cleanup scenario.
 
 Target structure, consolidated into `qbit-manage-policy.sh` so one file owns the
 share-limits model:
