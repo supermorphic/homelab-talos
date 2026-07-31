@@ -115,6 +115,33 @@ fi
 rg -F -q "source.md:1: forbidden Markdown link target '$title_target'" \
   "$temp_root/title.out"
 
+escaped_fragment_repo="$temp_root/escaped-fragment"
+new_repo "$escaped_fragment_repo"
+escaped_fragment_target='target#name.md'
+escaped_fragment_link='target\#name.md'
+printf 'present\n' >"$escaped_fragment_repo/$escaped_fragment_target"
+printf 'See [escaped](%s).\n' "$escaped_fragment_link" \
+  >"$escaped_fragment_repo/source.md"
+git -C "$escaped_fragment_repo" add -A
+if ! "$validator" "$escaped_fragment_repo" >"$temp_root/escaped-fragment.out" 2>&1; then
+  cat "$temp_root/escaped-fragment.out" >&2
+  echo 'Expected an escaped fragment marker to resolve as a filename character.' >&2
+  exit 1
+fi
+
+escaped_title_repo="$temp_root/escaped-title"
+new_repo "$escaped_title_repo"
+escaped_title_target='file:/etc/passwd'
+printf 'See [forbidden](%s (title\\))).\n' "$escaped_title_target" \
+  >"$escaped_title_repo/source.md"
+git -C "$escaped_title_repo" add source.md
+if "$validator" "$escaped_title_repo" >"$temp_root/escaped-title.out" 2>&1; then
+  echo 'Expected a file target with an escaped title delimiter to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: forbidden Markdown link target '$escaped_title_target'" \
+  "$temp_root/escaped-title.out"
+
 outside_name='outside.md'
 outside_path="$temp_root/$outside_name"
 printf 'external\n' >"$outside_path"

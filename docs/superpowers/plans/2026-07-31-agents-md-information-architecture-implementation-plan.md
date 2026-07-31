@@ -544,6 +544,8 @@ chmod +x scripts/validate/links.sh
 
 The implementation intentionally validates relative inline Markdown links only. It supports recursively balanced and escaped ordinary destinations, angle-bracket destinations, and double-, single-, or parenthesized titles; fragment-only and HTTP(S) links are skipped, HTTP(S) is never fetched, absolute filesystem and `file:` targets are errors, and bare `docs/**.md`, `plans/**.md`, and subtree `README.md`/`AGENTS.md` paths resolve from repository root. Existing targets are canonicalized, including symlinks, and must remain inside the worktree root. The supplied root must itself be the Git worktree root.
 
+Escaped destination characters are decoded while scanning left-to-right: an unescaped `#` or `?` starts fragment/query handling, while `\#` and `\?` remain literal filename characters. Parenthesized titles likewise permit escaped delimiters.
+
 Four details in that code are load-bearing and are not stylistic:
 
 - The Markdown destination capture has separate angle-bracket and ordinary branches. The angle branch permits spaces and punctuation while the ordinary branch remains whitespace- and parenthesis-free. The link-text character class is `[^\]\[]`, not `[^][]`; Ripgrep's default engine is Rust's `regex`, which does not treat a leading `]` inside a class as literal.

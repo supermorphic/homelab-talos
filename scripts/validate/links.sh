@@ -32,13 +32,16 @@ report_failure() {
 unescape_destination() {
   local value="$1"
   local index character
+  local backslash='\'
   local result=''
 
   for ((index = 0; index < ${#value}; index++)); do
     character="${value:index:1}"
-    if [[ "$character" == \\ && $((index + 1)) -lt ${#value} ]]; then
+    if [[ "$character" == "$backslash" && $((index + 1)) -lt ${#value} ]]; then
       ((index += 1))
       character="${value:index:1}"
+    elif [[ "$character" == '#' || "$character" == '?' ]]; then
+      break
     fi
     result+="$character"
   done
@@ -103,10 +106,8 @@ scan_markdown() {
         ;;
     esac
 
-    path="${target%%#*}"
-    path="${path%%\?*}"
+    path="$(unescape_destination "$target")"
     [[ -n "$path" ]] || continue
-    path="$(unescape_destination "$path")"
     path="$(dirname "$source")/$path"
     if [[ ! -e "$path" ]]; then
       report_failure "$source" "$line" 'missing Markdown link target' "$target"
@@ -151,7 +152,7 @@ markdown_paths="$(mktemp)"
 bare_paths="$(mktemp)"
 trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
 
-markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\([^()]*\\)))?\\)"
+markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\((?:\\\\.|[^()])*\\)))?\\)"
 git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
 while IFS= read -r -d '' source; do
   scan_markdown "$source"
