@@ -26,10 +26,11 @@ TALOS_APPLY_CONFIRM='nuc1:/dev/nvme0n1:<live-serial>' \
   mise exec -- just talos apply nuc1
 ```
 
-The confirmed invocation repeats every guard, then installs and reboots exactly
-one matching node. Remove the USB during reboot so the internal `Talos Linux UKI`
-entry starts. The recipe applies machine configuration only and never runs
-`talosctl bootstrap`.
+The confirmed invocation repeats every guard before it sends the generated
+config. Talos then wipes `/dev/nvme0n1`, installs the signed image, and reboots
+exactly one matching node. Remove the USB during reboot so the internal
+`Talos Linux UKI` entry starts. The recipe applies machine configuration only
+and never runs `talosctl bootstrap`.
 
 Repeat the procedure independently for `nuc2` and `nuc3`, using the value printed
 for that node.
