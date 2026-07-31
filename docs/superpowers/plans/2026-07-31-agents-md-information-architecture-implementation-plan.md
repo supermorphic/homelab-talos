@@ -109,7 +109,7 @@ See docs/@MISSING@.md for recovery.
 
 - [ ] **Step 2: Add the failing validator contract test**
 
-Create executable `scripts/validate/links-test.sh` with this content. It proves both classes fail closed and proves three things the validator must *accept*: a Markdown link whose target is a directory, a shell-interpolated path such as `"$base/README.md"`, and a live bare path. Every repository path is assembled from a variable, because this file is itself scanned by the validator it tests:
+Create executable `scripts/validate/links-test.sh` with this content. It proves missing Markdown and bare targets, angle-bracket targets with spaces, absolute and `file:` Markdown targets, scanner/root failures, tracked-only behavior, the exact exclusion boundary, and bare-path suffix handling. It also proves a Markdown directory target, a shell-interpolated path such as `"$base/README.md"`, and a live bare path are accepted. Every repository path is assembled from a variable, because this file is itself scanned by the validator it tests:
 
 ```bash
 #!/usr/bin/env bash
@@ -157,6 +157,119 @@ fi
 rg -q "source.txt:1: missing bare path target 'docs/$missing_name.md'" \
   "$temp_root/bare.out"
 
+angle_repo="$temp_root/angle"
+new_repo "$angle_repo"
+angle_target='docs/(missing) runbook.md'
+printf 'See [missing](<%s>).\n' "$angle_target" >"$angle_repo/source.md"
+git -C "$angle_repo" add source.md
+if "$validator" "$angle_repo" >"$temp_root/angle.out" 2>&1; then
+  echo 'Expected a missing angle-bracket Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: missing Markdown link target '$angle_target'" \
+  "$temp_root/angle.out"
+
+absolute_repo="$temp_root/absolute"
+new_repo "$absolute_repo"
+absolute_target='/tmp/missing file'
+printf 'See [absolute](<%s>).\n' "$absolute_target" >"$absolute_repo/source.md"
+git -C "$absolute_repo" add source.md
+if "$validator" "$absolute_repo" >"$temp_root/absolute.out" 2>&1; then
+  echo 'Expected an absolute Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: forbidden Markdown link target '$absolute_target'" \
+  "$temp_root/absolute.out"
+
+file_repo="$temp_root/file"
+new_repo "$file_repo"
+file_target='file:/tmp/missing-file'
+printf 'See [file](%s).\n' "$file_target" >"$file_repo/source.md"
+git -C "$file_repo" add source.md
+if "$validator" "$file_repo" >"$temp_root/file.out" 2>&1; then
+  echo 'Expected a file Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: forbidden Markdown link target '$file_target'" \
+  "$temp_root/file.out"
+
+untracked_repo="$temp_root/untracked"
+new_repo "$untracked_repo"
+printf 'tracked\n' >"$untracked_repo/tracked.md"
+untracked_target='missing-untracked.md'
+printf 'See [broken](%s).\n' "$untracked_target" >"$untracked_repo/source.md"
+git -C "$untracked_repo" add tracked.md
+if ! "$validator" "$untracked_repo" >"$temp_root/untracked.out" 2>&1; then
+  cat "$temp_root/untracked.out" >&2
+  echo 'Expected an untracked broken Markdown target to be ignored.' >&2
+  exit 1
+fi
+
+excluded_repo="$temp_root/excluded"
+new_repo "$excluded_repo"
+docs_dir='docs'
+superpowers_dir='superpowers'
+excluded_target='missing-excluded.md'
+mkdir -p "$excluded_repo/$docs_dir/$superpowers_dir"
+printf 'See [excluded](%s).\n' "$excluded_target" \
+  >"$excluded_repo/$docs_dir/$superpowers_dir/source.md"
+git -C "$excluded_repo" add -A
+if ! "$validator" "$excluded_repo" >"$temp_root/excluded.out" 2>&1; then
+  cat "$temp_root/excluded.out" >&2
+  echo 'Expected docs/superpowers to be excluded.' >&2
+  exit 1
+fi
+
+neighbor_repo="$temp_root/neighbor"
+new_repo "$neighbor_repo"
+neighbor_dir='neighbor'
+neighbor_target='missing-neighbor.md'
+mkdir -p "$neighbor_repo/$docs_dir/$neighbor_dir"
+printf 'See [neighbor](%s).\n' "$neighbor_target" \
+  >"$neighbor_repo/$docs_dir/$neighbor_dir/source.md"
+git -C "$neighbor_repo" add -A
+if "$validator" "$neighbor_repo" >"$temp_root/neighbor.out" 2>&1; then
+  echo 'Expected a neighboring tracked subtree to remain scanned.' >&2
+  exit 1
+fi
+rg -F -q "docs/$neighbor_dir/source.md:1: missing Markdown link target '$neighbor_target'" \
+  "$temp_root/neighbor.out"
+
+boundary_repo="$temp_root/boundary"
+new_repo "$boundary_repo"
+boundary_docs_name='example.md.in'
+boundary_child_dir='child'
+boundary_readme_name='README.md.old'
+printf 'See %s/%s and %s/%s.\n' \
+  "$docs_dir" "$boundary_docs_name" "$boundary_child_dir" "$boundary_readme_name" \
+  >"$boundary_repo/source.txt"
+git -C "$boundary_repo" add source.txt
+if ! "$validator" "$boundary_repo" >"$temp_root/boundary.out" 2>&1; then
+  cat "$temp_root/boundary.out" >&2
+  echo 'Expected bare-path suffixes to be ignored.' >&2
+  exit 1
+fi
+
+scanner_repo="$temp_root/scanner"
+new_repo "$scanner_repo"
+printf 'tracked\n' >"$scanner_repo/source.md"
+git -C "$scanner_repo" add source.md
+scanner_bin="$temp_root/scanner-bin"
+mkdir -p "$scanner_bin"
+printf '#!/usr/bin/env bash\nexit 2\n' >"$scanner_bin/rg"
+chmod +x "$scanner_bin/rg"
+if PATH="$scanner_bin:$PATH" "$validator" "$scanner_repo" >"$temp_root/scanner.out" 2>&1; then
+  echo 'Expected a scanner failure to fail the validator.' >&2
+  exit 1
+fi
+
+non_git_root="$temp_root/not-git"
+mkdir -p "$non_git_root"
+if "$validator" "$non_git_root" >"$temp_root/not-git.out" 2>&1; then
+  echo 'Expected a non-Git root to fail the validator.' >&2
+  exit 1
+fi
+
 accept_repo="$temp_root/accept"
 new_repo "$accept_repo"
 mkdir -p "$accept_repo/$live_dir"
@@ -200,6 +313,16 @@ set -euo pipefail
 
 repo_root="${1:-$(git rev-parse --show-toplevel)}"
 cd "$repo_root"
+repo_root="$(pwd -P)"
+
+if ! git_root="$(git rev-parse --show-toplevel)"; then
+  echo "Validator root must be a Git worktree: $repo_root" >&2
+  exit 1
+fi
+if [[ "$repo_root" != "$git_root" ]]; then
+  echo "Validator root must be the Git worktree root: $repo_root" >&2
+  exit 1
+fi
 
 # Design specs and implementation plans deliberately name paths that do not exist
 # yet, so they are the one tracked subtree this validator does not scan.
@@ -216,7 +339,27 @@ report_failure() {
   failed=1
 }
 
-while IFS= read -r -d '' source; do
+scan_markdown() {
+  local source="$1"
+  local line target path matches status
+
+  if matches="$(
+    rg --line-number --no-heading --only-matching \
+      --replace '$1' \
+      '!?\[[^\]\[]*\]\((<[^<>]*>|[^()[:space:]>]+)(?:[[:space:]]+"[^"]*")?\)' \
+      "$source"
+  )"; then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      return 0
+    fi
+    printf 'Failed to scan Markdown links in %s (rg exit %s).\n' \
+      "$source" "$status" >&2
+    return "$status"
+  fi
+
   while IFS=: read -r line target; do
     [[ -n "$target" ]] || continue
     target="${target#<}"
@@ -236,16 +379,26 @@ while IFS= read -r -d '' source; do
     if [[ ! -e "$(dirname "$source")/$path" ]]; then
       report_failure "$source" "$line" 'missing Markdown link target' "$target"
     fi
-  done < <(
-    rg --line-number --no-heading --only-matching \
-      --replace '$1' \
-      '!?\[[^\]\[]*\]\((<?[^()[:space:]>]+>?)(?:[[:space:]]+"[^"]*")?\)' \
-      "$source" || true
-  )
-done < <(git ls-files -z '*.md' "$exclude_spec")
+  done <<<"$matches"
+}
 
-bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)'
-while IFS= read -r -d '' source; do
+scan_bare_path() {
+  local source="$1"
+  local line target resolved matches status
+
+  if matches="$(rg --line-number --no-heading --only-matching --pcre2 \
+    "$bare_pattern" "$source")"; then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      return 0
+    fi
+    printf 'Failed to scan bare paths in %s (rg exit %s).\n' \
+      "$source" "$status" >&2
+    return "$status"
+  fi
+
   while IFS=: read -r line target; do
     [[ -n "$target" ]] || continue
     resolved="$target"
@@ -255,11 +408,23 @@ while IFS= read -r -d '' source; do
     if [[ ! -f "$resolved" ]]; then
       report_failure "$source" "$line" 'missing bare path target' "$target"
     fi
-  done < <(
-    rg --line-number --no-heading --only-matching --pcre2 \
-      "$bare_pattern" "$source" 2>/dev/null || true
-  )
-done < <(git ls-files -z "$exclude_spec")
+  done <<<"$matches"
+}
+
+markdown_paths="$(mktemp)"
+bare_paths="$(mktemp)"
+trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
+
+git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
+while IFS= read -r -d '' source; do
+  scan_markdown "$source"
+done <"$markdown_paths"
+
+bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9._/-])'
+git ls-files -z "$exclude_spec" >"$bare_paths"
+while IFS= read -r -d '' source; do
+  scan_bare_path "$source"
+done <"$bare_paths"
 
 if ((failed != 0)); then
   exit 1
@@ -274,14 +439,15 @@ Mark it executable:
 chmod +x scripts/validate/links.sh
 ```
 
-The implementation intentionally validates relative inline Markdown links only; fragment-only and HTTP(S) links are skipped, HTTP(S) is never fetched, absolute filesystem and `file:` targets are errors, and bare `docs/**.md`, `plans/**.md`, and subtree `README.md`/`AGENTS.md` paths resolve from repository root.
+The implementation intentionally validates relative inline Markdown links only. It supports ordinary destinations and angle-bracket destinations (including spaces and punctuation); fragment-only and HTTP(S) links are skipped, HTTP(S) is never fetched, absolute filesystem and `file:` targets are errors, and bare `docs/**.md`, `plans/**.md`, and subtree `README.md`/`AGENTS.md` paths resolve from repository root. The supplied root must itself be the Git worktree root.
 
 Four details in that code are load-bearing and are not stylistic:
 
-- The character class is `[^\]\[]`, not `[^][]`. Ripgrep's default engine is Rust's `regex`, which does not treat a leading `]` inside a class as literal; `[^][]` fails to compile with `error: unclosed character class`. Because the `rg` call ends in `|| true`, an uncompilable pattern would make the Markdown loop read zero lines and the validator would silently pass every Markdown link. The Step 2 fixture is what catches this.
+- The Markdown destination capture has separate angle-bracket and ordinary branches. The angle branch permits spaces and punctuation while the ordinary branch remains whitespace- and parenthesis-free. The link-text character class is `[^\]\[]`, not `[^][]`; Ripgrep's default engine is Rust's `regex`, which does not treat a leading `]` inside a class as literal.
 - The Markdown existence test is `-e`, not `-f`. A link target may legitimately be a directory — PR 4 links `docs/runbooks/` — and `-f` would reject it.
-- The bare pattern is wrapped in the negative lookbehind `(?<![\w$/{}.-])`, which is why `--pcre2` is required. Without it, a shell-interpolated path such as `"$base/app/icons/README.md"` in `scripts/validate/homepage.sh:15` matches at `base/...` and is reported as a missing root-relative path. Two such false positives exist in the tree today.
-- Both `git ls-files` calls pass `"$exclude_spec"`. Both classes must skip `docs/superpowers/*`, not just one.
+- Ripgrep exit status `1` means no matches and is accepted; any greater status is reported and fails the validator. The two tracked-file lists are materialized before scanning, so `git ls-files` failures cannot be lost in a process substitution.
+- The bare pattern is wrapped in the negative lookbehind `(?<![\w$/{}.-])` and a negative trailing boundary `(?![A-Za-z0-9._/-])`, which is why `--pcre2` is required. Without the lookbehind, a shell-interpolated path such as `"$base/app/icons/README.md"` in `scripts/validate/homepage.sh:15` matches at `base/...`; without the trailing boundary, suffixes such as `.md.in` and `.md.old` produce false references.
+- Both `git ls-files` calls pass `"$exclude_spec"`. Both classes must skip exactly `docs/superpowers/*`, not just one; tracked neighbors remain scanned.
 
 - [ ] **Step 5: Run focused syntax, lint, and behavior checks**
 
@@ -337,7 +503,7 @@ Run:
 mise exec -- scripts/validate/links-test.sh
 ```
 
-Expected: exit `0`, printing `Tracked Markdown links and bare repository paths resolve.` followed by `Link validator tests passed.` Both failure fixtures still fail closed, the acceptance case passes, and the repository tree is now clean.
+Expected: exit `0`, printing `Tracked Markdown links and bare repository paths resolve.` followed by `Link validator tests passed.` Missing Markdown, bare, angle-bracket, absolute, and `file:` targets fail closed; scanner and root failures fail; only tracked content is scanned; exactly `docs/superpowers/*` is skipped; bare-path suffixes are ignored; and the acceptance cases pass.
 
 - [ ] **Step 9: Expose one repository recipe**
 

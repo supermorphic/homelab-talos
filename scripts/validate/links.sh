@@ -3,6 +3,16 @@ set -euo pipefail
 
 repo_root="${1:-$(git rev-parse --show-toplevel)}"
 cd "$repo_root"
+repo_root="$(pwd -P)"
+
+if ! git_root="$(git rev-parse --show-toplevel)"; then
+  echo "Validator root must be a Git worktree: $repo_root" >&2
+  exit 1
+fi
+if [[ "$repo_root" != "$git_root" ]]; then
+  echo "Validator root must be the Git worktree root: $repo_root" >&2
+  exit 1
+fi
 
 # Design specs and implementation plans deliberately name paths that do not exist
 # yet, so they are the one tracked subtree this validator does not scan.
@@ -19,7 +29,27 @@ report_failure() {
   failed=1
 }
 
-while IFS= read -r -d '' source; do
+scan_markdown() {
+  local source="$1"
+  local line target path matches status
+
+  if matches="$(
+    rg --line-number --no-heading --only-matching \
+      --replace '$1' \
+      '!?\[[^\]\[]*\]\((<[^<>]*>|[^()[:space:]>]+)(?:[[:space:]]+"[^"]*")?\)' \
+      "$source"
+  )"; then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      return 0
+    fi
+    printf 'Failed to scan Markdown links in %s (rg exit %s).\n' \
+      "$source" "$status" >&2
+    return "$status"
+  fi
+
   while IFS=: read -r line target; do
     [[ -n "$target" ]] || continue
     target="${target#<}"
@@ -39,16 +69,26 @@ while IFS= read -r -d '' source; do
     if [[ ! -e "$(dirname "$source")/$path" ]]; then
       report_failure "$source" "$line" 'missing Markdown link target' "$target"
     fi
-  done < <(
-    rg --line-number --no-heading --only-matching \
-      --replace '$1' \
-      '!?\[[^\]\[]*\]\((<?[^()[:space:]>]+>?)(?:[[:space:]]+"[^"]*")?\)' \
-      "$source" || true
-  )
-done < <(git ls-files -z '*.md' "$exclude_spec")
+  done <<<"$matches"
+}
 
-bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)'
-while IFS= read -r -d '' source; do
+scan_bare_path() {
+  local source="$1"
+  local line target resolved matches status
+
+  if matches="$(rg --line-number --no-heading --only-matching --pcre2 \
+    "$bare_pattern" "$source")"; then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      return 0
+    fi
+    printf 'Failed to scan bare paths in %s (rg exit %s).\n' \
+      "$source" "$status" >&2
+    return "$status"
+  fi
+
   while IFS=: read -r line target; do
     [[ -n "$target" ]] || continue
     resolved="$target"
@@ -58,11 +98,23 @@ while IFS= read -r -d '' source; do
     if [[ ! -f "$resolved" ]]; then
       report_failure "$source" "$line" 'missing bare path target' "$target"
     fi
-  done < <(
-    rg --line-number --no-heading --only-matching --pcre2 \
-      "$bare_pattern" "$source" 2>/dev/null || true
-  )
-done < <(git ls-files -z "$exclude_spec")
+  done <<<"$matches"
+}
+
+markdown_paths="$(mktemp)"
+bare_paths="$(mktemp)"
+trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
+
+git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
+while IFS= read -r -d '' source; do
+  scan_markdown "$source"
+done <"$markdown_paths"
+
+bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9._/-])'
+git ls-files -z "$exclude_spec" >"$bare_paths"
+while IFS= read -r -d '' source; do
+  scan_bare_path "$source"
+done <"$bare_paths"
 
 if ((failed != 0)); then
   exit 1
