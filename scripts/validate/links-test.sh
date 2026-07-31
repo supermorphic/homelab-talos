@@ -79,6 +79,73 @@ fi
 rg -F -q "source.md:1: forbidden Markdown link target '$file_target'" \
   "$temp_root/file.out"
 
+balanced_repo="$temp_root/balanced"
+new_repo "$balanced_repo"
+balanced_target='missing(target).md'
+printf 'See [broken](%s).\n' "$balanced_target" >"$balanced_repo/source.md"
+git -C "$balanced_repo" add source.md
+if "$validator" "$balanced_repo" >"$temp_root/balanced.out" 2>&1; then
+  echo 'Expected a missing balanced Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: missing Markdown link target '$balanced_target'" \
+  "$temp_root/balanced.out"
+
+escaped_repo="$temp_root/escaped"
+new_repo "$escaped_repo"
+escaped_target='missing\\(escaped\\).md'
+printf 'See [escaped](%s).\n' "$escaped_target" >"$escaped_repo/source.md"
+git -C "$escaped_repo" add source.md
+if "$validator" "$escaped_repo" >"$temp_root/escaped.out" 2>&1; then
+  echo 'Expected a missing escaped Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: missing Markdown link target '$escaped_target'" \
+  "$temp_root/escaped.out"
+
+title_repo="$temp_root/title"
+new_repo "$title_repo"
+title_target='file:/etc/passwd'
+printf 'See [forbidden](%s (title)).\n' "$title_target" >"$title_repo/source.md"
+git -C "$title_repo" add source.md
+if "$validator" "$title_repo" >"$temp_root/title.out" 2>&1; then
+  echo 'Expected a parenthesized title with a file target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: forbidden Markdown link target '$title_target'" \
+  "$temp_root/title.out"
+
+outside_name='outside.md'
+outside_path="$temp_root/$outside_name"
+printf 'external\n' >"$outside_path"
+up_dir='..'
+markdown_traversal_target="$up_dir/$up_dir/$outside_name"
+markdown_traversal_repo="$temp_root/markdown-parent/markdown-traversal"
+new_repo "$markdown_traversal_repo"
+printf 'See [outside](%s).\n' "$markdown_traversal_target" \
+  >"$markdown_traversal_repo/source.md"
+git -C "$markdown_traversal_repo" add source.md
+if "$validator" "$markdown_traversal_repo" >"$temp_root/markdown-traversal.out" 2>&1; then
+  echo 'Expected an existing external Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: non-local Markdown link target '$markdown_traversal_target'" \
+  "$temp_root/markdown-traversal.out"
+
+bare_traversal_repo="$temp_root/bare-traversal"
+new_repo "$bare_traversal_repo"
+traversal_docs_dir='docs'
+bare_traversal_target="$traversal_docs_dir/$up_dir/$up_dir/$outside_name"
+mkdir -p "$bare_traversal_repo/$traversal_docs_dir"
+printf 'See %s.\n' "$bare_traversal_target" >"$bare_traversal_repo/source.txt"
+git -C "$bare_traversal_repo" add source.txt
+if "$validator" "$bare_traversal_repo" >"$temp_root/bare-traversal.out" 2>&1; then
+  echo 'Expected an existing external bare path target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.txt:1: non-local bare path target '$bare_traversal_target'" \
+  "$temp_root/bare-traversal.out"
+
 untracked_repo="$temp_root/untracked"
 new_repo "$untracked_repo"
 printf 'tracked\n' >"$untracked_repo/tracked.md"

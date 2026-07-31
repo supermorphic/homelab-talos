@@ -29,14 +29,54 @@ report_failure() {
   failed=1
 }
 
+unescape_destination() {
+  local value="$1"
+  local index character
+  local result=''
+
+  for ((index = 0; index < ${#value}; index++)); do
+    character="${value:index:1}"
+    if [[ "$character" == \\ && $((index + 1)) -lt ${#value} ]]; then
+      ((index += 1))
+      character="${value:index:1}"
+    fi
+    result+="$character"
+  done
+  printf '%s' "$result"
+}
+
+canonical_path() {
+  local path="$1"
+  local link parent
+
+  while [[ -L "$path" ]]; do
+    link="$(readlink "$path")"
+    if [[ "$link" == /* ]]; then
+      path="$link"
+    else
+      path="$(dirname "$path")/$link"
+    fi
+  done
+  parent="$(cd "$(dirname "$path")" && pwd -P)"
+  printf '%s/%s\n' "$parent" "$(basename "$path")"
+}
+
+is_local_path() {
+  local path="$1"
+  local canonical
+
+  canonical="$(canonical_path "$path")"
+  [[ "$canonical" == "$repo_root" || "$canonical" == "$repo_root/"* ]]
+}
+
 scan_markdown() {
   local source="$1"
   local line target path matches status
 
   if matches="$(
-    rg --line-number --no-heading --only-matching \
+    rg --line-number --no-heading --only-matching --pcre2 \
       --replace '$1' \
-      '!?\[[^\]\[]*\]\((<[^<>]*>|[^()[:space:]>]+)(?:[[:space:]]+"[^"]*")?\)' \
+      "$markdown_pattern" \
       "$source"
   )"; then
     :
@@ -66,8 +106,12 @@ scan_markdown() {
     path="${target%%#*}"
     path="${path%%\?*}"
     [[ -n "$path" ]] || continue
-    if [[ ! -e "$(dirname "$source")/$path" ]]; then
+    path="$(unescape_destination "$path")"
+    path="$(dirname "$source")/$path"
+    if [[ ! -e "$path" ]]; then
       report_failure "$source" "$line" 'missing Markdown link target' "$target"
+    elif ! is_local_path "$path"; then
+      report_failure "$source" "$line" 'non-local Markdown link target' "$target"
     fi
   done <<<"$matches"
 }
@@ -97,6 +141,8 @@ scan_bare_path() {
     esac
     if [[ ! -f "$resolved" ]]; then
       report_failure "$source" "$line" 'missing bare path target' "$target"
+    elif ! is_local_path "$resolved"; then
+      report_failure "$source" "$line" 'non-local bare path target' "$target"
     fi
   done <<<"$matches"
 }
@@ -105,12 +151,13 @@ markdown_paths="$(mktemp)"
 bare_paths="$(mktemp)"
 trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
 
+markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\([^()]*\\)))?\\)"
 git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
 while IFS= read -r -d '' source; do
   scan_markdown "$source"
 done <"$markdown_paths"
 
-bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9._/-])'
+bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
 git ls-files -z "$exclude_spec" >"$bare_paths"
 while IFS= read -r -d '' source; do
   scan_bare_path "$source"

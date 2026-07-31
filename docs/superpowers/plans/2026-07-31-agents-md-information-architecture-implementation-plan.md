@@ -193,6 +193,73 @@ fi
 rg -F -q "source.md:1: forbidden Markdown link target '$file_target'" \
   "$temp_root/file.out"
 
+balanced_repo="$temp_root/balanced"
+new_repo "$balanced_repo"
+balanced_target='missing(target).md'
+printf 'See [broken](%s).\n' "$balanced_target" >"$balanced_repo/source.md"
+git -C "$balanced_repo" add source.md
+if "$validator" "$balanced_repo" >"$temp_root/balanced.out" 2>&1; then
+  echo 'Expected a missing balanced Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: missing Markdown link target '$balanced_target'" \
+  "$temp_root/balanced.out"
+
+escaped_repo="$temp_root/escaped"
+new_repo "$escaped_repo"
+escaped_target='missing\\(escaped\\).md'
+printf 'See [escaped](%s).\n' "$escaped_target" >"$escaped_repo/source.md"
+git -C "$escaped_repo" add source.md
+if "$validator" "$escaped_repo" >"$temp_root/escaped.out" 2>&1; then
+  echo 'Expected a missing escaped Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: missing Markdown link target '$escaped_target'" \
+  "$temp_root/escaped.out"
+
+title_repo="$temp_root/title"
+new_repo "$title_repo"
+title_target='file:/etc/passwd'
+printf 'See [forbidden](%s (title)).\n' "$title_target" >"$title_repo/source.md"
+git -C "$title_repo" add source.md
+if "$validator" "$title_repo" >"$temp_root/title.out" 2>&1; then
+  echo 'Expected a parenthesized title with a file target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: forbidden Markdown link target '$title_target'" \
+  "$temp_root/title.out"
+
+outside_name='outside.md'
+outside_path="$temp_root/$outside_name"
+printf 'external\n' >"$outside_path"
+up_dir='..'
+markdown_traversal_target="$up_dir/$up_dir/$outside_name"
+markdown_traversal_repo="$temp_root/markdown-parent/markdown-traversal"
+new_repo "$markdown_traversal_repo"
+printf 'See [outside](%s).\n' "$markdown_traversal_target" \
+  >"$markdown_traversal_repo/source.md"
+git -C "$markdown_traversal_repo" add source.md
+if "$validator" "$markdown_traversal_repo" >"$temp_root/markdown-traversal.out" 2>&1; then
+  echo 'Expected an existing external Markdown target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.md:1: non-local Markdown link target '$markdown_traversal_target'" \
+  "$temp_root/markdown-traversal.out"
+
+bare_traversal_repo="$temp_root/bare-traversal"
+new_repo "$bare_traversal_repo"
+traversal_docs_dir='docs'
+bare_traversal_target="$traversal_docs_dir/$up_dir/$up_dir/$outside_name"
+mkdir -p "$bare_traversal_repo/$traversal_docs_dir"
+printf 'See %s.\n' "$bare_traversal_target" >"$bare_traversal_repo/source.txt"
+git -C "$bare_traversal_repo" add source.txt
+if "$validator" "$bare_traversal_repo" >"$temp_root/bare-traversal.out" 2>&1; then
+  echo 'Expected an existing external bare path target to fail.' >&2
+  exit 1
+fi
+rg -F -q "source.txt:1: non-local bare path target '$bare_traversal_target'" \
+  "$temp_root/bare-traversal.out"
+
 untracked_repo="$temp_root/untracked"
 new_repo "$untracked_repo"
 printf 'tracked\n' >"$untracked_repo/tracked.md"
@@ -339,14 +406,43 @@ report_failure() {
   failed=1
 }
 
+unescape_destination() {
+  local value="$1" index character result=''
+  for ((index = 0; index < ${#value}; index++)); do
+    character="${value:index:1}"
+    if [[ "$character" == \\ && $((index + 1)) -lt ${#value} ]]; then
+      ((index += 1))
+      character="${value:index:1}"
+    fi
+    result+="$character"
+  done
+  printf '%s' "$result"
+}
+
+canonical_path() {
+  local path="$1" link parent
+  while [[ -L "$path" ]]; do
+    link="$(readlink "$path")"
+    if [[ "$link" == /* ]]; then path="$link"; else path="$(dirname "$path")/$link"; fi
+  done
+  parent="$(cd "$(dirname "$path")" && pwd -P)"
+  printf '%s/%s\n' "$parent" "$(basename "$path")"
+}
+
+is_local_path() {
+  local canonical
+  canonical="$(canonical_path "$1")"
+  [[ "$canonical" == "$repo_root" || "$canonical" == "$repo_root/"* ]]
+}
+
 scan_markdown() {
   local source="$1"
   local line target path matches status
 
   if matches="$(
-    rg --line-number --no-heading --only-matching \
+    rg --line-number --no-heading --only-matching --pcre2 \
       --replace '$1' \
-      '!?\[[^\]\[]*\]\((<[^<>]*>|[^()[:space:]>]+)(?:[[:space:]]+"[^"]*")?\)' \
+      "$markdown_pattern" \
       "$source"
   )"; then
     :
@@ -376,8 +472,12 @@ scan_markdown() {
     path="${target%%#*}"
     path="${path%%\?*}"
     [[ -n "$path" ]] || continue
-    if [[ ! -e "$(dirname "$source")/$path" ]]; then
+    path="$(unescape_destination "$path")"
+    path="$(dirname "$source")/$path"
+    if [[ ! -e "$path" ]]; then
       report_failure "$source" "$line" 'missing Markdown link target' "$target"
+    elif ! is_local_path "$path"; then
+      report_failure "$source" "$line" 'non-local Markdown link target' "$target"
     fi
   done <<<"$matches"
 }
@@ -407,6 +507,8 @@ scan_bare_path() {
     esac
     if [[ ! -f "$resolved" ]]; then
       report_failure "$source" "$line" 'missing bare path target' "$target"
+    elif ! is_local_path "$resolved"; then
+      report_failure "$source" "$line" 'non-local bare path target' "$target"
     fi
   done <<<"$matches"
 }
@@ -415,12 +517,13 @@ markdown_paths="$(mktemp)"
 bare_paths="$(mktemp)"
 trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
 
+markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\([^()]*\\)))?\\)"
 git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
 while IFS= read -r -d '' source; do
   scan_markdown "$source"
 done <"$markdown_paths"
 
-bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9._/-])'
+bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
 git ls-files -z "$exclude_spec" >"$bare_paths"
 while IFS= read -r -d '' source; do
   scan_bare_path "$source"
@@ -439,14 +542,16 @@ Mark it executable:
 chmod +x scripts/validate/links.sh
 ```
 
-The implementation intentionally validates relative inline Markdown links only. It supports ordinary destinations and angle-bracket destinations (including spaces and punctuation); fragment-only and HTTP(S) links are skipped, HTTP(S) is never fetched, absolute filesystem and `file:` targets are errors, and bare `docs/**.md`, `plans/**.md`, and subtree `README.md`/`AGENTS.md` paths resolve from repository root. The supplied root must itself be the Git worktree root.
+The implementation intentionally validates relative inline Markdown links only. It supports recursively balanced and escaped ordinary destinations, angle-bracket destinations, and double-, single-, or parenthesized titles; fragment-only and HTTP(S) links are skipped, HTTP(S) is never fetched, absolute filesystem and `file:` targets are errors, and bare `docs/**.md`, `plans/**.md`, and subtree `README.md`/`AGENTS.md` paths resolve from repository root. Existing targets are canonicalized, including symlinks, and must remain inside the worktree root. The supplied root must itself be the Git worktree root.
 
 Four details in that code are load-bearing and are not stylistic:
 
 - The Markdown destination capture has separate angle-bracket and ordinary branches. The angle branch permits spaces and punctuation while the ordinary branch remains whitespace- and parenthesis-free. The link-text character class is `[^\]\[]`, not `[^][]`; Ripgrep's default engine is Rust's `regex`, which does not treat a leading `]` inside a class as literal.
 - The Markdown existence test is `-e`, not `-f`. A link target may legitimately be a directory — PR 4 links `docs/runbooks/` — and `-f` would reject it.
 - Ripgrep exit status `1` means no matches and is accepted; any greater status is reported and fails the validator. The two tracked-file lists are materialized before scanning, so `git ls-files` failures cannot be lost in a process substitution.
-- The bare pattern is wrapped in the negative lookbehind `(?<![\w$/{}.-])` and a negative trailing boundary `(?![A-Za-z0-9._/-])`, which is why `--pcre2` is required. Without the lookbehind, a shell-interpolated path such as `"$base/app/icons/README.md"` in `scripts/validate/homepage.sh:15` matches at `base/...`; without the trailing boundary, suffixes such as `.md.in` and `.md.old` produce false references.
+- Markdown scanning uses PCRE2 recursion for ordinary destinations and supports all three valid title delimiters. Destinations are unescaped for filesystem resolution but reported as written.
+- Existing Markdown and bare targets are canonicalized through symlinks and rejected when their canonical path leaves the worktree; an existing external file must never validate a repository reference.
+- The bare pattern is wrapped in the negative lookbehind `(?<![\w$/{}.-])` and a trailing boundary that rejects a path character or a dot followed by one. This avoids false prefixes such as `.md.in` and `.md.old` without ignoring a sentence-final period.
 - Both `git ls-files` calls pass `"$exclude_spec"`. Both classes must skip exactly `docs/superpowers/*`, not just one; tracked neighbors remain scanned.
 
 - [ ] **Step 5: Run focused syntax, lint, and behavior checks**
@@ -503,7 +608,7 @@ Run:
 mise exec -- scripts/validate/links-test.sh
 ```
 
-Expected: exit `0`, printing `Tracked Markdown links and bare repository paths resolve.` followed by `Link validator tests passed.` Missing Markdown, bare, angle-bracket, absolute, and `file:` targets fail closed; scanner and root failures fail; only tracked content is scanned; exactly `docs/superpowers/*` is skipped; bare-path suffixes are ignored; and the acceptance cases pass.
+Expected: exit `0`, printing `Tracked Markdown links and bare repository paths resolve.` followed by `Link validator tests passed.` Missing, balanced, escaped, angle-bracket, absolute, and `file:` Markdown targets fail closed; scanner and root failures fail; existing Markdown and bare traversal targets outside the worktree fail; only tracked content is scanned; exactly `docs/superpowers/*` is skipped; bare-path suffixes are ignored; and the acceptance cases pass.
 
 - [ ] **Step 9: Expose one repository recipe**
 
