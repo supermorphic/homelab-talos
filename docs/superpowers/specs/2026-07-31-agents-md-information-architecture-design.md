@@ -185,11 +185,27 @@ not deploy directories recursively; never manually apply `ks.yaml`,
 certificate and application routes never copy TLS private keys; ExternalDNS
 publishes only routes carrying `external-dns.k8s.io/audience=internal`; Kubernetes
 Secret manifests use the `*.sops.yaml` suffix and a decrypted Secret is never
-committed; direct `kubectl apply` is reserved for documented bootstrap or recovery.
-Migrated down from root: new apps begin suspended and are activated through a
-guarded rollout, no Flux resource is suspended without approval, and a Deployment
-mounting a `ReadWriteOnce` PVC uses `Recreate` or a StatefulSet, never
-`RollingUpdate`.
+committed; after Flux bootstrap, steady-state Kubernetes changes are made in Git
+and reconciled by Flux. Migrated down from root: new apps begin suspended, are
+activated through a guarded rollout, and **the unsuspended state is then persisted
+in Git**; no Flux resource is suspended without approval; and a Deployment mounting
+a `ReadWriteOnce` PVC uses `Recreate` or a StatefulSet, never `RollingUpdate`.
+
+**One source rule is deliberately not migrated.** `kubernetes/README.md:122–124`
+currently reads "Direct `kubectl apply` is reserved for documented bootstrap or
+recovery steps." Root §4 prohibits raw `kubectl` against the live cluster with no
+exception, so carrying that sentence into `kubernetes/AGENTS.md` would be a
+*relaxation* of an ancestor constraint — invalid under additive inheritance. The
+two files have quietly disagreed all along; making inheritance explicit is what
+surfaced it.
+
+The resolution preserves root: bootstrap and recovery applies happen **through
+guarded `just` recipes**, which invoke `kubectl` internally. An agent never invokes
+it directly, so no exception is needed. `kubernetes/AGENTS.md` states the
+steady-state rule (changes go through Git and Flux) and the README sentence is
+rewritten to describe the guarded path rather than grant a carve-out. PR 2 must not
+silently drop it — the rewrite is part of that PR's diff and its rationale belongs
+in the PR description.
 
 **`talos/AGENTS.md`** (~10 lines). Migrated out of `talos/README.md`: rendered
 machine configs contain credentials and must never be moved into a trackable path;
@@ -200,9 +216,18 @@ down from root: never hand-edit generated `clusterconfig/`; change
 Cilium compatibility.
 
 **`tests/AGENTS.md`** (~8 lines). Live and cluster-dependent suites never enter
-`executions.ci`; suite and `executions.ci` entries stay 1:1; documentation names a
-confirmation variable but never its value; guards fail closed; Sonobuoy is
-ephemeral, never scheduled or standing.
+`executions.ci`; suite and `executions.ci` entries stay 1:1; **generated result
+artifacts** record only a confirmation variable name, never its value; guards fail
+closed; Sonobuoy is ephemeral, never scheduled or standing.
+
+The artifact constraint is scoped precisely, because an earlier draft
+over-generalized it to "documentation" and would have been wrong. The source rule
+at `tests/README.md:125` governs `summary.json` and `environment.json` — machine
+output — not prose. Human documentation *must* carry complete confirmation values
+to be usable: `tests/README.md:63` correctly contains
+`CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy`, and the phase runbooks record exact
+confirmed commands throughout. A constraint written against "documentation" would
+have declared correct, safety-critical operator material to be a violation.
 
 ### README migration
 
@@ -254,9 +279,21 @@ Four PRs. Each is independently reviewable and each leaves `main` coherent.
 ### PR 1 — Link validator and plan removal
 
 - `scripts/validate/links.sh` — Bash plus `rg`, executable, ShellCheck-clean —
-  asserting every relative Markdown link in tracked `.md` files resolves to an
-  existing target. Absolute filesystem paths and `file:` URLs are rejected. HTTP(S)
-  URLs are out of scope and are not fetched.
+  validating **two distinct reference classes**, because checking only the first
+  would leave PR 3 unprovable:
+  1. **Markdown links** — every relative `[…](…)` target in tracked `.md` files
+     resolves to an existing file. Absolute filesystem paths and `file:` URLs are
+     rejected. HTTP(S) URLs are out of scope and are not fetched.
+  2. **Bare path references** — every `docs/**.md`, `plans/**.md`, or subtree
+     `README.md`/`AGENTS.md` path appearing as plain text in **any** tracked text
+     source resolves to an existing file. This class covers `.just`, `.sh`,
+     `.yaml`, `.toml`, and Markdown prose that names a path without linking it.
+
+  Class 2 is not optional polish. Thirty-one such references exist today outside
+  Markdown, including `docs/phase-11-media.md` inside a **runtime echo message** at
+  `.just/bootstrap.just:1163` and `docs/tailscale-operator.md` in a comment at
+  `.just/repository.just:1033`. PR 3 moves both files. Without class 2, `just ci`
+  stays green while a recipe prints a dead path to an operator mid-rollout.
 - Recipe in `.just/repository.just`; suite in `tests/catalog.yaml`; matching
   `executions.ci` entry, since the catalog asserts these 1:1; README recipe-table row.
 - Delete `plans/agent-instructions-and-skills-architecture-plan.md`. It is
@@ -277,9 +314,11 @@ Four PRs. Each is independently reviewable and each leaves `main` coherent.
   external persistent memory and not a repository file.
 - No file moves, so the link graph is stable and the diff concerns rule placement
   only.
-- **Acceptance:** the rule-by-rule mapping below holds — every constraint in force
-  before the PR has exactly one named home after it, with none dropped and none
-  duplicated.
+- **Acceptance:** the rule-by-rule mapping below is worked as a checklist and every
+  row ticked — each constraint in force before the PR has exactly one named home
+  after it, none dropped and none duplicated. Sections B, C, and D cover the README
+  migrations; a constraint that cannot be placed without relaxing an ancestor is a
+  blocker, not a rounding error.
 
 ### PR 3 — The `docs/` split
 
@@ -300,7 +339,14 @@ Four PRs. Each is independently reviewable and each leaves `main` coherent.
 
 ## Rule-by-rule mapping
 
-Every rule in force on 2026-07-31, and its home after this plan.
+Every constraint in force on 2026-07-31 and its single home after this plan. This
+table is **PR 2's executable checklist**, not illustration: the PR is incomplete
+until every row is ticked, and a row that cannot be ticked is a blocker rather than
+a cleanup item. It covers all four sources — root `AGENTS.md` and the three READMEs
+being migrated — because a mapping that omitted the READMEs would assert
+completeness it had not checked.
+
+### A. From root `AGENTS.md` (in force today)
 
 | Current rule | Destination |
 |---|---|
@@ -326,10 +372,52 @@ Every rule in force on 2026-07-31, and its home after this plan.
 | Never edit generated `clusterconfig/`; regenerate from `talconfig.yaml` | `talos/AGENTS.md` |
 | Preserve Talos/Kubernetes/Cilium compatibility | `talos/AGENTS.md` |
 | Follow the `apps/<domain>/<app>/` layout and Flux patterns | `kubernetes/AGENTS.md` |
-| New apps begin suspended; no unapproved `suspend:` | `kubernetes/AGENTS.md` |
+| New apps begin suspended, roll out through guarded `just bootstrap <app>`, **then persist the unsuspended state** | `kubernetes/AGENTS.md` |
+| Do not suspend Flux resources without approval | `kubernetes/AGENTS.md` |
 | RWO PVC requires `Recreate` or a StatefulSet | `kubernetes/AGENTS.md` |
 
-Restored by PR 2, currently absent from the repository:
+### B. From `kubernetes/README.md` (migrated by PR 2)
+
+| Source rule | Line | Destination |
+|---|---|---|
+| Flux cluster entrypoints belong under `flux/clusters/prod/` | L8 | `kubernetes/AGENTS.md` |
+| Components own their manifests and config under `apps/<namespace>/<app>/` | L9–11 | `kubernetes/AGENTS.md` |
+| Explicit `ks.yaml` and `app/`; a directory is not deployed merely by existing | L12–14 | `kubernetes/AGENTS.md` |
+| Rendered Helm output is validation material, not declarative source | L17–18 | `kubernetes/AGENTS.md` |
+| `HelmRelease` for maintained charts; focused native resources otherwise | L20–22 | `kubernetes/AGENTS.md` |
+| Never commit `helm template`, Kompose, or generator output as source | L22–24 | `kubernetes/AGENTS.md` |
+| `dependsOn`, readiness waiting, health checks — not implicit ordering or sync waves | L26–30 | `kubernetes/AGENTS.md` |
+| Explicit Kustomizations select children; Flux does not recurse into directories | L32–34 | `kubernetes/AGENTS.md` |
+| Never manually apply `ks.yaml`, `ocirepository.yaml`, or `helmrelease.yaml` | L60–61 | `kubernetes/AGENTS.md` |
+| Gateway owns one wildcard cert; routes never copy TLS private keys | L102–104 | `kubernetes/AGENTS.md` |
+| ExternalDNS publishes only `external-dns.k8s.io/audience=internal` | L104 | `kubernetes/AGENTS.md` |
+| Secret manifests use `*.sops.yaml` | L108 | `kubernetes/AGENTS.md` |
+| Never commit a decrypted Secret or place the age identity in this tree | L119–120 | `kubernetes/AGENTS.md` |
+| Steady state is Git plus Flux reconciliation | L122–124 | `kubernetes/AGENTS.md`, **rewritten** — see the additive-inheritance resolution above |
+| Shared bases deferred; `deletionPolicy: Orphan`; SOPS encrypts `data`/`stringData` only | L15–16, L35–36, L109–110 | `kubernetes/README.md` — descriptive, not constraints |
+
+### C. From `talos/README.md` (migrated by PR 2)
+
+| Source rule | Line | Destination |
+|---|---|---|
+| Rendered configs contain credentials; never move them into a trackable path | L16–18 | `talos/AGENTS.md` |
+| Applying is a separate guarded operation; never raw `talosctl apply-config` | L31–33 | `talos/AGENTS.md` |
+| Never reuse another node's confirmation value | L69–70 | `talos/AGENTS.md` |
+| Generation and validation workflow | L20–43 | `docs/runbooks/talos-generate.md` |
+| Phase 3 installation workflow | L45–75 | `docs/runbooks/talos-install.md` |
+| Source-versus-generated explanation | L8–18 | `talos/README.md` — retained |
+
+### D. From `tests/README.md` (migrated by PR 2)
+
+| Source rule | Line | Destination |
+|---|---|---|
+| Live commands must never enter `just ci` | L100 | `tests/AGENTS.md` |
+| Generated artifacts record a confirmation variable name, never its value | L125 | `tests/AGENTS.md` |
+| Operator-only suites must not be added to CI | L188 | `tests/AGENTS.md` |
+| Sonobuoy is ephemeral — never scheduled or standing | L26 | `tests/AGENTS.md` |
+| Validation-tier suite count and `executions.ci` count stay 1:1 | `catalog_validator.py:557` | `tests/AGENTS.md` |
+
+### E. Restored by PR 2 — currently absent from the repository
 
 | Restored constraint | Destination |
 |---|---|
@@ -339,7 +427,7 @@ Restored by PR 2, currently absent from the repository:
 | `--force-with-lease` only; a failed lease is a full stop | root §3 |
 | No `reset --hard`, `clean -fd`, or unconditional force-push | root §3 |
 
-New in PR 2:
+### F. New in PR 2
 
 | New content | Destination |
 |---|---|
@@ -350,8 +438,10 @@ New in PR 2:
 ## Validation strategy
 
 - Every PR passes `mise exec -- just ci` locally and shows a green `ci` check.
-- PR 1's validator must reject a deliberately broken fixture link and accept the
-  unmodified tree. Both cases ship with it.
+- PR 1's validator must accept the unmodified tree and reject a deliberately broken
+  fixture in **each** reference class — a dead Markdown link and a dead bare path
+  inside a non-Markdown source. A validator that only proves class 1 would pass
+  while leaving PR 3 unverifiable. Both fixtures ship with it.
 - PR 2 attaches the rule-by-rule mapping as its completeness evidence. No rule may
   end without a home, and no rule may appear in two.
 - PR 3 relies on the validator for link completeness rather than manual review.
@@ -359,7 +449,15 @@ New in PR 2:
 ## Risks and tradeoffs
 
 - **Link rewriting is the bulk of PR 3 and can half-succeed silently.** Mitigated
-  by landing the validator first, which is the reason for that ordering.
+  by landing the validator first, which is the reason for that ordering, and by
+  validating bare path references rather than Markdown links alone — 31 of the
+  references at risk are not links at all.
+- **PR 2 may surface further latent contradictions.** The `kubectl apply` conflict
+  between root and `kubernetes/README.md` was found only because additive
+  inheritance forced the question. Others may exist in the ~70 lines being migrated.
+  This is the mechanism working, but it means PR 2's scope is not fully knowable
+  until the mapping is worked row by row. Each contradiction found is resolved
+  explicitly in that PR, never by silently choosing the permissive reading.
 - **Nested files depend on agents actually reading them.** Nothing enforces this;
   it is an instruction, and the required-reading block is written to make the
   obligation explicit rather than implied. The residual is accepted.
