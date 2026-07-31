@@ -1,7 +1,15 @@
+<!-- FOR AI AGENTS - Human readability is a side effect, not a goal -->
+<!-- Managed by agent: hand-maintained; keep sections and order, edit content -->
+<!-- Last updated: 2026-07-31 -->
+
 # Agent Instructions
 
 Canonical, vendor-neutral rules for agents and contributors. `CLAUDE.md` imports
 this file.
+
+**Precedence:** the closest `AGENTS.md` to the files you are changing wins, and an
+explicit user prompt overrides both. Scoped files add procedure; they never relax
+the safety, approval, or merge boundaries below.
 
 ## Repository purpose
 
@@ -65,6 +73,19 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
   persist the unsuspended state. Do not suspend Flux resources without approval.
 - A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate` (or a StatefulSet),
   never `RollingUpdate`.
+
+## Scoped AGENTS.md (MUST read when working in these directories)
+
+| Directory | File | Covers |
+|-----------|------|--------|
+| `kubernetes/` | [kubernetes/AGENTS.md](kubernetes/AGENTS.md) | Flux app layout, `ks.yaml`, gateway label, RWO rule |
+| `scripts/` | [scripts/AGENTS.md](scripts/AGENTS.md) | Which subdirectory may run in `just ci`; shared `lib/` helpers |
+| `talos/` | [talos/AGENTS.md](talos/AGENTS.md) | `talconfig.yaml` → `clusterconfig/` generation; version matrix |
+| `tests/` | [tests/AGENTS.md](tests/AGENTS.md) | Test layer taxonomy; `catalog.yaml` registration |
+
+The invariants above are the boundary and always apply; the scoped file tells you
+how to satisfy them in that directory. `docs/`, `plans/`, and `.github/` have no
+scoped file — they are covered here and by the engineering skills.
 
 ## Repository guidance
 
