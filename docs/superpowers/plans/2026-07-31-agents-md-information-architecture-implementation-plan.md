@@ -407,10 +407,10 @@ report_failure() {
 }
 
 unescape_destination() {
-  local value="$1" index character result=''
+  local value="$1" index character backslash=$'\\' result=''
   for ((index = 0; index < ${#value}; index++)); do
     character="${value:index:1}"
-    if [[ "$character" == \\ && $((index + 1)) -lt ${#value} ]]; then
+    if [[ "$character" == "$backslash" && $((index + 1)) -lt ${#value} ]]; then
       ((index += 1))
       character="${value:index:1}"
     fi

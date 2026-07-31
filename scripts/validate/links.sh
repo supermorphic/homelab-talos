@@ -32,7 +32,7 @@ report_failure() {
 unescape_destination() {
   local value="$1"
   local index character
-  local backslash='\'
+  local backslash=$'\\'
   local result=''
 
   for ((index = 0; index < ${#value}; index++)); do
