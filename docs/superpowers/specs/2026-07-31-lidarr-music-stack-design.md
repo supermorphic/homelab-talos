@@ -37,7 +37,8 @@ Out of scope (deliberately deferred, may become separate work):
 
 - Creating the Plex Music library.
 - Plexamp client setup, CarPlay, Sonos.
-- A functional end-to-end music download test.
+- An automated functional end-to-end music download test. One operator-run real
+  import remains a required rollout acceptance gate; see §5 and §12.
 - Chainsaw smoke coverage for Lidarr (see §9).
 
 ## 3. Decisions
@@ -99,24 +100,35 @@ constraints, not chosen:
 | File | Change |
 |---|---|
 | `kubernetes/apps/media/lidarr/ks.yaml` | New. `suspend: true`, `dependsOn: [media-storage, internal-gateway]` |
-| `kubernetes/apps/media/lidarr/app/{helmrelease,values,httproute,kustomization}.yaml` | New, per §4 and §6 |
+| `kubernetes/apps/media/lidarr/app/{helmrelease,values,httproute,kustomization}.yaml` | New, per §4 and §6. The HTTPRoute has link/discovery annotations but no `widget.*` annotations yet |
 | `kubernetes/apps/media/kustomization.yaml` | Add `- ./lidarr/ks.yaml` |
 | `scripts/validate/arr.sh` | Table-driven refactor + `lidarr` row (§6.1); drop phase wording from the "Missing … source" error and the final success message |
 | `scripts/verify/arr.sh` | Add `lidarr` to the `case` allowlist and both usage strings |
-| `.just/bootstrap.just` | Add `lidarr` to the allowlist; confirm string → `bootstrap:arr:<app>`; drop phase wording from the recipe comment, the cleanup message, and the recommended-order note |
+| `.just/bootstrap.just` | Add `lidarr` to the allowlist; confirm string → `bootstrap:arr:<app>`; add `scripts/validate/arr.sh`, `scripts/verify/arr.sh`, and `tests/catalog.yaml` to `require_deployed_source`; drop phase wording from the recipe comment, cleanup message, and recommended-order note |
 | `.just/repository.just` | New `homepage-lidarr-secrets` recipe |
 | `kubernetes/mod.just` | Drop phase wording from the `arr-validate` / `arr-verify` comments |
 | `tests/catalog.yaml` | `verification.lidarr` entry + media suite membership |
 | `docs/arr-stack-startup.md` | Lidarr sections, `music` category, naming, caveats (§8) |
 
-Not in PR 1: the Gatus endpoint, the Homepage Secret, its env var, and its
-validation assertions.
+Not in PR 1: the Gatus endpoint, the Homepage widget annotations, the Homepage
+Secret, its env var, and its validation assertions. Deferring all three widget
+annotations avoids publishing a discovered widget with a key variable that does not
+exist yet.
 
 ### Operator gate
 
-1. `mise exec -- just bootstrap arr lidarr` (requires `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr'`).
-2. First-run configuration per the new startup documentation.
-3. `mise exec -- just repo homepage-lidarr-secrets` with `LIDARR_API_KEY` and
+1. `mise exec -- just bootstrap arr lidarr` (requires
+   `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr'`).
+2. First-run configuration per the new startup documentation, including the
+   qBittorrent `music` category and the authoritative naming output from §8.
+3. Confirm Lidarr's hardlink option is enabled and **Write Metadata to Audio Files**
+   is disabled. Metadata writes mutate the shared inode and can invalidate a torrent
+   that is still seeding.
+4. Import one authorized test release. Confirm its library path matches §8, its
+   download and library paths have link count 2, and a qBittorrent force recheck
+   completes without a hash error. This is manual rollout acceptance, not automated
+   end-to-end coverage.
+5. `mise exec -- just repo homepage-lidarr-secrets` with `LIDARR_API_KEY` and
    `HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'`.
 
 ### PR 2 — activation
@@ -124,17 +136,20 @@ validation assertions.
 | File | Change |
 |---|---|
 | `kubernetes/apps/media/lidarr/ks.yaml` | `suspend: false` |
+| `kubernetes/apps/media/lidarr/app/httproute.yaml` | Add the three `widget.*` annotations from §6 |
 | `kubernetes/apps/monitoring/gatus/app/values.yaml` | `lidarr` endpoint, group `Media`, `/ping`, 1m, `[STATUS] == 200` |
 | `kubernetes/apps/monitoring/homepage/app/homepage-lidarr.sops.yaml` | Operator-generated Secret |
 | `kubernetes/apps/monitoring/homepage/app/kustomization.yaml` | Add the Secret to `resources` |
 | `kubernetes/apps/monitoring/homepage/app/deployment.yaml` | `HOMEPAGE_VAR_LIDARR_API_KEY`, `optional: true` |
 | `scripts/validate/homepage.sh` | Lidarr Secret + env var assertions |
 | `kubernetes/apps/media/qbit-manage/app/config.yml` | `music` share-limit group (§7.1) |
+| `kubernetes/apps/media/qbit-manage/app/values.yaml` | Update the pod-template `config-hash` to `git hash-object` of the changed `config.yml` |
 | `scripts/validate/qbit-manage*.sh` | Two-layer restructure (§7.3) |
 | `docs/qbit-manage.md` | Music group, flow diagram, safety-invariant section |
 
-The `sops-hash` pod annotation is keyed only to `homepage-ntfy.sops.yaml`, so a new
-Secret causes no hash churn.
+The `sops-hash` pod annotation is keyed only to `homepage-ntfy.sops.yaml`, so the new
+Secret itself causes no hash churn. Adding the Lidarr env var changes the Homepage pod
+template and rolls it once during PR 2, making the new key available to the widget.
 
 ## 6. Lidarr application
 
@@ -142,7 +157,9 @@ Secret causes no hash churn.
 Probes are `/ping` on 8686 with Radarr's periods and thresholds (readiness 10s×3,
 liveness 30s×5, startup 5s×30).
 
-The HTTPRoute mirrors Radarr's with Homepage annotations:
+The HTTPRoute mirrors Radarr's routing and non-widget Homepage discovery annotations
+in PR 1. PR 2 adds the widget annotations only after its Secret and env var can land in
+the same commit:
 
 ```yaml
 gethomepage.dev/widget.type: "lidarr"
@@ -172,6 +189,11 @@ arr_apps=(
 Widget *type* is deliberately absent: it equals the app name for all four, so the
 loop derives it. The `HOMEPAGE_VAR_*` name is built with `${app^^}` — the repo
 requires bash >= 5 (`scripts/lib/common.sh:5`), so case expansion is available.
+
+Widget validation is activation-aware like Gatus validation. An active app must have
+the derived `widget.type`, URL, and key; a suspended app must have no `widget.*`
+annotations. Thus PR 1 validates without exposing a widget with missing credentials,
+while PR 2's `suspend: false` requires the complete widget.
 
 New assertion enabled by the table: `service.app.ports.http.port` and the
 HTTPRoute's `backendRefs[0].port` must both equal `$port`. Today only the backend
@@ -319,19 +341,24 @@ Three deliberate deviations from Lidarr's defaults, each documented with its rea
    performing artist. Getting this wrong scatters compilation tracks under individual
    artists.
 
-Embedded tags are load-bearing for Plex matching, so Lidarr must not be configured
-to rewrite tags broadly during initial rollout, and `Prefer local metadata` should
-not be enabled by default.
+Embedded tags are load-bearing for Plex matching. Lidarr's **Write Metadata to Audio
+Files** option must remain disabled while imported files are hardlinked to active
+torrents: rewriting a tag mutates the same inode and can invalidate the torrent's
+piece hashes. `Prefer local metadata` is a future Plex Music library choice, not a
+Lidarr setting; when that deferred library is created, it should not be enabled by
+default.
 
 ## 9. Testing and verification
 
 The `arr.sh` and qbit_manage refactors both touch validation that currently gates CI
 for live applications, so the safety argument is **differential**, not "CI passes":
 
-1. Capture `mise exec -- just kube arr-validate` output on `main`.
-2. Apply the refactor **without** the Lidarr row; re-run. Output must be identical —
-   the same three `OK` lines. This proves the refactor is behaviour-preserving
-   independently of whether Lidarr is correct.
+1. Capture the exit status and per-app `OK` lines from
+   `mise exec -- just kube arr-validate` on `main`.
+2. Apply the refactor **without** the Lidarr row; re-run. The exit status and same
+   three per-app `OK` lines must be identical. The final summary text may differ
+   because this work deliberately removes phase wording. This proves the refactor is
+   behaviour-preserving independently of whether Lidarr is correct.
 3. Add the Lidarr row; re-run. Expect the same three lines plus `lidarr … OK`.
 4. Repeat the same three-step procedure for `just kube qbit-manage-validate` around
    the two-layer restructure, adding the music group only after the restructure is
@@ -349,9 +376,11 @@ No Chainsaw smoke test: `tests/chainsaw/smoke/media/` covers only `qbittorrent` 
 ## 10. Risks and known limitations
 
 - **Lidarr's external metadata proxy.** Lidarr depends on `api.lidarr.audio`, a
-  MusicBrainz mirror with a history of outages. During one, `/ping` returns 200 —
-  the pod stays Ready and Gatus stays green — while artist and album adds fail.
-  No health check can detect this; it is documented in the startup guide instead.
+  MusicBrainz mirror with a history of outages. During one, `/ping` can still return
+  200 — the pod stays Ready and Gatus stays green — while artist and album adds fail.
+  The chosen `/ping` probe cannot detect this. A synthetic metadata transaction could,
+  but that functional external-dependency monitor is out of scope; the limitation is
+  documented in the startup guide instead.
 - **Breaking change to a documented operator command.** The `bootstrap arr` confirm
   string changes from `bootstrap:phase13:<app>` to `bootstrap:arr:<app>` for all four
   apps. Prowlarr, Sonarr, and Radarr are already live, so this only affects Lidarr or
@@ -360,10 +389,15 @@ No Chainsaw smoke test: `tests/chainsaw/smoke/media/` covers only `qbittorrent` 
   memory-hungry `*arr` during metadata refresh, but that scales with library size and
   this one starts empty. If it OOMs during a large import, raising the limit is a
   one-line follow-up rather than something to pre-inflate on speculation.
-- **Hardlink survival depends on a first-run setting.** The `/data/media/music`
-  file survives cleanup only if Lidarr is configured to hardlink rather than copy.
+- **Zero-copy imports depend on a first-run setting.** The library file survives
+  download-side cleanup whether Lidarr imports by hardlink or copy, but only a
+  hardlink delivers the intended near-zero marginal storage cost and link count 2.
   That is a UI setting, not a manifest guarantee, so it is both a documented step and
-  an item to confirm during the first real import.
+  an item confirmed during the operator gate's real import.
+- **Metadata writes would corrupt an actively seeded hardlink.** The download and
+  library names reference the same inode. **Write Metadata to Audio Files** therefore
+  stays disabled, and the operator gate requires a qBittorrent force recheck after the
+  first import.
 
 ## 11. Verify at implementation time
 
@@ -373,6 +407,8 @@ running system or a current source:
 - The newest `ghcr.io/home-operations/lidarr` tag (3.1.2.4902 at design time).
 - Lidarr 3.1.2's exact naming token syntax, read off the deployed UI — the target
   *output* in §8 is authoritative, the tokens that produce it are not yet verified.
+- The exact Lidarr 3.1.2 UI paths and labels for the hardlink and metadata-write
+  controls. Their required states are authoritative even if their placement changed.
 - Whether Lidarr defaults to disc subfolders for multi-disc releases (believed yes,
   unverified), which determines how much §8's deviation 2 needs to change.
 - That Prowlarr, Sonarr, and Radarr already satisfy the new port assertion in §6.1.
@@ -388,6 +424,7 @@ running system or a current source:
   plaintext key.
 - qBittorrent has a `music` category at `/data/downloads/music`; qbit_manage applies
   the music group, and CZTeam music still selects the czteam group.
-- A real import lands in `/data/media/music` with the §8 structure and a link count
-  of 2.
+- Before PR 2, a real import lands in `/data/media/music` with the §8 structure and a
+  link count of 2, **Write Metadata to Audio Files** is disabled, and a qBittorrent
+  force recheck reports no hash error.
 - Startup and qbit_manage documentation cover every non-declarative step.
