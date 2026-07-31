@@ -102,7 +102,8 @@ Worked examples:
 3. **`docs/runbooks/`** — the sole canonical owner of procedure within this
    repository, both agent- and operator-facing. Linked from the layers above,
    never restated in them.
-4. **`docs/`** — descriptive reference and phase history. Never normative.
+4. **`docs/`** — descriptive reference, phase history, and design specs. Never
+   normative.
 
 External and personal skills are **not a repository surface** and hold no canonical
 repository content. This is precisely why the worktree constraints must live in
@@ -226,11 +227,20 @@ Sorted by what the reader is doing, not by topic.
 | `docs/runbooks/` | 15 | 13 moved — `sops`, `recovery`, `github-protection`, `pihole-integration`, `portainer`, `protonvpn-gluetun`, `tailscale-operator`, `tailscale-lab-domain`, `tailscale-single-user-setup`, `ntfy-startup-guide`, `arr-stack-startup`, `qbit-manage`, `qbit-manage-czteam` — plus 2 new, `talos-generate` and `talos-install` |
 | `docs/phases/` | 15 | `phase-0-preflight` through `phase-14-media` |
 | `docs/` root | 4 | `nuc-cluster`, `testing-layers`, `test-campaigns`, `test-reports` |
+| `docs/superpowers/specs/` | 1+ | Dated design specs, this document first |
 
 Twenty-eight existing files move; two are newly extracted. The live documentation
 surface — everything that is not frozen phase history — goes from 32 files to 19,
 and root `AGENTS.md` §7 can name `docs/runbooks/` as one destination instead of
 enumerating files.
+
+`docs/superpowers/specs/` is the canonical home for design specs, named
+`YYYY-MM-DD-<topic>-design.md`. Specs are **descriptive, never normative** — a spec
+records why an architecture was chosen and is not a source of agent rules, so it
+sits under `docs/` rather than becoming a fourth instruction surface. It is
+deliberately distinct from `plans/`, which holds time-bounded implementation
+sequencing. Root `AGENTS.md` §7 names it as a destination but agents are not
+required to read it.
 
 **Cost:** approximately 117 of 124 inbound links require rewriting, across about 20
 files including `README.md`, the `plans/` documents, `.just/bootstrap.just`,
@@ -381,3 +391,17 @@ New in PR 2:
 9. A relative-link validator lands first, before any file moves.
 10. `plans/agent-instructions-and-skills-architecture-plan.md` is out of
     consideration and is deleted by PR 1.
+11. Design specs live in `docs/superpowers/specs/` as
+    `YYYY-MM-DD-<topic>-design.md`, separate from `plans/` implementation
+    sequencing. This document is the first, and establishes the convention.
+
+## Open follow-up
+
+`plans/` needs a cleanup pass and is not yet a reliable reference. Eight files are
+tracked; #168 removed completed plans once already, and at least
+`portainer-gitops-observability-deployment-plan.md` describes finished work. PR 1
+removes exactly one file — the superseded agent-instructions plan — and takes no
+position on the rest. A retention convention for `plans/` (retain with status,
+migrate durable content into `docs/` and remove, or retain indefinitely) is
+**explicitly out of scope here** and left as recorded follow-up so it is not
+silently resolved by precedent.
