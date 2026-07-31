@@ -15,26 +15,34 @@ documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
 ## Development workflow
 
 `main` is the Flux **production deployment boundary** — Flux reconciles it onto the
-live cluster — so changes go through a branch and a pull request, not direct commits
-to `main`:
+live cluster — so every change enters through a protected pull request:
 
 ```bash
 git fetch origin
 git switch -c feat/<short-description> origin/main
 # ... make changes ...
-mise exec -- just ci            # cluster-independent, secret-free validation gate
-git add -A && git commit -m "..."
+git add -A
+git commit -m "..."             # staged-file hooks provide fast feedback
+git fetch origin
+git rebase origin/main           # when main advanced and the branch is clean
 git push -u origin HEAD
-gh pr create
+mise exec -- gh pr create
 ```
 
-`just ci` is the single validation contract — the same command runs locally and in
-GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) on every PR
-and push to `main`. It needs the mise toolchain and network egress (Helm pulls
-public charts) but **no kubeconfig, SOPS age key, or cluster access**. Cluster-
-dependent checks (`*-verify`, `*-status`, `bootstrap`, `pihole-status`) remain
-local/operator-only. Squash-merge once the `ci` check is green; emergency
-direct-to-`main` commits are exceptional and must be followed by `just ci` on `main`.
+Commit-time pre-commit hooks are the only automatic local gate and inspect staged
+files. `mise exec -- just repo lint` runs that same hook suite repository-wide.
+`mise exec -- just ci` remains the single canonical full validation command and can
+be run locally, but the required GitHub Actions `ci` check is the authoritative merge
+gate for every pull request targeting `main`. It needs network egress for public Helm
+charts but **no kubeconfig, SOPS age key, cluster access, or repository secrets**.
+
+The active `Protect main` ruleset requires the branch to be current, the GitHub
+Actions `ci` check to pass, and squash as the only merge method. Actions validates
+GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
+has different commit identity but the equivalent source tree. The operator reviews
+and merges, then Flux reconciles the resulting `main`. See the
+[GitHub protection operator runbook](docs/github-protection.md) for non-authoritative
+maintenance and verification guidance.
 
 ### Test cadence and campaigns
 
@@ -42,7 +50,7 @@ Use this cadence so "full test suite" has one unambiguous meaning:
 
 | Cadence | Run | Purpose |
 | --- | --- | --- |
-| Every commit and PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
+| Every PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
 | Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
 | Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
 | Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
@@ -81,8 +89,8 @@ Most changes are made by an AI agent. The division of labor:
 | Step | Who |
 |---|---|
 | Plan approval (substantial or cross-cutting changes only) | agent proposes → **you approve** |
-| Branch → changes → staged commits → `just ci` → push → open PR | agent |
-| Review the PR diff and the green `ci` check | **you** |
+| Branch → changes → staged commits → push → open PR | agent |
+| Review the PR diff and required green `ci` check | **you** |
 | Squash-merge | **you** |
 | Flux reconciles `main`; run guarded `just bootstrap …` rollouts | Flux / **you** |
 
@@ -90,7 +98,7 @@ The agent owns branch-through-open-PR; you own review, merge, and rollout. The
 agent **never self-merges** and **never runs live cluster rollouts unprompted** —
 cluster-mutating `bootstrap …` recipes stay behind operator `*_CONFIRM` gates.
 Because merging to `main` deploys via Flux, the PR plus a green `ci` check is the
-review gate before anything reaches the cluster; branch protection makes that gate
+review gate before anything reaches the cluster; the active ruleset makes that gate
 mandatory rather than conventional.
 
 ## Physical KVM Note
@@ -245,7 +253,7 @@ available for focused developer validation.
 | `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Portainer Phase 1; operator-only and read-only |
 | `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Portainer Phase 1; operator-only and disruptive after confirmation |
 | `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Portainer Phase 1; operator-only |
-| `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Local + GitHub Actions; the PR gate; Actions retains the artifact for 90 days |
+| `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Manual local check + authoritative GitHub PR gate; Actions retains the artifact for 90 days |
 | `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
 | `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency, evidence size/path safety, and its complete evidence index | `.test-results/<run-id>` | Cluster-independent; coordinated runners invoke it automatically |
@@ -464,9 +472,10 @@ just repo secrets
 3. Load the SOPS identity only when the change requires encrypted material.
 4. Edit declarative source files, never generated output.
 5. Run the phase-specific generation or validation recipe when it is available.
-6. Run `just repo verify` before reviewing or committing the change.
-7. Inspect `git status` and confirm no generated config, decrypted secret,
+6. Inspect `git status` and confirm no generated config, decrypted secret,
    kubeconfig, talosconfig, or private key is trackable.
+7. Commit on the feature branch, push it, and open a pull request. GitHub's required
+   `ci` check supplies the authoritative full validation result.
 
 Do not bypass a disabled recipe with a raw cluster-changing command. Enable and
 test the guarded recipe as part of the phase that owns that operation.

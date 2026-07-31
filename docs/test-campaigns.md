@@ -13,7 +13,7 @@ Campaigns are intentionally local and operator-run. GitHub Actions runs only
 
 | Cadence | Command | Coverage |
 | --- | --- | --- |
-| Every commit and PR | `mise exec -- just ci` | Cluster-independent validation; this remains the required GitHub status check and does not publish to the cluster archive |
+| Every PR | `mise exec -- just ci` | Cluster-independent validation; this remains the required GitHub status check and does not publish to the cluster archive |
 | Nightly | `standard` campaign | Validation, non-duplicated smoke coverage, qbit-manage E2E, and Sonobuoy quick conformance |
 | Weekly | `weekly` campaign | The nightly contract plus all live verifications, integrations, probes, and disruptive resilience scenarios |
 | Full | `full` campaign | Every weekly suite plus certified Kubernetes conformance; run monthly and before or after Kubernetes, Talos, Cilium, storage, networking, or topology upgrades |
