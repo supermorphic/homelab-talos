@@ -2,7 +2,7 @@
 
 Use this runbook after deploying the media applications onto empty configuration
 PVCs. It covers the runtime setup that cannot be expressed by the existing Helm
-values alone: qBittorrent, Prowlarr, Sonarr, Radarr, and Seerr.
+values alone: qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr.
 
 The Kubernetes resources remain declarative in Git. These application settings are
 written by their web UIs into configuration files and SQLite databases on retained
@@ -14,6 +14,7 @@ Longhorn PVCs:
 | Prowlarr | `https://prowlarr.lab.supermorphic.com` | `http://prowlarr.media.svc.cluster.local:9696` | `/config` |
 | Sonarr | `https://sonarr.lab.supermorphic.com` | `http://sonarr.media.svc.cluster.local:8989` | `/config` |
 | Radarr | `https://radarr.lab.supermorphic.com` | `http://radarr.media.svc.cluster.local:7878` | `/config` |
+| Lidarr | `https://lidarr.lab.supermorphic.com` | `http://lidarr.media.svc.cluster.local:8686` | `/config` |
 | Seerr | `https://seerr.lab.supermorphic.com` | `http://seerr.media.svc.cluster.local:5055` | `/app/config` |
 | Plex | `https://plex.lab.supermorphic.com` | `http://plex.media.svc.cluster.local:32400` | `/config` |
 
@@ -30,15 +31,20 @@ Configure the stack in this order:
 2. Prowlarr authentication and indexers.
 3. Sonarr authentication, TV root folder, and qBittorrent client.
 4. Radarr authentication, movie root folder, and qBittorrent client.
-5. Prowlarr application connections to Sonarr and Radarr.
-6. Plex library-path verification.
-7. Seerr connections to Plex, Sonarr, and Radarr.
-8. Direct Sonarr/Radarr download tests, followed by a Seerr request test.
+5. Lidarr authentication, media management, music root folder, naming, and
+   qBittorrent client.
+6. Prowlarr application connections to Sonarr, Radarr, and Lidarr.
+7. Direct Lidarr real-import acceptance with one authorized release. This is the
+   blocking gate before the next PR and before any Plex Music library work.
+8. Existing Plex TV/movie library-path verification. Creating the Plex Music
+   library remains deferred and is not part of this change.
+9. Seerr connections to Plex, Sonarr, and Radarr.
+10. Direct Sonarr/Radarr download tests, followed by a Seerr request test.
 
 Complete a service's guarded bootstrap and durable `suspend: false` activation
 before configuring it here. Work through the steps incrementally as each service is
 activated — you do not need every application live at once. For example, connect
-Prowlarr to Sonarr as soon as Sonarr is up (step 5's Sonarr half), before Radarr has
+Prowlarr to Sonarr as soon as Sonarr is up (step 6's Sonarr connection), before Radarr has
 been activated, and complete Radarr's steps later.
 
 ## qBittorrent
@@ -65,9 +71,9 @@ Open `https://qbittorrent.lab.supermorphic.com`.
 7. Save, sign out, and confirm the permanent credential signs back in.
 
 qBittorrent exposes one WebUI credential to integrations supported here. Sonarr,
-Radarr, and Homepage use it; Prowlarr uses it only if direct Prowlarr searches are
-enabled. Keep the human copy in the password manager and create Homepage's independently
-rotatable SOPS Secret without printing either value:
+Radarr, Lidarr, and Homepage use it; Prowlarr uses it only if direct Prowlarr searches
+are enabled. Keep the human copy in the password manager and create Homepage's
+independently rotatable SOPS Secret without printing either value:
 
 ```bash
 printf 'qBittorrent WebUI username: '
@@ -103,11 +109,17 @@ The media library directories are not download targets:
 ├── downloads/
 │   ├── incomplete/
 │   ├── movies/
+│   ├── music/
 │   └── tv/
 └── media/
     ├── movies/
+    ├── music/
     └── tv/
 ```
+
+The SMB mount and every media Pod use UID/GID `568`. When the operator saves
+Lidarr's `/data/media/music` root folder, Lidarr creates that library directory
+with matching ownership. The library path is not a qBittorrent save path.
 
 ### Categories
 
@@ -115,10 +127,11 @@ In the transfer-list sidebar, under **Categories**:
 
 1. Add category `tv` with save path `/data/downloads/tv`.
 2. Add category `movies` with save path `/data/downloads/movies`.
+3. Add category `music` with save path `/data/downloads/music`.
 
-Sonarr and Radarr use these exact category names. Automatic Torrent Management
-applies the category save paths. Keeping downloads and media under the same
-`/data` filesystem allows imports to hardlink rather than copy.
+Sonarr, Radarr, and Lidarr use these exact category names. Automatic Torrent
+Management applies the category save paths. Keeping downloads and media under
+the same `/data` filesystem allows imports to hardlink rather than copy.
 
 ### Check
 
@@ -222,9 +235,9 @@ next indexer that needs it, and continue with your other indexers.
 
 Do not add qBittorrent under **Prowlarr → Settings → Download Clients** for the
 normal automation flow. Prowlarr download clients are only used for searches
-initiated directly in Prowlarr; Sonarr and Radarr use their own clients.
+initiated directly in Prowlarr; Sonarr, Radarr, and Lidarr use their own clients.
 If direct Prowlarr searches are deliberately enabled, configure the same in-cluster
-qBittorrent URL and permanent WebUI credential used by Sonarr and Radarr, with a
+qBittorrent URL and permanent WebUI credential used by the downstream apps, with a
 separate category chosen for those searches.
 
 ### API key
@@ -247,8 +260,8 @@ unset PROWLARR_API_KEY HOMEPAGE_PROWLARR_SECRETS_CONFIRM
 Run this only when creating or rotating the widget Secret. Commit only the
 resulting encrypted `homepage-prowlarr.sops.yaml`.
 
-Application connections are completed after Sonarr and Radarr have generated
-their API keys; see [Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr).
+Application connections are completed after the downstream apps have generated
+their API keys; see [Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr).
 
 ### Check
 
@@ -345,7 +358,7 @@ notation before saving.
 ### Indexers
 
 Do not add indexers in Sonarr. Prowlarr owns them and pushes them here during the
-[application connection](#connect-prowlarr-to-sonarr-and-radarr) with `Full Sync`.
+[application connection](#connect-prowlarr-to-sonarr-radarr-and-lidarr) with `Full Sync`.
 After that step, Sonarr's **Settings → Indexers** lists entries ending in
 `(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
 
@@ -382,7 +395,7 @@ in Seerr's [Sonarr service](#sonarr-service) step). No setup action is required 
 
 Sonarr's API key is under **Settings → General → Security**. You do **not** paste it
 into Sonarr — it is entered elsewhere: Prowlarr, in
-[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr);
+[Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr);
 Seerr, in the [Sonarr service](#sonarr-service) step; and the Homepage widget below.
 Copy it only when entering it into those screens; never commit it.
 
@@ -488,7 +501,7 @@ title followed by the release year in parentheses before saving.
 ### Indexers
 
 Do not add indexers in Radarr. Prowlarr owns them and pushes them here during the
-[application connection](#connect-prowlarr-to-sonarr-and-radarr) with `Full Sync`.
+[application connection](#connect-prowlarr-to-sonarr-radarr-and-lidarr) with `Full Sync`.
 After that step, Radarr's **Settings → Indexers** lists entries ending in
 `(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
 
@@ -525,7 +538,7 @@ Seerr's [Radarr service](#radarr-service) step). No setup action is required her
 
 Radarr's API key is under **Settings → General → Security**. You do **not** paste it
 into Radarr — it is entered elsewhere: Prowlarr, in
-[Connect Prowlarr to Sonarr and Radarr](#connect-prowlarr-to-sonarr-and-radarr);
+[Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr);
 Seerr, in the [Radarr service](#radarr-service) step; and the Homepage widget below.
 Copy it only when entering it into those screens; never commit it.
 
@@ -552,12 +565,79 @@ and Flux reconciles it.
 mise exec -- just kube arr-verify radarr
 ```
 
-## Connect Prowlarr to Sonarr and Radarr
+## Lidarr
+
+Lidarr is staged suspended. From a clean checkout of the authorized deployment
+source, the operator performs its guarded first bootstrap:
+
+```bash
+export ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr'
+mise exec -- just bootstrap arr lidarr
+unset ARR_BOOTSTRAP_CONFIRM
+```
+
+Then open `https://lidarr.lab.supermorphic.com` and configure the new PVC to reach
+every required state below:
+
+- Authentication: Forms login, authentication enabled, unique password-manager credential.
+- Root folder: `/data/media/music`; never `/data/downloads`.
+- Download client: `qbittorrent.media.svc.cluster.local`, port `8080`, no SSL,
+  no URL base, category `music`, and no remote path mapping.
+- Importing: **Use Hardlinks instead of Copy** enabled.
+- Metadata: **Write Metadata to Audio Files** disabled while torrents seed.
+- Quality profile: prefer FLAC/lossless, retain a lossy fallback below it.
+- Rename tracks: enabled.
+- Artist folder: `{Artist}`.
+- Album folder output: `{Album}` with no release year.
+- Track output: `{Disc}{Track:00} - {Title}` in one album folder, producing
+  `101 - Track.ext` and `201 - Track.ext` for multi-disc releases.
+- Compilation output: `/data/media/music/Various Artists/{Album}/...`, with embedded
+  `Album Artist` equal to `Various Artists` and embedded `Artist` equal to the performer.
+
+Use the permanent qBittorrent WebUI credential when testing and saving the download
+client. Lidarr and qBittorrent see the same `/data` mount, so a remote path mapping
+would be incorrect. Saving `/data/media/music` as the root folder creates the library
+directory with UID/GID `568`; do not create or select a download directory as the root.
+
+The output above is authoritative. The brace-style expressions describe the required
+filesystem result; they are not a claim about the exact token strings or field placement
+in the deployed UI. Use Lidarr 3.1.2's naming preview to select the tokens offered by
+that deployed version, and do not save until its previews produce the bare album folder,
+flat disc/track numbering, and `Various Artists` compilation layout shown above.
+
+Lidarr's API key becomes available only after first boot. Once the application is
+configured, create the independently rotatable Homepage Secret without echoing the key:
+
+```bash
+printf 'Lidarr API key: '
+IFS= read -r -s LIDARR_API_KEY
+printf '\n'
+export LIDARR_API_KEY
+export HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'
+mise exec -- just repo homepage-lidarr-secrets
+unset LIDARR_API_KEY HOMEPAGE_LIDARR_SECRETS_CONFIRM
+```
+
+Run this recipe only after first boot. Only the resulting SOPS-encrypted
+`homepage-lidarr.sops.yaml` enters PR 2; do not add it to the initial staging PR,
+and never commit the plaintext API key.
+
+After the operator activates Lidarr, its read-only guarded verification is:
+
+```bash
+mise exec -- just kube arr-verify lidarr
+```
+
+The `/ping` endpoint used by the Pod probes and later by Gatus does not exercise
+`api.lidarr.audio`. A green Pod or Gatus endpoint therefore does not guarantee that
+artist or album searches work; verify a real search during first-run acceptance.
+
+## Connect Prowlarr to Sonarr, Radarr, and Lidarr
 
 Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
-is available — you do not need both at once. Connect **Sonarr** immediately after its
-rollout; connect **Radarr** once its own activation is live. Each app connection is
-independent, and this is the step where each application's API key is finally used.
+is available — you do not need all three at once. Connect **Sonarr** immediately after
+its rollout, then connect **Radarr** and **Lidarr** when each activation is live. Each
+app connection is independent, and this is where each application's API key is used.
 
 ### Sonarr application
 
@@ -591,8 +671,24 @@ Open **Settings → Apps → Add → Radarr**:
 
 Select **Test**, require a successful result, and then **Save**.
 
+### Lidarr application
+
+Open **Settings → Apps → Add → Lidarr**:
+
+| Setting | Value |
+|---|---|
+| Name | `Lidarr` |
+| Sync Level | `Full Sync` |
+| Prowlarr Server | `http://prowlarr.media.svc.cluster.local:9696` |
+| Application Server | `http://lidarr.media.svc.cluster.local:8686` |
+| API Key | Lidarr's API key |
+| Tags | Blank |
+| Sync Categories | Defaults |
+
+Select **Test**, require a successful result, and then **Save**.
+
 `Full Sync` makes Prowlarr authoritative for the indexers it manages. Do not edit
-those generated indexers independently in Sonarr or Radarr. Confirm that each
+those generated indexers independently in Sonarr, Radarr, or Lidarr. Confirm that each
 application now lists indexers whose names end in `(Prowlarr)`.
 
 ## Plex
@@ -606,9 +702,13 @@ automation path. Open `https://plex.lab.supermorphic.com`.
    `/Volumes/Prometheus/media/movies`.
 3. Scan both libraries after the first Sonarr/Radarr import.
 
+Creating the Plex Music library is explicitly deferred. Do not add a music library
+as part of the initial Lidarr staging or its blocking import gate; future work may
+add `/Volumes/Prometheus/media/music` only after that gate has passed.
+
 Plex mounts the same SMB share under `/Volumes/Prometheus`, while qBittorrent,
-Sonarr, and Radarr mount it under `/data`. These are two views of the same share;
-do not change the *arr paths to match the Plex container path.
+Sonarr, Radarr, and Lidarr mount it under `/data`. These are two views of the same
+share; do not change the *arr paths to match the Plex container path.
 
 Run:
 
@@ -723,6 +823,33 @@ mise exec -- just kube seerr-verify
 
 ## End-to-end acceptance
 
+### Direct Lidarr test — blocking operator gate
+
+This is the blocking gate between the initial staging PR and the follow-up activation
+PR, not automated E2E coverage. In Lidarr, search for and import one release that the
+operator is authorized to download. Record all of this evidence:
+
+```text
+qBittorrent category: music
+download root: /data/downloads/music
+library root: /data/media/music
+library naming: Artist/Album/DiscTrack - Title.ext
+download-side link count: 2
+library-side link count: 2
+Write Metadata to Audio Files: disabled
+qBittorrent force recheck: completes with no hash error
+```
+
+Run qBittorrent's force recheck after Lidarr imports the release. The two link counts
+must be collected from the download-side and library-side files for that same track.
+If a shell is needed to inspect inode or link counts, use an existing guarded recipe
+or a NAS-side shell; never use raw `kubectl exec`.
+
+Do not begin the follow-up PR or create the Plex Music library until every item above
+passes. Preserve the observed Lidarr 3.1.2 naming tokens and UI labels for the
+follow-up runbook correction if they differ from the wording here, without changing
+the authoritative output or safety states.
+
 ### Direct Sonarr test
 
 1. Search for one TV series in Sonarr.
@@ -752,8 +879,8 @@ shared-filesystem proof and prior acceptance evidence are in
 3. Confirm both requests progress through qBittorrent.
 4. Confirm the imported media becomes available in Plex and then in Seerr.
 
-Phase 13 is not complete until both direct *arr flows pass. Phase 14 is not
-complete until the Seerr request flow passes.
+The video automation setup is not accepted until both direct *arr flows pass. The
+request workflow is not accepted until the Seerr request flow passes.
 
 ## Recovery and repeat setup
 
@@ -771,6 +898,7 @@ configuration directory to Git.
 - [Sonarr quick-start guide](https://wiki.servarr.com/en/sonarr/quick-start-guide)
 - [Radarr settings](https://wiki.servarr.com/radarr/settings)
 - [Prowlarr quick-start guide](https://wiki.servarr.com/en/prowlarr/quick-start-guide)
+- [Plex music naming and organization](https://support.plex.tv/articles/200265296-adding-music-media-from-folders/) — authority for the bare album folder, flat disc/track numbering, and `Various Artists` convention
 - [qBittorrent 5.x WebUI API and authentication](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29)
 - [qBittorrent WebUI password recovery](https://github.com/qbittorrent/qBittorrent/wiki/Web-UI-password-locked-on-qBittorrent-NO-X-%28qbittorrent-nox%29)
 - [Seerr media-server settings](https://docs.seerr.dev/using-seerr/settings/mediaserver/)
