@@ -23,6 +23,17 @@ mise exec -- just repo secrets
 The check derives the public recipient and rejects an identity that does not
 match the first rule in `.sops.yaml`.
 
+## Edit an Encrypted Kubernetes Secret
+
+After making the operator-held repository identity available as above, use this
+operator-only workflow:
+
+```bash
+mise exec -- just repo secrets
+mise exec -- sops kubernetes/path/to/secret.sops.yaml
+mise exec -- just repo verify
+```
+
 ## Encryption Policy
 
 - `talos/talsecret.sops.yaml` is encrypted as a complete document because every

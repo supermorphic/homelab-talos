@@ -18,7 +18,7 @@
 - Do not run live cluster commands. This work is documentation and cluster-independent validation only.
 - Do not add `.agents/`, `.claude/`, or `.codex/` content.
 - Do not change classification, review gates, model routing, Talos, Flux, Kubernetes applications, or cluster state.
-- Root admission requires both universality and constraint status. Procedures belong in `docs/runbooks/`; scoped constraints belong in nested `AGENTS.md` files.
+- Root admission requires both universality and constraint status. Procedures belong in `docs/runbooks/`; until PR 3 moves an existing procedure, its current `docs/*.md` path remains the sole canonical owner and must be routed directly. Scoped constraints belong in nested `AGENTS.md` files. A scoped file may bind a cross-tree domain only when its header declares that domain and root routes readers to it explicitly.
 - Nested instructions are additive: they may narrow or strengthen root constraints, never relax or override them.
 - Normative content moves; it is not copied into both an `AGENTS.md` and a README.
 - The link validator is Bash plus `rg`, executable, and ShellCheck-clean. It checks tracked content only, rejects absolute filesystem paths and `file:` URLs in Markdown links, does not fetch HTTP(S) URLs, and validates both Markdown links and bare repository-path references.
@@ -50,19 +50,22 @@
 
 - Rewrite `AGENTS.md`: universal constitution, restored worktree constraints, precedence, required reading, and scoped index.
 - Create `kubernetes/AGENTS.md`: Kubernetes/Flux-scoped constraints.
-- Create `talos/AGENTS.md`: Talos-scoped constraints.
-- Create `tests/AGENTS.md`: test-harness-scoped constraints.
+- Create `talos/AGENTS.md`: constraints for `talos/` and generated root `clusterconfig/`.
+- Create `tests/AGENTS.md`: constraints for `tests/` and test result/guard machinery under `scripts/test/`.
 - Create `docs/runbooks/talos-generate.md`: canonical Talos generation and source-validation procedure.
 - Create `docs/runbooks/talos-install.md`: canonical guarded one-node Talos installation procedure.
-- Modify `kubernetes/README.md`: retain explanation and recipe orientation, remove migrated rules, and point to `AGENTS.md`.
+- Modify `kubernetes/README.md`: retain explanation and recipe orientation, remove migrated rules, point to `AGENTS.md`, and route the SOPS procedure to current `docs/sops.md`.
+- Modify `docs/sops.md`: own the exact operator-only Kubernetes Secret editing and repository-verification sequence removed from the Kubernetes README.
 - Modify `talos/README.md`: retain source-versus-generated orientation, remove procedures and migrated rules, and link to the two runbooks and `AGENTS.md`.
 - Modify `tests/README.md`: remove the four migrated constraints and point to `AGENTS.md`.
 - Modify `CLAUDE.md`: identify `MEMORY.md` as external persistent memory, not a repository path.
+- Modify the approved design and this plan: keep cross-tree scope and PR 2/PR 3 transition ownership synchronized with the implementation.
 
 ### PR 3 — documentation topology
 
 - Move 13 existing procedural documents into `docs/runbooks/`.
 - Move `docs/phase-0-preflight.md` through `docs/phase-14-media.md` into `docs/phases/`.
+- Change root's completed-history route to `docs/phases/`, the Kubernetes SOPS route to `docs/runbooks/sops.md`, and the Talos installation-evidence link to its moved phase path.
 - Modify every tracked source reported by `just repo links-validate` until all Markdown and bare references resolve to the new paths.
 
 ### PR 4 — human README boundary
@@ -697,14 +700,17 @@ Before pushing, follow the global fetch/rebase rule. Open a pull request titled 
 - Create: `docs/runbooks/talos-generate.md`
 - Create: `docs/runbooks/talos-install.md`
 - Modify: `kubernetes/README.md:1-132`
+- Modify: `docs/sops.md`
 - Modify: `talos/README.md:1-79`
 - Modify: `tests/README.md:1-189`
 - Modify: `CLAUDE.md:9-10`
+- Modify: `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md`
+- Modify: `docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md`
 
 **Interfaces:**
 
 - Consumes: root constraints in the pre-PR `AGENTS.md`; normative rules in `kubernetes/README.md`, `talos/README.md`, and `tests/README.md`; the additive-inheritance model from the approved design.
-- Produces: universal root constraints; required-reading contract; scoped constraints for `kubernetes/`, `talos/`, and `tests/`; canonical Talos procedures at `docs/runbooks/talos-generate.md` and `docs/runbooks/talos-install.md`.
+- Produces: universal root constraints; required-reading contract; scoped constraints for Kubernetes/Flux, Talos plus root `clusterconfig/`, and tests plus result/guard machinery under `scripts/test/`; canonical Talos procedures at `docs/runbooks/talos-generate.md` and `docs/runbooks/talos-install.md`; the exact SOPS edit workflow owned at current `docs/sops.md`; current-path routes that PR 3 updates atomically with document moves.
 
 - [ ] **Step 1: Start from PR 1's merged baseline**
 
@@ -756,10 +762,12 @@ rules alone.
 ## Scoped instruction index
 
 - Read `kubernetes/AGENTS.md` before changing Kubernetes or Flux sources.
-- Read `talos/AGENTS.md` before changing Talos sources or generation inputs.
-- Read `tests/AGENTS.md` before changing the test catalog, suites, fixtures, or result machinery.
+- Read `talos/AGENTS.md` before changing Talos sources, generation inputs, or root
+  `clusterconfig/`.
+- Read `tests/AGENTS.md` before changing the test catalog, suites, fixtures, or
+  test result and guard machinery, including `scripts/test/`.
 - Read the relevant file under `docs/runbooks/` before following a repository procedure.
-- `docs/phases/` is completed rollout history, not live procedure.
+- Current `docs/phase-*.md` files are completed rollout history, not live procedure.
 - `docs/superpowers/specs/` records design rationale and is descriptive, never normative.
 ```
 
@@ -815,8 +823,9 @@ Create `talos/AGENTS.md` with this content:
 ```markdown
 # Talos Agent Instructions
 
-Binding constraints for all files under `talos/`. Root `AGENTS.md` remains the
-floor and this file may only narrow or strengthen it.
+Binding constraints for all files under `talos/` and generated machine configs
+under root `clusterconfig/`. Root `AGENTS.md` remains the floor and this file may
+only narrow or strengthen it.
 
 - Never hand-edit generated files under root `clusterconfig/`. Change
   `talconfig.yaml` and `patches/`, then regenerate.
@@ -835,8 +844,9 @@ Create `tests/AGENTS.md` with this content:
 ```markdown
 # Test Agent Instructions
 
-Binding constraints for all files under `tests/`. Root `AGENTS.md` remains the
-floor and this file may only narrow or strengthen it.
+Binding constraints for all files under `tests/` and test result and guard
+machinery under `scripts/test/`. Root `AGENTS.md` remains the floor and this file
+may only narrow or strengthen it.
 
 - Live and cluster-dependent suites never enter `executions.ci`.
 - Validation-tier suite entries and `executions.ci` entries stay 1:1.
@@ -869,6 +879,15 @@ mise exec -- just repo verify
 
 Create `docs/runbooks/talos-install.md` from `talos/README.md` lines 45-75. Preserve the full operator sequence and exact examples:
 
+Add this prerequisite exactly:
+
+```markdown
+## Prerequisite
+
+Current rendered machine configs must exist. If needed, generate and validate
+them with [`talos-generate.md`](talos-generate.md) before continuing.
+```
+
 ```bash
 mise exec -- just talos apply nuc1
 ```
@@ -880,7 +899,7 @@ TALOS_APPLY_CONFIRM='nuc1:/dev/nvme0n1:<live-serial>' \
   mise exec -- just talos apply nuc1
 ```
 
-State that the confirmed invocation repeats every guard, installs and reboots exactly one matching node, requires USB removal during reboot, and never runs `talosctl bootstrap`. Direct the operator to repeat independently for `nuc2` and `nuc3`, using the value printed for that node, and link installation evidence at `../phases/phase-3-installation.md` in its final PR 3 location.
+State that the confirmed invocation repeats every guard, wipes `/dev/nvme0n1`, installs the signed image, and reboots exactly one matching node; requires USB removal during reboot; and never runs `talosctl bootstrap`. Direct the operator to repeat independently for `nuc2` and `nuc3`, using the value printed for that node. In PR 2, link installation evidence at the currently valid `../phase-3-installation.md`; Task 3 changes it to `../phases/phase-3-installation.md` when the phase record moves.
 
 - [ ] **Step 8: Remove migrated rules from the Kubernetes README**
 
@@ -892,7 +911,23 @@ Binding rules for this directory are in [`AGENTS.md`](AGENTS.md); this file is e
 
 Remove the rules now owned by `kubernetes/AGENTS.md`: entrypoint/layout requirements, generated-source prohibitions, HelmRelease/native selection, dependency ordering, recursive-deployment prohibition, manual apply prohibition, Gateway/TLS and ExternalDNS constraints, `*.sops.yaml` suffix, decrypted-secret prohibition, and steady-state deployment constraint.
 
-Retain the explanatory statements that shared bases are deferred, `deletionPolicy: Orphan` prevents root deletion from cascading, and SOPS encrypts only `data`/`stringData`. Retain the Cilium bootstrap narrative, package tree, recipe tables, and phase/runbook links. Replace the old raw-`kubectl` exception with this non-relaxing explanation:
+Retain the explanatory statements that shared bases are deferred, `deletionPolicy: Orphan` prevents root deletion from cascading, and SOPS encrypts only `data`/`stringData`. Remove the ordered identity-loading and interactive-editing sequence from this README and route operator procedure to the currently valid `docs/sops.md`; Task 3 updates that link when the runbook moves. Add the exact removed three-command workflow to `docs/sops.md` so procedure ownership moves rather than disappears:
+
+```bash
+mise exec -- just repo secrets
+mise exec -- sops kubernetes/path/to/secret.sops.yaml
+mise exec -- just repo verify
+```
+
+Use this exact explanatory route in `kubernetes/README.md`:
+
+```markdown
+SOPS encrypts only Secret `data` and `stringData` fields so metadata remains
+reviewable by Flux. Identity loading and interactive editing are operator-only
+procedures documented in [`docs/sops.md`](../docs/sops.md).
+```
+
+Retain the Cilium bootstrap narrative, package tree, recipe tables, and phase/runbook links. Replace the old raw-`kubectl` exception with this non-relaxing explanation:
 
 ```markdown
 Bootstrap and recovery applies are performed through documented guarded `just`
@@ -937,11 +972,11 @@ Replace `CLAUDE.md` lines 9-10 with:
 Compare the resulting files against sections A-F of the approved design and explicitly check every group below in the PR description:
 
 - Root current rules: purpose/production boundary; no direct main commit/push; per-merge authorization; scoped commits; reporting; worktree/branch preservation; fetch/rebase; pinned tools; guarded cluster access; missing-recipe rule; operator-only confirmations; deployed-source parity; protected-repository authorization; canonical CI; operator-only live checks; SOPS/age/secrets constraints.
-- Kubernetes README migration: Flux entrypoints; app package; explicit entrypoint/deployment; Helm output; chart/native selection; generator prohibition; explicit dependency/health ordering; native selection/no recursion; no manual Flux-source apply; wildcard certificate; ExternalDNS audience; SOPS suffix; decrypted Secret; Git/Flux steady state.
+- Kubernetes README migration: Flux entrypoints; app package; explicit entrypoint/deployment; Helm output; chart/native selection; generator prohibition; explicit dependency/health ordering; native selection/no recursion; no manual Flux-source apply; wildcard certificate; ExternalDNS audience; SOPS suffix; decrypted Secret; Git/Flux steady state; exact SOPS edit workflow moved to current `docs/sops.md` with only an operator route retained in the README.
 - Talos README migration: rendered credentials; guarded apply; node-specific confirmation; generation procedure; install procedure; source-versus-generated explanation.
 - Tests README migration: live suites excluded from CI; artifact confirmation-name-only; operator suites excluded from CI; Sonobuoy ephemeral; validation-suite and CI-entry 1:1.
 - Restored rules: absolute worktree boundary; prohibited worktree lifecycle subcommands; no parked unmerged slot; lease-only force update/full stop; no hard reset, clean, or unconditional force.
-- New rules: precedence/additive inheritance; scoped required reading; scoped destination index.
+- New rules: precedence/additive inheritance; scoped required reading; scoped destination index; explicit cross-tree routes for root `clusterconfig/` and test result/guard machinery under `scripts/test/`; current `docs/phase-*.md` history classification with a Task 3 transition to `docs/phases/`.
 
 For each item, name exactly one owning file. If an item is absent, duplicated, or requires relaxing root, stop and resolve it before continuing.
 
@@ -960,7 +995,7 @@ Expected: all pass; no file moves have occurred, and all links remain valid.
 - [ ] **Step 14: Commit and hand off PR 2**
 
 ```bash
-mise exec -- git add AGENTS.md CLAUDE.md kubernetes/AGENTS.md kubernetes/README.md talos/AGENTS.md talos/README.md tests/AGENTS.md tests/README.md docs/runbooks/talos-generate.md docs/runbooks/talos-install.md
+mise exec -- git add AGENTS.md CLAUDE.md kubernetes/AGENTS.md kubernetes/README.md talos/AGENTS.md talos/README.md tests/AGENTS.md tests/README.md docs/sops.md docs/runbooks/talos-generate.md docs/runbooks/talos-install.md docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md
 mise exec -- git commit -m "docs: define agent instruction ownership"
 ```
 
@@ -974,7 +1009,7 @@ Open a pull request titled `docs: define agent instruction ownership`. Include t
 
 - Move to `docs/runbooks/`: `sops.md`, `recovery.md`, `github-protection.md`, `pihole-integration.md`, `portainer.md`, `protonvpn-gluetun.md`, `tailscale-operator.md`, `tailscale-lab-domain.md`, `tailscale-single-user-setup.md`, `ntfy-startup-guide.md`, `arr-stack-startup.md`, `qbit-manage.md`, `qbit-manage-czteam.md`
 - Move to `docs/phases/`: `phase-0-preflight.md`, `phase-1-repository.md`, `phase-2-talos.md`, `phase-3-installation.md`, `phase-4-bootstrap.md`, `phase-5-cilium.md`, `phase-6-flux.md`, `phase-7-foundation.md`, `phase-8-soak.md`, `phase-9-storage.md`, `phase-10-platform.md`, `phase-11-media.md`, `phase-12-media.md`, `phase-13-media.md`, `phase-14-media.md`
-- Modify references in: `.just/bootstrap.just`, `.just/repository.just`, `README.md`, `kubernetes/README.md`, `talos/README.md`, the moved docs, `docs/nuc-cluster.md`, affected app READMEs/YAML, `kubernetes/mod.just`, retained plans, affected scripts, and affected test YAML.
+- Modify references in: `AGENTS.md`, `.just/bootstrap.just`, `.just/repository.just`, `README.md`, `kubernetes/README.md`, `talos/README.md`, `docs/runbooks/talos-install.md`, the moved docs, `docs/nuc-cluster.md`, affected app READMEs/YAML, `kubernetes/mod.just`, retained plans, affected scripts, and affected test YAML.
 - Do **not** rewrite anything under `docs/superpowers/`. The design spec and this plan are dated records of what was decided against the pre-move layout; the validator excludes that subtree precisely so they can stay truthful to their date.
 
 **Interfaces:**
@@ -1055,6 +1090,15 @@ docs/phase-14-media.md               -> docs/phases/phase-14-media.md
 
 Apply the replacements with reviewable patches. Preserve prose and command behavior; only change path spelling in non-Markdown sources.
 
+Apply the three explicit PR 2 transition updates in the same step:
+
+- In root `AGENTS.md`, replace the current `docs/phase-*.md` history route with
+  `` `docs/phases/` is completed rollout history, not live procedure. ``
+- In `kubernetes/README.md`, change the SOPS procedure link from
+  `../docs/sops.md` to `../docs/runbooks/sops.md`.
+- In `docs/runbooks/talos-install.md`, change the installation-evidence link from
+  `../phase-3-installation.md` to `../phases/phase-3-installation.md`.
+
 - [ ] **Step 5: Repair relative links inside moved Markdown files**
 
 For every moved file, recalculate links from its new directory:
@@ -1127,12 +1171,12 @@ mise exec -- just repo lint
 mise exec -- just ci
 ```
 
-Expected topology: 15 runbooks (13 moved plus 2 Talos runbooks), 15 phase records, four descriptive Markdown files at `docs/` root, and an unmodified `docs/superpowers/` subtree. All validation passes.
+Expected topology: 15 runbooks (13 moved plus 2 Talos runbooks), 15 phase records, four descriptive Markdown files at `docs/` root, and an unmodified `docs/superpowers/` subtree. Root routes completed history to `docs/phases/`; the Kubernetes SOPS link and Talos installation-evidence link use their moved destinations. All validation passes.
 
 - [ ] **Step 9: Commit and hand off PR 3**
 
 ```bash
-mise exec -- git add -A docs .just README.md kubernetes plans scripts talos tests
+mise exec -- git add -A AGENTS.md docs .just README.md kubernetes plans scripts talos tests
 mise exec -- git commit -m "docs: separate runbooks from phase history"
 ```
 

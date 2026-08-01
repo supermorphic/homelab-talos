@@ -77,17 +77,8 @@ See [`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md) for credential
 confirmations, rollout order, failure behavior, and acceptance gates.
 
 SOPS encrypts only Secret `data` and `stringData` fields so metadata remains
-reviewable by Flux. Load and validate the repository identity before editing an
-encrypted manifest:
-
-```bash
-mise exec -- just repo secrets
-mise exec -- sops kubernetes/path/to/secret.sops.yaml
-mise exec -- just repo verify
-```
-
-There is not yet a Just recipe for interactive SOPS editing, so this is an
-intentional direct use of a mise-pinned CLI.
+reviewable by Flux. Identity loading and interactive editing are operator-only
+procedures documented in [`docs/sops.md`](../docs/sops.md).
 
 Bootstrap and recovery applies are performed through documented guarded `just`
 recipes, which invoke the required client internally; they are not direct agent
@@ -98,5 +89,4 @@ See the root [`README.md`](../README.md) for workstation setup and
 adoption procedure. [`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md)
 defines the internal service foundation, and
 [`docs/pihole-integration.md`](../docs/pihole-integration.md) covers Pi-hole
-reinstall and credential recovery. [`docs/sops.md`](../docs/sops.md) defines the
-encryption policy.
+reinstall and credential recovery.

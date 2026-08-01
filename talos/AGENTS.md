@@ -1,7 +1,8 @@
 # Talos Agent Instructions
 
-Binding constraints for all files under `talos/`. Root `AGENTS.md` remains the
-floor and this file may only narrow or strengthen it.
+Binding constraints for all files under `talos/` and generated machine configs
+under root `clusterconfig/`. Root `AGENTS.md` remains the floor and this file may
+only narrow or strengthen it.
 
 - Never hand-edit generated files under root `clusterconfig/`. Change
   `talconfig.yaml` and `patches/`, then regenerate.

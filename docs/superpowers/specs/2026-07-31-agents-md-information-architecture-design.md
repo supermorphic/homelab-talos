@@ -80,7 +80,7 @@ Routing uses **two independent tests**. Root admission requires both.
 | | **Constraint** — a prohibition, boundary, or authority | **Procedure** — an ordered way to accomplish something |
 |---|---|---|
 | **Universal** — binds regardless of directory | root `AGENTS.md` | `docs/runbooks/` |
-| **Scoped** — binds only within one subtree | nested `AGENTS.md` | `docs/runbooks/` |
+| **Scoped** — binds only within named paths or a named domain | nested `AGENTS.md` | `docs/runbooks/` |
 
 Worked examples:
 
@@ -98,10 +98,13 @@ Worked examples:
 1. **Root `AGENTS.md`** — the constitution. Universal, non-negotiable constraints.
    Loaded every session, so it pays context rent in all of them; that is what earns
    the strict admission test.
-2. **Nested `AGENTS.md`** — scoped constraints, binding within their subtree.
-3. **`docs/runbooks/`** — the sole canonical owner of procedure within this
+2. **Nested `AGENTS.md`** — scoped constraints, binding within the paths or domain
+   declared by their header and explicitly routed from root.
+3. **`docs/runbooks/`** — the final sole canonical owner of procedure within this
    repository, both agent- and operator-facing. Linked from the layers above,
-   never restated in them.
+   never restated in them. Until PR 3 moves the 13 existing procedures, each
+   current `docs/*.md` procedure remains the sole owner at its valid current path;
+   PR 2 therefore routes SOPS editing to `docs/sops.md`.
 4. **`docs/`** — descriptive reference, phase history, and design specs. Never
    normative.
 
@@ -120,10 +123,11 @@ what keeps the constitution meaningfully constitutional.
 
 Nested files are **required reading, not an assumed automatic load.** Claude Code
 does not reliably load a nested `AGENTS.md` before a file in that subtree is
-touched, and client behavior is not something this repository controls. Root
-therefore carries an explicit obligation to read a subtree's `AGENTS.md` before
-modifying files under it, to verify rather than assume, and to stop if it cannot be
-read.
+touched, and placement cannot make a nested file discoverable for a cross-tree
+domain such as root `clusterconfig/` or `scripts/test/`. Client behavior is not
+something this repository controls. Root therefore carries an explicit obligation
+to read a scoped `AGENTS.md` before modifying any path or domain its index routes,
+to verify rather than assume, and to stop if it cannot be read.
 
 ## Root `AGENTS.md`
 
@@ -137,7 +141,7 @@ Seven sections. Every rule in it is universal **and** a constraint.
 | 4. Tools and cluster access | `mise exec -- just`; no unpinned or system tools; no raw `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster; add a guarded recipe when one is missing; `*_CONFIRM` recipes are operator-run and agents never invent a confirmation value; rollout sources must match current `origin/main`; GitHub protection mutation requires per-invocation authorization through the guarded recipe |
 | 5. Secrets | SOPS-encrypted `*.sops.yaml`; the age private key stays with the operator; never handle it, decrypt, rewrite, print, copy legacy ciphertext, or commit plaintext; secrets are created through guarded operator-run `*-secrets` recipes |
 | 6. Validation | `just ci` is the authoritative, cluster-independent, secret-free gate; cluster-dependent `*-verify`, `*-status`, `*-preflight`, and diagnostic families are operator-only and never enter it |
-| 7. Scoped instruction index | One line per nested file and per runbook destination: what it covers, when to read it |
+| 7. Scoped instruction index | One line per nested file and per runbook destination: every path/domain it covers and when to read it |
 
 The two new normative blocks, stated exactly:
 
@@ -161,17 +165,37 @@ scoped file cannot be read, stop and report rather than proceeding under root
 rules alone.
 ```
 
+The scoped index is transitional in PR 2 and is stated exactly:
+
+```markdown
+## Scoped instruction index
+
+- Read `kubernetes/AGENTS.md` before changing Kubernetes or Flux sources.
+- Read `talos/AGENTS.md` before changing Talos sources, generation inputs, or root
+  `clusterconfig/`.
+- Read `tests/AGENTS.md` before changing the test catalog, suites, fixtures, or
+  test result and guard machinery, including `scripts/test/`.
+- Read the relevant file under `docs/runbooks/` before following a repository procedure.
+- Current `docs/phase-*.md` files are completed rollout history, not live procedure.
+- `docs/superpowers/specs/` records design rationale and is descriptive, never normative.
+```
+
+PR 3 changes only the completed-history route to `docs/phases/` when those files
+move; it never advertises the future directory before it exists.
+
 Root ends at roughly its current length: about 15 lines of scoped material leave
 and about 12 lines of restored constraints and precedence arrive. Size is not an
 acceptance criterion; scope clarity is.
 
 ## Nested `AGENTS.md` files
 
-Three files. `.just/` and `scripts/` are **deliberately excluded** — their content
-is recipe-authoring procedure and shell convention, which route to runbooks and
-pre-commit respectively. Adding near-empty scoped files for symmetry would
-reproduce the catch-all problem in a new location. They can be added when a genuine
-scoped constraint appears.
+Three files. `.just/` and `scripts/` do not receive additional `AGENTS.md` files.
+Adding near-empty files for symmetry would reproduce the catch-all problem in a
+new location. A genuine cross-tree domain is instead declared in the owning
+scoped file's header and routed explicitly from root; this is why
+`tests/AGENTS.md` also binds test result and guard machinery under `scripts/test/`.
+Other `.just/` and `scripts/` content remains recipe-authoring procedure or shell
+convention routed to runbooks and pre-commit respectively.
 
 **`kubernetes/AGENTS.md`** (~25 lines). Migrated out of `kubernetes/README.md`:
 Flux entrypoints under `flux/clusters/prod/`; the `apps/<namespace>/<app>/` layout
@@ -207,7 +231,9 @@ rewritten to describe the guarded path rather than grant a carve-out. PR 2 must 
 silently drop it — the rewrite is part of that PR's diff and its rationale belongs
 in the PR description.
 
-**`talos/AGENTS.md`** (~10 lines). Migrated out of `talos/README.md`: rendered
+**`talos/AGENTS.md`** (~10 lines). Its header binds both files under `talos/` and
+generated machine configs under root `clusterconfig/`; root's scoped index makes
+the cross-tree route discoverable. Migrated out of `talos/README.md`: rendered
 machine configs contain credentials and must never be moved into a trackable path;
 applying a rendered config is a separate guarded operation and never a raw
 `talosctl apply-config`; never reuse another node's confirmation value. Migrated
@@ -215,7 +241,9 @@ down from root: never hand-edit generated `clusterconfig/`; change
 `talconfig.yaml` and `patches/` and regenerate; preserve Talos, Kubernetes, and
 Cilium compatibility.
 
-**`tests/AGENTS.md`** (~8 lines). Live and cluster-dependent suites never enter
+**`tests/AGENTS.md`** (~8 lines). Its header binds both files under `tests/` and
+test result and guard machinery under `scripts/test/`; root's scoped index makes
+the cross-tree route discoverable. Live and cluster-dependent suites never enter
 `executions.ci`; suite and `executions.ci` entries stay 1:1; **generated result
 artifacts** record only a confirmation variable name, never its value; guards fail
 closed; Sonobuoy is ephemeral, never scheduled or standing.
@@ -236,7 +264,7 @@ Normative content **moves**; it is not copied. Each README gains a pointer line:
 
 | File | Loses | Keeps |
 |---|---|---|
-| `kubernetes/README.md` | ~55 lines of normative rules → `kubernetes/AGENTS.md` | Cilium bootstrap narrative, package tree, the four recipe tables, phase links |
+| `kubernetes/README.md` | ~55 lines of normative rules → `kubernetes/AGENTS.md`; exact identity-loading/editing/verification workflow → current `docs/sops.md` | Cilium bootstrap narrative, package tree, the three recipe tables, SOPS field explanation and operator-only route, phase links |
 | `talos/README.md` | ~15 lines of constraint → `talos/AGENTS.md`; ~55 lines of workflow → `docs/runbooks/talos-generate.md` and `docs/runbooks/talos-install.md` | Purpose, the source-versus-generated explanation, links |
 
 `talos/README.md` ends at roughly 20 lines of orientation. The source-versus-
@@ -306,10 +334,13 @@ Four PRs. Each is independently reviewable and each leaves `main` coherent.
 ### PR 2 — Constitution and nested layer
 
 - Rewrite root `AGENTS.md` to the seven sections, including the restored worktree
-  and concurrency constraints and the two new normative blocks.
+  and concurrency constraints, the two new normative blocks, explicit cross-tree
+  routes, and the current `docs/phase-*.md` history classification.
 - Add `kubernetes/AGENTS.md`, `talos/AGENTS.md`, `tests/AGENTS.md`.
 - Strip migrated content from `kubernetes/README.md` and `talos/README.md`; add
-  their pointer lines.
+  their pointer lines. Route the Kubernetes SOPS procedure to current
+  `docs/sops.md` instead of retaining a second ordered workflow, and place the
+  exact three-command edit sequence there.
 - Reword `CLAUDE.md`'s `MEMORY.md` reference so it is unambiguously the agent's
   external persistent memory and not a repository file.
 - No file moves, so the link graph is stable and the diff concerns rule placement
@@ -322,8 +353,12 @@ Four PRs. Each is independently reviewable and each leaves `main` coherent.
 
 ### PR 3 — The `docs/` split
 
-- Create `docs/runbooks/` and `docs/phases/`; `git mv` 28 files; extract the two
-  `talos-*` runbooks; rewrite approximately 117 links.
+- Create `docs/phases/`; `git mv` 28 files into `docs/runbooks/` and
+  `docs/phases/`; retain the two Talos runbooks extracted by PR 2; rewrite
+  approximately 117 links.
+- In the same move, change root's completed-history route from current
+  `docs/phase-*.md` files to `docs/phases/`, update the Talos installation-evidence
+  link, and change the Kubernetes SOPS route to `docs/runbooks/sops.md`.
 - **Acceptance:** `just ci` green, which is now meaningful because PR 1's validator
   is watching.
 
@@ -369,7 +404,7 @@ completeness it had not checked.
 | Never handle the age key, decrypt, expose, or commit plaintext | root §5 |
 | Secrets created through guarded operator-run `*-secrets` recipes | root §5 |
 | Pre-commit hooks are staged-file fast feedback; `just repo lint` runs repo-wide | `README.md` — descriptive, not a constraint |
-| Never edit generated `clusterconfig/`; regenerate from `talconfig.yaml` | `talos/AGENTS.md` |
+| Never edit generated `clusterconfig/`; regenerate from `talconfig.yaml` | `talos/AGENTS.md`, whose declared scope includes root `clusterconfig/` and is routed there by root |
 | Preserve Talos/Kubernetes/Cilium compatibility | `talos/AGENTS.md` |
 | Follow the `apps/<domain>/<app>/` layout and Flux patterns | `kubernetes/AGENTS.md` |
 | New apps begin suspended, roll out through guarded `just bootstrap <app>`, **then persist the unsuspended state** | `kubernetes/AGENTS.md` |
@@ -395,6 +430,7 @@ completeness it had not checked.
 | Never commit a decrypted Secret or place the age identity in this tree | L119–120 | `kubernetes/AGENTS.md` |
 | Steady state is Git plus Flux reconciliation | L122–124 | `kubernetes/AGENTS.md`, **rewritten** — see the additive-inheritance resolution above |
 | Shared bases deferred; `deletionPolicy: Orphan`; SOPS encrypts `data`/`stringData` only | L15–16, L35–36, L109–110 | `kubernetes/README.md` — descriptive, not constraints |
+| Repository identity loading and interactive SOPS editing workflow | L111–118 | current `docs/sops.md`; PR 3 moves it to `docs/runbooks/sops.md` |
 
 ### C. From `talos/README.md` (migrated by PR 2)
 
@@ -411,11 +447,11 @@ completeness it had not checked.
 
 | Source rule | Line | Destination |
 |---|---|---|
-| Live commands must never enter `just ci` | L100 | `tests/AGENTS.md` |
-| Generated artifacts record a confirmation variable name, never its value | L125 | `tests/AGENTS.md` |
-| Operator-only suites must not be added to CI | L188 | `tests/AGENTS.md` |
-| Sonobuoy is ephemeral — never scheduled or standing | L26 | `tests/AGENTS.md` |
-| Validation-tier suite count and `executions.ci` count stay 1:1 | `catalog_validator.py:557` | `tests/AGENTS.md` |
+| Live commands must never enter `just ci` | L100 | `tests/AGENTS.md`, whose declared scope includes test result/guard machinery under `scripts/test/` and is routed there by root |
+| Generated artifacts record a confirmation variable name, never its value | L125 | `tests/AGENTS.md`, with the same declared cross-tree scope |
+| Operator-only suites must not be added to CI | L188 | `tests/AGENTS.md`, with the same declared cross-tree scope |
+| Sonobuoy is ephemeral — never scheduled or standing | L26 | `tests/AGENTS.md`, with the same declared cross-tree scope |
+| Validation-tier suite count and `executions.ci` count stay 1:1 | `catalog_validator.py:557` | `tests/AGENTS.md`, with the same declared cross-tree scope |
 
 ### E. Restored by PR 2 — currently absent from the repository
 
@@ -434,6 +470,9 @@ completeness it had not checked.
 | Precedence and additive inheritance | root §1 |
 | Required-reading obligation for scoped files | root §1 |
 | Scoped instruction index | root §7 |
+| Cross-tree route from root `clusterconfig/` to `talos/AGENTS.md` | root §7 |
+| Cross-tree route from test result/guard machinery under `scripts/test/` to `tests/AGENTS.md` | root §7 |
+| Current `docs/phase-*.md` files classified as completed history until PR 3 moves them | root §7; PR 3 changes the route to `docs/phases/` |
 
 ## Validation strategy
 
@@ -459,8 +498,9 @@ completeness it had not checked.
   until the mapping is worked row by row. Each contradiction found is resolved
   explicitly in that PR, never by silently choosing the permissive reading.
 - **Nested files depend on agents actually reading them.** Nothing enforces this;
-  it is an instruction, and the required-reading block is written to make the
-  obligation explicit rather than implied. The residual is accepted.
+  it is an instruction, and cross-tree domains cannot rely on ancestor discovery.
+  The required-reading block plus explicit root routes make every declared domain
+  discoverable rather than implied. The residual is accepted.
 - **Additive inheritance is instruction-only.** Nothing mechanically prevents a
   nested file from contradicting root. The precedence block tells agents to obey
   root and report the defect. A future validator could assert this; it is out of
@@ -492,6 +532,10 @@ completeness it had not checked.
 11. Design specs live in `docs/superpowers/specs/` as
     `YYYY-MM-DD-<topic>-design.md`, separate from `plans/` implementation
     sequencing. This document is the first, and establishes the convention.
+12. A scoped file may bind a cross-tree domain only when its header declares that
+    domain and root's scoped index routes readers to it.
+13. PR 2 names only current paths. PR 3 changes the phase-history, SOPS-runbook,
+    and Talos-install evidence routes atomically with the corresponding moves.
 
 ## Open follow-up
 

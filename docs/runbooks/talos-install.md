@@ -5,6 +5,11 @@
 Install a rendered Talos machine config on exactly one matching NUC through the
 guarded apply workflow. This procedure does not bootstrap etcd.
 
+## Prerequisite
+
+Current rendered machine configs must exist. If needed, generate and validate
+them with [`talos-generate.md`](talos-generate.md) before continuing.
+
 ## Procedure
 
 Boot exactly one matching NUC from the approved Talos Secure Boot USB and leave

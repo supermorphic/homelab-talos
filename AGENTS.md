@@ -85,8 +85,10 @@ rules alone.
 ## Scoped instruction index
 
 - Read `kubernetes/AGENTS.md` before changing Kubernetes or Flux sources.
-- Read `talos/AGENTS.md` before changing Talos sources or generation inputs.
-- Read `tests/AGENTS.md` before changing the test catalog, suites, fixtures, or result machinery.
+- Read `talos/AGENTS.md` before changing Talos sources, generation inputs, or root
+  `clusterconfig/`.
+- Read `tests/AGENTS.md` before changing the test catalog, suites, fixtures, or
+  test result and guard machinery, including `scripts/test/`.
 - Read the relevant file under `docs/runbooks/` before following a repository procedure.
-- `docs/phases/` is completed rollout history, not live procedure.
+- Current `docs/phase-*.md` files are completed rollout history, not live procedure.
 - `docs/superpowers/specs/` records design rationale and is descriptive, never normative.
