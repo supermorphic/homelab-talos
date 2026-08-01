@@ -823,16 +823,6 @@ The recipe leaves that encrypted file untracked in the checkout, and every guard
 the Secret to the PR 2 branch (or stash it) before attempting another guarded rollout
 from this worktree.
 
-After PR 2 activates Lidarr, its read-only guarded verification is:
-
-```bash
-mise exec -- just kube arr-verify lidarr
-```
-
-The `/ping` endpoint used by the Pod probes and later by Gatus does not exercise
-`api.lidarr.audio`. A green Pod or Gatus endpoint therefore does not guarantee that
-artist or album searches work; verify a real search during first-run acceptance.
-
 ## Connect Prowlarr to Sonarr, Radarr, and Lidarr
 
 Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
@@ -1061,6 +1051,19 @@ Do not begin the follow-up PR or create the Plex Music library until every item 
 passes. If the deployed saved naming values or labels differ from this recorded
 walkthrough, preserve the authoritative preview output and safety states, then record
 the deployed values for a follow-up runbook correction.
+
+The required Lidarr order is: guarded bootstrap; create the required profiles and
+root folder; connect Prowlarr while the Git source remains suspended and the staged
+endpoint is available; complete authorized acceptance; activate in PR 2; then run
+the guarded verification:
+
+```bash
+mise exec -- just kube arr-verify lidarr
+```
+
+The `/ping` endpoint used by the Pod probes and later by Gatus does not exercise
+`api.lidarr.audio`. A green Pod or Gatus endpoint therefore does not guarantee that
+artist or album searches work; the real search is verified during first-run acceptance.
 
 ### Direct Sonarr test
 
