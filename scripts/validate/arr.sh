@@ -35,7 +35,10 @@ for record in "${arr_apps[@]}"; do
 
   [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
 
-  [[ "$(yq -r ".controllers.$app.strategy" "$values")" == 'Recreate' ]]
+  [[ "$(yq -r ".controllers.$app.strategy" "$values")" == 'Recreate' ]] || {
+    echo "$app must set strategy: Recreate (it mounts a ReadWriteOnce config PVC)." >&2
+    exit 1
+  }
   [[ "$(yq -r ".controllers.$app.containers.app.image.repository" "$values")" == "ghcr.io/home-operations/$app" ]]
   tag="$(yq -r ".controllers.$app.containers.app.image.tag" "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
   [[ "$(yq -r ".controllers.$app.containers.app.securityContext.capabilities.drop[]" "$values" | tr '\n' ' ')" == 'ALL ' ]]
@@ -43,7 +46,7 @@ for record in "${arr_apps[@]}"; do
   [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
   [[ "$(yq -r '.persistence.config.annotations."helm.sh/resource-policy"' "$values")" == 'keep' ]]
   if [[ "$mounts_data" == 'no' ]]; then
-    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'prowlarr must not mount media-data (config-only).' >&2; exit 1; }
+    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo "$app must not mount media-data (config-only)." >&2; exit 1; }
   else
     [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app data persistence must use existingClaim media-data." >&2; exit 1; }
     [[ "$(yq -r '.persistence.data.globalMounts[0].path' "$values")" == '/data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
@@ -68,16 +71,29 @@ for record in "${arr_apps[@]}"; do
     ! rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "Suspended $app must not create a failing Gatus endpoint." >&2; exit 1; }
   fi
 
+  # Homepage widgets track activation exactly like the Gatus endpoints above: an active app
+  # publishes the full widget triple, a suspended one publishes none. Suspending a live *arr
+  # app therefore means dropping its widget annotations and its Gatus endpoint in the same
+  # commit that sets suspend: true.
   widget_count="$(yq -r \
     '[(.metadata.annotations // {}) | keys[] | select(test("^gethomepage\\.dev/widget\\."))] | length' \
     "$route")"
   if [[ "$suspend_state" == 'false' ]]; then
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == "$app" ]]
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == "$app" ]] || {
+      echo "Active $app widget.type annotation must be $app." >&2
+      exit 1
+    }
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == \
-      "http://$app.media.svc.cluster.local:$port" ]]
+      "http://$app.media.svc.cluster.local:$port" ]] || {
+      echo "Active $app widget.url annotation must be http://$app.media.svc.cluster.local:$port." >&2
+      exit 1
+    }
     widget_key="HOMEPAGE_VAR_${app^^}_API_KEY"
     [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == \
-      "{{${widget_key}}}" ]]
+      "{{${widget_key}}}" ]] || {
+      echo "Active $app widget.key annotation must be {{${widget_key}}}." >&2
+      exit 1
+    }
   else
     [[ "$widget_count" == '0' ]] || {
       echo "Suspended $app must not publish widget.* annotations." >&2
@@ -88,7 +104,10 @@ for record in "${arr_apps[@]}"; do
   kustomize build "$base/app" >/dev/null
   helm template "$app" "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/$app.yaml"
   [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/$app.yaml")" == "$app" ]]
-  [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/$app.yaml")" == 'Recreate' ]]
+  [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/$app.yaml")" == 'Recreate' ]] || {
+    echo "$app rendered Deployment strategy must be Recreate." >&2
+    exit 1
+  }
   echo "  $app $tag OK"
 done
 
