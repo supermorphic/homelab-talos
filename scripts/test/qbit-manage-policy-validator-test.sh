@@ -46,6 +46,55 @@ reset_config
 expect_pass 'production policy'
 
 reset_config
+yq -i 'del(.share_limits.music)' "$test_config"
+expect_fail 'music group removed' \
+  'config.yml must define share_limits.music.'
+
+reset_config
+yq -i '.share_limits.music.max_ratio = 1.5' "$test_config"
+expect_fail 'music ratio changed' \
+  'share_limits.music.max_ratio must be 2.0.'
+
+reset_config
+yq -i '.share_limits.music.max_ratio = 2' "$test_config"
+expect_pass 'music ratio serialized as an integer'
+
+reset_config
+yq -i '.share_limits.music.min_seeding_time = "1d"' "$test_config"
+expect_fail 'music minimum seed time changed' \
+  'share_limits.music.min_seeding_time must be 7d.'
+
+reset_config
+yq -i '.share_limits.music.max_seeding_time = "7d"' "$test_config"
+expect_fail 'music maximum seed time changed' \
+  'share_limits.music.max_seeding_time must be 30d.'
+
+reset_config
+yq -i '.share_limits.music.share_limit_action = "Remove"' "$test_config"
+expect_fail 'music action changed' \
+  'share_limits.music.share_limit_action must be Stop.'
+
+reset_config
+yq -i '.share_limits.music.cleanup = false' "$test_config"
+expect_fail 'music cleanup disabled' \
+  'share_limits.music.cleanup must be true.'
+
+reset_config
+yq -i '.share_limits.music.categories = ["movies"]' "$test_config"
+expect_fail 'music categories changed' \
+  'share_limits.music.categories must contain exactly music.'
+
+reset_config
+yq -i '.share_limits.music.exclude_any_tags = ["tracker-czteam"]' "$test_config"
+expect_fail 'music missing tracker-private exclusion' \
+  'share_limits.music.exclude_any_tags must include tracker-private.'
+
+reset_config
+yq -i '.share_limits.music.exclude_any_tags = ["tracker-private"]' "$test_config"
+expect_fail 'music missing tracker-czteam exclusion' \
+  'share_limits.music.exclude_any_tags must include tracker-czteam.'
+
+reset_config
 yq -i '.tracker."private.example".tag = "tracker-private"' "$test_config"
 expect_pass 'named private tracker scalar tag'
 

@@ -91,16 +91,14 @@ tracker:
   other:
     tag: tracker-public
 
-# Category-based share limits. The single `public` group matches every torrent in the
-# tv/movies categories and EXCLUDES anything tagged tracker-private or tracker-czteam (the
-# safety gate — a private torrent never gets these limits). tracker-czteam is excluded as
-# defense in depth: a CZTeam torrent also carries tracker-private, so either tag alone keeps
-# it out. Torrents with no matching group keep qBittorrent's (disabled) defaults, i.e. seed
-# indefinitely.
+# Category-based share limits. A torrent matches one group: CZTeam priority 10 wins first,
+# then music priority 50, then public priority 100. Music excludes both private tags as
+# independent fall-through protection. Torrents with no matching group keep qBittorrent's
+# (disabled) defaults, i.e. seed indefinitely.
 #
-# Behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5 and
-# seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES the
-# torrent when its limit is reached (required by the qBittorrent 5.2.x API; do not inherit the
+# Public behavior (verify against live observation): a torrent is actioned once BOTH ratio >= 1.5
+# and seed time >= 24h are met, OR unconditionally at 7 days. `share_limit_action: Stop` PAUSES
+# the torrent when its limit is reached (required by the qBittorrent 5.2.x API; do not inherit the
 # implicit default). Cleanup is enabled only after the completed hardlink-survival proof.
 share_limits:
   # CZTeam (private): dedicated seeding policy, HIGHER priority than public (lower number wins),
@@ -122,6 +120,21 @@ share_limits:
     max_seeding_time: -1
     share_limit_action: Stop
     cleanup: false
+  # Music: public music torrents only. Ratio 2.0 cannot stop a torrent before its seven-day
+  # floor; 30 days stops unconditionally. Cleanup moves only the download-side name into the
+  # seven-day recycle bin, while the library hardlink remains.
+  music:
+    priority: 50
+    categories:
+      - music
+    exclude_any_tags:
+      - tracker-private
+      - tracker-czteam
+    max_ratio: 2.0
+    min_seeding_time: 7d
+    max_seeding_time: 30d
+    share_limit_action: Stop
+    cleanup: true
   public:
     priority: 100
     categories:
