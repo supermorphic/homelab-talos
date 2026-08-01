@@ -11,6 +11,7 @@ arr_apps=(
   "prowlarr|9696|no|internal-gateway,media"
   "sonarr|8989|yes|internal-gateway,media-storage"
   "radarr|7878|yes|internal-gateway,media-storage"
+  "lidarr|8686|yes|internal-gateway,media-storage"
 )
 
 for record in "${arr_apps[@]}"; do
@@ -90,4 +91,4 @@ for record in "${arr_apps[@]}"; do
   echo "  $app $tag OK"
 done
 
-echo '*arr source (Prowlarr, Sonarr, Radarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes, activation-aware Gatus and Homepage widgets, and pinned renders passed validation.'
+echo '*arr source (Prowlarr, Sonarr, Radarr, Lidarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes, activation-aware Gatus and Homepage widgets, and pinned renders passed validation.'

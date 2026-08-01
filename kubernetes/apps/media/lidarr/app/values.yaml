@@ -1,0 +1,79 @@
+# Lidarr (music) via the bjw-s app-template chart. Single replica, Recreate on a retained
+# Longhorn RWO config volume. The shared media-data PVC is mounted at /data so imports
+# hardlink from /data/downloads/music into /data/media/music on one filesystem.
+controllers:
+  lidarr:
+    type: deployment
+    strategy: Recreate
+    pod:
+      securityContext:
+        runAsUser: 568
+        runAsGroup: 568
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+    containers:
+      app:
+        image:
+          repository: ghcr.io/home-operations/lidarr
+          tag: 3.1.2.4902
+        env:
+          TZ: America/Denver
+        resources:
+          requests:
+            cpu: 25m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        probes:
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /ping
+                port: 8686
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /ping
+                port: 8686
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /ping
+                port: 8686
+              periodSeconds: 5
+              failureThreshold: 30
+service:
+  app:
+    controller: lidarr
+    ports:
+      http:
+        port: 8686
+persistence:
+  config:
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    storageClass: longhorn
+    annotations:
+      helm.sh/resource-policy: keep
+    globalMounts:
+      - path: /config
+  data:
+    type: persistentVolumeClaim
+    existingClaim: media-data
+    globalMounts:
+      - path: /data
