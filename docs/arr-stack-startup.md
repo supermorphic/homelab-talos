@@ -34,12 +34,16 @@ Configure the stack in this order:
 5. Lidarr authentication, media management, music root folder, naming, and
    qBittorrent client.
 6. Prowlarr application connections to Sonarr, Radarr, and Lidarr.
-7. Direct Lidarr real-import acceptance with one authorized release. This is the
-   blocking gate before the next PR and before any Plex Music library work.
-8. Existing Plex TV/movie library-path verification. Creating the Plex Music
-   library remains deferred and is not part of this change.
-9. Seerr connections to Plex, Sonarr, and Radarr.
-10. Direct Sonarr/Radarr download tests, followed by a Seerr request test.
+7. Verify the existing Plex TV and Movies library paths, then complete a direct
+   Sonarr import and configure and validate its Plex refresh connection.
+8. Complete a direct Radarr import and configure and validate its Plex refresh
+   connection.
+9. Complete the blocking Lidarr authorized real-import acceptance.
+10. Create the Plex Music library at `/Volumes/Prometheus/media/music` and run
+    its initial manual scan.
+11. Configure and validate the Lidarr Plex refresh connection.
+12. Seerr connections to Plex, Sonarr, and Radarr, followed by a Seerr request
+    test.
 
 Complete a service's guarded bootstrap and durable `suspend: false` activation
 before configuring it here. **Lidarr is the exception:** keep its PR 1 source at
@@ -891,15 +895,18 @@ application now lists indexers whose names end in `(Prowlarr)`.
 Plex is the destination for imported media rather than part of the download
 automation path. Open `https://plex.lab.supermorphic.com`.
 
-1. Confirm the TV library reads from
+1. Confirm the existing TV library reads from
    `/Volumes/Prometheus/media/tv`.
-2. Confirm the movie library reads from
+2. Confirm the existing movie library reads from
    `/Volumes/Prometheus/media/movies`.
-3. Scan both libraries after the first Sonarr/Radarr import.
+3. A manual scan belongs to a newly created library only. Do not make routine
+   Sonarr or Radarr imports depend on manually choosing **Scan Library Files**;
+   their direct Plex connections below notify Plex after organized-library changes.
 
-Creating the Plex Music library is explicitly deferred. Do not add a music library
-as part of the initial Lidarr staging or its blocking import gate; future work may
-add `/Volumes/Prometheus/media/music` only after that gate has passed.
+Creating the Plex Music library is explicitly deferred until the blocking Lidarr
+real-import acceptance succeeds. After that gate, create it at
+`/Volumes/Prometheus/media/music`, run one initial manual scan, and only then
+configure the Lidarr connection below.
 
 Plex mounts the same SMB share under `/Volumes/Prometheus`, while qBittorrent,
 Sonarr, Radarr, and Lidarr mount it under `/data`. These are two views of the same
@@ -1020,6 +1027,11 @@ mise exec -- just kube seerr-verify
 
 ### Direct Lidarr test — blocking operator gate
 
+Perform this gate at step 9 of [Order of operations](#order-of-operations): only
+after the Sonarr and Radarr direct-import and Plex refresh validations, and before
+creating the Plex Music library. It appears here with the other acceptance evidence
+for reference.
+
 This is the blocking gate between the initial staging PR and the follow-up activation
 PR, not automated E2E coverage. Before grabbing, search for a real artist and confirm
 its artist and album metadata loads. Add it with root `/data/media/music`, quality
@@ -1072,7 +1084,6 @@ artist or album searches work; the real search is verified during first-run acce
 3. Confirm qBittorrent receives it with category `tv`.
 4. Confirm its download path is below `/data/downloads/tv`.
 5. Confirm Sonarr imports it below `/data/media/tv`.
-6. Confirm the episode appears in Plex.
 
 ### Direct Radarr test
 
@@ -1081,11 +1092,204 @@ artist or album searches work; the real search is verified during first-run acce
 3. Confirm qBittorrent receives it with category `movies`.
 4. Confirm its download path is below `/data/downloads/movies`.
 5. Confirm Radarr imports it below `/data/media/movies`.
-6. Confirm the movie appears in Plex.
 
 The download and imported files must be hardlinks, not duplicate copies. The
 shared-filesystem proof and prior acceptance evidence are in
 [`phase-11-media.md`](phase-11-media.md).
+
+## Direct Plex library-refresh connections
+
+These are post-import library-refresh notifications, not download or import
+configuration:
+
+```text
+Sonarr/Radarr/Lidarr
+        → import or modify organized library files
+        → notify Plex
+        → Plex scans the affected library
+```
+
+Use each application's native **Settings → Connect → Add → Plex Media Server**
+dialog. Select **Test**, require success, and only then **Save**. Never put a
+username, password, token, screenshot, shell-history value, or example secret in
+this runbook or Git. Obtain **Auth Token** through the application's
+**Authenticate with Plex.tv** flow, or enter the existing token securely.
+
+Unless an app-specific section says otherwise, use these deployed values:
+
+| Setting | Value |
+|---|---|
+| Name | `Plex Media Server` |
+| Host | `plex.media.svc.cluster.local` |
+| Port | `32400` |
+| Use SSL | Disabled |
+| URL Base | Blank |
+| Auth Token | Authenticate with Plex.tv or enter the existing token securely; never document or store it |
+| Update Library | Enabled |
+| Tags | Blank |
+| Map Paths From | Blank |
+| Map Paths To | Blank |
+
+The applications and Plex view the same SMB-backed media through different
+container paths:
+
+| Application | *arr library path | Plex library path |
+|---|---|---|
+| Sonarr | `/data/media/tv` | `/Volumes/Prometheus/media/tv` |
+| Radarr | `/data/media/movies` | `/Volumes/Prometheus/media/movies` |
+| Lidarr | `/data/media/music` | `/Volumes/Prometheus/media/music` |
+
+Do not change an *arr root folder to `/Volumes/Prometheus`. Although the deployed
+connectors expose **Map Paths From** and **Map Paths To**, leave both blank for
+all three connections by operator instruction. These optional Plex connector
+fields are not qBittorrent download-client Remote Path Mapping. Acceptance must
+prove that each connection refreshes its intended Plex library.
+
+### Sonarr → Plex
+
+After the successful direct Sonarr import and Plex TV path verification, open
+**Sonarr → Settings → Connect → Add → Plex Media Server**. The deployed dialog
+title is **Edit Connection - Plex Media Server**. Authenticate, then select the
+deployed Plex server in **Server** without recording account or credential data.
+Use the common values above and set these deployed triggers:
+
+| Trigger | State |
+|---|---|
+| On Grab | Disabled |
+| On File Import | Enabled |
+| On File Upgrade | Enabled |
+| On Import Complete | Enabled |
+| On Rename | Enabled |
+| On Series Add | Disabled |
+| On Series Delete | Enabled |
+| On Episode File Delete | Enabled |
+| On Episode File Delete For Upgrade | Enabled |
+| On Health Issue | Disabled |
+| On Health Restored | Disabled |
+| On Application Update | Disabled |
+| On Manual Interaction Required | Disabled |
+
+**On Grab** is disabled because nothing is yet under `/data/media/tv`. **On Import
+Complete** was enabled in the recorded walkthrough and can overlap file-level
+import events; use controlled acceptance to assess scan frequency. The captured
+walkthrough had **On Series Add** enabled, but leave it disabled for this minimal
+library-changing policy because adding a series does not import a file.
+
+Validate with a controlled Sonarr import or Sonarr-managed rename. Confirm a
+successful Plex connection event, a Plex TV scan, and the correct appearance
+without manually choosing **Scan Library Files**.
+
+### Radarr → Plex
+
+After the successful direct Radarr import and Plex Movies path verification, open
+**Radarr → Settings → Connect → Add → Plex Media Server**. The deployed dialog
+title is **Edit Notification - Plex Media Server**. Authenticate using **Start
+OAuth** under **Authenticate with Plex.tv**, then select the deployed Plex server
+in **Server** without recording account or credential data. Use the common values
+above and set these deployed triggers:
+
+| Trigger | State |
+|---|---|
+| On Grab | Disabled |
+| On File Import | Enabled |
+| On File Upgrade | Enabled |
+| On Rename | Enabled |
+| On Movie Added | Disabled |
+| On Movie Delete | Enabled |
+| On Movie File Delete | Enabled |
+| On Movie File Delete For Upgrade | Enabled |
+| On Health Issue | Disabled |
+| On Health Restored | Disabled |
+| On Application Update | Disabled |
+| On Manual Interaction Required | Disabled |
+
+**On Grab** is disabled because no movie exists in `/data/media/movies` until
+import. The deployed help describes **Map Paths From** as the Radarr path and
+**Map Paths To** as the Plex path, but leave both blank by operator instruction.
+The captured walkthrough did not use **On Movie Added**; leave it disabled because
+adding a movie does not import a file.
+
+Validate with a controlled Radarr import or Radarr-managed rename. Confirm a
+successful Plex connection event, a Plex Movies scan, and the correct appearance
+without manually choosing **Scan Library Files**.
+
+### Create the Plex Music library
+
+Only after the blocking Lidarr authorized real-import acceptance passes, create
+the Plex Music library at `/Volumes/Prometheus/media/music` and run its initial
+manual scan. This is the one manual scan for the new library; subsequent
+Lidarr-organized changes use the connection below.
+
+### Lidarr → Plex
+
+Do not configure this connection until all five conditions are complete:
+
+1. Authorized real-import acceptance passed.
+2. Download/library link counts verified.
+3. Force Recheck completed without hash error.
+4. Plex Music library created at `/Volumes/Prometheus/media/music`.
+5. Initial manual Plex Music scan succeeded.
+
+Then open **Lidarr → Settings → Connect → Add → Plex Media Server**. The deployed
+dialog title is **Edit Connection - Plex Media Server**. Unlike the captured
+Sonarr and Radarr dialogs, the captured Lidarr view did not show a **Server**
+selector; do not invent one. Use the common values above and set these deployed
+triggers:
+
+| Trigger | State |
+|---|---|
+| On Grab | Disabled |
+| On Release Import | Enabled |
+| On Upgrade | Enabled |
+| On Download Failure | Disabled |
+| On Import Failure | Disabled |
+| On Rename | Enabled |
+| On Track Retag | Enabled |
+| On Artist Add | Disabled |
+| On Artist Delete | Enabled when the operator wants stale Plex artist entries removed after a Lidarr-managed deletion |
+| On Album Delete | Disabled |
+| On Application Update | Disabled |
+| On Health Issue | Disabled |
+| On Health Restored | Disabled |
+
+**On Grab** is disabled because no album exists in `/data/media/music` until
+import. **On Track Retag** is enabled because retagging changes organized library
+files. The captured walkthrough had **On Artist Add** enabled, but leave it
+disabled for this minimal library-changing policy because adding an artist does
+not import a file. **On Album Delete** was disabled in the recorded walkthrough;
+enable it only if later controlled testing proves it operationally required.
+
+Validate with a second small authorized import or a Lidarr-managed rename of the
+acceptance album. Confirm a successful Plex connection event, a Plex Music scan,
+and the album or renamed tracks appear without a manual scan.
+
+### Delete events and ownership
+
+Do not blindly enable every delete event. Each connector above records the
+deployed delete events; enable only an event used to remove stale Plex entries
+after an *arr-managed deletion of an organized-library file. This is distinct
+from removing an artist, series, or movie in an *arr app, removing the original
+torrent from qBittorrent, or qbit_manage cleaning `/data/downloads`. Plex refresh
+follows organized-library changes and must not fire merely because qbit_manage
+removes seeded download data.
+
+### Troubleshooting direct Plex refresh
+
+1. **Test fails:** verify Pod reachability to
+   `plex.media.svc.cluster.local:32400`, in-cluster SSL is disabled, the token is
+   valid, and the Plex server is claimed and available.
+2. **Test succeeds but no scan:** verify the relevant exact trigger, inspect
+   *arr **System → Events** and **System → Logs**, confirm an
+   organized-library import rather than a change only in `/data/downloads`, and
+   confirm the Plex library uses the matching `/Volumes/Prometheus/media/...`
+   folder.
+3. **Wrong or no library match:** compare the paths in the table above, retain
+   blank map fields per deployed configuration, and do not add download-client
+   Remote Path Mapping. Exact native matching behavior remains
+   acceptance-tested rather than repository-verifiable.
+4. **Duplicate or excess scans:** use only library-changing events, keep **On
+   Grab** disabled, and avoid redundant broad events unless controlled testing
+   proves they are necessary.
 
 ### Seerr request test
 
@@ -1094,8 +1298,9 @@ shared-filesystem proof and prior acceptance evidence are in
 3. Confirm both requests progress through qBittorrent.
 4. Confirm the imported media becomes available in Plex and then in Seerr.
 
-The video automation setup is not accepted until both direct *arr flows pass. The
-request workflow is not accepted until the Seerr request flow passes.
+The video automation setup is not accepted until both direct *arr flows and their
+Plex refresh validations pass. The request workflow is not accepted until the
+Seerr request flow passes.
 
 ## Recovery and repeat setup
 
