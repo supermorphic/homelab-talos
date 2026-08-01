@@ -134,6 +134,11 @@ expect_fail 'future group reuses a resolution priority' \
   'share_limits priorities must be unique'
 
 reset_config
+yq -i '.share_limits.public.priority = "100"' "$test_config"
+expect_fail 'share-limit priority is a YAML string instead of a number' \
+  'Every share_limits priority must be a non-negative integer'
+
+reset_config
 yq -i '.share_limits.czteam.cleanup = true' "$test_config"
 expect_fail 'czteam cleanup would delete a private torrent' \
   'share_limits.czteam.cleanup must be false'

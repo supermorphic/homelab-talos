@@ -145,11 +145,11 @@ cz='.share_limits.czteam'
 }
 
 invalid_priorities=''
-while IFS='|' read -r group priority; do
-  if [[ ! "$priority" =~ ^[0-9]+$ ]]; then
+while IFS='|' read -r group priority priority_type; do
+  if [[ "$priority_type" != '!!int' || ! "$priority" =~ ^[0-9]+$ ]]; then
     invalid_priorities+="${invalid_priorities:+,}$group"
   fi
-done < <(yq -r '.share_limits | to_entries[] | [.key, .value.priority] | join("|")' "$config")
+done < <(yq -r '.share_limits | to_entries[] | [.key, .value.priority, (.value.priority | type)] | join("|")' "$config")
 [[ -z "$invalid_priorities" ]] || {
   echo 'Every share_limits priority must be a non-negative integer.' >&2
   exit 1
