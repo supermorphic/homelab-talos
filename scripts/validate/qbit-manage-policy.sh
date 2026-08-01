@@ -73,9 +73,10 @@ czteam_mapping="$(yq -r '
 }
 
 # Generic private-torrent safety net: settings.private_tag auto-tags EVERY private torrent
-# tracker-private, which share_limits.public excludes. This host-independent layer keeps any
-# private torrent (even from a tracker not named above) out of the public policy, so it must
-# stay set while the public group excludes tracker-private.
+# tracker-private, which both public share-limit groups (music and public) exclude. This
+# host-independent layer keeps any private torrent (even from a tracker not named above) out of
+# the public music and tv/movie policies, so it must stay set while both groups exclude
+# tracker-private.
 [[ "$(yq -r '.settings.private_tag // "none"' "$config")" == 'tracker-private' ]] || {
   echo 'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).' >&2
   exit 1

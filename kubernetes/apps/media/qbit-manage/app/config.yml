@@ -2,8 +2,8 @@
 # the init-config container onto the writable /config/config.yml. Reviewable plaintext: NO
 # credentials live here (qbt.user/qbt.pass resolve from the SOPS Secret via !ENV at runtime).
 #
-# CLASSIFICATION MODEL: category-based. The public seeding policy manages ALL torrents
-# in the tv/movies categories and EXCLUDES anything tagged `tracker-private`. Two layers apply
+# CLASSIFICATION MODEL: category-based. The public seeding policies manage torrents in the
+# tv, movies, and music categories and EXCLUDE anything tagged `tracker-private`. Two layers apply
 # that tag: (a) settings.private_tag auto-tags EVERY private torrent generically, and (b) the
 # tracker: map can tag specific announce hosts. Layer (a) means safety no longer depends on the
 # host mapping being COMPLETE — a private torrent is excluded even from an unmapped tracker.
@@ -15,7 +15,7 @@ commands:
   # dry-run reviewed clean (CZTeam group + public policy); qbit_manage now applies for real.
   dry_run: false
   recheck: false
-  cat_update: false        # never change categories (Sonarr/Radarr own tv/movies)
+  cat_update: false        # never change categories (Sonarr/Radarr/Lidarr own tv/movies/music)
   tag_update: true         # apply tracker-public/tracker-private classification
   rem_unregistered: false  # destructive: stays off
   tag_tracker_error: false # destructive-adjacent: stays off
@@ -50,12 +50,12 @@ recyclebin:
 
 # Generic private-torrent safety net (host-independent). During tag_update, qbit_manage's
 # private_tag applies `tracker-private` to EVERY torrent whose metadata marks it private —
-# no announce host has to be known first. Because the public share-limit group EXCLUDES
+# no announce host has to be known first. Because both public share-limit groups EXCLUDE
 # tracker-private, any private torrent (including one from a newly joined tracker not yet in
-# the tracker: map) is automatically kept out of the public ratio/stop/cleanup policy. This
-# only ever ADDS an exclusion; it can never subject a torrent to the public policy. Explicit
-# per-tracker mappings below are still used to apply tracker-specific tags/groups, but
-# protection no longer depends on the map being complete first.
+# the tracker: map) is automatically kept out of the public music and tv/movie
+# ratio/stop/cleanup groups. This only ever ADDS an exclusion; it can never subject a torrent
+# to either public policy. Explicit per-tracker mappings below are still used to apply
+# tracker-specific tags/groups, but protection no longer depends on the map being complete first.
 settings:
   private_tag: tracker-private
 

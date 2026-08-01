@@ -4,8 +4,8 @@
 # filesystem) — never a copy. Root folder /data/media/music and the qBittorrent download
 # client are manual first-run settings persisted in the config PVC.
 #
-# Pinned to Lidarr 3.1.2. Staged suspended: this app stays suspend: true in Git until the
-# operator completes first-run configuration and the authorized import check.
+# Pinned to Lidarr 3.1.2. The operator completed first-run configuration and the authorized
+# import check; ks.yaml now preserves the accepted active state (suspend: false).
 controllers:
   lidarr:
     type: deployment

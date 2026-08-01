@@ -87,7 +87,7 @@ done
 rg -q '!ENV QBT_USER' "$config" || { echo 'config.yml qbt.user must resolve from !ENV QBT_USER (no literal credential).' >&2; exit 1; }
 rg -q '!ENV QBT_PASS' "$config" || { echo 'config.yml qbt.pass must resolve from !ENV QBT_PASS (no literal credential).' >&2; exit 1; }
 
-# [invariant] Categories are owned by Sonarr/Radarr — qbit_manage must never change them.
+# [invariant] Categories are owned by Sonarr/Radarr/Lidarr — qbit_manage must never change them.
 [[ "$(yq -r '.commands.cat_update' "$config")" == 'false' ]] || { echo 'commands.cat_update must be false (never change categories).' >&2; exit 1; }
 # [invariant] Destructive / unrelated features stay disabled in this plan.
 for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error recheck; do
@@ -95,8 +95,8 @@ for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error reche
 done
 scripts/validate/qbit-manage-policy.sh "$config"
 
-# The active policy classifies trackers, applies limits, and cleans up eligible public
-# torrents. The tracker/category safety gates above are intentionally validated separately.
+# The active policy classifies trackers, applies limits, and cleans up eligible public music and
+# tv/movie torrents. The tracker/category safety gates above are intentionally validated separately.
 [[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo 'commands.dry_run must be false (the reviewed policy is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo 'commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo 'commands.share_limits must be true (limits are active).' >&2; exit 1; }
