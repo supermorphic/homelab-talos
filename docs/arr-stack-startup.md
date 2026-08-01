@@ -139,10 +139,10 @@ In the transfer-list sidebar, under **Categories**:
 3. Add category `music` with save path `/data/downloads/music`.
 
 Sonarr, Radarr, and Lidarr use these exact category names. Automatic Torrent
-Management applies the category save paths. For music, `/data/downloads/music`
-is the download path and `/data/media/music` is the organized library path;
-they are on the same mounted filesystem, so Lidarr can hardlink imported tracks
-rather than copy them.
+Management applies the category save paths. Each application imports from its
+category path under `/data/downloads` into its organized library under
+`/data/media` on the same mounted filesystem, allowing hardlinks instead of
+copies.
 
 ### Cleanup authority
 
