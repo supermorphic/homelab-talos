@@ -39,10 +39,12 @@ Configure the stack in this order:
 8. Complete a direct Radarr import and configure and validate its Plex refresh
    connection.
 9. Complete the blocking Lidarr authorized real-import acceptance.
-10. Create the Plex Music library at `/Volumes/Prometheus/media/music` and run
+10. In PR 2, make Lidarr's activation durable, then run
+    `mise exec -- just kube arr-verify lidarr`.
+11. Create the Plex Music library at `/Volumes/Prometheus/media/music` and run
     its initial manual scan.
-11. Configure and validate the Lidarr Plex refresh connection.
-12. Seerr connections to Plex, Sonarr, and Radarr, followed by a Seerr request
+12. Configure and validate the Lidarr Plex refresh connection.
+13. Seerr connections to Plex, Sonarr, and Radarr, followed by a Seerr request
     test.
 
 Complete a service's guarded bootstrap and durable `suspend: false` activation
@@ -904,7 +906,8 @@ automation path. Open `https://plex.lab.supermorphic.com`.
    their direct Plex connections below notify Plex after organized-library changes.
 
 Creating the Plex Music library is explicitly deferred until the blocking Lidarr
-real-import acceptance succeeds. After that gate, create it at
+real-import acceptance succeeds, PR 2 makes activation durable, and
+`mise exec -- just kube arr-verify lidarr` passes. Then create it at
 `/Volumes/Prometheus/media/music`, run one initial manual scan, and only then
 configure the Lidarr connection below.
 
@@ -937,7 +940,9 @@ Complete this section only after the Phase 14 Seerr rollout is live. Open
    | Web App URL | `https://plex.lab.supermorphic.com/web` |
 
 4. Select the TV and movie libraries.
-5. Save, select **Sync Libraries**, and run the initial manual library scan.
+5. Save, select **Sync Libraries**, and complete Seerr's one-time Plex catalog
+   synchronization/import. This is not Plex **Scan Library Files** and does not
+   replace direct *arr → Plex connector validation.
 
 ### Sonarr service
 
@@ -1028,9 +1033,10 @@ mise exec -- just kube seerr-verify
 ### Direct Lidarr test — blocking operator gate
 
 Perform this gate at step 9 of [Order of operations](#order-of-operations): only
-after the Sonarr and Radarr direct-import and Plex refresh validations, and before
-creating the Plex Music library. It appears here with the other acceptance evidence
-for reference.
+after the Sonarr and Radarr direct-import and Plex refresh validations. Then make
+activation durable in PR 2 and run `mise exec -- just kube arr-verify lidarr`
+before creating the Plex Music library. It appears here with the other acceptance
+evidence for reference.
 
 This is the blocking gate between the initial staging PR and the follow-up activation
 PR, not automated E2E coverage. Before grabbing, search for a real artist and confirm
@@ -1169,9 +1175,11 @@ Use the common values above and set these deployed triggers:
 | On Application Update | Disabled |
 | On Manual Interaction Required | Disabled |
 
-**On Grab** is disabled because nothing is yet under `/data/media/tv`. **On Import
-Complete** was enabled in the recorded walkthrough and can overlap file-level
-import events; use controlled acceptance to assess scan frequency. The captured
+**On Grab** is disabled because a grab event itself does not modify organized
+library files. Import, upgrade, rename, and selected delete events are the refresh
+triggers regardless of current library contents. **On Import Complete** was enabled
+in the recorded walkthrough and can overlap file-level import events; use controlled
+acceptance to assess scan frequency. The captured
 walkthrough had **On Series Add** enabled, but leave it disabled for this minimal
 library-changing policy because adding a series does not import a file.
 
@@ -1203,8 +1211,10 @@ above and set these deployed triggers:
 | On Application Update | Disabled |
 | On Manual Interaction Required | Disabled |
 
-**On Grab** is disabled because no movie exists in `/data/media/movies` until
-import. The deployed help describes **Map Paths From** as the Radarr path and
+**On Grab** is disabled because a grab event itself does not modify organized
+library files. Import, upgrade, rename, and selected delete events are the refresh
+triggers regardless of current library contents. The deployed help describes
+**Map Paths From** as the Radarr path and
 **Map Paths To** as the Plex path, but leave both blank by operator instruction.
 The captured walkthrough did not use **On Movie Added**; leave it disabled because
 adding a movie does not import a file.
@@ -1215,9 +1225,10 @@ without manually choosing **Scan Library Files**.
 
 ### Create the Plex Music library
 
-Only after the blocking Lidarr authorized real-import acceptance passes, create
-the Plex Music library at `/Volumes/Prometheus/media/music` and run its initial
-manual scan. This is the one manual scan for the new library; subsequent
+Only after the blocking Lidarr authorized real-import acceptance passes, PR 2
+makes activation durable, and `mise exec -- just kube arr-verify lidarr` passes,
+create the Plex Music library at `/Volumes/Prometheus/media/music` and run its
+initial manual scan. This is the one manual scan for the new library; subsequent
 Lidarr-organized changes use the connection below.
 
 ### Lidarr → Plex
@@ -1252,10 +1263,12 @@ triggers:
 | On Health Issue | Disabled |
 | On Health Restored | Disabled |
 
-**On Grab** is disabled because no album exists in `/data/media/music` until
-import. **On Track Retag** is enabled because retagging changes organized library
-files. The captured walkthrough had **On Artist Add** enabled, but leave it
-disabled for this minimal library-changing policy because adding an artist does
+**On Grab** is disabled because a grab event itself does not modify organized
+library files. Import, upgrade, rename, retag, and selected delete events are the
+refresh triggers regardless of current library contents. **On Track Retag** is
+enabled because retagging changes organized library files. The captured walkthrough
+had **On Artist Add** enabled, but leave it disabled for this minimal
+library-changing policy because adding an artist does
 not import a file. **On Album Delete** was disabled in the recorded walkthrough;
 enable it only if later controlled testing proves it operationally required.
 
@@ -1265,13 +1278,13 @@ and the album or renamed tracks appear without a manual scan.
 
 ### Delete events and ownership
 
-Do not blindly enable every delete event. Each connector above records the
-deployed delete events; enable only an event used to remove stale Plex entries
-after an *arr-managed deletion of an organized-library file. This is distinct
-from removing an artist, series, or movie in an *arr app, removing the original
-torrent from qBittorrent, or qbit_manage cleaning `/data/downloads`. Plex refresh
-follows organized-library changes and must not fire merely because qbit_manage
-removes seeded download data.
+Do not blindly enable every delete event. File-delete events refresh Plex after an
+*arr-managed deletion of an organized-library file. Entity-delete events (artist,
+series, or movie) are useful only when the *arr-managed entity removal also deletes
+organized media or would otherwise leave stale Plex entries. This is distinct from
+removing the original torrent from qBittorrent or qbit_manage cleaning
+`/data/downloads`; neither changes the organized library and neither must trigger
+Plex refresh.
 
 ### Troubleshooting direct Plex refresh
 
