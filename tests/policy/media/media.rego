@@ -6,6 +6,7 @@ mutable_tags := {"latest", "main", "master", "stable", "nightly"}
 
 required_dependencies := {
 	"flaresolverr": {"media"},
+	"lidarr": {"internal-gateway", "media-storage"},
 	"plex": {"internal-gateway", "media-storage"},
 	"prowlarr": {"internal-gateway", "media"},
 	"qbit-manage": {"media-storage", "qbittorrent"},
@@ -29,6 +30,7 @@ stateless_internal_apps := {"flaresolverr"}
 uiless_worker_apps := {"qbit-manage"}
 
 shared_claim_keys := {
+	"lidarr": "data",
 	"plex": "media",
 	"qbittorrent": "data",
 	"radarr": "data",

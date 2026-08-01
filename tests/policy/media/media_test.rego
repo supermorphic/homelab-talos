@@ -46,6 +46,36 @@ valid_fixture := fixture(
 	"media-data",
 )
 
+lidarr_fixture(dependencies, claim) := [
+	{
+		"path": "kubernetes/apps/media/lidarr/app/values.yaml",
+		"contents": {
+			"controllers": {"lidarr": {
+				"strategy": "Recreate",
+				"containers": {"app": {
+					"image": {"tag": "3.1.2.4902"},
+					"securityContext": {"capabilities": {"drop": ["ALL"]}},
+				}},
+			}},
+			"persistence": {
+				"config": {"accessMode": "ReadWriteOnce"},
+				"data": {"existingClaim": claim},
+			},
+		},
+	},
+	{
+		"path": "kubernetes/apps/media/lidarr/ks.yaml",
+		"contents": {"spec": {"dependsOn": [{"name": dependency} | some dependency in dependencies]}},
+	},
+	{
+		"path": "kubernetes/apps/media/lidarr/app/httproute.yaml",
+		"contents": {
+			"metadata": {"annotations": {"external-dns.k8s.io/audience": "internal"}},
+			"spec": {"parentRefs": [{"name": "internal"}]},
+		},
+	},
+]
+
 config_only_fixture(extra_persistence) := [
 	{
 		"path": "kubernetes/apps/media/prowlarr/app/values.yaml",
@@ -109,6 +139,30 @@ stateless_fixture := [
 test_valid_media_app_has_no_violations if {
 	messages := deny with input as valid_fixture
 	count(messages) == 0
+}
+
+test_valid_lidarr_contract_has_no_violations if {
+	messages := deny with input as lidarr_fixture(
+		{"media-storage", "internal-gateway"},
+		"media-data",
+	)
+	count(messages) == 0
+}
+
+test_lidarr_requires_internal_gateway_dependency if {
+	messages := deny with input as lidarr_fixture(
+		{"media-storage"},
+		"media-data",
+	)
+	count(messages_matching(messages, "required Flux dependency \"internal-gateway\"")) == 1
+}
+
+test_lidarr_requires_shared_media_claim if {
+	messages := deny with input as lidarr_fixture(
+		{"media-storage", "internal-gateway"},
+		"other-claim",
+	)
+	count(messages_matching(messages, "persistence.data.existingClaim must be media-data")) == 1
 }
 
 # UI-less scheduled worker (qbit-manage): no config PVC, no HTTPRoute, no Service. Like the
