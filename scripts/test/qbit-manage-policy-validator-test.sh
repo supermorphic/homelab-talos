@@ -56,6 +56,11 @@ expect_fail 'music ratio changed' \
   'share_limits.music.max_ratio must be 2.0.'
 
 reset_config
+yq -i '.share_limits.music.priority = 75' "$test_config"
+expect_fail 'music priority changed' \
+  'share_limits.music.priority must be 50.'
+
+reset_config
 yq -i '.share_limits.music.max_ratio = 2' "$test_config"
 expect_pass 'music ratio serialized as an integer'
 

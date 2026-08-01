@@ -117,6 +117,10 @@ assert_share_limit_group() {
 assert_share_limit_group public 1.5 1d 7d Stop true
 assert_share_limit_group music 2.0 7d 30d Stop true
 music='.share_limits.music'
+[[ "$(yq -r "$music.priority" "$config")" == '50' ]] || {
+  echo 'share_limits.music.priority must be 50.' >&2
+  exit 1
+}
 music_categories="$(yq -o=json -I=0 "$music.categories | sort" "$config")"
 [[ "$music_categories" == '["music"]' ]] || {
   echo 'share_limits.music.categories must contain exactly music.' >&2

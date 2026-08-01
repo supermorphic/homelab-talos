@@ -60,12 +60,12 @@ rules, policy semantics, first-real-torrent acceptance, and rollback procedure.
 
 ## ⚠️ SAFETY-CRITICAL: adding a private tracker
 
-**A private torrent is auto-excluded from the public policy by the `settings.private_tag` net
-as soon as qbit_manage next runs** — you no longer have to register the announce host first just
-to avoid a hit-and-run (public cleanup is now active, so this generic protection matters). You
-still add a tracker's announce hostname when it needs a **tracker-specific tag or its own
-share-limit group** (e.g. the CZTeam policy); land that mapping before relying on those bespoke
-rules.
+**A private torrent is auto-excluded from both cleanup policies by the `settings.private_tag`
+net as soon as qbit_manage next runs** — you no longer have to register the announce host first
+just to avoid a hit-and-run (music and public cleanup are active, so this generic protection
+matters). You still add a tracker's announce hostname when it needs a **tracker-specific tag or
+its own share-limit group** (e.g. the CZTeam policy); land that mapping before relying on those
+bespoke rules.
 
 **Is this a file edit or a command?** A **file edit that goes through a PR** — there is no
 `just` recipe for it, on purpose: this is the one safety-critical change in the system, so the
@@ -88,12 +88,12 @@ maintainer (or edit it yourself) and it lands as a reviewed one-line PR.
        tag: tracker-public
    ```
 3. Open a PR, let `just ci` pass, and merge. Flux reconciles and qbit_manage re-tags on its
-   next run; the public `share_limits` group excludes `tracker-private`.
+   next run; both cleanup `share_limits` groups exclude `tracker-private`.
 
 **Layered safety nets** make a brief delay before registering a host non-fatal:
 - **Generic `private_tag` (primary):** qbit_manage tags every private torrent `tracker-private`
-  on its next run and the public group excludes that tag, so a private torrent is kept out of
-  the public ratio/stop/cleanup path automatically — no host registration required.
+  on its next run and both cleanup groups exclude that tag, so a private torrent is kept out of
+  the music/public ratio/stop/cleanup paths automatically — no host registration required.
 - **24h grace:** the public policy's `min_seeding_time: 1d` means a freshly downloaded torrent
   cannot be ratio-cleaned for its first 24 hours.
 - **7-day recycle window:** cleanup moves download-side data into `.RecycleBin` before its name
