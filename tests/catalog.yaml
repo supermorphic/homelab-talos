@@ -64,6 +64,7 @@ campaigns:
       - verification.prowlarr
       - verification.sonarr
       - verification.radarr
+      - verification.lidarr
       - verification.seerr
       - verification.flaresolverr
       - verification.qbit-manage
@@ -366,6 +367,10 @@ suites:
   - metadata: {id: verification.radarr, source: verification, framework: bash, suite: media, tier: verification, target: radarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify radarr", implementation: scripts/verify/arr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.lidarr, source: verification, framework: bash, suite: media, tier: verification, target: lidarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube arr-verify lidarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.seerr, source: verification, framework: bash, suite: media, tier: verification, target: seerr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}

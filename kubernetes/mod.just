@@ -547,14 +547,14 @@ qbittorrent-validate: require-bash
 qbittorrent-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.qbittorrent -- scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
 
-# Validate the Phase 13 *arr source (Prowlarr, Sonarr, Radarr): files, wiring, dependency
+# Validate the current *arr source (Prowlarr, Sonarr, Radarr, Lidarr): files, wiring, dependency
 # graph, no-secret ks, app-template chartRef, config-PVC (Longhorn RWO + Recreate + keep),
 # shared /data for sonarr/radarr, HTTPRoutes, Gatus /ping probes, and the pinned
 # app-template render. Cluster-independent — part of `just ci`.
 arr-validate: require-bash
     @scripts/validate/arr.sh
 
-# Verify a live Phase 13 *arr app: `just kube arr-verify <prowlarr|sonarr|radarr>`.
+# Verify a current live *arr app: `just kube arr-verify <prowlarr|sonarr|radarr|lidarr>`.
 # Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, DNS, and /ping over the
 # internal gateway. Operator-only (needs the cluster); not in `just ci`.
 arr-verify app: require-bash
