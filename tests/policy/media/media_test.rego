@@ -157,6 +157,14 @@ test_lidarr_requires_internal_gateway_dependency if {
 	count(messages_matching(messages, "required Flux dependency \"internal-gateway\"")) == 1
 }
 
+test_lidarr_requires_media_storage_dependency if {
+	messages := deny with input as lidarr_fixture(
+		{"internal-gateway"},
+		"media-data",
+	)
+	count(messages_matching(messages, "required Flux dependency \"media-storage\"")) == 1
+}
+
 test_lidarr_requires_shared_media_claim if {
 	messages := deny with input as lidarr_fixture(
 		{"media-storage", "internal-gateway"},
