@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-lidarr
+    namespace: homepage
+type: Opaque
+stringData:
+    apiKey: ENC[AES256_GCM,data:stxoPOcJ7iLGPWVEFiHlDiibHEpXBAf9aH39LDJeRQc=,iv:6ZWx5T01MshFRxOjdUNqbkq04Ae4+K8SceDjp4xCY7s=,tag:Lg9XH4RzBdfSN+bGJOrhyQ==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBaRlpqMnVSSjVjWjVNVHh4
+            Q20wcDUweUUydmVZa1M3VklhRlk3UHVpWmlBCkcyeVZIMjhQSWRPamJLV2dRS1JR
+            bWpld3NNeDdscjVseFdteGl5N3dGZ0kKLS0tIGZuQmJGaTFhUllLcjNvYXFTZGVM
+            dUZHYUt0NGV6NktGenprS2xhdThxcHcKH4ddz0qGMX8zn9vIktHKp7M+5kV5YCzb
+            RtpaJ1OLDV5gpT68e+9BMlWx+O0KFmvZRJzc0ymit6JBq6axI8s8ag==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-08-01T14:28:57Z"
+    mac: ENC[AES256_GCM,data:/l0USFomkxZiTj0Y4h+mXJsDpgUm64j3aXtWXG2VBmvfIyZL2Ie+NxwAhem/mdHx+m8zqLa+/BRlcPG3X2qlze6Tf0HdgjIh3lM+n9vxHYENc1bIYLmNqTsNYQNsSlw8l5cAW1HenOJohXmMEJR4pIrh7D63BkaxJWC310eA5Tg=,iv:SBFShyQ1sxcalphodc3HDKnmqEzbVDd2SbFJuTfXDMc=,tag:R1rGGJbzkPxbBhNrv4TfEw==,type:str]
+    version: 3.13.2

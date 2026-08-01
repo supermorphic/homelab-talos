@@ -129,6 +129,12 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    - name: lidarr
+      group: Media
+      url: "https://lidarr.lab.supermorphic.com/ping"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     - name: seerr
       group: Media
       url: "https://seerr.lab.supermorphic.com/api/v1/status"

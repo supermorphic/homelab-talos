@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ./deployment.yaml
   - ./homepage-grafana.sops.yaml
+  - ./homepage-lidarr.sops.yaml
   - ./homepage-ntfy.sops.yaml
   - ./homepage-plex.sops.yaml
   - ./homepage-portainer.sops.yaml

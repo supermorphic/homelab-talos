@@ -176,6 +176,7 @@ expect_fail 'active app widget reading another app API key' \
 
 reset_tree
 yq -i '.spec.suspend = false' "$media/lidarr/ks.yaml"
+yq -i 'del(.config.endpoints[] | select(.name == "lidarr"))' "$gatus"
 expect_fail 'lidarr activated without its Gatus endpoint' \
   'Active lidarr has no Gatus endpoint.'
 
