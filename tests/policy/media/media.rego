@@ -39,6 +39,9 @@ shared_claim_keys := {
 
 config_only_apps := {"prowlarr", "seerr"}
 
+# Narrower than the media-mounting entries in shared_claim_keys: qbittorrent reaches the
+# shared claim through advancedMounts (per-container) rather than globalMounts, so the
+# /data mount-path rule below cannot read it. Keep these lists in sync by hand.
 arr_apps := {"lidarr", "radarr", "sonarr"}
 
 media_app(document) := app if {

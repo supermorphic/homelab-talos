@@ -626,6 +626,11 @@ and never commit the plaintext API key. Keep `kubernetes/apps/media/lidarr/ks.ya
 at `suspend: true` until this Secret, the first-run configuration, and the authorized
 real-import acceptance gate all pass; PR 2 is the only activation change.
 
+The recipe leaves that encrypted file untracked in the checkout, and every guarded
+`bootstrap` recipe refuses to run from a checkout with any uncommitted change. Commit
+the Secret to the PR 2 branch (or stash it) before attempting another guarded rollout
+from this worktree.
+
 After the operator activates Lidarr, its read-only guarded verification is:
 
 ```bash

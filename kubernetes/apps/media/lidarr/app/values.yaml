@@ -1,6 +1,11 @@
-# Lidarr (music) via the bjw-s app-template chart. Single replica, Recreate on a retained
-# Longhorn RWO config volume. The shared media-data PVC is mounted at /data so imports
-# hardlink from /data/downloads/music into /data/media/music on one filesystem.
+# Lidarr (music) via the bjw-s app-template chart. Single replica, Recreate on a Longhorn
+# RWO config volume (single-writer SQLite). The shared SMB PVC (media-data) is mounted at
+# /data so imports HARDLINK from /data/downloads/music into /data/media/music (same
+# filesystem) — never a copy. Root folder /data/media/music and the qBittorrent download
+# client are manual first-run settings persisted in the config PVC.
+#
+# Pinned to Lidarr 3.1.2. Staged suspended: this app stays suspend: true in Git until the
+# operator completes first-run configuration and the authorized import check.
 controllers:
   lidarr:
     type: deployment
@@ -23,12 +28,16 @@ controllers:
             cpu: 25m
             memory: 256Mi
           limits:
+            # Headroom for library scans; no CPU limit per repo convention. Matched to the
+            # Sonarr/Radarr ceiling rather than measured — revisit once a real music
+            # library has been imported.
             memory: 1Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
         probes:
+          # /ping is unauthenticated and returns 200 — real health, unlike a TCP check.
           readiness:
             enabled: true
             custom: true
@@ -68,6 +77,7 @@ persistence:
     accessMode: ReadWriteOnce
     size: 5Gi
     storageClass: longhorn
+    # Preserve the music library/config across a teardown (Longhorn reclaim is Delete).
     annotations:
       helm.sh/resource-policy: keep
     globalMounts:

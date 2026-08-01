@@ -1320,7 +1320,8 @@ arr app:
     source scripts/lib/rollout.sh
     require_deployed_source "$app bootstrap" \
       .just/bootstrap.just kubernetes/mod.just \
-      scripts/validate/arr.sh scripts/verify/arr.sh tests/catalog.yaml \
+      scripts/validate/arr.sh scripts/verify/arr.sh scripts/lib/network.sh \
+      tests/catalog.yaml \
       kubernetes/apps/media/kustomization.yaml \
       kubernetes/apps/media/namespace \
       "kubernetes/apps/media/$app"
