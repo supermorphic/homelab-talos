@@ -77,19 +77,21 @@ key placeholder, while leaving the widget to display its complete default field 
 
 Recommended order: **Prowlarr first**, then Sonarr and Radarr. All three sources are now
 activated (`suspend: false`); run each app's guarded `just bootstrap arr <app>` rollout
-if it has not been brought up yet, then confirm with `arr-verify`.
+if it has not been brought up yet, then confirm with `arr-verify`. The confirmation token
+changed: `bootstrap:phase13:<app>` is no longer accepted; use `bootstrap:arr:<app>`.
+For the canonical current runbook, see [`arr-stack-startup.md`](arr-stack-startup.md).
 
 ```bash
 # from any clean checkout after the rollout source is merged to main
 git fetch origin main
 git status --short  # must print nothing
-export ARR_BOOTSTRAP_CONFIRM='bootstrap:phase13:prowlarr'
+export ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:prowlarr'
 mise exec -- just bootstrap arr prowlarr
 mise exec -- just kube arr-verify prowlarr
 # then set suspend: false in Git for prowlarr/ks.yaml, commit, push, rerun arr-verify
 ```
 
-Repeat with `sonarr` / `radarr` (confirm string `bootstrap:phase13:<app>`).
+Repeat with `sonarr` / `radarr` (confirm string `bootstrap:arr:<app>`).
 
 ### First-run wiring (manual, persists in config PVCs)
 

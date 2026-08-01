@@ -1351,7 +1351,11 @@ arr app:
 
     just kube arr-verify "$app"
     bootstrap_complete=true
-    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
+    if [[ "$app" == 'lidarr' ]]; then
+      echo 'Lidarr live acceptance passed. Keep suspend: true in Git until first-run configuration, the authorized import, and Homepage Secret acceptance all pass; PR 2 then activates it. Continue with docs/arr-stack-startup.md.'
+    else
+      echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
+    fi
 
 # Reconcile the suspended Phase 14 Seerr app after guarded checks, then verify. Operator-run.
 # Requires the suspended source to match deployed origin/main and

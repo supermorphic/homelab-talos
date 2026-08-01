@@ -59,7 +59,10 @@ lidarr_fixture(dependencies, claim) := [
 			}},
 			"persistence": {
 				"config": {"accessMode": "ReadWriteOnce"},
-				"data": {"existingClaim": claim},
+				"data": {
+					"existingClaim": claim,
+					"globalMounts": [{"path": "/data"}],
+				},
 			},
 		},
 	},
@@ -171,6 +174,24 @@ test_lidarr_requires_shared_media_claim if {
 		"other-claim",
 	)
 	count(messages_matching(messages, "persistence.data.existingClaim must be media-data")) == 1
+}
+
+# The validator must reject a shared data claim mounted anywhere other than /data:
+# Lidarr import paths rely on its downloads and library sharing that exact root.
+test_lidarr_requires_shared_media_mount_path if {
+	fixture_input := json.patch(
+		lidarr_fixture(
+			{"media-storage", "internal-gateway"},
+			"media-data",
+		),
+		[{
+			"op": "replace",
+			"path": "/0/contents/persistence/data/globalMounts/0/path",
+			"value": "/mnt/media",
+		}],
+	)
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "persistence.data.globalMounts must include /data")) == 1
 }
 
 # UI-less scheduled worker (qbit-manage): no config PVC, no HTTPRoute, no Service. Like the

@@ -42,10 +42,12 @@ Configure the stack in this order:
 10. Direct Sonarr/Radarr download tests, followed by a Seerr request test.
 
 Complete a service's guarded bootstrap and durable `suspend: false` activation
-before configuring it here. Work through the steps incrementally as each service is
-activated — you do not need every application live at once. For example, connect
-Prowlarr to Sonarr as soon as Sonarr is up (step 6's Sonarr connection), before Radarr has
-been activated, and complete Radarr's steps later.
+before configuring it here. **Lidarr is the exception:** keep its PR 1 source at
+`suspend: true` after bootstrap until its first-run configuration, authorized import,
+and Homepage Secret acceptance gate pass; PR 2 performs the activation. Work through the
+steps incrementally as each service is activated — you do not need every application live
+at once. For example, connect Prowlarr to Sonarr as soon as Sonarr is up (step 6's Sonarr
+connection), before Radarr has been activated, and complete Radarr's steps later.
 
 ## qBittorrent
 
@@ -620,7 +622,9 @@ unset LIDARR_API_KEY HOMEPAGE_LIDARR_SECRETS_CONFIRM
 
 Run this recipe only after first boot. Only the resulting SOPS-encrypted
 `homepage-lidarr.sops.yaml` enters PR 2; do not add it to the initial staging PR,
-and never commit the plaintext API key.
+and never commit the plaintext API key. Keep `kubernetes/apps/media/lidarr/ks.yaml`
+at `suspend: true` until this Secret, the first-run configuration, and the authorized
+real-import acceptance gate all pass; PR 2 is the only activation change.
 
 After the operator activates Lidarr, its read-only guarded verification is:
 

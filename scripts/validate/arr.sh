@@ -45,7 +45,8 @@ for record in "${arr_apps[@]}"; do
   if [[ "$mounts_data" == 'no' ]]; then
     [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'prowlarr must not mount media-data (config-only).' >&2; exit 1; }
   else
-    [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
+    [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app data persistence must use existingClaim media-data." >&2; exit 1; }
+    [[ "$(yq -r '.persistence.data.globalMounts[0].path' "$values")" == '/data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
   fi
 
   [[ "$(yq -r '.spec.hostnames[0]' "$route")" == "$app.lab.supermorphic.com" ]]
