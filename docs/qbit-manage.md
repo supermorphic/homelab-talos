@@ -1,7 +1,7 @@
 # qbit_manage — seeding lifecycle policy
 
 `qbit_manage` (StuffAnThings) is a UI-less scheduler in the `media` namespace that applies a
-declarative seeding lifecycle to the movie/TV torrents in qBittorrent, so completed public
+declarative seeding lifecycle to the movie/TV/music torrents in qBittorrent, so completed public
 torrents stop seeding forever instead of accumulating. It talks to qBittorrent's Web API over
 the internal Service only — it does **not** join Gluetun's VPN, has no web UI, HTTPRoute, or
 Service. It mounts only the shared `/data/downloads` subpath and can never reach
@@ -13,16 +13,16 @@ Service. It mounts only the shared `/data/downloads` subpath and can never reach
 
 ## Classification model: category-based (read this first)
 
-The policy manages **every torrent in the `tv`/`movies` categories** (the categories
-Sonarr/Radarr assign) and **excludes anything tagged `tracker-private`**. Two independent layers
-apply that tag: a generic `settings.private_tag` net that auto-tags **every** private torrent,
-plus optional per-host mappings under `tracker:`. The generic net means a private torrent is
-excluded even from a tracker you have not mapped yet — basic safety no longer depends on the
-per-host list being complete.
+The policy manages **every torrent in the `tv`/`movies`/`music` categories** (the categories
+Sonarr/Radarr/Lidarr assign) and **excludes anything tagged `tracker-private`**. Two independent
+layers apply that tag: a generic `settings.private_tag` net that auto-tags **every** private
+torrent, plus optional per-host mappings under `tracker:`. The generic net means a private
+torrent is excluded even from a tracker you have not mapped yet — basic safety no longer depends
+on the per-host list being complete.
 
 **Classified today:** `tracker.czteam.me` → `tracker-private` + `tracker-czteam` (a private
-tracker), excluded from the public policy via both tags. It has a dedicated `czteam` share-limit
-group (priority 10, above public's 100): seed **at least 7 days**, then stop only once ratio
+tracker), excluded from cleanup policies via both tags. It has a dedicated `czteam` share-limit
+group (priority 10, above music's 50 and public's 100): seed **at least 7 days**, then stop only once ratio
 **2.0** is also reached; below 2.0 it seeds indefinitely (`max_seeding_time: -1`).
 `share_limit_action: Stop` pauses (reversible); `cleanup: false` never deletes. The policy is
 **active** (`dry_run: false`) after a clean dry-run review. Local seed time is not proof CZTeam
@@ -36,15 +36,20 @@ trackers are identified generically from private torrent metadata, while explici
 mappings add tracker-specific policy tags.
 
 ```text
-private torrent metadata ───────────────► tracker-private (public policy excluded)
-verified CZTeam announce hostname ──────► tracker-private + tracker-czteam
-                                                │
-                                                └─► CZTeam: 7d minimum, ratio 2.0,
-                                                    unlimited maximum, Stop, no cleanup
-
-tv/movies without tracker-private ──────► public: 24h minimum, ratio 1.5,
-                                           7d maximum, cleanup through recycle bin
+CZTeam tag + any category ─────────────► czteam (10): 7d minimum, ratio 2.0,
+                                         unlimited maximum, Stop, no cleanup
+music without private tags ───────────► music (50): 7d minimum, ratio 2.0,
+                                         30d maximum, Stop, recycle cleanup
+tv/movies without private tags ───────► public (100): 1d minimum, ratio 1.5,
+                                         7d maximum, Stop, recycle cleanup
 ```
+
+A torrent matches one share-limit group, selected by priority (lower numbers win). Music's two
+private exclusions are independent fall-through protection: either `tracker-private` or
+`tracker-czteam` keeps it out of the music cleanup path. Its ratio 2.0 limit cannot stop it
+before seven days, and 30 days is unconditional. Music can seed longer with near-zero marginal
+storage cost because the completed library file is a hardlink, not a second copy of the download.
+The remaining operational cost is qBittorrent tracking more active torrents.
 
 ## CZTeam private-tracker policy
 
@@ -55,12 +60,12 @@ rules, policy semantics, first-real-torrent acceptance, and rollback procedure.
 
 ## ⚠️ SAFETY-CRITICAL: adding a private tracker
 
-**A private torrent is auto-excluded from the public policy by the `settings.private_tag` net
-as soon as qbit_manage next runs** — you no longer have to register the announce host first just
-to avoid a hit-and-run (public cleanup is now active, so this generic protection matters). You
-still add a tracker's announce hostname when it needs a **tracker-specific tag or its own
-share-limit group** (e.g. the CZTeam policy); land that mapping before relying on those bespoke
-rules.
+**A private torrent is auto-excluded from both cleanup policies by the `settings.private_tag`
+net as soon as qbit_manage next runs** — you no longer have to register the announce host first
+just to avoid a hit-and-run (music and public cleanup are active, so this generic protection
+matters). You still add a tracker's announce hostname when it needs a **tracker-specific tag or
+its own share-limit group** (e.g. the CZTeam policy); land that mapping before relying on those
+bespoke rules.
 
 **Is this a file edit or a command?** A **file edit that goes through a PR** — there is no
 `just` recipe for it, on purpose: this is the one safety-critical change in the system, so the
@@ -83,12 +88,12 @@ maintainer (or edit it yourself) and it lands as a reviewed one-line PR.
        tag: tracker-public
    ```
 3. Open a PR, let `just ci` pass, and merge. Flux reconciles and qbit_manage re-tags on its
-   next run; the public `share_limits` group excludes `tracker-private`.
+   next run; both cleanup `share_limits` groups exclude `tracker-private`.
 
 **Layered safety nets** make a brief delay before registering a host non-fatal:
 - **Generic `private_tag` (primary):** qbit_manage tags every private torrent `tracker-private`
-  on its next run and the public group excludes that tag, so a private torrent is kept out of
-  the public ratio/stop/cleanup path automatically — no host registration required.
+  on its next run and both cleanup groups exclude that tag, so a private torrent is kept out of
+  the music/public ratio/stop/cleanup paths automatically — no host registration required.
 - **24h grace:** the public policy's `min_seeding_time: 1d` means a freshly downloaded torrent
   cannot be ratio-cleaned for its first 24 hours.
 - **7-day recycle window:** cleanup moves download-side data into `.RecycleBin` before its name
@@ -110,8 +115,9 @@ Hardlink-survival proof (the PR4 gate) was passed on real imports: a Radarr movi
 download/library inodes — so removing the download-side name provably leaves the Plex
 library file intact.
 
-Policy target: **min seed 24h, ratio 1.5, max seed 7d.** `tracker-private` torrents are never
-touched.
+Policy targets: public TV/movies **min seed 24h, ratio 1.5, max seed 7d**; public music **min
+seed 7d, ratio 2.0, max seed 30d**. `tracker-private` torrents are never cleaned up by either
+policy.
 
 ## First-time deployment (operator)
 
@@ -233,11 +239,12 @@ or Kubernetes commands. Suspending qbit_manage does not stop qBittorrent from
 seeding.
 
 **Disable limits/cleanup quickly through GitOps.** The controls, in `config.yml`: the per-group
-`share_limits.public.cleanup` flag (deletion), the global `commands.skip_cleanup` (recyclebin
-pass), and `commands.share_limits` (limits entirely). Set the safe value, open a PR — Flux
+`share_limits.music.cleanup` and `share_limits.public.cleanup` flags (deletion), the global
+`commands.skip_cleanup` (recyclebin pass), and `commands.share_limits` (limits entirely). Set the safe value, open a PR — Flux
 reconciles and the pod rolls with the safe policy (the `config-hash` annotation auto-rolls it).
 
-**Recover a mistakenly-cleaned torrent (within 7 days).** Cleanup *moves* download-side data to
+**Recover a mistakenly-cleaned torrent (within 7 days).** Either cleanup group
+(`share_limits.music` or `share_limits.public`) *moves* download-side data to
 `/data/downloads/.RecycleBin`; it is only unlinked after `recyclebin.empty_after_x_days` (7).
 The `/data/media` Plex file is a hardlink and is unaffected regardless. To recover the
 download-side within the window, move it back out of `.RecycleBin` through a
@@ -246,16 +253,22 @@ If no guarded recipe exists for the required recovery, add one rather than
 using an ad-hoc raw cluster command.
 
 To make cleanup even safer, raise `recyclebin.empty_after_x_days`. To stop deletion entirely,
-set `share_limits.public.cleanup: false` (via PR).
+set both `share_limits.music.cleanup: false` and `share_limits.public.cleanup: false` (via PR).
 
 ## Safety invariants (enforced by `scripts/validate/qbit-manage.sh` in `just ci`)
 
-- Categories `tv`/`movies` are owned by Sonarr/Radarr and never changed (`cat_update: false`).
+- Categories `tv`/`movies`/`music` are owned by Sonarr/Radarr/Lidarr and never changed
+  (`cat_update: false`).
 - qBittorrent's global seeding limits stay disabled.
-- The public `share_limits` group must exclude `tracker-private` (the safety gate).
-  Known-private hosts map to `tracker-private`, never `tracker-public`.
-- The public group also excludes `tracker-czteam`; the CZTeam group has higher
-  priority, uses `Stop`, has no finite maximum seed time, and never cleans up.
+- `czteam.priority` is strictly lower than every other group and every priority is unique.
+  The strict-minimum check prevents a later group from matching before CZTeam; uniqueness
+  prevents ambiguous selector resolution between any two groups.
+- Every `cleanup: true` group excludes both `tracker-private` and `tracker-czteam`.
+  This blocks a new or changed cleanup group from deleting private torrents even if only one
+  private-tag layer is present.
+- The public and music groups must exclude both private tags. Known-private hosts map to
+  `tracker-private`, never `tracker-public`.
+- The CZTeam group uses `Stop`, has no finite maximum seed time, and never cleans up.
 - `settings.private_tag` must be `tracker-private` — the generic net that auto-tags every
   private torrent so an unmapped private tracker is still excluded from the public policy.
 - Destructive features off: unregistered removal, orphaned removal, no-hardlink handling,

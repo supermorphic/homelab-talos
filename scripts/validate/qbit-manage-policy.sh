@@ -73,19 +73,69 @@ czteam_mapping="$(yq -r '
 }
 
 # Generic private-torrent safety net: settings.private_tag auto-tags EVERY private torrent
-# tracker-private, which share_limits.public excludes. This host-independent layer keeps any
-# private torrent (even from a tracker not named above) out of the public policy, so it must
-# stay set while the public group excludes tracker-private.
+# tracker-private, which both public share-limit groups (music and public) exclude. This
+# host-independent layer keeps any private torrent (even from a tracker not named above) out of
+# the public music and tv/movie policies, so it must stay set while both groups exclude
+# tracker-private.
 [[ "$(yq -r '.settings.private_tag // "none"' "$config")" == 'tracker-private' ]] || {
   echo 'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).' >&2
   exit 1
 }
 
-sl='.share_limits.public'
-[[ "$(yq -r "$sl // \"none\"" "$config")" != 'none' ]] || {
-  echo 'config.yml must define share_limits.public.' >&2
+assert_share_limit_group() {
+  local name="$1" expected_ratio="$2" expected_min="$3"
+  local expected_max="$4" expected_action="$5" expected_cleanup="$6"
+  local group=".share_limits.$name" actual_ratio
+
+  [[ "$(yq -r "$group // \"none\"" "$config")" != 'none' ]] || {
+    echo "config.yml must define share_limits.$name." >&2
+    exit 1
+  }
+  actual_ratio="$(yq -r "$group.max_ratio" "$config")"
+  [[ "$actual_ratio" == "$expected_ratio" || \
+    ( "$expected_ratio" == *.0 && "$actual_ratio" == "${expected_ratio%.0}" ) ]] || {
+    echo "share_limits.$name.max_ratio must be $expected_ratio." >&2
+    exit 1
+  }
+  [[ "$(yq -r "$group.min_seeding_time" "$config")" == "$expected_min" ]] || {
+    echo "share_limits.$name.min_seeding_time must be $expected_min." >&2
+    exit 1
+  }
+  [[ "$(yq -r "$group.max_seeding_time" "$config")" == "$expected_max" ]] || {
+    echo "share_limits.$name.max_seeding_time must be $expected_max." >&2
+    exit 1
+  }
+  [[ "$(yq -r "$group.share_limit_action" "$config")" == "$expected_action" ]] || {
+    echo "share_limits.$name.share_limit_action must be $expected_action." >&2
+    exit 1
+  }
+  [[ "$(yq -r "$group.cleanup" "$config")" == "$expected_cleanup" ]] || {
+    echo "share_limits.$name.cleanup must be $expected_cleanup." >&2
+    exit 1
+  }
+}
+
+assert_share_limit_group public 1.5 1d 7d Stop true
+assert_share_limit_group music 2.0 7d 30d Stop true
+music='.share_limits.music'
+[[ "$(yq -r "$music.priority" "$config")" == '50' ]] || {
+  echo 'share_limits.music.priority must be 50.' >&2
   exit 1
 }
+music_categories="$(yq -o=json -I=0 "$music.categories | sort" "$config")"
+[[ "$music_categories" == '["music"]' ]] || {
+  echo 'share_limits.music.categories must contain exactly music.' >&2
+  exit 1
+}
+for private_tag in tracker-private tracker-czteam; do
+  [[ "$(yq -r "($music.exclude_any_tags // []) | contains([\"$private_tag\"])" "$config")" == 'true' ]] || {
+    echo "share_limits.music.exclude_any_tags must include $private_tag." >&2
+    exit 1
+  }
+done
+assert_share_limit_group czteam 2.0 7d -1 Stop false
+
+sl='.share_limits.public'
 
 [[ "$(yq -r "($sl.exclude_any_tags // []) | contains([\"tracker-private\"])" "$config")" == 'true' ]] || {
   echo 'share_limits.public.exclude_any_tags must include tracker-private.' >&2
@@ -106,42 +156,56 @@ categories="$(yq -o=json -I=0 "$sl.categories | sort" "$config")"
 # CZTeam dedicated share-limit group — the private seeding policy. Assert its safety-critical
 # shape so a later edit can't silently weaken it into a hit-and-run or a delete.
 cz='.share_limits.czteam'
-[[ "$(yq -r "$cz // \"none\"" "$config")" != 'none' ]] || {
-  echo 'config.yml must define share_limits.czteam.' >&2
-  exit 1
-}
-# Higher priority than public (lower number wins) so a CZTeam torrent selects this group, not public.
-cz_prio="$(yq -r "$cz.priority" "$config")"
-pub_prio="$(yq -r "$sl.priority" "$config")"
-[[ "$cz_prio" =~ ^[0-9]+$ && "$pub_prio" =~ ^[0-9]+$ && "$cz_prio" -lt "$pub_prio" ]] || {
-  echo 'share_limits.czteam.priority must be a number lower than share_limits.public.priority.' >&2
-  exit 1
-}
 # Selected by tracker-czteam.
 [[ "$(yq -r "($cz.include_all_tags // []) | contains([\"tracker-czteam\"])" "$config")" == 'true' ]] || {
   echo 'share_limits.czteam.include_all_tags must include tracker-czteam.' >&2
   exit 1
 }
-# Ratio goal 2.0, 7-day minimum seed floor, UNLIMITED maximum (-1) so a below-ratio torrent is
-# never time-stopped, reversible Stop, and NEVER cleanup (no removal/deletion of a private torrent).
-cz_ratio="$(yq -r "$cz.max_ratio" "$config")"
-[[ "$cz_ratio" == '2' || "$cz_ratio" == '2.0' ]] || {
-  echo 'share_limits.czteam.max_ratio must be 2.0.' >&2
+
+invalid_priorities=''
+while IFS='|' read -r group priority priority_type; do
+  if [[ "$priority_type" != '!!int' || ! "$priority" =~ ^[0-9]+$ ]]; then
+    invalid_priorities+="${invalid_priorities:+,}$group"
+  fi
+done < <(yq -r '.share_limits | to_entries[] | [.key, .value.priority, (.value.priority | type)] | join("|")' "$config")
+[[ -z "$invalid_priorities" ]] || {
+  echo 'Every share_limits priority must be a non-negative integer.' >&2
   exit 1
 }
-[[ "$(yq -r "$cz.min_seeding_time" "$config")" == '7d' ]] || {
-  echo 'share_limits.czteam.min_seeding_time must be 7d.' >&2
+
+# shellcheck disable=SC2016
+unsafe_precedence="$(yq -r '
+  .share_limits.czteam.priority as $cz
+  | .share_limits
+  | to_entries[]
+  | select(.key != "czteam")
+  | select(.value.priority <= $cz)
+  | .key
+' "$config")"
+[[ -z "$unsafe_precedence" ]] || {
+  echo 'share_limits.czteam.priority must be the strict minimum across all groups.' >&2
   exit 1
 }
-[[ "$(yq -r "$cz.max_seeding_time" "$config")" == '-1' ]] || {
-  echo 'share_limits.czteam.max_seeding_time must be -1 (unlimited; a below-ratio torrent must never be time-stopped).' >&2
+
+# shellcheck disable=SC2016
+unsafe_cleanup="$(yq -r '
+  .share_limits
+  | to_entries[]
+  | select(.value.cleanup == true)
+  | select(
+      ((.value.exclude_any_tags // []) | contains(["tracker-private"])) == false
+      or ((.value.exclude_any_tags // []) | contains(["tracker-czteam"])) == false
+    )
+  | .key
+' "$config")"
+[[ -z "$unsafe_cleanup" ]] || {
+  echo 'Every cleanup-enabled share_limits group must exclude tracker-private and tracker-czteam.' >&2
   exit 1
 }
-[[ "$(yq -r "$cz.share_limit_action" "$config")" == 'Stop' ]] || {
-  echo 'share_limits.czteam.share_limit_action must be Stop (reversible; never Remove/RemoveWithContent for a private tracker).' >&2
-  exit 1
-}
-[[ "$(yq -r "$cz.cleanup" "$config")" == 'false' ]] || {
-  echo 'share_limits.czteam.cleanup must be false (never remove/delete a CZTeam torrent).' >&2
+
+priority_count="$(yq -r '.share_limits | length' "$config")"
+unique_priority_count="$(yq -r '[.share_limits[].priority] | unique | length' "$config")"
+[[ "$priority_count" == "$unique_priority_count" ]] || {
+  echo 'share_limits priorities must be unique.' >&2
   exit 1
 }

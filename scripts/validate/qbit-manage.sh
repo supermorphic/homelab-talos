@@ -87,7 +87,7 @@ done
 rg -q '!ENV QBT_USER' "$config" || { echo 'config.yml qbt.user must resolve from !ENV QBT_USER (no literal credential).' >&2; exit 1; }
 rg -q '!ENV QBT_PASS' "$config" || { echo 'config.yml qbt.pass must resolve from !ENV QBT_PASS (no literal credential).' >&2; exit 1; }
 
-# [invariant] Categories are owned by Sonarr/Radarr — qbit_manage must never change them.
+# [invariant] Categories are owned by Sonarr/Radarr/Lidarr — qbit_manage must never change them.
 [[ "$(yq -r '.commands.cat_update' "$config")" == 'false' ]] || { echo 'commands.cat_update must be false (never change categories).' >&2; exit 1; }
 # [invariant] Destructive / unrelated features stay disabled in this plan.
 for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error recheck; do
@@ -95,23 +95,14 @@ for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error reche
 done
 scripts/validate/qbit-manage-policy.sh "$config"
 
-# The active policy classifies trackers, applies limits, and cleans up eligible public
-# torrents. The tracker/category safety gates above are intentionally validated separately.
+# The active policy classifies trackers, applies limits, and cleans up eligible public music and
+# tv/movie torrents. The tracker/category safety gates above are intentionally validated separately.
 [[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo 'commands.dry_run must be false (the reviewed policy is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo 'commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo 'commands.share_limits must be true (limits are active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.skip_cleanup' "$config")" == 'false' ]] || { echo 'commands.skip_cleanup must be false (the recycle-bin retention pass is active).' >&2; exit 1; }
 [[ "$(yq -r '.recyclebin.enabled' "$config")" == 'true' ]] || { echo 'recyclebin.enabled must be true (download-side recovery window).' >&2; exit 1; }
 rb_days="$(yq -r '.recyclebin.empty_after_x_days // 0' "$config")"; [[ "$rb_days" -ge 1 ]] || { echo 'recyclebin.empty_after_x_days must set a recovery window (>= 1).' >&2; exit 1; }
-
-# --- Category-based public share-limits group ---
-sl='.share_limits.public'
-# The agreed policy numbers and the explicit (qBittorrent-5.2-required) stop action.
-[[ "$(yq -r "$sl.max_ratio" "$config")" == '1.5' ]] || { echo 'share_limits.public.max_ratio must be 1.5.' >&2; exit 1; }
-[[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo 'share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo 'share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo 'share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
-[[ "$(yq -r "$sl.cleanup" "$config")" == 'true' ]] || { echo 'share_limits.public.cleanup must be true.' >&2; exit 1; }
 
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }

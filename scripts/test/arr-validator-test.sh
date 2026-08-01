@@ -171,11 +171,13 @@ yq -i '.metadata.annotations."gethomepage.dev/widget.key" = "{{HOMEPAGE_VAR_SONA
 expect_fail 'active app widget reading another app API key' \
   'Active prowlarr widget.key annotation must be {{HOMEPAGE_VAR_PROWLARR_API_KEY}}.'
 
-# --- Staged Lidarr specifically ------------------------------------------------------------
-# Lidarr ships suspended in PR1; activating it in Git without its monitoring must not pass.
+# --- Active Lidarr monitoring guard ---------------------------------------------------------
+# The fixture removes Lidarr's copied Gatus endpoint while Lidarr is active to exercise the
+# active-app guard.
 
 reset_tree
 yq -i '.spec.suspend = false' "$media/lidarr/ks.yaml"
+yq -i 'del(.config.endpoints[] | select(.name == "lidarr"))' "$gatus"
 expect_fail 'lidarr activated without its Gatus endpoint' \
   'Active lidarr has no Gatus endpoint.'
 

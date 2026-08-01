@@ -106,6 +106,7 @@ prowlarr_secret="$base/app/homepage-prowlarr.sops.yaml"
 qbittorrent_secret="$base/app/homepage-qbittorrent.sops.yaml"
 sonarr_secret="$base/app/homepage-sonarr.sops.yaml"
 radarr_secret="$base/app/homepage-radarr.sops.yaml"
+lidarr_secret="$base/app/homepage-lidarr.sops.yaml"
 seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ -f "$grafana_secret" ]] || { echo "Missing Homepage Grafana Secret: $grafana_secret (run just repo homepage-grafana-secrets)." >&2; exit 1; }
 [[ -f "$ntfy_secret" ]] || { echo "Missing Homepage ntfy Secret: $ntfy_secret (run just repo ntfy-identity ensure homepage)." >&2; exit 1; }
@@ -115,6 +116,7 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ -f "$qbittorrent_secret" ]] || { echo "Missing Homepage qBittorrent Secret: $qbittorrent_secret (run just repo homepage-qbittorrent-secrets)." >&2; exit 1; }
 [[ -f "$sonarr_secret" ]] || { echo "Missing Homepage Sonarr Secret: $sonarr_secret (run just repo homepage-sonarr-secrets)." >&2; exit 1; }
 [[ -f "$radarr_secret" ]] || { echo "Missing Homepage Radarr Secret: $radarr_secret (run just repo homepage-radarr-secrets)." >&2; exit 1; }
+[[ -f "$lidarr_secret" ]] || { echo "Missing Homepage Lidarr Secret: $lidarr_secret (run just repo homepage-lidarr-secrets)." >&2; exit 1; }
 [[ -f "$seerr_secret" ]] || { echo "Missing Homepage Seerr Secret: $seerr_secret (run just repo homepage-seerr-secrets)." >&2; exit 1; }
 [[ "$(sops filestatus "$grafana_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$grafana_secret")" == 'homepage-grafana' ]]
@@ -140,6 +142,9 @@ seerr_secret="$base/app/homepage-seerr.sops.yaml"
 [[ "$(sops filestatus "$radarr_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$radarr_secret")" == 'homepage-radarr' ]]
 [[ "$(yq -r '.metadata.namespace' "$radarr_secret")" == 'homepage' ]]
+[[ "$(sops filestatus "$lidarr_secret" | yq -r '.encrypted')" == 'true' ]]
+[[ "$(yq -r '.metadata.name' "$lidarr_secret")" == 'homepage-lidarr' ]]
+[[ "$(yq -r '.metadata.namespace' "$lidarr_secret")" == 'homepage' ]]
 [[ "$(sops filestatus "$seerr_secret" | yq -r '.encrypted')" == 'true' ]]
 [[ "$(yq -r '.metadata.name' "$seerr_secret")" == 'homepage-seerr' ]]
 [[ "$(yq -r '.metadata.namespace' "$seerr_secret")" == 'homepage' ]]
@@ -171,6 +176,9 @@ assert_command_finds_nothing \
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SONARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_RADARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-radarr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_RADARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_LIDARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-lidarr' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_LIDARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_LIDARR_API_KEY") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SEERR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-seerr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SEERR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 

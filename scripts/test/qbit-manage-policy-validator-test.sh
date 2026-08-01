@@ -46,6 +46,60 @@ reset_config
 expect_pass 'production policy'
 
 reset_config
+yq -i 'del(.share_limits.music)' "$test_config"
+expect_fail 'music group removed' \
+  'config.yml must define share_limits.music.'
+
+reset_config
+yq -i '.share_limits.music.max_ratio = 1.5' "$test_config"
+expect_fail 'music ratio changed' \
+  'share_limits.music.max_ratio must be 2.0.'
+
+reset_config
+yq -i '.share_limits.music.priority = 75' "$test_config"
+expect_fail 'music priority changed' \
+  'share_limits.music.priority must be 50.'
+
+reset_config
+yq -i '.share_limits.music.max_ratio = 2' "$test_config"
+expect_pass 'music ratio serialized as an integer'
+
+reset_config
+yq -i '.share_limits.music.min_seeding_time = "1d"' "$test_config"
+expect_fail 'music minimum seed time changed' \
+  'share_limits.music.min_seeding_time must be 7d.'
+
+reset_config
+yq -i '.share_limits.music.max_seeding_time = "7d"' "$test_config"
+expect_fail 'music maximum seed time changed' \
+  'share_limits.music.max_seeding_time must be 30d.'
+
+reset_config
+yq -i '.share_limits.music.share_limit_action = "Remove"' "$test_config"
+expect_fail 'music action changed' \
+  'share_limits.music.share_limit_action must be Stop.'
+
+reset_config
+yq -i '.share_limits.music.cleanup = false' "$test_config"
+expect_fail 'music cleanup disabled' \
+  'share_limits.music.cleanup must be true.'
+
+reset_config
+yq -i '.share_limits.music.categories = ["movies"]' "$test_config"
+expect_fail 'music categories changed' \
+  'share_limits.music.categories must contain exactly music.'
+
+reset_config
+yq -i '.share_limits.music.exclude_any_tags = ["tracker-czteam"]' "$test_config"
+expect_fail 'music missing tracker-private exclusion' \
+  'share_limits.music.exclude_any_tags must include tracker-private.'
+
+reset_config
+yq -i '.share_limits.music.exclude_any_tags = ["tracker-private"]' "$test_config"
+expect_fail 'music missing tracker-czteam exclusion' \
+  'share_limits.music.exclude_any_tags must include tracker-czteam.'
+
+reset_config
 yq -i '.tracker."private.example".tag = "tracker-private"' "$test_config"
 expect_pass 'named private tracker scalar tag'
 
@@ -109,9 +163,34 @@ expect_fail 'czteam group removed' \
   'config.yml must define share_limits.czteam.'
 
 reset_config
-yq -i '.share_limits.czteam.priority = 100' "$test_config"
-expect_fail 'czteam not higher priority than public' \
-  'share_limits.czteam.priority must be a number lower than share_limits.public.priority.'
+yq -i '.share_limits.future = {
+  "priority": 5, "max_ratio": 1.0, "min_seeding_time": "1d",
+  "max_seeding_time": "7d", "share_limit_action": "Stop", "cleanup": false
+}' "$test_config"
+expect_fail 'future finite-stop group above czteam' \
+  'share_limits.czteam.priority must be the strict minimum across all groups'
+
+reset_config
+yq -i '.share_limits.future = {
+  "priority": 50, "exclude_any_tags": ["tracker-private"],
+  "max_ratio": 1.0, "min_seeding_time": "1d", "max_seeding_time": "7d",
+  "share_limit_action": "Stop", "cleanup": true
+}' "$test_config"
+expect_fail 'cleanup-enabled future group missing a private exclusion' \
+  'Every cleanup-enabled share_limits group must exclude tracker-private and tracker-czteam'
+
+reset_config
+yq -i '.share_limits.future = {
+  "priority": 100, "max_ratio": 1.0, "min_seeding_time": "1d",
+  "max_seeding_time": "7d", "share_limit_action": "Stop", "cleanup": false
+}' "$test_config"
+expect_fail 'future group reuses a resolution priority' \
+  'share_limits priorities must be unique'
+
+reset_config
+yq -i '.share_limits.public.priority = "100"' "$test_config"
+expect_fail 'share-limit priority is a YAML string instead of a number' \
+  'Every share_limits priority must be a non-negative integer'
 
 reset_config
 yq -i '.share_limits.czteam.cleanup = true' "$test_config"

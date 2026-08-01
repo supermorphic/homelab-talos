@@ -108,6 +108,14 @@ spec:
                   name: homepage-radarr
                   key: apiKey
                   optional: true
+            # Lidarr widget API key (optional: widget blank until
+            # `just repo homepage-lidarr-secrets` creates the encrypted Secret).
+            - name: HOMEPAGE_VAR_LIDARR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-lidarr
+                  key: apiKey
+                  optional: true
             # Seerr widget API key (optional: widget blank until
             # `just repo homepage-seerr-secrets` creates the encrypted Secret).
             - name: HOMEPAGE_VAR_SEERR_API_KEY
