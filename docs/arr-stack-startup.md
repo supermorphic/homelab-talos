@@ -119,9 +119,10 @@ The media library directories are not download targets:
     └── tv/
 ```
 
-The SMB mount and every media Pod use UID/GID `568`. When the operator saves
-Lidarr's `/data/media/music` root folder, Lidarr creates that library directory
-with matching ownership. The library path is not a qBittorrent save path.
+The SMB mount and every media Pod use UID/GID `568`. Create the `media/music`
+directory on the SMB share before adding it in Lidarr; saving a root-folder path
+does not necessarily create a missing directory. The library path is not a
+qBittorrent save path.
 
 ### Categories
 
@@ -132,8 +133,25 @@ In the transfer-list sidebar, under **Categories**:
 3. Add category `music` with save path `/data/downloads/music`.
 
 Sonarr, Radarr, and Lidarr use these exact category names. Automatic Torrent
-Management applies the category save paths. Keeping downloads and media under
-the same `/data` filesystem allows imports to hardlink rather than copy.
+Management applies the category save paths. For music, `/data/downloads/music`
+is the download path and `/data/media/music` is the organized library path;
+they are on the same mounted filesystem, so Lidarr can hardlink imported tracks
+rather than copy them.
+
+### Cleanup authority
+
+For Sonarr, Radarr, and Lidarr, keep **Remove Completed** disabled,
+**Post-Import Category** blank, and **Initial State** set to `Started`. This
+does not disable their normal completed-download monitoring and import. Where a
+client exposes **Remove Failed**, keep it enabled; it is a separate failed-job
+control, not a reason to describe it as Usenet-only.
+
+qbit_manage alone owns successful torrent seeding duration, ratio, maximum seed
+time, and final cleanup. The responsibilities are deliberately separate:
+
+- Sonarr, Radarr, and Lidarr monitor, grab, import, rename, and organize.
+- qBittorrent downloads and seeds.
+- qbit_manage owns torrent lifecycle, seeding policy, and final cleanup.
 
 ### Check
 
@@ -379,10 +397,13 @@ Open **Settings → Download Clients → Add → qBittorrent** and enter:
 | Username | The permanent qBittorrent WebUI username |
 | Password | The permanent qBittorrent WebUI password |
 | Category | `tv` |
+| Post-Import Category | Blank |
+| Initial State | `Started` |
+| Remove Completed | Disabled |
 
-Leave priority and seeding-policy fields at their defaults unless a separate
-policy has been chosen. Select **Test**, require a successful result, and then
-**Save**.
+Select **Test**, require a successful result, and then **Save**. qbit_manage,
+not Sonarr, owns successful-torrent seeding and cleanup; see
+[Cleanup authority](#cleanup-authority).
 
 Do not add a remote path mapping. Sonarr and qBittorrent mount the same PVC at
 the same `/data` path.
@@ -522,10 +543,13 @@ Open **Settings → Download Clients → Add → qBittorrent** and enter:
 | Username | The permanent qBittorrent WebUI username |
 | Password | The permanent qBittorrent WebUI password |
 | Category | `movies` |
+| Post-Import Category | Blank |
+| Initial State | `Started` |
+| Remove Completed | Disabled |
 
-Leave priority and seeding-policy fields at their defaults unless a separate
-policy has been chosen. Select **Test**, require a successful result, and then
-**Save**.
+Select **Test**, require a successful result, and then **Save**. qbit_manage,
+not Radarr, owns successful-torrent seeding and cleanup; see
+[Cleanup authority](#cleanup-authority).
 
 Do not add a remote path mapping. Radarr and qBittorrent mount the same PVC at
 the same `/data` path.
@@ -579,33 +603,199 @@ unset ARR_BOOTSTRAP_CONFIRM
 ```
 
 Then open `https://lidarr.lab.supermorphic.com` and configure the new PVC to reach
-every required state below:
+every required state below.
 
-- Authentication: Forms login, authentication enabled, unique password-manager credential.
-- Root folder: `/data/media/music`; never `/data/downloads`.
-- Download client: `qbittorrent.media.svc.cluster.local`, port `8080`, no SSL,
-  no URL base, category `music`, and no remote path mapping.
-- Importing: **Use Hardlinks instead of Copy** enabled.
-- Metadata: **Write Metadata to Audio Files** disabled while torrents seed.
-- Quality profile: prefer FLAC/lossless, retain a lossy fallback below it.
-- Rename tracks: enabled.
-- Artist folder: `{Artist}`.
-- Album folder output: `{Album}` with no release year.
-- Track output: `{Disc}{Track:00} - {Title}` in one album folder, producing
-  `101 - Track.ext` and `201 - Track.ext` for multi-disc releases.
-- Compilation output: `/data/media/music/Various Artists/{Album}/...`, with embedded
-  `Album Artist` equal to `Various Artists` and embedded `Artist` equal to the performer.
+### Authentication
 
-Use the permanent qBittorrent WebUI credential when testing and saving the download
-client. Lidarr and qBittorrent see the same `/data` mount, so a remote path mapping
-would be incorrect. Saving `/data/media/music` as the root folder creates the library
-directory with UID/GID `568`; do not create or select a download directory as the root.
+On a new PVC, configure **Forms (Login Page)** authentication as enabled with a
+unique username and password-manager credential.
 
-The output above is authoritative. The brace-style expressions describe the required
-filesystem result; they are not a claim about the exact token strings or field placement
-in the deployed UI. Use Lidarr 3.1.2's naming preview to select the tokens offered by
-that deployed version, and do not save until its previews produce the bare album folder,
-flat disc/track numbering, and `Various Artists` compilation layout shown above.
+### SMB music directory
+
+Create the library directory on the SMB share before adding it to Lidarr:
+
+```text
+media/
+├── movies/
+├── music/
+└── tv/
+```
+
+The paths are two views of the same SMB share:
+
+| Consumer | Music-library path |
+|---|---|
+| Lidarr | `/data/media/music` |
+| Future Plex Music library | `/Volumes/Prometheus/media/music` |
+
+Use this prerequisite sequence:
+
+1. Create `media/music` on the SMB share beside `media/movies` and `media/tv`.
+2. Confirm Lidarr sees it as `/data/media/music`.
+3. Confirm Lidarr can write it using stack UID/GID `568`.
+4. Never use `/data/downloads/music` as the library root.
+5. Keep Plex Music library creation deferred until real-import acceptance passes.
+
+If `/data/media` is absent, diagnose the mount. If `/data/media/music` is visible
+but not writable, diagnose its ownership and permissions. A missing directory can
+produce `Path '/data/media/music' does not exist`; saving the root-folder path does
+not necessarily create it.
+
+### Importing
+
+Under **Settings → Media Management**, keep **Use Hardlinks instead of Copy**
+enabled. The shared `/data` filesystem and the separate download and library
+paths allow this setting to avoid a duplicate copy during import.
+
+### Track naming
+
+Open **Settings → Media Management → Show Advanced → Track Naming** and set:
+
+| Setting | Value |
+|---|---|
+| Rename Tracks | Enabled |
+| Replace Illegal Characters | Enabled |
+| Colon Replacement | `Smart Replace` |
+| Artist Folder Format | `{Artist Name}` |
+
+The required output is:
+
+```text
+Artist/
+└── Album/
+    ├── 101 - Track Title.ext
+    ├── 102 - Track Title.ext
+    ├── 201 - Track Title.ext
+    └── ...
+```
+
+Do not put a release year in the album folder; do not repeat the artist or album
+in the track filename; and do not create `CD 01`, `Disc 1`, or any other
+per-disc directory. Disc 1 track 1 is `101`, disc 2 track 1 is `201`, and all
+discs stay in one album directory.
+
+The completed walkthrough recorded these intended values:
+
+| Setting | Intended value |
+|---|---|
+| Standard Track Format | `{Album Title}/1{track:00} - {Track Title}` |
+| Multi Disc Track Format | `{Album Title}/{medium:0}{track:00} - {Track Title}` |
+
+The repository does not independently prove the deployed Lidarr version's saved
+token strings. The deployed saved value and its preview are authoritative. Do
+not save until previews show all of the following:
+
+- Single-disc: `The Album Title/103 - Track Title`
+- Multi-disc, disc 1: `The Album Title/103 - Track Title`
+- Multi-disc, disc 2: `The Album Title/203 - Track Title`
+
+Keep the compilation output contract: `/data/media/music/Various Artists/{Album}/...`,
+with embedded `Album Artist` equal to `Various Artists` and embedded `Artist`
+equal to the performer.
+
+### Root-folder defaults
+
+Open **Settings → Media Management → Root Folders → Add Root Folder** and set:
+
+| Setting | Value |
+|---|---|
+| Name | `Music` |
+| Path | `/data/media/music` |
+| Monitor | `None` |
+| Monitor New Albums | `No New Albums` |
+| Quality Profile | `Lossless Preferred` |
+| Metadata Profile | `Standard` |
+| Default Lidarr Tags | Blank |
+
+Both monitoring defaults are conservative: detecting or importing an artist must
+not unexpectedly monitor its whole discography. Select albums explicitly.
+
+### Audio metadata writing
+
+Open **Settings → Metadata → Write Metadata to Audio Files** and confirm the
+saved state:
+
+| Setting | Value |
+|---|---|
+| Tag Audio Files with Metadata | `Never` |
+| Scrub Existing Tags | Disabled |
+| Kodi/Emby metadata consumer | Disabled |
+| Roksbox metadata consumer | Disabled |
+| WDTV metadata consumer | Disabled |
+
+The library file and download file are hardlinks to one inode. Writing or
+scrubbing embedded tags therefore changes the seeded file and can cause a
+qBittorrent hash-check failure.
+
+### Quality profile
+
+Create a new profile; do not modify the built-in **Lossless** profile. Open
+**Settings → Profiles → Quality Profiles → Add** and set:
+
+| Setting | Value |
+|---|---|
+| Name | `Lossless Preferred` |
+| Upgrades Allowed | Enabled |
+| Lossless group | Enabled |
+| High Quality Lossy group | Enabled as fallback |
+| Upgrade Until/Cutoff | `Lossless`, when exposed |
+| WAV | Disabled |
+| Mid Quality Lossy | Disabled |
+| Low Quality Lossy | Disabled |
+| Poor Quality Lossy | Disabled |
+| Trash Quality Lossy | Disabled |
+| Unknown | Disabled |
+
+This accepts high-quality lossy as a fallback, prefers acceptable lossless, and
+upgrades later until the Lossless cutoff. Do not claim that FLAC is preferred
+over every codec: without a custom format or group ordering, the built-in
+Lossless group contains multiple codecs.
+
+### Metadata profile
+
+Reuse the unchanged **Standard** profile at **Settings → Profiles → Metadata
+Profiles → Standard**:
+
+| Group | Enabled | Disabled |
+|---|---|---|
+| Primary Types | Album | Broadcast, EP, Other, Single |
+| Secondary Types | Studio | Spokenword, Soundtrack, Remix, Mixtape/Street, Live, Interview, DJ-mix, Demo, Compilation, Audio drama |
+| Release Statuses | Official | Pseudo-Release, Promotion, Bootleg |
+
+This is a conservative official-studio-album policy. Compilation naming remains
+supported, but this profile excludes compilation releases; add a separate profile
+later if that policy changes.
+
+### qBittorrent download client
+
+Open **Settings → Download Clients → Add → qBittorrent** and set:
+
+| Setting | Value |
+|---|---|
+| Name | `qBittorrent` |
+| Enable | Enabled |
+| Host | `qbittorrent.media.svc.cluster.local` |
+| Port | `8080` |
+| Use SSL | Disabled |
+| URL Base | Blank |
+| Username/password | Permanent qBittorrent WebUI credentials |
+| Category | `music` |
+| Post-Import Category | Blank |
+| Recent Priority | `Last` |
+| Older Priority | `Last` |
+| Initial State | `Started` |
+| Sequential Order | Disabled |
+| First and Last First | Disabled |
+| Content Layout | `Default` |
+| Client Priority | `1` |
+| Tags | Blank |
+| Remove Completed | Disabled |
+
+Select **Test**, require a successful result, then **Save**. Do not add a remote
+path mapping: Lidarr and qBittorrent see the same `/data` path. Leaving
+**Post-Import Category** blank preserves `music`; do not use `Forced`. qbit_manage,
+not Lidarr, owns successful-torrent seeding and cleanup; see
+[Cleanup authority](#cleanup-authority).
 
 Lidarr's API key becomes available only after first boot. Once the application is
 configured, create the independently rotatable Homepage Secret without echoing the key:
@@ -682,7 +872,7 @@ Select **Test**, require a successful result, and then **Save**.
 
 ### Lidarr application
 
-Open **Settings → Apps → Add → Lidarr**:
+Open **Prowlarr → Settings → Apps → Add → Lidarr**:
 
 | Setting | Value |
 |---|---|
@@ -835,8 +1025,11 @@ mise exec -- just kube seerr-verify
 ### Direct Lidarr test — blocking operator gate
 
 This is the blocking gate between the initial staging PR and the follow-up activation
-PR, not automated E2E coverage. In Lidarr, search for and import one release that the
-operator is authorized to download. Record all of this evidence:
+PR, not automated E2E coverage. Before grabbing, search for a real artist and confirm
+its artist and album metadata loads. Add it with root `/data/media/music`, quality
+profile `Lossless Preferred`, metadata profile `Standard`, and only the intended test
+album monitored. Do not search or monitor the whole discography. Choose one authorized,
+uncomplicated release and record all of this evidence:
 
 ```text
 qBittorrent category: music
@@ -845,19 +1038,23 @@ library root: /data/media/music
 library naming: Artist/Album/DiscTrack - Title.ext
 download-side link count: 2
 library-side link count: 2
-Write Metadata to Audio Files: disabled
+Tag Audio Files with Metadata: Never
 qBittorrent force recheck: completes with no hash error
 ```
 
-Run qBittorrent's force recheck after Lidarr imports the release. The two link counts
-must be collected from the download-side and library-side files for that same track.
-If a shell is needed to inspect inode or link counts, use an existing guarded recipe
-or a NAS-side shell; never use raw `kubectl exec`.
+Verify the qBittorrent category is `music`, its download path is
+`/data/downloads/music`, and Lidarr's library is `/data/media/music`. Confirm the
+imported naming is `Artist/Album/DiscTrack - Title.ext`, **Tag Audio Files with
+Metadata** remains `Never`, and the download-side link count is `2`. Run
+qBittorrent's force recheck after import and require it to complete with no hash
+error. Collect both link counts from the download-side and library-side files for
+the same track. If a shell is needed to inspect inode or link counts, use an
+existing guarded recipe or a NAS-side shell; never use raw `kubectl exec`.
 
 Do not begin the follow-up PR or create the Plex Music library until every item above
-passes. Preserve the observed Lidarr 3.1.2 naming tokens and UI labels for the
-follow-up runbook correction if they differ from the wording here, without changing
-the authoritative output or safety states.
+passes. If the deployed saved naming values or labels differ from this recorded
+walkthrough, preserve the authoritative preview output and safety states, then record
+the deployed values for a follow-up runbook correction.
 
 ### Direct Sonarr test
 
