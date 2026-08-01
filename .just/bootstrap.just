@@ -1284,29 +1284,32 @@ qbittorrent:
     bootstrap_complete=true
     echo "Phase 12 qBittorrent live acceptance passed. NOW run the BLOCKING gate: CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' just test resilience qbittorrent-vpn-disconnect. Only after it passes, set suspend=false in Git, commit, push, and rerun just kube qbittorrent-verify."
 
-# Reconcile a suspended Phase 13 *arr app after guarded checks, then verify:
-#   just bootstrap arr <prowlarr|sonarr|radarr>
+# Reconcile a suspended *arr app after guarded checks, then verify:
+#   just bootstrap arr <prowlarr|sonarr|radarr|lidarr>
 # Operator-run. Requires the suspended source to match deployed origin/main and
-# ARR_BOOTSTRAP_CONFIRM='bootstrap:phase13:<app>'. On failure the resumed Kustomization
+# ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:<app>'. On failure the resumed Kustomization
 # is re-suspended while its resources are preserved. Recommended order: prowlarr, then
-# sonarr and radarr.
+# sonarr, radarr, and lidarr as each becomes ready.
 arr app:
     #!/usr/bin/env bash
     set -euo pipefail
 
     app='{{app}}'
-    case "$app" in prowlarr|sonarr|radarr) ;; *) echo "Usage: just bootstrap arr <prowlarr|sonarr|radarr>" >&2; exit 1;; esac
+    case "$app" in
+      prowlarr|sonarr|radarr|lidarr) ;;
+      *) echo "Usage: just bootstrap arr <prowlarr|sonarr|radarr|lidarr>" >&2; exit 1 ;;
+    esac
     kubeconfig='{{kubeconfig}}'
     owner='7yXwscXEzv6phzUnKfrw'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation="bootstrap:phase13:$app"
+    expected_confirmation="bootstrap:arr:$app"
     ks="kubernetes/apps/media/$app/ks.yaml"
     resumed=false
     bootstrap_complete=false
     cleanup_arr() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo "Phase 13 $app did not pass; suspending it while preserving its resources." >&2
+        echo "$app did not pass; suspending it while preserving its resources." >&2
         flux suspend kustomization "$app" --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1317,6 +1320,8 @@ arr app:
     source scripts/lib/rollout.sh
     require_deployed_source "$app bootstrap" \
       .just/bootstrap.just kubernetes/mod.just \
+      scripts/validate/arr.sh scripts/verify/arr.sh scripts/lib/network.sh \
+      tests/catalog.yaml \
       kubernetes/apps/media/kustomization.yaml \
       kubernetes/apps/media/namespace \
       "kubernetes/apps/media/$app"
@@ -1335,7 +1340,7 @@ arr app:
     }
 
     [[ "${ARR_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo "Refusing to reconcile the Phase 13 $app app." >&2
+      echo "Refusing to reconcile $app." >&2
       echo "Set ARR_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing arr-validate." >&2
       exit 1
     }
@@ -1347,7 +1352,7 @@ arr app:
 
     just kube arr-verify "$app"
     bootstrap_complete=true
-    echo "Phase 13 $app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Then wire first-run: Prowlarr indexers -> Sonarr/Radarr; root folders /data/media/{tv,movies}; download client http://qbittorrent.media.svc.cluster.local:8080."
+    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
 
 # Reconcile the suspended Phase 14 Seerr app after guarded checks, then verify. Operator-run.
 # Requires the suspended source to match deployed origin/main and

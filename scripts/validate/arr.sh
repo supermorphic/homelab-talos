@@ -7,11 +7,19 @@ chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
 temp_dir="$(mktemp -d /tmp/homelab-talos-arr-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for app in prowlarr sonarr radarr; do
+arr_apps=(
+  "prowlarr|9696|no|internal-gateway,media"
+  "sonarr|8989|yes|internal-gateway,media-storage"
+  "radarr|7878|yes|internal-gateway,media-storage"
+  "lidarr|8686|yes|internal-gateway,media-storage"
+)
+
+for record in "${arr_apps[@]}"; do
+  IFS='|' read -r app port mounts_data expected_deps <<<"$record"
   base="kubernetes/apps/media/$app"
   ks="$base/ks.yaml"; hr="$base/app/helmrelease.yaml"; values="$base/app/values.yaml"; route="$base/app/httproute.yaml"
   for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml"; do
-    [[ -f "$f" ]] || { echo "Missing Phase 13 source: $f" >&2; exit 1; }
+    [[ -f "$f" ]] || { echo "Missing *arr source: $f" >&2; exit 1; }
   done
   rg -qx "  - ./$app/ks.yaml" kubernetes/apps/media/kustomization.yaml || {
     echo "Refusing: ./$app/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml." >&2
@@ -23,30 +31,38 @@ for app in prowlarr sonarr radarr; do
   # No SOPS decryption — these apps carry no secrets (API keys are first-run).
   [[ "$(yq -r '.spec.decryption // "none"' "$ks")" == 'none' ]] || { echo "$app ks.yaml must not declare decryption (no secrets)." >&2; exit 1; }
   deps="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")"
-  if [[ "$app" == 'prowlarr' ]]; then
-    [[ "$deps" == 'internal-gateway,media' ]] || { echo "prowlarr dependsOn must be [media, internal-gateway]; got: $deps." >&2; exit 1; }
-  else
-    [[ "$deps" == 'internal-gateway,media-storage' ]] || { echo "$app dependsOn must be [media-storage, internal-gateway]; got: $deps." >&2; exit 1; }
-  fi
+  [[ "$deps" == "$expected_deps" ]] || { echo "$app dependsOn must be [$expected_deps]; got: $deps." >&2; exit 1; }
 
   [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
 
-  [[ "$(yq -r ".controllers.$app.strategy" "$values")" == 'Recreate' ]]
+  [[ "$(yq -r ".controllers.$app.strategy" "$values")" == 'Recreate' ]] || {
+    echo "$app must set strategy: Recreate (it mounts a ReadWriteOnce config PVC)." >&2
+    exit 1
+  }
   [[ "$(yq -r ".controllers.$app.containers.app.image.repository" "$values")" == "ghcr.io/home-operations/$app" ]]
   tag="$(yq -r ".controllers.$app.containers.app.image.tag" "$values")"; [[ -n "$tag" && "$tag" != 'null' ]]
   [[ "$(yq -r ".controllers.$app.containers.app.securityContext.capabilities.drop[]" "$values" | tr '\n' ' ')" == 'ALL ' ]]
   [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOnce' ]]
   [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
   [[ "$(yq -r '.persistence.config.annotations."helm.sh/resource-policy"' "$values")" == 'keep' ]]
-  if [[ "$app" == 'prowlarr' ]]; then
-    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo 'prowlarr must not mount media-data (config-only).' >&2; exit 1; }
+  if [[ "$mounts_data" == 'no' ]]; then
+    [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]] || { echo "$app must not mount media-data (config-only)." >&2; exit 1; }
   else
-    [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
+    [[ "$(yq -r '.persistence.data.existingClaim' "$values")" == 'media-data' ]] || { echo "$app data persistence must use existingClaim media-data." >&2; exit 1; }
+    [[ "$(yq -r '.persistence.data.globalMounts[0].path' "$values")" == '/data' ]] || { echo "$app must mount media-data at /data." >&2; exit 1; }
   fi
 
   [[ "$(yq -r '.spec.hostnames[0]' "$route")" == "$app.lab.supermorphic.com" ]]
   [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
   [[ "$(yq -r '.spec.rules[0].backendRefs[0].name' "$route")" == "$app" ]]
+  [[ "$(yq -r '.service.app.ports.http.port' "$values")" == "$port" ]] || {
+    echo "$app service port must be $port." >&2
+    exit 1
+  }
+  [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == "$port" ]] || {
+    echo "$app HTTPRoute backend port must be $port." >&2
+    exit 1
+  }
 
   # Gatus must probe active apps, but not staged/suspended apps that do not exist yet.
   if [[ "$suspend_state" == 'false' ]]; then
@@ -55,27 +71,44 @@ for app in prowlarr sonarr radarr; do
     ! rg -q "^    - name: $app\$" kubernetes/apps/monitoring/gatus/app/values.yaml || { echo "Suspended $app must not create a failing Gatus endpoint." >&2; exit 1; }
   fi
 
-  if [[ "$app" == 'prowlarr' ]]; then
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'prowlarr' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://prowlarr.media.svc.cluster.local:9696' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_PROWLARR_API_KEY}}' ]]
-  fi
-  if [[ "$app" == 'sonarr' ]]; then
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'sonarr' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://sonarr.media.svc.cluster.local:8989' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_SONARR_API_KEY}}' ]]
-  fi
-  if [[ "$app" == 'radarr' ]]; then
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'radarr' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://radarr.media.svc.cluster.local:7878' ]]
-    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_RADARR_API_KEY}}' ]]
+  # Homepage widgets track activation exactly like the Gatus endpoints above: an active app
+  # publishes the full widget triple, a suspended one publishes none. Suspending a live *arr
+  # app therefore means dropping its widget annotations and its Gatus endpoint in the same
+  # commit that sets suspend: true.
+  widget_count="$(yq -r \
+    '[(.metadata.annotations // {}) | keys[] | select(test("^gethomepage\\.dev/widget\\."))] | length' \
+    "$route")"
+  if [[ "$suspend_state" == 'false' ]]; then
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == "$app" ]] || {
+      echo "Active $app widget.type annotation must be $app." >&2
+      exit 1
+    }
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == \
+      "http://$app.media.svc.cluster.local:$port" ]] || {
+      echo "Active $app widget.url annotation must be http://$app.media.svc.cluster.local:$port." >&2
+      exit 1
+    }
+    widget_key="HOMEPAGE_VAR_${app^^}_API_KEY"
+    [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == \
+      "{{${widget_key}}}" ]] || {
+      echo "Active $app widget.key annotation must be {{${widget_key}}}." >&2
+      exit 1
+    }
+  else
+    [[ "$widget_count" == '0' ]] || {
+      echo "Suspended $app must not publish widget.* annotations." >&2
+      exit 1
+    }
   fi
 
   kustomize build "$base/app" >/dev/null
   helm template "$app" "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/$app.yaml"
   [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/$app.yaml")" == "$app" ]]
-  [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/$app.yaml")" == 'Recreate' ]]
+  [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/$app.yaml")" == 'Recreate' ]] || {
+    echo "$app rendered Deployment strategy must be Recreate." >&2
+    exit 1
+  }
   echo "  $app $tag OK"
 done
 
-echo 'Phase 13 *arr source (Prowlarr, Sonarr, Radarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes/Homepage widget, activation-aware Gatus probes, and pinned renders passed validation.'
+echo '*arr source (Prowlarr, Sonarr, Radarr, Lidarr), wiring, dependency graph, config/Recreate + shared /data, HTTPRoutes, activation-aware Gatus and Homepage widgets, and pinned renders passed validation.'

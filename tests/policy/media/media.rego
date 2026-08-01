@@ -6,6 +6,7 @@ mutable_tags := {"latest", "main", "master", "stable", "nightly"}
 
 required_dependencies := {
 	"flaresolverr": {"media"},
+	"lidarr": {"internal-gateway", "media-storage"},
 	"plex": {"internal-gateway", "media-storage"},
 	"prowlarr": {"internal-gateway", "media"},
 	"qbit-manage": {"media-storage", "qbittorrent"},
@@ -29,6 +30,7 @@ stateless_internal_apps := {"flaresolverr"}
 uiless_worker_apps := {"qbit-manage"}
 
 shared_claim_keys := {
+	"lidarr": "data",
 	"plex": "media",
 	"qbittorrent": "data",
 	"radarr": "data",
@@ -36,6 +38,11 @@ shared_claim_keys := {
 }
 
 config_only_apps := {"prowlarr", "seerr"}
+
+# Narrower than the media-mounting entries in shared_claim_keys: qbittorrent reaches the
+# shared claim through advancedMounts (per-container) rather than globalMounts, so the
+# /data mount-path rule below cannot read it. Keep these lists in sync by hand.
+arr_apps := {"lidarr", "radarr", "sonarr"}
 
 media_app(document) := app if {
 	endswith(document.path, "/app/values.yaml")
@@ -66,6 +73,11 @@ name |
 		[],
 	)
 	name := object.get(dependency, "name", "")
+}
+
+has_data_mount(persistence_data) if {
+	some mount in object.get(persistence_data, "globalMounts", [])
+	object.get(mount, "path", "") == "/data"
 }
 
 allowed_net_admin(app, controller, container) if {
@@ -275,6 +287,19 @@ deny contains msg if {
 	msg := sprintf(
 		"%s: persistence.%s.existingClaim must be media-data, got %q",
 		[document.path, claim_key, claim],
+	)
+}
+
+deny contains msg if {
+	some document in input
+	app := media_app(document)
+	app in arr_apps
+	persistence := object.get(document.contents, "persistence", {})
+	persistence_data := object.get(persistence, "data", {})
+	not has_data_mount(persistence_data)
+	msg := sprintf(
+		"%s: persistence.data.globalMounts must include /data",
+		[document.path],
 	)
 }
 

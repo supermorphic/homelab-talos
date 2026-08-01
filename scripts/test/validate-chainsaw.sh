@@ -138,6 +138,7 @@ run_shell_case qbit-manage-policy-shellcheck \
   shellcheck scripts/validate/qbit-manage-policy.sh
 run_shell_case qbit-manage-policy-validator \
   scripts/test/qbit-manage-policy-validator-test.sh
+run_shell_case arr-validator scripts/test/arr-validator-test.sh
 run_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh
 run_shell_case dns-isolation tests/probes/dns/isolation-test.sh
 run_shell_case ntfy-identity scripts/test/ntfy-identity-test.sh

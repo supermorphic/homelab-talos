@@ -791,6 +791,49 @@ homepage-radarr-secrets:
     mv -- "$temp_dir/homepage-radarr.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-radarr in homepage)."
 
+# Write ONLY the SOPS-encrypted Homepage Lidarr widget Secret
+# (homepage-lidarr in the homepage namespace) from LIDARR_API_KEY.
+# Independent of the other Homepage widget credentials. Never echoes the value.
+homepage-lidarr-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-lidarr:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-lidarr.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-lidarr.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${LIDARR_API_KEY:-}" ]] || {
+      echo 'Set LIDARR_API_KEY to the API key from Lidarr Settings > General.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_LIDARR_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Lidarr Secret.' >&2
+      echo "Set HOMEPAGE_LIDARR_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export LIDARR_API_KEY
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-lidarr" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."apiKey" = strenv(LIDARR_API_KEY)' \
+      >"$temp_dir/homepage-lidarr.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-lidarr.yaml" >"$temp_dir/homepage-lidarr.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-lidarr.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-lidarr.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$LIDARR_API_KEY" "$temp_dir/homepage-lidarr.sops.yaml"
+
+    mv -- "$temp_dir/homepage-lidarr.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-lidarr in homepage)."
+
 # Write ONLY the SOPS-encrypted Homepage Sonarr widget Secret
 # (homepage-sonarr in the homepage namespace) from SONARR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.

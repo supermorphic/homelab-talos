@@ -4,15 +4,15 @@ set -euo pipefail
 source scripts/lib/network.sh
 
 [[ "$#" -eq 2 ]] || {
-  echo 'Usage: arr.sh <prowlarr|sonarr|radarr> <kubeconfig>' >&2
+  echo 'Usage: arr.sh <prowlarr|sonarr|radarr|lidarr> <kubeconfig>' >&2
   exit 2
 }
 app="$1"
 kubeconfig="$2"
 case "$app" in
-  prowlarr|sonarr|radarr) ;;
+  prowlarr|sonarr|radarr|lidarr) ;;
   *)
-    echo 'Usage: arr.sh <prowlarr|sonarr|radarr> <kubeconfig>' >&2
+    echo 'Usage: arr.sh <prowlarr|sonarr|radarr|lidarr> <kubeconfig>' >&2
     exit 2
     ;;
 esac
