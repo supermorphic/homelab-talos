@@ -109,9 +109,29 @@ expect_fail 'czteam group removed' \
   'config.yml must define share_limits.czteam.'
 
 reset_config
-yq -i '.share_limits.czteam.priority = 100' "$test_config"
-expect_fail 'czteam not higher priority than public' \
-  'share_limits.czteam.priority must be a number lower than share_limits.public.priority.'
+yq -i '.share_limits.future = {
+  "priority": 5, "max_ratio": 1.0, "min_seeding_time": "1d",
+  "max_seeding_time": "7d", "share_limit_action": "Stop", "cleanup": false
+}' "$test_config"
+expect_fail 'future finite-stop group above czteam' \
+  'share_limits.czteam.priority must be the strict minimum across all groups'
+
+reset_config
+yq -i '.share_limits.future = {
+  "priority": 50, "exclude_any_tags": ["tracker-private"],
+  "max_ratio": 1.0, "min_seeding_time": "1d", "max_seeding_time": "7d",
+  "share_limit_action": "Stop", "cleanup": true
+}' "$test_config"
+expect_fail 'cleanup-enabled future group missing a private exclusion' \
+  'Every cleanup-enabled share_limits group must exclude tracker-private and tracker-czteam'
+
+reset_config
+yq -i '.share_limits.future = {
+  "priority": 100, "max_ratio": 1.0, "min_seeding_time": "1d",
+  "max_seeding_time": "7d", "share_limit_action": "Stop", "cleanup": false
+}' "$test_config"
+expect_fail 'future group reuses a resolution priority' \
+  'share_limits priorities must be unique'
 
 reset_config
 yq -i '.share_limits.czteam.cleanup = true' "$test_config"

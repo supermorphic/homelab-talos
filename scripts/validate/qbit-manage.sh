@@ -104,15 +104,6 @@ scripts/validate/qbit-manage-policy.sh "$config"
 [[ "$(yq -r '.recyclebin.enabled' "$config")" == 'true' ]] || { echo 'recyclebin.enabled must be true (download-side recovery window).' >&2; exit 1; }
 rb_days="$(yq -r '.recyclebin.empty_after_x_days // 0' "$config")"; [[ "$rb_days" -ge 1 ]] || { echo 'recyclebin.empty_after_x_days must set a recovery window (>= 1).' >&2; exit 1; }
 
-# --- Category-based public share-limits group ---
-sl='.share_limits.public'
-# The agreed policy numbers and the explicit (qBittorrent-5.2-required) stop action.
-[[ "$(yq -r "$sl.max_ratio" "$config")" == '1.5' ]] || { echo 'share_limits.public.max_ratio must be 1.5.' >&2; exit 1; }
-[[ "$(yq -r "$sl.min_seeding_time" "$config")" == '1d' ]] || { echo 'share_limits.public.min_seeding_time must be 1d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.max_seeding_time" "$config")" == '7d' ]] || { echo 'share_limits.public.max_seeding_time must be 7d.' >&2; exit 1; }
-[[ "$(yq -r "$sl.share_limit_action" "$config")" == 'Stop' ]] || { echo 'share_limits.public.share_limit_action must be Stop (explicit; required by qBittorrent 5.2.x).' >&2; exit 1; }
-[[ "$(yq -r "$sl.cleanup" "$config")" == 'true' ]] || { echo 'share_limits.public.cleanup must be true.' >&2; exit 1; }
-
 # --- No Gatus endpoint ever (UI-less; nothing to black-box probe over the gateway). ---
 ! rg -q '^    - name: qbit-manage$' kubernetes/apps/monitoring/gatus/app/values.yaml || { echo 'qbit-manage is UI-less and must not register a Gatus endpoint.' >&2; exit 1; }
 
