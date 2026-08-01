@@ -693,23 +693,6 @@ Keep the compilation output contract: `/data/media/music/Various Artists/{Album}
 with embedded `Album Artist` equal to `Various Artists` and embedded `Artist`
 equal to the performer.
 
-### Root-folder defaults
-
-Open **Settings → Media Management → Root Folders → Add Root Folder** and set:
-
-| Setting | Value |
-|---|---|
-| Name | `Music` |
-| Path | `/data/media/music` |
-| Monitor | `None` |
-| Monitor New Albums | `No New Albums` |
-| Quality Profile | `Lossless Preferred` |
-| Metadata Profile | `Standard` |
-| Default Lidarr Tags | Blank |
-
-Both monitoring defaults are conservative: detecting or importing an artist must
-not unexpectedly monitor its whole discography. Select albums explicitly.
-
 ### Audio metadata writing
 
 Open **Settings → Metadata → Write Metadata to Audio Files** and confirm the
@@ -766,6 +749,25 @@ This is a conservative official-studio-album policy. Compilation naming remains
 supported, but this profile excludes compilation releases; add a separate profile
 later if that policy changes.
 
+### Root-folder defaults
+
+After creating `Lossless Preferred` and confirming the unchanged `Standard`
+metadata profile, open **Settings → Media Management → Root Folders → Add Root
+Folder** and set:
+
+| Setting | Value |
+|---|---|
+| Name | `Music` |
+| Path | `/data/media/music` |
+| Monitor | `None` |
+| Monitor New Albums | `No New Albums` |
+| Quality Profile | `Lossless Preferred` |
+| Metadata Profile | `Standard` |
+| Default Lidarr Tags | Blank |
+
+Both monitoring defaults are conservative: detecting or importing an artist must
+not unexpectedly monitor its whole discography. Select albums explicitly.
+
 ### qBittorrent download client
 
 Open **Settings → Download Clients → Add → qBittorrent** and set:
@@ -821,7 +823,7 @@ The recipe leaves that encrypted file untracked in the checkout, and every guard
 the Secret to the PR 2 branch (or stash it) before attempting another guarded rollout
 from this worktree.
 
-After the operator activates Lidarr, its read-only guarded verification is:
+After PR 2 activates Lidarr, its read-only guarded verification is:
 
 ```bash
 mise exec -- just kube arr-verify lidarr
@@ -835,8 +837,12 @@ artist or album searches work; verify a real search during first-run acceptance.
 
 Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
 is available — you do not need all three at once. Connect **Sonarr** immediately after
-its rollout, then connect **Radarr** and **Lidarr** when each activation is live. Each
-app connection is independent, and this is where each application's API key is used.
+its rollout, then connect **Radarr** after its activation. Connect **Lidarr** after its
+guarded bootstrap and first-run configuration, once its staged endpoint is available,
+while `kubernetes/apps/media/lidarr/ks.yaml` remains Git-suspended. Lidarr's durable
+activation remains deferred to PR 2 until the Prowlarr-backed authorized real-import
+acceptance gate passes. Each app connection is independent, and this is where each
+application's API key is used.
 
 ### Sonarr application
 
