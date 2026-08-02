@@ -4,7 +4,7 @@
 
 **Goal:** Deploy Tautulli as an authenticated, durable Plex analytics service and add tested media availability and persistence alerts without coupling media applications to the Prometheus Operator.
 
-**Architecture:** Tautulli is a config-only `app-template` workload in the `media` namespace: one `Recreate` Deployment, one retained Longhorn RWO PVC at `/config`, an internal Gateway API route, and no shared media or Plex volume. A separate unsuspended `media-alerts` Flux Kustomization depends on `kube-prometheus-stack` and owns all new media `PrometheusRule` objects. Delivery uses a suspended application PR, an operator-run authentication/playback gate, and an activation PR that adds the API-key-dependent Homepage widget, Gatus endpoint, Tautulli-specific absence alerts, and live Prometheus verification.
+**Architecture:** Tautulli is a config-only `app-template` workload in the `media` namespace: one `Recreate` Deployment, one retained Longhorn RWO PVC at `/config`, an internal Gateway API route, and no shared media or Plex volume. A separate unsuspended `media-alerts` Flux Kustomization depends on `kube-prometheus-stack` and owns all new media `PrometheusRule` objects. Delivery uses a suspended application PR, a rollout-discovered verifier correction PR, an operator-run authentication/playback gate, and an activation PR that adds the API-key-dependent Homepage widget, Gatus endpoint, Tautulli-specific absence alerts, and live Prometheus verification.
 
 **Tech Stack:** Flux Kustomizations and HelmReleases, bjw-s `app-template` 5.0.1, Kubernetes Gateway API, Longhorn, Bash 5, `yq`, `kustomize`, `helm`, `promtool` 3.13.1, Conftest/Rego, SOPS/age, Homepage, Gatus, Prometheus Operator, `just`, and the repository's pinned `mise` toolchain.
 
@@ -14,7 +14,10 @@
 - Preserve unrelated user changes. Immediately before each push, require a clean branch, run `mise exec -- git fetch origin`, and safely rebase onto `origin/main` when needed.
 - Run repository workflows through `mise exec -- just ...`; use `mise exec -- <tool> ...` only for pinned ad hoc inspection when no recipe exists.
 - Use guarded `just` recipes for every live-cluster check or mutation. The operator, not an implementation agent, runs the mutating bootstrap and SOPS Secret recipes.
-- Deliver exactly two PRs with the operator gate in this plan between them. PR 1 stages Tautulli with `spec.suspend: true`; PR 2 persists `spec.suspend: false` only after every acceptance gate passes.
+- Deliver three PRs after the rollout-discovered verifier failure: PR 1 stages Tautulli with
+  `spec.suspend: true`; the corrective PR replaces the API-server Service proxy oracle; PR 2
+  persists `spec.suspend: false` only after every acceptance gate passes. The corrective PR
+  is required because guarded bootstrap source must match merged `origin/main`.
 - Pin `ghcr.io/home-operations/tautulli:2.17.2`; do not substitute another tag without superseding `docs/decisions/2026-08-01-tautulli.md`.
 - Tautulli runs in namespace `media`, listens on `8181`, and is routed only at `tautulli.lab.supermorphic.com` through the `internal` Gateway.
 - Tautulli depends on `internal-gateway` and `media`, not `media-storage` or `plex`.
@@ -1234,13 +1237,27 @@ mise exec -- just bootstrap media-app tautulli
 unset MEDIA_APP_BOOTSTRAP_CONFIRM
 ```
 
-In the Tautulli UI, complete these steps in order:
+In the Tautulli setup wizard, complete these steps in order:
 
-1. Enable Tautulli web authentication before entering Plex or API credentials.
-2. Connect Plex at `http://plex.media.svc.cluster.local:32400` with the operator-supplied Plex token.
-3. Generate the Tautulli API key.
-4. Confirm at least one Plex library appears.
-5. Play authorized media and require the session to appear in Tautulli history.
+1. On **Welcome!**, continue to **Authentication**.
+2. On **Authentication**, enter a unique HTTP username and a strong password, store the
+   credentials in the password manager, and select **Next**. Do not reuse Plex credentials.
+3. On **Plex Account**, select **Sign In with Plex**, complete the Plex administrator login,
+   require **Authentication successful**, and select **Next**.
+4. On **Plex Media Server**, enter `plex.media.svc.cluster.local` as **Plex IP Address or
+   Hostname**, enter `32400` as **Plex Port**, disable **Use Secure Connection**, select
+   **Verify**, and require **Server found!** Enter only the hostname in the first field, not
+   a URL or port; do not select a transient Pod IP or the gateway hostname.
+5. Leave **Activity Logging** at its defaults unless a different retention policy is
+   required, leave **Notifications** unconfigured, and skip **Database Import** because this
+   is a new database. Finish the wizard.
+6. Open **Settings → Web Interface**, scroll to **API**, and enable **Enable API**. Do not
+   use **3rd Party APIs**; that page configures metadata providers rather than Tautulli's
+   own API.
+7. Copy the value shown in **API Key**, generating a new key there first if the field is
+   blank, and select **Save**. Do not put the key in Git, logs, chat, or command arguments.
+8. Confirm at least one Plex library appears.
+9. Play authorized media and require the session to appear in Tautulli history.
 
 Before PR 2, record the chosen authentication mode and prove `/status` returns exact HTTP
 `200` with redirects disabled both from the cluster and through
@@ -1375,11 +1392,25 @@ Expected: validators pass before mutation, Tautulli resumes and becomes Ready, t
 
 In the UI:
 
-1. Enable web authentication and record the exact mode name shown by Tautulli.
-2. Configure Plex URL `http://plex.media.svc.cluster.local:32400` and the operator's Plex token.
-3. Generate the API key without pasting it into Git, logs, chat, or command arguments.
-4. Confirm at least one Plex library appears.
-5. Start a real authorized playback and confirm it appears in Tautulli history.
+1. On **Authentication**, enter a unique HTTP username and strong password, store them in
+   the password manager, and record the exact authentication mode name shown by Tautulli.
+2. On **Plex Account**, select **Sign In with Plex**, complete the Plex administrator login,
+   and require **Authentication successful**.
+3. On **Plex Media Server**, enter hostname `plex.media.svc.cluster.local`, port `32400`, and
+   disable **Use Secure Connection**. Select **Verify** and require **Server found!** Do not
+   put a URL or port in the hostname field and do not use a transient Pod IP or the gateway
+   hostname.
+4. Leave **Activity Logging** at its defaults unless a different retention policy is
+   required, leave **Notifications** unconfigured, and skip **Database Import** because this
+   is a new database. Finish the wizard.
+5. Open **Settings → Web Interface**, scroll to **API**, and enable **Enable API**. Do not
+   use **3rd Party APIs**, which configures metadata providers rather than Tautulli's own
+   API.
+6. Copy the value shown in **API Key**, generating a new key there first if the field is
+   blank, and select **Save**. Do not paste the key into Git, logs, chat, or command
+   arguments.
+7. Confirm at least one Plex library appears.
+8. Start a real authorized playback and confirm it appears in Tautulli history.
 
 - [ ] **Step 4: Re-run both exact status checks after authentication**
 
@@ -1396,6 +1427,96 @@ Expected: PASS with exact Service and gateway statuses `200`, not 3xx.
 Continue to Task 9 only if all five gates hold: authentication enabled, both `/status` paths exact `200`, `tautulli-verify` green, a Plex library visible, and a real playback recorded.
 
 If either status is not `200`, stop. Record the exact status and `Location` response header, then amend this plan with the observed login path and the accepted TCP-probe fallback before changing PR 2 source. Do not proceed with the remaining tasks unchanged.
+
+### Task 8A: Correct the Rollout-Discovered Service Verification Path
+
+The first guarded rollout on 2026-08-02 proved the Deployment and HTTPRoute Ready, then
+received HTTP `503` only through the Kubernetes API server's Service proxy. Tautulli
+2.17.2's `/status` handler always returns success, and the browser-reachable gateway path
+uses the same Service backend. The failed oracle measured API-server-to-ClusterIP
+reachability on this Cilium kube-proxy-replacement cluster rather than the application path.
+
+**Files:**
+- Create: `scripts/test/tautulli-verify-test.sh`
+- Modify: `scripts/verify/tautulli.sh`
+- Modify: `scripts/test/validate-chainsaw.sh`
+- Modify: `tests/catalog.yaml`
+- Modify: `docs/arr-stack-startup.md`
+
+**Interfaces:**
+- Consumes: Diagnostic-context `pods/exec`, the pinned Tautulli image's `curl`, Service DNS
+  `tautulli.media.svc.cluster.local:8181`, and the existing gateway curl oracle.
+- Produces: Exact HTTP status checks through both the in-cluster Service and gateway without
+  using `kubectl proxy` or creating temporary cluster resources.
+
+- [x] **Step 1: Add a failing black-box verifier test**
+
+Create a fake-tool test that supports resource reads, rollout, `pods/exec`, DNS, and gateway
+curl; rejects `kubectl proxy`; and requires the exec call to contain:
+
+```text
+deployment/tautulli --container app -- curl --silent --show-error --output /dev/null --write-out %{http_code} --max-time 15 --max-redirs 0 http://tautulli.media.svc.cluster.local:8181/status
+```
+
+Run:
+
+```bash
+mise exec -- bash scripts/test/tautulli-verify-test.sh
+```
+
+Expected: FAIL because the current verifier calls `kubectl proxy` and never performs the
+in-pod Service-DNS request.
+
+- [x] **Step 2: Replace the API-server proxy oracle**
+
+Use the repository's scoped-context pattern and execute the pinned image's `curl`:
+
+```bash
+kc=(kubectl --kubeconfig "$kubeconfig")
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
+
+service_status="$("${kc[@]}" --namespace "$ns" exec deployment/tautulli --container app -- \
+  curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --max-time 15 --max-redirs 0 \
+    http://tautulli.media.svc.cluster.local:8181/status)"
+```
+
+Require exact `200`, keep the independent gateway check unchanged, and remove the temporary
+directory, background proxy process, proxy polling, and proxy cleanup logic.
+
+- [x] **Step 3: Register and classify the regression**
+
+Add `scripts/test/tautulli-verify-test.sh` to `scripts/test/validate-chainsaw.sh` with case
+name `tautulli-verifier`. Change `verification.tautulli` access in `tests/catalog.yaml` from
+`operator` to `diagnostic`, and add it to the `scoped-verification` campaign; the verifier
+selects that context when installed and safely falls back to the main clone's operator
+context.
+
+- [x] **Step 4: Prove the correction offline**
+
+Run:
+
+```bash
+mise exec -- bash scripts/test/tautulli-verify-test.sh
+mise exec -- just test validate
+mise exec -- just test catalog-validate
+mise exec -- just kube tautulli-validate
+```
+
+Expected: all pass; the regression proves scoped-context and operator fallback layouts,
+exact Service/gateway `200` handling, and the absence of `kubectl proxy`.
+
+- [ ] **Step 5: Publish the corrective PR before retrying bootstrap**
+
+Commit the verifier correction, its test/harness/catalog changes, this plan amendment, and
+the rollout-discovered setup-wizard corrections in the operator guide. Immediately before
+push, fetch `origin`, require a clean tree, and safely rebase onto `origin/main`. Open a
+corrective PR without enabling auto-merge or merging it.
+
+After the operator explicitly authorizes and completes that merge, rerun Task 8 Step 1 and
+the guarded bootstrap. Do not retry bootstrap against the old `origin/main` verifier.
 
 ---
 

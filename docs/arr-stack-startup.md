@@ -1042,13 +1042,38 @@ mise exec -- just bootstrap media-app tautulli
 unset MEDIA_APP_BOOTSTRAP_CONFIRM
 ```
 
-In the Tautulli UI, complete these steps in order:
+In the Tautulli setup wizard, complete these steps in order:
 
-1. Enable Tautulli web authentication before entering Plex or API credentials.
-2. Connect Plex at `http://plex.media.svc.cluster.local:32400` with the operator-supplied Plex token.
-3. Generate the Tautulli API key.
-4. Confirm at least one Plex library appears.
-5. Play authorized media and require the session to appear in Tautulli history.
+1. On **Welcome!**, continue to **Authentication**.
+2. On **Authentication**, enter a unique HTTP username and a strong password, store the
+   credentials in the password manager, and select **Next**. Do not reuse Plex credentials.
+3. On **Plex Account**, select **Sign In with Plex**, complete the Plex administrator login,
+   require **Authentication successful**, and select **Next**.
+4. On **Plex Media Server**, enter these values manually:
+
+   | Setting | Value |
+   |---|---|
+   | Plex IP Address or Hostname | `plex.media.svc.cluster.local` |
+   | Plex Port | `32400` |
+   | Use Secure Connection | Disabled |
+
+   Enter only the hostname in the first field, not a URL or port. Do not select a transient
+   `10.244.x.x` Pod IP or the gateway hostname. Select **Verify**, require **Server found!**,
+   and select **Next**.
+5. Leave **Activity Logging** at its defaults unless a different retention policy is
+   required. The Plex Logs viewer remains unavailable because this deployment does not
+   mount Plex configuration or logs.
+6. Leave **Notifications** unconfigured; cluster alerting is provided through Prometheus
+   and Alertmanager.
+7. Skip **Database Import** because this is a new database, then finish the wizard.
+8. After the wizard finishes, open **Settings → Web Interface** and scroll to **API**. Do
+   not use **3rd Party APIs**; that page configures metadata providers rather than
+   Tautulli's own API.
+9. Under **API**, enable **Enable API**. Copy the value shown in **API Key**, generating a
+   new key there first if the field is blank, and select **Save**. Treat the key as a secret:
+   do not put it in Git, logs, chat, or command arguments.
+10. Confirm at least one Plex library appears.
+11. Play authorized media and require the session to appear in Tautulli history.
 
 Before PR 2, record the chosen authentication mode and prove `/status` returns exact HTTP
 `200` with redirects disabled both from the cluster and through
