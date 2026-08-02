@@ -7,7 +7,12 @@ set -euo pipefail
 }
 
 kubeconfig="$1"
-pod="$(kubectl --kubeconfig "$kubeconfig" --namespace media get pods \
+kc=(kubectl --kubeconfig "$kubeconfig")
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
+
+pod="$("${kc[@]}" --namespace media get pods \
   --selector app.kubernetes.io/name=plex \
   --field-selector status.phase=Running \
   --output jsonpath='{.items[0].metadata.name}')"
@@ -18,7 +23,7 @@ pod="$(kubectl --kubeconfig "$kubeconfig" --namespace media get pods \
 
 # This single-quoted program expands only inside the Plex container.
 # shellcheck disable=SC2016
-raw_status="$(kubectl --kubeconfig "$kubeconfig" --namespace media exec "$pod" -c app -- \
+raw_status="$("${kc[@]}" --namespace media exec "$pod" -c app -- \
   /bin/bash -ceu '
     uid="$(id -u)"
     user="$(getent passwd "$uid" | cut -d: -f1)"

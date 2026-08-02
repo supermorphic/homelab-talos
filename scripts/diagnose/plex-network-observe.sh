@@ -18,6 +18,11 @@ duration="$2"
   exit 2
 }
 
+cilium_args=(hubble port-forward --kubeconfig "$kubeconfig")
+if kubectl --kubeconfig "$kubeconfig" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  cilium_args+=(--context homelab-diagnostic)
+fi
+
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/plex-network-observe.XXXXXX")"
 port_forward_pid=''
 observe_pid=''
@@ -36,7 +41,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-cilium hubble port-forward --kubeconfig "$kubeconfig" >/dev/null 2>&1 &
+cilium "${cilium_args[@]}" >/dev/null 2>&1 &
 port_forward_pid=$!
 
 hubble_ready='false'

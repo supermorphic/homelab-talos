@@ -64,7 +64,12 @@ set -euo pipefail
 printf -v quoted_args ' %q' "$@"
 printf 'cilium command%s\n' "$quoted_args" >>"$FAKE_COMMAND_LOG"
 
-[[ "$#" -eq 4 \
+context_args=0
+if [[ "${5:-}" == '--context' ]]; then
+  [[ "${6:-}" == 'homelab-diagnostic' ]] || exit 9
+  context_args=2
+fi
+[[ "$#" -eq $((4 + context_args)) \
   && "$1" == 'hubble' \
   && "$2" == 'port-forward' \
   && "$3" == '--kubeconfig' \
@@ -168,7 +173,29 @@ printf 'cluster-client %s%s\n' "$client" "$quoted_args" >>"$FAKE_COMMAND_LOG"
 exit 97
 EOF
 
-for client in kubectl flux helm talosctl talhelper kustomize; do
+cat >"$fake_bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf -v quoted_args ' %q' "$@"
+printf 'kubectl%s\n' "$quoted_args" >>"$FAKE_COMMAND_LOG"
+
+if [[ "${1:-}" == 'mutation-probe' ]]; then
+  printf 'cluster-client kubectl%s\n' "$quoted_args" >>"$FAKE_COMMAND_LOG"
+  exit 97
+fi
+
+[[ "$#" -eq 6 \
+  && "$1" == '--kubeconfig' \
+  && "$2" == "$FAKE_KUBECONFIG" \
+  && "$3" == 'config' \
+  && "$4" == 'get-contexts' \
+  && "$5" == 'homelab-diagnostic' \
+  && "$6" == '--no-headers' ]] || exit 9
+[[ "$FAKE_KUBECONFIG_LAYOUT" == 'scoped' ]]
+EOF
+
+for client in flux helm talosctl talhelper kustomize; do
   cp "$fake_bin/cluster-client-deny" "$fake_bin/$client"
 done
 chmod +x "$fake_bin/cilium" "$fake_bin/hubble" "$fake_bin/cluster-client-deny" \
@@ -191,6 +218,7 @@ cilium_exit_gate=''
 cilium_ready=''
 run_status=0
 scenario_fds_open='false'
+kubeconfig_layout='operator'
 
 close_scenario_fds() {
   [[ "$scenario_fds_open" == 'true' ]] || return 0
@@ -200,6 +228,7 @@ close_scenario_fds() {
 
 new_scenario() {
   local name="$1"
+  kubeconfig_layout="${2:-operator}"
   close_scenario_fds
   scenario_dir="$test_root/$name"
   command_log="$scenario_dir/commands.log"
@@ -245,6 +274,7 @@ run_observer() {
     FAKE_COMMAND_LOG="$command_log" \
     FAKE_PROCESS_LOG="$process_log" \
     FAKE_KUBECONFIG="$kubeconfig" \
+    FAKE_KUBECONFIG_LAYOUT="$kubeconfig_layout" \
     FAKE_STATUS_COUNT="$status_count" \
     FAKE_EVENT_FIFO="$event_fifo" \
     FAKE_TIMER_GATE="$timer_gate" \
@@ -414,7 +444,7 @@ assert_pid_reaped() {
 }
 
 assert_forbidden_absent() {
-  if rg -qi -e '(^|[[:space:]])(kubectl|flux|helm|talosctl|talhelper|kustomize|create|apply|patch|delete|rollout|suspend|resume)([[:space:]]|$)' "$command_log"; then
+  if rg -qi -e '(^|[[:space:]])(flux|helm|talosctl|talhelper|kustomize|create|apply|patch|delete|rollout|suspend|resume)([[:space:]]|$)' "$command_log"; then
     echo "Observer used a forbidden command in $scenario_dir." >&2
     exit 1
   fi
@@ -485,6 +515,22 @@ if should_run timeout; then
   assert_same_lifecycle_pid timer start release
   assert_pid_reaped timer
   assert_same_lifecycle_pid 'hubble observe' start term exit
+  assert_pid_reaped 'hubble observe'
+  assert_common_cleanup
+fi
+
+if should_run diagnostic-context; then
+  new_scenario diagnostic-context scoped
+  coordinate_early_exit &
+  coordinator_pid=$!
+  run_observer 8 healthy success
+  wait "$coordinator_pid"
+  [[ "$run_status" -eq 0 ]]
+  rg -q "^kubectl --kubeconfig ${kubeconfig} config get-contexts homelab-diagnostic --no-headers$" "$command_log"
+  rg -q "^cilium command hubble port-forward --kubeconfig ${kubeconfig} --context homelab-diagnostic$" "$command_log"
+  assert_same_lifecycle_pid timer start term exit
+  assert_pid_reaped timer
+  assert_same_lifecycle_pid 'hubble observe' start exit
   assert_pid_reaped 'hubble observe'
   assert_common_cleanup
 fi
