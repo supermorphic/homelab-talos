@@ -32,6 +32,7 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 
 [[ "$(yq -r "$controller.type" "$values")" == 'deployment' ]]
 [[ "$(yq -r "$controller.strategy" "$values")" == 'Recreate' ]]
+[[ "$(yq -r "$controller.replicas" "$values")" == '1' ]]
 [[ "$(yq -r "$controller.pod.automountServiceAccountToken" "$values")" == 'false' ]]
 [[ "$(yq -r "$controller.pod.securityContext.runAsNonRoot" "$values")" == 'true' ]]
 [[ "$(yq -r "$controller.pod.securityContext.runAsUser" "$values")" == '568' ]]
@@ -58,6 +59,7 @@ for required in \
   rg -Fq -- "$required" <<<"$identity_script"
 done
 ! rg -Fq 'relayHostKey' <<<"$identity_script"
+! rg -Fq 'relayHostKey' "$values"
 
 [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOncePod' ]]
 [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
@@ -91,6 +93,8 @@ rendered="$temp_dir/deployment.yaml"
 
 [[ "$(yq -r '.metadata.name' "$rendered")" == 'plex' ]]
 [[ "$(yq -r '.spec.strategy.type' "$rendered")" == 'Recreate' ]]
+[[ "$(yq -r '.spec.replicas' "$rendered")" == '1' ]]
+! rg -Fq 'relayHostKey' "$rendered"
 [[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$rendered")" == 'false' ]]
 [[ "$(yq -r '.spec.template.spec.securityContext.seccompProfile.type' "$rendered")" == 'RuntimeDefault' ]]
 [[ "$(yq -r '.spec.template.spec.initContainers[] | select(.name == "runtime-identity") | .securityContext.runAsUser' "$rendered")" == '568' ]]
@@ -100,7 +104,7 @@ rendered="$temp_dir/deployment.yaml"
 [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "runtime-identity") | has("emptyDir")' "$rendered")" == 'true' ]]
 
 for container in runtime-identity app; do
-  [[ "$(yq -r ".spec.template.spec.initContainers[], .spec.template.spec.containers[] | select(.name == \"$container\") | .image" "$rendered")" == "$image_repository:$image_tag@$image_digest" ]]
+  [[ "$(yq -r "(.spec.template.spec.initContainers[], .spec.template.spec.containers[]) | select(.name == \"$container\") | .image" "$rendered")" == "$image_repository:$image_tag@$image_digest" ]]
 done
 
 echo "Plex relay identity, deterministic image, private routing, and pinned render passed validation."
