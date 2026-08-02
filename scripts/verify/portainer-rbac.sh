@@ -18,12 +18,21 @@ fail() {
 
 normalize_role_rules() {
   yq -o=json -I=0 '.rules |
-    map({
-      "apiGroups": (.apiGroups | sort),
-      "resources": (.resources | sort),
-      "verbs": (.verbs | sort)
-    }) |
-    sort_by(.apiGroups[0], .resources[0], .verbs[0])'
+    map(
+      to_entries |
+      map(
+        select(
+          .key == "apiGroups" or
+          .key == "resources" or
+          .key == "verbs" or
+          .key == "resourceNames" or
+          .key == "nonResourceURLs"
+        ) |
+        .value |= sort
+      ) |
+      from_entries
+    ) |
+    sort_by(to_json)'
 }
 
 live_role="$("${kc[@]}" get clusterrole portainer-readonly --output json)"

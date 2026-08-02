@@ -22,6 +22,8 @@ catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-$repo_root/.test-results}"
 campaigns_root="${TEST_CAMPAIGNS_ROOT:-$repo_root/.test-campaigns}"
 kubeconfig="${KUBECONFIG:-$repo_root/.kube/config}"
+talosconfig="${TALOSCONFIG:-$repo_root/.talos/config}"
+scoped_preflight_bin="${TEST_SCOPED_PREFLIGHT_BIN:-$repo_root/scripts/test/scoped-campaign-preflight.sh}"
 publish_bin="${TEST_CAMPAIGN_PUBLISH_BIN:-$repo_root/scripts/test/publish-report.sh}"
 validate_run_bin="${TEST_CAMPAIGN_VALIDATE_RUN_BIN:-$repo_root/scripts/test/validate-run.sh}"
 test_mode="${TEST_CAMPAIGN_TEST_MODE:-false}"
@@ -59,6 +61,10 @@ if [[ "$test_mode" == 'true' ]]; then
   }
 elif [[ "$test_mode" != 'false' ]]; then
   echo 'TEST_CAMPAIGN_TEST_MODE must be true or false.' >&2
+  exit 2
+fi
+if [[ "$test_mode" != 'true' && -n "${TEST_SCOPED_PREFLIGHT_BIN:-}" ]]; then
+  echo 'TEST_SCOPED_PREFLIGHT_BIN is available only in campaign test mode.' >&2
   exit 2
 fi
 
@@ -497,6 +503,14 @@ run_member() {
   recovery="$(yq -r '.phases.recovery.status // "not-required"' "$run_dir/summary.json")"
   append_run "$suite_id" "$run_id" "$result" "$cleanup" "$recovery"
 
+  if [[ "$result" == 'passed' && "$command_exit" -ne 0 ]]; then
+    echo "$suite_id exited $command_exit but emitted a passed canonical result." >&2
+    return 20
+  fi
+  if [[ "$result" != 'passed' && "$command_exit" -eq 0 ]]; then
+    echo "$suite_id exited 0 but emitted a non-passing canonical result ($result)." >&2
+  fi
+
   if ! require_campaign_lease; then
     update_publish "$run_id" not-published-lease-lost
     return 25
@@ -623,6 +637,9 @@ prepare_new_campaign() {
     echo 'scoped-verification requires scoped local-only mode.' >&2
     exit 2
   fi
+  if [[ "$scoped_mode" == 'true' ]]; then
+    "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
+  fi
   [[ "$test_mode" == 'true' ]] || scripts/test/validate-catalog.sh "$catalog" >/dev/null
   plan_digest="$(catalog_campaign_digest "$catalog" "$campaign")"
   state="$(source_state)"
@@ -651,7 +668,7 @@ prepare_new_campaign() {
 }
 
 prepare_resume() {
-  local state current_digest status current_source current_flux
+  local state current_digest status current_source current_flux execution_mode
 
   campaign_id="$requested"
   [[ "$campaign_id" =~ ^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]+-[0-9a-f]{8}$ ]] || {
@@ -663,6 +680,12 @@ prepare_resume() {
     echo "Missing campaign manifest: $manifest" >&2
     exit 1
   }
+  campaign="$(yq -r '.campaign' "$manifest")"
+  execution_mode="$(yq -r '.execution_mode // "operator-published"' "$manifest")"
+  [[ "$campaign" != 'scoped-verification' && "$execution_mode" != 'scoped-local' ]] || {
+    echo 'scoped-local campaigns cannot be resumed or published.' >&2
+    exit 1
+  }
   [[ "${TEST_CAMPAIGN_CONFIRM:-}" == "resume-publish:$campaign_id" ]] || {
     echo "Set TEST_CAMPAIGN_CONFIRM='resume-publish:$campaign_id' to resume." >&2
     exit 1
@@ -672,7 +695,6 @@ prepare_resume() {
     echo "Campaign $campaign_id is not resumable (status=$status)." >&2
     exit 1
   }
-  campaign="$(yq -r '.campaign' "$manifest")"
   source_sha="$(yq -r '.source_sha' "$manifest")"
   flux_sha="$(yq -r '.flux_sha' "$manifest")"
   plan_digest="$(yq -r '.plan_digest' "$manifest")"

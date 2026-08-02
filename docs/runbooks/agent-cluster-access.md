@@ -130,6 +130,14 @@ only with the confirmation it prints:
 mise exec -- just test scoped-campaign-plan
 ```
 
+Both the plan and run fail closed unless they execute from a linked Git worktree and
+find `.kube/config` and `.talos/config` in that worktree with mode `0600`. The local
+preflight inspects the kubeconfig and requires exactly the `homelab-observer` and
+`homelab-diagnostic` contexts and token users, with `homelab-observer` current and no
+admin identity. It also uses `talosctl config info --output json` to require exactly the
+`os:reader` role before any suite starts. A main clone, credential path override,
+partial context pair, broader identity, or unreadable credential is rejected.
+
 `scoped-verification` contains every observer and diagnostic suite and no operator-only
 suite. Its dedicated linked-worktree runner uses the observer current context, selects
 the named diagnostic context only when required, and uses the Talos reader credential.

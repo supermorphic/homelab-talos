@@ -128,10 +128,10 @@ def _command_aliases(
     aliases: dict[str, list[str]] = {"kubectl": []}
     for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=\(\s*kubectl\b([^)]*)\)", source):
         aliases[match.group(1)] = shlex.split(match.group(2), comments=True, posix=True)
-    for match in re.finditer(
-        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=(?:['\"])?kubectl(?:['\"])?\s*$", source
-    ):
-        aliases[match.group(1)] = []
+    literal_assignments, _ = _literal_scalar_assignments(source)
+    for name, value in literal_assignments.items():
+        if Path(value).name == "kubectl":
+            aliases[name] = []
     for match in re.finditer(
         r"(?m)^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)="
         r"(?:['\"])?\$\{[A-Za-z_][A-Za-z0-9_]*:-kubectl\}(?:['\"])?\s*$",
@@ -178,23 +178,86 @@ def _alias_name(token: str) -> str:
     return match.group(1) if match else token
 
 
+def _literal_scalar_assignments(source: str) -> tuple[dict[str, str], set[str]]:
+    literals: dict[str, str] = {}
+    dynamic: set[str] = set()
+    assignment = re.compile(
+        r"^\s*(?:(?:local|readonly|export|declare(?:\s+-[a-zA-Z]+)?)\s+)*"
+        r"([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$"
+    )
+    for line in source.splitlines():
+        match = assignment.match(line)
+        if not match or match.group(2).startswith("("):
+            continue
+        name, raw_value = match.groups()
+        if any(character in raw_value for character in "$`"):
+            dynamic.add(name)
+            continue
+        try:
+            values = shlex.split(raw_value, comments=True, posix=True)
+        except ValueError:
+            dynamic.add(name)
+            continue
+        if len(values) == 1 and values[0]:
+            literals[name] = values[0]
+        else:
+            dynamic.add(name)
+    return literals, dynamic
+
+
+def _command_position(tokens: list[str]) -> int | None:
+    if not tokens:
+        return None
+    index = 0
+    declaration_commands = {"alias", "declare", "export", "local", "readonly", "typeset"}
+    if tokens[0] in declaration_commands:
+        return None
+    while index < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[index]):
+        index += 1
+    while index < len(tokens) and tokens[index] in {
+        "!",
+        "do",
+        "elif",
+        "else",
+        "if",
+        "then",
+        "time",
+        "until",
+        "while",
+    }:
+        index += 1
+    if index < len(tokens) and tokens[index] == "env":
+        index += 1
+        while index < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[index]):
+            index += 1
+    if index < len(tokens) and tokens[index] in {"command", "exec"}:
+        index += 1
+    return index if index < len(tokens) else None
+
+
 def _kubectl_invocation(
     tokens: list[str], aliases: dict[str, list[str]], wrappers: dict[str, list[str]]
 ) -> list[str] | None:
-    for index, token in enumerate(tokens):
-        name = _alias_name(token)
-        if name in aliases:
-            return [*aliases[name], *tokens[index + 1 :]]
-        if name in wrappers:
-            prefix = wrappers[name]
-            consume = int(prefix[0].partition("=")[2])
-            return [*prefix[1:], *tokens[index + 1 + consume :]]
+    index = _command_position(tokens)
+    if index is None:
+        return None
+    token = tokens[index]
+    name = _alias_name(token)
+    if Path(name).name == "kubectl":
+        name = "kubectl"
+    if name in aliases:
+        return [*aliases[name], *tokens[index + 1 :]]
+    if name in wrappers:
+        prefix = wrappers[name]
+        consume = int(prefix[0].partition("=")[2])
+        return [*prefix[1:], *tokens[index + 1 + consume :]]
     return None
 
 
 def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = False) -> list[str]:
     """Reject every scoped kubectl operation outside a conservative tier allowlist."""
     aliases, wrappers, unresolved_wrappers = _command_aliases(source)
+    literal_assignments, _ = _literal_scalar_assignments(source)
     violations: set[str] = set()
     safe_commands = {
         "api-resources",
@@ -227,6 +290,18 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
         "--user",
         "--username",
         "-n",
+    }
+    get_value_options = global_value_options | {
+        "--chunk-size",
+        "--field-selector",
+        "--label-columns",
+        "--output",
+        "--selector",
+        "--sort-by",
+        "--subresource",
+        "--template",
+        "-l",
+        "-o",
     }
 
     def subcommand(invocation: list[str]) -> tuple[str, int] | None:
@@ -265,32 +340,66 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
             return token
         return ""
 
-    def reads_secret(tokens: list[str]) -> bool:
-        return any(
-            token.lower().split("/", 1)[0].split(".", 1)[0] in {"secret", "secrets"}
-            for token in tokens
-            if token and not token.startswith("-")
-        )
+    def resource_operand(tokens: list[str]) -> tuple[str, str]:
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                continue
+            option = token.split("=", 1)[0]
+            if option in get_value_options:
+                if "=" not in token and index + 1 >= len(tokens):
+                    return "", f"kubectl option without a value ({option})"
+                index += 1 if "=" in token else 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            return token, ""
+        return "", ""
+
+    for alias_match in re.finditer(r"(?m)^\s*alias\s+([A-Za-z_][A-Za-z0-9_]*)=", source):
+        violations.add(f"unresolved shell alias declaration ({alias_match.group(1)})")
 
     for tokens in _shell_tokens(source):
-        if "helm" in tokens:
-            helm_index = tokens.index("helm")
+        command_index = _command_position(tokens)
+        command_token = tokens[command_index] if command_index is not None else ""
+        command_name = _alias_name(command_token)
+        if Path(command_name).name == "helm":
+            helm_index = command_index
             if any(
                 token in {"get", "history", "list", "status"} for token in tokens[helm_index + 1 :]
             ):
                 violations.add("Helm release storage read")
 
-        unresolved = next(
-            (_alias_name(token) for token in tokens if _alias_name(token) in unresolved_wrappers),
-            "",
-        )
+        unresolved = command_name if command_name in unresolved_wrappers else ""
         if unresolved:
             violations.add(f"unresolved dynamic wrapper ({unresolved})")
 
-        if len(tokens) == 1 and _alias_name(tokens[0]) in wrappers:
+        if (
+            command_token.startswith("$")
+            and command_name not in aliases
+            and command_name not in literal_assignments
+            and command_name
+            in {
+                "cmd",
+                "command",
+                "executable",
+                "helper",
+                "runner",
+                "verifier",
+            }
+        ):
+            violations.add(f"unresolved dynamic command ({command_name})")
+
+        if len(tokens) == 1 and command_name in wrappers:
             continue
         invocation = _kubectl_invocation(tokens, aliases, wrappers)
         if invocation is None:
+            continue
+        if any(token == "--raw" or token.startswith("--raw=") for token in invocation):
+            violations.add("kubectl get --raw")
             continue
         resolved = subcommand(invocation)
         if resolved is None:
@@ -302,9 +411,17 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
             continue
         command, command_index = resolved
         remaining = invocation[command_index + 1 :]
-        if command in {"get", "describe"} and reads_secret(remaining):
-            violations.add("Secret API read")
-            continue
+        if command in {"get", "describe"}:
+            resource, option_error = resource_operand(remaining)
+            if option_error:
+                violations.add(option_error)
+                continue
+            if resource.lower().split("/", 1)[0].split(".", 1)[0] in {
+                "secret",
+                "secrets",
+            }:
+                violations.add("Secret API read")
+                continue
         if command in safe_commands:
             continue
         if command == "auth" and next_non_option(remaining, 0) == "can-i":
@@ -385,6 +502,7 @@ def reachable_verifier_source(root: Path, implementation: str) -> str:
                 if dependency in recipes:
                     pending_recipes.append(dependency)
         chunks.append(source)
+        literal_assignments, dynamic_assignments = _literal_scalar_assignments(source)
         for line in source.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith(("#", "echo ", "printf ")):
@@ -404,6 +522,16 @@ def reachable_verifier_source(root: Path, implementation: str) -> str:
                 command_tokens = shlex.split(stripped, comments=True, posix=True)
             except ValueError:
                 command_tokens = []
+            command_index = _command_position(command_tokens)
+            command_token = command_tokens[command_index] if command_index is not None else ""
+            command_name = _alias_name(command_token)
+            if command_token.startswith("$") and command_name in literal_assignments:
+                helper_target = literal_assignments[command_name]
+                if helper_target.endswith(".sh"):
+                    helper_path = checked_relative_path(helper_target, "helper")
+                    pending_files.append(str(helper_path.relative_to(root)))
+            elif command_token.startswith("$") and command_name in dynamic_assignments:
+                fail(f"Scoped verifier has dynamic executable helper: {command_token}.\n")
             for command_token in command_tokens:
                 if not re.fullmatch(r"[a-zA-Z0-9_./-]+\.sh", command_token):
                     continue

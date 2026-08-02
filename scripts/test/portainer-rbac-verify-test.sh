@@ -25,9 +25,28 @@ done
 
 case "$resource:$name" in
   clusterrole:portainer-readonly)
-    yq ea -o=json -I=0 \
+    role="$(yq ea -o=json -I=0 \
       'select(.kind == "ClusterRole" and .metadata.name == "portainer-readonly")' \
-      "$FAKE_RBAC_SOURCE"
+      "$FAKE_RBAC_SOURCE")"
+    case "${FAKE_ROLE_DRIFT:-none}" in
+      none)
+        printf '%s\n' "$role"
+        ;;
+      reorder)
+        yq -o=json -I=0 \
+          '.rules |= reverse | .rules[] |= with(.apiGroups; . |= reverse) |
+            .rules[] |= with(.resources; . |= reverse) |
+            .rules[] |= with(.verbs; . |= reverse)' <<<"$role"
+        ;;
+      resourceNames | nonResourceURLs)
+        FAKE_ROLE_DRIFT="$FAKE_ROLE_DRIFT" yq -o=json -I=0 \
+          '.rules[0][env(FAKE_ROLE_DRIFT)] = []' <<<"$role"
+        ;;
+      *)
+        echo "Unexpected role drift fixture: $FAKE_ROLE_DRIFT" >&2
+        exit 64
+        ;;
+    esac
     ;;
   clusterrolebinding:portainer-readonly)
     yq ea -o=json -I=0 \
@@ -102,12 +121,29 @@ chmod +x "$fixture/bin/kubectl"
 PATH="$fixture/bin:$PATH" \
 FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
 FAKE_RISKY=false \
+FAKE_ROLE_DRIFT=reorder \
   "$verifier" "$fixture/kubeconfig" \
     "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml"
+
+for drift_field in resourceNames nonResourceURLs; do
+  if PATH="$fixture/bin:$PATH" \
+    FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+    FAKE_RISKY=false \
+    FAKE_ROLE_DRIFT="$drift_field" \
+      "$verifier" "$fixture/kubeconfig" \
+        "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+        >"$fixture/$drift_field.out" 2>&1; then
+    echo "$drift_field-only ClusterRole drift unexpectedly passed." >&2
+    exit 1
+  fi
+  rg -q 'Live portainer-readonly ClusterRole rules differ' \
+    "$fixture/$drift_field.out"
+done
 
 if PATH="$fixture/bin:$PATH" \
   FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
   FAKE_RISKY=true \
+  FAKE_ROLE_DRIFT=none \
     "$verifier" "$fixture/kubeconfig" \
       "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
       >"$fixture/risky.out" 2>&1; then

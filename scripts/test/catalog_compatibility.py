@@ -614,7 +614,15 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
         "renamed-secret": 'k=kubectl\n"$k" get --namespace monitoring secret foo',
+        "readonly-renamed-delete": 'readonly cmd=kubectl\n"$cmd" delete pod app',
+        "path-delete": "/usr/local/bin/kubectl delete pod app",
+        "raw-equals": "kubectl get --raw=/api/v1/secrets",
+        "raw-value": "kubectl get --raw /api/v1/pods",
+        "dynamic-command": 'cmd=$(printf kubectl)\n"$cmd" get pods',
+        "unresolved-command": '"$cmd" get pods',
+        "shell-alias": "alias k='kubectl get pods'\nk",
         "option-between": "kubectl --namespace monitoring get --output name secrets",
+        "namespace-before-secret": "kubectl get -n monitoring secrets",
         "helper-secret": 'kg() { kubectl get "$@"; }\nkg --output name secrets',
         "helm-storage": "helm get values cilium --namespace kube-system",
         "unknown": "kubectl frobnicate pods",
@@ -645,6 +653,10 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         assert analyze(source), f"{name}: forbidden operation was not detected"
     safe_cases = {
         "get": "kubectl --namespace default get pods",
+        "secret-as-name": "kubectl get pod secret",
+        "echo-command-text": "echo kubectl delete pods",
+        "printf-command-text": "printf '%s\\n' 'kubectl get secrets'",
+        "assignment-only": "note=kubectl",
         "describe": "kubectl describe pod app",
         "logs": "kubectl logs deployment/app --tail=10",
         "wait": "kubectl wait --for=condition=Ready pod/app",
@@ -749,6 +761,35 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert analyze('runner() { "$command" "$@"; }\nrunner get pods'), (
         "unresolved dynamic wrapper was accepted"
     )
+
+    helper_fixture = root / "executable-helper-reachability"
+    (helper_fixture / "scripts/verify").mkdir(parents=True)
+    (helper_fixture / "kubernetes").mkdir()
+    (helper_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nreadonly verifier=scripts/verify/helper.sh\n"$verifier"\n',
+        encoding="utf-8",
+    )
+    (helper_fixture / "scripts/verify/helper.sh").write_text(
+        "kubectl delete pod app\n", encoding="utf-8"
+    )
+    (helper_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    helper_source = catalog_validator.reachable_verifier_source(
+        helper_fixture, "scripts/verify/root.sh"
+    )
+    assert analyze(helper_source) == ["kubectl subcommand (delete)"], (
+        "literal executable helper variable was not traversed"
+    )
+
+    (helper_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nhelper="${HELPER_PATH}"\n"$helper"\n',
+        encoding="utf-8",
+    )
+    try:
+        catalog_validator.reachable_verifier_source(helper_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic executable helper" in failure.message
+    else:
+        raise AssertionError("dynamic executable helper variable was accepted")
 
     def diagnostic_without_context(data: dict[str, Any]) -> None:
         suite(data, "verification.homepage")["runner"]["implementation"] = (
