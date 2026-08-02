@@ -27,9 +27,13 @@ if [[ "$command" =~ ^git[[:space:]]+clean([[:space:]]|$) ]]; then
   dry_run=false
 
   for option in "${command_parts[@]:2}"; do
-    if [[ "$option" == *';'* || "$option" == *'&&'* || "$option" == *'||'* || "$option" == *'|'* ]]; then
-      break
-    fi
+    stop_parsing=false
+    case "$option" in
+      *';'*) option="${option%%;*}"; stop_parsing=true ;;
+      *'&&'*) option="${option%%&&*}"; stop_parsing=true ;;
+      *'||'*) option="${option%%||*}"; stop_parsing=true ;;
+      *'|'*) option="${option%%|*}"; stop_parsing=true ;;
+    esac
     [[ "$option" == '--' ]] && break
 
     case "$option" in
@@ -50,6 +54,8 @@ if [[ "$command" =~ ^git[[:space:]]+clean([[:space:]]|$) ]]; then
         [[ "$flags" == *n* ]] && dry_run=true
         ;;
     esac
+
+    [[ "$stop_parsing" == true ]] && break
   done
 
   if [[ "$force" == true && "$expands_untracked" == true && "$dry_run" == false ]]; then
