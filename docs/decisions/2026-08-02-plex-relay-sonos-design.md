@@ -1,6 +1,7 @@
 # Plex Relay and Sonos integration — design
 
-Status: approved design, pending implementation plan.
+Status: approved design; implementation sequenced in the
+[Plex Relay and Sonos implementation plan](../superpowers/plans/2026-08-02-plex-relay-sonos-implementation-plan.md).
 Date: 2026-08-02.
 Branch: `investigate-plex-remote-access`.
 
