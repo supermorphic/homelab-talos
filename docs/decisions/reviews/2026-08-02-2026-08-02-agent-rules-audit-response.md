@@ -18,7 +18,12 @@ artefact from the recovery, not content — no finding was lost to it.
 
 ## For you to decide
 
-### 1. Which mechanism halts a failing reconciliation? (from F1 — blocking)
+> **Update, same day.** Items 1 and 3 below are **resolved** — see *Resolution* under
+> each. Only item 2 (post-merge architecture) and item 4 (admin isolation, non-blocking)
+> remain open. Workstream 4 is unblocked; workstream 3 is unblocked except its
+> post-merge automation sub-item.
+
+### 1. Which mechanism halts a failing reconciliation? (from F1) — **RESOLVED**
 
 **What the spec said:** explicit `retryInterval` plus bounded Helm remediation plus a
 `NotReady` alert would contain a thrashing app, replacing the deleted cleanup trap.
@@ -34,17 +39,30 @@ element of the replacement does that.**
 reconciliation, and the rollout workstream is marked blocked until a halting mechanism
 exists. I did not invent one.
 
-**Candidate mechanisms**, none chosen:
+**Resolution.** Both the spec and the review were wrong, in opposite directions, and
+the repository already held the answer.
 
-- an alert-driven automation that suspends a Kustomization after prolonged `NotReady`
-  — closest to the deleted behaviour, but it is a cluster mutation performed by
-  automation, which cuts against decision 1's tiering;
-- accept a weaker control explicitly and amend the non-goal, which currently forbids
-  replacing a control with a weaker one;
-- keep the bootstrap recipes for any app whose failure mode needs halting, shrinking the
-  rollout change to apps where alert-plus-revert genuinely suffices.
+- **All 25 HelmReleases already configure remediation** — `install.remediation.retries: 3`
+  and `upgrade.remediation.retries: 3` with `strategy: rollback` and
+  `cleanupOnFail: true`. The spec proposed adding this as new work; it exists.
+- **Flux does halt.** Its documentation: after remediation retries are exhausted *"the
+  controller stops attempting recovery until the spec changes."* The review's "nothing
+  halts reconciliation" was wrong for every Helm-managed app.
+- **The real gap is one field.** `install.remediation.remediateLastFailure` defaults to
+  **false**, while for upgrades it defaults to **true** when retries are configured. A
+  new-app rollout is an *install*, so today the final failed install is left in place.
+  Setting it to `true` uninstalls the broken release.
+- **Suspension was never the stronger control.** The deleted trap's own message reads
+  *"suspending the attempted Kustomization while preserving its resources."* It stopped
+  Flux re-applying; it did not stop a crashlooping pod, remove a workload, or restore a
+  prior version. Uninstalling a failed release beats freezing it.
+- **`retryInterval` is dropped from the contract entirely.** It governs retry cadence for
+  a Kustomization, which after Helm remediation is a no-op reapply of unchanged YAML.
 
-This is the load-bearing question for the entire rollout decision.
+**Native apps are the residual.** `homepage`, `test-reports` and `intel-gpu-plugin` have
+no `HelmRelease`, so no remediation exists for them. They now fail a new eligibility
+criterion and keep their bootstrap recipes. Nothing in Flux offers a native equivalent,
+and none is invented here.
 
 ### 2. Post-merge acceptance: workstation runner or in-cluster Job? (from F6)
 
@@ -61,7 +79,7 @@ makes it materially more expensive than I implied when I proposed it.
 Meanwhile sequencing still instructs workstream 3 to "build post-merge acceptance
 automation" without saying which architecture.
 
-### 3. Alert threshold architecture (from F8)
+### 3. Alert threshold architecture (from F8) — **RESOLVED**
 
 The spec said the alert fires when a Kustomization is `NotReady` beyond
 `spec.timeout + spec.retryInterval`. The reviewer checked
@@ -69,10 +87,14 @@ The spec said the alert fires when a Kustomization is `NotReady` beyond
 `gotk_resource_info` series carries kind, namespace, name, readiness and suspension
 labels **and no duration fields**, and the existing rule uses a single static `for: 15m`.
 
-A per-Kustomization sum is therefore not expressible by extending the current rule. The
-choice is between generating per-object alert rules from source — new machinery and
-source-to-alert coupling — or picking one conservative static threshold and losing the
-per-app fit. I changed the table to say the architecture is unresolved rather than pick.
+A per-Kustomization sum is therefore not expressible by extending the current rule.
+
+**Resolution.** The question only existed because the spec had made the alert
+load-bearing for containment. With containment provided by Helm remediation, the alert's
+job is just notification — and the existing `FluxReconciliationFailure` rule with its
+static `for: 15m` already does that. **No new alert machinery, no per-Kustomization
+threshold, no change to `gotk_resource_info`.** The threshold was solving a problem the
+resolution to item 1 removed.
 
 ### 4. Is admin isolation worth building? (exposed by F2's fix)
 

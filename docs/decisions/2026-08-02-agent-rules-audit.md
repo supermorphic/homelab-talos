@@ -78,7 +78,8 @@ declarative. The suspended state exists only in the window between an app's "sta
 and its "activate" PR — a window in which `main` states something untrue about the
 cluster.
 
-Flux does **not** replicate the recipes' failure containment. See decision 2.
+Failure containment comes from `HelmRelease` remediation, which is already configured
+on all 25 HelmReleases and needs one additional field. See decision 2.
 
 **Validation.** Across `scripts/validate/*.sh`, 797 assertions decompose into 22
 tautologies (`[[ "$suspend" == 'true' || "$suspend" == 'false' ]]`, which cannot fail),
@@ -444,23 +445,43 @@ An app ships **unsuspended in one PR**, under a named containment contract:
 | Property | Value |
 |---|---|
 | **Retry** | Flux `spec.retryInterval`, set explicitly per Kustomization rather than inherited |
-| **Maximum failure duration** | An alert fires when a Kustomization is `NotReady` beyond a threshold. **The threshold's architecture is unresolved — see the open question below.** Extends the #154 `gotk_resource_info` rules |
-| **Remediation** | `HelmRelease` `install.remediation` / `upgrade.remediation` with a bounded retry count, so a failing *Helm action* stops retrying |
-| **Rollback trigger** | Alert fires → a revert of the activating commit is prepared as a pull request → **the operator merges it** → Flux converges to the prior state |
-| **Containment of a thrashing app** | **None of the above halts reconciliation.** Suspension by the operator remains the only mechanism that does |
+| **Containment** | `HelmRelease` remediation, **already configured on all 25 HelmReleases**: `install.remediation.retries: 3`, and `upgrade.remediation.retries: 3` with `strategy: rollback` and `cleanupOnFail: true` |
+| **The one change required** | Add `install.remediation.remediateLastFailure: true` to app-tier HelmReleases. It defaults to **false**, and a new-app rollout is an *install* — so today the final failed install is left in place |
+| **Halt** | Flux documents that after remediation retries are exhausted *"the controller stops attempting recovery until the spec changes."* Reconciliation of the failed release genuinely stops |
+| **Notification** | The existing `FluxReconciliationFailure` rule (#154, static `for: 15m`) fires on a `NotReady` Kustomization. Unchanged |
+| **Rollback trigger** | Alert fires → a revert of the activating commit is prepared as a pull request → **the operator merges it** → Flux prunes and converges |
 
-**This replacement is weaker than what it removes, and the gap is stated rather than
-argued away.** Flux's `retryInterval` sets the *cadence* of another failed
-reconciliation; it does not terminate one. Bounded Helm remediation stops retrying a
-Helm action but leaves the parent Kustomization reconciling, and a non-Helm failure has
-no remediation counter at all. An alert notifies. The deleted trap called
-`flux suspend`, which halts reconciliation outright — **no element of the replacement
-does that.**
+**The replacement is stronger than what it removes, once that one field is set.** The
+deleted trap ran `flux suspend`, and its own message describes the result: *"suspending
+the attempted Kustomization while preserving its resources."* Suspension stopped Flux
+from re-applying. It did not stop a crashlooping pod, remove a broken workload, or
+restore a prior version — the broken state was frozen in place awaiting a human.
 
-The non-goals require that a removed control be replaced by an equal or stronger one.
-On the evidence above this contract does not yet meet that bar, so **the rollout
-workstream is blocked until it does.** The open question is which halting mechanism to
-adopt; it is recorded for the operator rather than chosen here.
+With `remediateLastFailure: true`, a failed new-app install is **uninstalled**: the
+broken workload is gone rather than frozen. A failed upgrade already rolls back to the
+last working release, because `remediateLastFailure` defaults to *true* for upgrades
+whenever retries are configured. Both outcomes are strictly better than preservation.
+
+An earlier draft of this record claimed the alert and `retryInterval` provided
+containment; they do not, and that claim was wrong. A subsequent review concluded
+nothing halted reconciliation; that was also wrong, because HelmRelease remediation
+halts and was already configured. The mechanism above is what the repository actually
+does, plus the single missing field.
+
+**`spec.retryInterval` is not part of the containment contract** and is not set by this
+work. It governs retry cadence for a Kustomization, which is a no-op reapply of an
+unchanged manifest once Helm has remediated the release beneath it.
+
+`flux suspend` remains available to the operator as break-glass, which is the role it
+was actually serving: stopping Flux from fighting a manual intervention.
+
+#### Native apps have no equivalent and keep their recipes
+
+Remediation is a HelmRelease feature. Of the app-tier candidates, `homepage`,
+`test-reports` and `intel-gpu-plugin` are built from native resources with no
+`HelmRelease`, so no remediation mechanism exists for them. **They fail the containment
+criterion and retain their bootstrap recipes** until a native equivalent is designed —
+which is not attempted here.
 
 This must be implemented **before** the recipes are deleted, not after. Deleting first
 and replacing later is the reduction in safety the non-goals forbid.
@@ -469,14 +490,17 @@ and replacing later is the reduction in safety the non-goals forbid.
 
 An app qualifies only if **all** hold:
 
-1. It has no app-specific safety gate beyond Kustomization readiness.
-2. It has a Gatus endpoint that **exercises the function its `<app>-verify` proved** —
+1. It is Helm-managed and carries `install.remediation.remediateLastFailure: true`,
+   so a failed install is uninstalled rather than left in place. Native apps have no
+   equivalent mechanism and do not qualify.
+2. It has no app-specific safety gate beyond Kustomization readiness.
+3. It has a Gatus endpoint that **exercises the function its `<app>-verify` proved** —
    not merely TCP or HTTP reachability. The non-goals forbid replacing a control with a
    weaker one, and a liveness probe does not establish what a verifier established. An
    app whose function cannot be expressed as a service endpoint — GPU scheduling, SMB
    mounting, alert delivery — **fails this criterion and keeps its recipe** rather than
    qualifying on a shallow check.
-3. Its `<app>-verify` runs under the `observer` or `diagnostic` tier.
+4. Its `<app>-verify` runs under the `observer` or `diagnostic` tier.
 
 **qBittorrent is exempt** and keeps its guarded recipe until separately reviewed. It is
 the only app carrying a blocking post-bootstrap gate: `bootstrap.just` emits *"NOW run
@@ -850,11 +874,14 @@ deleted, and policy must exist before the assertions it replaces are deleted.
    `validation.decisions` with the identity and immutability semantics above; replace the
    interim link exclusion with introduce-then-freeze; add the generated index; gitignore
    plans; distil per the fate table; retire `docs/superpowers/`.
-3. **Containment.** Set explicit `retryInterval` and Helm remediation per Kustomization;
-   extend the #154 alert rules with a `NotReady`-duration alert; add Gatus endpoints for
-   the ~10 uncovered apps; build post-merge acceptance automation. **No recipe is deleted
-   in this step.**
-4. **Rollout.** Delete the app-tier bootstrap recipes for apps meeting all three
+3. **Containment.** Add `install.remediation.remediateLastFailure: true` to app-tier
+   HelmReleases — the only missing field, since remediation is already configured on all
+   25. Add Gatus endpoints for the uncovered apps, meeting the function-exercising bar in
+   criterion 3. Build post-merge acceptance automation once its architecture is chosen.
+   The existing `FluxReconciliationFailure` alert is reused unchanged; no per-Kustomization
+   threshold is introduced, and `retryInterval` is not touched. **No recipe is deleted in
+   this step.**
+4. **Rollout.** Delete the app-tier bootstrap recipes for apps meeting all four
    eligibility criteria; update `.just/repository.just:1206`; retain qBittorrent, the
    platform tier, and any app that failed eligibility.
 5. **Validation.** Build the layered policy set with negative fixtures; produce the
@@ -867,11 +894,15 @@ deleted, and policy must exist before the assertions it replaces are deleted.
   per-app blast radius, Gatus, #154 alerting, and `git revert`. The residual is accepted
   deliberately: the operator reports the gate as toil rather than judgment, and it has
   never vetoed a rollout.
-- **Containment replacement may not be equivalent.** Explicit `retryInterval` plus Helm
-  remediation bounds thrashing but does not stop reconciliation the way suspension does.
-  The compensating control is alerting on `NotReady` duration plus operator break-glass.
-  If that proves insufficient in practice, the honest response is to reinstate
-  suspension as an automated remediation rather than to accept the gap.
+- **Containment now depends on a Helm feature, so native apps are excluded.**
+  `homepage`, `test-reports` and `intel-gpu-plugin` have no `HelmRelease` and therefore
+  no remediation, so they keep their recipes. If a native equivalent is wanted later it
+  has to be designed; nothing in Flux provides one for a plain Kustomization.
+- **`remediateLastFailure: true` uninstalls a failed new app.** That is the intended
+  containment and it is stronger than the suspension it replaces, but it is also
+  destructive: a partially-working release is removed rather than left for inspection.
+  `flux suspend` remains available as break-glass for the case where preserving the
+  broken state is what you want.
 - **The `diagnostic` tier grants `exec`.** That is a real privilege increase over the
   status quo, where agents had no cluster access at all from worktrees. It is bounded to
   five named verifiers and is labelled accurately rather than described as read-only.
@@ -910,8 +941,11 @@ deleted, and policy must exist before the assertions it replaces are deleted.
    `observer`, `diagnostic`, `admin`.
 5. `diagnostic` grants `exec` and `port-forward` and is **not** read-only. The security
    claim is limited to denying the Secret API.
-6. App-tier bootstrap recipes are deleted **only after** the containment contract exists,
-   and only for apps meeting all three eligibility criteria.
+6. App-tier bootstrap recipes are deleted **only after**
+   `install.remediation.remediateLastFailure: true` is set, and only for apps meeting all
+   four eligibility criteria. Containment is `HelmRelease` remediation, which already
+   exists; `retryInterval` and a per-Kustomization alert threshold are explicitly not
+   part of it.
 7. Platform tier is defined by objective criteria, not a list. qBittorrent is exempt;
    `metrics-server` is retained pending its own review.
 8. Post-merge acceptance has a named actor, trigger, timeout, evidence location, and
