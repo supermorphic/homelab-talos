@@ -33,6 +33,10 @@ case "$target" in
     suite_id='verification.metrics-server'
     command=(bash -c 'exit 7')
     ;;
+  scoped-nested)
+    suite_id='verification.metrics-server'
+    command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.cilium -- true')
+    ;;
   *)
     echo "Unknown fixture target: $target" >&2
     exit 2
