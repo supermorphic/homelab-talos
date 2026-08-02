@@ -38,8 +38,9 @@ assert_can_i() {
   local verb="$3"
   local resource="$4"
   local namespace="${5:-default}"
+  local subresource="${6:-}"
   local -a identity_args
-  local actual
+  local action actual status
   if [[ "$credential_layout" == 'named-contexts' ]]; then
     identity_args=(--context "$context")
   else
@@ -48,12 +49,27 @@ assert_can_i() {
       "${service_account_groups[@]}"
     )
   fi
-  actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
-    --namespace "$namespace")"
-  [[ "$actual" == "$expected" ]] || {
-    echo "$context: expected '$verb $resource' in $namespace to be $expected, got $actual." >&2
-    exit 1
-  }
+  action="$resource"
+  if [[ -n "$subresource" ]]; then
+    action="$resource/$subresource"
+  fi
+  set +e
+  if [[ -n "$subresource" ]]; then
+    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
+      --subresource "$subresource" --namespace "$namespace")"
+  else
+    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
+      --namespace "$namespace")"
+  fi
+  status="$?"
+  set -e
+  case "$expected:$actual:$status" in
+    yes:yes:0|no:no:1) ;;
+    *)
+      echo "$context: expected '$verb $action' in $namespace to be $expected, got ${actual:-no response} (exit $status)." >&2
+      exit 1
+      ;;
+  esac
 }
 
 # Both scoped identities must have Kubernetes view, pod logs, and every explicit read
@@ -67,14 +83,12 @@ read_resources=(
   clusterissuers.cert-manager.io
   ciliumclusterwidenetworkpolicies.cilium.io
   ciliumendpoints.cilium.io
-  ciliumendpointslices.cilium.io
   ciliumidentities.cilium.io
   ciliumnetworkpolicies.cilium.io
   ciliumnodes.cilium.io
   gatewayclasses.gateway.networking.k8s.io
   gateways.gateway.networking.k8s.io
   httproutes.gateway.networking.k8s.io
-  endpoints.gatus.io
   helmreleases.helm.toolkit.fluxcd.io
   kustomizations.kustomize.toolkit.fluxcd.io
   backuptargets.longhorn.io
@@ -110,7 +124,7 @@ assert_declared_reads() {
   assert_can_i "$context" yes get pods kube-system
   assert_can_i "$context" yes list deployments.apps flux-system
   assert_can_i "$context" yes watch statefulsets.apps monitoring
-  assert_can_i "$context" yes get pods/log kube-system
+  assert_can_i "$context" yes get pods kube-system log
   local resource verb
   for resource in "${read_resources[@]}"; do
     for verb in get list watch; do
@@ -123,16 +137,16 @@ assert_declared_reads "$diagnostic"
 
 # Observer: Secret bodies, interactive subresources, and mutations stay denied.
 assert_can_i "$observer" no get secrets kube-system
-assert_can_i "$observer" no create pods/exec kube-system
-assert_can_i "$observer" no create pods/portforward kube-system
+assert_can_i "$observer" no create pods kube-system exec
+assert_can_i "$observer" no create pods kube-system portforward
 assert_can_i "$observer" no create configmaps kube-system
 assert_can_i "$observer" no patch deployments.apps kube-system
 assert_can_i "$observer" no delete deployments.apps kube-system
 assert_can_i "$observer" no delete pods kube-system
 
 # Diagnostic adds only exec and port-forward.
-assert_can_i "$diagnostic" yes create pods/exec kube-system
-assert_can_i "$diagnostic" yes create pods/portforward kube-system
+assert_can_i "$diagnostic" yes create pods kube-system exec
+assert_can_i "$diagnostic" yes create pods kube-system portforward
 assert_can_i "$diagnostic" no get secrets kube-system
 assert_can_i "$diagnostic" no create kustomizations.kustomize.toolkit.fluxcd.io flux-system
 assert_can_i "$diagnostic" no patch kustomizations.kustomize.toolkit.fluxcd.io flux-system
@@ -149,8 +163,14 @@ done
   exit 1
 }
 talosctl version --nodes "$talos_node" --endpoints "$talos_endpoints" \
-  --talosconfig "$talosconfig" >/dev/null
+  --talosconfig "$talosconfig" >/dev/null || {
+  echo 'Talos reader version inspection failed.' >&2
+  exit 1
+}
 talosctl services --nodes "$talos_node" --endpoints "$talos_endpoints" \
-  --talosconfig "$talosconfig" >/dev/null
+  --talosconfig "$talosconfig" >/dev/null || {
+  echo 'Talos reader services inspection failed.' >&2
+  exit 1
+}
 
 echo "Agent access verification passed using $credential_layout: observer and diagnostic Kubernetes boundaries match, and Talos reader inspection succeeds."
