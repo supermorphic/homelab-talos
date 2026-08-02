@@ -988,6 +988,18 @@ deleted, and policy must exist before the assertions it replaces are deleted.
     by a manual `export`, and never enters an agent session. `just ci` remains
     secret-free.
 
+## Review history
+
+The retained review package records the full path from the review brief through the
+independent findings to their verified disposition:
+
+1. [Review request](reviews/2026-08-02-agent-rules-audit-request.md)
+2. [Independent review](reviews/2026-08-02-agent-rules-audit-review.md)
+3. [Review response and disposition](reviews/2026-08-02-agent-rules-audit-response.md)
+
+The summary below records the resulting decision; the linked artifacts preserve the
+review evidence and the reasoning applied to each finding.
+
 ## Review disposition
 
 Independent review of 2026-08-02 raised seven blocking findings, six important, and three
