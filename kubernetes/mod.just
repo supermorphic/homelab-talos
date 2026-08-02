@@ -578,6 +578,11 @@ seerr-validate: require-bash
 tautulli-validate: require-bash
     @scripts/validate/tautulli.sh
 
+# Validate the isolated media-alerts Flux dependency/placement contract, then extract the
+# manifest rule spec and run promtool syntax and temporal/matcher unit tests.
+media-alerts-validate: require-bash
+    @scripts/validate/media-alerts.sh
+
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash

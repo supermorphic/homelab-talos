@@ -1,0 +1,93 @@
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media", name="seerr"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media", name="qbittorrent-vpn"}'
+        values: '0x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: MediaEndpointDown
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: MediaEndpointDown
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media, name: plex}
+            exp_annotations:
+              summary: Media endpoint plex is down
+              description: The Media/plex Gatus endpoint has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: Media, name: seerr}
+            exp_annotations:
+              summary: Media endpoint seerr is down
+              description: The Media/seerr Gatus endpoint has failed continuously for 15 minutes.
+      - eval_time: 21m
+        alertname: MediaEndpointDown
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Platform", name="ntfy"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
+        values: '_x18 1x6'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: MediaEndpointsProbeMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: MediaEndpointsProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media}
+            exp_annotations:
+              summary: All media endpoint probe metrics are missing
+              description: Gatus has exposed no Media endpoint success series for 15 minutes.
+      - eval_time: 20m
+        alertname: MediaEndpointsProbeMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media", name="seerr"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
+        values: '_x18 1x6'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PlexProbeMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PlexProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media, name: plex}
+            exp_annotations:
+              summary: Plex probe metric is missing
+              description: The Media/plex Gatus success series has been absent for 15 minutes.
+      - eval_time: 20m
+        alertname: PlexProbeMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="other", phase="Bound"}'
+        values: '1x14'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="plex", phase="Bound"}'
+        values: '_x8 1x6'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PlexPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PlexPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Plex database claim is absent or unbound
+              description: The media/plex PVC has not reported Bound for five minutes; Plex library state is at risk.
+      - eval_time: 10m
+        alertname: PlexPersistentVolumeClaimNotBound
+        exp_alerts: []

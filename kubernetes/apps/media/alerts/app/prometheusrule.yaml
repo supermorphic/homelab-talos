@@ -1,0 +1,46 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: media-alerts
+  namespace: media
+  labels:
+    app.kubernetes.io/name: media-alerts
+spec:
+  groups:
+    - name: media-availability
+      rules:
+        - alert: MediaEndpointDown
+          expr: gatus_results_endpoint_success{group="Media", name!="qbittorrent-vpn"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Media endpoint {{ $labels.name }} is down'
+            description: 'The Media/{{ $labels.name }} Gatus endpoint has failed continuously for 15 minutes.'
+        - alert: MediaEndpointsProbeMissing
+          expr: absent(gatus_results_endpoint_success{group="Media"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: All media endpoint probe metrics are missing
+            description: Gatus has exposed no Media endpoint success series for 15 minutes.
+        - alert: PlexProbeMissing
+          expr: absent(gatus_results_endpoint_success{group="Media", name="plex"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Plex probe metric is missing
+            description: The Media/plex Gatus success series has been absent for 15 minutes.
+    - name: media-persistence
+      rules:
+        - alert: PlexPersistentVolumeClaimNotBound
+          expr: absent(kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="plex", phase="Bound"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Plex database claim is absent or unbound
+            description: The media/plex PVC has not reported Bound for five minutes; Plex library state is at risk.

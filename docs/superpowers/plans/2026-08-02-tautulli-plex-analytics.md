@@ -650,7 +650,7 @@ tests:
       - eval_time: 17m
         alertname: MediaEndpointDown
         exp_alerts: []
-      - eval_time: 18m
+      - eval_time: 19m
         alertname: MediaEndpointDown
         exp_alerts:
           - exp_labels: {severity: warning, group: Media, name: plex}
@@ -661,7 +661,7 @@ tests:
             exp_annotations:
               summary: Media endpoint seerr is down
               description: The Media/seerr Gatus endpoint has failed continuously for 15 minutes.
-      - eval_time: 20m
+      - eval_time: 21m
         alertname: MediaEndpointDown
         exp_alerts: []
 
@@ -720,7 +720,7 @@ tests:
       - eval_time: 6m
         alertname: PlexPersistentVolumeClaimNotBound
         exp_alerts:
-          - exp_labels: {severity: critical, namespace: media, persistentvolumeclaim: plex, phase: Bound}
+          - exp_labels: {severity: critical}
             exp_annotations:
               summary: Plex database claim is absent or unbound
               description: The media/plex PVC has not reported Bound for five minutes; Plex library state is at risk.
@@ -1438,7 +1438,7 @@ Append:
       - eval_time: 6m
         alertname: TautulliPersistentVolumeClaimNotBound
         exp_alerts:
-          - exp_labels: {severity: warning, namespace: media, persistentvolumeclaim: tautulli, phase: Bound}
+          - exp_labels: {severity: warning}
             exp_annotations:
               summary: Tautulli database claim is absent or unbound
               description: The media/tautulli PVC has not reported Bound for five minutes; watch history persistence is at risk.
