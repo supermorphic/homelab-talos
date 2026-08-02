@@ -1180,8 +1180,8 @@ require-bash:
 # entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
 verify-shell-scripts:
-    @for script in scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
-    @for script in $(find scripts/secrets scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
+    @for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
+    @for script in $(find scripts/hooks scripts/repository scripts/secrets scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
       bash -n "$script"; \
       shellcheck --external-sources "$script"; \
     done
@@ -1190,6 +1190,7 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
+    @if rg --files docs/decisions/reviews | rg --pcre2 -q '/([0-9]{4}-[0-9]{2}-[0-9]{2})-\1-'; then echo "decision review filenames must not repeat their ISO date" >&2; exit 1; fi
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config
@@ -1203,7 +1204,11 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 24  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 25  # Update when adding/removing a guarded rollout recipe.
+    @agent_access_recipe="$(just --dry-run bootstrap agent-access 2>&1)"; \
+      normalized_recipe="$(tr '\n\t' '  ' <<<"$agent_access_recipe" | sed -E 's/\\[[:space:]]+/ /g; s/[[:space:]]+/ /g')"; \
+      matrix_contract="scripts/verify/agent-access.sh \"\$kubeconfig\" '.talos/config'"; \
+      rg -Fq -- "$matrix_contract" <<<"$normalized_recipe" || { echo 'agent-access bootstrap must run the shared complete authorization matrix' >&2; exit 1; }
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi

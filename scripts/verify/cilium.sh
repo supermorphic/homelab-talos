@@ -22,17 +22,19 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
 [[ "$api_server" == 'https://192.168.90.20:6443' ]]
 
-release_json="$(helm list --namespace kube-system --kubeconfig "$kubeconfig" --output json)"
-[[ "$(yq -r '.[] | select(.name == "cilium") | .status' - <<<"$release_json")" == 'deployed' ]]
-# Strip any Helm OCI +buildmetadata suffix (e.g. cilium-1.19.6+b8d600c542c9) before the
-# version match, so a repackaged chart digest does not fail the assertion.
-cilium_chart="$(yq -r '.[] | select(.name == "cilium") | .chart' - <<<"$release_json")"
-[[ "${cilium_chart%%+*}" == 'cilium-1.19.6' ]]
+release_json="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system \
+  get helmrelease cilium --output json)"
+[[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$release_json")" == 'True' ]]
+[[ "$(yq -r '.status.observedGeneration' - <<<"$release_json")" == \
+  "$(yq -r '.metadata.generation' - <<<"$release_json")" ]]
+[[ "$(yq -r '.status.history[0].chartName' - <<<"$release_json")" == 'cilium' ]]
+[[ "$(yq -r '.status.history[0].chartVersion' - <<<"$release_json")" == '1.19.6' ]]
 
-helm get values cilium \
-  --namespace kube-system \
-  --kubeconfig "$kubeconfig" \
-  --output yaml >"$temp_dir/live-values.yaml"
+# The HelmRelease consumes this ConfigMap as its sole valuesFrom source. Ready at the
+# observed generation plus exact ConfigMap contents preserves the live values oracle
+# without asking Helm to read its Secret-backed release storage.
+kubectl --kubeconfig "$kubeconfig" --namespace kube-system get configmap cilium-values \
+  --output go-template='{{ index .data "values.yaml" }}' >"$temp_dir/live-values.yaml"
 yq -o=json -I=0 'sort_keys(..)' "$values_file" >"$temp_dir/expected-values.json"
 yq -o=json -I=0 'sort_keys(..)' "$temp_dir/live-values.yaml" >"$temp_dir/normalized-live-values.json"
 cmp -s "$temp_dir/expected-values.json" "$temp_dir/normalized-live-values.json" || {

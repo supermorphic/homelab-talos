@@ -2348,6 +2348,77 @@ metrics-server:
     bootstrap_complete=true
     echo 'metrics-server live acceptance passed. Change the Git source to suspend=false, commit, push, and rerun just kube metrics-server-verify.'
 
+# Reconcile the suspended agent-access RBAC after validating the complete policy.
+# On failure the resumed Kustomization is re-suspended while preserving resources.
+agent-access:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:agent-access'
+    ks='kubernetes/apps/kube-system/agent-access/ks.yaml'
+    app='kubernetes/apps/kube-system/agent-access/app'
+    policy='tests/policy/agent-access'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-agent-access.XXXXXX)"
+    resumed=false
+    bootstrap_complete=false
+    cleanup_agent_access() {
+      rm -rf -- "$temp_dir"
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'agent-access did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization agent-access --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_agent_access EXIT
+
+    # Validate the policy and the exact rendered RBAC before any cluster access.
+    conftest fmt --check "$policy"
+    conftest verify --policy "$policy"
+    kustomize build "$app" >"$temp_dir/rendered.yaml"
+    conftest test --combine --all-namespaces --policy "$policy" "$temp_dir/rendered.yaml"
+
+    source scripts/lib/rollout.sh
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    require_deployed_source 'agent-access bootstrap' \
+      .just/bootstrap.just \
+      kubernetes/apps/kube-system/kustomization.yaml \
+      kubernetes/apps/kube-system/agent-access \
+      tests/policy/agent-access
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing agent-access bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+    [[ "${AGENT_ACCESS_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile agent-access.' >&2
+      echo "Set AGENT_ACCESS_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the rendered RBAC and policy." >&2
+      exit 1
+    }
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization agent-access --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing agent-access bootstrap: agent-access is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    echo 'Reconciling only the agent-access Kustomization.'
+    resumed=true
+    flux resume kustomization agent-access --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization agent-access \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 5m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/agent-access --timeout=5m
+
+    # With an admin kubeconfig, the shared verifier selects its complete ServiceAccount
+    # impersonation path (username plus all three Kubernetes identity groups). Worktree
+    # scoped contexts use the same matrix directly without impersonation.
+    scripts/verify/agent-access.sh "$kubeconfig" '{{talosconfig}}'
+
+    bootstrap_complete=true
+    echo 'agent-access authorization acceptance passed. Change the Git source to suspend=false in a separate reviewed change.'
+
 # Guard, reboot one node, and require full recovery before returning. Refuses
 # unless the cluster is already healthy so a rolling reboot never removes a second
 # node while another is degraded. Reused for Phase 8 soak and day-two maintenance.

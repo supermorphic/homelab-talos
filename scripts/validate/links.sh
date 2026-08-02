@@ -14,9 +14,10 @@ if [[ "$repo_root" != "$git_root" ]]; then
   exit 1
 fi
 
-# Design specs and implementation plans deliberately name paths that do not exist
-# yet, so they are the one tracked subtree this validator does not scan.
-exclude_spec=':(exclude)docs/superpowers/*'
+# Design specs and decision records deliberately name paths that do not exist yet, and
+# an accepted record is immutable so a moved target could never be repaired in place.
+# These are the only tracked subtrees this validator does not scan.
+exclude_specs=(':(exclude)docs/superpowers/*' ':(exclude)docs/decisions/*')
 
 failed=0
 
@@ -153,13 +154,13 @@ bare_paths="$(mktemp)"
 trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
 
 markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\((?:\\\\.|[^()])*\\)))?\\)"
-git ls-files -z '*.md' "$exclude_spec" >"$markdown_paths"
+git ls-files -z '*.md' "${exclude_specs[@]}" >"$markdown_paths"
 while IFS= read -r -d '' source; do
   scan_markdown "$source"
 done <"$markdown_paths"
 
 bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
-git ls-files -z "$exclude_spec" >"$bare_paths"
+git ls-files -z "${exclude_specs[@]}" >"$bare_paths"
 while IFS= read -r -d '' source; do
   scan_bare_path "$source"
 done <"$bare_paths"

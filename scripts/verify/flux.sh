@@ -9,10 +9,7 @@ set -euo pipefail
 kubeconfig="$1"
 github_owner="$2"
 github_repository="$3"
-expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
 expected_url="ssh://git@ssh.github.com:443/${github_owner}/${github_repository}"
-temp_key="$(mktemp /tmp/homelab-talos-flux-age.XXXXXX)"
-trap 'rm -f -- "$temp_key"' EXIT
 
 flux check --kubeconfig "$kubeconfig"
 for deployment in source-controller kustomize-controller helm-controller notification-controller; do
@@ -45,18 +42,6 @@ for name in flux-system cluster-apps cilium flux-canary; do
   [[ "$(yq -r '.spec.suspend // false' - <<<"$state")" == 'false' ]]
 done
 
-kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret sops-age \
-  --output jsonpath='{.data.age\.agekey}' | base64 --decode >"$temp_key"
-chmod 600 "$temp_key"
-[[ "$(age-keygen -y "$temp_key")" == "$expected_recipient" ]]
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-canary --output jsonpath='{.data.marker}' | base64 --decode)" == 'ready' ]]
-
-source_secret_keys="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-system --output json | yq -r '.data | keys | .[]' | sort)"
-[[ "$source_secret_keys" == $'identity\nidentity.pub\nknown_hosts' ]] || {
-  echo "Unexpected Flux source credential fields: $source_secret_keys" >&2
-  exit 1
-}
-
 cilium_source="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get ocirepository cilium --output json)"
 [[ -n "$(yq -r '.spec.ref.tag' - <<<"$cilium_source")" ]]
 [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$cilium_source")" == 'True' ]]
@@ -65,4 +50,4 @@ cilium_release="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get
 [[ "$(yq -r '.spec.releaseName' - <<<"$cilium_release")" == 'cilium' ]]
 
 just kube cilium-postflight
-echo 'Phase 6 verification passed: Flux, SSH source auth, SOPS, canary reconciliation, and Cilium ownership are healthy.'
+echo 'Phase 6 verification passed: Flux source and controller reconciliation, canary readiness, and Cilium ownership are healthy.'

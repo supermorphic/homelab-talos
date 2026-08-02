@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import catalog_validator
 import yaml
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -79,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=97.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=98.\n"
     assert completed.stderr == ""
 
 
@@ -177,10 +178,10 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
         "@@ -1,4 +1,3 @@\n"
-        "-verification.alertmanager-ntfy\n"
+        "-verification.agent-access\n"
+        " verification.alertmanager-ntfy\n"
         " verification.cilium\n"
-        " verification.csi-driver-smb\n"
-        " verification.flaresolverr\n",
+        " verification.csi-driver-smb\n",
         normalize_diff=True,
     )
     expect_rejection(
@@ -408,7 +409,7 @@ def campaign_contract(root: Path, canonical: dict[str, Any]) -> None:
         "Test catalog campaign names differ from the supported public interface.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -9,4 +9,3 @@\n"
+        "@@ -10,4 +10,3 @@\n"
         " standard\n"
         " validation\n"
         " verification\n"
@@ -601,6 +602,307 @@ def fail_fast_contract(root: Path, canonical: dict[str, Any]) -> None:
         "Duplicate test catalog IDs: validation.ci\n",
     )
 
+
+def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
+    assert canonical["campaigns"]["scoped-verification"].get("execution_mode") == (
+        "scoped-local"
+    ), "scoped-verification does not declare scoped-local execution"
+    assert canonical["campaigns"]["verification"].get("execution_mode") == (
+        "operator-published"
+    ), "verification does not declare operator-published execution"
+    analyze = catalog_validator.forbidden_kubernetes_operations
+    forbidden_cases = {
+        "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
+        "renamed-secret": 'k=kubectl\n"$k" get --namespace monitoring secret foo',
+        "readonly-renamed-delete": 'readonly cmd=kubectl\n"$cmd" delete pod app',
+        "path-delete": "/usr/local/bin/kubectl delete pod app",
+        "raw-equals": "kubectl get --raw=/api/v1/secrets",
+        "raw-value": "kubectl get --raw /api/v1/pods",
+        "dynamic-command": 'cmd=$(printf kubectl)\n"$cmd" get pods',
+        "unresolved-command": '"$cmd" get pods',
+        "shell-alias": "alias k='kubectl get pods'\nk",
+        "substitution-in-argument": 'echo "$(kubectl get secrets)"',
+        "nested-substitution-in-argument": ('echo "$(printf \'%s\' "$(kubectl get secrets)")"'),
+        "dynamic-command-substitution": "$(printf kubectl) delete pod app",
+        "dynamic-assignment-command": 'tool=$(printf kubectl); "$tool" delete pod app',
+        "env-launcher": "env -i KUBECONFIG=x kubectl delete pod app",
+        "command-launcher": "command -- kubectl delete pod app",
+        "comma-separated-secret": "kubectl get pods,secrets",
+        "builtin-launcher": "builtin -- kubectl delete pod app",
+        "positional-one-command": '"$1" delete pod app',
+        "braced-positional-command": '"${1}" delete pod app',
+        "positional-argv-command": '"$@" delete pod app',
+        "braced-positional-argv-command": '"${@}" delete pod app',
+        "positional-all-command": '"$*" delete pod app',
+        "braced-positional-all-command": '"${*}" delete pod app',
+        "adjacent-positional-command": 'kubectl"$1" delete pod app',
+        "resolved-positional-wrapper-mutation": ('run() { "$@"; }\nrun kubectl delete pod app'),
+        "env-short-split-string": 'env -S "kubectl delete pod app"',
+        "env-attached-split-string": 'env -S"kubectl delete pod app"',
+        "env-long-split-string": 'env --split-string "kubectl delete pod app"',
+        "env-equals-split-string": 'env --split-string="kubectl delete pod app"',
+        "option-between": "kubectl --namespace monitoring get --output name secrets",
+        "namespace-before-secret": "kubectl get -n monitoring secrets",
+        "helper-secret": 'kg() { kubectl get "$@"; }\nkg --output name secrets',
+        "helm-storage": "helm get values cilium --namespace kube-system",
+        "unknown": "kubectl frobnicate pods",
+        "rollout-restart": "kubectl rollout restart deployment/app",
+        "rollout-undo": "kubectl rollout undo deployment/app",
+        "run": "kubectl run shell --image=busybox",
+        "cordon": "kubectl cordon node-a",
+        "uncordon": "kubectl uncordon node-a",
+        "drain": "kubectl drain node-a",
+        "taint": "kubectl taint nodes node-a dedicated=test:NoSchedule",
+        "cp": "kubectl cp pod:/tmp/a ./a",
+        "attach": "kubectl attach pod/app",
+        "debug": "kubectl debug pod/app --image=busybox",
+        "create": "kubectl create configmap sample",
+        "replace": "kubectl replace --filename object.yaml",
+        "apply": "kubectl apply --filename object.yaml",
+        "delete": "kubectl delete pod app",
+        "edit": "kubectl edit deployment app",
+        "patch": "kubectl --namespace default patch deployment app -p {}",
+        "scale": "kubectl scale deployment app --replicas=2",
+        "set": "kubectl set image deployment/app app=image",
+        "label": "kubectl label pod app changed=true",
+        "annotate": "kubectl annotate pod app changed=true",
+        "expose": "kubectl expose deployment app",
+        "autoscale": "kubectl autoscale deployment app --min=1 --max=2",
+    }
+    for name, source in forbidden_cases.items():
+        assert analyze(source), f"{name}: forbidden operation was not detected"
+    safe_cases = {
+        "get": "kubectl --namespace default get pods",
+        "secret-as-name": "kubectl get pod secret",
+        "echo-command-text": "echo kubectl delete pods",
+        "printf-command-text": "printf '%s\\n' 'kubectl get secrets'",
+        "assignment-only": "note=kubectl",
+        "safe-substitution": 'echo "$(kubectl get pods)"',
+        "single-quoted-substitution-text": "echo '$(kubectl get secrets)'",
+        "safe-env-launcher": "env -i LANG=C kubectl get pods",
+        "safe-command-launcher": "command -- kubectl get pod secret",
+        "safe-command-lookup": "command -v kubectl",
+        "safe-builtin-launcher": "builtin -- kubectl get pods",
+        "positional-ordinary-argument": 'kubectl get pod "$1"',
+        "positional-argv-ordinary-argument": 'echo "$@"',
+        "resolved-positional-wrapper-read": 'run() { "$@"; }\nrun kubectl get pods',
+        "describe": "kubectl describe pod app",
+        "logs": "kubectl logs deployment/app --tail=10",
+        "wait": "kubectl wait --for=condition=Ready pod/app",
+        "rollout-status": "kubectl rollout status deployment/app",
+        "auth-can-i": "kubectl auth can-i get secrets",
+        "config-contexts": "kubectl config get-contexts homelab-observer",
+        "config-current": "kubectl config current-context",
+        "config-view": "kubectl config view --minify",
+        "api-resources": "kubectl api-resources",
+        "api-versions": "kubectl api-versions",
+        "version": "kubectl version --client",
+        "top": "kubectl top nodes",
+    }
+    for name, source in safe_cases.items():
+        assert analyze(source) == [], f"{name}: safe operation was rejected: {analyze(source)}"
+    assert analyze("kubectl exec deployment/app -- true", allow_interactive=True) == []
+    assert analyze("kubectl port-forward service/app 8080:80", allow_interactive=True) == []
+    assert analyze("kubectl exec deployment/app -- true"), "observer exec was accepted"
+    assert analyze("kubectl port-forward service/app 8080:80"), (
+        "observer port-forward was accepted"
+    )
+    assert analyze("assert_can_i observer no create pods/exec") == []
+
+    fixture = root / "access-reachability"
+    (fixture / "scripts/verify").mkdir(parents=True)
+    (fixture / "kubernetes").mkdir()
+    (fixture / "scripts/verify/root.sh").write_text(
+        "#!/usr/bin/env bash\njust kube root-check\n", encoding="utf-8"
+    )
+    (fixture / "kubernetes/mod.just").write_text(
+        "root-check: nested-check\n    true\n"
+        "nested-check:\n    kubectl get --output name secrets\n",
+        encoding="utf-8",
+    )
+    reachable = catalog_validator.reachable_verifier_source(fixture, "scripts/verify/root.sh")
+    assert analyze(reachable), "nested Just recipe bypass was not detected"
+
+    lease_fixture = root / "lease-reachability"
+    (lease_fixture / "scripts/verify").mkdir(parents=True)
+    (lease_fixture / "scripts/test/lib").mkdir(parents=True)
+    (lease_fixture / "kubernetes").mkdir()
+    (lease_fixture / "scripts/verify/root.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "source scripts/test/lib/lease.sh\n"
+        "lease_kubectl cfg delete lease lock\n",
+        encoding="utf-8",
+    )
+    (lease_fixture / "scripts/test/lib/lease.sh").write_text(
+        "lease_kubectl() {\n"
+        '  local kubeconfig="$1"\n'
+        "  shift\n"
+        '  "${TEST_LEASE_KUBECTL:-kubectl}" --kubeconfig "$kubeconfig" "$@"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (lease_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    lease_source = catalog_validator.reachable_verifier_source(
+        lease_fixture, "scripts/verify/root.sh"
+    )
+    assert analyze(lease_source) == ["kubectl subcommand (delete)"], (
+        f"indirect lease_kubectl mutation was not resolved: {analyze(lease_source)}"
+    )
+
+    escape = root / "escape.sh"
+    escape.write_text("kubectl delete pods --all\n", encoding="utf-8")
+    traversal_root = root / "traversal"
+    traversal_root.mkdir()
+    try:
+        catalog_validator.reachable_verifier_source(traversal_root, "../escape.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "outside repository root" in failure.message
+    else:
+        raise AssertionError("implementation path traversal was accepted")
+
+    dynamic_fixture = root / "dynamic-reachability"
+    (dynamic_fixture / "scripts/verify").mkdir(parents=True)
+    (dynamic_fixture / "kubernetes").mkdir()
+    (dynamic_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nhelper="scripts/verify/helper.sh"\nsource "$helper"\n',
+        encoding="utf-8",
+    )
+    (dynamic_fixture / "scripts/verify/helper.sh").write_text("true\n", encoding="utf-8")
+    (dynamic_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    try:
+        catalog_validator.reachable_verifier_source(dynamic_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic source target" in failure.message
+    else:
+        raise AssertionError("dynamic source target was accepted")
+
+    (dynamic_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nrecipe="nested"\njust kube "$recipe"\n',
+        encoding="utf-8",
+    )
+    try:
+        catalog_validator.reachable_verifier_source(dynamic_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic Just recipe target" in failure.message
+    else:
+        raise AssertionError("dynamic Just recipe target was accepted")
+
+    assert analyze('runner() { "$command" "$@"; }\nrunner get pods'), (
+        "unresolved dynamic wrapper was accepted"
+    )
+
+    helper_fixture = root / "executable-helper-reachability"
+    (helper_fixture / "scripts/verify").mkdir(parents=True)
+    (helper_fixture / "kubernetes").mkdir()
+    (helper_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nreadonly verifier=scripts/verify/helper.sh\n"$verifier"\n',
+        encoding="utf-8",
+    )
+    (helper_fixture / "scripts/verify/helper.sh").write_text(
+        "kubectl delete pod app\n", encoding="utf-8"
+    )
+    (helper_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    helper_source = catalog_validator.reachable_verifier_source(
+        helper_fixture, "scripts/verify/root.sh"
+    )
+    assert analyze(helper_source) == ["kubectl subcommand (delete)"], (
+        "literal executable helper variable was not traversed"
+    )
+
+    (helper_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nhelper="${HELPER_PATH}"\n"$helper"\n',
+        encoding="utf-8",
+    )
+    try:
+        catalog_validator.reachable_verifier_source(helper_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic executable helper" in failure.message
+    else:
+        raise AssertionError("dynamic executable helper variable was accepted")
+
+    def diagnostic_without_context(data: dict[str, Any]) -> None:
+        suite(data, "verification.homepage")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "diagnostic-context-contract",
+        diagnostic_without_context,
+        "Diagnostic verifier verification.homepage must select homelab-diagnostic "
+        "conditionally.\n",
+    )
+
+    def agent_access_without_matrix(data: dict[str, Any]) -> None:
+        suite(data, "verification.agent-access")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "agent-access-matrix-contract",
+        agent_access_without_matrix,
+        "verification.agent-access does not cover the required authorization matrix.\n",
+    )
+
+    def portainer_without_rbac_oracle(data: dict[str, Any]) -> None:
+        suite(data, "verification.portainer")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "portainer-rbac-oracle",
+        portainer_without_rbac_oracle,
+        "verification.portainer must prove exact live RBAC without impersonation.\n",
+    )
+
+    def campaign_rbac_drift(data: dict[str, Any]) -> None:
+        data["campaigns"]["scoped-verification"]["access"]["required_read_rules"][
+            "cilium.io"
+        ].remove("ciliumnodes")
+
+    expect_rejection(
+        root,
+        canonical,
+        "scoped-campaign-rbac-drift",
+        campaign_rbac_drift,
+        "Scoped verifier campaign requirements and observer RBAC grants differ.\n",
+    )
+
+    def operator_only_full_campaign(data: dict[str, Any]) -> None:
+        suite(data, "verification.monitoring")["access"]["tier"] = "operator"
+        data["campaigns"]["scoped-verification"]["members"].remove("verification.monitoring")
+
+    expect_acceptance(
+        root,
+        canonical,
+        "operator-only-full-campaign",
+        operator_only_full_campaign,
+    )
+
+    expect_rejection(
+        root,
+        canonical,
+        "wrong-scoped-execution-mode",
+        lambda data: data["campaigns"]["scoped-verification"].__setitem__(
+            "execution_mode", "operator-published"
+        ),
+        "Campaign scoped-verification must use scoped-local execution.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "wrong-operator-execution-mode",
+        lambda data: data["campaigns"]["verification"].__setitem__(
+            "execution_mode", "scoped-local"
+        ),
+        "Campaign verification must use operator-published execution.\n",
+    )
+
     def entry_before_campaign(data: dict[str, Any]) -> None:
         suite(data, "validation.ci")["metadata"]["source"] = "other"
         data["campaigns"]["standard"]["includes"].append("full")
@@ -630,7 +932,7 @@ def fail_fast_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=97.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=98.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {
@@ -643,6 +945,7 @@ def main() -> int:
         "campaign-composition": campaign_composition_contract,
         "execution": execution_contract,
         "fail-fast": fail_fast_contract,
+        "access-boundary": access_boundary_contract,
     }
     selected = sys.argv[1:] or list(groups)
     unknown = set(selected) - groups.keys()

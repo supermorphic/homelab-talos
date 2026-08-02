@@ -19,7 +19,11 @@ yq -i '
   (.suites[] | select(.metadata.id == "verification.metrics-server") |
     .runner.command) = "mise exec -- just fixture pass" |
   (.suites[] | select(.metadata.id == "verification.cilium") |
-    .runner.command) = "mise exec -- just fixture fail"
+    .runner.command) = "mise exec -- just fixture fail" |
+  .campaigns."scoped-verification".members = [
+    "verification.metrics-server",
+    "verification.cilium"
+  ]
 ' "$catalog"
 mkdir -p "$fixture/bin"
 ln -s "$repo_root/tests/fixtures/campaign/fake-mise.sh" "$fixture/bin/mise"
@@ -68,7 +72,10 @@ set +e
 run_fixture_campaign "$complete_root" env >"$fixture/complete.log" 2>&1
 complete_exit="$?"
 set -e
-[[ "$complete_exit" -eq 1 ]]
+[[ "$complete_exit" -eq 1 ]] || {
+  sed -n '1,240p' "$fixture/complete.log" >&2
+  exit 1
+}
 complete_manifest="$(find "$complete_root/campaigns" -name campaign.json -print)"
 [[ "$(yq -r '.status' "$complete_manifest")" == 'completed' ]] || {
   sed -n '1,240p' "$fixture/complete.log" >&2
@@ -138,5 +145,156 @@ drift_manifest="$(find "$drift_root/campaigns" -name campaign.json -print)"
 [[ "$(yq -r '.runs[0].publish_status' "$drift_manifest")" == \
   'not-published-source-drift' ]]
 [[ ! -s "$drift_root/publishes" ]]
+
+scoped_root="$fixture/scoped"
+mkdir -p "$scoped_root"
+touch "$scoped_root/publishes" "$scoped_root/lease-calls" "$scoped_root/source-calls"
+touch "$scoped_root/preflight-calls"
+yq -i '
+  (.suites[] | select(.metadata.id == "verification.metrics-server") |
+    .runner.command) = "mise exec -- just fixture scoped-pass" |
+  (.suites[] | select(.metadata.id == "verification.cilium") |
+    .runner.command) = "mise exec -- just fixture scoped-fail"
+' "$catalog"
+scoped_plan="$scoped_root/plan.log"
+PATH="$fixture/bin:$PATH" \
+CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+CAMPAIGN_TEST_COMMAND_CALLS="$scoped_root/commands" \
+CAMPAIGN_TEST_PUBLISH_CALLS="$scoped_root/publishes" \
+TEST_CATALOG_PATH="$catalog" \
+TEST_RESULTS_ROOT="$scoped_root/results" \
+TEST_CAMPAIGNS_ROOT="$scoped_root/campaigns" \
+TEST_CAMPAIGN_TEST_MODE=true \
+TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
+TEST_SCOPED_PREFLIGHT_CALLS="$scoped_root/preflight-calls" \
+TEST_EXECUTION_ORIGIN=agent \
+KUBECONFIG="$fixture/kubeconfig" \
+  "$repo_root/scripts/test/run-campaign.sh" scoped-plan scoped-verification \
+  >"$scoped_plan"
+rg -q "TEST_SCOPED_CAMPAIGN_CONFIRM='run-local:scoped-verification'" "$scoped_plan"
+rg -q '^Mode: scoped local-only$' "$scoped_plan"
+
+set +e
+PATH="$fixture/bin:$PATH" \
+CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+CAMPAIGN_TEST_COMMAND_CALLS="$scoped_root/commands" \
+CAMPAIGN_TEST_PUBLISH_CALLS="$scoped_root/publishes" \
+TEST_CATALOG_PATH="$catalog" \
+TEST_RESULTS_ROOT="$scoped_root/results" \
+TEST_CAMPAIGNS_ROOT="$scoped_root/campaigns" \
+TEST_CAMPAIGN_TEST_MODE=true \
+TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
+TEST_SCOPED_PREFLIGHT_CALLS="$scoped_root/preflight-calls" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/forbidden-kubectl.sh" \
+FORBIDDEN_KUBECTL_CALLS="$scoped_root/lease-calls" \
+TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/forbidden-source-check.sh" \
+FORBIDDEN_SOURCE_CALLS="$scoped_root/source-calls" \
+TEST_EXECUTION_ORIGIN=agent \
+KUBECONFIG="$fixture/kubeconfig" \
+TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+  "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
+  >"$scoped_root/run.log" 2>&1
+scoped_exit="$?"
+set -e
+[[ "$scoped_exit" -eq 1 ]]
+scoped_manifest="$(find "$scoped_root/campaigns" -name campaign.json -print)"
+[[ "$(yq -r '.status' "$scoped_manifest")" == 'completed' ]]
+[[ "$(yq -r '.result' "$scoped_manifest")" == 'failed' ]]
+[[ "$(yq -r '.runs | length' "$scoped_manifest")" == '2' ]]
+[[ "$(yq -r '[.runs[].publish_status] | unique | join(",")' \
+  "$scoped_manifest")" == 'local-only' ]]
+[[ "$(cat "$scoped_root/commands")" == $'scoped-pass\nscoped-fail' ]]
+[[ ! -s "$scoped_root/publishes" ]]
+[[ ! -s "$scoped_root/lease-calls" ]]
+[[ ! -s "$scoped_root/source-calls" ]]
+[[ "$(wc -l <"$scoped_root/preflight-calls" | tr -d ' ')" == '2' ]]
+if rg -q 'SCOPED_CHILD_OUTPUT' "$scoped_root/run.log"; then
+  echo 'Scoped campaign streamed child output to the terminal.' >&2
+  exit 1
+fi
+while IFS= read -r run_dir; do
+  "$repo_root/scripts/test/validate-run.sh" "$run_dir"
+done < <(find "$scoped_root/results" -mindepth 1 -maxdepth 1 -type d -print)
+
+scoped_resume_root="$fixture/scoped-resume"
+scoped_resume_id="$(yq -r '.campaign_id' "$scoped_manifest")"
+mkdir -p "$scoped_resume_root/campaigns/$scoped_resume_id"
+cp "$scoped_manifest" "$scoped_resume_root/campaigns/$scoped_resume_id/campaign.json"
+yq -i '.status = "publish-failed"' \
+  "$scoped_resume_root/campaigns/$scoped_resume_id/campaign.json"
+if CAMPAIGN_TEST_SOURCE_STATE="$scoped_resume_root/source-state" \
+  TEST_CATALOG_PATH="$catalog" \
+  TEST_RESULTS_ROOT="$scoped_root/results" \
+  TEST_CAMPAIGNS_ROOT="$scoped_resume_root/campaigns" \
+  TEST_CAMPAIGN_TEST_MODE=true \
+  TEST_CAMPAIGN_SKIP_LEASE=true \
+  TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
+  TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+  TEST_CAMPAIGN_CONFIRM="resume-publish:$scoped_resume_id" \
+  KUBECONFIG="$fixture/kubeconfig" \
+    "$repo_root/scripts/test/run-campaign.sh" resume "$scoped_resume_id" \
+    >"$scoped_resume_root/resume.out" 2>&1; then
+  echo 'Scoped-local campaign unexpectedly accepted operator resume.' >&2
+  exit 1
+fi
+rg -q 'scoped-local campaigns cannot be resumed or published' \
+  "$scoped_resume_root/resume.out"
+
+run_scoped_mismatch() {
+  local target="$1"
+  local expected_exit="$2"
+  local expected_status="$3"
+  local expected_result="$4"
+  local root="$fixture/$target"
+  mkdir -p "$root"
+  touch "$root/commands" "$root/publishes"
+  yq -i '
+    .campaigns."scoped-verification".members = ["verification.metrics-server"] |
+    (.suites[] | select(.metadata.id == "verification.metrics-server") |
+      .runner.command) = "mise exec -- just fixture '"$target"'"
+  ' "$catalog"
+  set +e
+  PATH="$fixture/bin:$PATH" \
+  CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+  CAMPAIGN_TEST_COMMAND_CALLS="$root/commands" \
+  CAMPAIGN_TEST_PUBLISH_CALLS="$root/publishes" \
+  TEST_CATALOG_PATH="$catalog" \
+  TEST_RESULTS_ROOT="$root/results" \
+  TEST_CAMPAIGNS_ROOT="$root/campaigns" \
+  TEST_CAMPAIGN_TEST_MODE=true \
+  TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+  TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
+  TEST_EXECUTION_ORIGIN=agent \
+  KUBECONFIG="$fixture/kubeconfig" \
+  TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+    "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
+    >"$root/run.out" 2>&1
+  local status="$?"
+  set -e
+  [[ "$status" -eq "$expected_exit" ]]
+  local result_manifest
+  result_manifest="$(find "$root/campaigns" -name campaign.json -print)"
+  [[ "$(yq -r '.status' "$result_manifest")" == "$expected_status" ]]
+  [[ "$(yq -r '.result' "$result_manifest")" == "$expected_result" ]]
+  [[ ! -s "$root/publishes" ]]
+}
+
+run_scoped_mismatch scoped-exit-mismatch 2 broken broken
+run_scoped_mismatch scoped-result-mismatch 1 completed failed
+
+if TEST_CATALOG_PATH="$catalog" TEST_CAMPAIGN_TEST_MODE=true \
+  TEST_RESULTS_ROOT="$fixture/wrong-mode-results" \
+  TEST_CAMPAIGNS_ROOT="$fixture/wrong-mode-campaigns" \
+  TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
+  TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+  KUBECONFIG="$fixture/kubeconfig" \
+    "$repo_root/scripts/test/run-campaign.sh" run scoped-verification \
+    >"$fixture/wrong-mode.out" 2>&1; then
+  echo 'Operator/published mode unexpectedly accepted scoped-verification.' >&2
+  exit 1
+fi
+rg -q 'scoped-verification requires scoped local-only mode' "$fixture/wrong-mode.out"
 
 echo 'Catalog-backed campaign coordinator tests passed.'

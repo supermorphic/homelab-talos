@@ -10,6 +10,9 @@ kubeconfig="$1"
 ns='ntfy'
 base_url='https://ntfy.lab.supermorphic.com'
 kc=(kubectl --kubeconfig "$kubeconfig")
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
 
 # Do not print credentials, Authorization headers, or message bodies.
 code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
@@ -40,16 +43,19 @@ expected_subscriber_acl=$'user subscriber (role: user, tier: none, server config
   exit 1
 }
 
-# 9-10. Least-privilege token ACLs. Read the publisher tokens from the live Secret via
-# kubectl's own base64decode (portable; never echoed). Negative tests are side-effect
-# free (ntfy rejects before delivering).
-tokens="$("${kc[@]}" --namespace "$ns" get secret ntfy-secret -o go-template='{{ index .data "NTFY_AUTH_TOKENS" | base64decode }}')"
+# 9-10. Least-privilege token ACLs. The diagnostic tier cannot read Secrets. Instead,
+# inspect the already provisioned process environments through the same named exec path
+# used for the runtime ACL check. Values stay in shell variables and are never printed.
+# shellcheck disable=SC2016 # Variables expand in the remote container, not this shell.
+tokens="$("${kc[@]}" --namespace "$ns" exec deployment/ntfy -c app -- \
+  sh -c 'printf %s "$NTFY_AUTH_TOKENS"')"
 token_for() { awk -F, -v u="$1" '{for(i=1;i<=NF;i++){n=split($i,a,":"); if(a[1]==u){print a[2]; exit}}}' <<<"$tokens"; }
 seerr_token="$(token_for seerr)"
 am_token="$(token_for alertmanager)"
 registered_homepage_token="$(token_for homepage)"
-homepage_token="$("${kc[@]}" --namespace homepage get secret homepage-ntfy \
-  -o go-template='{{ index .data "token" | base64decode }}')"
+# shellcheck disable=SC2016 # Variable expands in the remote container, not this shell.
+homepage_token="$("${kc[@]}" --namespace homepage exec deployment/homepage -c homepage -- \
+  sh -c 'printf %s "$HOMEPAGE_VAR_NTFY_TOKEN"')"
 [[ -n "$seerr_token" && -n "$am_token" && -n "$registered_homepage_token" &&
   -n "$homepage_token" ]] || {
   echo 'Could not read the expected seerr/alertmanager/homepage tokens.' >&2
