@@ -39,6 +39,10 @@ allowed=(
   'git push --force-with-lease origin HEAD'
   'mise exec -- git status --short'
   'git clean -f --exclude=-d'
+  'git clean -f; git status -d'
+  'git clean -f && git status -d'
+  'git clean -f || git status -d'
+  'git clean -f | git status -d'
   'echo git reset --hard'
 )
 
@@ -129,7 +133,19 @@ if ! run_session_start >"$session_output" 2>&1; then
 fi
 rg -q 'cluster credentials with unreadable contexts' "$session_output"
 
-main_session="$fixture/session-main.log"
+main_session="$fixture/session-main-absent.log"
+(
+  cd "$main_clone"
+  "$session_start"
+) >"$main_session" 2>&1
+rg -q 'main clone · branch challenge-agent-rules · admin credentials unavailable' "$main_session" || {
+  echo 'Main clone reported admin credentials without a Talos config.' >&2
+  exit 1
+}
+
+mkdir -p "$main_clone/.talos"
+printf '%s\n' 'contexts: {}' >"$main_clone/.talos/config"
+main_session="$fixture/session-main-present.log"
 (
   cd "$main_clone"
   "$session_start"

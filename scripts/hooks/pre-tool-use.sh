@@ -27,6 +27,9 @@ if [[ "$command" =~ ^git[[:space:]]+clean([[:space:]]|$) ]]; then
   dry_run=false
 
   for option in "${command_parts[@]:2}"; do
+    if [[ "$option" == *';'* || "$option" == *'&&'* || "$option" == *'||'* || "$option" == *'|'* ]]; then
+      break
+    fi
     [[ "$option" == '--' ]] && break
 
     case "$option" in

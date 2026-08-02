@@ -12,7 +12,12 @@ fi
 
 if [[ "$repo_root" == "$main_clone_root" ]]; then
   location='main clone'
-  credentials='admin credentials in effect'
+  talosconfig="$repo_root/.talos/config"
+  if [[ -f "$talosconfig" ]]; then
+    credentials='admin credentials in effect'
+  else
+    credentials='admin credentials unavailable'
+  fi
 else
   location='worktree'
   kubeconfig="$repo_root/.kube/config"
