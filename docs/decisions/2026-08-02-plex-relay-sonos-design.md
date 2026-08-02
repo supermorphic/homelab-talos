@@ -1,7 +1,8 @@
 # Plex Relay and Sonos integration — design
 
-Status: approved design; implementation sequenced in the
-[Plex Relay and Sonos implementation plan](../superpowers/plans/2026-08-02-plex-relay-sonos-implementation-plan.md).
+Status: Accepted (2026-08-02)
+Implementation is sequenced in the
+[Plex Relay and Sonos implementation plan](../plans/2026-08-02-plex-relay-sonos-implementation-plan.md).
 Date: 2026-08-02.
 Branch: `investigate-plex-remote-access`.
 
@@ -242,15 +243,15 @@ after writable paths are inventoried and supplied as bounded ephemeral mounts.
 ### 6.3 Network containment
 
 A Plex-specific `CiliumNetworkPolicy` is required before this work is considered
-fully hardened. It will default-deny selected Plex traffic and permit only observed,
-documented paths:
+fully hardened. It will default-deny selected Plex traffic and permit only exact,
+documented paths established by live observation or an accepted source contract:
 
 **Ingress to TCP 32400**
 
 - internal Envoy Gateway;
 - Homepage's Plex widget;
 - the named media applications that use Plex's runtime connector, including Seerr,
-  Sonarr, Radarr, and Lidarr; and
+  Sonarr, Radarr, Lidarr, and Tautulli; and
 - `host`/`remote-node` for kubelet probes.
 
 **Egress**
@@ -269,6 +270,13 @@ IoT-VLAN egress without captured evidence.
 Apply and test the policy separately from the identity repair so a failure has one
 clear cause. Hubble observation precedes enforcement; policy verification includes
 both required positive paths and denied negative paths.
+
+Tautulli's accepted design declares the exact in-cluster dependency
+`http://plex.media.svc.cluster.local:32400`. Its endpoint selector is therefore a
+source-declared least-privilege allowance even while the newly staged Tautulli
+Kustomization remains suspended. Task 7 records whether the flow has also been observed
+after Tautulli activation; absence of that observation must not cause the exact declared
+consumer to be omitted and broken by Plex policy enforcement.
 
 ## 7. Public-port trust-boundary baseline
 

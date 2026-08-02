@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Plex Relay permanently functional without an inbound WAN port, prove Plexamp and both Sonos integration directions, and contain a compromised Plex pod with an observed Cilium allowlist.
+**Goal:** Make Plex Relay permanently functional without an inbound WAN port, prove Plexamp and both Sonos integration directions, and contain a compromised Plex pod with an exact observed and source-declared Cilium allowlist.
 
-**Architecture:** PR 1 adds an init-generated passwd identity for Plex's existing UID/GID `568`, pins the tested image digest, hardens the pod, and makes the media mount read-only. A guarded operator gate then proves Relay, native Sonos-library access, Plexamp-to-Sonos linking, and captures Plex flows. PR 2 adds the exact Cilium policy and a guarded negative-path probe; it lands separately so policy regressions can be attributed and reverted independently.
+**Architecture:** PR 1 adds an init-generated passwd identity for Plex's existing UID/GID `568`, pins the tested image digest, hardens the pod, and makes the media mount read-only. Retained diagnostics conditionally use the scoped diagnostic context while remaining operator-owned under canonical `AGENTS.md`; a guarded operator gate then proves Relay, native Sonos-library access, Plexamp-to-Sonos linking, and captures Plex flows. PR 2 adds the exact observed and source-declared Cilium policy—including Tautulli's accepted TCP `32400` dependency—and a guarded negative-path probe; it lands separately so policy regressions can be attributed and reverted independently.
 
 **Tech Stack:** Flux GitOps, Kubernetes, bjw-s app-template `5.0.1`, Plex Media Server `1.43.3.10828`, Bash, Just, Helm, Kustomize, yq, Cilium `1.19.6`, Hubble CLI `1.19.3`, Conftest, and the repository test catalog.
 
@@ -20,6 +20,12 @@
 - Mount shared media read-only in Plex. `/config` remains the only persistent writable surface; `/transcode` and the generated passwd volume are ephemeral.
 - All repository commands use `mise exec --`; all live-cluster commands are invoked only through guarded `just` recipes.
 - No live or cluster-dependent check enters `just ci`.
+- Canonical `AGENTS.md` continues to govern execution ownership: live verification,
+  status, preflight, and diagnostic commands remain operator-only until that file is
+  explicitly changed, even when a script can select a scoped diagnostic context.
+- When `homelab-diagnostic` exists in the supplied kubeconfig, any retained Plex path
+  using `pods/exec` or `pods/portforward` must select it conditionally; an operator
+  kubeconfig without that named context continues using its current context.
 - Do not commit the investigation-only live patch bypass (`scripts/experiment/plex-relay-live.sh` or its test). Replace the current worktree-only Just diff with the safe diagnostics defined below.
 - Before each push, fetch `origin/main`; rebase only a clean branch when needed. Never merge or enable auto-merge without explicit authorization for that merge.
 
@@ -709,7 +715,91 @@ Do not merge or enable auto-merge.
 
 ---
 
-### Task 6: Run the PR 1 production acceptance and capture the Plex flow allowlist
+### Task 6: Align retained Plex diagnostics with scoped access
+
+**Files:**
+
+- Modify: `scripts/test/plex-relay-status-test.sh`
+- Modify: `scripts/diagnose/plex-relay-status.sh`
+- Modify: `scripts/test/plex-network-observe-test.sh`
+- Modify: `scripts/diagnose/plex-network-observe.sh`
+
+**Interfaces:**
+
+- Consumes: a kubeconfig that may contain `homelab-diagnostic`, plus the existing
+  operator-only guarded Just recipes.
+- Produces: both retained diagnostics use the named diagnostic context when it exists
+  and otherwise preserve the operator kubeconfig's current-context behavior.
+
+- [ ] **Step 1: Add failing Relay-status context tests**
+
+Extend the fake `kubectl` harness to expose two kubeconfig layouts. In the scoped case,
+`kubectl config get-contexts homelab-diagnostic --no-headers` succeeds and every live
+`get`/`exec` invocation must include `--context homelab-diagnostic`. In the operator
+case, the context lookup fails and live invocations must not add a context flag.
+
+- [ ] **Step 2: Run the Relay-status test and verify RED**
+
+Run:
+
+```bash
+mise exec -- bash scripts/test/plex-relay-status-test.sh
+```
+
+Expected: non-zero because the status script does not yet select the diagnostic context.
+
+- [ ] **Step 3: Implement minimal Relay-status context selection**
+
+Use the same `kc=(kubectl --kubeconfig "$kubeconfig")` pattern as
+`scripts/verify/plex.sh`. Append `--context homelab-diagnostic` only when the local
+context lookup succeeds, then route both pod lookup and `exec` through `"${kc[@]}"`.
+
+- [ ] **Step 4: Run the Relay-status test and verify GREEN**
+
+Run the command from Step 2. Expected: all existing redaction and failure-preservation
+cases plus both context-layout cases pass.
+
+- [ ] **Step 5: Add failing network-observer context tests**
+
+Extend the deterministic fake-client harness so the scoped case exposes
+`homelab-diagnostic` and requires `cilium hubble port-forward` to receive
+`--context homelab-diagnostic`. Add an operator-layout case proving no context flag is
+forced when the named context is absent. Preserve all PID, signal, timeout, mutation-
+client, and exact-status assertions.
+
+- [ ] **Step 6: Run the observer test and verify RED**
+
+Run:
+
+```bash
+mise exec -- bash scripts/test/plex-network-observe-test.sh
+```
+
+Expected: non-zero because the observer supplies only `--kubeconfig` today.
+
+- [ ] **Step 7: Implement minimal observer context selection**
+
+Inspect the local kubeconfig with pinned `kubectl config get-contexts`. Build Cilium
+arguments with `--kubeconfig "$kubeconfig"` and append
+`--context homelab-diagnostic` only when present. Do not change Hubble filters,
+duration bounds, payload behavior, cleanup, or exit-status semantics.
+
+- [ ] **Step 8: Run focused verification and commit**
+
+Run:
+
+```bash
+mise exec -- bash scripts/test/plex-relay-status-test.sh
+mise exec -- bash scripts/test/plex-network-observe-test.sh
+mise exec -- shellcheck scripts/diagnose/plex-relay-status.sh scripts/diagnose/plex-network-observe.sh scripts/test/plex-relay-status-test.sh scripts/test/plex-network-observe-test.sh
+mise exec -- just test validate
+```
+
+Expected: all pass. Commit only the four diagnostic/test files.
+
+---
+
+### Task 7: Run the PR 1 production acceptance and capture the Plex flow allowlist
 
 **Files:**
 
@@ -763,6 +853,9 @@ While it runs, repeat:
 - internal `https://plex.lab.supermorphic.com/identity`;
 - Homepage Plex widget refresh;
 - Seerr and each enabled `*arr` Plex connector test;
+- Tautulli's direct Plex connection when Tautulli has been activated; when it remains
+  suspended, retain its exact source-declared TCP `32400` contract and record that the
+  selector has not yet been observed live;
 - Plex library scan and metadata refresh;
 - cellular Plexamp Relay browse/play; and
 - native Sonos and Plexamp-to-Sonos playback.
@@ -770,7 +863,7 @@ While it runs, repeat:
 The expected allowlist is:
 
 ```text
-ingress TCP 32400: envoy-gateway-system, homepage, seerr, sonarr, radarr, lidarr, host, remote-node
+ingress TCP 32400: envoy-gateway-system, homepage, seerr, sonarr, radarr, lidarr, tautulli, host, remote-node
 egress TCP/UDP 53: kube-dns
 egress TCP 443: world
 ```
@@ -781,9 +874,9 @@ exact flow. Do not silently broaden `cluster`, Main-VLAN, IoT-VLAN, or `world`.
 
 ---
 
-## PR 2 — Observed Cilium containment
+## PR 2 — Exact Cilium containment
 
-### Task 7: Add the Plex Cilium policy contract before the policy
+### Task 8: Add the Plex Cilium policy contract before the policy
 
 **Files:**
 
@@ -792,7 +885,7 @@ exact flow. Do not silently broaden `cluster`, Main-VLAN, IoT-VLAN, or `world`.
 
 **Interfaces:**
 
-- Consumes: the exact expected allowlist confirmed at Task 6.
+- Consumes: the exact expected allowlist confirmed at Task 7.
 - Produces: a failing source/render contract requiring one Plex-specific CiliumNetworkPolicy with no broader ingress or egress.
 
 - [ ] **Step 1: Require the policy source and Kustomize wiring**
@@ -811,7 +904,7 @@ metadata.name = plex
 metadata.namespace = media
 endpointSelector.matchLabels.app.kubernetes.io/name = plex
 all ingress toPorts = TCP/32400
-ingress sources = envoy-gateway-system, homepage, seerr, sonarr, radarr, lidarr, host, remote-node
+ingress sources = envoy-gateway-system, homepage, seerr, sonarr, radarr, lidarr, tautulli, host, remote-node
 DNS egress = kube-dns TCP/53 and UDP/53
 Internet egress = world TCP/443
 ```
@@ -862,7 +955,7 @@ mise exec -- git commit -m "test(plex): define network containment contract"
 
 ---
 
-### Task 8: Implement the observed Plex CiliumNetworkPolicy
+### Task 9: Implement the observed Plex CiliumNetworkPolicy
 
 **Files:**
 
@@ -870,7 +963,7 @@ mise exec -- git commit -m "test(plex): define network containment contract"
 
 **Interfaces:**
 
-- Consumes: the exact source contract from Task 7 and observed allowlist from Task 6.
+- Consumes: the exact source contract from Task 8 and observed/source-declared allowlist from Task 7.
 - Produces: default-deny behavior for the selected Plex endpoint with only required TCP `32400`, DNS, and world HTTPS paths.
 
 - [ ] **Step 1: Create the policy**
@@ -907,6 +1000,9 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: lidarr
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+            app.kubernetes.io/name: tautulli
       toPorts:
         - ports:
             - port: "32400"
@@ -937,8 +1033,8 @@ spec:
               protocol: TCP
 ```
 
-If Task 6 approved an additional exact flow, add only that captured selector and
-port to this source and to Task 7's structural assertions before proceeding.
+If Task 7 approved an additional exact flow, add only that captured selector and
+port to this source and to Task 8's structural assertions before proceeding.
 
 - [ ] **Step 2: Run focused policy and render validation**
 
@@ -963,7 +1059,7 @@ mise exec -- git commit -m "feat(plex): contain pod network access"
 
 ---
 
-### Task 9: Add a guarded positive/negative network-policy acceptance scenario
+### Task 10: Add a guarded positive/negative network-policy acceptance scenario
 
 **Files:**
 
@@ -1079,7 +1175,7 @@ mise exec -- git commit -m "test(plex): prove network policy isolation"
 
 ---
 
-### Task 10: Validate, hand off PR 2, and run final acceptance
+### Task 11: Validate, hand off PR 2, and run final acceptance
 
 **Files:**
 
