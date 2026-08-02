@@ -1293,10 +1293,11 @@ Run:
 ```bash
 mise exec -- yq -r '.spec.suspend' kubernetes/apps/media/tautulli/ks.yaml
 mise exec -- rg -n 'widget\.type.*tautulli|homepage-tautulli' kubernetes/apps/monitoring/gatus/app/values.yaml kubernetes/apps/media/tautulli/app/httproute.yaml kubernetes/apps/monitoring/homepage/app/deployment.yaml kubernetes/apps/monitoring/homepage/app/kustomization.yaml || true
+mise exec -- yq -r '.config.endpoints[]?.name // ""' kubernetes/apps/monitoring/gatus/app/values.yaml | mise exec -- rg -nx 'tautulli' || true
 mise exec -- rg -n 'TautulliProbeMissing|TautulliPersistentVolumeClaimNotBound' kubernetes/apps/media/alerts/app/prometheusrule.yaml tests/prometheus/media-alerts_test.yaml || true
 ```
 
-Expected: suspend prints `true`; both searches print nothing. The Secret-generation recipe may mention `homepage-tautulli`, but no Homepage manifest may do so yet.
+Expected: suspend prints `true`; all three searches print nothing. The Secret-generation recipe may mention `homepage-tautulli`, but no Homepage manifest may do so yet.
 
 - [ ] **Step 2: Run canonical validation**
 
