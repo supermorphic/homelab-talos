@@ -39,7 +39,10 @@ pod="$("${kc[@]}" --namespace media get pods \
     [[ "$(id -u)" == "568" ]]
     [[ "$(getent passwd 568 | cut -d: -f1)" == "plex" ]]
     [[ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ]]
-    findmnt -n -o OPTIONS /Volumes/Prometheus | tr "," "\n" | rg -qx "ro"
+    [[ ",$(findmnt -n -o OPTIONS /Volumes/Prometheus)," == *,ro,* ]] || {
+      echo "Plex media mount is not read-only." >&2
+      exit 1
+    }
     [[ -w /config ]]
   '
 
