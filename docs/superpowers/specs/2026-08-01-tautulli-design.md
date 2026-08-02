@@ -25,8 +25,12 @@ nobody.
 In scope:
 
 - Tautulli Flux application (`kubernetes/apps/media/tautulli/`).
-- Media availability alerting (`MediaEndpointDown`) covering every media Gatus endpoint.
+- A dedicated `media-alerts` Flux Kustomization (`kubernetes/apps/media/alerts/`) owning all
+  media alert rules, gated on `kube-prometheus-stack`.
+- Media availability alerting (`MediaEndpointDown`) covering every media Gatus endpoint for
+  *down* detection; see §5.3 for the bounded gap on series disappearance.
 - Persistence alerting for the two claims holding irreplaceable state (Plex, Tautulli).
+- Tautulli web authentication as a blocking pre-activation gate.
 - promtool unit tests for the new alert rules.
 - Validation, verification, and a parameterized bootstrap recipe.
 - Homepage widget (secret recipe, Secret, env var) and Gatus endpoint.
@@ -40,7 +44,8 @@ Out of scope (deliberately deferred):
 - Tautulli newsletters.
 - Any watch-history import.
 - Chainsaw smoke, resilience, or automated E2E coverage. See D8.
-- Retrofitting qBittorrent's existing alert rules into the new promtool harness.
+- Retrofitting qBittorrent's existing alert rules into the new promtool harness, and fixing
+  its missing `kube-prometheus-stack` dependency (§10 — recommended follow-up).
 
 ## 3. Decisions
 
@@ -57,6 +62,9 @@ Out of scope (deliberately deferred):
 | D9 | Bootstrap via a parameterized `media-app` recipe, not a third copy | `seerr` and `flaresolverr` bootstrap recipes are 62/64 lines differing only in app name. This is the D6 signal from the Lidarr spec. See §6.2. |
 | D10 | Existing `seerr`/`flaresolverr` bootstrap recipes are left untouched | Both apps are live, so their recipes are dormant recovery paths. Rewriting working recovery code buys tidiness and risks a break discovered only during an incident. |
 | D11 | Docs extend `docs/arr-stack-startup.md` | That file already documents Seerr, which is not an `*arr` either. A one-app doc file would fragment the runbook. |
+| D12 | All media alert rules live in a dedicated `media-alerts` Kustomization gated on `kube-prometheus-stack`, **not** in the app Kustomizations | Flux dry-runs a Kustomization's objects atomically, so a PrometheusRule whose CRD is absent deadlocks the whole apply. Putting rules in `media/namespace/app/` would risk blocking every media app. Adding a KPS dependency to those Kustomizations instead would couple the media stack to an upgrade-fragile release. See §5.1. |
+| D13 | Tautulli web authentication is enabled and is a pre-activation gate | Tautulli stores usernames, full watch history, devices, and client IP/geolocation — materially more sensitive than an `*arr` queue, and the internal gateway puts no auth in front of it. See §8.3. |
+| D14 | Per-endpoint `absent()` rules for `plex` and `tautulli` only | `absent()` cannot fire per-series: a group-wide rule stays silent while any Media series exists. Enumerating every endpoint would defeat D5, so only the two carrying irreplaceable state get explicit coverage. See §5.3. |
 
 ## 4. Architecture
 
@@ -77,7 +85,7 @@ the one feature an operator would reasonably expect to work and which will not.
 | Image | `ghcr.io/home-operations/tautulli:2.17.2` |
 | Service port | `8181` |
 | Hostname | `tautulli.lab.supermorphic.com` |
-| Health endpoint | `/status` (unauthenticated, returns JSON 200) — unverified on this image, see §10 |
+| Health endpoint | `/status` — Tautulli's documented web health path. The design asserts **HTTP 200 only**; no claim is made about the response body. See §4.1 and §10. |
 | Config PVC | 5Gi, `longhorn`, RWO, `helm.sh/resource-policy: keep`, at `/config` |
 | Rendered PVC name | `media/tautulli` (verified by `helm template`) |
 | `dependsOn` | `internal-gateway`, `media` |
@@ -91,20 +99,62 @@ The Plex server URL, its token, and the Tautulli API key are first-run settings 
 in the config PVC. There is no config-as-code for them, exactly as with Lidarr's root
 folders.
 
+### 4.1 Probes and the authentication interaction
+
+Probes are explicit, matching the precision Seerr's values already use:
+
+| Probe | Path | Port | `periodSeconds` | `failureThreshold` |
+|---|---|---|---|---|
+| readiness | `/status` | 8181 | 10 | 3 |
+| liveness | `/status` | 8181 | 30 | 5 |
+| startup | `/status` | 8181 | 5 | 30 |
+
+All three are `httpGet` custom probes asserting HTTP 200. **The design does not assert a
+response body**, only the status code.
+
+This couples directly to D13. Enabling Tautulli's web authentication could turn `/status`
+into a redirect to the login page, which would simultaneously break all three probes *and*
+the Gatus endpoint — a single change with four failure surfaces. The §8.3 gate therefore
+re-confirms `/status` returns 200 **after** authentication is enabled, not before.
+
+If `/status` proves unusable under the chosen auth mode, the fallback is a `tcpSocket`
+probe on 8181 for the three kubelet probes, with a comment explaining the downgrade, and a
+Gatus endpoint asserting the login page's own 200. That fallback is chosen at rollout, not
+guessed now.
+
 ## 5. Alerting
 
-### 5.1 Ownership split
+### 5.1 Placement — a dedicated `media-alerts` Kustomization
 
-Availability is a namespace-wide concern; persistence is per-app.
+**All media alert rules live in one new Kustomization**, `media-alerts`, at
+`kubernetes/apps/media/alerts/`, with a single `dependsOn: [kube-prometheus-stack]`.
 
-| File | Rules |
-|---|---|
-| `kubernetes/apps/media/namespace/app/prometheusrule.yaml` | `MediaEndpointDown`, `MediaEndpointsProbeMissing` |
-| `kubernetes/apps/media/plex/app/prometheusrule.yaml` | `PlexPersistentVolumeClaimNotBound` |
-| `kubernetes/apps/media/tautulli/app/prometheusrule.yaml` | `TautulliPersistentVolumeClaimNotBound` |
+This is not a stylistic choice. Flux dry-runs every object in a Kustomization
+**atomically** before applying any of them, so a `monitoring.coreos.com/PrometheusRule`
+whose CRD is not yet installed fails the dry-run and **deadlocks the entire apply**. That
+mechanism is already documented in this repo at
+`kubernetes/apps/networking/tailscale-operator/ks.yaml`, where CRD instances were split
+into their own Kustomizations for exactly this reason.
 
-The namespace-wide rule lives in `media/namespace/app/` because the `media` Kustomization
-is what every media app already depends on.
+Two rejected alternatives:
+
+- **Rules inside `media/namespace/app/`** — on a cold reconcile this would block the
+  namespace and the `app-template` OCIRepository that *every* media app depends on. The
+  worst possible placement.
+- **Rules inside each app, adding `kube-prometheus-stack` to their `dependsOn`** — correct
+  for ordering, but it couples the media stack to a release this repo treats as
+  upgrade-fragile (drift detection is disabled on it). A KPS problem would then block Plex
+  and qBittorrent. `portainer`, `ntfy`, and `test-reports` do declare that dependency, but
+  they are monitoring-domain apps where the coupling is already implied.
+
+Isolating the rules means a missing or broken KPS leaves only `media-alerts` unready, while
+every media app reconciles normally.
+
+**Pre-existing exposure, not fixed here:** `kubernetes/apps/media/qbittorrent/` owns a
+PrometheusRule while its Kustomization declares only `media-storage` and
+`internal-gateway`. That is the same latent deadlock. It is called out in §10 as a
+recommended one-line follow-up rather than silently changing a live app's dependency graph
+inside this work.
 
 ### 5.2 Rules
 
@@ -112,17 +162,33 @@ is what every media app already depends on.
 |---|---|---|---|
 | `MediaEndpointDown` | `gatus_results_endpoint_success{group="Media", name!="qbittorrent-vpn"} == 0` | 15m | warning |
 | `MediaEndpointsProbeMissing` | `absent(gatus_results_endpoint_success{group="Media"})` | 15m | warning |
+| `PlexProbeMissing` | `absent(gatus_results_endpoint_success{group="Media", name="plex"})` | 15m | warning |
+| `TautulliProbeMissing` | `absent(gatus_results_endpoint_success{group="Media", name="tautulli"})` | 15m | warning |
 | `PlexPersistentVolumeClaimNotBound` | `absent(kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="plex", phase="Bound"} == 1)` | 5m | critical |
 | `TautulliPersistentVolumeClaimNotBound` | `absent(kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="tautulli", phase="Bound"} == 1)` | 5m | warning |
 
-The `name` label flows through `MediaEndpointDown`, so each failing endpoint produces its
-own alert and every future media app is covered the day its Gatus endpoint lands.
-`qbittorrent-vpn` is excluded because it already has a dedicated critical rule.
+`qbittorrent-vpn` is excluded from `MediaEndpointDown` because it already has a dedicated
+critical rule.
 
-`MediaEndpointsProbeMissing` fires only when *no* Media series exist at all, which makes it
-a Gatus-broken canary rather than a per-endpoint check.
+### 5.3 Exactly what is and is not covered
 
-### 5.3 Severity rationale
+The `name` label flows through `MediaEndpointDown`, so **each failing endpoint produces its
+own alert**, and any media app added later is covered for *down* detection the day its
+Gatus endpoint lands. That is the full extent of D5's automatic coverage.
+
+Series *disappearance* is a different failure and is **not** automatically covered.
+`absent()` returns a result only when its matcher selects no series at all, so
+`MediaEndpointsProbeMissing` stays silent whenever any Media endpoint is still reporting.
+It is therefore a **Gatus-broken canary**, not a per-endpoint check — the earlier framing
+implying otherwise was wrong.
+
+Per D14, `plex` and `tautulli` get explicit per-endpoint `absent()` rules because they
+carry the state this design exists to protect. The remaining endpoints (Sonarr, Radarr,
+Lidarr, Prowlarr, Seerr, FlareSolverr) are covered for *down* but not for *silently
+removed*. Enumerating all of them would create an inventory needing hand-maintenance on
+every app addition — the exact brittleness D5 avoids. This is a deliberate, bounded gap.
+
+### 5.4 Severity rationale
 
 Per `alertmanager-ntfy/app/config.yml`, severity controls the ntfy topic
 (`critical` → `critical`, otherwise → `homelab`), the priority (`urgent` vs `default`),
@@ -143,9 +209,9 @@ New (13):
 
 ```text
 kubernetes/apps/media/tautulli/ks.yaml
-kubernetes/apps/media/tautulli/app/{kustomization,helmrelease,values,httproute,prometheusrule}.yaml
-kubernetes/apps/media/namespace/app/prometheusrule.yaml
-kubernetes/apps/media/plex/app/prometheusrule.yaml
+kubernetes/apps/media/tautulli/app/{kustomization,helmrelease,values,httproute}.yaml
+kubernetes/apps/media/alerts/ks.yaml
+kubernetes/apps/media/alerts/app/{kustomization,prometheusrule}.yaml
 kubernetes/apps/monitoring/homepage/app/homepage-tautulli.sops.yaml   (operator-generated)
 scripts/validate/tautulli.sh
 scripts/validate/media-alerts.sh
@@ -153,20 +219,20 @@ scripts/verify/tautulli.sh
 tests/prometheus/media-alerts_test.yaml
 ```
 
-Modified (~15):
+Per D12 there is **one** `prometheusrule.yaml`, owned by `media-alerts`. No PrometheusRule
+is added to the `media`, `plex`, or `tautulli` Kustomizations.
+
+Modified (~14):
 
 | File | Change |
 |---|---|
-| `kubernetes/apps/media/kustomization.yaml` | wire `./tautulli/ks.yaml` |
-| `kubernetes/apps/media/namespace/app/kustomization.yaml` | add `prometheusrule.yaml` |
-| `kubernetes/apps/media/plex/app/kustomization.yaml` | add `prometheusrule.yaml` |
+| `kubernetes/apps/media/kustomization.yaml` | wire `./tautulli/ks.yaml` and `./alerts/ks.yaml` |
 | `kubernetes/apps/monitoring/gatus/app/values.yaml` | `tautulli` endpoint (activation PR only) |
 | `kubernetes/apps/monitoring/homepage/app/deployment.yaml` | `HOMEPAGE_VAR_TAUTULLI_API_KEY`, `optional: true` |
 | `kubernetes/apps/monitoring/homepage/app/kustomization.yaml` | add the SOPS resource |
 | `.just/repository.just` | `homepage-tautulli-secrets` recipe |
 | `.just/bootstrap.just` | parameterized `media-app` recipe |
 | `kubernetes/mod.just` | `tautulli-validate`, `tautulli-verify`, `media-alerts-validate` |
-| `scripts/validate/plex.sh` | assert the PrometheusRule exists and is wired |
 | `tests/catalog.yaml` | `validation.tautulli`, `validation.media-alerts`, `verification.tautulli` + aggregates |
 | `tests/policy/media/media.rego` | `required_dependencies`, `config_only_apps` |
 | `tests/policy/media/media_test.rego` | Tautulli contract tests |
@@ -183,6 +249,42 @@ check, resume, reconcile, wait, verify.
 Tautulli is therefore added through a parameterized `bootstrap media-app <name>` recipe
 modeled on the existing `bootstrap arr <app>`, which already proves the form works across
 four apps. Per D10, the two existing recipes are not migrated.
+
+**Safety contract.** Parameterizing must not weaken the guard. The recipe carries the same
+obligations `bootstrap arr` does:
+
+1. **Name allowlist.** A `case` statement accepts **`tautulli` and nothing else** for now;
+   any other value exits non-zero with a usage message. Widening the allowlist is a
+   deliberate future edit, not an emergent property of the parameter.
+2. **Confirmation.** `MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:<name>'`, checked
+   against the resolved name so the operator cannot confirm one app and roll out another.
+3. **Origin check.** `git remote get-url origin` equals the expected repository URL.
+4. **`require_deployed_source` closure**, enumerated explicitly — every path whose content
+   affects this rollout must match the deployed `origin/main`:
+
+   ```text
+   .just/bootstrap.just
+   kubernetes/mod.just
+   scripts/lib/rollout.sh
+   scripts/lib/network.sh
+   scripts/validate/tautulli.sh
+   scripts/validate/media-alerts.sh
+   scripts/verify/tautulli.sh
+   tests/catalog.yaml
+   tests/prometheus/media-alerts_test.yaml
+   kubernetes/apps/media/kustomization.yaml
+   kubernetes/apps/media/namespace
+   kubernetes/apps/media/alerts
+   kubernetes/apps/media/<name>
+   ```
+
+5. **Suspended in Git**: `.spec.suspend` in `kubernetes/apps/media/<name>/ks.yaml` is
+   `true`.
+6. **Suspended in the cluster**: the live Kustomization reports `.spec.suspend == true`.
+7. **Validate before mutate**: `just kube tautulli-validate` and
+   `just kube media-alerts-validate` both pass first.
+8. **Cleanup trap**: on any failure after resume, re-suspend the Kustomization while
+   preserving its resources.
 
 ### 6.3 Rego contract
 
@@ -216,15 +318,17 @@ would fire on every Plex upgrade, and alerts that cry wolf during deploys get mu
   Gatus and Homepage widget assertions, `kustomize build`, and a pinned `helm template`
   render check.
 - `validation.media-alerts` — `scripts/validate/media-alerts.sh`, mirroring
-  `validate/tailscale-alerts.sh`.
+  `validate/tailscale-alerts.sh`. It additionally asserts the D12 invariant: the
+  `media-alerts` Kustomization declares `kube-prometheus-stack` in `dependsOn`, and no
+  PrometheusRule exists under any other `kubernetes/apps/media/*/app/` directory.
 - Rego policy tests via the existing policy suite.
 
 ### 7.3 promtool unit tests
 
-`scripts/validate/media-alerts.sh` extracts the rule `.spec` from the three
-PrometheusRule files into a plain rules file next to
+`scripts/validate/media-alerts.sh` extracts the rule `.spec` from
+`kubernetes/apps/media/alerts/app/prometheusrule.yaml` into a plain rules file next to
 `tests/prometheus/media-alerts_test.yaml`, then runs `promtool check rules` and
-`promtool test rules`. The PromQL is single-sourced from the manifests — never duplicated
+`promtool test rules`. The PromQL is single-sourced from the manifest — never duplicated
 into the test.
 
 Each alert is exercised across three temporal states (before `for:` → silent, at/after →
@@ -240,6 +344,10 @@ endpoint and that `qbittorrent-vpn` is excluded.
 Ready, rollout complete, HTTPRoute Accepted, DNS resolves to the gateway VIP, and HTTP 200
 on `/status` through the internal gateway.
 
+This proves liveness only. The integrations activation introduces — the Gatus series, the
+loaded alert rules, and the Homepage widget — are covered separately by §8.5, because a
+green `tautulli-verify` says nothing about any of them.
+
 ### 7.5 Coverage deliberately not added
 
 Per D8. Chainsaw media smoke tests assert Kustomization Ready → HelmRelease Ready →
@@ -251,13 +359,35 @@ torrent names. Plex, Seerr, Prowlarr, Sonarr, Radarr, Lidarr, and FlareSolverr h
 
 ### 8.1 PR 1 — staged suspended
 
-Everything lands with `ks.yaml` at `suspend: true`. Because the validators are
-activation-aware, that specifically means **no** Gatus endpoint and **no** `widget.*`
-annotations yet — a suspended app publishing either creates a permanently-failing probe.
+Exact contents. Every file below ships in PR 1 and no others:
 
-The alert rules **do** ship active in this PR: `media/namespace` and `plex` are already-live
-Kustomizations, so `MediaEndpointDown` begins protecting existing services immediately.
-Tautulli's PVC rule is inert because Flux does not apply a suspended app.
+| File | State in PR 1 |
+|---|---|
+| `kubernetes/apps/media/tautulli/ks.yaml` | `suspend: true` |
+| `kubernetes/apps/media/tautulli/app/{kustomization,helmrelease,values}.yaml` | complete |
+| `kubernetes/apps/media/tautulli/app/httproute.yaml` | route only — **no `widget.*` annotations** |
+| `kubernetes/apps/media/alerts/ks.yaml` | `suspend: false` |
+| `kubernetes/apps/media/alerts/app/{kustomization,prometheusrule}.yaml` | all rules **except** the two `tautulli` ones — see below |
+| `kubernetes/apps/media/kustomization.yaml` | both `ks.yaml` files wired |
+| `scripts/validate/{tautulli,media-alerts}.sh`, `scripts/verify/tautulli.sh` | complete |
+| `tests/prometheus/media-alerts_test.yaml` | complete |
+| `tests/catalog.yaml`, `tests/policy/media/media{,_test}.rego` | complete |
+| `.just/bootstrap.just`, `kubernetes/mod.just`, `.just/repository.just` | complete |
+| `docs/arr-stack-startup.md`, `README.md` | complete |
+
+Explicitly **not** in PR 1: the Gatus `tautulli` endpoint, the `widget.*` annotations,
+`homepage-tautulli.sops.yaml`, and the Homepage `deployment.yaml` / `kustomization.yaml`
+edits. The validators are activation-aware, so a suspended app publishing a Gatus endpoint
+or widget annotations fails `just ci` by design.
+
+`media-alerts` ships **unsuspended**, so `MediaEndpointDown` starts protecting existing
+services the moment PR 1 merges.
+
+**The two `tautulli` rules ship in PR 2, not PR 1.** `TautulliProbeMissing` and
+`TautulliPersistentVolumeClaimNotBound` are both `absent()` rules: with Tautulli suspended,
+neither its Gatus series nor its PVC exists, so both would fire immediately and page on an
+app that is working as designed. Alerting on a deliberately-absent app is precisely the
+false-positive class §7.1 exists to prevent. They belong with activation.
 
 `mise exec -- just ci` must pass.
 
@@ -273,24 +403,58 @@ unless suspended in both Git and the cluster, runs `tautulli-validate`, reconcil
 waits Ready, then runs `tautulli-verify` — re-suspending on any failure while preserving
 resources.
 
-Then first-run configuration in the web UI: connect the Plex server, generate the API key,
-confirm the library list populates.
+Then first-run configuration in the web UI, in this order: **enable web authentication
+(D13)**, connect the Plex server, generate the API key, confirm the library list populates.
 
 ### 8.3 Acceptance gates
 
-All three must pass before activation:
+All five must pass before activation:
 
-1. `mise exec -- just kube tautulli-verify` green.
-2. Tautulli shows the Plex server connected with at least one library.
-3. **A real playback session appears in Tautulli's history.** This manual check stands in
+1. **Authentication is enabled** and the chosen mode is recorded in
+   `docs/arr-stack-startup.md`. Tautulli stores usernames, complete watch history, device
+   identifiers, and client IP/geolocation; the internal gateway puts no authentication in
+   front of it, and its API exposes the same data to anything that can reach the Service.
+   Leaving the UI open is not acceptable for this data class.
+2. **`/status` still returns 200 with authentication enabled**, verified from inside the
+   cluster and through the gateway. Per §4.1 this single fact gates the three kubelet
+   probes *and* the Gatus endpoint. If it fails, apply the §4.1 fallback and re-run.
+3. `mise exec -- just kube tautulli-verify` green.
+4. Tautulli shows the Plex server connected with at least one library.
+5. **A real playback session appears in Tautulli's history.** This manual check stands in
    for the automated E2E that D8 establishes is infeasible; it is the only gate that proves
    the Plex API path works end to end.
 
 ### 8.4 PR 2 — activation
 
-Flip `suspend: false`, add the Gatus endpoint, add the Homepage widget annotations. The
-operator runs `homepage-tautulli-secrets` first so the widget has its key.
-`MediaEndpointDown` picks up the new endpoint automatically.
+Exact contents:
+
+| File | Change |
+|---|---|
+| `kubernetes/apps/media/tautulli/ks.yaml` | `suspend: false` |
+| `kubernetes/apps/media/tautulli/app/httproute.yaml` | add `widget.*` annotations |
+| `kubernetes/apps/media/alerts/app/prometheusrule.yaml` | add `TautulliProbeMissing`, `TautulliPersistentVolumeClaimNotBound` |
+| `tests/prometheus/media-alerts_test.yaml` | add cases for those two rules |
+| `kubernetes/apps/monitoring/gatus/app/values.yaml` | add the `tautulli` endpoint |
+| `kubernetes/apps/monitoring/homepage/app/deployment.yaml` | add `HOMEPAGE_VAR_TAUTULLI_API_KEY` |
+| `kubernetes/apps/monitoring/homepage/app/kustomization.yaml` | add the SOPS resource |
+| `kubernetes/apps/monitoring/homepage/app/homepage-tautulli.sops.yaml` | operator-generated, before the PR |
+
+The operator runs `homepage-tautulli-secrets` first so the widget has its key.
+
+### 8.5 Post-activation gates
+
+`tautulli-verify` proves application liveness only. Activation adds three integrations it
+does not touch, so each gets an explicit check:
+
+1. **Gatus series exists**: `gatus_results_endpoint_success{group="Media", name="tautulli"}`
+   returns a value in Prometheus. This is what `MediaEndpointDown` and `TautulliProbeMissing`
+   both depend on; without it they are silently inert.
+2. **All rules loaded**: every rule in §5.2 appears in Prometheus's active rule set with no
+   evaluation errors — not merely present as a `PrometheusRule` object. Confirms the
+   `media-alerts` Kustomization applied and the operator ingested it.
+3. **Homepage widget renders live data**, verified by `mise exec -- just kube
+   homepage-verify` plus a visual check that the widget shows stream counts rather than an
+   error state (which is how a wrong API key presents).
 
 ### 8.5 Why two PRs
 
@@ -320,7 +484,9 @@ wording on lines this work edits is dropped.
 
 | Risk | Handling |
 |---|---|
-| `/status` unverified on this image | Designed against Tautulli's own container healthcheck. If it requires auth, fall back to a TCP probe on 8181 with a comment explaining the downgrade. Confirmed at §8.2 before activation. |
+| `/status` behaviour unverified on this image, and its interaction with authentication | The design asserts HTTP 200 only, never a body. §8.3 gate 2 confirms it *after* auth is enabled, because that single path gates three kubelet probes and the Gatus endpoint at once. §4.1 defines the fallback. |
+| **`qbittorrent` owns a PrometheusRule with no `kube-prometheus-stack` dependency** | Pre-existing latent deadlock: on a cold reconcile where the CRD is absent, the atomic dry-run fails and blocks the whole qBittorrent apply. Not fixed here — it is a one-line `dependsOn` addition to a live app's graph, outside this scope. **Recommended immediate follow-up.** |
+| Tautulli exposes sensitive viewing data | D13 makes authentication a blocking pre-activation gate (§8.3 gate 1), with the chosen mode recorded in the runbook. |
 | UID 568 write access to `/config` | Assumed from the `home-operations` convention; `fsGroup: 568` chowns the fresh PVC. Confirmed at rollout, exactly as Seerr's values flagged for its image. |
 | Homepage `tautulli` widget field names | Confirmed against the rendered dashboard rather than assumed. |
 | Plex Logs viewer will not work | Structural, not fixable: Plex's config claim is `ReadWriteOncePod`. Documented in §9 so it is not rediscovered as a bug. |
@@ -329,18 +495,31 @@ wording on lines this work edits is dropped.
 
 ## 11. Verify at implementation time
 
-- `/status` returns 200 unauthenticated on `ghcr.io/home-operations/tautulli:2.17.2`.
-- The rendered Deployment has `strategy: Recreate` and the PVC is named `tautulli`.
-- Homepage's `tautulli` widget accepts `{{HOMEPAGE_VAR_TAUTULLI_API_KEY}}` as `widget.key`.
-- `gatus_results_endpoint_success` carries both `name` and `group` labels as matched in §5.2.
-- `promtool` is available through the pinned toolchain for `just ci`.
+Closed during review, no longer open questions:
+
+- `promtool = "3.13.1"` is already pinned at `.mise.toml:22`.
+- Homepage documents the `tautulli` widget with `type`, `url`, and `key`, matching the
+  annotation triple used by the other media widgets.
+- The rendered PVC name is `tautulli`, confirmed by `helm template` against the pinned
+  `app-template` 5.0.1 chart.
+
+Genuinely open, to be resolved during implementation:
+
+- `/status` returns 200 on `ghcr.io/home-operations/tautulli:2.17.2`, **and still does once
+  authentication is enabled** (§8.3 gate 2). This is the highest-risk unknown: it gates
+  three probes and the Gatus endpoint together.
+- The container's runtime UID accepts `568` ownership on `/config`.
+- `gatus_results_endpoint_success` carries both `name` and `group` labels exactly as matched
+  in §5.2 — verify against a live series before trusting the promtool fixtures.
 
 ## 12. Definition of done
 
 - Tautulli is live, unsuspended in Git, and `tautulli-verify` passes.
+- Web authentication is enabled, and `/status` still returns 200 through the gateway.
 - A real playback session is recorded in Tautulli history.
-- The Homepage widget renders and the Gatus endpoint is green.
-- `MediaEndpointDown` and both PVC rules are loaded in Prometheus, with promtool tests
-  passing in `just ci`.
-- `mise exec -- just ci` passes.
-- `docs/arr-stack-startup.md` documents the rollout and the Plex-logs limitation.
+- The Homepage widget renders live stream data and the Gatus endpoint is green.
+- Every rule in §5.2 is loaded in Prometheus's active rule set with no evaluation errors,
+  and `gatus_results_endpoint_success{name="tautulli"}` returns a value.
+- `mise exec -- just ci` passes, including the promtool unit tests.
+- `docs/arr-stack-startup.md` documents the rollout, the chosen auth mode, and the
+  Plex-logs limitation.
