@@ -420,7 +420,7 @@ suites:
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.plex, source: verification, framework: bash, suite: media, tier: verification, target: plex, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     description: Verifies Plex runtime identity, Kubernetes API-token absence, and read-only media as acceptance checks.
-    access: {tier: observer}
+    access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-verify", implementation: scripts/verify/plex.sh}
     native_results: {strategy: wrapper-junit}

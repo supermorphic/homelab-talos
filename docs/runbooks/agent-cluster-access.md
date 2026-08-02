@@ -79,7 +79,7 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 | `storage` | observer | Reads storage health and resources. |
 | `csi-driver-smb` | observer | Reads driver rollout and storage state. |
 | `media-storage` | observer | Reads the media storage contract. |
-| `plex` | observer | Reads rollout, route, and application health. |
+| `plex` | diagnostic | Executes read-only runtime identity, Kubernetes API-token, and filesystem assertions inside the Plex pod. |
 | `intel-gpu-plugin` | observer | Reads plugin rollout and advertised resources. |
 | `qbittorrent` | observer | Reads rollout, route, and functional endpoint state. |
 | `prowlarr` | observer | Reads rollout, route, and application state. |
