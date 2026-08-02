@@ -1,8 +1,14 @@
 # Movie encoding benchmark — design
 
-Status: approved design, revised after code review, pending implementation plan.
+Status: Draft
 Date: 2026-08-01.
 Branch: `fileflows-movie-encoding-strategy`.
+
+Revised after a code review and an independent spec review (codex). Two open
+decisions remain — scratch placement and the temporary Plex library — recorded in
+`reviews/2026-08-01-fileflows-movie-encoding-design-response.md`. Draft rather
+than Accepted precisely because those are open: an accepted record is superseded,
+never revised.
 
 ## 1. Purpose
 
@@ -317,7 +323,7 @@ mounting `downloads/`.
 | Image | Selected per §7.1, pinned by digest | Capability-verified, immutable |
 | GPU | `gpu.intel.com/i915: 1`, request == limit (benchmark only) | Extended resources require equality |
 | Node | Anti-affinity against the Plex pod; node name recorded per run | A `nodeSelector` pin would hang `Pending` if Plex held that node |
-| Scratch placement | `ephemeral-storage` **request** sized to the full scratch budget | Scheduler places the Job only where capacity exists — replaces hand-pinning, and satisfies the same intent |
+| Scratch placement | `ephemeral-storage` **request** sized to the full scratch budget | Bounds the Job against node *allocatable* ephemeral storage minus other pods' requests. It does **not** attest current free bytes, so it is not by itself a placement guarantee — see the open item below |
 | Sources | `/media`, `subPath: media/movies`, `readOnly: true` | Structurally incapable of damaging the library; TV invisible |
 | Outputs | `/out`, `subPath: benchmark` | RW blast radius confined outside `media/` |
 | Security | `runAsUser: 568`, non-root, `drop: ["ALL"]` | Matches the SMB mount's uid/gid |
@@ -386,8 +392,13 @@ One pass answers four questions:
 - **Audio inventory** — per-track codec, channels, language, and estimated bytes.
   Recon for the deferred audio project.
 - **Lifecycle classification** — `st_nlink` plus the qbit_manage state model from
-  §3.1, yielding one of: `never-torrented`, `active`, `private-permanent`,
-  `public-awaiting-cleanup`, `already-cleaned`.
+  §3.1, yielding one of the **four** states in that table: `active`,
+  `private-permanent`, `public-awaiting-cleanup`, or `unlinked`. The last covers
+  both never-torrented and already-cleaned files, which are indistinguishable:
+  once cleanup removes the download-side name the torrent is gone from
+  qBittorrent, and no durable history remains to separate them. They are merged
+  deliberately — both realize full savings immediately, so no decision in this
+  design depends on telling them apart.
 
 Output: `census.csv`, one row per file.
 
@@ -452,10 +463,17 @@ encodes ≈ **2–3 hours**.
 
 **x265 reference sweep.** An earlier draft used a single CRF point, which cannot
 support a quality-matched comparison — the two encoders sit at different points on
-their rate-quality curves. Instead: x265 `preset slow` at **CRF 18/20/22/24** on
-the grain-heavy 4K and grain-heavy AVC clips only. This yields enough of a
-rate-quality curve to compare QSV and x265 **at matched VMAF** by interpolation,
-which is the only comparison that means anything.
+their rate-quality curves. Instead: x265 `preset slow` starting at **CRF
+18/20/22/24** on the grain-heavy 4K and grain-heavy AVC clips only. This yields a
+rate-quality curve for comparing QSV and x265 **at matched VMAF**, which is the
+only comparison that means anything.
+
+Comparison is by **interpolation only, never extrapolation**. The starting CRF
+points are not guaranteed to bracket the QSV operating point's VMAF, so the sweep
+**extends beyond them — lower or higher CRF as needed — until the QSV point lies
+inside the x265 range.** If bracketing cannot be achieved, §11.3 returns **no
+verdict** for that cohort and the unbracketed result is reported as such; a
+verdict is never produced by extrapolating past the measured range.
 
 x265 is a yardstick, not a production candidate.
 
@@ -471,8 +489,17 @@ Results are written to run-scoped directories, never a shared flat file:
 ├── manifest.json     # immutable; written first, never modified
 ├── results.csv
 ├── stills/
-└── logs/
+├── logs/
+└── encodes/          # finalist full-title outputs ONLY
 ```
+
+**What persists.** Clip-sweep outputs and savings-panel full encodes are measured
+in `/scratch` and **discarded there**; only their measurements reach
+`results.csv`. Just the finalist full encodes needed for §8.7's Plex review are
+copied to `encodes/`. Persisting everything would put ~600 GB on the share for
+the savings panel alone, contradicting §9.1's "tens of GB" — that figure is what
+fixes this. `encode-benchmark-clean` therefore deletes a run tree whose bulk is
+finalist encodes.
 
 `<run-id>` is a UTC timestamp plus a short hash of the manifest's identity fields.
 
@@ -487,11 +514,19 @@ could change a result:
 - VMAF model name and version
 - Sampling seed for the savings panel
 
-**Resume is scoped to a single run-id.** A rerun resumes only when the recomputed
-manifest identity matches the stored one exactly; any divergence starts a new
-run-id instead. This closes the failure mode where a changed script, image, or
-VMAF model silently reuses stale CSV rows. Cross-run comparison is an explicit
-analysis step over multiple manifests, never an implicit merge.
+**Resume is scoped to a single run-id, supplied explicitly.** Because `<run-id>`
+embeds a fresh UTC timestamp, a bare invocation can never match a prior run — so
+resume is **operator-directed, not discovered**: `encode-benchmark-run` takes an
+optional run-id, and omitting it always starts a new run. This matches
+`encode-benchmark-clean`, which already takes a run-id (§7.4); the run-id is an
+operator-held handle throughout.
+
+Given a run-id, the run resumes **only** when the recomputed manifest identity
+matches that run's stored one exactly; any divergence aborts with a diff rather
+than resuming or silently starting elsewhere. This closes the failure mode where
+a changed script, image, or VMAF model reuses stale CSV rows. Cross-run
+comparison is an explicit analysis step over multiple manifests, never an
+implicit merge.
 
 ### 8.6 Stage 4 — Plex contention protocol
 
@@ -502,9 +537,11 @@ described as "run an encode while streaming."
   manifest. Not a browser, not a variable device.
 - **Content:** a fixed UHD HDR10 remux from the quality panel, played from a fixed
   start timestamp.
-- **Baseline:** three 15-minute playback runs with no encoding active. Records the
-  metrics below. Any test run is compared against this baseline, not against
-  intuition.
+- **Baseline:** three 15-minute playback runs with no encoding active, **each
+  executing the same seek sequence as case (d) — one seek every 2 minutes.**
+  Records every metric below, including seek-to-resume latency; a baseline that
+  performs no seeks yields no comparator for case (d)'s threshold. Any test run
+  is compared against this baseline, not against intuition.
 - **Cases:** (a) direct play + 4K encode; (b) direct play + two concurrent 1080p
   encodes — the modeled worst case from §6; (c) forced transcode + two concurrent
   1080p encodes; (d) case (b) with a seek every 2 minutes.
@@ -559,19 +596,27 @@ mitigations:
 
 - `emptyDir.sizeLimit` set to the scratch budget — this *does* deterministically
   evict the offending pod when it exceeds its own limit.
-- `ephemeral-storage` **request** equal to the full scratch budget, so the
-  scheduler places the Job only on a node with real headroom, and the pod stays
-  within its request during normal operation.
+- `ephemeral-storage` **request** equal to the full scratch budget, keeping the
+  pod within its request during normal operation. Note this bounds the Job
+  against node *allocatable* storage minus other pods' requests; it does not
+  attest currently free bytes, so it does not by itself guarantee the Job lands
+  on a node with real headroom.
 - `ephemeral-storage` limit set marginally above the request.
 - Preflight refuses to launch unless free NVMe exceeds the budget by a stated
-  margin on the candidate node.
+  margin. **Open:** the Job has no binding to the node preflight measured, so a
+  preflight pass on one node does not constrain placement. Resolving this needs
+  one of: preflight requiring *every* eligible node to pass; the recipe selecting
+  a verified node at dispatch and pinning to it; or accepting the gap and
+  treating a scratch-exhaustion eviction as an ordinary failed run. Not chosen
+  here — see the response file.
 
 Together these make node-pressure eviction unlikely and make the benchmark the
 most likely victim if it occurs. They do not make it impossible.
 
 **Fail-closed preflight.** `encode-benchmark-preflight` aborts before any frame is
 encoded unless all hold: i915 advertised on a non-Plex node; free NVMe above
-budget-plus-margin on that node; `/media` readable; `/out` writable; every pinned
+budget-plus-margin on the node or nodes the open item above resolves to;
+`/media` readable; `/out` writable; every pinned
 sample present at its recorded size and hash; the image digest resolvable; ffmpeg
 reporting QSV, `libvmaf`, and `libx265`.
 
@@ -654,8 +699,11 @@ binary, not an adjective.
 
 ### 11.1 Per-variant quality gate (quality panel)
 
-A QSV setting is **eligible** for a cohort only if, across all clips of that
-cohort's panel titles:
+A QSV setting is **eligible** for a cohort only if **every individual clip** of
+that cohort's panel titles independently meets every threshold below. Scores are
+**not** pooled across clips: pooling would let a strong clip offset a weak one,
+which defeats §8.3's reason for choosing hard scenes deliberately — a setting
+that fails the worst 90 seconds has not held.
 
 | Criterion | Threshold |
 |---|---|
@@ -693,6 +741,7 @@ Compared at **matched VMAF** by interpolation across the CRF sweep (§8.4):
 | ≤ 15% | QSV is the right engine |
 | 15–30% | QSV acceptable; note the cost in `findings.md` |
 | > 30% | QSV is materially worse. Escalate: CPU x265 at ~20× the wall clock, or abandon. |
+| QSV point not bracketed by the x265 sweep | **No verdict.** Reported as unbracketed; never resolved by extrapolation (§8.4). |
 
 ### 11.4 Cohort outcomes
 
@@ -749,12 +798,15 @@ breaks either fails CI rather than a movie.
    1% low), SSIM, GPU utilization, and validation of codec, resolution, frame
    rate, bit depth, HDR metadata, and audio / subtitle / chapter counts.
 4. `runs/<run-id>/stills/` — matched-frame crops for visual review.
-5. `audio-inventory.csv` — recon for the deferred audio project.
-6. **`findings.md`** — recommended QSV settings per cohort, measured savings by
+5. `runs/<run-id>/encodes/` — finalist full-title outputs only, for §8.7's Plex
+   review. Clip-sweep and savings-panel outputs are measured in scratch and
+   discarded (§8.5).
+6. `audio-inventory.csv` — recon for the deferred audio project.
+7. **`findings.md`** — recommended QSV settings per cohort, measured savings by
    cohort with median and IQR, the x265 matched-VMAF comparison, the Plex
    contention results against §8.6 thresholds, the NAS uplink figure, a revised
    TiB estimate superseding §3.2, and a go/no-go per §11.
-7. GitOps sources under `kubernetes/apps/media/encode-benchmark/`, recipes in
+8. GitOps sources under `kubernetes/apps/media/encode-benchmark/`, recipes in
    `.just/bootstrap.just` and `kubernetes/mod.just`, and tests in `just ci`.
 
 ## 14. Success criteria
