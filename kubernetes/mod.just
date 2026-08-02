@@ -588,6 +588,11 @@ media-alerts-validate: require-bash
 seerr-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(kubeconfig)}}
 
+# Verify live Tautulli resources, route, DNS, and exact non-redirecting HTTP 200 responses
+# from /status through the Service and internal gateway. Operator-only/read-only; not in ci.
+tautulli-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.tautulli -- scripts/verify/tautulli.sh {{quote(kubeconfig)}}
+
 # Validate the FlareSolverr source: files, wiring, no-secret ks, app-template chartRef,
 # stateless (no config PVC, no HTTPRoute), non-root + drop-ALL caps, /dev/shm memory,
 # ClusterIP :8191, activation-aware Gatus probe, and the pinned render. Cluster-independent
