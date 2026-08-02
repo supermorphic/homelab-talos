@@ -32,7 +32,6 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 
 [[ "$(yq -r "$controller.type" "$values")" == 'deployment' ]]
 [[ "$(yq -r "$controller.strategy" "$values")" == 'Recreate' ]]
-[[ "$(yq -r "$controller.replicas" "$values")" == '1' ]]
 [[ "$(yq -r "$controller.pod.automountServiceAccountToken" "$values")" == 'false' ]]
 [[ "$(yq -r "$controller.pod.securityContext.runAsNonRoot" "$values")" == 'true' ]]
 [[ "$(yq -r "$controller.pod.securityContext.runAsUser" "$values")" == '568' ]]
@@ -60,6 +59,7 @@ for required in \
 done
 ! rg -Fq 'relayHostKey' <<<"$identity_script"
 ! rg -Fq 'relayHostKey' "$values"
+[[ "$(yq -r "$controller.replicas" "$values")" == '1' ]]
 
 [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOncePod' ]]
 [[ "$(yq -r '.persistence.config.storageClass' "$values")" == 'longhorn' ]]
