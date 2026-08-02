@@ -36,7 +36,7 @@
 - Never decrypt, rewrite by hand, inspect plaintext from, or copy ciphertext into `homepage-tautulli.sops.yaml`. The operator creates it only through the guarded recipe in Task 10.
 - Do not add ntfy integration, a Prometheus exporter, newsletters, history import, Plex Logs mounting, Chainsaw coverage, resilience coverage, E2E automation, or qBittorrent alert refactoring.
 - New documentation must not use rollout `Phase N` wording. On any existing line edited by this work, remove such wording.
-- The agent-rules audit's scoped-access workstream is present on `main`: classify `verification.tautulli` as `operator` and add it to the verifier matrix because the accepted exact direct-Service oracle uses the general API-server `kubectl proxy`, which the scoped tiers deliberately reject. Keep it in the operator `verification` campaign and out of `scoped-verification`. The audit's containment and rollout-deletion workstreams have not landed, so keep `bootstrap media-app` as temporary guarded rollout scaffolding and do not pre-implement its deletion here.
+- Task 8A supersedes the prior `kubectl proxy` constraint: `verification.tautulli` is diagnostic-tier, belongs to `scoped-verification`, and uses an in-pod Service-DNS curl. The audit's containment and rollout-deletion workstream has not landed, so temporary `bootstrap media-app` remains.
 
 ## Delivery Boundaries and File Map
 
@@ -1392,8 +1392,9 @@ Expected: validators pass before mutation, Tautulli resumes and becomes Ready, t
 
 In the UI:
 
-1. On **Authentication**, enter a unique HTTP username and strong password, store them in
-   the password manager, and record the exact authentication mode name shown by Tautulli.
+1. On **Authentication**, sign in using the Plex administrator account. Record the observed
+   web-authentication mode as **Plex OAuth (Plex admin)**; do not look for a selectable UI
+   mode label.
 2. On **Plex Account**, select **Sign In with Plex**, complete the Plex administrator login,
    and require **Authentication successful**.
 3. On **Plex Media Server**, enter hostname `plex.media.svc.cluster.local`, port `32400`, and
@@ -1508,7 +1509,7 @@ mise exec -- just kube tautulli-validate
 Expected: all pass; the regression proves scoped-context and operator fallback layouts,
 exact Service/gateway `200` handling, and the absence of `kubectl proxy`.
 
-- [ ] **Step 5: Publish the corrective PR before retrying bootstrap**
+- [x] **Step 5: Publish the corrective PR before retrying bootstrap**
 
 Commit the verifier correction, its test/harness/catalog changes, this plan amendment, and
 the rollout-discovered setup-wizard corrections in the operator guide. Immediately before
@@ -1736,6 +1737,7 @@ mise exec -- git commit -m "feat(media): activate tautulli integrations"
 ### Task 11: Extend Live Verification to the Metric and Loaded Rules
 
 **Files:**
+- Create: `scripts/test/tautulli-verify-test.sh`
 - Modify: `scripts/verify/tautulli.sh`
 
 **Interfaces:**
@@ -1822,6 +1824,7 @@ The message must say exact `/status` `200`, the Tautulli Gatus series, and all s
 
 ```bash
 mise exec -- bash -n scripts/verify/tautulli.sh
+mise exec -- bash scripts/test/tautulli-verify-test.sh
 mise exec -- just test catalog-validate
 ```
 
