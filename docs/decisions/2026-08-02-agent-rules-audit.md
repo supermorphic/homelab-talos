@@ -305,6 +305,22 @@ session is running in the main clone on `main` with admin credentials:
 where rollouts belong. The irreversible half is already covered: branch protection
 blocks pushing to `main` server-side.
 
+The same hook asserts the session environment carries **no SOPS key material**. This
+holds today — `SOPS_AGE_KEY` and `SOPS_AGE_KEY_FILE` are absent from agent sessions —
+but only incidentally, because Claude Code is launched from a shell that has not
+exported them. There is no automation populating them: no `[env]` in `.mise.toml`, no
+`.envrc`, no direnv, just a manual `export` documented at `docs/sops.md:12,19`. Put that
+export in a shell profile and every agent session would inherit the key silently. The
+check turns an accident of launch context into something visible.
+
+Nothing else about SOPS changes. The key stays with the operator; `just ci` remains
+secret-free (chainsaw, the one SOPS-touching test path, is not in `executions.ci`); and
+the recipes needing the key — `just talos generate`, every `*-secrets` recipe,
+`just bootstrap flux-sops`, `just bootstrap foundation`, and the `scripts/secrets/ntfy-*`
+scripts — stay operator-run under the redrawn division of labour below.
+`scripts/test/validate-chainsaw.sh:37` already unsets both variables defensively and is
+the model for any future path that must prove it never touches them.
+
 #### Consequence: the operator/agent division of labour changes
 
 The current division exists *because* the operator holds the credentials. Once the
@@ -796,11 +812,15 @@ deleted, and policy must exist before the assertions it replaces are deleted.
     documents the mapping.
 22. Kubernetes tokens are bounded and re-minted on demand; the `os:reader` talosconfig
     carries a 90-day TTL.
-23. A `SessionStart` hook announces the credential tier and branch, and warns when a
-    session runs in the main clone on `main`. It warns; it does not block.
+23. A `SessionStart` hook announces the credential tier and branch, warns when a session
+    runs in the main clone on `main`, and warns when SOPS key material is present in the
+    environment. It warns; it does not block.
 24. The operator/agent division of labour is redrawn as a consequence: agents run
     offline validation and live verification; the operator keeps secrets, platform
     rollouts, credential minting, and merges.
+25. SOPS handling is unchanged: the age key stays with the operator, is populated only
+    by a manual `export`, and never enters an agent session. `just ci` remains
+    secret-free.
 
 ## Review disposition
 
