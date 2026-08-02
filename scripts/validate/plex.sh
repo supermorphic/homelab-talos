@@ -57,8 +57,14 @@ for required in \
   'chmod 0644 /runtime-identity/passwd'; do
   rg -Fq -- "$required" <<<"$identity_script"
 done
-! rg -Fq 'relayHostKey' <<<"$identity_script"
-! rg -Fq 'relayHostKey' "$values"
+if rg -Fq 'relayHostKey' <<<"$identity_script"; then
+  echo 'Refusing: Plex runtime identity script must not manage relayHostKey.' >&2
+  exit 1
+fi
+if rg -Fq 'relayHostKey' "$values"; then
+  echo 'Refusing: Plex values must not define relayHostKey state.' >&2
+  exit 1
+fi
 [[ "$(yq -r "$controller.replicas" "$values")" == '1' ]]
 
 [[ "$(yq -r '.persistence.config.accessMode' "$values")" == 'ReadWriteOncePod' ]]
@@ -94,7 +100,10 @@ rendered="$temp_dir/deployment.yaml"
 [[ "$(yq -r '.metadata.name' "$rendered")" == 'plex' ]]
 [[ "$(yq -r '.spec.strategy.type' "$rendered")" == 'Recreate' ]]
 [[ "$(yq -r '.spec.replicas' "$rendered")" == '1' ]]
-! rg -Fq 'relayHostKey' "$rendered"
+if rg -Fq 'relayHostKey' "$rendered"; then
+  echo 'Refusing: rendered Plex Deployment must not define relayHostKey state.' >&2
+  exit 1
+fi
 [[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$rendered")" == 'false' ]]
 [[ "$(yq -r '.spec.template.spec.securityContext.seccompProfile.type' "$rendered")" == 'RuntimeDefault' ]]
 [[ "$(yq -r '.spec.template.spec.initContainers[] | select(.name == "runtime-identity") | .securityContext.runAsUser' "$rendered")" == '568' ]]
