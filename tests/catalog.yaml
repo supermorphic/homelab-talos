@@ -24,6 +24,7 @@ executions:
     - validation.arr
     - validation.qbit-manage
     - validation.seerr
+    - validation.tautulli
     - validation.flaresolverr
     - validation.media-policy
     - validation.monitoring
@@ -314,6 +315,10 @@ suites:
   - metadata: {id: validation.seerr, source: validation, framework: bash, suite: ci, tier: offline, target: seerr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube seerr-validate", implementation: scripts/validate/seerr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.tautulli, source: validation, framework: bash, suite: ci, tier: offline, target: tautulli, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube tautulli-validate", implementation: scripts/validate/tautulli.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.flaresolverr, source: validation, framework: bash, suite: ci, tier: offline, target: flaresolverr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

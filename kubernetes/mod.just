@@ -572,6 +572,12 @@ arr-verify app: require-bash
 seerr-validate: require-bash
     @scripts/validate/seerr.sh
 
+# Validate the Tautulli source, config-only retained PVC, security/resources, exact probes,
+# internal route, activation-aware Gatus/Homepage boundary, and pinned app-template render.
+# Cluster-independent and included in `just ci`.
+tautulli-validate: require-bash
+    @scripts/validate/tautulli.sh
+
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
