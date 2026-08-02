@@ -4,8 +4,55 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 pre_tool_use="$repo_root/scripts/hooks/pre-tool-use.sh"
 session_start="$repo_root/scripts/hooks/session-start.sh"
+claude_settings="$repo_root/.claude/settings.json"
+codex_hooks="$repo_root/.codex/hooks.json"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-hooks-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
+
+registered_command() {
+  local client="$1"
+  local config="$2"
+  local event="$3"
+  local matcher="$4"
+  local script="$5"
+  local count
+
+  [[ -f "$config" ]] || {
+    echo "Missing $client hook registration: $config" >&2
+    return 1
+  }
+  count="$(EVENT="$event" MATCHER="$matcher" SCRIPT="$script" yq -r '
+    [.hooks[strenv(EVENT)][] |
+      select((.matcher // "") == strenv(MATCHER)) |
+      .hooks[] | select(
+        .type == "command" and (.command | contains(strenv(SCRIPT)))
+      )] | length
+  ' "$config")"
+  [[ "$count" == '1' ]] || {
+    echo "$client must register exactly one $event command hook." >&2
+    return 1
+  }
+  EVENT="$event" MATCHER="$matcher" SCRIPT="$script" yq -r '
+    .hooks[strenv(EVENT)][] |
+    select((.matcher // "") == strenv(MATCHER)) |
+    .hooks[] | select(
+      .type == "command" and (.command | contains(strenv(SCRIPT)))
+    ) | .command
+  ' "$config"
+}
+
+registered_command Claude "$claude_settings" PreToolUse Bash \
+  'scripts/hooks/pre-tool-use.sh' >/dev/null
+registered_command Claude "$claude_settings" SessionStart '' \
+  'scripts/hooks/session-start.sh' >/dev/null
+codex_pre_tool_command="$(
+  registered_command Codex "$codex_hooks" PreToolUse Bash \
+    'scripts/hooks/pre-tool-use.sh'
+)"
+codex_session_command="$(
+  registered_command Codex "$codex_hooks" SessionStart '' \
+    'scripts/hooks/session-start.sh'
+)"
 
 blocked=(
   'git reset --hard'
@@ -57,6 +104,15 @@ run_pre_tool_use() {
     | "$pre_tool_use"
 }
 
+run_registered_pre_tool_use() {
+  local hook_command="$1"
+  local requested_command="$2"
+  local working_directory="$3"
+  COMMAND="$requested_command" yq --null-input --output-format json \
+    '{"tool_name":"Bash","tool_input":{"command":strenv(COMMAND)}}' \
+    | (cd "$working_directory" && bash -c "$hook_command")
+}
+
 for command in "${blocked[@]}"; do
   output="$fixture/blocked-${RANDOM}.log"
   if run_pre_tool_use "$command" >"$output" 2>&1; then
@@ -82,6 +138,32 @@ for command in "${allowed[@]}"; do
     exit 1
   fi
 done
+
+codex_nested_output="$fixture/codex-nested-denial.log"
+if run_registered_pre_tool_use "$codex_pre_tool_command" 'git reset --hard' \
+  "$repo_root/scripts/test" >"$codex_nested_output" 2>&1; then
+  echo 'Codex hook did not block an irreversible command from a nested directory.' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ "$status" -eq 2 ]] || {
+  echo "Codex nested-directory hook exited $status instead of 2." >&2
+  exit 1
+}
+rg -q 'Denied irreversible git command' "$codex_nested_output"
+run_registered_pre_tool_use "$codex_pre_tool_command" 'git status --short' \
+  "$repo_root/scripts/test" >/dev/null
+
+codex_session_output="$fixture/codex-session.log"
+(
+  cd "$repo_root/scripts/test"
+  bash -c "$codex_session_command"
+) >"$codex_session_output" 2>&1
+rg -q '^(worktree|main clone) · branch .+ · ' "$codex_session_output" || {
+  echo 'Codex SessionStart registration did not resolve from a nested directory.' >&2
+  exit 1
+}
 
 main_clone="$fixture/main-clone"
 worktree="$fixture/worktree"
@@ -168,4 +250,4 @@ if rg -q "$fake_age_key|$fake_age_key_file" "$sops_session"; then
   exit 1
 fi
 
-echo 'Claude hook command and session visibility checks passed.'
+echo 'Claude and Codex hook command and session visibility checks passed.'
