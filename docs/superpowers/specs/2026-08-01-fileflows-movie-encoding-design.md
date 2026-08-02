@@ -8,14 +8,22 @@ Branch: `fileflows-movie-encoding-strategy`.
 
 Determine, cheaply and reversibly, whether Intel Quick Sync HEVC encoding on the
 NUC cluster can normalize and meaningfully shrink the movie catalog — **before**
-committing to build the FileFlows platform described in
-`plans/fileflows-movie-evaluation-implementation-plan.md`.
+committing to build a FileFlows platform.
 
-That plan is deploy-first: steps 1–11 build a three-node FileFlows application,
-storage, probes, and classification flows before a single frame is encoded. The
-risk it leaves unaddressed is the one most likely to sink the project — whether
-QSV HEVC preserves acceptable quality, particularly on grain-heavy 4K HDR10
-material, at a worthwhile size reduction.
+**Source document.** This design responds to an operator-supplied "FileFlows Movie
+Evaluation and Implementation Plan," which is deliberately **not tracked in this
+repository** — it is working input, not a deliverable. Citations below of the form
+"plan §N" refer to that document's numbered sections and are recorded for
+provenance; the material this design actually depends on is restated here, so this
+spec stands alone. The sections cited are: §4 safety principles, §6 QSV
+requirement, §11 encoding strategy, §13 output validation, §14 the 15% savings
+gate, §16 phased rollout, §17 the TV boundary, and §21 the seeding boundary.
+
+That plan is deploy-first: its steps 1–11 build a three-node FileFlows
+application, storage, probes, and classification flows before a single frame is
+encoded. The risk it leaves unaddressed is the one most likely to sink the
+project — whether QSV HEVC preserves acceptable quality, particularly on
+grain-heavy 4K HDR10 material, at a worthwhile size reduction.
 
 This design inverts that order. A throwaway benchmark harness answers the
 quality-and-savings question first. FileFlows gets built only if the answer
