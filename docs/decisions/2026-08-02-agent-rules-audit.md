@@ -238,27 +238,97 @@ explicitly or via aggregation. Flux `Kustomization`/`HelmRelease`, Cilium polici
 `Endpoint`, Longhorn volumes and Trivy reports all require explicit rules. A tier that
 omits them cannot diagnose this cluster.
 
-#### Credential lifecycle
+#### Where each credential comes from
 
-The spec's obligations, to be discharged in implementation:
+The tiers are not variants of one mechanism. `talosctl kubeconfig` is documented as
+*"Download the **admin** kubeconfig from the node"* and has no scope option, so the
+existing recipe cannot be made read-only:
 
-- **Where admin lives.** `.kube/config` and `.talos/config` are repository-root-relative
-  and gitignored, currently shared by every workflow and enforced centrally at
-  `.just/repository.just:1206`. The admin pair moves to an operator-only path outside
-  every worktree. Agent worktrees receive only `observer`/`diagnostic` material.
-- **Distribution.** A guarded recipe mints and installs the agent kubeconfig into a
-  worktree. Agents never mint their own.
-- **Lifetime, renewal, revocation, rotation.** Kubernetes ServiceAccount tokens are
-  bound and expiring; Talos `os:reader` certificates carry an explicit lifetime that
-  must be chosen, documented, and renewable without operator presence at an
-  inconvenient moment. Revocation is by deleting the binding and rotating the
-  ServiceAccount.
-- **Command-to-permission matrix.** Every retained verifier and diagnostic script is
-  mapped to the exact verbs and resources it needs, and to its tier. A verifier that
-  cannot be satisfied by `diagnostic` is reworked or becomes operator-only.
-- **Tests.** Positive tests that every retained verifier succeeds under its declared
-  tier, and **negative authorization tests** that `observer` cannot exec, cannot read
-  Secrets, and cannot mutate; and that `diagnostic` cannot mutate Flux-managed state.
+| Credential | Source | Scope control | Lifetime |
+|---|---|---|---|
+| admin kubeconfig | `talosctl kubeconfig` | none — admin only | Talos PKI cert |
+| observer/diagnostic kubeconfig | Kubernetes ServiceAccount + RBAC | ClusterRole | bounded token |
+| admin talosconfig | talhelper, via `just talos generate` | `os:admin` | cert |
+| reader talosconfig | `talosctl config new --roles os:reader --crt-ttl` | roles flag | **90 days** |
+
+#### Starting position
+
+Only the main clone holds credentials today. All four agent worktrees have neither
+`.kube/config` nor `.talos/config`, so **agents currently have zero cluster access.**
+This decision is a privilege increase from nothing, not a reduction from admin, and the
+work is minting the new lower tier rather than relocating the existing one.
+
+#### Path strategy: same path, different content by location
+
+`.kube/config` and `.talos/config` stay repository-root-relative, so each worktree has
+its own. **The main clone's hold admin; every worktree's hold observer/diagnostic.**
+
+No recipe changes, and `.just/repository.just:1206`'s centralised-path assertion stands
+unmodified. A rollout recipe run from a worktree fails at the API server rather than
+being refused by an instruction — the guard becomes real. This aligns with
+`require_deployed_source`, which already makes the main clone the natural home for
+rollouts.
+
+`just talos kubeconfig` **resolves conditionally** on where it runs:
+
+- **In the main clone** — downloads the admin kubeconfig from Talos. Unchanged.
+- **In a worktree** — mints a bounded observer/diagnostic token using the main clone's
+  admin config and writes the scoped kubeconfig locally. Fails with a clear message if
+  the main clone holds no admin config.
+
+The same command is therefore the **token refresh recipe**: when a bounded token
+expires, re-running it re-mints. `README.md` documents the mapping explicitly —
+main clone → admin, worktree → observer — because a credential whose scope depends on
+directory is exactly the kind of thing that must not be inferred.
+
+#### Lifetime, revocation, rotation
+
+- **Kubernetes:** a bounded ServiceAccount token, re-minted by the recipe above. Chosen
+  over a long-lived Secret-backed token so a leaked worktree config expires on its own.
+  The cost is acknowledged in the risks: a token can expire mid-diagnosis, and the
+  remedy is one operator command.
+- **Talos:** `os:reader` at a **90-day** TTL — short enough that a stale or leaked
+  config self-heals within a quarter, long enough that renewal is a rare chore.
+- **Revocation** is deleting the ClusterRoleBinding and rotating the ServiceAccount for
+  Kubernetes, and letting the certificate lapse or rotating Talos PKI for `os:reader`.
+
+#### Tier visibility
+
+An agent cannot otherwise tell which tier it holds, and will report its own capabilities
+incorrectly. A **`SessionStart` hook announces the tier and branch**, and warns when a
+session is running in the main clone on `main` with admin credentials:
+
+> `main clone · branch main · admin credentials in effect — repository work belongs on a
+> feature branch in a worktree`
+
+**This is a warning, not a guard.** Working in the main clone is legitimate — it is
+where rollouts belong. The irreversible half is already covered: branch protection
+blocks pushing to `main` server-side.
+
+#### Consequence: the operator/agent division of labour changes
+
+The current division exists *because* the operator holds the credentials. Once the
+observer and diagnostic tiers exist, it is redrawn:
+
+| Work | Before | After |
+|---|---|---|
+| Offline validation, `just ci` | Operator | **Agent** |
+| Live `<app>-verify`, diagnostics | Operator | **Agent**, under observer/diagnostic |
+| `*-secrets`, platform `bootstrap` | Operator | Operator — SOPS key and admin |
+| Credential minting | — | Operator |
+| Merging pull requests | Operator | Operator |
+
+This is a deliberate consequence of decision 1, not a side effect, and it is what makes
+decision 2's post-merge acceptance runnable by automation rather than by the operator.
+
+#### Command-to-permission matrix and tests
+
+Every retained verifier and diagnostic script is mapped to the exact verbs and resources
+it needs, and to its tier. A verifier that cannot be satisfied by `diagnostic` is
+reworked or becomes operator-only. Positive tests confirm each retained verifier
+succeeds under its declared tier; **negative authorization tests** confirm `observer`
+cannot exec, cannot read Secrets, and cannot mutate, and that `diagnostic` cannot mutate
+Flux-managed state.
 
 #### What is and is not claimed
 
@@ -660,9 +730,14 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 - **The `diagnostic` tier grants `exec`.** That is a real privilege increase over the
   status quo, where agents had no cluster access at all from worktrees. It is bounded to
   five named verifiers and is labelled accurately rather than described as read-only.
-- **Scoped credentials are new infrastructure** to mint, rotate, and debug, and a broken
-  agent config blocks diagnosis at exactly the wrong moment. The admin path remains
-  available to the operator throughout.
+- **Scoped credentials are new infrastructure** to mint, rotate, and debug. Choosing a
+  bounded token over a long-lived one means it *will* expire mid-diagnosis at some
+  point; the remedy is one operator command, and the alternative was a standing
+  credential. The admin path remains available to the operator throughout.
+- **Credential scope now depends on directory**, which is implicit state. A worktree
+  that never received a scoped config simply has no access, and a main-clone session
+  silently has admin. The `SessionStart` hook exists to make that visible, and
+  `README.md` documents it; neither makes it explicit at the moment of use.
 - **A layered policy set is a single point of failure per layer.** Mitigated by negative
   fixtures per rule and by `validation.policy-unit`.
 - **Stripping assertions could drop one that mattered.** Mitigated by the per-class
@@ -715,6 +790,17 @@ deleted, and policy must exist before the assertions it replaces are deleted.
     out-of-tree reads and memory writes.
 20. `bypassPermissions` is recorded as a known condition, not changed here. It is why
     `AGENTS.md` and the hook are the only controls present.
+21. Credential tier follows directory: main clone holds admin, worktrees hold
+    observer/diagnostic, at the same repository-relative paths. `just talos kubeconfig`
+    resolves conditionally and doubles as the token-refresh recipe. `README.md`
+    documents the mapping.
+22. Kubernetes tokens are bounded and re-minted on demand; the `os:reader` talosconfig
+    carries a 90-day TTL.
+23. A `SessionStart` hook announces the credential tier and branch, and warns when a
+    session runs in the main clone on `main`. It warns; it does not block.
+24. The operator/agent division of labour is redrawn as a consequence: agents run
+    offline validation and live verification; the operator keeps secrets, platform
+    rollouts, credential minting, and merges.
 
 ## Review disposition
 
