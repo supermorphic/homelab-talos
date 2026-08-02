@@ -17,6 +17,10 @@ file_mode() {
 	python3 -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$1"
 }
 
+results_header() {
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
+}
+
 prepare_configmap_script_mount() {
 	configmap_root="$BATS_TEST_TMPDIR/scripts"
 	configmap_data="$configmap_root/..2026_08_02_12_00_00.000000000"
@@ -61,6 +65,46 @@ prepare_configmap_script_mount() {
 	[ "$(run_directory_count)" -eq 2 ]
 }
 
+# Catches a production break where collision cleanup removes an empty run
+# directory that existed before this process attempted its atomic mkdir.
+@test "failed create preserves an existing empty run directory" {
+	run_id='20260802T120000Z-037fa5c4'
+	collision="$BENCHMARK_OUT/runs/$run_id"
+	mkdir "$collision"
+
+	run "$SCRIPTS/runmeta.sh" create quality
+	[ "$status" -eq 73 ]
+	[[ "$output" == *"run already exists: $run_id" ]]
+	[ -d "$collision" ]
+	[ "$(run_directory_count)" -eq 1 ]
+}
+
+# Catches the race where a concurrent creator wins mkdir after this process has
+# selected the run ID and the losing process removes the winner's empty tree.
+@test "failed concurrent create preserves the winning run directory" {
+	run_id='20260802T120000Z-037fa5c4'
+	collision="$BENCHMARK_OUT/runs/$run_id"
+	stub_bin="$BATS_TEST_TMPDIR/mkdir-bin"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/mkdir" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if (($# == 1)) && [[ "$1" == */20260802T120000Z-037fa5c4 ]]; then
+	/bin/mkdir "$1"
+	exit 1
+fi
+exec /bin/mkdir "$@"
+EOF
+	chmod +x "$stub_bin/mkdir"
+	export PATH="$stub_bin:$PATH"
+
+	run "$SCRIPTS/runmeta.sh" create quality
+	[ "$status" -eq 73 ]
+	[[ "$output" == *"run already exists: $run_id" ]]
+	[ -d "$collision" ]
+	[ "$(run_directory_count)" -eq 1 ]
+}
+
 # Catches a production break where an explicitly selected, byte-identical run
 # is recreated, or a successful exact row is encoded again.
 @test "matching explicit run id resumes without changing manifest bytes and skips an exact passed row" {
@@ -85,16 +129,15 @@ prepare_configmap_script_mount() {
 	[ -z "$output" ]
 }
 
-# Catches a production break where prefix keys, failed attempts, or malformed
-# rows are mistaken for exact successful rows and are incorrectly skipped.
+# Catches a production break where prefix keys or failed attempts are mistaken
+# for exact successful rows and are incorrectly skipped.
 @test "completed accepts only an exact row key whose status is passed" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	printf '%s\n' \
 		'quality|abc123|detail|qsv|22-extra,passed' \
 		'quality|abc123|detail|qsv|22,failed' \
-		'quality|abc123|detail|qsv|23,invalid' \
-		'malformed-row' >"$results"
+		'quality|abc123|detail|qsv|23,invalid' >"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 1 ]
@@ -108,6 +151,49 @@ prepare_configmap_script_mount() {
 	[ "$status" -eq 0 ]
 }
 
+# Catches a production break where a crash-truncated row ending at a positional
+# passed status is trusted even though Task 5 did not append a complete record.
+@test "completed rejects a truncated full-schema passed row" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	results_header >"$results"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed" >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 36' ]
+}
+
+# Catches a production break where a header with only the first field correct is
+# treated as Task 5 output and positional columns can suppress an encode.
+@test "completed requires the exact Task 5 results header" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status' >"$results"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed" >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV header' ]
+}
+
+# Catches a production break where valid RFC 4180 quoted commas shift positional
+# fields or where malformed quoting is accepted after a complete passed row.
+@test "completed parses quoted commas and rejects malformed full-schema CSV" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	results_header >"$results"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded" >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 0 ]
+
+	printf '%s\n' '"unterminated' >>"$results"
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: malformed row 3' ]
+}
+
 # Catches a production break where changed executable bytes reuse stale result
 # rows, overwrite the original evidence, leak digest values, or fork silently.
 @test "changed script digest aborts explicit resume with a redacted field diff" {
@@ -119,7 +205,7 @@ prepare_configmap_script_mount() {
 
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
 	[ "$status" -eq 1 ]
-	[ "$output" = 'identity mismatch: scriptDigests.benchmark.sh (stored=<redacted>, current=<redacted>)' ]
+	[ "$output" = 'identity mismatch: scriptDigests.benchmark.sh (stored=<missing>, current=<redacted>)' ]
 	[[ "$output" != *'ae253cad'* ]]
 	cmp -s "$before" "$manifest"
 	[ "$(file_mode "$manifest")" = '444' ]
@@ -127,7 +213,7 @@ prepare_configmap_script_mount() {
 
 	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
 	[ "$status" -eq 1 ]
-	[ "$output" = 'identity mismatch: scriptDigests.benchmark.sh (stored=<redacted>, current=<redacted>)' ]
+	[ "$output" = 'identity mismatch: scriptDigests.benchmark.sh (stored=<missing>, current=<redacted>)' ]
 	cmp -s "$before" "$manifest"
 	[ "$(run_directory_count)" -eq 1 ]
 }
@@ -143,8 +229,8 @@ prepare_configmap_script_mount() {
 	mv -f "$tampered" "$manifest"
 
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
-	[ "$status" -eq 65 ]
-	[ "$output" = "invalid run manifest: $manifest" ]
+	[ "$status" -eq 1 ]
+	[ "$output" = 'identity mismatch: clientDevice (stored=<missing>, current=<redacted>)' ]
 }
 
 # Catches a production break where ConfigMap data symlinks are skipped and
@@ -176,8 +262,51 @@ prepare_configmap_script_mount() {
 	mv -f "$tampered" "$manifest"
 
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
-	[ "$status" -eq 65 ]
-	[ "$output" = "invalid run manifest: $manifest" ]
+	[ "$status" -eq 1 ]
+	[ "$output" = 'identity mismatch: unexpectedIdentityField (stored=<redacted>, current=<missing>)' ]
+}
+
+# Catches a production break where a known field with a malformed type is
+# rejected without identifying which redacted identity field is unusable.
+@test "verify names a malformed stored identity field without exposing values" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	tampered="$BATS_TEST_TMPDIR/tampered-manifest.json"
+	jq -S -c '.node.kernel = 17' "$manifest" >"$tampered"
+	chmod 0444 "$tampered"
+	mv -f "$tampered" "$manifest"
+
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 1 ]
+	[ "$output" = 'identity mismatch: node.kernel (stored=<redacted>, current=<redacted>)' ]
+}
+
+# Catches a production break where source recomputation echoes a sensitive media
+# pathname instead of reporting only the redacted identity field that vanished.
+@test "verify redacts a source path that disappears before resume" {
+	source_path="$BATS_TEST_TMPDIR/Secret Movie Name.mkv"
+	printf '%s' 'media-bytes' >"$source_path"
+	samples_file="$BATS_TEST_TMPDIR/samples-with-source.yaml"
+	printf '%s\n' \
+		'runtime:' \
+		'  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' \
+		'savingsSeed: 20260802' \
+		'qualityPanel:' \
+		'  - id: secret-movie' \
+		'    cohort: avc' \
+		"    path: '$source_path'" \
+		'    sizeBytes: 11' \
+		'    sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+		'savingsPanel: []' >"$samples_file"
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_SAMPLES_FILE="$samples_file"
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	rm "$source_path"
+
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 66 ]
+	[ "$output" = 'identity unavailable: sources.0.path (stored=<redacted>, current=<unavailable>)' ]
+	[[ "$output" != *'Secret Movie Name.mkv'* ]]
 }
 
 # Catches a production break where an explicit run handle can escape the run
@@ -199,11 +328,35 @@ prepare_configmap_script_mount() {
 # Catches a production break where the fixture override becomes reachable in a
 # real benchmark environment and can replace runtime-discovered identity.
 @test "identity fixture is refused outside test mode" {
+	test_out="$BENCHMARK_OUT"
 	export BENCHMARK_TEST_MODE=0
+	unset BENCHMARK_OUT BENCHMARK_NOW BENCHMARK_SAMPLES_FILE
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 64 ]
 	[ "$output" = 'BENCHMARK_IDENTITY_FIXTURE requires BENCHMARK_TEST_MODE=1' ]
+	[ "$(find "$test_out/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches a production break where an output-root override can redirect run
+# creation away from the fixed writable /out mount.
+@test "output override is refused outside test mode" {
+	export BENCHMARK_TEST_MODE=0
+	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW BENCHMARK_SAMPLES_FILE
+	run "$SCRIPTS/runmeta.sh" create quality
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' ]
 	[ "$(run_directory_count)" -eq 0 ]
+}
+
+# Catches a production break where a samples override can replace the fixed
+# /config/samples.yaml identity input in a live benchmark environment.
+@test "samples override is refused outside test mode" {
+	export BENCHMARK_TEST_MODE=0
+	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW BENCHMARK_OUT
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_DIRNAME/fixtures/manifests/identity.json"
+	run "$SCRIPTS/runmeta.sh" create quality
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' ]
 }
 
 # Catches a production break where later command mappings are enabled before

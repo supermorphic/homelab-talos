@@ -9,6 +9,15 @@ clock_override="${BENCHMARK_NOW:-}"
 new_run_directory=''
 manifest_temp=''
 
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
+	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
+	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
+
 cleanup_unpublished_manifest() {
 	if [[ -n "$manifest_temp" ]]; then
 		rm -f -- "$manifest_temp"
@@ -107,6 +116,7 @@ discover_identity() {
 	local script_directory image_digest samples_digest savings_seed
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha
+	local source_index=0
 
 	if [[ -n "$identity_fixture" ]]; then
 		[[ "$test_mode" == '1' ]] || {
@@ -147,7 +157,8 @@ discover_identity() {
 		[[ -n "$source_json" ]] || continue
 		source_path="$(jq -r '.path' <<<"$source_json")"
 		[[ -f "$source_path" ]] || {
-			echo "benchmark source not found: $source_path" >&2
+			printf 'identity unavailable: sources.%s.path (stored=<redacted>, current=<unavailable>)\n' \
+				"$source_index" >&2
 			return 66
 		}
 		source_size="$(wc -c <"$source_path" | tr -d '[:space:]')"
@@ -157,6 +168,7 @@ discover_identity() {
 			--argjson size "$source_size" \
 			--arg sha256 "$source_sha" \
 			'. + [{path: $path, size: $size, sha256: $sha256}]' <<<"$sources")"
+		((source_index += 1))
 	done < <(yq -o=json -I=0 "$panel" "$samples_file")
 
 	encoder_commands="${BENCHMARK_ENCODER_COMMANDS_JSON:-[]}"
@@ -201,44 +213,91 @@ discover_identity() {
 print_identity_diff() {
 	local stored="$1"
 	local current="$2"
-	local path stored_mode current_mode
-	while IFS= read -r path; do
+	local path stored_present current_present stored_mode current_mode stored_value current_value
+	while IFS=$'\t' read -r path stored_present current_present; do
 		[[ -n "$path" ]] || continue
-		if [[ "$path" == 'mode' ]]; then
+		if [[ "$path" == 'mode' && "$stored_present" == 'true' && "$current_present" == 'true' ]]; then
 			stored_mode="$(jq -r '.mode' <<<"$stored")"
 			current_mode="$(jq -r '.mode' <<<"$current")"
 			printf 'identity mismatch: mode (stored=%s, current=%s)\n' "$stored_mode" "$current_mode" >&2
 		else
-			printf 'identity mismatch: %s (stored=<redacted>, current=<redacted>)\n' "$path" >&2
+			if [[ "$stored_present" == 'true' ]]; then
+				stored_value='<redacted>'
+			else
+				stored_value='<missing>'
+			fi
+			if [[ "$current_present" == 'true' ]]; then
+				current_value='<redacted>'
+			else
+				current_value='<missing>'
+			fi
+			printf 'identity mismatch: %s (stored=%s, current=%s)\n' \
+				"$path" "$stored_value" "$current_value" >&2
 		fi
 	done < <(jq -n -r --argjson stored "$stored" --argjson current "$current" '
-		[($stored | paths(scalars)), ($current | paths(scalars))]
-		| unique
-		| .[] as $path
-		| select(($stored | getpath($path)) != ($current | getpath($path)))
-		| $path | map(tostring) | join(".")
+		def key_nodes($side; $path):
+			if type == "object" or type == "array" then
+				to_entries[] as $entry
+				| {side: $side, path: ($path + [$entry.key])},
+					($entry.value | key_nodes($side; $path + [$entry.key]))
+			else empty end;
+		def leaves($side; $path):
+			if type == "object" or type == "array" then
+				to_entries[] as $entry
+				| $entry.value | leaves($side; $path + [$entry.key])
+			else {side: $side, path: $path, value: .} end;
+		[
+			($stored | key_nodes("stored"; [])),
+			($current | key_nodes("current"; []))
+		] as $nodes
+		| [
+			$nodes
+			| group_by(.path)[]
+			| select((map(.side) | unique | length) != 2)
+			| .[0].path
+		] as $key_differences
+		| [
+			($stored | leaves("stored"; [])),
+			($current | leaves("current"; []))
+		]
+		| group_by(.path)
+		| map(select(
+			(map(.side) | unique | length) != 2 or
+			(length == 2 and .[0].value != .[1].value)
+		) | .[0].path) as $leaf_differences
+		| ($key_differences + $leaf_differences | unique)[] as $path
+		| [
+			($path | map(tostring) | join(".")),
+			(any($nodes[]; .side == "stored" and .path == $path) | tostring),
+			(any($nodes[]; .side == "current" and .path == $path) | tostring)
+		]
+		| @tsv
 	')
 }
 
 stored_identity() {
 	local manifest="$1"
-	local stored_mode normalized
+	local stored_mode identity
+	if ! identity="$(jq -e -S -c 'del(.createdAt)' "$manifest" 2>/dev/null)"; then
+		echo 'identity mismatch: manifest (stored=<malformed>, current=<redacted>)' >&2
+		return 1
+	fi
 	if ! jq -e '
 		has("createdAt") and
 		(.createdAt | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$"))
 	' "$manifest" >/dev/null 2>&1; then
-		echo "invalid run manifest: $manifest" >&2
-		return 65
+		echo 'identity mismatch: createdAt (stored=<redacted>, current=<ignored>)' >&2
+		return 1
 	fi
 	stored_mode="$(jq -e -r '.mode | select(type == "string")' "$manifest")" || {
-		echo "invalid run manifest: $manifest" >&2
-		return 65
+		if jq -e 'has("mode")' "$manifest" >/dev/null; then
+			echo 'identity mismatch: mode (stored=<redacted>, current=<redacted>)' >&2
+		else
+			echo 'identity mismatch: mode (stored=<missing>, current=<redacted>)' >&2
+		fi
+		return 1
 	}
-	if ! normalized="$(normalize_identity "$(jq -c 'del(.createdAt)' "$manifest")" "$stored_mode" 2>/dev/null)"; then
-		echo "invalid run manifest: $manifest" >&2
-		return 65
-	fi
-	printf '%s\n' "$normalized"
+	printf '%s\n' "$identity"
 }
 
 verify_run() {
@@ -266,7 +325,7 @@ verify_run() {
 create_run() {
 	local mode="$1"
 	local explicit_run_id="${2:-}"
-	local identity identity_digest now run_id manifest
+	local identity identity_digest now run_id run_directory manifest
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
 		verify_run "$explicit_run_id" "$mode" || return
@@ -291,11 +350,12 @@ create_run() {
 	}
 	run_id="$now-$identity_digest"
 	mkdir -p "$runs_root"
-	new_run_directory="$runs_root/$run_id"
-	if ! mkdir "$new_run_directory"; then
+	run_directory="$runs_root/$run_id"
+	if ! mkdir "$run_directory"; then
 		echo "run already exists: $run_id" >&2
 		return 73
 	fi
+	new_run_directory="$run_directory"
 	manifest="$new_run_directory/manifest.json"
 	manifest_temp="$new_run_directory/manifest.json.tmp"
 	umask 022
@@ -318,16 +378,78 @@ completed_row() {
 	fi
 	results="$runs_root/$run_id/results.csv"
 	[[ -f "$results" && ! -L "$results" ]] || return 1
-	awk -F, -v key="$row_key" '
-		NR == 1 && $1 == "run_id" { full_schema = 1; next }
-		full_schema {
-			candidate = $2 "|" $5 "|" $6 "|" $7 "|" $8
-			if (candidate == key && $10 == "passed") found = 1
-			next
-		}
-		NF == 2 && $1 == key && $2 == "passed" { found = 1 }
-		END { exit(found ? 0 : 1) }
-	' "$results"
+	python3 - "$results" "$run_id" "$row_key" "$test_mode" <<'PYTHON'
+import csv
+import sys
+
+results_path, expected_run_id, expected_key, test_mode = sys.argv[1:]
+expected_header = [
+    "run_id", "panel", "sample_id", "cohort", "source_sha256", "clip_id",
+    "encoder", "requested_setting", "selected_rate_control", "status", "attempt",
+    "input_bytes", "output_bytes", "reduction_percent", "input_bit_rate",
+    "output_bit_rate", "wall_seconds", "encode_fps", "encode_speed",
+    "vmaf_harmonic_mean", "vmaf_1pct_low", "ssim", "gpu_busy_percent",
+    "qsv_proof", "validation_codec", "validation_duration",
+    "validation_resolution", "validation_frame_rate", "validation_bit_depth",
+    "validation_hdr", "validation_audio_tracks", "validation_subtitle_tracks",
+    "validation_chapters", "validation_failures", "log_path", "output_disposition",
+]
+
+
+def invalid(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(65)
+
+
+try:
+    with open(results_path, newline="", encoding="utf-8") as stream:
+        reader = csv.reader(stream, strict=True)
+        try:
+            first = next(reader)
+        except StopIteration:
+            raise SystemExit(1)
+
+        if first != expected_header:
+            if test_mode != "1" or len(first) != 2:
+                invalid("invalid results CSV header")
+            rows = [first]
+            try:
+                rows.extend(reader)
+            except csv.Error:
+                invalid(f"invalid results CSV: malformed row {reader.line_num}")
+            for row_number, row in enumerate(rows, 1):
+                if len(row) != 2 or row[1] not in {"passed", "failed", "invalid"}:
+                    invalid(f"invalid compact results CSV row {row_number}")
+            found = any(row[0] == expected_key and row[1] == "passed" for row in rows)
+            raise SystemExit(0 if found else 1)
+
+        found = False
+        try:
+            for row_number, row in enumerate(reader, 2):
+                if len(row) != len(expected_header):
+                    invalid(
+                        f"invalid results CSV: row {row_number} has {len(row)} columns; "
+                        f"expected {len(expected_header)}"
+                    )
+                if row[0] != expected_run_id:
+                    invalid(f"invalid results CSV: row {row_number} has a mismatched run id")
+                if row[9] not in {"passed", "failed", "invalid"}:
+                    invalid(f"invalid results CSV: row {row_number} has an invalid status")
+                if not row[10].isdigit() or int(row[10]) < 1:
+                    invalid(f"invalid results CSV: row {row_number} has an invalid attempt")
+                key_parts = [row[1], row[4], row[5], row[6], row[7]]
+                if any(not part or "|" in part for part in key_parts):
+                    invalid(f"invalid results CSV: row {row_number} has an invalid row key")
+                candidate = "|".join(key_parts)
+                if candidate == expected_key and row[9] == "passed":
+                    found = True
+        except csv.Error:
+            invalid(f"invalid results CSV: malformed row {reader.line_num}")
+except (OSError, UnicodeError):
+    invalid("invalid results CSV: unreadable input")
+
+raise SystemExit(0 if found else 1)
+PYTHON
 }
 
 (($# >= 1)) || usage
