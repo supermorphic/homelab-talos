@@ -6,10 +6,6 @@
   acceptance.
 - Date: 2026-08-02
 - Branch: `challenge-agent-rules`
-- Supersedes on acceptance: `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md`
-  and the four-PR plan in
-  `docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md`.
-  PR #171 is closed unmerged; PR #170 (the reference validator) is merged and retained.
 
 **A record becomes `Accepted` when it is merged to `main`.** Until then it is `Draft`
 and may be revised freely. After acceptance it is superseded, never revised. Status is
@@ -25,15 +21,15 @@ validation. Nothing else has been implemented.
 
 The repository's governing rules had been rewritten four times in four days — #162
 removed 76 lines of worktree constraints, #163 added a skills section, #165 compressed
-162 lines to 75, #169 deleted the skills section — while two successive architecture
-plans were written and superseded. Net rule content finished roughly where it started.
+162 lines to 75, #169 deleted the skills section. Net rule content finished roughly
+where it started.
 
 The rules were never wrong in a way anyone could name. They were never *tested* either.
 No rewrite had an acceptance criterion, so no rewrite could be finished, and the churn
 had no natural stopping point.
 
-This audit asks a different question from its predecessor. The 2026-07-31 design asked
-where each rule should *live*. This one asks whether each rule should *exist*.
+The question this audit asks is not where each rule should *live*, but whether each rule
+should *exist*.
 
 ### Current-state findings
 
@@ -175,19 +171,24 @@ produced the churn; a one-line signpost is not duplication.
 This is the standing test for future rule proposals. It is the mechanism that ends the
 churn: a proposed rule now has an answer rather than an argument.
 
-### Why no nested layer
+### Why one file and not a nested layer
 
-The 2026-07-31 design proposed root plus three nested `AGENTS.md` files plus
-`docs/runbooks/` plus `docs/`, governed by a formal admission test, "additive
-inheritance", and a precedence block. That is rejected on three grounds:
+Splitting root `AGENTS.md` into per-subtree files — `kubernetes/AGENTS.md`,
+`talos/AGENTS.md`, and so on — is the obvious next move once a rule set feels
+unwieldy, and it is rejected here for three reasons. Recorded explicitly so the
+question does not reopen:
 
-1. **The size premise does not hold.** 67 lines is far below every published split
-   threshold. Splitting to save context optimises a cost that is not being paid.
-2. **Additive inheritance contradicts the specification.** AGENTS.md is nearest-wins.
-   "Nested may narrow but never relax" is implemented by no harness, so it would run
-   entirely on agents reading and honouring a bespoke precedence block.
+1. **The size premise does not hold.** At 67 lines, root is far below every published
+   split threshold. Splitting to save context optimises a cost that is not being paid.
+2. **Any "narrow but never relax" inheritance model contradicts the specification.**
+   AGENTS.md is nearest-wins. A rule that a nested file may only strengthen its parent
+   is implemented by no harness, so it would run entirely on agents reading and
+   honouring a bespoke precedence block — an instruction pretending to be a mechanism.
 3. **It adds surfaces without removing rules.** The measured problem was never that
    rules were hard to find.
+
+A nested layer becomes worth revisiting if root approaches 150–200 lines. It is not
+close, and the decisions here make it shorter.
 
 `docs/runbooks/` is **created** by this work; it does not exist today. Procedure is
 descriptive and is not loaded every session, so it does not compete for the same budget.
@@ -536,9 +537,7 @@ the safety non-goal.
 | `plans/test-reporting-standardization-plan.md` | Distil → `docs/decisions/`, `Status: Accepted` |
 | `plans/flux-reconciliation-alerting-handoff.md` | Distil → `docs/decisions/`, `Status: Accepted`; residual phone-delivery E2E moves to the testing-expansion session |
 | `plans/talos-validation-refactor-plan.md` | **Not distilled.** Unexecuted live intent. Its content becomes input to decision 3's workstream; the file is deleted once that workstream's record exists |
-| `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md` | → `docs/decisions/`, `Status: Superseded by 2026-08-02-agent-rules-audit.md` |
 | `docs/superpowers/specs/2026-07-31-lidarr-music-stack-design.md` | → `docs/decisions/`, `Status: Accepted` — implemented by #172 and #174 |
-| `docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md` | Deleted — superseded design, and plans are not tracked |
 | `docs/superpowers/plans/2026-07-31-lidarr-music-stack.md` | Deleted — executed, and plans are not tracked |
 
 Distilled content lives in the `docs/decisions/` record named in each row. Git preserves
@@ -561,7 +560,7 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 1. **Rules and credentials.** Rewrite root `AGENTS.md` to the categorised rule set. Bound
    `CLAUDE.md` to harness guidance. Mint the `observer`, `diagnostic`, and `admin` tiers;
    relocate admin credentials; build the command-to-permission matrix; add positive and
-   negative authorization tests. Close #171. Resolve the `kubectl` contradiction in
+   negative authorization tests. Resolve the `kubectl` contradiction in
    `kubernetes/README.md`.
 2. **Documentation.** Create `docs/decisions/`, `docs/phases/`, `docs/runbooks/`; add
    `validation.decisions` with the identity and immutability semantics above; replace the
@@ -640,8 +639,6 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 16. Filenames are date-based, not sequentially numbered, because worktrees run in
     parallel.
 17. Test reporting is out of scope and slated for expansion, not reduction.
-18. The 2026-07-31 information architecture design is superseded and PR #171 is closed
-    unmerged. PR #170's reference validator is retained.
 
 ## Review disposition
 
