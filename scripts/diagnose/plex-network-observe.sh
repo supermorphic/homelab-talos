@@ -22,6 +22,7 @@ temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/plex-network-observe.XXXXXX")"
 port_forward_pid=''
 observe_pid=''
 timer_pid=''
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   local pid
   for pid in "$timer_pid" "$observe_pid" "$port_forward_pid"; do
@@ -48,7 +49,8 @@ for _ in {1..15}; do
 done
 [[ "$hubble_ready" == 'true' ]]
 
-timeout_flag="$temp_dir/observe-timeout"
+timeout_started="$temp_dir/observe-timeout-started"
+timeout_signaled="$temp_dir/observe-timeout-signaled"
 hubble observe \
   --server localhost:4245 \
   --namespace media \
@@ -59,8 +61,10 @@ observe_pid=$!
 
 (
   sleep "$duration"
-  : >"$timeout_flag"
-  kill -TERM "$observe_pid" 2>/dev/null || true
+  : >"$timeout_started"
+  if kill -TERM "$observe_pid" 2>/dev/null; then
+    : >"$timeout_signaled"
+  fi
 ) &
 timer_pid=$!
 
@@ -68,6 +72,19 @@ set +e
 wait "$observe_pid"
 observe_status=$?
 set -e
-kill "$timer_pid" 2>/dev/null || true
-wait "$timer_pid" 2>/dev/null || true
-[[ "$observe_status" == '0' || -f "$timeout_flag" ]]
+observe_pid=''
+if [[ -f "$timeout_started" ]]; then
+  wait "$timer_pid" 2>/dev/null || true
+else
+  kill "$timer_pid" 2>/dev/null || true
+  wait "$timer_pid" 2>/dev/null || true
+fi
+timer_pid=''
+
+if [[ "$observe_status" == '0' ]]; then
+  exit 0
+fi
+if [[ "$observe_status" == '143' && -f "$timeout_signaled" ]]; then
+  exit 0
+fi
+exit "$observe_status"
