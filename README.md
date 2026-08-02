@@ -500,10 +500,12 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 ## Repository Boundaries
 
 - `talos/` holds declarative Talhelper inputs beginning in Phase 2.
-- `.talos/config` holds the ignored Talos API client credential generated from the
-  encrypted Talhelper identity.
-- `.kube/config` holds the ignored Kubernetes admin credential retrieved through
-  the Talos machine API.
+- `.talos/config` holds the ignored Talos API client credential: the main clone's
+  admin identity is generated from encrypted Talhelper source, while a linked
+  worktree receives only an operator-minted `os:reader` identity.
+- `.kube/config` holds the ignored Kubernetes credential: the main clone receives
+  the admin identity retrieved through the Talos machine API, while a linked
+  worktree receives only observer and diagnostic ServiceAccount contexts.
 - `.just/` holds repository and cross-domain bootstrap command modules.
 - `scripts/lib/common.sh` holds validator-safe shared shell helpers;
   `scripts/lib/network.sh` holds shared network constants (the Pi-hole resolver

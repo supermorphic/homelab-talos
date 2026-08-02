@@ -8,6 +8,8 @@ trap 'rm -rf -- "$fixture"' EXIT
 
 fake_bin="$fixture/bin"
 mkdir -p "$fake_bin"
+real_mktemp_bin="$(command -v mktemp)"
+real_mv_bin="$(command -v mv)"
 
 cat >"$fake_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -34,11 +36,19 @@ for ((index = 0; index < ${#args[@]}; index++)); do
 done
 
 if [[ " $* " == *' create token homelab-observer '* ]]; then
+  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
+    echo "observer token used wrong kubeconfig: $kubeconfig" >&2
+    exit 66
+  }
   [[ "${FAKE_FAIL_STAGE:-}" != 'observer-token' ]] || exit 71
   printf '%s\n' 'fake-observer-token'
   exit 0
 fi
 if [[ " $* " == *' create token homelab-diagnostic '* ]]; then
+  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
+    echo "diagnostic token used wrong kubeconfig: $kubeconfig" >&2
+    exit 66
+  }
   [[ "${FAKE_FAIL_STAGE:-}" != 'diagnostic-token' ]] || exit 72
   printf '%s\n' 'fake-diagnostic-token'
   exit 0
@@ -110,6 +120,17 @@ YAML
     ;;
   'config new')
     [[ "${FAKE_FAIL_STAGE:-}" != 'talos-new' ]] || exit 73
+    talosconfig=''
+    args=("$@")
+    for ((index = 0; index < ${#args[@]}; index++)); do
+      if [[ "${args[$index]}" == '--talosconfig' ]]; then
+        talosconfig="${args[$((index + 1))]}"
+      fi
+    done
+    [[ "$talosconfig" == "$EXPECTED_MAIN_TALOSCONFIG" ]] || {
+      echo "Talos generation used wrong talosconfig: $talosconfig" >&2
+      exit 66
+    }
     output="$3"
     cat >"$output" <<'YAML'
 context: homelab-reader
@@ -131,7 +152,36 @@ YAML
 esac
 EOF
 
-chmod +x "$fake_bin/git" "$fake_bin/kubectl" "$fake_bin/talosctl"
+cat >"$fake_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "$FAKE_MKTEMP_COUNTER" ]] || count="$(<"$FAKE_MKTEMP_COUNTER")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_MKTEMP_COUNTER"
+if [[ "${FAKE_FAIL_STAGE:-}" == 'second-mktemp' && "$count" -eq 2 ]]; then
+  exit 74
+fi
+exec "$REAL_MKTEMP_BIN" "$@"
+EOF
+
+cat >"$fake_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "$FAKE_MV_COUNTER" ]] || count="$(<"$FAKE_MV_COUNTER")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_MV_COUNTER"
+if [[ "${FAKE_FAIL_STAGE:-}" == 'publish-kube' && "$count" -eq 1 ]]; then
+  exit 75
+fi
+if [[ "${FAKE_FAIL_STAGE:-}" == 'publish-talos' && "$count" -eq 2 ]]; then
+  exit 76
+fi
+exec "$REAL_MV_BIN" "$@"
+EOF
+
+chmod +x "$fake_bin/git" "$fake_bin/kubectl" "$fake_bin/talosctl" "$fake_bin/mktemp" "$fake_bin/mv"
 
 file_mode() {
   if stat -f '%Lp' "$1" >/dev/null 2>&1; then
@@ -169,14 +219,24 @@ YAML
 run_installer() {
   local worktree_root="$1"
   local main_root="$2"
+  local main_root_physical
   shift 2
+  main_root_physical="$(cd -- "$main_root" && pwd -P)"
   env \
     GIT_BIN="$fake_bin/git" \
     KUBECTL_BIN="$fake_bin/kubectl" \
     TALOSCTL_BIN="$fake_bin/talosctl" \
+    MKTEMP_BIN="$fake_bin/mktemp" \
+    MV_BIN="$fake_bin/mv" \
     FAKE_WORKTREE_ROOT="$worktree_root" \
     FAKE_GIT_COMMON_DIR="$main_root/.git" \
     FAKE_CALL_LOG="$worktree_root/calls.log" \
+    FAKE_MKTEMP_COUNTER="$worktree_root/mktemp.count" \
+    FAKE_MV_COUNTER="$worktree_root/mv.count" \
+    REAL_MKTEMP_BIN="$real_mktemp_bin" \
+    REAL_MV_BIN="$real_mv_bin" \
+    EXPECTED_MAIN_KUBECONFIG="$main_root_physical/.kube/config" \
+    EXPECTED_MAIN_TALOSCONFIG="$main_root_physical/.talos/config" \
     "$@" \
     "$installer"
 }
@@ -184,6 +244,7 @@ run_installer() {
 # The main-clone recipe must retain the Talos-admin kubeconfig download behavior.
 main_case="$fixture/main-path"
 make_main_credentials "$main_case"
+main_case_physical="$(cd -- "$main_case" && pwd -P)"
 mkdir -p \
   "$main_case/talos" \
   "$main_case/.just" \
@@ -209,6 +270,8 @@ env \
   FAKE_WORKTREE_ROOT="$main_case_alias" \
   FAKE_GIT_COMMON_DIR="$main_case/.git" \
   FAKE_CALL_LOG="$main_case/calls.log" \
+  EXPECTED_MAIN_KUBECONFIG="$main_case_physical/.kube/config" \
+  EXPECTED_MAIN_TALOSCONFIG="$main_case_physical/.talos/config" \
   just --justfile "$main_case/.justfile" talos kubeconfig >/dev/null
 [[ "$(yq -r '.current-context' "$main_case/.kube/config")" == 'homelab-admin' ]]
 rg -q '^kubeconfig ' "$main_case/calls.log"
@@ -228,6 +291,8 @@ env \
   FAKE_WORKTREE_ROOT="$recipe_worktree" \
   FAKE_GIT_COMMON_DIR="$main_case/.git" \
   FAKE_CALL_LOG="$recipe_worktree/calls.log" \
+  EXPECTED_MAIN_KUBECONFIG="$main_case_physical/.kube/config" \
+  EXPECTED_MAIN_TALOSCONFIG="$main_case_physical/.talos/config" \
   just --justfile "$main_case/.justfile" talos kubeconfig >/dev/null
 [[ "$(yq -r '.current-context' "$recipe_worktree/.kube/config")" == 'homelab-observer' ]]
 rg -q '^config new ' "$recipe_worktree/calls.log"
@@ -294,6 +359,49 @@ for failed_stage in observer-token diagnostic-token talos-new; do
   [[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
   [[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
   [[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
+done
+
+# A failed second temp allocation must not leak the first temp or alter originals.
+case_root="$fixture/failure-second-mktemp"
+main_root="$case_root/main"
+worktree_root="$case_root/worktree"
+make_main_credentials "$main_root"
+mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
+printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
+printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
+if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=second-mktemp >/dev/null 2>&1; then
+  echo 'Installer accepted a failed second temporary-file allocation.' >&2
+  exit 1
+fi
+[[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
+[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
+[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
+
+# Either publication-move failure rolls back both destinations to their prior pair.
+for failed_stage in publish-kube publish-talos; do
+  for prior_state in existing absent; do
+    case_root="$fixture/failure-$failed_stage-$prior_state"
+    main_root="$case_root/main"
+    worktree_root="$case_root/worktree"
+    make_main_credentials "$main_root"
+    mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
+    if [[ "$prior_state" == 'existing' ]]; then
+      printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
+      printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
+    fi
+    if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE="$failed_stage" >/dev/null 2>&1; then
+      echo "Installer accepted publication failure: $failed_stage ($prior_state)" >&2
+      exit 1
+    fi
+    if [[ "$prior_state" == 'existing' ]]; then
+      [[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
+      [[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
+    else
+      [[ ! -e "$worktree_root/.kube/config" ]]
+      [[ ! -e "$worktree_root/.talos/config" ]]
+    fi
+    [[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
+  done
 done
 
 echo 'Worktree credential installation contract passed.'

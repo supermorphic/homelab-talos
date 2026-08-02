@@ -5,6 +5,8 @@ umask 077
 git_bin="${GIT_BIN:-git}"
 kubectl_bin="${KUBECTL_BIN:-kubectl}"
 talosctl_bin="${TALOSCTL_BIN:-talosctl}"
+mktemp_bin="${MKTEMP_BIN:-mktemp}"
+mv_bin="${MV_BIN:-mv}"
 
 worktree_root="$("$git_bin" rev-parse --show-toplevel)"
 git_common_dir="$("$git_bin" rev-parse --path-format=absolute --git-common-dir)"
@@ -48,12 +50,23 @@ worktree_talosconfig="$worktree_root/.talos/config"
 kubeconfig_dir="${worktree_kubeconfig%/*}"
 talosconfig_dir="${worktree_talosconfig%/*}"
 install -d -m 700 "$kubeconfig_dir" "$talosconfig_dir"
-staged_kubeconfig="$(mktemp "$kubeconfig_dir/config.XXXXXX")"
-staged_talosconfig="$(mktemp "$talosconfig_dir/config.XXXXXX")"
+staged_kubeconfig=''
+staged_talosconfig=''
+backup_kubeconfig=''
+backup_talosconfig=''
 cleanup() {
-  rm -f -- "$staged_kubeconfig" "$staged_talosconfig"
+  local temp_file
+  for temp_file in \
+    "$staged_kubeconfig" \
+    "$staged_talosconfig" \
+    "$backup_kubeconfig" \
+    "$backup_talosconfig"; do
+    [[ -z "$temp_file" ]] || rm -f -- "$temp_file"
+  done
 }
 trap cleanup EXIT
+staged_kubeconfig="$("$mktemp_bin" "$kubeconfig_dir/config.XXXXXX")"
+staged_talosconfig="$("$mktemp_bin" "$talosconfig_dir/config.XXXXXX")"
 
 api_server="$("$kubectl_bin" --kubeconfig "$main_kubeconfig" config view --raw \
   --output "jsonpath={.clusters[0].cluster.server}")"
@@ -164,7 +177,57 @@ file_mode() {
   exit 1
 }
 
-mv -f -- "$staged_kubeconfig" "$worktree_kubeconfig"
-mv -f -- "$staged_talosconfig" "$worktree_talosconfig"
+kubeconfig_existed=false
+talosconfig_existed=false
+if [[ -e "$worktree_kubeconfig" ]]; then
+  kubeconfig_existed=true
+  backup_kubeconfig="$("$mktemp_bin" "$kubeconfig_dir/config.backup.XXXXXX")"
+  install -m 600 "$worktree_kubeconfig" "$backup_kubeconfig"
+fi
+if [[ -e "$worktree_talosconfig" ]]; then
+  talosconfig_existed=true
+  backup_talosconfig="$("$mktemp_bin" "$talosconfig_dir/config.backup.XXXXXX")"
+  install -m 600 "$worktree_talosconfig" "$backup_talosconfig"
+fi
+
+rollback_prior_pair() {
+  local rollback_status=0
+
+  if [[ "$kubeconfig_existed" == true ]]; then
+    "$mv_bin" -f -- "$backup_kubeconfig" "$worktree_kubeconfig" || rollback_status=1
+  else
+    rm -f -- "$worktree_kubeconfig" || rollback_status=1
+  fi
+
+  if [[ "$talosconfig_existed" == true ]]; then
+    "$mv_bin" -f -- "$backup_talosconfig" "$worktree_talosconfig" || rollback_status=1
+  else
+    rm -f -- "$worktree_talosconfig" || rollback_status=1
+  fi
+
+  return "$rollback_status"
+}
+
+# Each replacement is an atomic same-directory rename. If either ordinary move
+# command fails, restore the complete prior pair; a crash-safe transaction across
+# the two credential directories is outside the filesystem's guarantees.
+if ! "$mv_bin" -f -- "$staged_kubeconfig" "$worktree_kubeconfig"; then
+  rollback_prior_pair || {
+    echo 'Credential publication failed and rollback could not restore the prior pair.' >&2
+    exit 1
+  }
+  echo 'Credential publication failed before replacing the kubeconfig; restored the prior pair.' >&2
+  exit 1
+fi
+if ! "$mv_bin" -f -- "$staged_talosconfig" "$worktree_talosconfig"; then
+  rollback_prior_pair || {
+    echo 'Credential publication failed and rollback could not restore the prior pair.' >&2
+    exit 1
+  }
+  echo 'Credential publication failed while replacing the Talos config; restored the prior pair.' >&2
+  exit 1
+fi
+
+cleanup
 trap - EXIT
 echo "Wrote scoped Kubernetes and Talos credentials for worktree $worktree_root."
