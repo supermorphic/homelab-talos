@@ -247,7 +247,7 @@ existing recipe cannot be made read-only:
 | Credential | Source | Scope control | Lifetime |
 |---|---|---|---|
 | admin kubeconfig | `talosctl kubeconfig` | none — admin only | Talos PKI cert |
-| observer/diagnostic kubeconfig | Kubernetes ServiceAccount + RBAC | ClusterRole | bounded token |
+| observer/diagnostic kubeconfig | Kubernetes ServiceAccount + RBAC | ClusterRole | 30-day token |
 | admin talosconfig | talhelper, via `just talos generate` | `os:admin` | cert |
 | reader talosconfig | `talosctl config new --roles os:reader --crt-ttl` | roles flag | **90 days** |
 
