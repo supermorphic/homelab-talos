@@ -39,6 +39,11 @@
 
 PR 1 owns the suspended application, generic/Plex media alerts, offline validation, policy contract, guarded rollout, Secret-generation recipe, liveness verifier, catalog registration, and operator instructions:
 
+- Include `docs/decisions/2026-08-01-tautulli.md` — accepted design provenance carried by the feature branch.
+- Include `docs/decisions/reviews/2026-08-01-tautulli-request.md` — accepted design review request provenance.
+- Include `docs/decisions/reviews/2026-08-01-tautulli-response.md` — accepted design review response provenance.
+- Include `docs/decisions/reviews/2026-08-01-tautulli-review.md` — accepted design review findings provenance.
+- Include `docs/superpowers/plans/2026-08-02-tautulli-plex-analytics.md` — reviewed implementation plan and delivery gates.
 - Create `kubernetes/apps/media/tautulli/ks.yaml` — suspended Flux child with `media` and `internal-gateway` dependencies.
 - Create `kubernetes/apps/media/tautulli/app/helmrelease.yaml` — `app-template` HelmRelease.
 - Create `kubernetes/apps/media/tautulli/app/values.yaml` — workload, probes, security, resources, Service, and retained config PVC.
@@ -51,6 +56,7 @@ PR 1 owns the suspended application, generic/Plex media alerts, offline validati
 - Create `scripts/validate/media-alerts.sh` — placement checks plus single-sourced promtool validation.
 - Create `scripts/verify/tautulli.sh` — live resource, route, DNS, and exact `/status` checks.
 - Create `tests/prometheus/media-alerts_test.yaml` — temporal and matcher tests for the PR 1 rules.
+- Modify `scripts/test/catalog_compatibility.py` — keep catalog compatibility expectations aligned with the added suites.
 - Modify `kubernetes/apps/media/kustomization.yaml` — register `alerts` and `tautulli`.
 - Modify `tests/policy/media/media.rego` and `tests/policy/media/media_test.rego` — dependencies and config-only contract.
 - Modify `kubernetes/mod.just` and `tests/catalog.yaml` — two validations and one verification.
@@ -1286,7 +1292,7 @@ Run:
 
 ```bash
 mise exec -- yq -r '.spec.suspend' kubernetes/apps/media/tautulli/ks.yaml
-mise exec -- rg -n 'name: tautulli|widget\.type.*tautulli|homepage-tautulli' kubernetes/apps/monitoring/gatus/app/values.yaml kubernetes/apps/media/tautulli/app/httproute.yaml kubernetes/apps/monitoring/homepage/app/deployment.yaml kubernetes/apps/monitoring/homepage/app/kustomization.yaml || true
+mise exec -- rg -n 'widget\.type.*tautulli|homepage-tautulli' kubernetes/apps/monitoring/gatus/app/values.yaml kubernetes/apps/media/tautulli/app/httproute.yaml kubernetes/apps/monitoring/homepage/app/deployment.yaml kubernetes/apps/monitoring/homepage/app/kustomization.yaml || true
 mise exec -- rg -n 'TautulliProbeMissing|TautulliPersistentVolumeClaimNotBound' kubernetes/apps/media/alerts/app/prometheusrule.yaml tests/prometheus/media-alerts_test.yaml || true
 ```
 
