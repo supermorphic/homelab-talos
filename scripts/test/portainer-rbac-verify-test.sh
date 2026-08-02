@@ -38,6 +38,10 @@ case "$resource:$name" in
             .rules[] |= with(.resources; . |= reverse) |
             .rules[] |= with(.verbs; . |= reverse)' <<<"$role"
         ;;
+      key-order)
+        yq -o=json -I=0 \
+          '.rules |= map(to_entries | reverse | from_entries)' <<<"$role"
+        ;;
       resourceNames | nonResourceURLs)
         FAKE_ROLE_DRIFT="$FAKE_ROLE_DRIFT" yq -o=json -I=0 \
           '.rules[0][env(FAKE_ROLE_DRIFT)] = []' <<<"$role"
@@ -122,6 +126,13 @@ PATH="$fixture/bin:$PATH" \
 FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
 FAKE_RISKY=false \
 FAKE_ROLE_DRIFT=reorder \
+  "$verifier" "$fixture/kubeconfig" \
+    "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml"
+
+PATH="$fixture/bin:$PATH" \
+FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+FAKE_RISKY=false \
+FAKE_ROLE_DRIFT=key-order \
   "$verifier" "$fixture/kubeconfig" \
     "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml"
 

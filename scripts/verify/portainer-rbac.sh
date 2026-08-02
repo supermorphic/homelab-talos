@@ -17,20 +17,20 @@ fail() {
 }
 
 normalize_role_rules() {
+  # shellcheck disable=SC2016 # yq variables are intentionally literal shell input.
   yq -o=json -I=0 '.rules |
-    map(
-      to_entries |
-      map(
-        select(
-          .key == "apiGroups" or
-          .key == "resources" or
-          .key == "verbs" or
-          .key == "resourceNames" or
-          .key == "nonResourceURLs"
-        ) |
-        .value |= sort
-      ) |
-      from_entries
+    map(. as $rule |
+      {} +
+      ({"apiGroups": ($rule.apiGroups | sort)} |
+        select($rule | has("apiGroups")) // {}) +
+      ({"resources": ($rule.resources | sort)} |
+        select($rule | has("resources")) // {}) +
+      ({"verbs": ($rule.verbs | sort)} |
+        select($rule | has("verbs")) // {}) +
+      ({"resourceNames": ($rule.resourceNames | sort)} |
+        select($rule | has("resourceNames")) // {}) +
+      ({"nonResourceURLs": ($rule.nonResourceURLs | sort)} |
+        select($rule | has("nonResourceURLs")) // {})
     ) |
     sort_by(to_json)'
 }

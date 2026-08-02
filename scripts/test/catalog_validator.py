@@ -94,7 +94,7 @@ def scoped_read_rules(catalog: dict[str, Any]) -> dict[str, set[str]]:
 def _shell_tokens(source: str) -> list[list[str]]:
     logical = source.replace("\\\n", " ")
     statements: list[list[str]] = []
-    lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()<>\n")
+    lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()\n")
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"
     lexer.commenters = "#"
@@ -226,13 +226,166 @@ def _command_position(tokens: list[str]) -> int | None:
         "while",
     }:
         index += 1
-    if index < len(tokens) and tokens[index] == "env":
+    while index < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[index]):
         index += 1
-        while index < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[index]):
+    if (
+        index + 1 < len(tokens)
+        and (
+            re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", tokens[index])
+            or tokens[index] == "__COMMAND_SUBSTITUTION__"
+        )
+        and tokens[index + 1] in {"==", "=~", "!=", "-eq", "-ge", "-gt", "-le", "-lt", "-ne"}
+    ):
+        return None
+    while index < len(tokens):
+        launcher = Path(tokens[index]).name
+        launcher_index = index
+        if launcher == "env":
             index += 1
-    if index < len(tokens) and tokens[index] in {"command", "exec"}:
-        index += 1
+            while index < len(tokens):
+                token = tokens[index]
+                option = token.split("=", 1)[0]
+                if token == "--":
+                    index += 1
+                    continue
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+                    index += 1
+                    continue
+                if option in {"-i", "--ignore-environment", "-0", "--null"}:
+                    index += 1
+                    continue
+                if option in {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"}:
+                    index += 1 if "=" in token else 2
+                    continue
+                if token.startswith("-"):
+                    return launcher_index
+                break
+            continue
+        if launcher in {"builtin", "command"}:
+            index += 1
+            if index < len(tokens) and tokens[index] in {"-v", "-V"}:
+                return None
+            while index < len(tokens) and tokens[index] in {"--", "-a", "-p", "-s"}:
+                index += 1
+            if index < len(tokens) and tokens[index].startswith("-"):
+                return launcher_index
+            continue
+        if launcher == "exec":
+            index += 1
+            while index < len(tokens):
+                token = tokens[index]
+                if token in {"--", "-c", "-l"}:
+                    index += 1
+                    continue
+                if token == "-a":
+                    index += 2
+                    continue
+                if token.startswith("-"):
+                    return launcher_index
+                break
+            continue
+        break
     return index if index < len(tokens) else None
+
+
+def _command_substitution_spans(source: str) -> list[tuple[int, int, str]]:
+    """Locate direct command substitutions without executing or expanding shell text."""
+    substitutions: list[tuple[int, int, str]] = []
+    index = 0
+    quote = ""
+    while index < len(source):
+        character = source[index]
+        if character == "\\":
+            index += 2
+            continue
+        if character == "#" and not quote:
+            newline = source.find("\n", index)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if character == "'" and quote != '"':
+            quote = "" if quote == "'" else "'"
+            index += 1
+            continue
+        if character == '"' and quote != "'":
+            quote = "" if quote == '"' else '"'
+            index += 1
+            continue
+        if quote != "'" and character == "`":
+            end = index + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end += 2
+                    continue
+                if source[end] == "`":
+                    substitutions.append((index, end + 1, source[index + 1 : end]))
+                    index = end + 1
+                    break
+                end += 1
+            else:
+                index += 1
+            continue
+        if quote != "'" and source.startswith("$(", index) and not source.startswith("$((", index):
+            depth = 1
+            end = index + 2
+            inner_quote = ""
+            while end < len(source):
+                inner = source[end]
+                if inner == "\\":
+                    end += 2
+                    continue
+                if inner == "#" and not inner_quote:
+                    newline = source.find("\n", end)
+                    end = len(source) if newline < 0 else newline + 1
+                    continue
+                if inner == "'" and inner_quote != '"':
+                    inner_quote = "" if inner_quote == "'" else "'"
+                elif inner == '"' and inner_quote != "'":
+                    inner_quote = "" if inner_quote == '"' else '"'
+                elif not inner_quote and inner == "(":
+                    depth += 1
+                elif not inner_quote and inner == ")":
+                    depth -= 1
+                    if depth == 0:
+                        substitutions.append((index, end + 1, source[index + 2 : end]))
+                        index = end + 1
+                        break
+                end += 1
+            else:
+                index += 2
+            continue
+        index += 1
+    return substitutions
+
+
+def _command_substitutions(source: str) -> list[str]:
+    return [body for _, _, body in _command_substitution_spans(source)]
+
+
+def _mask_command_substitutions(source: str) -> str:
+    spans = _command_substitution_spans(source)
+    if not spans:
+        return source
+    masked: list[str] = []
+    cursor = 0
+    for start, end, _ in spans:
+        masked.extend((source[cursor:start], "__COMMAND_SUBSTITUTION__"))
+        cursor = end
+    masked.append(source[cursor:])
+    return "".join(masked)
+
+
+def _recursive_shell_sources(source: str) -> list[str]:
+    pending = [source]
+    seen: set[str] = set()
+    extracted: list[str] = []
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        extracted.append(current)
+        pending.extend(_command_substitutions(current))
+    return extracted
 
 
 def _kubectl_invocation(
@@ -362,10 +515,27 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
     for alias_match in re.finditer(r"(?m)^\s*alias\s+([A-Za-z_][A-Za-z0-9_]*)=", source):
         violations.add(f"unresolved shell alias declaration ({alias_match.group(1)})")
 
-    for tokens in _shell_tokens(source):
+    scan_sources = _recursive_shell_sources(source)
+    for scan_source in scan_sources:
+        if re.search(r"(?m)(?:^|[;&|])\s*\$\((?!\()", scan_source) or re.search(
+            r"(?m)(?:^|[;&|])\s*`", scan_source
+        ):
+            violations.add("unresolved dynamic command substitution")
+
+    for tokens in [
+        tokens
+        for scan_source in scan_sources
+        for tokens in _shell_tokens(_mask_command_substitutions(scan_source))
+    ]:
         command_index = _command_position(tokens)
         command_token = tokens[command_index] if command_index is not None else ""
         command_name = _alias_name(command_token)
+        if "__COMMAND_SUBSTITUTION__" in command_token:
+            violations.add("unresolved dynamic command substitution")
+            continue
+        if Path(command_name).name in {"builtin", "command", "env", "exec"}:
+            violations.add(f"unresolved command launcher ({Path(command_name).name})")
+            continue
         if Path(command_name).name == "helm":
             helm_index = command_index
             if any(
@@ -378,18 +548,9 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
             violations.add(f"unresolved dynamic wrapper ({unresolved})")
 
         if (
-            command_token.startswith("$")
+            re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", command_token)
             and command_name not in aliases
             and command_name not in literal_assignments
-            and command_name
-            in {
-                "cmd",
-                "command",
-                "executable",
-                "helper",
-                "runner",
-                "verifier",
-            }
         ):
             violations.add(f"unresolved dynamic command ({command_name})")
 
@@ -416,10 +577,11 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
             if option_error:
                 violations.add(option_error)
                 continue
-            if resource.lower().split("/", 1)[0].split(".", 1)[0] in {
-                "secret",
-                "secrets",
-            }:
+            resource_kinds = {
+                component.lower().split("/", 1)[0].split(".", 1)[0]
+                for component in resource.split(",")
+            }
+            if resource_kinds & {"secret", "secrets"}:
                 violations.add("Secret API read")
                 continue
         if command in safe_commands:
