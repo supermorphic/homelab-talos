@@ -135,6 +135,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 staged_kubeconfig="$("$mktemp_bin" "$kubeconfig_dir/config.XXXXXX")"
 staged_talosconfig="$("$mktemp_bin" "$talosconfig_dir/config.XXXXXX")"
+# talosctl config new refuses an existing output path. Reserve a random name in
+# the private credential directory, then remove only its empty placeholder.
+rm -f -- "$staged_talosconfig"
 
 api_server="$("$kubectl_bin" --kubeconfig "$main_kubeconfig" config view --raw \
   --output "jsonpath={.clusters[0].cluster.server}")"
