@@ -459,6 +459,7 @@ suites:
     runner: {command: "mise exec -- just kube seerr-verify", implementation: scripts/verify/seerr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.tautulli, source: verification, framework: bash, suite: media, tier: verification, target: tautulli, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: operator}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tautulli-verify", implementation: scripts/verify/tautulli.sh}
     native_results: {strategy: wrapper-junit}

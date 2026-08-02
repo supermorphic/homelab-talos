@@ -33,7 +33,7 @@
 - Never decrypt, rewrite by hand, inspect plaintext from, or copy ciphertext into `homepage-tautulli.sops.yaml`. The operator creates it only through the guarded recipe in Task 10.
 - Do not add ntfy integration, a Prometheus exporter, newsletters, history import, Plex Logs mounting, Chainsaw coverage, resilience coverage, E2E automation, or qBittorrent alert refactoring.
 - New documentation must not use rollout `Phase N` wording. On any existing line edited by this work, remove such wording.
-- The `bootstrap media-app` recipe is intentionally temporary: accepted decision D15 expects the separate agent-rules-audit workstream to delete it later. Do not pre-implement that other branch here.
+- The agent-rules audit's scoped-access workstream is present on `main`: classify `verification.tautulli` as `operator` and add it to the verifier matrix because the accepted exact direct-Service oracle uses the general API-server `kubectl proxy`, which the scoped tiers deliberately reject. Keep it in the operator `verification` campaign and out of `scoped-verification`. The audit's containment and rollout-deletion workstreams have not landed, so keep `bootstrap media-app` as temporary guarded rollout scaffolding and do not pre-implement its deletion here.
 
 ## Delivery Boundaries and File Map
 
@@ -44,6 +44,7 @@ PR 1 owns the suspended application, generic/Plex media alerts, offline validati
 - Include `docs/decisions/reviews/2026-08-01-tautulli-response.md` — accepted design review response provenance.
 - Include `docs/decisions/reviews/2026-08-01-tautulli-review.md` — accepted design review findings provenance.
 - Include `docs/plans/2026-08-02-tautulli-plex-analytics.md` — reviewed implementation plan and delivery gates.
+- Modify `docs/runbooks/agent-cluster-access.md` — classify the Tautulli verifier in the access-tier matrix.
 - Create `kubernetes/apps/media/tautulli/ks.yaml` — suspended Flux child with `media` and `internal-gateway` dependencies.
 - Create `kubernetes/apps/media/tautulli/app/helmrelease.yaml` — `app-template` HelmRelease.
 - Create `kubernetes/apps/media/tautulli/app/values.yaml` — workload, probes, security, resources, Service, and retained config PVC.
@@ -61,7 +62,7 @@ PR 1 owns the suspended application, generic/Plex media alerts, offline validati
 - Modify `tests/policy/media/media.rego` and `tests/policy/media/media_test.rego` — dependencies and config-only contract.
 - Modify `kubernetes/mod.just` and `tests/catalog.yaml` — two validations and one verification.
 - Modify `.just/bootstrap.just` — guarded `media-app tautulli` rollout.
-- Modify `.just/repository.just` — Homepage Secret recipe and rollout-guard count `24` → `25`.
+- Modify `.just/repository.just` — Homepage Secret recipe and rebased rollout-guard count `25` → `26`.
 - Modify `docs/arr-stack-startup.md` — rollout, setup, authentication, playback, API key, and Plex Logs limitation.
 - Modify `README.md` — new operator-facing recipes.
 
@@ -929,10 +930,11 @@ mise exec -- git commit -m "feat(monitoring): add tested media alerts"
 - Create: `scripts/verify/tautulli.sh`
 - Modify: `kubernetes/mod.just`
 - Modify: `tests/catalog.yaml`
+- Modify: `docs/runbooks/agent-cluster-access.md`
 
 **Interfaces:**
 - Consumes: Kustomization/HelmRelease/Deployment/HTTPRoute `tautulli`, `HOMELAB_GATEWAY_VIP`, and `HOMELAB_DNS_RESOLVER`.
-- Produces: verification ID `verification.tautulli` and guarded read-only recipe `just kube tautulli-verify`.
+- Produces: operator-tier verification ID `verification.tautulli`, membership in the operator live-verification campaign, a verifier-matrix row, and guarded read-only recipe `just kube tautulli-verify`.
 
 - [ ] **Step 1: Create the liveness verifier**
 
@@ -1003,10 +1005,13 @@ tautulli-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.tautulli -- scripts/verify/tautulli.sh {{quote(kubeconfig)}}
 ```
 
-Add `verification.tautulli` to the verification campaign beside Seerr and register:
+Add `verification.tautulli` beside Seerr in the operator `verification` campaign,
+register it as operator-tier, keep it out of `scoped-verification`, and add the matching
+operator row to `docs/runbooks/agent-cluster-access.md`:
 
 ```yaml
   - metadata: {id: verification.tautulli, source: verification, framework: bash, suite: media, tier: verification, target: tautulli, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: operator}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tautulli-verify", implementation: scripts/verify/tautulli.sh}
     native_results: {strategy: wrapper-junit}
@@ -1168,7 +1173,7 @@ Do not run this recipe in PR 1.
 Change exactly:
 
 ```just
-@test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 25  # Update when adding/removing a guarded rollout recipe.
+@test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 26  # Update when adding/removing a guarded rollout recipe.
 ```
 
 - [ ] **Step 4: Add README command-table entries**
@@ -1307,7 +1312,7 @@ Run:
 mise exec -- just ci
 ```
 
-Expected: PASS, including `validation.tautulli`, `validation.media-alerts`, media policy, promtool, kubeconform, and rollout-guard count `25`.
+Expected: PASS, including `validation.tautulli`, `validation.media-alerts`, operator-tier `verification.tautulli`, media policy, promtool, kubeconform, and rollout-guard count `26`.
 
 - [ ] **Step 3: Review the exact PR 1 footprint**
 
