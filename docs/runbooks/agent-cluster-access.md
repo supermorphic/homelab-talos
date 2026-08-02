@@ -40,13 +40,13 @@ ClusterRole adds only these campaign-required resources, each with `get`, `list`
 
 | API group | Resources |
 |---|---|
+| core | `nodes` |
 | `apiextensions.k8s.io` | `customresourcedefinitions` |
 | `apiregistration.k8s.io` | `apiservices` |
 | `aquasecurity.github.io` | `vulnerabilityreports` |
 | `cert-manager.io` | `certificates`, `clusterissuers` |
-| `cilium.io` | `ciliumclusterwidenetworkpolicies`, `ciliumendpoints`, `ciliumendpointslices`, `ciliumidentities`, `ciliumnetworkpolicies`, `ciliumnodes` |
+| `cilium.io` | `ciliumclusterwidenetworkpolicies`, `ciliumendpoints`, `ciliumidentities`, `ciliumnetworkpolicies`, `ciliumnodes` |
 | `gateway.networking.k8s.io` | `gatewayclasses`, `gateways`, `httproutes` |
-| `gatus.io` | `endpoints` |
 | `helm.toolkit.fluxcd.io` | `helmreleases` |
 | `kustomize.toolkit.fluxcd.io` | `kustomizations` |
 | `longhorn.io` | `backuptargets`, `nodes`, `recurringjobs`, `volumes` |

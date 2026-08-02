@@ -218,6 +218,48 @@ while IFS= read -r run_dir; do
   "$repo_root/scripts/test/validate-run.sh" "$run_dir"
 done < <(find "$scoped_root/results" -mindepth 1 -maxdepth 1 -type d -print)
 
+nested_root="$fixture/scoped-nested"
+nested_catalog="$nested_root/catalog.yaml"
+mkdir -p "$nested_root"
+touch "$nested_root/commands" "$nested_root/publishes" "$nested_root/preflight-calls"
+cp "$catalog" "$nested_catalog"
+yq -i '
+  .campaigns."scoped-verification".members = ["verification.metrics-server"] |
+  (.suites[] | select(.metadata.id == "verification.metrics-server") |
+    .runner.command) = "mise exec -- just fixture scoped-nested"
+' "$nested_catalog"
+set +e
+PATH="$fixture/bin:$PATH" \
+CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+CAMPAIGN_TEST_COMMAND_CALLS="$nested_root/commands" \
+CAMPAIGN_TEST_PUBLISH_CALLS="$nested_root/publishes" \
+TEST_CATALOG_PATH="$nested_catalog" \
+TEST_RESULTS_ROOT="$nested_root/results" \
+TEST_CAMPAIGNS_ROOT="$nested_root/campaigns" \
+TEST_CAMPAIGN_TEST_MODE=true \
+TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
+TEST_SCOPED_PREFLIGHT_CALLS="$nested_root/preflight-calls" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/forbidden-kubectl.sh" \
+FORBIDDEN_KUBECTL_CALLS="$nested_root/lease-calls" \
+TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/forbidden-source-check.sh" \
+FORBIDDEN_SOURCE_CALLS="$nested_root/source-calls" \
+TEST_EXECUTION_ORIGIN=agent \
+KUBECONFIG="$fixture/kubeconfig" \
+TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+  "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
+  >"$nested_root/run.log" 2>&1
+nested_exit="$?"
+set -e
+[[ "$nested_exit" -eq 0 ]] || {
+  sed -n '1,240p' "$nested_root/run.log" >&2
+  echo 'Nested suite overwrote its parent campaign run ID.' >&2
+  exit 1
+}
+nested_manifest="$(find "$nested_root/campaigns" -name campaign.json -print)"
+[[ "$(yq -r '.status + ":" + .result' "$nested_manifest")" == 'completed:passed' ]]
+[[ "$(yq -r '.runs[0].suite_id' "$nested_manifest")" == 'verification.metrics-server' ]]
+
 scoped_resume_root="$fixture/scoped-resume"
 scoped_resume_id="$(yq -r '.campaign_id' "$scoped_manifest")"
 mkdir -p "$scoped_resume_root/campaigns/$scoped_resume_id"

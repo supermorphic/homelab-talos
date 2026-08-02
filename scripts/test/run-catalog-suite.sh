@@ -114,6 +114,9 @@ handle_signal() {
 trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 write_run_id_output "$run_id"
+# The output file identifies this wrapper to its parent campaign. Nested catalog
+# suites create their own canonical runs and must not overwrite the parent's pointer.
+unset TEST_RUN_ID_FILE
 
 if [[ "$mutates_cluster" == 'true' ]]; then
   lease_release_status='failed'

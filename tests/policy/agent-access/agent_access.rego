@@ -20,9 +20,8 @@ required_read_rules := {
 	"apiregistration.k8s.io": {"apiservices"},
 	"aquasecurity.github.io": {"vulnerabilityreports"},
 	"cert-manager.io": {"certificates", "clusterissuers"},
-	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumendpointslices", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
+	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
 	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes"},
-	"gatus.io": {"endpoints"},
 	"helm.toolkit.fluxcd.io": {"helmreleases"},
 	"kustomize.toolkit.fluxcd.io": {"kustomizations"},
 	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "volumes"},
@@ -83,6 +82,10 @@ rule_matches(rule, api_groups, resources, verbs) if {
 
 allowed_rule("homelab-observer-extra", rule) if {
 	rule_matches(rule, {""}, {"pods/log"}, {"get"})
+}
+
+allowed_rule("homelab-observer-extra", rule) if {
+	rule_matches(rule, {""}, {"nodes"}, {"get", "list", "watch"})
 }
 
 allowed_rule("homelab-observer-extra", rule) if {
@@ -152,6 +155,15 @@ deny contains msg if {
 
 deny contains "observer extras must grant only pod logs" if {
 	not has_allowed_rule("homelab-observer-extra", {""}, {"pods/log"}, {"get"})
+}
+
+deny contains "observer extras must grant core node reads" if {
+	not has_allowed_rule(
+		"homelab-observer-extra",
+		{""},
+		{"nodes"},
+		{"get", "list", "watch"},
+	)
 }
 
 deny contains msg if {

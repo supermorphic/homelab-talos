@@ -33,6 +33,7 @@ printf '\n' >>"$FAKE_CALL_LOG"
 args=("$@")
 verb=''
 resource=''
+subresource=''
 diagnostic=false
 for ((index = 0; index < ${#args[@]}; index++)); do
   case "${args[$index]}" in
@@ -47,17 +48,37 @@ for ((index = 0; index < ${#args[@]}; index++)); do
       verb="${args[$((index + 1))]}"
       resource="${args[$((index + 2))]}"
       ;;
+    --subresource)
+      subresource="${args[$((index + 1))]}"
+      ;;
+    --subresource=*)
+      subresource="${args[$index]#--subresource=}"
+      ;;
   esac
 done
 
+# Match deployed API discovery: Cilium EndpointSlice is disabled and Gatus uses no
+# CRD, so discovery-backed `kubectl auth can-i` rejects both absent resources.
+case "$resource" in
+  ciliumendpointslices.cilium.io)
+    echo "the server doesn't have a resource type 'ciliumendpointslices' in group 'cilium.io'" >&2
+    exit 1
+    ;;
+  endpoints.gatus.io)
+    echo "the server doesn't have a resource type 'endpoints' in group 'gatus.io'" >&2
+    exit 1
+    ;;
+esac
+
 answer=yes
-case "$verb:$resource" in
-  create:pods/exec|create:pods/portforward)
+case "$verb:$resource:$subresource" in
+  create:pods:exec|create:pods:portforward)
     [[ "$diagnostic" == true ]] || answer=no
     ;;
-  get:secrets|create:*|patch:*|delete:*|bind:*|escalate:*|impersonate:*) answer=no ;;
+  get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
 esac
 printf '%s\n' "$answer"
+[[ "$answer" == yes ]] || exit 1
 EOF
 chmod +x "$fixture/bin/kubectl"
 
@@ -65,6 +86,10 @@ cat >"$fixture/bin/talosctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == version || "$1" == services ]] || exit 64
+case "${FAKE_TALOS_FAILURE:-}:$1" in
+  version:version) exit 70 ;;
+  services:services) exit 71 ;;
+esac
 EOF
 chmod +x "$fixture/bin/talosctl"
 
@@ -72,8 +97,11 @@ run_layout() {
   local layout="$1"
   local log="$fixture/$layout.log"
   : >"$log"
-  PATH="$fixture/bin:$PATH" FAKE_LAYOUT="$layout" FAKE_CALL_LOG="$log" \
-    "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >/dev/null
+  if ! PATH="$fixture/bin:$PATH" FAKE_LAYOUT="$layout" FAKE_CALL_LOG="$log" \
+    "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >/dev/null; then
+    echo "Verifier rejected the $layout layout while checking expected denials." >&2
+    return 1
+  fi
   [[ "$(wc -l <"$log" | tr -d ' ')" -gt 250 ]]
   printf '%s\n' "$log"
 }
@@ -104,5 +132,20 @@ if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial
   exit 1
 fi
 rg -q 'requires both scoped contexts or neither' "$fixture/partial.out"
+
+for talos_failure in version services; do
+  talos_failure_output="$fixture/talos-$talos_failure.out"
+  if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=named FAKE_CALL_LOG="$fixture/talos-$talos_failure.log" \
+    FAKE_TALOS_FAILURE="$talos_failure" \
+    "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" \
+    >"$talos_failure_output" 2>&1; then
+    echo "Talos $talos_failure failure unexpectedly passed." >&2
+    exit 1
+  fi
+  rg -q "Talos reader $talos_failure inspection failed" "$talos_failure_output" || {
+    echo "Talos $talos_failure failure lacked a boundary-specific diagnostic." >&2
+    exit 1
+  }
+done
 
 echo 'Agent access verifier credential-layout tests passed.'

@@ -38,9 +38,8 @@ read_requirements := {
 	"apiregistration.k8s.io": {"apiservices"},
 	"aquasecurity.github.io": {"vulnerabilityreports"},
 	"cert-manager.io": {"certificates", "clusterissuers"},
-	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumendpointslices", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
+	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
 	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes"},
-	"gatus.io": {"endpoints"},
 	"helm.toolkit.fluxcd.io": {"helmreleases"},
 	"kustomize.toolkit.fluxcd.io": {"kustomizations"},
 	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "volumes"},
@@ -69,7 +68,10 @@ valid_fixture := [
 	cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
 	cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
 	cluster_role("homelab-observer-extra", array.concat(
-		[{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]}],
+		[
+			{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+			{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+		],
 		read_rules,
 	)),
 	cluster_role_binding(

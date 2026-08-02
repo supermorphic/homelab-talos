@@ -26,8 +26,13 @@ done
   echo 'The metrics.k8s.io APIService is not Available.' >&2
   exit 1
 }
-kubectl --kubeconfig "$kubeconfig" top nodes >/dev/null 2>&1 || {
+set +e
+metrics_output="$(kubectl --kubeconfig "$kubeconfig" top nodes 2>&1)"
+metrics_status="$?"
+set -e
+[[ "$metrics_status" -eq 0 && -n "$metrics_output" ]] || {
   echo 'kubectl top nodes did not return metrics.' >&2
+  [[ -z "$metrics_output" ]] || printf '%s\n' "$metrics_output" >&2
   exit 1
 }
 
