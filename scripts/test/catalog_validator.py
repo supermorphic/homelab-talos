@@ -254,7 +254,9 @@ def _command_position(tokens: list[str]) -> int | None:
                 if option in {"-i", "--ignore-environment", "-0", "--null"}:
                     index += 1
                     continue
-                if option in {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"}:
+                if option == "--split-string" or token.startswith("-S"):
+                    return launcher_index
+                if option in {"-C", "--chdir", "-u", "--unset"}:
                     index += 1 if "=" in token else 2
                     continue
                 if token.startswith("-"):
@@ -388,6 +390,34 @@ def _recursive_shell_sources(source: str) -> list[str]:
     return extracted
 
 
+def _transparent_positional_wrappers(source: str) -> tuple[dict[str, int], str]:
+    """Resolve wrappers that execute argv after a fixed number of literal shifts."""
+    wrappers: dict[str, int] = {}
+    masked_source = source
+    for match in re.finditer(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{([^\n}]*)",
+        source,
+    ):
+        name = match.group(1)
+        body_start = match.start(2)
+        same_line_close = source.find("}", body_start, source.find("\n", body_start) + 1)
+        if same_line_close >= 0:
+            body = source[body_start:same_line_close]
+        else:
+            close = re.search(r"(?m)^\s*}\s*$", source[body_start:])
+            body = source[body_start : body_start + close.start()] if close else match.group(2)
+        positional_command = re.compile(r"(?m)^(\s*(?:if\s+)?)\"?\$(?:@|\{@\})\"?")
+        if not positional_command.search(body):
+            continue
+        wrappers[name] = sum(
+            int(shift.group(1) or "1")
+            for shift in re.finditer(r"(?m)^\s*shift(?:\s+([0-9]+))?\s*$", body)
+        )
+        masked_body = positional_command.sub(r"\1true", body)
+        masked_source = masked_source.replace(body, masked_body, 1)
+    return wrappers, masked_source
+
+
 def _kubectl_invocation(
     tokens: list[str], aliases: dict[str, list[str]], wrappers: dict[str, list[str]]
 ) -> list[str] | None:
@@ -515,23 +545,40 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
     for alias_match in re.finditer(r"(?m)^\s*alias\s+([A-Za-z_][A-Za-z0-9_]*)=", source):
         violations.add(f"unresolved shell alias declaration ({alias_match.group(1)})")
 
-    scan_sources = _recursive_shell_sources(source)
+    positional_wrappers, source_without_positional_wrappers = _transparent_positional_wrappers(
+        source
+    )
+    scan_sources = _recursive_shell_sources(source_without_positional_wrappers)
     for scan_source in scan_sources:
         if re.search(r"(?m)(?:^|[;&|])\s*\$\((?!\()", scan_source) or re.search(
             r"(?m)(?:^|[;&|])\s*`", scan_source
         ):
             violations.add("unresolved dynamic command substitution")
 
-    for tokens in [
+    token_queue = [
         tokens
         for scan_source in scan_sources
         for tokens in _shell_tokens(_mask_command_substitutions(scan_source))
-    ]:
+    ]
+    while token_queue:
+        tokens = token_queue.pop(0)
         command_index = _command_position(tokens)
         command_token = tokens[command_index] if command_index is not None else ""
         command_name = _alias_name(command_token)
+        if command_name in positional_wrappers:
+            if len(tokens) == 1:
+                continue
+            launched = tokens[command_index + 1 + positional_wrappers[command_name] :]
+            if not launched:
+                violations.add(f"unresolved positional wrapper ({command_name})")
+            else:
+                token_queue.append(launched)
+            continue
         if "__COMMAND_SUBSTITUTION__" in command_token:
             violations.add("unresolved dynamic command substitution")
+            continue
+        if re.search(r"\$(?:[0-9]+|[@*])|\$\{(?:[0-9]+|[@*])\}", command_token):
+            violations.add(f"unresolved positional command ({command_token})")
             continue
         if Path(command_name).name in {"builtin", "command", "env", "exec"}:
             violations.add(f"unresolved command launcher ({Path(command_name).name})")
