@@ -17,6 +17,14 @@ case "$target" in
     suite_id='verification.cilium'
     command=(bash -c 'exit 7')
     ;;
+  scoped-pass)
+    suite_id='verification.metrics-server'
+    command=(bash -c 'echo SCOPED_CHILD_OUTPUT')
+    ;;
+  scoped-fail)
+    suite_id='verification.cilium'
+    command=(bash -c 'exit 7')
+    ;;
   *)
     echo "Unknown fixture target: $target" >&2
     exit 2

@@ -8,12 +8,14 @@ source scripts/test/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 2 ]] || {
-  echo 'Usage: run-campaign.sh <plan|run|resume> <campaign|campaign-run-id>' >&2
+  echo 'Usage: run-campaign.sh <plan|run|resume|scoped-plan|scoped-run> <campaign|campaign-run-id>' >&2
   exit 2
 }
 
 action="$1"
 requested="$2"
+scoped_mode=false
+[[ "$action" != scoped-* ]] || scoped_mode=true
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
@@ -43,7 +45,7 @@ plan_digest=''
 [[ "$retry_delay" =~ ^[0-9]+$ ]]
 
 if [[ "$test_mode" == 'true' ]]; then
-  [[ -n "${TEST_CAMPAIGN_SOURCE_CHECK_BIN:-}" ]] || {
+  [[ "$scoped_mode" == 'true' || -n "${TEST_CAMPAIGN_SOURCE_CHECK_BIN:-}" ]] || {
     echo 'Campaign test mode requires TEST_CAMPAIGN_SOURCE_CHECK_BIN.' >&2
     exit 2
   }
@@ -67,6 +69,18 @@ random_hex() {
 source_state() {
   local remote_ref remote_sha head_sha revision deployed_sha
 
+  if [[ "$scoped_mode" == 'true' ]]; then
+    if [[ "$test_mode" != 'true' ]]; then
+      [[ -z "$(git status --porcelain)" ]] || {
+        echo 'Refusing scoped campaign: commit or stash all checkout changes first.' >&2
+        return 1
+      }
+    fi
+    head_sha="$(git rev-parse HEAD)"
+    [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+    printf '%s %s\n' "$head_sha" "$head_sha"
+    return
+  fi
   if [[ "$test_mode" == 'true' ]]; then
     "$TEST_CAMPAIGN_SOURCE_CHECK_BIN"
     return
@@ -150,6 +164,10 @@ campaign_has_suite() {
 }
 
 expected_confirmation() {
+  if [[ "$scoped_mode" == 'true' ]]; then
+    printf 'run-local:%s\n' "$campaign"
+    return
+  fi
   if campaign_has_suite test.resilience.plex-node-reboot; then
     printf 'run-publish:%s:%s:%s\n' \
       "$campaign" "${source_sha:0:12}" "$plan_digest"
@@ -170,6 +188,11 @@ print_plan() {
   echo "Source: $source_sha"
   echo "Flux: $flux_sha"
   echo "Plan digest: $plan_digest"
+  if [[ "$scoped_mode" == 'true' ]]; then
+    echo 'Mode: scoped local-only'
+  else
+    echo 'Mode: operator published'
+  fi
   echo "Mutates cluster: $(yq -r '.mutates_cluster' - <<<"$campaign_entry")"
   echo "Disruptive: $(yq -r '.disruptive' - <<<"$campaign_entry")"
   if campaign_has_suite test.resilience.plex-node-reboot; then
@@ -179,8 +202,13 @@ print_plan() {
   catalog_campaign_ids "$catalog" "$campaign" | nl -w2 -s'. '
   echo
   echo 'Run with:'
-  printf "TEST_CAMPAIGN_CONFIRM='%s' mise exec -- just test campaign %s\n" \
-    "$confirmation" "$campaign"
+  if [[ "$scoped_mode" == 'true' ]]; then
+    printf "TEST_SCOPED_CAMPAIGN_CONFIRM='%s' mise exec -- just test scoped-campaign\n" \
+      "$confirmation"
+  else
+    printf "TEST_CAMPAIGN_CONFIRM='%s' mise exec -- just test campaign %s\n" \
+      "$confirmation" "$campaign"
+  fi
 }
 
 initialize_manifest() {
@@ -197,6 +225,7 @@ initialize_manifest() {
   campaign_entry="$(catalog_campaign_entry "$catalog" "$campaign")"
   CAMPAIGN_ID="$campaign_id" CAMPAIGN="$campaign" PLAN_DIGEST="$plan_digest" \
   SOURCE_SHA="$source_sha" FLUX_SHA="$flux_sha" MEMBERS_JSON="$members_json" \
+  EXECUTION_MODE="$(yq -r '.execution_mode // "operator-published"' - <<<"$campaign_entry")" \
   MUTATES="$(yq -r '.mutates_cluster' - <<<"$campaign_entry")" \
   DISRUPTIVE="$(yq -r '.disruptive' - <<<"$campaign_entry")" \
   STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -204,6 +233,7 @@ initialize_manifest() {
       "schema_version": 1,
       "campaign_id": strenv(CAMPAIGN_ID),
       "campaign": strenv(CAMPAIGN),
+      "execution_mode": strenv(EXECUTION_MODE),
       "plan_digest": strenv(PLAN_DIGEST),
       "source_sha": strenv(SOURCE_SHA),
       "flux_sha": strenv(FLUX_SHA),
@@ -296,6 +326,7 @@ print_summary() {
 # Invoked directly and through the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_campaign() {
+  [[ "$scoped_mode" != 'true' ]] || return 0
   stop_test_lease_renewal 2>/dev/null || true
   if [[ "$lease_acquired" == 'true' ]]; then
     release_test_lease "$kubeconfig" "$lease_holder" >/dev/null 2>&1 || {
@@ -324,6 +355,7 @@ trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 
 acquire_campaign_lease() {
+  [[ "$scoped_mode" != 'true' ]] || return 0
   if [[ "${TEST_CAMPAIGN_SKIP_LEASE:-false}" == 'true' ]]; then
     [[ "$test_mode" == 'true' ]] || {
       echo 'TEST_CAMPAIGN_SKIP_LEASE is available only in test mode.' >&2
@@ -341,6 +373,7 @@ acquire_campaign_lease() {
 }
 
 require_campaign_lease() {
+  [[ "$scoped_mode" != 'true' ]] || return 0
   if [[ "${TEST_CAMPAIGN_SKIP_LEASE:-false}" == 'true' ]]; then
     return 0
   fi
@@ -429,12 +462,20 @@ run_member() {
   echo
   echo "=== campaign $campaign: $suite_id ==="
   command_exit=0
-  TEST_RUN_ID_FILE="$run_id_file" \
-  TEST_RESULTS_ROOT="$results_root" \
-  TEST_KUBECONFIG="$kubeconfig" \
-  KUBECONFIG="$kubeconfig" \
-    bash -o pipefail -c "$command" 2>&1 | tee "$log_file" ||
-    command_exit="${PIPESTATUS[0]}"
+  if [[ "$scoped_mode" == 'true' ]]; then
+    TEST_RUN_ID_FILE="$run_id_file" \
+    TEST_RESULTS_ROOT="$results_root" \
+    TEST_KUBECONFIG="$kubeconfig" \
+    KUBECONFIG="$kubeconfig" \
+      bash -o pipefail -c "$command" >"$log_file" 2>&1 || command_exit="$?"
+  else
+    TEST_RUN_ID_FILE="$run_id_file" \
+    TEST_RESULTS_ROOT="$results_root" \
+    TEST_KUBECONFIG="$kubeconfig" \
+    KUBECONFIG="$kubeconfig" \
+      bash -o pipefail -c "$command" 2>&1 | tee "$log_file" ||
+      command_exit="${PIPESTATUS[0]}"
+  fi
 
   [[ -f "$run_id_file" ]] || {
     echo "$suite_id did not emit TEST_RUN_ID_FILE (exit $command_exit)." >&2
@@ -464,7 +505,9 @@ run_member() {
     update_publish "$run_id" not-published-source-drift
     return 23
   fi
-  if ! publish_run "$run_id" "$publish_result_file"; then
+  if [[ "$scoped_mode" == 'true' ]]; then
+    update_publish "$run_id" local-only
+  elif ! publish_run "$run_id" "$publish_result_file"; then
     require_source_snapshot "$source_sha" "$flux_sha" || return 23
     return 22
   fi
@@ -566,10 +609,20 @@ execute_remaining_members() {
 }
 
 prepare_new_campaign() {
-  local state confirmation
+  local state confirmation execution_mode confirmation_value confirmation_variable
 
   campaign="$requested"
-  catalog_campaign_entry "$catalog" "$campaign" >/dev/null
+  execution_mode="$(yq -r '.execution_mode // "operator-published"' \
+    - <<<"$(catalog_campaign_entry "$catalog" "$campaign")")"
+  if [[ "$scoped_mode" == 'true' ]]; then
+    [[ "$campaign" == 'scoped-verification' && "$execution_mode" == 'scoped-local' ]] || {
+      echo 'Scoped local-only mode accepts only scoped-verification.' >&2
+      exit 2
+    }
+  elif [[ "$campaign" == 'scoped-verification' || "$execution_mode" == 'scoped-local' ]]; then
+    echo 'scoped-verification requires scoped local-only mode.' >&2
+    exit 2
+  fi
   [[ "$test_mode" == 'true' ]] || scripts/test/validate-catalog.sh "$catalog" >/dev/null
   plan_digest="$(catalog_campaign_digest "$catalog" "$campaign")"
   state="$(source_state)"
@@ -579,13 +632,19 @@ prepare_new_campaign() {
     exit 1
   }
   confirmation="$(expected_confirmation)"
-  if [[ "$action" == 'plan' ]]; then
+  if [[ "$action" == 'plan' || "$action" == 'scoped-plan' ]]; then
     print_plan
     exit 0
   fi
-  [[ "${TEST_CAMPAIGN_CONFIRM:-}" == "$confirmation" ]] || {
+  confirmation_value="${TEST_CAMPAIGN_CONFIRM:-}"
+  confirmation_variable='TEST_CAMPAIGN_CONFIRM'
+  if [[ "$scoped_mode" == 'true' ]]; then
+    confirmation_value="${TEST_SCOPED_CAMPAIGN_CONFIRM:-}"
+    confirmation_variable='TEST_SCOPED_CAMPAIGN_CONFIRM'
+  fi
+  [[ "$confirmation_value" == "$confirmation" ]] || {
     echo "Refusing campaign $campaign." >&2
-    echo "Run 'mise exec -- just test campaign-plan $campaign' and use its exact confirmation." >&2
+    echo "Run its plan recipe and set $confirmation_variable to the exact value." >&2
     exit 1
   }
   initialize_manifest
@@ -650,7 +709,7 @@ prepare_resume() {
 }
 
 case "$action" in
-  plan|run) prepare_new_campaign ;;
+  plan|run|scoped-plan|scoped-run) prepare_new_campaign ;;
   resume) prepare_resume ;;
   *)
     echo "Unknown campaign action: $action" >&2

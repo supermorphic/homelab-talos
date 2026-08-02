@@ -70,57 +70,10 @@ assert_equal 'PVC StorageClass' 'longhorn' \
 assert_equal 'PVC Helm retention annotation' 'keep' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get persistentvolumeclaim portainer --output jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')"
 
-# The scoped verifier cannot impersonate Portainer. Compare the exact live role and
-# binding graph to the rendered source instead, and reject any additional binding that
-# names the ServiceAccount identity or any ServiceAccount group it belongs to.
-live_role="$(kubectl --kubeconfig "$kubeconfig" get clusterrole portainer-readonly --output json)"
-expected_role="$(yq ea -o=json -I=0 \
-  'select(.kind == "ClusterRole" and .metadata.name == "portainer-readonly")' \
-  "$rbac_source")"
-normalize_role_rules() {
-  yq -o=json -I=0 '.rules |
-    map({
-      "apiGroups": (.apiGroups | sort),
-      "resources": (.resources | sort),
-      "verbs": (.verbs | sort)
-    }) |
-    sort_by(.apiGroups[0], .resources[0], .verbs[0])'
-}
-[[ "$(normalize_role_rules <<<"$live_role")" == \
-  "$(normalize_role_rules <<<"$expected_role")" ]] || {
-  echo 'Live portainer-readonly ClusterRole rules differ from the rendered policy.' >&2
-  exit 1
-}
-
-binding="$(kubectl --kubeconfig "$kubeconfig" get clusterrolebinding portainer-readonly --output json)"
-[[ "$(yq -r '[.roleRef.apiGroup, .roleRef.kind, .roleRef.name] | join(":")' - <<<"$binding")" == \
-  'rbac.authorization.k8s.io:ClusterRole:portainer-readonly' ]]
-[[ "$(yq -r '[.subjects[] | [.kind, (.namespace // ""), .name] | join(":")] | join(",")' - <<<"$binding")" == \
-  'ServiceAccount:portainer:portainer-readonly' ]]
-
-binding_subject_filter='[.subjects[]? | select(
-  (.kind == "ServiceAccount" and .namespace == "portainer" and .name == "portainer-readonly") or
-  (.kind == "User" and .name == "system:serviceaccount:portainer:portainer-readonly") or
-  (.kind == "Group" and (
-    .name == "system:authenticated" or
-    .name == "system:serviceaccounts:portainer" or
-    .name == "system:serviceaccounts"
-  ))
-)] | length > 0'
-cluster_binding_refs="$(kubectl --kubeconfig "$kubeconfig" get clusterrolebindings --output json |
-  yq -r ".items[] | select($binding_subject_filter) |
-    [.kind, \"-\", .metadata.name, .roleRef.kind, .roleRef.name] | @tsv")"
-role_binding_refs="$(kubectl --kubeconfig "$kubeconfig" get rolebindings --all-namespaces --output json |
-  yq -r ".items[] | select($binding_subject_filter) |
-    [.kind, .metadata.namespace, .metadata.name, .roleRef.kind, .roleRef.name] | @tsv")"
-[[ "$cluster_binding_refs" == $'ClusterRoleBinding\t-\tportainer-readonly\tClusterRole\tportainer-readonly' ]] || {
-  echo "Unexpected ClusterRoleBinding grants Portainer access: ${cluster_binding_refs:-<none>}." >&2
-  exit 1
-}
-[[ -z "$role_binding_refs" ]] || {
-  echo "Unexpected RoleBinding grants Portainer access: $role_binding_refs." >&2
-  exit 1
-}
+# The scoped verifier cannot impersonate Portainer. The helper compares the exact direct
+# graph and separately permits only tightly bounded Kubernetes bootstrap discovery and
+# self-review roles inherited through system:authenticated.
+scripts/verify/portainer-rbac.sh "$kubeconfig" "$rbac_source"
 assert_present 'CiliumNetworkPolicy' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get ciliumnetworkpolicy portainer --output name)"
 

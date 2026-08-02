@@ -35,6 +35,15 @@ publish run:
 campaign-plan campaign:
     @scripts/test/run-campaign.sh plan {{quote(campaign)}}
 
+# Preview the read-only worktree campaign. This mode never acquires the cluster test
+# Lease or publishes reports.
+scoped-campaign-plan:
+    @scripts/test/run-campaign.sh scoped-plan scoped-verification
+
+# Run the read-only worktree campaign and retain canonical results only on this host.
+scoped-campaign:
+    @scripts/test/run-campaign.sh scoped-run scoped-verification
+
 # Run every explicit member of a campaign and publish each canonical child report.
 # Operator-only; mutating campaigns share one renewable cluster-wide test Lease.
 campaign campaign:

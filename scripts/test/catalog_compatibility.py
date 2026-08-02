@@ -604,18 +604,68 @@ def fail_fast_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 
 def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
+    assert canonical["campaigns"]["scoped-verification"].get("execution_mode") == (
+        "scoped-local"
+    ), "scoped-verification does not declare scoped-local execution"
+    assert canonical["campaigns"]["verification"].get("execution_mode") == (
+        "operator-published"
+    ), "verification does not declare operator-published execution"
     analyze = catalog_validator.forbidden_kubernetes_operations
-    cases = {
+    forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
         "renamed-secret": 'k=kubectl\n"$k" get --namespace monitoring secret foo',
-        "option-between": "kubectl get --output name --namespace monitoring secrets",
+        "option-between": "kubectl --namespace monitoring get --output name secrets",
         "helper-secret": 'kg() { kubectl get "$@"; }\nkg --output name secrets',
         "helm-storage": "helm get values cilium --namespace kube-system",
-        "mutation": "kubectl --namespace default patch deployment app -p {}",
+        "unknown": "kubectl frobnicate pods",
+        "rollout-restart": "kubectl rollout restart deployment/app",
+        "rollout-undo": "kubectl rollout undo deployment/app",
+        "run": "kubectl run shell --image=busybox",
+        "cordon": "kubectl cordon node-a",
+        "uncordon": "kubectl uncordon node-a",
+        "drain": "kubectl drain node-a",
+        "taint": "kubectl taint nodes node-a dedicated=test:NoSchedule",
+        "cp": "kubectl cp pod:/tmp/a ./a",
+        "attach": "kubectl attach pod/app",
+        "debug": "kubectl debug pod/app --image=busybox",
+        "create": "kubectl create configmap sample",
+        "replace": "kubectl replace --filename object.yaml",
+        "apply": "kubectl apply --filename object.yaml",
+        "delete": "kubectl delete pod app",
+        "edit": "kubectl edit deployment app",
+        "patch": "kubectl --namespace default patch deployment app -p {}",
+        "scale": "kubectl scale deployment app --replicas=2",
+        "set": "kubectl set image deployment/app app=image",
+        "label": "kubectl label pod app changed=true",
+        "annotate": "kubectl annotate pod app changed=true",
+        "expose": "kubectl expose deployment app",
+        "autoscale": "kubectl autoscale deployment app --min=1 --max=2",
     }
-    for name, source in cases.items():
+    for name, source in forbidden_cases.items():
         assert analyze(source), f"{name}: forbidden operation was not detected"
-    assert analyze("kubectl auth can-i get secrets") == []
+    safe_cases = {
+        "get": "kubectl --namespace default get pods",
+        "describe": "kubectl describe pod app",
+        "logs": "kubectl logs deployment/app --tail=10",
+        "wait": "kubectl wait --for=condition=Ready pod/app",
+        "rollout-status": "kubectl rollout status deployment/app",
+        "auth-can-i": "kubectl auth can-i get secrets",
+        "config-contexts": "kubectl config get-contexts homelab-observer",
+        "config-current": "kubectl config current-context",
+        "config-view": "kubectl config view --minify",
+        "api-resources": "kubectl api-resources",
+        "api-versions": "kubectl api-versions",
+        "version": "kubectl version --client",
+        "top": "kubectl top nodes",
+    }
+    for name, source in safe_cases.items():
+        assert analyze(source) == [], f"{name}: safe operation was rejected: {analyze(source)}"
+    assert analyze("kubectl exec deployment/app -- true", allow_interactive=True) == []
+    assert analyze("kubectl port-forward service/app 8080:80", allow_interactive=True) == []
+    assert analyze("kubectl exec deployment/app -- true"), "observer exec was accepted"
+    assert analyze("kubectl port-forward service/app 8080:80"), (
+        "observer port-forward was accepted"
+    )
     assert analyze("assert_can_i observer no create pods/exec") == []
 
     fixture = root / "access-reachability"
@@ -631,6 +681,74 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     )
     reachable = catalog_validator.reachable_verifier_source(fixture, "scripts/verify/root.sh")
     assert analyze(reachable), "nested Just recipe bypass was not detected"
+
+    lease_fixture = root / "lease-reachability"
+    (lease_fixture / "scripts/verify").mkdir(parents=True)
+    (lease_fixture / "scripts/test/lib").mkdir(parents=True)
+    (lease_fixture / "kubernetes").mkdir()
+    (lease_fixture / "scripts/verify/root.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "source scripts/test/lib/lease.sh\n"
+        "lease_kubectl cfg delete lease lock\n",
+        encoding="utf-8",
+    )
+    (lease_fixture / "scripts/test/lib/lease.sh").write_text(
+        "lease_kubectl() {\n"
+        '  local kubeconfig="$1"\n'
+        "  shift\n"
+        '  "${TEST_LEASE_KUBECTL:-kubectl}" --kubeconfig "$kubeconfig" "$@"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (lease_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    lease_source = catalog_validator.reachable_verifier_source(
+        lease_fixture, "scripts/verify/root.sh"
+    )
+    assert analyze(lease_source) == ["kubectl subcommand (delete)"], (
+        f"indirect lease_kubectl mutation was not resolved: {analyze(lease_source)}"
+    )
+
+    escape = root / "escape.sh"
+    escape.write_text("kubectl delete pods --all\n", encoding="utf-8")
+    traversal_root = root / "traversal"
+    traversal_root.mkdir()
+    try:
+        catalog_validator.reachable_verifier_source(traversal_root, "../escape.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "outside repository root" in failure.message
+    else:
+        raise AssertionError("implementation path traversal was accepted")
+
+    dynamic_fixture = root / "dynamic-reachability"
+    (dynamic_fixture / "scripts/verify").mkdir(parents=True)
+    (dynamic_fixture / "kubernetes").mkdir()
+    (dynamic_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nhelper="scripts/verify/helper.sh"\nsource "$helper"\n',
+        encoding="utf-8",
+    )
+    (dynamic_fixture / "scripts/verify/helper.sh").write_text("true\n", encoding="utf-8")
+    (dynamic_fixture / "kubernetes/mod.just").write_text("", encoding="utf-8")
+    try:
+        catalog_validator.reachable_verifier_source(dynamic_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic source target" in failure.message
+    else:
+        raise AssertionError("dynamic source target was accepted")
+
+    (dynamic_fixture / "scripts/verify/root.sh").write_text(
+        '#!/usr/bin/env bash\nrecipe="nested"\njust kube "$recipe"\n',
+        encoding="utf-8",
+    )
+    try:
+        catalog_validator.reachable_verifier_source(dynamic_fixture, "scripts/verify/root.sh")
+    except catalog_validator.ValidationFailure as failure:
+        assert "dynamic Just recipe target" in failure.message
+    else:
+        raise AssertionError("dynamic Just recipe target was accepted")
+
+    assert analyze('runner() { "$command" "$@"; }\nrunner get pods'), (
+        "unresolved dynamic wrapper was accepted"
+    )
 
     def diagnostic_without_context(data: dict[str, Any]) -> None:
         suite(data, "verification.homepage")["runner"]["implementation"] = (
@@ -689,13 +807,30 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         suite(data, "verification.monitoring")["access"]["tier"] = "operator"
         data["campaigns"]["scoped-verification"]["members"].remove("verification.monitoring")
 
-    expect_rejection(
+    expect_acceptance(
         root,
         canonical,
         "operator-only-full-campaign",
         operator_only_full_campaign,
-        "The full verification campaign must run with either scoped contexts or admin "
-        "impersonation; operator-only suites remain: verification.monitoring.\n",
+    )
+
+    expect_rejection(
+        root,
+        canonical,
+        "wrong-scoped-execution-mode",
+        lambda data: data["campaigns"]["scoped-verification"].__setitem__(
+            "execution_mode", "operator-published"
+        ),
+        "Campaign scoped-verification must use scoped-local execution.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "wrong-operator-execution-mode",
+        lambda data: data["campaigns"]["verification"].__setitem__(
+            "execution_mode", "scoped-local"
+        ),
+        "Campaign verification must use operator-published execution.\n",
     )
 
     def entry_before_campaign(data: dict[str, Any]) -> None:

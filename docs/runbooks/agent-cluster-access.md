@@ -127,10 +127,18 @@ Plan the scoped live campaign, review its exact membership and confirmation, the
 only with the confirmation it prints:
 
 ```bash
-mise exec -- just test campaign-plan scoped-verification
+mise exec -- just test scoped-campaign-plan
 ```
 
 `scoped-verification` contains every observer and diagnostic suite and no operator-only
-suite. The complete `verification` campaign has the same credential requirements: it
-can run with worktree contexts or from the main clone with admin credentials. Neither
-live campaign is part of `executions.ci`; CI remains secret-free and cluster-independent.
+suite. Its dedicated linked-worktree runner uses the observer current context, selects
+the named diagnostic context only when required, and uses the Talos reader credential.
+It writes and validates canonical results locally without acquiring the cluster test
+Lease, publishing reports, or streaming child output through the campaign coordinator.
+
+The complete `verification` campaign is a separate operator workflow from the main
+clone with an admin kubeconfig. It retains the normal Lease/publication campaign
+semantics, and its `verification.agent-access` member uses admin impersonation to prove
+the scoped ServiceAccount identities. Run it with `campaign-plan verification` and the
+operator confirmation that command prints. Neither live campaign is part of
+`executions.ci`; CI remains secret-free and cluster-independent.

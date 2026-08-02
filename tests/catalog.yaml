@@ -48,6 +48,7 @@ campaigns:
       - validation.ci
   verification:
     description: Read-only live acceptance checks for deployed services.
+    execution_mode: operator-published
     mutates_cluster: false
     disruptive: false
     members:
@@ -81,6 +82,7 @@ campaigns:
       - verification.agent-access
   scoped-verification:
     description: Read-only and reduced-privilege live checks runnable with worktree credentials.
+    execution_mode: scoped-local
     mutates_cluster: false
     disruptive: false
     access:

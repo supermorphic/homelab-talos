@@ -96,6 +96,7 @@ def _shell_tokens(source: str) -> list[list[str]]:
     statements: list[list[str]] = []
     lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()<>\n")
     lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
     lexer.commenters = "#"
     current: list[str] = []
     try:
@@ -121,7 +122,9 @@ def _shell_tokens(source: str) -> list[list[str]]:
     return statements
 
 
-def _command_aliases(source: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _command_aliases(
+    source: str,
+) -> tuple[dict[str, list[str]], dict[str, list[str]], set[str]]:
     aliases: dict[str, list[str]] = {"kubectl": []}
     for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=\(\s*kubectl\b([^)]*)\)", source):
         aliases[match.group(1)] = shlex.split(match.group(2), comments=True, posix=True)
@@ -129,8 +132,15 @@ def _command_aliases(source: str) -> tuple[dict[str, list[str]], dict[str, list[
         r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=(?:['\"])?kubectl(?:['\"])?\s*$", source
     ):
         aliases[match.group(1)] = []
+    for match in re.finditer(
+        r"(?m)^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)="
+        r"(?:['\"])?\$\{[A-Za-z_][A-Za-z0-9_]*:-kubectl\}(?:['\"])?\s*$",
+        source,
+    ):
+        aliases[match.group(1)] = []
 
     wrappers: dict[str, list[str]] = {}
+    unresolved_wrappers: set[str] = set()
     for match in re.finditer(
         r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{([^\n}]*)",
         source,
@@ -146,13 +156,24 @@ def _command_aliases(source: str) -> tuple[dict[str, list[str]], dict[str, list[
         for tokens in _shell_tokens(body):
             invocation = _kubectl_invocation(tokens, aliases, {})
             if invocation is not None:
-                wrappers[name] = invocation
+                consumed_args = sum(
+                    int(shift.group(1) or "1")
+                    for shift in re.finditer(r"(?m)^\s*shift(?:\s+([0-9]+))?\s*$", body)
+                )
+                wrappers[name] = [
+                    f"__consume_args__={consumed_args}",
+                    *(token for token in invocation if token not in {"$@", "${@}"}),
+                ]
                 break
-    return aliases, wrappers
+        if name not in wrappers and re.search(r"(?:^|[;&|])\s*[\"']?\$(?!@)[{A-Za-z_]", body):
+            unresolved_wrappers.add(name)
+    return aliases, wrappers, unresolved_wrappers
 
 
 def _alias_name(token: str) -> str:
     token = token.strip("\"'")
+    if re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-kubectl\}", token):
+        return "kubectl"
     match = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)(?:\[@\])?\}?", token)
     return match.group(1) if match else token
 
@@ -165,30 +186,92 @@ def _kubectl_invocation(
         if name in aliases:
             return [*aliases[name], *tokens[index + 1 :]]
         if name in wrappers:
-            return [*wrappers[name], *tokens[index + 1 :]]
+            prefix = wrappers[name]
+            consume = int(prefix[0].partition("=")[2])
+            return [*prefix[1:], *tokens[index + 1 + consume :]]
     return None
 
 
 def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = False) -> list[str]:
-    """Find cluster operations forbidden to scoped verifier credentials."""
-    aliases, wrappers = _command_aliases(source)
+    """Reject every scoped kubectl operation outside a conservative tier allowlist."""
+    aliases, wrappers, unresolved_wrappers = _command_aliases(source)
     violations: set[str] = set()
-    mutating_verbs = {
-        "annotate",
-        "apply",
-        "bind",
-        "create",
-        "delete",
-        "edit",
-        "escalate",
-        "impersonate",
-        "label",
-        "patch",
-        "replace",
-        "scale",
-        "set",
+    safe_commands = {
+        "api-resources",
+        "api-versions",
+        "describe",
+        "get",
+        "logs",
+        "top",
+        "version",
+        "wait",
     }
-    read_verbs = {"describe", "get", "list", "watch"}
+    global_value_options = {
+        "--as",
+        "--as-group",
+        "--cache-dir",
+        "--certificate-authority",
+        "--client-certificate",
+        "--client-key",
+        "--cluster",
+        "--context",
+        "--kubeconfig",
+        "--namespace",
+        "--password",
+        "--profile",
+        "--profile-output",
+        "--request-timeout",
+        "--server",
+        "--tls-server-name",
+        "--token",
+        "--user",
+        "--username",
+        "-n",
+    }
+
+    def subcommand(invocation: list[str]) -> tuple[str, int] | None:
+        index = 0
+        while index < len(invocation):
+            token = invocation[index]
+            if token == "--":
+                index += 1
+                continue
+            if token in {"$@", "${@}"}:
+                index += 1
+                continue
+            option = token.split("=", 1)[0]
+            if option in global_value_options:
+                index += 1 if "=" in token else 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            if re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*_args\[@\]\}", token):
+                index += 1
+                continue
+            return token, index
+        return None
+
+    def next_non_option(tokens: list[str], start: int) -> str:
+        index = start
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            return token
+        return ""
+
+    def reads_secret(tokens: list[str]) -> bool:
+        return any(
+            token.lower().split("/", 1)[0].split(".", 1)[0] in {"secret", "secrets"}
+            for token in tokens
+            if token and not token.startswith("-")
+        )
+
     for tokens in _shell_tokens(source):
         if "helm" in tokens:
             helm_index = tokens.index("helm")
@@ -197,33 +280,46 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
             ):
                 violations.add("Helm release storage read")
 
-        invocation = _kubectl_invocation(tokens, aliases, wrappers)
-        if invocation is None or ("auth" in invocation and "can-i" in invocation):
-            continue
-        verb_index = next(
-            (
-                index
-                for index, token in enumerate(invocation)
-                if token in read_verbs
-                or token in mutating_verbs
-                or token in {"exec", "port-forward"}
-            ),
-            None,
+        unresolved = next(
+            (_alias_name(token) for token in tokens if _alias_name(token) in unresolved_wrappers),
+            "",
         )
-        if verb_index is None:
+        if unresolved:
+            violations.add(f"unresolved dynamic wrapper ({unresolved})")
+
+        if len(tokens) == 1 and _alias_name(tokens[0]) in wrappers:
             continue
-        verb = invocation[verb_index]
-        resource_tokens = {
-            token.lower().split("/", 1)[0]
-            for token in invocation[verb_index + 1 :]
-            if token and not token.startswith("-")
-        }
-        if verb in read_verbs and resource_tokens & {"secret", "secrets"}:
+        invocation = _kubectl_invocation(tokens, aliases, wrappers)
+        if invocation is None:
+            continue
+        resolved = subcommand(invocation)
+        if resolved is None:
+            if invocation in aliases.values() or any(
+                token in {"$@", "${@}"} for token in invocation
+            ):
+                continue
+            violations.add("kubectl invocation without a subcommand")
+            continue
+        command, command_index = resolved
+        remaining = invocation[command_index + 1 :]
+        if command in {"get", "describe"} and reads_secret(remaining):
             violations.add("Secret API read")
-        if verb in mutating_verbs:
-            violations.add(f"Kubernetes mutation ({verb})")
-        if not allow_interactive and verb in {"exec", "port-forward"}:
-            violations.add(verb)
+            continue
+        if command in safe_commands:
+            continue
+        if command == "auth" and next_non_option(remaining, 0) == "can-i":
+            continue
+        if command == "config" and next_non_option(remaining, 0) in {
+            "current-context",
+            "get-contexts",
+            "view",
+        }:
+            continue
+        if command == "rollout" and next_non_option(remaining, 0) == "status":
+            continue
+        if allow_interactive and command in {"exec", "port-forward"}:
+            continue
+        violations.add(f"kubectl subcommand ({command})")
     return sorted(violations)
 
 
@@ -247,6 +343,19 @@ def _just_recipes(root: Path) -> dict[str, str]:
 
 def reachable_verifier_source(root: Path, implementation: str) -> str:
     """Resolve verifier files, sourced helpers, and literal nested kube Just recipes."""
+    root = root.resolve()
+
+    def checked_relative_path(relative: str, label: str) -> Path:
+        candidate = Path(relative)
+        if candidate.is_absolute():
+            fail(f"Scoped verifier {label} resolves outside repository root: {relative}.\n")
+        resolved = (root / candidate).resolve()
+        if not resolved.is_relative_to(root):
+            fail(f"Scoped verifier {label} resolves outside repository root: {relative}.\n")
+        if not resolved.is_file():
+            fail(f"Scoped verifier {label} does not resolve to a file: {relative}.\n")
+        return resolved
+
     recipes = _just_recipes(root)
     pending_files = [implementation]
     pending_recipes: list[str] = []
@@ -259,9 +368,7 @@ def reachable_verifier_source(root: Path, implementation: str) -> str:
             if relative in seen_files:
                 continue
             seen_files.add(relative)
-            path = root / relative
-            if not path.is_file():
-                continue
+            path = checked_relative_path(relative, "source")
             source = path.read_text(encoding="utf-8")
         else:
             recipe = pending_recipes.pop()
@@ -269,8 +376,12 @@ def reachable_verifier_source(root: Path, implementation: str) -> str:
                 continue
             seen_recipes.add(recipe)
             source = recipes.get(recipe, "")
+            if not source:
+                fail(f"Scoped verifier references unknown Just recipe: {recipe}.\n")
             header = source.splitlines()[0] if source else ""
             for dependency in header.partition(":")[2].split():
+                if any(character in dependency for character in "${}{ }"):
+                    fail(f"Scoped verifier has dynamic Just recipe target: {dependency}.\n")
                 if dependency in recipes:
                     pending_recipes.append(dependency)
         chunks.append(source)
@@ -278,12 +389,33 @@ def reachable_verifier_source(root: Path, implementation: str) -> str:
             stripped = line.strip()
             if not stripped or stripped.startswith(("#", "echo ", "printf ")):
                 continue
-            just_call = re.search(r"(?:^|\s)just\s+kube\s+([a-zA-Z0-9_-]+)", stripped)
+            source_call = re.match(r"^(?:source|\.)\s+(.+)$", stripped)
+            if source_call:
+                try:
+                    source_tokens = shlex.split(source_call.group(1), comments=True, posix=True)
+                except ValueError:
+                    source_tokens = []
+                if not source_tokens or any(character in source_tokens[0] for character in "$`"):
+                    fail(f"Scoped verifier has dynamic source target: {source_call.group(1)}.\n")
+                source_path = checked_relative_path(source_tokens[0], "source")
+                pending_files.append(str(source_path.relative_to(root)))
+
+            try:
+                command_tokens = shlex.split(stripped, comments=True, posix=True)
+            except ValueError:
+                command_tokens = []
+            for command_token in command_tokens:
+                if not re.fullmatch(r"[a-zA-Z0-9_./-]+\.sh", command_token):
+                    continue
+                command_path = checked_relative_path(command_token, "helper")
+                pending_files.append(str(command_path.relative_to(root)))
+
+            just_call = re.search(r"(?:^|\s)just\s+kube\s+(\S+)", stripped)
             if just_call:
-                pending_recipes.append(just_call.group(1))
-            pending_files.extend(
-                re.findall(r"(?:source\s+)?(scripts/[a-zA-Z0-9_./-]+\.sh)", stripped)
-            )
+                recipe_target = just_call.group(1).strip("\"'")
+                if not re.fullmatch(r"[a-zA-Z0-9_-]+", recipe_target):
+                    fail(f"Scoped verifier has dynamic Just recipe target: {recipe_target}.\n")
+                pending_recipes.append(recipe_target)
     return "\n".join(chunks)
 
 
@@ -514,7 +646,7 @@ class CatalogValidator:
     def validate_portainer_rbac_oracle(self) -> None:
         entry = self.entry_by_id("verification.portainer")
         implementation = shell_text(entry.get("runner", {}).get("implementation"))
-        content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
+        content = reachable_verifier_source(REPO_ROOT, implementation)
         required = {
             "get clusterrole portainer-readonly",
             "get clusterrolebinding portainer-readonly",
@@ -524,8 +656,9 @@ class CatalogValidator:
             "system:authenticated",
             "system:serviceaccounts:portainer",
             "Live portainer-readonly ClusterRole rules differ",
-            "Unexpected ClusterRoleBinding grants Portainer access",
-            "Unexpected RoleBinding grants Portainer access",
+            "Unexpected direct ClusterRoleBinding grants Portainer access",
+            "Unexpected direct RoleBinding grants Portainer access",
+            "Unsafe system:authenticated ClusterRole rules",
         }
         if "--as" in content or not all(marker in content for marker in required):
             fail("verification.portainer must prove exact live RBAC without impersonation.\n")
@@ -867,17 +1000,10 @@ class CatalogValidator:
             fail(
                 exact_diff("Campaign scoped-verification members", expected_scoped, actual_scoped)
             )
-        operator_only = sorted(
-            entry["metadata"]["id"]
-            for entry in self.suites
-            if entry["metadata"]["tier"] == "verification"
-            and entry["access"]["tier"] == "operator"
-        )
-        if operator_only:
-            fail(
-                "The full verification campaign must run with either scoped contexts or "
-                f"admin impersonation; operator-only suites remain: {', '.join(operator_only)}.\n"
-            )
+        if self.campaigns["scoped-verification"].get("execution_mode") != "scoped-local":
+            fail("Campaign scoped-verification must use scoped-local execution.\n")
+        if self.campaigns["verification"].get("execution_mode") != "operator-published":
+            fail("Campaign verification must use operator-published execution.\n")
 
         expected_conformance = sorted(
             entry["metadata"]["id"]
