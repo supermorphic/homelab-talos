@@ -234,11 +234,11 @@ staged_diagnostic_token="$("$kubectl_bin" --kubeconfig "$staged_kubeconfig" conf
 }
 
 file_mode() {
-  if stat -f '%Lp' "$1" >/dev/null 2>&1; then
-    stat -f '%Lp' "$1"
-  else
-    stat -c '%a' "$1"
-  fi
+  local mode
+  mode="$(stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null)" ||
+    return 1
+  [[ "$mode" =~ ^0?[0-7]{3}$ ]] || return 1
+  printf '%s\n' "${mode#0}"
 }
 [[ "$(file_mode "$staged_kubeconfig")" == '600' && "$(file_mode "$staged_talosconfig")" == '600' ]] || {
   echo 'Refusing staged credentials: both files must have mode 0600.' >&2

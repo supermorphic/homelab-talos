@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 preflight="$repo_root/scripts/test/scoped-campaign-preflight.sh"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/scoped-preflight-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
+real_stat="$(command -v stat)"
 worktree="$fixture/worktree"
 mkdir -p "$fixture/bin" "$fixture/common/worktrees/scoped" \
   "$worktree/.kube" "$worktree/.talos"
@@ -59,7 +60,28 @@ set -euo pipefail
 }
 printf '{"Context":"homelab","Roles":["%s"]}\n' "${FAKE_TALOS_ROLE:-os:reader}"
 EOF
-chmod +x "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/talosctl"
+
+cat >"$fixture/bin/stat" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" -eq 3 ]] || exit 64
+case "$1 $2" in
+  '-f %Lp')
+    # GNU stat accepts -f but interprets it as filesystem output, so a
+    # BSD-first fallback can succeed without returning the file mode.
+    printf 'gnu-filesystem-output\n'
+    ;;
+  '-c %a')
+    if "$REAL_STAT" -c '%a' "$3" >/dev/null 2>&1; then
+      exec "$REAL_STAT" -c '%a' "$3"
+    fi
+    exec "$REAL_STAT" -f '%Lp' "$3"
+    ;;
+  *) exit 64 ;;
+esac
+EOF
+chmod +x "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/talosctl" \
+  "$fixture/bin/stat"
 
 write_kubeconfig_view() {
   local variant="$1"
@@ -98,6 +120,7 @@ write_kubeconfig_view() {
 
 run_preflight() {
   PATH="$fixture/bin:$PATH" \
+  REAL_STAT="$real_stat" \
   FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" \
   FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
@@ -119,7 +142,7 @@ write_kubeconfig_view valid
 run_preflight
 
 expect_failure main-clone 'linked Git worktree' env FAKE_GIT_LAYOUT=main \
-  PATH="$fixture/bin:$PATH" FAKE_WORKTREE="$worktree" \
+  PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
   "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
 
@@ -131,7 +154,8 @@ write_kubeconfig_view wrong-current
 expect_failure wrong-current 'current context must be homelab-observer' run_preflight
 write_kubeconfig_view valid
 expect_failure wrong-reader 'Talos credential must have exactly the os:reader role' env \
-  FAKE_TALOS_ROLE=os:admin PATH="$fixture/bin:$PATH" FAKE_WORKTREE="$worktree" \
+  FAKE_TALOS_ROLE=os:admin PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" \
+  FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
   "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
 

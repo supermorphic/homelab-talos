@@ -35,8 +35,9 @@ common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-
 credential_mode() {
   local path="$1"
   local mode
-  mode="$(stat -f '%Lp' "$path" 2>/dev/null || stat -c '%a' "$path" 2>/dev/null)" ||
+  mode="$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path" 2>/dev/null)" ||
     return 1
+  [[ "$mode" =~ ^0?[0-7]{3}$ ]] || return 1
   printf '%s\n' "${mode#0}"
 }
 
