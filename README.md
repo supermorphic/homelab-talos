@@ -213,7 +213,7 @@ available for focused developer validation.
 | `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Enabled in Phase 3; destructive after confirmation |
 | `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
-| `just talos kubeconfig` | Atomically refresh the ignored workstation kubeconfig at `.kube/config` through Talos (no etcd/NotReady gate) | — | Day-2; the routine way to (re)fetch a kubeconfig after Cilium |
+| `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Operator-run on demand; directory-dependent access contract documented below |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Enabled in Phase 4; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Enabled in Phase 4; destructive after confirmation |
@@ -521,12 +521,18 @@ The repo-local `.talos/config` and `.kube/config` paths intentionally do not rel
 on the CLIs' `$HOME` defaults or ambient current contexts. Guarded recipes always
 pass the selected credential path explicitly.
 
-Each checkout has its own ignored credential directories. Initialize
-`.talos/config` either by loading the repository SOPS identity and running
-`just talos generate`, or by installing a trusted talosconfig from another
-operator checkout with directory mode `0700` and file mode `0600`. Then run
-`just talos kubeconfig` to fetch and validate that checkout's `.kube/config`;
-do not copy credentials into Git.
+Each checkout has its own ignored credential directories, and credential
+installation depends on which checkout runs the command:
+
+- main clone + `mise exec -- just talos kubeconfig` -> admin Kubernetes credential
+- worktree + operator-run `mise exec -- just talos kubeconfig` -> observer/diagnostic
+  Kubernetes contexts and `os:reader` Talos credential
+- new worktree -> no credential until the operator runs the command on demand
+- expired token/certificate -> rerun the same command in that worktree
+
+The worktree path uses the main clone's admin credentials only to mint scoped
+credentials; it never copies an admin user into the worktree kubeconfig. Do not
+copy credentials into Git.
 
 Generated configs, kubeconfigs, talosconfigs, decrypted secrets, Helm output,
 support bundles, and age private identities must remain outside Git. The private

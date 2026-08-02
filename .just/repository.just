@@ -1180,8 +1180,8 @@ require-bash:
 # entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
 verify-shell-scripts:
-    @for script in scripts/hooks/*.sh scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
-    @for script in $(find scripts/hooks scripts/secrets scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
+    @for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
+    @for script in $(find scripts/hooks scripts/repository scripts/secrets scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
       bash -n "$script"; \
       shellcheck --external-sources "$script"; \
     done
