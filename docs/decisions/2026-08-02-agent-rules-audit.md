@@ -7,9 +7,17 @@
 - Date: 2026-08-02
 - Branch: `challenge-agent-rules`
 
-**A record becomes `Accepted` when it is merged to `main`.** Until then it is `Draft`
-and may be revised freely. After acceptance it is superseded, never revised. Status is
+**The author sets `Accepted` in the pull request that lands the record**, once the
+operator has approved it. Until that commit it is `Draft` and may be revised freely.
+Once an `Accepted` record exists on `main` it is superseded, never revised. Status is
 one of `Draft`, `Accepted`, or `Superseded by <filename>`.
+
+Acceptance is *written*, not *inferred from merging*. Git merges file content unchanged,
+so a record committed as `Draft` and merged stays `Draft` for ever — the immutability
+check compares against the merge base and would never see an `Accepted` record to
+protect, and the generated index would report every record as a draft. A post-merge
+writer was the alternative and is ruled out: it would have to push to `main`, and the
+operator is the sole merge authority.
 
 **Implementation already performed.** The commit introducing this record also changed
 `scripts/validate/links.sh` to exclude `docs/decisions/*`. That is implementation, not
@@ -224,7 +232,21 @@ Three tiers, each an authoritative control:
 |---|---|---|---|
 | **`observer`** | Kubernetes `view` plus `pods/log`, `metrics.k8s.io`, and explicit read on the CRDs in use (Flux, Cilium, Gatus, Tailscale, Longhorn, Trivy) | Agents, in every worktree | Diagnosis, `flux get`, `cilium status` |
 | **`diagnostic`** | `observer` **plus `pods/exec` and `pods/portforward`** | Agents, for named verifiers only | The 5 verifiers that require it |
-| **`admin`** | Full cluster-admin; `os:admin` talosconfig | Operator only | Bootstrap, break-glass, recovery |
+| **`admin`** | Full cluster-admin; `os:admin` talosconfig | Main clone — see the isolation limit below | Bootstrap, break-glass, recovery |
+
+**The admin tier is separated by convention, not by a boundary.** `.kube/config` and
+`.talos/config` are ordinary repository-relative files. Nothing distinguishes an operator
+shell from an agent session launched in the same clone: the `SessionStart` hook warns and
+never blocks, `bypassPermissions` gates nothing, and working in the main clone is
+explicitly legitimate. **Any agent session started there holds admin.**
+
+So "admin credential custody" is a real control against a session in a *worktree* — which
+has no admin file to read — and **no control at all** against a session in the main clone.
+The spec's own admission test forbids claiming more than a mechanism delivers, so the
+claim is stated at its true strength here rather than in the rule table's shorthand.
+Closing the gap would need a real boundary — a separate filesystem location, a different
+user, or a credential helper — and that is recorded as an open question rather than
+assumed.
 
 **`diagnostic` is not read-only and is not described as such.** `pods/exec` is a
 `create` verb on a subresource and can mutate container state arbitrarily. It is a
@@ -272,9 +294,16 @@ rollouts.
 `just talos kubeconfig` **resolves conditionally** on where it runs:
 
 - **In the main clone** — downloads the admin kubeconfig from Talos. Unchanged.
-- **In a worktree** — mints a 30-day observer/diagnostic token using the main clone's
-  admin config and writes the scoped kubeconfig locally. Fails with a clear message if
-  the main clone holds no admin config.
+- **In a worktree** — mints **both** scoped credentials using the main clone's admin
+  config: a 30-day observer/diagnostic ServiceAccount token written to `.kube/config`,
+  **and a 90-day `os:reader` talosconfig written to `.talos/config`** via
+  `talosctl config new --roles os:reader --crt-ttl`, which requires admin authority
+  against a control-plane node. Fails with a clear message if the main clone holds no
+  admin config.
+
+Both files are required. `.kube/config` alone leaves every Talos-backed diagnostic
+broken for want of a talosconfig, even after the operator has run the documented
+command — the `os:reader` tier would exist on paper with no path that installs it.
 
 The same command is therefore the **token refresh recipe**: when a token expires,
 re-running it re-mints. `README.md` documents the mapping explicitly — main clone →
@@ -415,10 +444,23 @@ An app ships **unsuspended in one PR**, under a named containment contract:
 | Property | Value |
 |---|---|
 | **Retry** | Flux `spec.retryInterval`, set explicitly per Kustomization rather than inherited |
-| **Maximum failure duration** | An alert fires when a Kustomization is `NotReady` for longer than `spec.timeout + spec.retryInterval`, so it cannot fire during a normal slow rollout but bounds an indefinite one. Extends the #154 `gotk_resource_info` rules |
-| **Remediation** | `HelmRelease` `install.remediation` / `upgrade.remediation` with a bounded retry count, so a failing release rolls back rather than thrashing |
-| **Rollback trigger** | Alert fires → `git revert` the activating commit → Flux converges to the prior state |
-| **Containment of a thrashing app** | Explicit `retryInterval` plus Helm remediation bounds reapplication; suspension remains available to the operator as break-glass |
+| **Maximum failure duration** | An alert fires when a Kustomization is `NotReady` beyond a threshold. **The threshold's architecture is unresolved — see the open question below.** Extends the #154 `gotk_resource_info` rules |
+| **Remediation** | `HelmRelease` `install.remediation` / `upgrade.remediation` with a bounded retry count, so a failing *Helm action* stops retrying |
+| **Rollback trigger** | Alert fires → a revert of the activating commit is prepared as a pull request → **the operator merges it** → Flux converges to the prior state |
+| **Containment of a thrashing app** | **None of the above halts reconciliation.** Suspension by the operator remains the only mechanism that does |
+
+**This replacement is weaker than what it removes, and the gap is stated rather than
+argued away.** Flux's `retryInterval` sets the *cadence* of another failed
+reconciliation; it does not terminate one. Bounded Helm remediation stops retrying a
+Helm action but leaves the parent Kustomization reconciling, and a non-Helm failure has
+no remediation counter at all. An alert notifies. The deleted trap called
+`flux suspend`, which halts reconciliation outright — **no element of the replacement
+does that.**
+
+The non-goals require that a removed control be replaced by an equal or stronger one.
+On the evidence above this contract does not yet meet that bar, so **the rollout
+workstream is blocked until it does.** The open question is which halting mechanism to
+adopt; it is recorded for the operator rather than chosen here.
 
 This must be implemented **before** the recipes are deleted, not after. Deleting first
 and replacing later is the reduction in safety the non-goals forbid.
@@ -428,7 +470,12 @@ and replacing later is the reduction in safety the non-goals forbid.
 An app qualifies only if **all** hold:
 
 1. It has no app-specific safety gate beyond Kustomization readiness.
-2. It has a Gatus endpoint providing functional monitoring.
+2. It has a Gatus endpoint that **exercises the function its `<app>-verify` proved** —
+   not merely TCP or HTTP reachability. The non-goals forbid replacing a control with a
+   weaker one, and a liveness probe does not establish what a verifier established. An
+   app whose function cannot be expressed as a service endpoint — GPU scheduling, SMB
+   mounting, alert delivery — **fails this criterion and keeps its recipe** rather than
+   qualifying on a shallow check.
 3. Its `<app>-verify` runs under the `observer` or `diagnostic` tier.
 
 **qBittorrent is exempt** and keeps its guarded recipe until separately reviewed. It is
@@ -454,7 +501,7 @@ An earlier draft said `<app>-verify` runs "by either the operator or an agent" a
 | **Trigger** | Flux reports the Kustomization `Ready`, or the readiness timeout expires |
 | **Timeout** | `spec.timeout + spec.retryInterval` — the same bound as the failure-duration alert, so acceptance and alerting cannot disagree about whether a rollout finished |
 | **Evidence** | A run record under the existing `.test-results/` canonical structure, so it lands in the reporting pipeline that is being retained and expanded |
-| **Failure response** | Alert via the existing ntfy path; the activating commit is reverted unless the operator explicitly accepts the failure |
+| **Failure response** | Alert via the existing ntfy path, and a revert of the activating commit **opened as a pull request**. The operator merges it or explicitly accepts the failure. Automation never writes to `main` — the operator is the sole merge authority, and the tracked ruleset grants no bypass actor |
 
 Where automation is not yet available, the operator runs it — but the obligation is
 recorded and its absence is visible, rather than being optional by construction.
@@ -540,11 +587,20 @@ to 33 heterogeneous Kustomizations is not architecturally possible.
 
 The replacement is a layered policy set, each layer declaring its **input form**:
 
+**Workload checks cannot live at the Resource layer.** Verified on 2026-08-02:
+`kustomize build kubernetes/apps/media/sonarr/app` emits a `ConfigMap`, an `HTTPRoute`
+and a `HelmRelease` — **no `Deployment`, `Pod`, or `PersistentVolumeClaim`.** For every
+Helm-managed app, which is most of them, the workload does not exist until Helm renders
+it. A capability, image-tag, `NET_ADMIN`, or RWO-strategy check placed at that layer
+would pass while the actual running workload violated it. Those checks therefore belong
+to the Rendered layer, and the RWO-implies-`Recreate` rule in the `AGENTS.md` table is
+backed by that layer specifically.
+
 | Layer | Input form | Scope | Examples |
 |---|---|---|---|
 | **Source** | Raw tracked YAML | All of `kubernetes/apps` | `ks.yaml` listed in its parent kustomization; `dependsOn` declared; `wait`/`timeout` present; no `suspend: true` on `main` |
-| **Resource** | `kustomize build` output | All of `kubernetes/apps` | No mutable image tags; capabilities dropped; no `NET_ADMIN` outside an allowlist; RWO PVC implies `Recreate` or StatefulSet |
-| **Rendered** | `helm template` output | Per chart family | A values key actually reaches the rendered object — the Trivy `OPERATOR_SBOM_GENERATION_ENABLED` pattern, generalised |
+| **Resource** | `kustomize build` output | All of `kubernetes/apps` | Only checks on objects this output actually contains — `HelmRelease` chart pinning and `chartRef`, `HTTPRoute` parent and audience, `CiliumNetworkPolicy` shape, native workloads where an app declares them directly |
+| **Rendered** | `helm template` output | Per chart family | **All workload-level invariants**: no mutable image tags, capabilities dropped, no `NET_ADMIN` outside an allowlist, RWO PVC implies `Recreate` or StatefulSet. Plus values-reach-the-object checks — the Trivy `OPERATOR_SBOM_GENERATION_ENABLED` pattern, generalised |
 | **Domain** | Chart-specific | One chart family | The existing app-template rules, retained as the media/app-template domain policy |
 
 Every rule ships with **negative fixtures** proving it fails closed, matching the
@@ -627,11 +683,16 @@ blanket exclusion means a broken link in a *new* record passes immediately, not 
 decays later — it sacrifices admission-time correctness for a problem that only arises
 after acceptance.
 
-The replacement: **records are link-validated when introduced or changed; that result is
+The replacement: **records are link-validated when their content changes; that result is
 frozen at acceptance.** Concretely, the validator scans `docs/decisions/*.md` files that
-are added or modified in the diff, and skips those unchanged since the merge-base. This
-preserves admission-time correctness while never asking an immutable record to be
-repaired.
+are added in the diff, or modified in any way **other than a status-line-only change**.
+It uses the same predicate the immutability check uses, so the two cannot disagree.
+
+The status-line exception is load-bearing, not tidiness. Superseding a record modifies
+it, which would otherwise re-validate every link it contains. If any target had since
+moved, the record could not be superseded without repairing content the immutability
+rule forbids touching — a deadlock with no legal exit. Selecting on *content* change
+rather than *any* change avoids it.
 
 #### Index contract
 
@@ -653,7 +714,8 @@ rule carries its category and control:
 
 | Rule | Category | Control |
 |---|---|---|
-| Never commit or push directly to `main` | Authoritative | Branch protection |
+| Never **push** to `main` | Authoritative | Branch protection (server-side) |
+| Never **commit** on a checked-out `main` | **Operator policy** | `SessionStart` warning only — no mechanism intercepts a local commit |
 | Never merge or enable auto-merge without per-merge authorization | **Operator policy** | Named human authority |
 | Work on the assigned branch in the current worktree; preserve unrelated changes | **Operator policy** | — |
 | Worktree lifecycle (`wt switch --create`, `wt remove`) is operator-run | **Operator policy** | — |
@@ -662,18 +724,18 @@ rule carries its category and control:
 | Fetch and rebase before every push | **Operator policy** | — |
 | Never `reset --hard`, `clean -fd`, unqualified `checkout .`/`restore .`, or force-push without a lease | Authoritative (bypassable) | `PreToolUse` hook (decision 5) |
 | Reads are direct; changes to Flux-managed state go through Git | Authoritative | Credential tiers (decision 1) |
-| A worktree has no cluster credentials until asked for. Stop and ask the operator to mint them | Gotcha | Absence of a kubeconfig |
+| A worktree has no cluster credentials until asked for. Stop and ask the operator to mint them | Gotcha | — |
 | Platform rollouts, break-glass, recovery, secrets and protection changes are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
 | GitHub protection mutation needs per-invocation authorization | Authoritative | Guarded recipe + token scope |
 | Secrets are SOPS-encrypted; the age key stays with the operator | Authoritative | Key custody; gitleaks; staged-blob check |
 | `just ci` is the authoritative cluster-independent gate | Authoritative | Required GitHub check |
-| Cluster-dependent suites never enter `just ci` | Gotcha | `validation.test-harness` |
-| Run workflows through `mise exec -- just`; no unpinned tools | Gotcha | `mise.lock` |
+| Cluster-dependent suites never enter `just ci` | Authoritative | `validation.test-harness` |
+| Run workflows through `mise exec -- just`; no unpinned tools | Authoritative | `mise.lock` |
 | Never hand-edit `clusterconfig/`; regenerate from `talconfig.yaml` | Gotcha | — |
-| Follow the `apps/<domain>/<app>/` layout | Gotcha | Source-layer policy (decision 3) |
-| A Deployment mounting an RWO PVC uses `Recreate` or a StatefulSet | Authoritative | Resource-layer policy (decision 3) |
+| Follow the `apps/<domain>/<app>/` layout | Authoritative | Source-layer policy (decision 3) |
+| A Deployment mounting an RWO PVC uses `Recreate` or a StatefulSet | Authoritative | **Rendered**-layer policy (decision 3) |
 | Portainer must not become a deployment authority | **Operator policy** | Extracted from the legacy plan |
-| Design decisions go in `docs/decisions/`; plans are not committed | Gotcha | `validation.decisions` |
+| Design decisions go in `docs/decisions/`; plans are not committed | Authoritative | `validation.decisions` |
 | An `Accepted` record is superseded, never revised | Authoritative | `validation.decisions` |
 | An assertion must have an independent oracle or encode an invariant | **Operator policy** | Reviewed at PR time |
 
@@ -859,7 +921,8 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 10. An assertion must have an independent oracle or encode an invariant.
 11. A per-assertion-class coverage matrix is a precondition for deleting any assertion.
 12. Design decisions live in `docs/decisions/` with defined identity, comparison base,
-    and immutability semantics. A record becomes `Accepted` when merged to `main`.
+    and immutability semantics. The author writes `Accepted` in the landing pull
+    request; acceptance is never inferred from merging.
 13. Link validation is introduce-then-freeze, replacing the interim blanket exclusion.
 14. The index is generated and committed, with CI comparing rather than writing.
 15. Implementation plans are written but not committed.
@@ -993,9 +1056,11 @@ mise trust                            # idempotent; avoids a first-run prompt
 mise exec -- just ci                  # first run builds .venv: slow, needs network
 
 # NOT run at creation. Only when a session turns out to need the cluster:
-mise exec -- just talos kubeconfig    # (proposed) mints a 30-day observer token here;
+mise exec -- just talos kubeconfig    # (proposed) in a worktree mints BOTH:
+                                      #   .kube/config   30-day observer token
+                                      #   .talos/config  90-day os:reader
                                       # unchanged admin download in the main clone.
-                                      # Re-run to refresh an expired token.
+                                      # Re-run to refresh an expired credential.
 ```
 
 No `.kube/config` or `.talos/config` is created in a worktree — today because nothing
