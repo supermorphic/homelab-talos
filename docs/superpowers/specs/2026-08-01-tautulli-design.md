@@ -39,7 +39,7 @@ In scope:
 
 Out of scope (deliberately deferred):
 
-- **ntfy notifications from Tautulli.** See D3 and §10.
+- **ntfy notifications from Tautulli.** See D3 and §10.1.
 - Prometheus stream/transcode metrics via a sidecar exporter.
 - Tautulli newsletters.
 - Any watch-history import.
@@ -53,7 +53,7 @@ Out of scope (deliberately deferred):
 |---|---|---|
 | D1 | Deploy Tautulli as a structural clone of Seerr | Both are config-only media apps consuming the Plex API. Divergence would be unjustified. |
 | D2 | Pin `ghcr.io/home-operations/tautulli:2.17.2` | Verified present in the registry. No Renovate in this repo — pins are manual. |
-| D3 | No ntfy integration | `docs/ntfy-startup-guide.md` §G forbids direct Plex/`*arr` ntfy producers. The unique alerts Tautulli could add (buffering, remote-access) are soft, and the declarative-sync cost is high. See §10. |
+| D3 | No ntfy integration | Tautulli's notifications bypass Alertmanager, creating a second notification spine with no shared silencing. That, not distrust of Plex, is what `docs/ntfy-startup-guide.md` §G protects. Full analysis and the named conditions for revisiting it: §10.1. |
 | D4 | Tautulli mounts no shared media claim | It reads the Plex API, never the files. Enforced by adding it to `config_only_apps` in Rego. |
 | D5 | Generic `MediaEndpointDown` over `group="Media"` rather than per-app rules | One rule covers every current and future media endpoint. Less code, strictly more coverage. |
 | D6 | `MediaEndpointDown` uses `for: 15m`, severity `warning` | Plex's own rollout can be legitimately down 5–8 minutes; see §7.1. Media availability is not a data-loss or privacy event, so it routes to the `homelab` topic. |
@@ -490,8 +490,49 @@ wording on lines this work edits is dropped.
 | UID 568 write access to `/config` | Assumed from the `home-operations` convention; `fsGroup: 568` chowns the fresh PVC. Confirmed at rollout, exactly as Seerr's values flagged for its image. |
 | Homepage `tautulli` widget field names | Confirmed against the rendered dashboard rather than assumed. |
 | Plex Logs viewer will not work | Structural, not fixable: Plex's config claim is `ReadWriteOncePod`. Documented in §9 so it is not rediscovered as a bug. |
-| No notification path from Tautulli | Deliberate (D3). If the dashboard later shows real buffering, adding Tautulli as a declaratively-synced ntfy consumer alongside Seerr is a well-motivated follow-up: a `tautulli` identity in `identities.yaml`, a consumer type in `ntfy-identity.sh`, a branch in `ntfy-consumer-sync.sh`, and amending the §G rule. |
+| No notification path from Tautulli | Deliberate (D3). Full reasoning and revisit conditions in §10.1. |
 | `MediaEndpointDown` widens alerting to all media apps | Intended. Sonarr, Radarr, Lidarr, Prowlarr, Seerr, and FlareSolverr begin alerting on sustained outage. |
+
+### 10.1 Why no ntfy integration, and what would change that
+
+This decision was re-examined after §5 was designed, because the alerting added there
+absorbed part of what originally justified Tautulli notifications.
+
+**What direct ntfy would still uniquely buy.** `MediaEndpointDown` now covers Plex-down,
+Tautulli-down, and every other media endpoint, so the remaining unique set is smaller than
+it first appeared — and all of it is *event*-shaped, which Prometheus models poorly:
+
+| Signal | Why nothing else can reach it | Value |
+|---|---|---|
+| Plex Remote Access Down | Gatus probes `plex.lab.supermorphic.com`, the internal gateway path. Tautulli asks plex.tv, so it observes the external path. Zero overlap. | High if anyone streams from outside |
+| User New Device / Concurrent Streams | The only security-relevant signal in the set. If Plex credentials leak, a new-device notification is how it surfaces. | Higher than first credited |
+| Playback Error / Buffer Warning | User-experienced failure while every probe reports green | Real, but rare on a LAN with direct play |
+| Transcode Decision Change | The silent QuickSync-fallback case. The catastrophic case is already covered: Plex requests `gpu.intel.com/i915`, so a dead device plugin means the pod will not schedule at all. | Tuning signal, not an outage |
+| Recently Added (non-requested) | Seerr covers requested items only | Informational |
+
+**What it costs.** Tautulli publishes to ntfy directly, bypassing Alertmanager — so those
+notifications get **no grouping, no dedup, no inhibition, and no silences**. During a
+planned Plex upgrade, Alertmanager can be silenced; Tautulli cannot. Two notification
+spines with different semantics and no shared mute switch is the actual thing §G protects
+against, rather than any distrust of Plex itself.
+
+**"Like Seerr" undersells the work.** Seerr's sync enforces a single integer
+(`notificationMask: 280`). Tautulli's model is one notifier row per agent carrying roughly
+thirty boolean `on_*` triggers, each with its own subject and body template — several times
+the surface area to enforce declaratively and keep drift-free.
+
+**A complementary middle path.** A Tautulli Prometheus exporter would keep one spine
+(metrics → PrometheusRule → Alertmanager → ntfy, silencing intact) and handle the
+gauge-shaped signals such as stream and transcode counts. It cannot express playback
+errors, new devices, or remote-access-down, which are events rather than gauges. It is
+therefore a complement, not a substitute.
+
+**Named revisit conditions.** Revisit D3 when **remote-access reliability or account
+sharing starts to matter** — those two justify a second spine. Buffering frequency,
+transcode tuning, and recently-added notifications do not. If revisited, the work is: a
+`tautulli` identity in `identities.yaml`, a consumer type in `ntfy-identity.sh`, a branch in
+`ntfy-consumer-sync.sh` with its test coverage, and amending the §G rule from "no direct
+Plex integrations" to "only through the guarded sync."
 
 ## 11. Verify at implementation time
 
