@@ -2348,6 +2348,117 @@ metrics-server:
     bootstrap_complete=true
     echo 'metrics-server live acceptance passed. Change the Git source to suspend=false, commit, push, and rerun just kube metrics-server-verify.'
 
+# Reconcile the suspended agent-access RBAC after validating the complete policy.
+# On failure the resumed Kustomization is re-suspended while preserving resources.
+agent-access:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:agent-access'
+    ks='kubernetes/apps/kube-system/agent-access/ks.yaml'
+    app='kubernetes/apps/kube-system/agent-access/app'
+    policy='tests/policy/agent-access'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-agent-access.XXXXXX)"
+    resumed=false
+    bootstrap_complete=false
+    cleanup_agent_access() {
+      rm -rf -- "$temp_dir"
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'agent-access did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        flux suspend kustomization agent-access --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_agent_access EXIT
+
+    # Validate the policy and the exact rendered RBAC before any cluster access.
+    conftest fmt --check "$policy"
+    conftest verify --policy "$policy"
+    kustomize build "$app" >"$temp_dir/rendered.yaml"
+    conftest test --combine --all-namespaces --policy "$policy" "$temp_dir/rendered.yaml"
+
+    source scripts/lib/rollout.sh
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    require_deployed_source 'agent-access bootstrap' \
+      .just/bootstrap.just \
+      kubernetes/apps/kube-system/kustomization.yaml \
+      kubernetes/apps/kube-system/agent-access \
+      tests/policy/agent-access
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing agent-access bootstrap: the Kustomization must be staged suspended in Git.' >&2
+      exit 1
+    }
+    [[ "${AGENT_ACCESS_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile agent-access.' >&2
+      echo "Set AGENT_ACCESS_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the rendered RBAC and policy." >&2
+      exit 1
+    }
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization agent-access --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing agent-access bootstrap: agent-access is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    echo 'Reconciling only the agent-access Kustomization.'
+    resumed=true
+    flux resume kustomization agent-access --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization agent-access \
+      --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 5m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/agent-access --timeout=5m
+
+    assert_can_i() {
+      local expected="$1"
+      local subject="$2"
+      local verb="$3"
+      local resource="$4"
+      shift 4
+      local actual
+      actual="$(kubectl --kubeconfig "$kubeconfig" auth can-i \
+        "$verb" "$resource" --as="$subject" "$@" 2>/dev/null || true)"
+      [[ "$actual" == "$expected" ]] || {
+        echo "Expected $subject can-i $verb $resource to be $expected, got ${actual:-no result}." >&2
+        return 1
+      }
+    }
+
+    observer='system:serviceaccount:kube-system:homelab-observer'
+    diagnostic='system:serviceaccount:kube-system:homelab-diagnostic'
+    for subject in "$observer" "$diagnostic"; do
+      assert_can_i yes "$subject" get pods --all-namespaces
+      assert_can_i yes "$subject" get pods/log --all-namespaces
+      for api_group in \
+        source.toolkit.fluxcd.io \
+        kustomize.toolkit.fluxcd.io \
+        helm.toolkit.fluxcd.io \
+        notification.toolkit.fluxcd.io \
+        cilium.io \
+        gatus.io \
+        tailscale.com \
+        longhorn.io \
+        aquasecurity.github.io \
+        metrics.k8s.io; do
+        assert_can_i yes "$subject" get '*' --api-group="$api_group" --all-namespaces
+      done
+      assert_can_i no "$subject" get secrets --all-namespaces
+      assert_can_i no "$subject" patch kustomizations.kustomize.toolkit.fluxcd.io --all-namespaces
+      assert_can_i no "$subject" delete pods --all-namespaces
+      assert_can_i no "$subject" impersonate users
+      assert_can_i no "$subject" bind clusterroles.rbac.authorization.k8s.io
+      assert_can_i no "$subject" escalate clusterroles.rbac.authorization.k8s.io
+    done
+    assert_can_i no "$observer" create pods/exec --all-namespaces
+    assert_can_i no "$observer" create pods/portforward --all-namespaces
+    assert_can_i yes "$diagnostic" create pods/exec --all-namespaces
+    assert_can_i yes "$diagnostic" create pods/portforward --all-namespaces
+
+    bootstrap_complete=true
+    echo 'agent-access authorization acceptance passed. Change the Git source to suspend=false in a separate reviewed change.'
+
 # Guard, reboot one node, and require full recovery before returning. Refuses
 # unless the cluster is already healthy so a rolling reboot never removes a second
 # node while another is degraded. Reused for Phase 8 soak and day-two maintenance.
