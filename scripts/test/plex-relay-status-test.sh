@@ -72,6 +72,9 @@ case "$operation" in
       'Aug 02 DEBUG - Relay: starting relay PLEXTOKEN=secret-value' \
       'Aug 02 DEBUG - [PlexRelay] Authenticated to 203.0.113.10 user@example.com' \
       'Aug 02 INFO - [PlexRelay] Allocated port 31157 for remote forward to 127.0.0.1:32401'
+    printf '%s\n' \
+      'Aug 02 DEBUG - Relay: starting relay PLEXTOKEN=stderr-token-leak' \
+      'Aug 02 DEBUG - [PlexRelay] Authenticated to 198.51.100.20 stderr-account@example.net' >&2
     ;;
 esac
 EOF
@@ -87,8 +90,9 @@ rg -q '^relay_current_user=plex$' "$output"
 rg -q '^relay_key_cache_readable=yes$' "$output"
 rg -q '^relay_secure_connections_eligible=yes$' "$output"
 rg -q 'Authenticated to 203\.0\.113\.10' "$output"
+rg -q 'Authenticated to 198\.51\.100\.20' "$output"
 rg -q 'Allocated port 31157' "$output"
-if rg -q 'secret-value|user@example\.com' "$output"; then
+if rg -q 'secret-value|user@example\.com|stderr-token-leak|stderr-account@example\.net' "$output"; then
   echo 'Relay status output exposed fixture credentials.' >&2
   exit 1
 fi

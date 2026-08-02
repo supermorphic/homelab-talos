@@ -36,7 +36,7 @@ raw_status="$(kubectl --kubeconfig "$kubeconfig" --namespace media exec "$pod" -
     echo "relay_secure_connections_eligible=yes"
 
     tail -n 5000 "/config/Library/Application Support/Plex Media Server/Logs/Plex Media Server.log"
-  ')"
+  ' 2>&1)"
 
 printf '%s\n' "$raw_status" | sed -E \
   -e 's/(PLEXTOKEN=)[^[:space:]]+/\1<redacted>/g' \
