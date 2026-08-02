@@ -132,6 +132,7 @@ run_shell_case ci-runner scripts/test/run-ci-test.sh
 run_shell_case campaign-runner scripts/test/run-campaign-test.sh
 run_shell_case scoped-campaign-preflight scripts/test/scoped-campaign-preflight-test.sh
 run_shell_case agent-access-verifier scripts/test/agent-access-verify-test.sh
+run_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
 run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
 run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
 run_shell_case allure-report scripts/test/allure-report-test.sh
