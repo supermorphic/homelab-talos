@@ -504,10 +504,30 @@ it satisfies any criterion above.
 #### Known implementation blocker
 
 `.just/repository.just:1206` asserts
-`rg -c 'require_deployed_source ' … -eq 24`. Deleting 18 recipes breaks
+`rg -c 'require_deployed_source ' … -eq 24`. Deleting any rollout recipe breaks
 `just repo verify`, which is the `validation.repo-verify` CI suite. The count must be
 updated in the same change, and is a reason the rollout workstream cannot be split
 across PRs arbitrarily.
+
+#### How many recipes this actually removes
+
+**No fixed number is committed here**, deliberately. The eligibility criteria decide
+per recipe, and they cannot be fully applied until workstream 3 lands the missing Gatus
+endpoints.
+
+An earlier draft said "the 18 app-tier bootstrap recipes are deleted". That figure came
+from the *structural* finding — 18 recipes share an identical operation sequence — and
+carried over into a decision where it does not apply. **Three of those 18 are platform
+tier by the criteria above**: `foundation` (required before GitOps is operational), and
+`storage` and `csi-driver-smb` (cluster-wide, not cheaply reversible). A structural
+similarity is not a tier.
+
+For scale rather than commitment: of **68 distinct `*_CONFIRM` variables** in the
+repository, 35 are in `bootstrap.just` and 33 are not — `GITHUB_PROTECTION_CONFIRM`,
+thirteen `*_SECRETS_CONFIRM`, `TALOS_APPLY_CONFIRM`, the test-suite confirmations, and
+others, none of which this audit touches. Of the 35, roughly half are retained by the
+platform criteria. **The confirmation model is narrowed, not removed** — on the order of
+a quarter of the repository's confirmation gates, all of them app-tier rollouts.
 
 ### 3. A policy architecture replaces change-detectors
 
@@ -643,7 +663,7 @@ rule carries its category and control:
 | Never `reset --hard`, `clean -fd`, unqualified `checkout .`/`restore .`, or force-push without a lease | Authoritative (bypassable) | `PreToolUse` hook (decision 5) |
 | Reads are direct; changes to Flux-managed state go through Git | Authoritative | Credential tiers (decision 1) |
 | A worktree has no cluster credentials until asked for. Stop and ask the operator to mint them | Gotcha | Absence of a kubeconfig |
-| Bootstrap, break-glass and recovery are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
+| Platform rollouts, break-glass, recovery, secrets and protection changes are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
 | GitHub protection mutation needs per-invocation authorization | Authoritative | Guarded recipe + token scope |
 | Secrets are SOPS-encrypted; the age key stays with the operator | Authoritative | Key custody; gitleaks; staged-blob check |
 | `just ci` is the authoritative cluster-independent gate | Authoritative | Required GitHub check |
