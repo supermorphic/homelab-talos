@@ -113,11 +113,17 @@ recorded there as well as here.
 
 ## Ledger
 
-### F1 — Defect — evidence holds — FIXED + SURFACED
-**Changed:** decision 2's containment table now states that none of `retryInterval`,
-Helm remediation, or alerting halts reconciliation, and marks the rollout workstream
-blocked until a halting mechanism exists (was: "Explicit `retryInterval` plus Helm
-remediation bounds reapplication"). Mechanism choice surfaced above.
+### F1 — Defect — evidence holds — FIXED, then RESOLVED
+**Changed:** decision 2's containment table now names `HelmRelease` remediation as the
+mechanism — already configured on all 25 HelmReleases — plus the single missing field
+`install.remediation.remediateLastFailure: true` (was: "Explicit `retryInterval` plus
+Helm remediation bounds reapplication"). `retryInterval` is removed from the contract.
+A fourth eligibility criterion excludes native apps, which have no remediation. The
+rollout workstream is **not** blocked.
+
+The finding's evidence held — `retryInterval` and alerting do not halt anything, exactly
+as stated. Its conclusion did not: HelmRelease remediation *does* halt, and was already
+in place. Investigating the finding is what surfaced that.
 
 ### F2 — Defect — evidence holds — FIXED + SURFACED
 **Changed:** the `admin` tier row now reads "Main clone — see the isolation limit below"
