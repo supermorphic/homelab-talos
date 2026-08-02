@@ -151,3 +151,13 @@ test_observer_cannot_receive_an_additional_binding if {
 	messages := deny with input as fixture_input
 	count(messages) == 1
 }
+
+test_expected_role_cannot_use_aggregation if {
+	fixture_input := json.patch(valid_fixture, [{
+		"op": "add",
+		"path": "/4/aggregationRule",
+		"value": {"clusterRoleSelectors": [{"matchLabels": {"rbac.example.com/aggregate": "true"}}]},
+	}])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "must not use aggregationRule")) == 1
+}

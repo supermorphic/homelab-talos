@@ -167,6 +167,15 @@ deny contains msg if {
 	object.get(document, "kind", "") == "ClusterRole"
 	role_name := metadata_name(document)
 	role_name in agent_role_names
+	object.get(document, "aggregationRule", null) != null
+	msg := sprintf("%s must not use aggregationRule", [role_name])
+}
+
+deny contains msg if {
+	some document in documents
+	object.get(document, "kind", "") == "ClusterRole"
+	role_name := metadata_name(document)
+	role_name in agent_role_names
 	some rule in object.get(document, "rules", [])
 	not allowed_rule(role_name, rule)
 	msg := sprintf("%s contains a forbidden RBAC rule", [role_name])

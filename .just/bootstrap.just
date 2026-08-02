@@ -2411,6 +2411,11 @@ agent-access:
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
       --for=condition=Ready kustomization/agent-access --timeout=5m
 
+    service_account_impersonation_groups=(
+      --as-group=system:authenticated
+      --as-group=system:serviceaccounts
+      --as-group=system:serviceaccounts:kube-system
+    )
     assert_can_i() {
       local expected="$1"
       local subject="$2"
@@ -2419,7 +2424,8 @@ agent-access:
       shift 4
       local actual
       actual="$(kubectl --kubeconfig "$kubeconfig" auth can-i \
-        "$verb" "$resource" --as="$subject" "$@" 2>/dev/null || true)"
+        "$verb" "$resource" --as="$subject" \
+        "${service_account_impersonation_groups[@]}" "$@" 2>/dev/null || true)"
       [[ "$actual" == "$expected" ]] || {
         echo "Expected $subject can-i $verb $resource to be $expected, got ${actual:-no result}." >&2
         return 1
@@ -2442,7 +2448,9 @@ agent-access:
         longhorn.io \
         aquasecurity.github.io \
         metrics.k8s.io; do
-        assert_can_i yes "$subject" get '*' --api-group="$api_group" --all-namespaces
+        for verb in get list watch; do
+          assert_can_i yes "$subject" "$verb" '*' --api-group="$api_group" --all-namespaces
+        done
       done
       assert_can_i no "$subject" get secrets --all-namespaces
       assert_can_i no "$subject" patch kustomizations.kustomize.toolkit.fluxcd.io --all-namespaces
