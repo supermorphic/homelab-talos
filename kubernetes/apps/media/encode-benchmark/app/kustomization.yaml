@@ -9,8 +9,8 @@ resources:
 configMapGenerator:
   - name: encode-benchmark-scripts
     files:
-      - probe.sh=scripts/not-ready.sh
-      - census.sh=scripts/not-ready.sh
+      - probe.sh=scripts/probe.sh
+      - census.sh=scripts/census.sh
       - runmeta.sh=scripts/not-ready.sh
       - benchmark.sh=scripts/not-ready.sh
       - stills.sh=scripts/not-ready.sh

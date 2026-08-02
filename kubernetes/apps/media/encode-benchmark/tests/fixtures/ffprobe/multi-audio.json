@@ -1,0 +1,72 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "pix_fmt": "yuv420p",
+      "bits_per_raw_sample": "8",
+      "color_primaries": "bt709",
+      "color_transfer": "bt709",
+      "color_space": "bt709",
+      "r_frame_rate": "24/1",
+      "avg_frame_rate": "24/1",
+      "bit_rate": "4000000",
+      "disposition": {"default": 1}
+    },
+    {
+      "index": 1,
+      "codec_name": "ac3",
+      "codec_long_name": "ATSC A/52A (AC-3)",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1(side)",
+      "bit_rate": "640000",
+      "duration": "100.000000",
+      "disposition": {"default": 1},
+      "tags": {"language": "eng", "title": "English 5.1"}
+    },
+    {
+      "index": 2,
+      "codec_name": "aac",
+      "codec_long_name": "AAC (Advanced Audio Coding)",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "disposition": {"default": 0},
+      "tags": {
+        "language": "jpn",
+        "title": "Japanese Stereo",
+        "BPS": "192000",
+        "BPS-eng": "192000",
+        "DURATION": "00:01:40.000000000"
+      }
+    },
+    {
+      "index": 3,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {"default": 0},
+      "tags": {"language": "eng"}
+    }
+  ],
+  "chapters": [
+    {"id": 0, "time_base": "1/1000", "start": 0, "end": 50000, "tags": {"title": "Part 1"}},
+    {"id": 1, "time_base": "1/1000", "start": 50000, "end": 100000, "tags": {"title": "Part 2"}}
+  ],
+  "format": {
+    "filename": "multi-audio.mkv",
+    "nb_streams": 4,
+    "format_name": "matroska,webm",
+    "duration": "100.000000",
+    "size": "65000000",
+    "bit_rate": "5200000",
+    "probe_score": 100
+  }
+}

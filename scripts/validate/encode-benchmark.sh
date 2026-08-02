@@ -9,9 +9,13 @@ priority="$app/priorityclass.yaml"
 samples="$app/samples.yaml"
 alerts="$app/alerts.yaml"
 scaffold="$app/scripts/not-ready.sh"
+probe="$app/scripts/probe.sh"
+census="$app/scripts/census.sh"
 template="$base/templates/job.yaml"
 tests_dir="$base/tests"
 contract_test="$tests_dir/source-contract.bats"
+census_test="$tests_dir/census.bats"
+inventory='scripts/encode-benchmark/torrent-inventory.py'
 validator='scripts/validate/encode-benchmark.sh'
 media_kustomization='kubernetes/apps/media/kustomization.yaml'
 temp_dir="$(mktemp -d /tmp/homelab-talos-encode-benchmark-validate.XXXXXX)"
@@ -39,13 +43,20 @@ for file in \
 	"$samples" \
 	"$alerts" \
 	"$scaffold" \
+	"$probe" \
+	"$census" \
 	"$template" \
 	"$contract_test" \
+	"$census_test" \
+	"$inventory" \
 	"$validator" \
 	"$media_kustomization"; do
 	[[ -f "$file" ]] || fail "missing required source: $file"
 done
 [[ -x "$scaffold" ]] || fail "$scaffold must be executable"
+[[ -x "$probe" ]] || fail "$probe must be executable"
+[[ -x "$census" ]] || fail "$census must be executable"
+[[ -x "$inventory" ]] || fail "$inventory must be executable"
 
 # The shared structural scaffold must fail closed until each real command lands.
 set +e
@@ -91,7 +102,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='probe.sh=scripts/not-ready.sh,census.sh=scripts/not-ready.sh,runmeta.sh=scripts/not-ready.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh'
+expected_mappings='probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/not-ready.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -371,4 +382,4 @@ mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort
 (("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
 bats "${bats_files[@]}"
 
-echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, fail-closed scripts, candidate/verified evidence gates, safe media mounts, and offline contracts."
+echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, tested probe/census scripts, three fail-closed commands, candidate/verified evidence gates, safe media mounts, and offline contracts."

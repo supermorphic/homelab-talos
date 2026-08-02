@@ -1,0 +1,42 @@
+{
+  "torrent": {
+    "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "name": "Stopped Public Fixture",
+    "category": "movies",
+    "tags": "tracker-public",
+    "state": "stoppedUP",
+    "save_path": "/data/downloads/movies/stopped-public",
+    "content_path": "/data/downloads/movies/stopped-public",
+    "amount_left": 0,
+    "progress": 1.0,
+    "size": 9,
+    "downloaded": 9,
+    "uploaded": 18,
+    "ratio": 2.0,
+    "added_on": 1700000200,
+    "completion_on": 1700000300,
+    "tracker": "https://public.example.invalid/announce?passkey=fixture-stopped-secret"
+  },
+  "files": [
+    {
+      "index": 0,
+      "name": "Public Cleanup.mkv",
+      "size": 3,
+      "progress": 1.0,
+      "priority": 1,
+      "is_seed": true,
+      "piece_range": [0, 0],
+      "availability": 1.0
+    },
+    {
+      "index": 1,
+      "name": "Shared Priority VC1 stopped.mkv",
+      "size": 6,
+      "progress": 1.0,
+      "priority": 1,
+      "is_seed": true,
+      "piece_range": [1, 1],
+      "availability": 1.0
+    }
+  ]
+}
