@@ -43,7 +43,7 @@ PR 1 owns the suspended application, generic/Plex media alerts, offline validati
 - Include `docs/decisions/reviews/2026-08-01-tautulli-request.md` — accepted design review request provenance.
 - Include `docs/decisions/reviews/2026-08-01-tautulli-response.md` — accepted design review response provenance.
 - Include `docs/decisions/reviews/2026-08-01-tautulli-review.md` — accepted design review findings provenance.
-- Include `docs/superpowers/plans/2026-08-02-tautulli-plex-analytics.md` — reviewed implementation plan and delivery gates.
+- Include `docs/plans/2026-08-02-tautulli-plex-analytics.md` — reviewed implementation plan and delivery gates.
 - Create `kubernetes/apps/media/tautulli/ks.yaml` — suspended Flux child with `media` and `internal-gateway` dependencies.
 - Create `kubernetes/apps/media/tautulli/app/helmrelease.yaml` — `app-template` HelmRelease.
 - Create `kubernetes/apps/media/tautulli/app/values.yaml` — workload, probes, security, resources, Service, and retained config PVC.
