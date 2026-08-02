@@ -2,17 +2,24 @@
 
 ## Status
 
-- **Status: Accepted.** No implementation performed.
+- **Status: Draft.** Revised 2026-08-02 after independent review. Awaiting operator
+  acceptance.
 - Date: 2026-08-02
 - Branch: `challenge-agent-rules`
-- Supersedes: `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md`,
-  and with it the four-PR plan in
+- Supersedes on acceptance: `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md`
+  and the four-PR plan in
   `docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md`.
   PR #171 is closed unmerged; PR #170 (the reference validator) is merged and retained.
 
-This document establishes the convention it follows. Design decisions are recorded in
-`docs/decisions/YYYY-MM-DD-<topic>.md`. Status is one of `Draft`, `Accepted`, or
-`Superseded by <filename>`. An accepted record is superseded, never revised.
+**A record becomes `Accepted` when it is merged to `main`.** Until then it is `Draft`
+and may be revised freely. After acceptance it is superseded, never revised. Status is
+one of `Draft`, `Accepted`, or `Superseded by <filename>`.
+
+**Implementation already performed.** The commit introducing this record also changed
+`scripts/validate/links.sh` to exclude `docs/decisions/*`. That is implementation, not
+design, and it is acknowledged as such rather than described as a no-op. It is an
+**interim measure**: decision 4 replaces the blanket exclusion with introduce-then-freeze
+validation. Nothing else has been implemented.
 
 ## Problem
 
@@ -30,7 +37,9 @@ where each rule should *live*. This one asks whether each rule should *exist*.
 
 ### Current-state findings
 
-Verified against `15bf87f` on 2026-08-01/02.
+Measured against `15bf87f` on 2026-08-01/02. **These are a dated snapshot, not ongoing
+acceptance criteria.** Reproduction commands and classification rules are in
+[Appendix A](#appendix-a--methodology).
 
 **Repository mass.** 18,523 lines of cluster payload under `kubernetes/`, against
 32,652 lines of machinery (`scripts/`, `tests/`, justfiles, CI, `talos/`) and 14,950
@@ -38,7 +47,7 @@ lines of prose. Only 28% of the repository is the thing being managed. `scripts/
 alone, at 23,020 lines, is larger than all of `kubernetes/`.
 
 **Rollout scaffolding.** `.just/bootstrap.just` is 2,635 lines across 28 recipes with
-72 `*_CONFIRM` references. Of the 22 resume-style recipes, **18 have a byte-identical
+72 `*_CONFIRM` references. Of the 22 resume-style recipes, **18 have an identical
 operation sequence**:
 
 ```
@@ -58,11 +67,14 @@ edits instead: #39 modified 21 recipes in 48 hunks, #38 modified 13 in 37, a
 guard-ordering correctness fix (source-sync before `flux-verify`) was applied by hand to
 7, and #111 to 4.
 
-**Flux is already configured to do the job.** All 33 Kustomizations carry `wait: true`
-and a `timeout` (5m–20m); 32 of 33 declare `dependsOn`; and `suspend` is unset on every
-one. Ordered, health-gated, time-bounded rollout is already declarative. The suspended
-state exists only in the window between an app's "stage" PR and its "activate" PR — a
-window in which `main` states something untrue about the cluster.
+**Flux is already configured for ordered rollout.** All 33 Kustomizations carry
+`wait: true` and a `timeout` (5m–20m); 32 of 33 declare `dependsOn`; and `suspend` is
+unset on every one. Ordered, health-gated, time-bounded *application* is already
+declarative. The suspended state exists only in the window between an app's "stage" PR
+and its "activate" PR — a window in which `main` states something untrue about the
+cluster.
+
+Flux does **not** replicate the recipes' failure containment. See decision 2.
 
 **Validation.** Across `scripts/validate/*.sh`, 797 assertions decompose into 22
 tautologies (`[[ "$suspend" == 'true' || "$suspend" == 'false' ]]`, which cannot fail),
@@ -73,12 +85,11 @@ The change-detectors do not function as tripwires: 47 of 119 app-config changes 
 2026-06-01 (39%) edited the config and its own validator in the same commit. When one
 author moves both sides of an equality, the assertion is not a check.
 
-Meanwhile `tests/policy/media/media.rego` is the correct pattern, already built — one
-policy covering nine apps with named, reasoned exemptions (`stateless_internal_apps`,
-`uiless_worker_apps`), enforcing pinned images, no mutable tags, dropped capabilities,
-and dependency ordering. `kubernetes/mod.just:152` applies it to `kubernetes/apps/media`
-only. **Nine of 33 Kustomizations have policy coverage.** The other 24 are the vacuum the
-567 assertions grew into.
+`tests/policy/media/media.rego` is the better pattern — one policy covering nine apps
+with named, reasoned exemptions, enforcing pinned images, no mutable tags, dropped
+capabilities, and dependency ordering. `kubernetes/mod.just:152` applies it to
+`kubernetes/apps/media` only. **Nine of 33 Kustomizations have policy coverage.** It is
+not, however, directly extensible — see decision 3.
 
 **Cluster access.** Across scripts and justfiles, 166 cluster invocations are read-only
 (53%) and 143 mutate. Of the mutating calls, 116 are Flux orchestration (`reconcile` 71,
@@ -129,18 +140,37 @@ Separate settled history from live intent so no document silently reads as curre
 
 **Non-goals.** Test reporting, which is retained whole and slated for expansion.
 Cluster, Talos, Flux, or application behaviour changes beyond the rollout model.
-Any reduction in actual safety — where a control is removed, an equal or stronger one
-replaces it.
+**Any reduction in actual safety** — where a control is removed, an equal or stronger
+one replaces it, and the replacement is named with an owner, a trigger, and a failure
+response.
 
 ## The admission test
 
-One root `AGENTS.md`. Every rule in it must be:
+One root `AGENTS.md`. Every rule in it must fall into exactly one of three categories,
+and must **state its category and its supporting control inline**:
 
-- **Enforced** — a hook, CI check, guard, or credential backs it; or
-- **A gotcha** — non-obvious knowledge an agent cannot infer from the repository.
+| Category | Meaning | Backed by |
+|---|---|---|
+| **Authoritative control** | An authorization boundary. The action is impossible, not merely forbidden | Credential/RBAC, branch protection, SOPS key custody |
+| **Operator policy** | A judgment boundary the repository cannot decide. Genuinely advisory, and legitimately so | Named human authority; no mechanism claimed |
+| **Gotcha** | Non-obvious repository-specific knowledge an agent cannot infer | Nothing — it is information, not a rule |
 
-A rule that is neither is deleted. A rule that *could* be enforced is converted to
-enforcement and then removed from the file, rather than stated in both places.
+A rule fitting none of the three is deleted.
+
+**Enforcement mechanisms are not equivalent**, and a rule must not claim more than its
+mechanism delivers:
+
+| Mechanism | Strength |
+|---|---|
+| Credential / RBAC | Hard boundary — the call fails at the API server |
+| Branch protection | Merge boundary — enforced server-side by GitHub |
+| CI check | **Delayed detection** — catches after the fact, does not prevent |
+| Pre-commit hook, shell guard | **Bypassable** — `--no-verify`, or editing the guard |
+
+**Instruction alongside enforcement is permitted, bounded.** Where a bare denial would
+leave an agent confused about the correct path, the *workflow* may be stated once. The
+*prohibition* is never restated beside its enforcement. Unbounded duplication is what
+produced the churn; a one-line signpost is not duplication.
 
 This is the standing test for future rule proposals. It is the mechanism that ends the
 churn: a proposed rule now has an answer rather than an argument.
@@ -159,12 +189,24 @@ inheritance", and a precedence block. That is rejected on three grounds:
 3. **It adds surfaces without removing rules.** The measured problem was never that
    rules were hard to find.
 
-`docs/runbooks/` is retained. Procedure is descriptive and is not loaded every session,
-so it does not compete for the same budget.
+`docs/runbooks/` is **created** by this work; it does not exist today. Procedure is
+descriptive and is not loaded every session, so it does not compete for the same budget.
+
+### `CLAUDE.md` is a permitted vendor shim
+
+`CLAUDE.md` currently carries `@AGENTS.md` plus four Claude-specific lines (plan mode,
+Explore subagents, repository boundary, memory index). These are **harness operating
+guidance, not repository rules** — they describe how to use one client's features and
+would be meaningless to Codex or Gemini.
+
+`CLAUDE.md` may therefore contain harness-specific guidance, and is bounded to that: it
+must not contain a repository rule, and must not narrow, extend, or contradict
+`AGENTS.md`. "Root `AGENTS.md` is the only agent instruction surface" means **the only
+surface for repository rules** — restated precisely in decision 10.
 
 ## Decisions
 
-### 1. Cluster access is governed by effect, not by tool
+### 1. Cluster access is governed by effect, with tiered credentials
 
 The rule *"All cluster mutations and health checks use guarded `just` recipes; never run
 raw `kubectl`, `talosctl`, `helm`, or `flux`"* bans a tool where the risk is an effect.
@@ -173,105 +215,227 @@ guarded recipes invoke `kubectl` with full admin rights regardless — so the ru
 constrains spellings, not blast radius. It is also unenforced, and 53% of what it forces
 through wrappers is read-only.
 
-Replaced by:
+#### Credential tiers
 
-| Effect | Rule | Enforced by |
-|---|---|---|
-| **Read** | Unrestricted | `view`-scoped kubeconfig (plus logs/metrics delta); `os:reader` talosconfig |
-| **Mutate Flux-managed state** | Forbidden — Git is the interface | The credential; the call fails at the API server |
-| **Bootstrap, break-glass, recovery** | Guarded recipe + `*_CONFIRM`, operator-run | Admin config, held by the operator |
+Three tiers, each an authoritative control:
 
-This is **stricter than today**, not looser: mutation moves from advisory to
-mechanically impossible for an agent. The `view` role also excludes Secrets, closing
-secret exposure as a side effect. AGENTS.md retains only what the credential cannot
-express — *why* Git is the interface — and drops the prohibition itself.
+| Tier | Grants | Holder | Used for |
+|---|---|---|---|
+| **`observer`** | Kubernetes `view` plus `pods/log`, `metrics.k8s.io`, and explicit read on the CRDs in use (Flux, Cilium, Gatus, Tailscale, Longhorn, Trivy) | Agents, in every worktree | Diagnosis, `flux get`, `cilium status` |
+| **`diagnostic`** | `observer` **plus `pods/exec` and `pods/portforward`** | Agents, for named verifiers only | The 5 verifiers that require it |
+| **`admin`** | Full cluster-admin; `os:admin` talosconfig | Operator only | Bootstrap, break-glass, recovery |
+
+**`diagnostic` is not read-only and is not described as such.** `pods/exec` is a
+`create` verb on a subresource and can mutate container state arbitrarily. It is a
+deliberate, named privilege granted because five retained verifiers require it —
+`scripts/verify/homepage.sh:31` uses `exec`, `scripts/verify/flaresolverr.sh:27` uses
+`port-forward`, and three others. The honest framing is a *reduced-privilege* tier, not
+a read-only one.
+
+`view` also **excludes CustomResourceDefinitions and custom resources** unless granted
+explicitly or via aggregation. Flux `Kustomization`/`HelmRelease`, Cilium policies, Gatus
+`Endpoint`, Longhorn volumes and Trivy reports all require explicit rules. A tier that
+omits them cannot diagnose this cluster.
+
+#### Credential lifecycle
+
+The spec's obligations, to be discharged in implementation:
+
+- **Where admin lives.** `.kube/config` and `.talos/config` are repository-root-relative
+  and gitignored, currently shared by every workflow and enforced centrally at
+  `.just/repository.just:1206`. The admin pair moves to an operator-only path outside
+  every worktree. Agent worktrees receive only `observer`/`diagnostic` material.
+- **Distribution.** A guarded recipe mints and installs the agent kubeconfig into a
+  worktree. Agents never mint their own.
+- **Lifetime, renewal, revocation, rotation.** Kubernetes ServiceAccount tokens are
+  bound and expiring; Talos `os:reader` certificates carry an explicit lifetime that
+  must be chosen, documented, and renewable without operator presence at an
+  inconvenient moment. Revocation is by deleting the binding and rotating the
+  ServiceAccount.
+- **Command-to-permission matrix.** Every retained verifier and diagnostic script is
+  mapped to the exact verbs and resources it needs, and to its tier. A verifier that
+  cannot be satisfied by `diagnostic` is reworked or becomes operator-only.
+- **Tests.** Positive tests that every retained verifier succeeds under its declared
+  tier, and **negative authorization tests** that `observer` cannot exec, cannot read
+  Secrets, and cannot mutate; and that `diagnostic` cannot mutate Flux-managed state.
+
+#### What is and is not claimed
+
+AGENTS.md retains only the workflow signpost — *reads are direct; changes go through
+Git* — as an authoritative-control-backed rule, and drops the prohibition itself.
+
+**The security claim is narrow.** Denying the Secret API is the only guarantee made.
+Logs, events, ConfigMaps, workload specifications, and application endpoints can still
+disclose credential material, and Kubernetes documents that read-oriented permissions
+carry disclosure and escalation risk. The correct statement is: *direct diagnostic
+commands are permitted within an explicit least-privilege allowlist, and Secret API
+reads are denied.* Not: *secret exposure is closed.*
 
 Worktrees already lack cluster access accidentally, because `bootstrap.just` reads
 `.kube/config` relative to the repository root. This makes that deliberate.
 
-The gain is friction, not line count. `scripts/diagnose/` is three files and the
-`<app>-verify` scripts are retained as repeatable acceptance checks. What ends is the
-requirement to author and commit a script before the cluster can be asked a question.
-
-### 2. App-tier bootstrap recipes are deleted
+### 2. App-tier bootstrap recipes are deleted, with a named containment replacement
 
 Scored against Flux's existing configuration, the 15 steps of a bootstrap recipe are:
-one already running in CI (`validate`), one genuinely additional (`<app>-verify`, live
-acceptance), three duplicating `dependsOn` + `wait: true` + `timeout`, one duplicating
-Flux's own failure behaviour, and **nine that exist only because the rollout is manual**
-— kubeconfig and git-remote checks, `require_deployed_source` (Flux runs `origin/main`
-by definition), the staged-suspended check, the CONFIRM. The guards largely guard
-against hazards created by the mechanism they implement.
+one already running in CI (`validate`), one genuinely additional (`<app>-verify`), three
+duplicating `dependsOn` + `wait: true` + `timeout`, **one providing containment Flux does
+not provide**, and nine that exist only because the rollout is manual — kubeconfig and
+git-remote checks, `require_deployed_source` (Flux runs `origin/main` by definition), the
+staged-suspended check, the CONFIRM.
 
-Measured cost: two PRs per app. Lidarr shipped as #172 then #174, and its own design
-spec names the cause — *"Two-PR rollout with an operator bootstrap gate, forced by the
-existing Gatus/suspend interlock."*
+#### Correction: the failure trap is not redundant
 
-An app now ships **unsuspended in one PR**. `just ci` validates pre-merge; Flux performs
-the rollout; Gatus and the #154 Flux reconciliation alerting detect failure; `git revert`
-is the rollback.
+An earlier draft of this record claimed the cleanup trap duplicated Flux's own failure
+behaviour. **That was wrong.** On failure Flux leaves the Kustomization `NotReady` and
+**keeps retrying at its interval**, reapplying indefinitely. The trap instead *suspends*
+the Kustomization, halting reconciliation while preserving resources. Those are different
+outcomes, and the trap is a real containment mechanism that must be replaced rather than
+assumed away.
 
-`<app>-verify` is retained and is run **after Flux reports the Kustomization Ready**, by
-either the operator or an agent, using the read-only credential from decision 1. It is a
-check, not a gate: nothing blocks on it, and a failure is handled by fixing forward or
-reverting rather than by re-suspending. This is what removes its dependency on the
-rollout being manual.
+#### The replacement
 
-**Platform tier keeps full guards**: `talos`, `cilium`, `flux*`, `foundation`,
-`storage`, `csi-driver-smb`, `metrics-server`. Cilium is the CNI, and Flux cannot
-bootstrap the layer it runs on.
+An app ships **unsuspended in one PR**, under a named containment contract:
 
-The corresponding AGENTS.md rules are deleted or narrowed:
+| Property | Value |
+|---|---|
+| **Retry** | Flux `spec.retryInterval`, set explicitly per Kustomization rather than inherited |
+| **Maximum failure duration** | An alert fires when a Kustomization is `NotReady` for longer than `spec.timeout + spec.retryInterval`, so it cannot fire during a normal slow rollout but bounds an indefinite one. Extends the #154 `gotk_resource_info` rules |
+| **Remediation** | `HelmRelease` `install.remediation` / `upgrade.remediation` with a bounded retry count, so a failing release rolls back rather than thrashing |
+| **Rollback trigger** | Alert fires → `git revert` the activating commit → Flux converges to the prior state |
+| **Containment of a thrashing app** | Explicit `retryInterval` plus Helm remediation bounds reapplication; suspension remains available to the operator as break-glass |
+
+This must be implemented **before** the recipes are deleted, not after. Deleting first
+and replacing later is the reduction in safety the non-goals forbid.
+
+#### Eligibility for the one-PR path
+
+An app qualifies only if **all** hold:
+
+1. It has no app-specific safety gate beyond Kustomization readiness.
+2. It has a Gatus endpoint providing functional monitoring.
+3. Its `<app>-verify` runs under the `observer` or `diagnostic` tier.
+
+**qBittorrent is exempt** and keeps its guarded recipe until separately reviewed. It is
+the only app carrying a blocking post-bootstrap gate: `bootstrap.just` emits *"NOW run
+the BLOCKING gate: `CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect'` … Only
+after it passes, set `suspend=false`."* A VPN-disconnect chaos test is not expressible as
+a Kustomization health check.
+
+**Gatus coverage is currently insufficient.** Its 17 endpoints omit roughly 10 of the 18
+apps losing a recipe — `qbit-manage`, `intel-gpu-plugin`, `homepage`, `trivy`,
+`tailscale-subnet-router`, `csi-driver-smb`, `media-storage`, `gatus` itself,
+`foundation`, and `alertmanager-ntfy`. Each must gain an endpoint, or be exempted and
+keep its recipe. Criterion 2 is not waivable by assertion.
+
+#### Post-merge acceptance is a defined mechanism, not a suggestion
+
+An earlier draft said `<app>-verify` runs "by either the operator or an agent" and that
+"nothing blocks on it". That cannot substitute for a removed control. The contract:
+
+| | |
+|---|---|
+| **Actor** | Automation, triggered by the merge to `main` |
+| **Trigger** | Flux reports the Kustomization `Ready`, or the readiness timeout expires |
+| **Timeout** | `spec.timeout + spec.retryInterval` — the same bound as the failure-duration alert, so acceptance and alerting cannot disagree about whether a rollout finished |
+| **Evidence** | A run record under the existing `.test-results/` canonical structure, so it lands in the reporting pipeline that is being retained and expanded |
+| **Failure response** | Alert via the existing ntfy path; the activating commit is reverted unless the operator explicitly accepts the failure |
+
+Where automation is not yet available, the operator runs it — but the obligation is
+recorded and its absence is visible, rather than being optional by construction.
+
+#### Platform tier, by criteria rather than label
+
+"Platform" is defined by objective tests, not by a list. A recipe is retained if **any**
+apply:
+
+1. Flux cannot deploy it, because Flux depends on it (`cilium`, `flux*`).
+2. Its failure is cluster-wide and not cheaply reversible (`talos`, `storage`,
+   `csi-driver-smb`).
+3. It is required before GitOps is operational (`foundation`).
+4. It carries an app-specific blocking gate (`qbittorrent`).
+
+`metrics-server` is retained pending its own review — it is the largest and most
+irregular recipe at 345 lines with three confirmation gates, and it is not obvious that
+it satisfies any criterion above.
+
+#### AGENTS.md rules deleted or narrowed
 
 | Rule | Fate |
 |---|---|
 | "New apps begin suspended, roll out through guarded `just bootstrap <app>`, then persist the unsuspended state" | Deleted |
-| "If a needed cluster operation has no recipe, add an appropriately guarded recipe" | Narrowed to irreversible or cluster-wide operations |
-| "`bootstrap …` recipes require `*_CONFIRM` and are operator-run" | Narrowed to platform tier |
-| Root vs `kubernetes/README.md:123` `kubectl apply` contradiction | Resolved — bootstrap and recovery applies run through guarded recipes, so no exception is required |
+| "If a needed cluster operation has no recipe, add an appropriately guarded recipe" | Narrowed to operations meeting the platform criteria |
+| "`bootstrap …` recipes require `*_CONFIRM` and are operator-run" | Narrowed to the retained recipes |
+| Root vs `kubernetes/README.md:123` `kubectl apply` contradiction | Resolved — bootstrap and recovery applies run through guarded recipes |
 | Phase-N notation | Dropped on every line touched: 59 sites in `bootstrap.just`, 13 of 18 confirmation strings |
 
-### 3. Policy replaces change-detectors
+#### Known implementation blocker
 
-`conftest` extends from `kubernetes/apps/media` to `kubernetes/apps`, generalising
-`media.rego`'s exemption tables in their existing documented style. Coverage goes from
-9 to 33 Kustomizations, and newly added apps are covered on arrival rather than when
-someone writes a validator.
+`.just/repository.just:1206` asserts
+`rg -c 'require_deployed_source ' … -eq 24`. Deleting 18 recipes breaks
+`just repo verify`, which is the `validation.repo-verify` CI suite. The count must be
+updated in the same change, and is a reason the rollout workstream cannot be split
+across PRs arbitrarily.
 
-Per-app bash assertions the policy subsumes are then deleted. Retained, because each
-prevents a failure that is not "someone edited this file":
+### 3. A policy architecture replaces change-detectors
+
+`media.rego` **cannot simply be extended.** It discovers apps via
+`endswith(document.path, "/app/values.yaml")` and then reads `controllers`,
+`persistence`, `globalMounts`, and `advancedMounts` — the **app-template chart schema**.
+Charts such as kube-prometheus-stack, longhorn, cilium, trivy-operator, cert-manager,
+metallb, and envoy-gateway share none of that structure. Extending its exemption tables
+to 33 heterogeneous Kustomizations is not architecturally possible.
+
+The replacement is a layered policy set, each layer declaring its **input form**:
+
+| Layer | Input form | Scope | Examples |
+|---|---|---|---|
+| **Source** | Raw tracked YAML | All of `kubernetes/apps` | `ks.yaml` listed in its parent kustomization; `dependsOn` declared; `wait`/`timeout` present; no `suspend: true` on `main` |
+| **Resource** | `kustomize build` output | All of `kubernetes/apps` | No mutable image tags; capabilities dropped; no `NET_ADMIN` outside an allowlist; RWO PVC implies `Recreate` or StatefulSet |
+| **Rendered** | `helm template` output | Per chart family | A values key actually reaches the rendered object — the Trivy `OPERATOR_SBOM_GENERATION_ENABLED` pattern, generalised |
+| **Domain** | Chart-specific | One chart family | The existing app-template rules, retained as the media/app-template domain policy |
+
+Every rule ships with **negative fixtures** proving it fails closed, matching the
+existing `validation.policy-unit` practice.
+
+#### Retained assertions and the coverage matrix
+
+Retained because each prevents a failure that is not "someone edited this file":
 
 - **External facts learned the hard way** — `infraAssessmentScannerEnabled == false`
   ("cannot run on Talos, read-only host"), FlareSolverr's numeric UID 1000,
-  qbit-manage's `directory.root_dir`. These are regression tests for real outages and
-  must carry their reason inline.
-- **Cross-file consistency** where two files must agree and neither is authoritative —
-  the `rg -qx` check that a `ks.yaml` is listed in its parent kustomization, which
-  catches the "directory exists but is not deployed" trap.
-- **Render-effect checks** — Trivy asserting `OPERATOR_SBOM_GENERATION_ENABLED` in the
-  *rendered ConfigMap* rather than in `values.yaml`. This is the only assertion pattern
-  that catches an upstream chart renaming a values key, and it appears once. It should
-  be the model.
+  qbit-manage's `directory.root_dir`. Regression tests for real outages; each must carry
+  its reason inline.
+- **Cross-file consistency** where two files must agree and neither is authoritative.
+- **Render-effect checks** — the only pattern that catches an upstream chart renaming a
+  values key.
 - **External contracts the repository does not own** — chart repository URLs, and the
   Gateway VIP and Pi-hole resolver IP already centralised in `scripts/lib/network.sh`.
 
-Deleted: literal equality on a freely chosen internal value (hostname, port, image
-repository, storage class); file-existence checks that `kustomize build` already fails
-on; and the 22 tautologies.
+Before any assertion is deleted, a **coverage matrix** records, **per assertion class**,
+which policy layer independently detects the original failure. Per-*assertion*
+granularity across 567 rows was considered and rejected: a matrix that size will be
+rubber-stamped rather than read. Each class carries its definition, its replacement, and
+one worked example verified by hand.
 
-A new rule is added under the admission test: **a validator assertion must be
-structural.** An assertion restating a value from the file it reads is not a test.
+#### Wording correction
 
-`plans/talos-validation-refactor-plan.md` is not archived. It is unexecuted, it reached
-the same diagnosis independently, and it is input to this work.
+An earlier draft said *"a validator assertion must be structural"*. That contradicted
+the retained external-fact category, since `infraAssessmentScannerEnabled == false` is
+precisely a literal comparison and is legitimate. The rule is:
+
+> **An assertion must have an independent oracle or encode an invariant.** Restating a
+> freely chosen value from the file the assertion just read is neither.
+
+`plans/talos-validation-refactor-plan.md` reached the same diagnosis independently and
+is input to this workstream. Its destination is given in the fate table below.
 
 ### 4. Documentation is split by status, not by tooling
 
 ```
 docs/decisions/YYYY-MM-DD-<topic>.md   design records; superpowers' spec shape
-docs/decisions/README.md               CI-generated index (date, topic, status)
+docs/decisions/README.md               generated index (date, topic, status)
 docs/phases/                           15 rollout records — execution evidence
-docs/runbooks/                         live procedure
+docs/runbooks/                         live procedure (created by this work)
 docs/                                  live reference
 <gitignored>                           implementation plans — written, never committed
 ```
@@ -280,150 +444,271 @@ Specs record *why* and age well; plans are task lists and age badly, so plans ar
 written for execution but not tracked. This follows ADR practice, where the decision
 record is kept and the schedule is not.
 
-The document shape is **exactly what superpowers already emits** — its sections already
-map onto MADR's (Status, Problem, Goals/non-goals, Considered options, Decisions
-recorded, Risks and tradeoffs). No template is imposed; imposing one would add ceremony
-to a shape that works. What is added is the Status line supporting `Superseded by`, and
-the discipline that an accepted record is superseded rather than revised.
+The document shape is what superpowers already emits; its sections map onto MADR's. No
+template is imposed. What is added is the Status line and the supersession discipline.
+Filenames stay date-based rather than MADR's `NNNN-`, because sequential numbering
+collides across the parallel worktrees this repository uses.
 
-Filenames stay date-based rather than MADR's `NNNN-`. Sequential numbering collides
-across parallel worktrees, which this repository uses, and numbering was never what
-solved the problem — the Status field is.
+#### Record identity and immutability semantics
 
-AGENTS.md gains exactly two lines, both passing the admission test:
+Path-based comparison against `origin/main` is ambiguous. The contract:
 
-```markdown
-- Design decisions are recorded in `docs/decisions/YYYY-MM-DD-<topic>.md`, not
-  `docs/superpowers/`. Implementation plans are written but never committed.
-- A record with `Status: Accepted` is superseded, never revised. Write a new
-  record and set the old one to `Superseded by <filename>`.
-```
+- **Identity** is the filename, which is immutable. A rename is a delete plus an add and
+  is rejected by the check; superseding a record never renames it.
+- **Comparison base** is the PR merge-base with `origin/main`, fetched in CI. Locally the
+  recipe fetches first, so a stale ref cannot produce a false pass.
+- **A newly added record** in the diff is unconstrained — it is `Draft` by definition.
+- **An `Accepted` record present in the base** may change only by its Status line
+  becoming `Superseded by <existing filename>`. Any other diff fails.
+- **A deletion** of an `Accepted` record fails.
+- **Migration exception:** the four files moving out of `docs/superpowers/` are added,
+  not modified, so they enter as new records under their assigned Status.
 
-The first is a gotcha — it overrides a hardcoded default at `brainstorming/SKILL.md:107`
-and cannot be inferred. The second is a judgment rule; CI catches the mechanical part.
+Tests cover modification, deletion, rename, legal supersession, a missing supersession
+target, and a stale base.
 
-A `validation.decisions` suite asserts that every record carries a Status from the known
-vocabulary, that any `Superseded by` target resolves, that a record already `Accepted` on
-`origin/main` is unmodified except for its Status flipping, and that the index is
-current.
+#### Link validation: introduce-then-freeze
 
-`docs/decisions/` inherits the link-validator exclusion already granted to
-`docs/superpowers/*` by #170. Without it, a referenced file moving would make an
-immutable record fail the link check with no legal way to repair it.
+The blanket `docs/decisions/*` exclusion committed with this record is **interim**. A
+blanket exclusion means a broken link in a *new* record passes immediately, not merely
+decays later — it sacrifices admission-time correctness for a problem that only arises
+after acceptance.
 
-The seven legacy plans are distilled to roughly 400 lines total, after their live
-constraints are extracted to the files that own them — "Seerr, not Overseerr" into the
-media policy, "Portainer must not become a deployment authority" into AGENTS.md. Git
-preserves the originals.
+The replacement: **records are link-validated when introduced or changed; that result is
+frozen at acceptance.** Concretely, the validator scans `docs/decisions/*.md` files that
+are added or modified in the diff, and skips those unchanged since the merge-base. This
+preserves admission-time correctness while never asking an immutable record to be
+repaired.
 
-`docs/superpowers/` is emptied and removed. Its four tracked files resolve as:
+#### Index contract
+
+`docs/decisions/README.md` is **generated and committed**. `just repo decisions-index`
+regenerates it; `validation.decisions` regenerates into a temporary file and fails if it
+differs from the tracked one, the same compare-don't-write pattern used elsewhere in the
+repository.
+
+- **Source of truth:** the Status headers of `docs/decisions/*.md`.
+- **Sort:** date descending, then filename ascending — deterministic when two records
+  share a date.
+- **Columns:** date, topic, status, superseded-by.
+- **Failure:** a dirty index fails CI with the diff shown.
+
+#### Final `AGENTS.md` rule set
+
+Replacing the earlier and incorrect claim that "AGENTS.md gains exactly two lines". Every
+rule carries its category and control:
+
+| Rule | Category | Control |
+|---|---|---|
+| Never commit or push directly to `main` | Authoritative | Branch protection |
+| Never merge or enable auto-merge without per-merge authorization | **Operator policy** | Named human authority |
+| Stay within the assigned worktree; preserve unrelated changes | **Operator policy** | — |
+| Keep commits scoped and reviewable | **Operator policy** | — |
+| Report changed files, validation performed, remaining risk | **Operator policy** | — |
+| Fetch and rebase before every push; `--force-with-lease` only | **Operator policy** | — |
+| Reads are direct; changes to Flux-managed state go through Git | Authoritative | Credential tiers (decision 1) |
+| Bootstrap, break-glass and recovery are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
+| GitHub protection mutation needs per-invocation authorization | Authoritative | Guarded recipe + token scope |
+| Secrets are SOPS-encrypted; the age key stays with the operator | Authoritative | Key custody; gitleaks; staged-blob check |
+| `just ci` is the authoritative cluster-independent gate | Authoritative | Required GitHub check |
+| Cluster-dependent suites never enter `just ci` | Gotcha | `validation.test-harness` |
+| Run workflows through `mise exec -- just`; no unpinned tools | Gotcha | `mise.lock` |
+| Never hand-edit `clusterconfig/`; regenerate from `talconfig.yaml` | Gotcha | — |
+| Follow the `apps/<domain>/<app>/` layout | Gotcha | Source-layer policy (decision 3) |
+| A Deployment mounting an RWO PVC uses `Recreate` or a StatefulSet | Authoritative | Resource-layer policy (decision 3) |
+| Portainer must not become a deployment authority | **Operator policy** | Extracted from the legacy plan |
+| Design decisions go in `docs/decisions/`; plans are not committed | Gotcha | `validation.decisions` |
+| An `Accepted` record is superseded, never revised | Authoritative | `validation.decisions` |
+| An assertion must have an independent oracle or encode an invariant | **Operator policy** | Reviewed at PR time |
+
+The operator-policy category is what the earlier binary test would have deleted. Five of
+those rules are the repository's actual governance, and removing them would have breached
+the safety non-goal.
+
+#### Fate of every tracked plan and spec
 
 | File | Fate |
 |---|---|
-| `specs/2026-07-31-agents-md-information-architecture-design.md` | Moves to `docs/decisions/`, `Status: Superseded by 2026-08-02-agent-rules-audit.md` |
-| `specs/2026-07-31-lidarr-music-stack-design.md` | Moves to `docs/decisions/`, `Status: Accepted` — implemented by #172 and #174 |
-| `plans/2026-07-31-agents-md-information-architecture-implementation-plan.md` | Deleted; its design is superseded and plans are no longer tracked |
-| `plans/2026-07-31-lidarr-music-stack.md` | Deleted; executed, and plans are no longer tracked |
+| `plans/talos-flux-platform-plan.md` | Distil → `docs/decisions/`, `Status: Accepted` (implemented) |
+| `plans/ntfy-flux-implementation-plan.md` | Distil → `docs/decisions/`, `Status: Accepted`; its numbered Decisions are the durable content |
+| `plans/media-stack-architecture-plan.md` | Distil → `docs/decisions/`, `Status: Accepted`; "Seerr, not Overseerr" extracted to the app-template domain policy first |
+| `plans/portainer-gitops-observability-deployment-plan.md` | Distil → `docs/decisions/`, `Status: Accepted`; "not a deployment authority" extracted to `AGENTS.md` first |
+| `plans/test-reporting-standardization-plan.md` | Distil → `docs/decisions/`, `Status: Accepted` |
+| `plans/flux-reconciliation-alerting-handoff.md` | Distil → `docs/decisions/`, `Status: Accepted`; residual phone-delivery E2E moves to the testing-expansion session |
+| `plans/talos-validation-refactor-plan.md` | **Not distilled.** Unexecuted live intent. Its content becomes input to decision 3's workstream; the file is deleted once that workstream's record exists |
+| `docs/superpowers/specs/2026-07-31-agents-md-information-architecture-design.md` | → `docs/decisions/`, `Status: Superseded by 2026-08-02-agent-rules-audit.md` |
+| `docs/superpowers/specs/2026-07-31-lidarr-music-stack-design.md` | → `docs/decisions/`, `Status: Accepted` — implemented by #172 and #174 |
+| `docs/superpowers/plans/2026-07-31-agents-md-information-architecture-implementation-plan.md` | Deleted — superseded design, and plans are not tracked |
+| `docs/superpowers/plans/2026-07-31-lidarr-music-stack.md` | Deleted — executed, and plans are not tracked |
 
-The link-validator exclusion transfers from `docs/superpowers/*` to `docs/decisions/*`
-with them, rather than being added alongside.
+Distilled content lives in the `docs/decisions/` record named in each row. Git preserves
+the originals. `docs/superpowers/` is then removed.
 
 ## Not in scope
 
 **Test reporting is retained whole.** All 9,587 lines of Allure, JUnit, campaign, and
 catalog machinery and the 1,621-line deployed `test-reports` service stay. The operator's
 intent is to *expand* testing — more resilience, E2E, and smoke coverage, reported
-through Allure — with tuning and streamlining handled as its own design session. This
-audit deliberately takes no position on its size.
+through Allure — with tuning and streamlining handled as its own design session. The
+post-merge acceptance evidence in decision 2 deliberately lands in that pipeline rather
+than beside it.
 
 ## Sequencing
 
-Rules first, because they are the licence for everything that follows; then
-documentation, which is independent; then the rollout deletion; then validation, which
-is the largest and benefits from the policy landing before the assertions leave.
+Dependencies are strict: containment must exist before the recipes it replaces are
+deleted, and policy must exist before the assertions it replaces are deleted.
 
-1. **Rules and credentials.** Rewrite root `AGENTS.md` against the admission test. Mint
-   the `view`-scoped kubeconfig and `os:reader` talosconfig. Close #171. Resolve the
-   `kubectl` contradiction in `kubernetes/README.md`.
-2. **Documentation.** Create `docs/decisions/`, `docs/phases/`, `docs/runbooks/`; retire
-   `docs/superpowers/`; add the `validation.decisions` suite and generated index;
-   gitignore plans; distil the seven legacy plans after extracting their live
-   constraints.
-
-   The `docs/decisions/*` link-validator exclusion lands **with this record** rather
-   than in this step, because the record names `docs/phases/` and `docs/runbooks/`
-   before they exist and would otherwise fail `validation.links` on commit.
-3. **Rollout.** Delete the 18 app-tier bootstrap recipes and their confirmation
-   variables; retain `<app>-verify` as post-merge checks; keep the platform tier intact.
-4. **Validation.** Extend `conftest` repo-wide; then strip subsumed assertions,
-   retaining the four categories above with their reasons stated inline.
-
-Expected net change is roughly **−5,000 lines**: −1,100 rollout scaffolding, −1,500 to
-−1,900 validators, −3,131 prose, against approximately +550 of policy, credentials, and
-CI. Line count is a consequence, not a target.
+1. **Rules and credentials.** Rewrite root `AGENTS.md` to the categorised rule set. Bound
+   `CLAUDE.md` to harness guidance. Mint the `observer`, `diagnostic`, and `admin` tiers;
+   relocate admin credentials; build the command-to-permission matrix; add positive and
+   negative authorization tests. Close #171. Resolve the `kubectl` contradiction in
+   `kubernetes/README.md`.
+2. **Documentation.** Create `docs/decisions/`, `docs/phases/`, `docs/runbooks/`; add
+   `validation.decisions` with the identity and immutability semantics above; replace the
+   interim link exclusion with introduce-then-freeze; add the generated index; gitignore
+   plans; distil per the fate table; retire `docs/superpowers/`.
+3. **Containment.** Set explicit `retryInterval` and Helm remediation per Kustomization;
+   extend the #154 alert rules with a `NotReady`-duration alert; add Gatus endpoints for
+   the ~10 uncovered apps; build post-merge acceptance automation. **No recipe is deleted
+   in this step.**
+4. **Rollout.** Delete the app-tier bootstrap recipes for apps meeting all three
+   eligibility criteria; update `.just/repository.just:1206`; retain qBittorrent, the
+   platform tier, and any app that failed eligibility.
+5. **Validation.** Build the layered policy set with negative fixtures; produce the
+   per-class coverage matrix; then strip subsumed assertions.
 
 ## Risks and tradeoffs
 
-- **Deleting the app-tier gate increases agent authority.** Mitigated by controls that
-  already exist and are already proven: CI validation pre-merge, per-app blast radius
-  via independent Kustomizations, Gatus probing, #154 Flux reconciliation alerting, and
-  `git revert`. The residual is accepted deliberately: the operator reports the gate as
-  toil rather than judgment, and it has never vetoed a rollout.
-- **Stripping assertions could drop one that mattered.** Mitigated by extending policy
-  *before* deleting anything, and by classifying every retained assertion into one of
-  four named categories with its reason inline. An assertion that fits no category and
-  cannot be justified is the one being removed.
-- **A single shared policy is a single point of failure.** A defect in the repo-wide
-  rego reaches all 33 apps at once, where a per-app bash bug reached one. Mitigated by
-  `validation.policy-unit`, which already unit-tests the rego, and by the fact that the
-  media policy has run this way for nine apps without incident.
-- **Scoped credentials are new infrastructure to mint, rotate, and debug.** Small — a
-  ServiceAccount, a ClusterRoleBinding, and one guarded recipe — but non-zero, and a
-  broken read-only config blocks diagnosis at exactly the wrong moment. The admin path
-  remains available to the operator throughout.
-- **Distillation is judgment.** Seven documents are compressed by roughly 90%, and the
-  compressor decides what mattered. Git preserves the originals, and live constraints
-  are extracted before distillation rather than during it.
-- **The admission test is itself an instruction.** Nothing mechanically prevents a
-  future rule that is neither enforced nor a gotcha. This is accepted; the test's value
-  is that it makes the question answerable, not that it makes it automatic.
+- **Deleting the app-tier gate increases agent authority.** Mitigated by the named
+  containment contract in decision 2, which must land first, and by CI validation,
+  per-app blast radius, Gatus, #154 alerting, and `git revert`. The residual is accepted
+  deliberately: the operator reports the gate as toil rather than judgment, and it has
+  never vetoed a rollout.
+- **Containment replacement may not be equivalent.** Explicit `retryInterval` plus Helm
+  remediation bounds thrashing but does not stop reconciliation the way suspension does.
+  The compensating control is alerting on `NotReady` duration plus operator break-glass.
+  If that proves insufficient in practice, the honest response is to reinstate
+  suspension as an automated remediation rather than to accept the gap.
+- **The `diagnostic` tier grants `exec`.** That is a real privilege increase over the
+  status quo, where agents had no cluster access at all from worktrees. It is bounded to
+  five named verifiers and is labelled accurately rather than described as read-only.
+- **Scoped credentials are new infrastructure** to mint, rotate, and debug, and a broken
+  agent config blocks diagnosis at exactly the wrong moment. The admin path remains
+  available to the operator throughout.
+- **A layered policy set is a single point of failure per layer.** Mitigated by negative
+  fixtures per rule and by `validation.policy-unit`.
+- **Stripping assertions could drop one that mattered.** Mitigated by the per-class
+  coverage matrix, which is a precondition for deletion rather than a follow-up.
+- **Distillation is judgment.** Six documents are compressed substantially, and the
+  compressor decides what mattered. Git preserves the originals, and live constraints are
+  extracted before distillation rather than during it.
+- **The admission test is itself an instruction.** Nothing mechanically prevents a future
+  rule that fits no category. Accepted; the test's value is that it makes the question
+  answerable, not automatic.
+- **This record is large.** Splitting it into per-subsystem decisions was proposed in
+  review and declined — see the disposition below. The mitigation is that each workstream
+  in Sequencing has its own acceptance criteria stated inline.
 
 ## Decisions recorded
 
-1. Root `AGENTS.md` is the only agent instruction surface. No nested files.
-2. Every rule must be enforced or a gotcha; anything else is deleted or converted.
-3. A rule that can be enforced is converted to enforcement and removed from the file,
-   not stated in both places.
-4. Cluster access is governed by effect, not by tool, and enforced by scoped
-   credentials rather than instruction.
-5. Reads are unrestricted. Mutation of Flux-managed state is prevented by the
-   credential. Bootstrap and break-glass keep guarded recipes.
-6. The 18 app-tier bootstrap recipes are deleted; apps ship unsuspended in one PR.
-7. The platform tier retains full `*_CONFIRM` guards.
-8. Policy as code is extended repo-wide; subsumed per-app assertions are deleted.
-9. A validator assertion must be structural; restating a value from the file it reads
-   is not a test.
-10. Design decisions live in `docs/decisions/` with a Status field; accepted records are
-    superseded, never revised.
-11. Implementation plans are written but not committed.
-12. Filenames are date-based, not sequentially numbered, because worktrees run in
+1. Root `AGENTS.md` is the only surface for **repository rules**. `CLAUDE.md` is a
+   permitted vendor shim bounded to harness-specific operating guidance.
+2. Every rule is an authoritative control, an operator policy, or a gotcha, and states
+   its category and supporting control. Anything else is deleted.
+3. Enforcement mechanisms are not equivalent; a rule may not claim more than its
+   mechanism delivers. Workflow may be stated once alongside enforcement; a prohibition
+   may not be restated.
+4. Cluster access is governed by effect and enforced by three credential tiers:
+   `observer`, `diagnostic`, `admin`.
+5. `diagnostic` grants `exec` and `port-forward` and is **not** read-only. The security
+   claim is limited to denying the Secret API.
+6. App-tier bootstrap recipes are deleted **only after** the containment contract exists,
+   and only for apps meeting all three eligibility criteria.
+7. Platform tier is defined by objective criteria, not a list. qBittorrent is exempt;
+   `metrics-server` is retained pending its own review.
+8. Post-merge acceptance has a named actor, trigger, timeout, evidence location, and
+   failure response.
+9. A layered policy set — source, resource, rendered, domain — replaces change-detectors.
+   `media.rego` is retained as the app-template domain layer, not extended repo-wide.
+10. An assertion must have an independent oracle or encode an invariant.
+11. A per-assertion-class coverage matrix is a precondition for deleting any assertion.
+12. Design decisions live in `docs/decisions/` with defined identity, comparison base,
+    and immutability semantics. A record becomes `Accepted` when merged to `main`.
+13. Link validation is introduce-then-freeze, replacing the interim blanket exclusion.
+14. The index is generated and committed, with CI comparing rather than writing.
+15. Implementation plans are written but not committed.
+16. Filenames are date-based, not sequentially numbered, because worktrees run in
     parallel.
-13. Test reporting is out of scope and slated for expansion, not reduction.
-14. The 2026-07-31 information architecture design is superseded and PR #171 is closed
+17. Test reporting is out of scope and slated for expansion, not reduction.
+18. The 2026-07-31 information architecture design is superseded and PR #171 is closed
     unmerged. PR #170's reference validator is retained.
+
+## Review disposition
+
+Independent review of 2026-08-02 raised seven blocking findings, six important, and three
+optional. All seven blocking findings were verified against the repository and accepted;
+two were accepted with modification, and two non-blocking findings were declined by the
+operator.
+
+**Accepted with modification:**
+
+- *Policy coverage matrix* — accepted, but at per-assertion-**class** granularity. A
+  567-row matrix would be rubber-stamped rather than read.
+- *Instruction alongside enforcement* — accepted, but bounded to stating the workflow
+  once. Restating a prohibition beside its enforcement is what produced the churn.
+
+**Declined by the operator, recorded so they are not silently reopened:**
+
+- *Split into separate decisions per subsystem.* Declined in favour of one record with
+  the missing detail filled in. Rationale: cross-subsystem dependencies — containment
+  before rollout deletion, policy before assertion deletion, credentials before verifier
+  changes — are the substance of the design, and separate records would put them in
+  cross-references rather than in one sequence.
+- *Defer phase relocation and plan distillation.* Declined. The stale-prose defect is
+  real and present, the work is largely mechanical, and deferring leaves 3,531 lines
+  reading as current guidance.
+
+**Found during verification, not in the review:** `.just/repository.just:1206` hardcodes
+`-eq 24` for `require_deployed_source` occurrences and breaks when recipes are deleted.
 
 ## Follow-up
 
-Each of these is its own design session, not a task in this one:
+Each is its own design session:
 
-- **Testing expansion** — resilience, E2E, and smoke coverage, reported through Allure;
-  including tuning and streamlining the existing 9,587 lines of reporting machinery.
-- **`metrics-server`** — 345 lines with three separate confirmation gates, the largest
-  and most irregular recipe in `bootstrap.just`. It survives the app-tier deletion as
-  platform tier, but its shape is an outlier worth examining.
-- **Platform-tier consolidation** — whether registry-driven generation still pays for
-  the roughly five surviving guarded recipes, or whether duplication is acceptable at
-  that count.
-- **`qbittorrent`'s two-stage rollout** — the only recipe running the standard sequence
-  twice, tied to the Gluetun VPN sidecar. Its staging needs may not survive the app-tier
-  change unexamined.
+- **Testing expansion** — resilience, E2E, and smoke coverage through Allure; tuning and
+  streamlining the existing reporting machinery; absorbing the residual Flux
+  phone-delivery E2E.
+- **`metrics-server`** — 345 lines with three confirmation gates; does it satisfy any
+  platform criterion?
+- **Platform-tier consolidation** — whether registry-driven generation pays for the
+  surviving guarded recipes.
+- **qBittorrent** — whether the VPN-disconnect chaos gate can become an automated
+  post-merge acceptance check, which would make it eligible for the one-PR path.
+
+## Appendix A — Methodology
+
+Counts in *Current-state findings* are a snapshot at `15bf87f`. They motivate the
+decisions; they are **not** acceptance criteria, and implementation is not judged by
+reproducing them.
+
+| Figure | Method |
+|---|---|
+| Repository mass | `git ls-files <dir> \| xargs wc -l`, summed per top-level directory |
+| Identical rollout sequences | Each recipe body reduced to an ordered tag sequence by matching 15 fixed patterns (trap, kubeconfig check, git remote, `require_deployed_source`, staged-suspended, validate, source reconcile, `flux-verify`, cluster-apps reconcile, live-suspend, CONFIRM, resume, app reconcile, wait, verify); sequences compared for equality |
+| Assertion classification | Lines beginning `[[` in `scripts/validate/*.sh`. **Tautology** = matches `== 'true' \|\| … == 'false'`. **Change-detector** = a `yq` extraction compared to a string literal. **Structural** = everything else, plus counts of `kustomize build`, `helm template`, `conftest`, `kubeconform` |
+| Same-commit validator edits | For each commit since 2026-06-01 touching `kubernetes/apps/<ns>/<app>/`, whether it also touched `scripts/validate/<app>.sh` |
+| Read vs mutating calls | Verb following `kubectl\|flux\|talosctl\|helm\|cilium` and any flags, bucketed by a fixed read/write verb list |
+| Cross-cutting recipe edits | Distinct recipe names appearing in `git show -U0` hunk headers per commit |
+
+Classification is heuristic. The change-detector count in particular depends on a
+regular expression and should be treated as approximate; the qualitative finding — that
+a large majority of assertions restate values from the files they read — is what the
+decisions rest on.
+
+## Appendix B — Expected size
+
+Non-binding, and deliberately not a design signal. Roughly −1,100 lines of rollout
+scaffolding, −1,500 to −1,900 validators, and −3,131 of prose, against additions for
+policy layers, credentials, containment configuration, post-merge automation, and CI.
+Success is judged by the named safety and maintenance outcomes in each decision, not by
+net lines. A retained control that costs lines is not a failure.
