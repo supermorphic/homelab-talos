@@ -71,6 +71,11 @@ class Client:
         for fixture_path in sorted(fixture_dir.glob("*.json")):
             scenario = json.loads(fixture_path.read_text())
             if scenario["torrent"] is not None:
+                if (
+                    scenario["torrent"]["hash"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    and "QBT_STUB_TAGS" in os.environ
+                ):
+                    scenario["torrent"]["tags"] = os.environ["QBT_STUB_TAGS"]
                 scenarios.append(scenario)
         self._scenarios = scenarios
 
@@ -381,6 +386,132 @@ run_inventory_to_fixture() {
 	[[ "$output" == *'source path escapes media root'* ]]
 	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
 	[ "$(<"$output_dir/audio-inventory.csv")" = 'previous audio' ]
+}
+
+# Catches a production break where os.walk suppresses a directory scan error,
+# allowing an incomplete path inventory to be published as a successful census.
+@test "census rejects directory-walk errors without replacing prior outputs" {
+	prepare_library
+	create_qbittorrent_stub
+	run_inventory_to_fixture
+	create_ffprobe_stub
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	walk_failure="$media_root/Unreadable Subtree"
+	mkdir -p "$walk_failure"
+	printf 'unseen' >"$walk_failure/Hidden Film.mkv"
+	export BENCHMARK_TEST_WALK_ERROR_PATH="$walk_failure"
+	output_dir="$BATS_TEST_TMPDIR/output"
+	mkdir -p "$output_dir"
+	printf 'previous census\n' >"$output_dir/census.csv"
+	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
+
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'media walk failed'* ]]
+	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
+	[ "$(<"$output_dir/audio-inventory.csv")" = 'previous audio' ]
+}
+
+# Catches a production break where the checked NUL-separated path inventory is
+# not removed after both outputs publish successfully.
+@test "successful census leaves no temporary path inventory" {
+	prepare_library
+	create_qbittorrent_stub
+	run_inventory_to_fixture
+	create_ffprobe_stub
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	output_dir="$BATS_TEST_TMPDIR/output"
+
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -eq 0 ]
+	run find "$output_dir" -type f -name '.encode-benchmark-census.*' -print
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+# Catches a production break where the first new CSV remains visible after a
+# handled failure publishing the second CSV.
+@test "second publication failure restores both prior outputs" {
+	prepare_library
+	create_qbittorrent_stub
+	run_inventory_to_fixture
+	create_ffprobe_stub
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	export BENCHMARK_TEST_FAIL_SECOND_PUBLISH=1
+	output_dir="$BATS_TEST_TMPDIR/output"
+	mkdir -p "$output_dir"
+	printf 'previous census\n' >"$output_dir/census.csv"
+	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
+
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'second census publication failed; restored prior outputs'* ]]
+	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
+	[ "$(<"$output_dir/audio-inventory.csv")" = 'previous audio' ]
+	run find "$output_dir" -type f -name '.encode-benchmark-census.*' -print
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+
+	output_dir="$BATS_TEST_TMPDIR/output-without-prior-generation"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -ne 0 ]
+	[ ! -e "$output_dir/census.csv" ]
+	[ ! -e "$output_dir/audio-inventory.csv" ]
+}
+
+# Catches a production break where the Excel-tab producer is decoded by raw tab
+# splitting rather than as a five-column quoted record stream.
+@test "torrent TSV round-trips quote tab and newline tag data into census CSV" {
+	prepare_library
+	create_qbittorrent_stub
+	export QBT_STUB_TAGS=$'quote"two,alpha\tone,line\nthree'
+	run_inventory_to_fixture
+	expected_tags=$'alpha\tone,line\nthree,quote"two'
+
+	run python3 -c '
+import csv
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = list(csv.reader(stream, dialect="excel-tab"))
+if any(len(row) != 5 for row in rows):
+    raise SystemExit("TSV record did not contain exactly five columns")
+matching = [row for row in rows[1:] if row[2] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+if not matching or any(row[4] != sys.argv[2] for row in matching):
+    raise SystemExit("complex tag field did not round-trip through inventory TSV")
+' "$FIXTURES/qbittorrent/inodes.tsv" "$expected_tags"
+	[ "$status" -eq 0 ]
+
+	create_ffprobe_stub
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	output_dir="$BATS_TEST_TMPDIR/output"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -eq 0 ]
+	run python3 -c '
+import csv
+import json
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = csv.DictReader(stream)
+    row = next(item for item in rows if item["source_path"] == "/media/Active Public.mkv")
+print(json.dumps(row["torrent_tags"]))
+' "$output_dir/census.csv"
+	[ "$status" -eq 0 ]
+	run jq -e --arg expected "$expected_tags" '. == $expected' <<<"$output"
+	[ "$status" -eq 0 ]
 }
 
 # Catches a production break where the app prematurely enables later command
