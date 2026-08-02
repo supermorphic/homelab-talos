@@ -14,6 +14,7 @@ required_dependencies := {
 	"radarr": {"internal-gateway", "media-storage"},
 	"seerr": {"internal-gateway", "media"},
 	"sonarr": {"internal-gateway", "media-storage"},
+	"tautulli": {"internal-gateway", "media"},
 }
 
 # Stateless, in-cluster-only apps: no persistent config to keep and no operator UI, so
@@ -37,7 +38,7 @@ shared_claim_keys := {
 	"sonarr": "data",
 }
 
-config_only_apps := {"prowlarr", "seerr"}
+config_only_apps := {"prowlarr", "seerr", "tautulli"}
 
 # Narrower than the media-mounting entries in shared_claim_keys: qbittorrent reaches the
 # shared claim through advancedMounts (per-container) rather than globalMounts, so the

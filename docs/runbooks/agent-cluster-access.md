@@ -87,6 +87,7 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 | `radarr` | observer | Reads rollout, route, and application state. |
 | `lidarr` | observer | Reads rollout, route, and application state. |
 | `seerr` | observer | Reads rollout, route, and application state. |
+| `tautulli` | operator | Uses the general API-server Service proxy for the exact direct-Service health oracle. |
 | `flaresolverr` | diagnostic | Port-forwards its in-cluster-only Service to preserve the ready-JSON oracle. |
 | `qbit-manage` | observer | Reads controller and job state. |
 | `monitoring` | observer | Reads stack health, Prometheus telemetry, and Alertmanager's loaded receiver/route through `/api/v2/status`. |

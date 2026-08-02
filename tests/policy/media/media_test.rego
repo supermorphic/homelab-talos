@@ -112,6 +112,36 @@ config_only_fixture(extra_persistence) := [
 	},
 ]
 
+tautulli_fixture(dependencies, extra_persistence) := [
+	{
+		"path": "kubernetes/apps/media/tautulli/app/values.yaml",
+		"contents": {
+			"controllers": {"tautulli": {
+				"strategy": "Recreate",
+				"containers": {"app": {
+					"image": {"tag": "2.17.2"},
+					"securityContext": {"capabilities": {"drop": ["ALL"]}},
+				}},
+			}},
+			"persistence": object.union(
+				{"config": {"accessMode": "ReadWriteOnce"}},
+				extra_persistence,
+			),
+		},
+	},
+	{
+		"path": "kubernetes/apps/media/tautulli/ks.yaml",
+		"contents": {"spec": {"dependsOn": [{"name": dependency} | some dependency in dependencies]}},
+	},
+	{
+		"path": "kubernetes/apps/media/tautulli/app/httproute.yaml",
+		"contents": {
+			"metadata": {"annotations": {"external-dns.k8s.io/audience": "internal"}},
+			"spec": {"parentRefs": [{"name": "internal"}]},
+		},
+	},
+]
+
 messages_matching(messages, fragment) := {
 message |
 	some message in messages
@@ -158,6 +188,37 @@ test_lidarr_requires_internal_gateway_dependency if {
 		"media-data",
 	)
 	count(messages_matching(messages, "required Flux dependency \"internal-gateway\"")) == 1
+}
+
+test_valid_tautulli_contract_has_no_violations if {
+	messages := deny with input as tautulli_fixture({"internal-gateway", "media"}, {})
+	count(messages) == 0
+}
+
+test_tautulli_requires_internal_gateway_dependency if {
+	messages := deny with input as tautulli_fixture({"media"}, {})
+	count(messages_matching(messages, "required Flux dependency \"internal-gateway\"")) == 1
+}
+
+test_tautulli_requires_media_dependency if {
+	messages := deny with input as tautulli_fixture({"internal-gateway"}, {})
+	count(messages_matching(messages, "required Flux dependency \"media\"")) == 1
+}
+
+test_tautulli_must_not_define_data if {
+	messages := deny with input as tautulli_fixture(
+		{"internal-gateway", "media"},
+		{"data": {"existingClaim": "media-data"}},
+	)
+	count(messages_matching(messages, "tautulli is config-only and must not define persistence.data")) == 1
+}
+
+test_tautulli_must_not_define_media if {
+	messages := deny with input as tautulli_fixture(
+		{"internal-gateway", "media"},
+		{"media": {"existingClaim": "media-data"}},
+	)
+	count(messages_matching(messages, "tautulli is config-only and must not define persistence.media")) == 1
 }
 
 test_lidarr_requires_media_storage_dependency if {

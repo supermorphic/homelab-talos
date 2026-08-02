@@ -1028,6 +1028,49 @@ Flux reconciles it.
 mise exec -- just kube seerr-verify
 ```
 
+## Tautulli
+
+Tautulli begins with an empty database; watch history starts at this rollout. It reads Plex
+through `http://plex.media.svc.cluster.local:32400` and never mounts Plex or shared-media
+storage. The Tautulli **Plex Logs** viewer is therefore intentionally unavailable.
+
+After PR 1 is merged, the operator runs:
+
+```bash
+export MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:tautulli'
+mise exec -- just bootstrap media-app tautulli
+unset MEDIA_APP_BOOTSTRAP_CONFIRM
+```
+
+In the Tautulli UI, complete these steps in order:
+
+1. Enable Tautulli web authentication before entering Plex or API credentials.
+2. Connect Plex at `http://plex.media.svc.cluster.local:32400` with the operator-supplied Plex token.
+3. Generate the Tautulli API key.
+4. Confirm at least one Plex library appears.
+5. Play authorized media and require the session to appear in Tautulli history.
+
+Before PR 2, record the chosen authentication mode and prove `/status` returns exact HTTP
+`200` with redirects disabled both from the cluster and through
+`tautulli.lab.supermorphic.com`. A 3xx is a failed gate even if Kubernetes probes are green.
+Run `mise exec -- just kube tautulli-verify` after authentication is enabled.
+
+The operator creates the Homepage Secret only after the API key exists:
+
+```bash
+printf 'Tautulli API key: '
+IFS= read -r -s TAUTULLI_API_KEY
+printf '\n'
+export TAUTULLI_API_KEY
+export HOMEPAGE_TAUTULLI_SECRETS_CONFIRM='write:monitoring:homepage-tautulli:sops'
+mise exec -- just repo homepage-tautulli-secrets
+unset TAUTULLI_API_KEY HOMEPAGE_TAUTULLI_SECRETS_CONFIRM
+```
+
+Commit only the generated encrypted `homepage-tautulli.sops.yaml`; never commit the key.
+PR 2 may set `suspend: false` only after authentication, exact status, verifier, library,
+and real-playback gates all pass.
+
 ## End-to-end acceptance
 
 ### Direct Lidarr test — blocking operator gate

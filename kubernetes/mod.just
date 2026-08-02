@@ -572,10 +572,26 @@ arr-verify app: require-bash
 seerr-validate: require-bash
     @scripts/validate/seerr.sh
 
+# Validate the Tautulli source, config-only retained PVC, security/resources, exact probes,
+# internal route, activation-aware Gatus/Homepage boundary, and pinned app-template render.
+# Cluster-independent and included in `just ci`.
+tautulli-validate: require-bash
+    @scripts/validate/tautulli.sh
+
+# Validate the isolated media-alerts Flux dependency/placement contract, then extract the
+# manifest rule spec and run promtool syntax and temporal/matcher unit tests.
+media-alerts-validate: require-bash
+    @scripts/validate/media-alerts.sh
+
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(kubeconfig)}}
+
+# Verify live Tautulli resources, route, DNS, and exact non-redirecting HTTP 200 responses
+# from /status through the Service and internal gateway. Operator-only/read-only; not in ci.
+tautulli-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.tautulli -- scripts/verify/tautulli.sh {{quote(kubeconfig)}}
 
 # Validate the FlareSolverr source: files, wiring, no-secret ks, app-template chartRef,
 # stateless (no config PVC, no HTTPRoute), non-root + drop-ALL caps, /dev/shm memory,
