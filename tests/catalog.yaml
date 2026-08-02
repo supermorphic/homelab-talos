@@ -89,6 +89,7 @@ campaigns:
     mutates_cluster: false
     disruptive: false
     access:
+      required_core_read_resources: [nodes]
       required_read_rules:
         apiextensions.k8s.io: [customresourcedefinitions]
         apiregistration.k8s.io: [apiservices]

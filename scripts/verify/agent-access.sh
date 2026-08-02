@@ -76,6 +76,7 @@ assert_can_i() {
 # required by the scoped verifier campaign. Repeating get/list/watch for every resource
 # proves the declared RBAC rule semantics, including all Flux source/notification kinds.
 read_resources=(
+  nodes
   customresourcedefinitions.apiextensions.k8s.io
   apiservices.apiregistration.k8s.io
   vulnerabilityreports.aquasecurity.github.io

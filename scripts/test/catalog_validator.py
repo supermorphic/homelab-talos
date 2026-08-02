@@ -66,14 +66,17 @@ VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
 
 
 def scoped_read_rules(catalog: dict[str, Any]) -> dict[str, set[str]]:
-    raw = (
-        catalog.get("campaigns", {})
-        .get("scoped-verification", {})
-        .get("access", {})
-        .get("required_read_rules")
-    )
+    access = catalog.get("campaigns", {}).get("scoped-verification", {}).get("access", {})
+    raw_core = access.get("required_core_read_resources")
+    raw = access.get("required_read_rules")
     if (
-        not isinstance(raw, dict)
+        not isinstance(raw_core, list)
+        or not raw_core
+        or any(
+            not isinstance(resource, str) or not resource or resource == "*"
+            for resource in (raw_core or [])
+        )
+        or not isinstance(raw, dict)
         or not raw
         or any(
             not isinstance(api_group, str)
@@ -87,8 +90,10 @@ def scoped_read_rules(catalog: dict[str, Any]) -> dict[str, set[str]]:
             for api_group, resources in (raw or {}).items()
         )
     ):
-        fail("Campaign scoped-verification must declare bounded required_read_rules.\n")
-    return {api_group: set(resources) for api_group, resources in raw.items()}
+        fail("Campaign scoped-verification must declare bounded required read rules.\n")
+    rules = {api_group: set(resources) for api_group, resources in raw.items()}
+    rules[""] = set(raw_core)
+    return rules
 
 
 def _shell_tokens(source: str) -> list[list[str]]:
@@ -947,7 +952,7 @@ class CatalogValidator:
             "talosctl services",
         }
         required.update(
-            f"{resource}.{api_group}"
+            f"{resource}.{api_group}" if api_group else resource
             for api_group, resources in scoped_read_rules(self.catalog).items()
             for resource in resources
         )

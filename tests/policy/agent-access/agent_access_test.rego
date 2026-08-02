@@ -68,7 +68,10 @@ valid_fixture := [
 	cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
 	cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
 	cluster_role("homelab-observer-extra", array.concat(
-		[{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]}],
+		[
+			{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+			{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+		],
 		read_rules,
 	)),
 	cluster_role_binding(

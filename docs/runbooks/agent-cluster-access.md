@@ -40,6 +40,7 @@ ClusterRole adds only these campaign-required resources, each with `get`, `list`
 
 | API group | Resources |
 |---|---|
+| core | `nodes` |
 | `apiextensions.k8s.io` | `customresourcedefinitions` |
 | `apiregistration.k8s.io` | `apiservices` |
 | `aquasecurity.github.io` | `vulnerabilityreports` |

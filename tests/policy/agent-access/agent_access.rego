@@ -85,6 +85,10 @@ allowed_rule("homelab-observer-extra", rule) if {
 }
 
 allowed_rule("homelab-observer-extra", rule) if {
+	rule_matches(rule, {""}, {"nodes"}, {"get", "list", "watch"})
+}
+
+allowed_rule("homelab-observer-extra", rule) if {
 	some api_group
 	resources := required_read_rules[api_group]
 	rule_matches(rule, {api_group}, resources, {"get", "list", "watch"})
@@ -151,6 +155,15 @@ deny contains msg if {
 
 deny contains "observer extras must grant only pod logs" if {
 	not has_allowed_rule("homelab-observer-extra", {""}, {"pods/log"}, {"get"})
+}
+
+deny contains "observer extras must grant core node reads" if {
+	not has_allowed_rule(
+		"homelab-observer-extra",
+		{""},
+		{"nodes"},
+		{"get", "list", "watch"},
+	)
 }
 
 deny contains msg if {
