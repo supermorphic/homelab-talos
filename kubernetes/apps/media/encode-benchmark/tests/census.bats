@@ -514,11 +514,11 @@ print(json.dumps(row["torrent_tags"]))
 	[ "$status" -eq 0 ]
 }
 
-# Catches a production break where the app prematurely enables later command
-# mappings or fails to map the two tested Task 3 scripts.
-@test "ConfigMap maps only probe and census to real scripts" {
+# Catches a production break where the app prematurely enables benchmark/stills
+# mappings or regresses one of the tested probe/census/runmeta scripts.
+@test "ConfigMap maps only tested scripts to real implementations" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/not-ready.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh' ]
+	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh' ]
 }
