@@ -1,0 +1,27 @@
+{
+  "path": "/scratch/invalid.mkv",
+  "sizeBytes": 500000,
+  "durationSeconds": 92.1,
+  "container": "matroska",
+  "cohort": "other",
+  "videoCodec": "h264",
+  "width": 1920,
+  "height": 1080,
+  "pixelFormat": "yuv420p",
+  "bitDepth": 8,
+  "colorPrimaries": "bt709",
+  "colorTransfer": "bt709",
+  "colorSpace": "bt709",
+  "hdrFormat": "",
+  "dolbyVisionProfile": null,
+  "masteringDisplay": null,
+  "maxCLL": null,
+  "videoBitRate": 4000000,
+  "frameRate": "25/1",
+  "audioTrackCount": 1,
+  "subtitleCount": 0,
+  "chapterCount": 0,
+  "audioTracks": [
+    {"index": 1, "codec": "aac", "channels": 2, "channelLayout": "stereo", "language": "eng", "bitRate": 192000, "durationSeconds": 92.1, "audioBytes": 2207520, "audioBytesMethod": "reported"}
+  ]
+}

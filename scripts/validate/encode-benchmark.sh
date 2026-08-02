@@ -12,11 +12,15 @@ scaffold="$app/scripts/not-ready.sh"
 probe="$app/scripts/probe.sh"
 census="$app/scripts/census.sh"
 runmeta="$app/scripts/runmeta.sh"
+benchmark="$app/scripts/benchmark.sh"
+stills="$app/scripts/stills.sh"
 template="$base/templates/job.yaml"
 tests_dir="$base/tests"
 contract_test="$tests_dir/source-contract.bats"
 census_test="$tests_dir/census.bats"
 runmeta_test="$tests_dir/runmeta.bats"
+benchmark_test="$tests_dir/benchmark.bats"
+stills_test="$tests_dir/stills.bats"
 inventory='scripts/encode-benchmark/torrent-inventory.py'
 validator='scripts/validate/encode-benchmark.sh'
 media_kustomization='kubernetes/apps/media/kustomization.yaml'
@@ -44,34 +48,33 @@ for file in \
 	"$priority" \
 	"$samples" \
 	"$alerts" \
-	"$scaffold" \
 	"$probe" \
 	"$census" \
 	"$runmeta" \
+	"$benchmark" \
+	"$stills" \
 	"$template" \
 	"$contract_test" \
 	"$census_test" \
 	"$runmeta_test" \
+	"$benchmark_test" \
+	"$stills_test" \
 	"$inventory" \
 	"$validator" \
 	"$media_kustomization"; do
 	[[ -f "$file" ]] || fail "missing required source: $file"
 done
-[[ -x "$scaffold" ]] || fail "$scaffold must be executable"
+[[ ! -e "$scaffold" ]] || fail "$scaffold must be removed once all five scripts are real"
 [[ -x "$probe" ]] || fail "$probe must be executable"
 [[ -x "$census" ]] || fail "$census must be executable"
 [[ -x "$runmeta" ]] || fail "$runmeta must be executable"
+[[ -x "$benchmark" ]] || fail "$benchmark must be executable"
+[[ -x "$stills" ]] || fail "$stills must be executable"
 [[ -x "$inventory" ]] || fail "$inventory must be executable"
 
-# The shared structural scaffold must fail closed until each real command lands.
-set +e
-scaffold_output="$($scaffold 2>&1)"
-scaffold_status="$?"
-set -e
-assert_eq "$scaffold_status" '64' 'the not-ready scaffold exit status'
-assert_eq "$scaffold_output" \
-	'This benchmark command is unavailable in the structural source revision.' \
-	'the not-ready scaffold diagnostic'
+if rg -n 'not-ready[.]sh' "$kustomization" "$app/scripts"; then
+	fail 'a not-ready scaffold mapping or implementation remains'
+fi
 
 # Flux must reconcile only this suspended, inert child and must keep its dependency graph.
 assert_eq "$(yq -r '.metadata.name' "$ks")" 'encode-benchmark' 'Flux child name'
@@ -107,7 +110,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh'
+expected_mappings='probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -387,4 +390,4 @@ mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort
 (("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
 bats "${bats_files[@]}"
 
-echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, tested probe/census/runmeta scripts, two fail-closed commands, candidate/verified evidence gates, safe media mounts, and offline contracts."
+echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, five tested runtime scripts, candidate/verified evidence gates, safe media mounts, and offline contracts."

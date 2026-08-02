@@ -34,6 +34,7 @@ fi
 
 case "$filename" in
 	*Dolby*) fixture='dolby-vision-profile7.json' ;;
+	*HDRStatic*) fixture='hdr-static-metadata.json' ;;
 	*'Public Cleanup'* | *'Unlinked AVC'*) fixture='multi-audio.json' ;;
 	*TrueHD*) fixture='truehd-unknown.json' ;;
 	*) fixture='vc1.json' ;;
@@ -199,6 +200,26 @@ run_inventory_to_fixture() {
 		.dolbyVisionProfile == 7 and
 		.hdrFormat == "dolby-vision"
 	' <<<"$output"
+}
+
+# Catches a production break where Task 5's HDR validation receives no
+# normalized mastering-display or max-CLL fields from the shared probe source.
+@test "HDR static metadata is normalized for exact output validation" {
+	create_ffprobe_stub
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+
+	run "$SCRIPTS/probe.sh" "$BATS_TEST_TMPDIR/HDRStatic Fixture.mkv"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.masteringDisplay == {
+			redX: 0.68, redY: 0.32, greenX: 0.265, greenY: 0.69,
+			blueX: 0.15, blueY: 0.06, whitePointX: 0.3127,
+			whitePointY: 0.329, minLuminance: 0.0001, maxLuminance: 1000
+		} and
+		.maxCLL == {maxContent: 1000, maxAverage: 400}
+	' <<<"$output"
+	[ "$status" -eq 0 ]
 }
 
 # Catches a production break where aggregate container bitrate is allocated to
@@ -514,11 +535,12 @@ print(json.dumps(row["torrent_tags"]))
 	[ "$status" -eq 0 ]
 }
 
-# Catches a production break where the app prematurely enables benchmark/stills
-# mappings or regresses one of the tested probe/census/runmeta scripts.
-@test "ConfigMap maps only tested scripts to real implementations" {
+# Catches a production break where any of the five tested commands regresses to
+# a scaffold mapping after the encode and still-generation contracts land.
+@test "ConfigMap maps all tested scripts to real implementations" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh' ]
+	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
+	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }

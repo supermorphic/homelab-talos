@@ -359,11 +359,12 @@ EOF
 	[ "$output" = 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' ]
 }
 
-# Catches a production break where later command mappings are enabled before
-# their behavior contracts land or runmeta remains pointed at the scaffold.
-@test "ConfigMap maps only probe census and runmeta to real scripts" {
+# Catches a production break where any tested command regresses to the shared
+# scaffold after all five behavior contracts have landed.
+@test "ConfigMap maps all five tested commands to real scripts" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh' ]
+	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
+	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }

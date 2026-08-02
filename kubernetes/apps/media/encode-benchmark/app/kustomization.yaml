@@ -12,8 +12,8 @@ configMapGenerator:
       - probe.sh=scripts/probe.sh
       - census.sh=scripts/census.sh
       - runmeta.sh=scripts/runmeta.sh
-      - benchmark.sh=scripts/not-ready.sh
-      - stills.sh=scripts/not-ready.sh
+      - benchmark.sh=scripts/benchmark.sh
+      - stills.sh=scripts/stills.sh
 generatorOptions:
   labels:
     app.kubernetes.io/name: encode-benchmark

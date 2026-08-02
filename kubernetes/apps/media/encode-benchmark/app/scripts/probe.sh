@@ -19,6 +19,13 @@ jq -c --arg source_path "$source_path" '
 		elif . != null then . + 0
 		else .
 		end;
+	def rational:
+		if type == "number" then .
+		elif type == "string" and test("^-?[0-9]+/[1-9][0-9]*$") then
+			(split("/") | (.[0] | tonumber) / (.[1] | tonumber))
+		elif type == "string" and test("^-?[0-9]+([.][0-9]+)?$") then tonumber
+		else null
+		end;
 	def bit_depth($video):
 		($video.bits_per_raw_sample | numeric) //
 		(if (($video.pix_fmt // "") | test("p[0-9]+(le|be)?$")) then
@@ -35,6 +42,8 @@ jq -c --arg source_path "$source_path" '
 	| ($video.color_transfer // $video.tags.COLOR_TRANSFER // "") as $color_transfer
 	| ($video.color_space // $video.tags.COLOR_SPACE // "") as $color_space
 	| ([$video.side_data_list[]? | (.dv_profile | numeric) | select(. != null)][0] // null) as $dv_profile
+	| ([$video.side_data_list[]? | select(.side_data_type == "Mastering display metadata")][0] // null) as $mastering
+	| ([$video.side_data_list[]? | select(.side_data_type == "Content light level metadata")][0] // null) as $content_light
 	| (if $dv_profile == 7 then "dolby-vision"
 		elif ($video.codec_name == "hevc" and ($bit_depth // 0) >= 10 and
 			$color_transfer == "smpte2084" and $color_primaries == "bt2020") then "hdr10"
@@ -86,6 +95,22 @@ jq -c --arg source_path "$source_path" '
 		colorPrimaries: $color_primaries,
 		colorTransfer: $color_transfer,
 		colorSpace: $color_space,
+		masteringDisplay: (if $mastering == null then null else {
+			redX: ($mastering.red_x | rational),
+			redY: ($mastering.red_y | rational),
+			greenX: ($mastering.green_x | rational),
+			greenY: ($mastering.green_y | rational),
+			blueX: ($mastering.blue_x | rational),
+			blueY: ($mastering.blue_y | rational),
+			whitePointX: ($mastering.white_point_x | rational),
+			whitePointY: ($mastering.white_point_y | rational),
+			minLuminance: ($mastering.min_luminance | rational),
+			maxLuminance: ($mastering.max_luminance | rational)
+		} end),
+		maxCLL: (if $content_light == null then null else {
+			maxContent: ($content_light.max_content | numeric),
+			maxAverage: ($content_light.max_average | numeric)
+		} end),
 		hdrFormat: (if $cohort == "dolby-vision" then "dolby-vision"
 			elif $cohort == "hdr10" then "hdr10"
 			else ""
