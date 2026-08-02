@@ -147,7 +147,7 @@ and must **state its category and its supporting control inline**:
 
 | Category | Meaning | Backed by |
 |---|---|---|
-| **Authoritative control** | An authorization boundary. The action is impossible, not merely forbidden | Credential/RBAC, branch protection, SOPS key custody |
+| **Authoritative control** | A boundary, not a judgment call. Backed by a mechanism — whose strength is stated separately, since not every mechanism is absolute | Credential/RBAC, branch protection, SOPS key custody, `PreToolUse` hook |
 | **Operator policy** | A judgment boundary the repository cannot decide. Genuinely advisory, and legitimately so | Named human authority; no mechanism claimed |
 | **Gotcha** | Non-obvious repository-specific knowledge an agent cannot infer | Nothing — it is information, not a rule |
 
@@ -161,7 +161,7 @@ mechanism delivers:
 | Credential / RBAC | Hard boundary — the call fails at the API server |
 | Branch protection | Merge boundary — enforced server-side by GitHub |
 | CI check | **Delayed detection** — catches after the fact, does not prevent |
-| Pre-commit hook, shell guard | **Bypassable** — `--no-verify`, or editing the guard |
+| Pre-commit hook, shell guard, `PreToolUse` hook | **Bypassable** — `--no-verify`, or editing the guard. Catches accident, not intent |
 
 **Instruction alongside enforcement is permitted, bounded.** Where a bare denial would
 leave an agent confused about the correct path, the *workflow* may be stated once. The
@@ -503,10 +503,12 @@ rule carries its category and control:
 |---|---|---|
 | Never commit or push directly to `main` | Authoritative | Branch protection |
 | Never merge or enable auto-merge without per-merge authorization | **Operator policy** | Named human authority |
-| Stay within the assigned worktree; preserve unrelated changes | **Operator policy** | — |
+| Work on the assigned branch in the current worktree; preserve unrelated changes | **Operator policy** | — |
+| Worktree lifecycle (`wt switch --create`, `wt remove`) is operator-run | **Operator policy** | — |
 | Keep commits scoped and reviewable | **Operator policy** | — |
 | Report changed files, validation performed, remaining risk | **Operator policy** | — |
-| Fetch and rebase before every push; `--force-with-lease` only | **Operator policy** | — |
+| Fetch and rebase before every push | **Operator policy** | — |
+| Never `reset --hard`, `clean -fd`, unqualified `checkout .`/`restore .`, or force-push without a lease | Authoritative (bypassable) | `PreToolUse` hook (decision 5) |
 | Reads are direct; changes to Flux-managed state go through Git | Authoritative | Credential tiers (decision 1) |
 | Bootstrap, break-glass and recovery are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
 | GitHub protection mutation needs per-invocation authorization | Authoritative | Guarded recipe + token scope |
@@ -543,6 +545,73 @@ the safety non-goal.
 Distilled content lives in the `docs/decisions/` record named in each row. Git preserves
 the originals. `docs/superpowers/` is then removed.
 
+### 5. Worktree lifecycle is operator-run; destructive git commands are hooked
+
+The `persistent-git-worktree` skill has been deleted and replaced by
+[worktrunk](https://worktrunk.dev/) (`wt`, v0.71.0). The constraints that skill held —
+the worktree as a filesystem boundary, no raw `git worktree` lifecycle subcommands,
+`--force-with-lease` only, no `reset --hard` or `clean -fd` — currently live nowhere.
+`AGENTS.md` retains one line: *"Stay within the assigned worktree and branch."*
+
+#### Agents do not manage worktrees
+
+`wt switch --create` and `wt remove` are **operator-run**. Agents neither create nor
+remove worktrees, and no skill is added for it. The reasoning:
+
+- **An agent cannot work in a worktree it creates.** A session is bound to its launch
+  directory. Worktrunk's auto-cd relies on interactive shell integration, which an
+  agent's non-interactive tool calls do not have. A created worktree is one the agent
+  must then *not* enter, and that the operator must open regardless.
+- **The window-title problem is solved without automation.** VS Code supports
+  `${activeRepositoryBranchName}` and `${activeRepositoryName}` in `window.title`
+  (verified in the installed build). One user-level setting placing the branch first
+  distinguishes every window, which is the actual problem — the folder names all share
+  a `homelab-talos.` prefix and truncate to identical stubs. `.vscode/` is gitignored
+  (`.gitignore:35`), so no per-worktree file could be committed anyway.
+- **Removal is the risky half and has no upside.** Uncommitted work is unrecoverable;
+  removing a worktree the operator has open leaves VS Code pointed at nothing; and
+  `wt remove` deletes the branch only *if merged*, so a closed-unmerged PR leaves both
+  behind and still needs a human decision.
+
+#### What is hooked, and what it is worth
+
+A `PreToolUse` hook rejects four Bash patterns, all irreversible and none legitimate
+for an agent:
+
+| Pattern | Destroys |
+|---|---|
+| `git reset --hard` | Uncommitted work in the worktree |
+| `git clean -fd` (any `-f` with `-d`/`-x`) | Untracked files |
+| `git checkout .` / `git restore .` with no limiting pathspec | Working-tree changes |
+| `git push --force` / `-f` without `--force-with-lease` | Remote history |
+
+**A boundary hook was considered and rejected.** Blocking paths outside the worktree
+root would false-positive on legitimate work: agent sessions routinely read the
+installed skill cache and the toolchain, and **write** to the external persistent memory
+directory. The boundary was never the risk; irreversibility is, and none of the four
+patterns above involves crossing one.
+
+**The hook's strength is "bypassable"** under the table in *The admission test* — an
+agent could edit the settings file that defines it. That is accepted, because the threat
+model here is **accident, not intent**: agents have not been violating rules, so the
+control that pays is the one that catches a destructive command issued in good faith.
+
+#### Known condition: permissions are bypassed
+
+`~/.claude/settings.json` sets `"permissions": { "defaultMode": "bypassPermissions" }`.
+No tool call is gated, and every sibling worktree and the main clone are writable
+without a prompt. This is a deliberate operator choice and is **out of scope** for this
+audit, but it is recorded because it changes what the rules are worth: with no
+permission gate, `AGENTS.md` plus this hook are the only controls present.
+
+#### Worktree layout
+
+Two naming schemes coexist — one `homelab-talos-worktrees/…` slot left from the deleted
+skill, and four worktrunk-style siblings at `homelab-talos.<branch>`. The worktrunk
+convention is adopted; the leftover slot is removed by the operator. Project-level
+worktree configuration belongs in `.config/wt.toml`, which worktrunk tracks in the
+repository — unlike the personal skill it replaces, which could be and was deleted.
+
 ## Not in scope
 
 **Test reporting is retained whole.** All 9,587 lines of Allure, JUnit, campaign, and
@@ -560,8 +629,8 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 1. **Rules and credentials.** Rewrite root `AGENTS.md` to the categorised rule set. Bound
    `CLAUDE.md` to harness guidance. Mint the `observer`, `diagnostic`, and `admin` tiers;
    relocate admin credentials; build the command-to-permission matrix; add positive and
-   negative authorization tests. Resolve the `kubectl` contradiction in
-   `kubernetes/README.md`.
+   negative authorization tests. Add the destructive-git `PreToolUse` hook and its
+   tests. Resolve the `kubectl` contradiction in `kubernetes/README.md`.
 2. **Documentation.** Create `docs/decisions/`, `docs/phases/`, `docs/runbooks/`; add
    `validation.decisions` with the identity and immutability semantics above; replace the
    interim link exclusion with introduce-then-freeze; add the generated index; gitignore
@@ -639,6 +708,13 @@ deleted, and policy must exist before the assertions it replaces are deleted.
 16. Filenames are date-based, not sequentially numbered, because worktrees run in
     parallel.
 17. Test reporting is out of scope and slated for expansion, not reduction.
+18. Agents neither create nor remove worktrees. Worktree lifecycle is operator-run
+    through worktrunk, and no skill is added for it.
+19. A `PreToolUse` hook blocks four irreversible git patterns. A worktree-boundary hook
+    is rejected: the boundary is not the risk, and blocking it would break legitimate
+    out-of-tree reads and memory writes.
+20. `bypassPermissions` is recorded as a known condition, not changed here. It is why
+    `AGENTS.md` and the hook are the only controls present.
 
 ## Review disposition
 
