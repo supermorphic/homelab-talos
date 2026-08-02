@@ -178,10 +178,28 @@ fi
 if [[ "${FAKE_FAIL_STAGE:-}" == 'publish-talos' && "$count" -eq 2 ]]; then
   exit 76
 fi
+if [[ "${FAKE_FAIL_STAGE:-}" == 'rollback-move-failure' && "$count" -eq 2 ]]; then
+  exit 76
+fi
+if [[ "${FAKE_FAIL_STAGE:-}" == 'rollback-move-failure' && "$count" -eq 3 ]]; then
+  exit 77
+fi
 exec "$REAL_MV_BIN" "$@"
 EOF
 
-chmod +x "$fake_bin/git" "$fake_bin/kubectl" "$fake_bin/talosctl" "$fake_bin/mktemp" "$fake_bin/mv"
+cat >"$fake_bin/publication-hook" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${FAKE_FAIL_STAGE:-}" != 'publication-abort' ]] || exit 78
+EOF
+
+chmod +x \
+  "$fake_bin/git" \
+  "$fake_bin/kubectl" \
+  "$fake_bin/talosctl" \
+  "$fake_bin/mktemp" \
+  "$fake_bin/mv" \
+  "$fake_bin/publication-hook"
 
 file_mode() {
   if stat -f '%Lp' "$1" >/dev/null 2>&1; then
@@ -228,6 +246,7 @@ run_installer() {
     TALOSCTL_BIN="$fake_bin/talosctl" \
     MKTEMP_BIN="$fake_bin/mktemp" \
     MV_BIN="$fake_bin/mv" \
+    PUBLICATION_HOOK_BIN="$fake_bin/publication-hook" \
     FAKE_WORKTREE_ROOT="$worktree_root" \
     FAKE_GIT_COMMON_DIR="$main_root/.git" \
     FAKE_CALL_LOG="$worktree_root/calls.log" \
@@ -403,5 +422,52 @@ for failed_stage in publish-kube publish-talos; do
     [[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
   done
 done
+
+# A rollback move failure preserves and reports the sole recoverable old file.
+case_root="$fixture/failure-rollback-move"
+main_root="$case_root/main"
+worktree_root="$case_root/worktree"
+make_main_credentials "$main_root"
+mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
+printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
+printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
+output="$case_root/output.log"
+if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=rollback-move-failure >"$output" 2>&1; then
+  echo 'Installer accepted a publication plus rollback move failure.' >&2
+  exit 1
+fi
+worktree_root_physical="$(cd -- "$worktree_root" && pwd -P)"
+recovery_kubeconfig="$worktree_root_physical/.kube/config.rollback"
+[[ -f "$recovery_kubeconfig" ]] || {
+  echo 'Rollback failure deleted the only recoverable kubeconfig backup.' >&2
+  exit 1
+}
+[[ "$(<"$recovery_kubeconfig")" == 'original-kubeconfig' ]]
+[[ "$(file_mode "$recovery_kubeconfig")" == '600' ]]
+[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
+[[ ! -e "$worktree_root/.talos/config.rollback" ]]
+rg -Fq 'RECOVERY REQUIRED' "$output"
+rg -Fq "$recovery_kubeconfig" "$output"
+[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config ! -name config.rollback -print -quit)" ]]
+
+# An abort hook between publication moves exercises state-aware EXIT restoration.
+case_root="$fixture/failure-publication-abort"
+main_root="$case_root/main"
+worktree_root="$case_root/worktree"
+make_main_credentials "$main_root"
+mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
+printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
+printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
+output="$case_root/output.log"
+if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=publication-abort >"$output" 2>&1; then
+  echo 'Installer accepted an abort between publication moves.' >&2
+  exit 1
+fi
+[[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
+[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
+[[ ! -e "$worktree_root/.kube/config.rollback" ]]
+[[ ! -e "$worktree_root/.talos/config.rollback" ]]
+rg -Fq 'restored the prior credential pair' "$output"
+[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
 
 echo 'Worktree credential installation contract passed.'

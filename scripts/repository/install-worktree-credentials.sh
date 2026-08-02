@@ -7,6 +7,7 @@ kubectl_bin="${KUBECTL_BIN:-kubectl}"
 talosctl_bin="${TALOSCTL_BIN:-talosctl}"
 mktemp_bin="${MKTEMP_BIN:-mktemp}"
 mv_bin="${MV_BIN:-mv}"
+publication_hook_bin="${PUBLICATION_HOOK_BIN:-}"
 
 worktree_root="$("$git_bin" rev-parse --show-toplevel)"
 git_common_dir="$("$git_bin" rev-parse --path-format=absolute --git-common-dir)"
@@ -37,6 +38,8 @@ main_kubeconfig="$main_clone_root/.kube/config"
 main_talosconfig="$main_clone_root/.talos/config"
 worktree_kubeconfig="$worktree_root/.kube/config"
 worktree_talosconfig="$worktree_root/.talos/config"
+backup_kubeconfig="$worktree_root/.kube/config.rollback"
+backup_talosconfig="$worktree_root/.talos/config.rollback"
 
 [[ -f "$main_kubeconfig" ]] || {
   echo "Missing main-clone .kube/config at $main_kubeconfig; ask the operator to restore admin access there first." >&2
@@ -50,21 +53,86 @@ worktree_talosconfig="$worktree_root/.talos/config"
 kubeconfig_dir="${worktree_kubeconfig%/*}"
 talosconfig_dir="${worktree_talosconfig%/*}"
 install -d -m 700 "$kubeconfig_dir" "$talosconfig_dir"
+[[ ! -e "$backup_kubeconfig" && ! -e "$backup_talosconfig" ]] || {
+  echo 'RECOVERY REQUIRED: a prior credential rollback file already exists; resolve it before installing new credentials.' >&2
+  [[ ! -e "$backup_kubeconfig" ]] || echo "  Kubernetes recovery file: $backup_kubeconfig" >&2
+  [[ ! -e "$backup_talosconfig" ]] || echo "  Talos recovery file: $backup_talosconfig" >&2
+  exit 1
+}
 staged_kubeconfig=''
 staged_talosconfig=''
-backup_kubeconfig=''
-backup_talosconfig=''
-cleanup() {
+backup_kubeconfig_created=false
+backup_talosconfig_created=false
+publication_state='staging'
+
+cleanup_staged_files() {
   local temp_file
-  for temp_file in \
-    "$staged_kubeconfig" \
-    "$staged_talosconfig" \
-    "$backup_kubeconfig" \
-    "$backup_talosconfig"; do
+  for temp_file in "$staged_kubeconfig" "$staged_talosconfig"; do
     [[ -z "$temp_file" ]] || rm -f -- "$temp_file"
   done
 }
-trap cleanup EXIT
+
+restore_prior_pair() {
+  local restore_status=0
+
+  if [[ "$kubeconfig_existed" == true ]]; then
+    if [[ "$backup_kubeconfig_created" == true && -f "$backup_kubeconfig" ]] && \
+      "$mv_bin" -f -- "$backup_kubeconfig" "$worktree_kubeconfig"; then
+      backup_kubeconfig_created=false
+    else
+      restore_status=1
+      echo 'RECOVERY REQUIRED: automatic kubeconfig rollback failed.' >&2
+      echo "  Preserved prior kubeconfig: $backup_kubeconfig" >&2
+      echo "  Restore it to: $worktree_kubeconfig" >&2
+    fi
+  elif ! rm -f -- "$worktree_kubeconfig"; then
+    restore_status=1
+    echo "RECOVERY REQUIRED: remove newly published kubeconfig $worktree_kubeconfig" >&2
+  fi
+
+  if [[ "$talosconfig_existed" == true ]]; then
+    if [[ "$backup_talosconfig_created" == true && -f "$backup_talosconfig" ]] && \
+      "$mv_bin" -f -- "$backup_talosconfig" "$worktree_talosconfig"; then
+      backup_talosconfig_created=false
+    else
+      restore_status=1
+      echo 'RECOVERY REQUIRED: automatic Talos config rollback failed.' >&2
+      echo "  Preserved prior Talos config: $backup_talosconfig" >&2
+      echo "  Restore it to: $worktree_talosconfig" >&2
+    fi
+  elif ! rm -f -- "$worktree_talosconfig"; then
+    restore_status=1
+    echo "RECOVERY REQUIRED: remove newly published Talos config $worktree_talosconfig" >&2
+  fi
+
+  if [[ "$restore_status" -eq 0 ]]; then
+    publication_state='recovered'
+    echo 'Credential publication stopped; restored the prior credential pair.' >&2
+  else
+    publication_state='recovery-failed'
+  fi
+  return "$restore_status"
+}
+
+handle_exit() {
+  local exit_status="$?"
+  trap - EXIT INT TERM
+  set +e
+
+  if [[ "$publication_state" == 'publishing' ]]; then
+    restore_prior_pair || exit_status=1
+  elif [[ "$publication_state" == 'staging' ]]; then
+    [[ "$backup_kubeconfig_created" == false ]] || rm -f -- "$backup_kubeconfig"
+    [[ "$backup_talosconfig_created" == false ]] || rm -f -- "$backup_talosconfig"
+  fi
+
+  cleanup_staged_files
+  exit "$exit_status"
+}
+
+trap handle_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 staged_kubeconfig="$("$mktemp_bin" "$kubeconfig_dir/config.XXXXXX")"
 staged_talosconfig="$("$mktemp_bin" "$talosconfig_dir/config.XXXXXX")"
 
@@ -181,53 +249,40 @@ kubeconfig_existed=false
 talosconfig_existed=false
 if [[ -e "$worktree_kubeconfig" ]]; then
   kubeconfig_existed=true
-  backup_kubeconfig="$("$mktemp_bin" "$kubeconfig_dir/config.backup.XXXXXX")"
   install -m 600 "$worktree_kubeconfig" "$backup_kubeconfig"
+  backup_kubeconfig_created=true
 fi
 if [[ -e "$worktree_talosconfig" ]]; then
   talosconfig_existed=true
-  backup_talosconfig="$("$mktemp_bin" "$talosconfig_dir/config.backup.XXXXXX")"
   install -m 600 "$worktree_talosconfig" "$backup_talosconfig"
+  backup_talosconfig_created=true
 fi
-
-rollback_prior_pair() {
-  local rollback_status=0
-
-  if [[ "$kubeconfig_existed" == true ]]; then
-    "$mv_bin" -f -- "$backup_kubeconfig" "$worktree_kubeconfig" || rollback_status=1
-  else
-    rm -f -- "$worktree_kubeconfig" || rollback_status=1
-  fi
-
-  if [[ "$talosconfig_existed" == true ]]; then
-    "$mv_bin" -f -- "$backup_talosconfig" "$worktree_talosconfig" || rollback_status=1
-  else
-    rm -f -- "$worktree_talosconfig" || rollback_status=1
-  fi
-
-  return "$rollback_status"
-}
 
 # Each replacement is an atomic same-directory rename. If either ordinary move
-# command fails, restore the complete prior pair; a crash-safe transaction across
-# the two credential directories is outside the filesystem's guarantees.
+# command or trapped interruption stops publication, the EXIT handler restores
+# the prior pair. An unrecovered backup is preserved at its reported *.rollback
+# path; crash-safe two-file transactionality remains outside filesystem guarantees.
+publication_state='publishing'
 if ! "$mv_bin" -f -- "$staged_kubeconfig" "$worktree_kubeconfig"; then
-  rollback_prior_pair || {
-    echo 'Credential publication failed and rollback could not restore the prior pair.' >&2
-    exit 1
-  }
-  echo 'Credential publication failed before replacing the kubeconfig; restored the prior pair.' >&2
-  exit 1
-fi
-if ! "$mv_bin" -f -- "$staged_talosconfig" "$worktree_talosconfig"; then
-  rollback_prior_pair || {
-    echo 'Credential publication failed and rollback could not restore the prior pair.' >&2
-    exit 1
-  }
-  echo 'Credential publication failed while replacing the Talos config; restored the prior pair.' >&2
+  echo 'Credential publication failed while replacing the kubeconfig.' >&2
   exit 1
 fi
 
-cleanup
-trap - EXIT
+if [[ -n "$publication_hook_bin" ]] && ! "$publication_hook_bin"; then
+  echo 'Credential publication aborted between destination replacements.' >&2
+  exit 1
+fi
+
+if ! "$mv_bin" -f -- "$staged_talosconfig" "$worktree_talosconfig"; then
+  echo 'Credential publication failed while replacing the Talos config.' >&2
+  exit 1
+fi
+
+publication_state='complete'
+[[ "$backup_kubeconfig_created" == false ]] || rm -f -- "$backup_kubeconfig"
+[[ "$backup_talosconfig_created" == false ]] || rm -f -- "$backup_talosconfig"
+backup_kubeconfig_created=false
+backup_talosconfig_created=false
+cleanup_staged_files
+trap - EXIT INT TERM
 echo "Wrote scoped Kubernetes and Talos credentials for worktree $worktree_root."
