@@ -34,6 +34,39 @@ The diagnostic verifiers select `homelab-diagnostic` only when that named contex
 present. Therefore an operator admin kubeconfig without renamed contexts can continue to
 run the same recipes using its current context.
 
+The observer and diagnostic identities inherit Kubernetes `view`. The supplemental
+ClusterRole adds only these campaign-required resources, each with `get`, `list`, and
+`watch` (plus core `pods/log` with `get`):
+
+| API group | Resources |
+|---|---|
+| `apiextensions.k8s.io` | `customresourcedefinitions` |
+| `apiregistration.k8s.io` | `apiservices` |
+| `aquasecurity.github.io` | `vulnerabilityreports` |
+| `cert-manager.io` | `certificates`, `clusterissuers` |
+| `cilium.io` | `ciliumclusterwidenetworkpolicies`, `ciliumendpoints`, `ciliumendpointslices`, `ciliumidentities`, `ciliumnetworkpolicies`, `ciliumnodes` |
+| `gateway.networking.k8s.io` | `gatewayclasses`, `gateways`, `httproutes` |
+| `gatus.io` | `endpoints` |
+| `helm.toolkit.fluxcd.io` | `helmreleases` |
+| `kustomize.toolkit.fluxcd.io` | `kustomizations` |
+| `longhorn.io` | `backuptargets`, `nodes`, `recurringjobs`, `volumes` |
+| `metallb.io` | `ipaddresspools` |
+| `metrics.k8s.io` | `nodes`, `pods` |
+| `monitoring.coreos.com` | `prometheusrules`, `servicemonitors` |
+| `notification.toolkit.fluxcd.io` | `alerts`, `providers`, `receivers` |
+| `rbac.authorization.k8s.io` | `clusterrolebindings`, `clusterroles`, `rolebindings`, `roles` |
+| `source.toolkit.fluxcd.io` | `buckets`, `gitrepositories`, `helmcharts`, `helmrepositories`, `ocirepositories` |
+| `storage.k8s.io` | `csidrivers`, `storageclasses` |
+| `tailscale.com` | `connectors`, `dnsconfigs`, `proxyclasses`, `proxygroups` |
+
+Catalog validation compares this exact source RBAC contract with the scoped campaign's
+static requirements. Wildcard resources, missing groups, extra verbs, Secret reads,
+mutations, and hidden calls reached through nested Kubernetes Just recipes fail offline.
+RBAC object reads are intentionally limited to roles and bindings so the Portainer
+verifier can compare its live authorization graph with source and detect alternate direct
+bindings. They expose policy metadata, not Secret bodies, and grant no impersonation,
+`bind`, `escalate`, or write verb.
+
 ## Verifier matrix
 
 | Verifier | Tier | Reason |
@@ -56,7 +89,7 @@ run the same recipes using its current context.
 | `seerr` | observer | Reads rollout, route, and application state. |
 | `flaresolverr` | diagnostic | Port-forwards its in-cluster-only Service to preserve the ready-JSON oracle. |
 | `qbit-manage` | observer | Reads controller and job state. |
-| `monitoring` | operator | Its retained routing oracle reads Alertmanager's generated configuration Secret; replacing that full oracle is outside this change. |
+| `monitoring` | observer | Reads stack health, Prometheus telemetry, and Alertmanager's loaded receiver/route through `/api/v2/status`. |
 | `gatus` | observer | Reads Gatus endpoint and rollout state. |
 | `portainer` | observer | Reads workload, PVC, route, network policy, and effective RBAC state. |
 | `test-reports` | observer | Reads report service and storage state. |
@@ -84,6 +117,12 @@ port-forward, create, patch, and delete requests to be denied; diagnostic exec a
 port-forward requests to succeed while Secret and Flux mutations remain denied; and
 Talos version and service inspection to succeed with the reader credential.
 
+When both scoped contexts exist, the gate exercises them directly and never depends on
+impersonation. When neither exists, it treats the current kubeconfig as operator admin
+and evaluates the two ServiceAccounts with their complete Kubernetes identities:
+username, `system:authenticated`, `system:serviceaccounts`, and
+`system:serviceaccounts:kube-system`. A partial one-context layout is rejected.
+
 Plan the scoped live campaign, review its exact membership and confirmation, then run
 only with the confirmation it prints:
 
@@ -91,7 +130,7 @@ only with the confirmation it prints:
 mise exec -- just test campaign-plan scoped-verification
 ```
 
-`scoped-verification` contains only observer and diagnostic suites. The complete
-`verification` campaign also contains operator-only suites and must run with operator
-credentials. Neither live campaign is part of `executions.ci`; CI remains secret-free
-and cluster-independent.
+`scoped-verification` contains every observer and diagnostic suite and no operator-only
+suite. The complete `verification` campaign has the same credential requirements: it
+can run with worktree contexts or from the main clone with admin credentials. Neither
+live campaign is part of `executions.ci`; CI remains secret-free and cluster-independent.

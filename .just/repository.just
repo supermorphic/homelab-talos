@@ -1207,10 +1207,8 @@ verify-files: require-bash
     @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 25  # Update when adding/removing a guarded rollout recipe.
     @agent_access_recipe="$(just --dry-run bootstrap agent-access 2>&1)"; \
       normalized_recipe="$(tr '\n\t' '  ' <<<"$agent_access_recipe" | sed -E 's/\\[[:space:]]+/ /g; s/[[:space:]]+/ /g')"; \
-      auth_contract='actual="$(kubectl --kubeconfig "$kubeconfig" auth can-i "$verb" "$resource" --as="$subject" "${service_account_impersonation_groups[@]}" "$@" 2>/dev/null || true)"'; \
-      rg -Fq -- "$auth_contract" <<<"$normalized_recipe" || { echo 'agent-access bootstrap must pass the complete ServiceAccount identity through every auth can-i request' >&2; exit 1; }; \
-      matrix_contract="for api_group in source.toolkit.fluxcd.io kustomize.toolkit.fluxcd.io helm.toolkit.fluxcd.io notification.toolkit.fluxcd.io cilium.io gatus.io tailscale.com longhorn.io aquasecurity.github.io metrics.k8s.io; do for verb in get list watch; do assert_can_i yes \"\$subject\" \"\$verb\" '*' --api-group=\"\$api_group\" --all-namespaces done done"; \
-      rg -Fq -- "$matrix_contract" <<<"$normalized_recipe" || { echo 'agent-access bootstrap must send every declared API group and read verb through assert_can_i' >&2; exit 1; }
+      matrix_contract="scripts/verify/agent-access.sh \"\$kubeconfig\" '.talos/config'"; \
+      rg -Fq -- "$matrix_contract" <<<"$normalized_recipe" || { echo 'agent-access bootstrap must run the shared complete authorization matrix' >&2; exit 1; }
     @if rg -n "(^[[:space:]]*talosconfig='(\\.\\./)?clusterconfig/talosconfig'|--talosconfig (\\.\\./)?clusterconfig/talosconfig|^[[:space:]]*kubeconfig='(\\.\\./)?kubeconfig'|^kubeconfig := \"kubeconfig\")" .just/bootstrap.just talos/mod.just kubernetes/mod.just; then echo "runtime credentials must use the centralized .talos/config and .kube/config paths" >&2; exit 1; fi
     @if git check-ignore -q talos/talconfig.yaml; then echo "talos/talconfig.yaml must be trackable" >&2; exit 1; fi
     @if git check-ignore -q talos/talsecret.sops.yaml; then echo "encrypted Talos secrets must be trackable" >&2; exit 1; fi

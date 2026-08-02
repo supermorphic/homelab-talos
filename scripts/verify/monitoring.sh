@@ -16,8 +16,8 @@ exporter_name='flux-kube-state-metrics'
 exporter_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
 prometheus_base_url='https://prometheus.lab.supermorphic.com'
 prometheus_resolve="prometheus.lab.supermorphic.com:443:${gateway_ip}"
-temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-monitoring-verify.XXXXXX")"
-trap 'rm -rf -- "$temp_dir"' EXIT
+alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
+alertmanager_resolve="alertmanager.lab.supermorphic.com:443:${gateway_ip}"
 
 for k in kube-prometheus-stack kube-prometheus-stack-config flux-kube-state-metrics; do
   [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$k" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
@@ -149,17 +149,18 @@ alertmanagers_response="$(
   exit 1
 }
 
-alertmanager_config="$temp_dir/alertmanager.yaml"
-kubectl --kubeconfig "$kubeconfig" --namespace "$ns" \
-  get secret alertmanager-kube-prometheus-stack-alertmanager-generated \
-  --output jsonpath='{.data.alertmanager\.yaml\.gz}' |
-  base64 -d |
-  gunzip >"$alertmanager_config"
+alertmanager_status="$(curl --silent --show-error --fail --max-time 15 \
+  --resolve "$alertmanager_resolve" "$alertmanager_base_url/api/v2/status")"
+alertmanager_config="$(yq -r '.config.original // ""' <<<"$alertmanager_status")"
+[[ -n "$alertmanager_config" ]] || {
+  echo 'Alertmanager status API returned no loaded configuration.' >&2
+  exit 1
+}
 yq -e '
   .receivers[] |
   select(.name == "ntfy") |
   (.webhook_configs | length) > 0
-' "$alertmanager_config" >/dev/null || {
+' - <<<"$alertmanager_config" >/dev/null || {
   echo 'Alertmanager has not loaded the expected ntfy receiver.' >&2
   exit 1
 }
@@ -167,7 +168,7 @@ yq -r '
   .route.routes[] |
   select(.receiver == "ntfy") |
   .matchers[]
-' "$alertmanager_config" |
+' - <<<"$alertmanager_config" |
   rg -q 'severity.*critical.*warning' || {
     echo 'Alertmanager has not loaded the expected warning/critical route to ntfy.' >&2
     exit 1

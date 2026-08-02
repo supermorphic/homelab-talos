@@ -33,17 +33,34 @@ cluster_role_binding(name, service_accounts, role_name) := {
 	],
 }
 
-read_groups := [
-	"source.toolkit.fluxcd.io",
-	"kustomize.toolkit.fluxcd.io",
-	"helm.toolkit.fluxcd.io",
-	"notification.toolkit.fluxcd.io",
-	"cilium.io",
-	"gatus.io",
-	"tailscale.com",
-	"longhorn.io",
-	"aquasecurity.github.io",
-	"metrics.k8s.io",
+read_requirements := {
+	"apiextensions.k8s.io": {"customresourcedefinitions"},
+	"apiregistration.k8s.io": {"apiservices"},
+	"aquasecurity.github.io": {"vulnerabilityreports"},
+	"cert-manager.io": {"certificates", "clusterissuers"},
+	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumendpointslices", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
+	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes"},
+	"gatus.io": {"endpoints"},
+	"helm.toolkit.fluxcd.io": {"helmreleases"},
+	"kustomize.toolkit.fluxcd.io": {"kustomizations"},
+	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "volumes"},
+	"metallb.io": {"ipaddresspools"},
+	"metrics.k8s.io": {"nodes", "pods"},
+	"monitoring.coreos.com": {"prometheusrules", "servicemonitors"},
+	"notification.toolkit.fluxcd.io": {"alerts", "providers", "receivers"},
+	"rbac.authorization.k8s.io": {"clusterrolebindings", "clusterroles", "rolebindings", "roles"},
+	"source.toolkit.fluxcd.io": {"buckets", "gitrepositories", "helmcharts", "helmrepositories", "ocirepositories"},
+	"storage.k8s.io": {"csidrivers", "storageclasses"},
+	"tailscale.com": {"connectors", "dnsconfigs", "proxyclasses", "proxygroups"},
+}
+
+read_rules := [{
+	"apiGroups": [api_group],
+	"resources": [resource | some resource in resources],
+	"verbs": ["get", "list", "watch"],
+} |
+	some api_group
+	resources := read_requirements[api_group]
 ]
 
 valid_fixture := [
@@ -51,10 +68,10 @@ valid_fixture := [
 	service_account("homelab-diagnostic"),
 	cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
 	cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
-	cluster_role("homelab-observer-extra", [
-		{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
-		{"apiGroups": read_groups, "resources": ["*"], "verbs": ["get", "list", "watch"]},
-	]),
+	cluster_role("homelab-observer-extra", array.concat(
+		[{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]}],
+		read_rules,
+	)),
 	cluster_role_binding(
 		"homelab-observer-extra",
 		["homelab-observer", "homelab-diagnostic"],
@@ -99,6 +116,25 @@ document_with_rule(document, role_name, {
 	some document in valid_fixture
 ]
 
+document_without_api_group(document, role_name, api_group) := object.union(
+	document,
+	{"rules": [rule |
+		some rule in object.get(document, "rules", [])
+		object.get(rule, "apiGroups", []) != [api_group]
+	]},
+) if {
+	object.get(object.get(document, "metadata", {}), "name", "") == role_name
+}
+
+document_without_api_group(document, role_name, _) := document if {
+	object.get(object.get(document, "metadata", {}), "name", "") != role_name
+}
+
+fixture_without_api_group(role_name, api_group) := [
+document_without_api_group(document, role_name, api_group) |
+	some document in valid_fixture
+]
+
 fixture_without(name) := [
 document |
 	some document in valid_fixture
@@ -139,6 +175,21 @@ test_observer_cannot_read_secrets if {
 test_observer_cannot_exec if {
 	messages := deny with input as fixture_with_rule("homelab-observer-extra", [""], ["pods/exec"], ["create"])
 	count(messages) == 1
+}
+
+test_observer_cannot_receive_wildcard_custom_resources if {
+	messages := deny with input as fixture_with_rule("homelab-observer-extra", ["metallb.io"], ["*"], ["get", "list", "watch"])
+	count(messages) == 1
+}
+
+test_observer_requires_gateway_reads if {
+	messages := deny with input as fixture_without_api_group("homelab-observer-extra", "gateway.networking.k8s.io")
+	count(messages_matching(messages, "gateway.networking.k8s.io")) == 1
+}
+
+test_observer_requires_notification_flux_reads if {
+	messages := deny with input as fixture_without_api_group("homelab-observer-extra", "notification.toolkit.fluxcd.io")
+	count(messages_matching(messages, "notification.toolkit.fluxcd.io")) == 1
 }
 
 test_diagnostic_cannot_patch_flux if {

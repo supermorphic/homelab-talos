@@ -2411,58 +2411,10 @@ agent-access:
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
       --for=condition=Ready kustomization/agent-access --timeout=5m
 
-    service_account_impersonation_groups=(
-      --as-group=system:authenticated
-      --as-group=system:serviceaccounts
-      --as-group=system:serviceaccounts:kube-system
-    )
-    assert_can_i() {
-      local expected="$1"
-      local subject="$2"
-      local verb="$3"
-      local resource="$4"
-      shift 4
-      local actual
-      actual="$(kubectl --kubeconfig "$kubeconfig" auth can-i \
-        "$verb" "$resource" --as="$subject" \
-        "${service_account_impersonation_groups[@]}" "$@" 2>/dev/null || true)"
-      [[ "$actual" == "$expected" ]] || {
-        echo "Expected $subject can-i $verb $resource to be $expected, got ${actual:-no result}." >&2
-        return 1
-      }
-    }
-
-    observer='system:serviceaccount:kube-system:homelab-observer'
-    diagnostic='system:serviceaccount:kube-system:homelab-diagnostic'
-    for subject in "$observer" "$diagnostic"; do
-      assert_can_i yes "$subject" get pods --all-namespaces
-      assert_can_i yes "$subject" get pods/log --all-namespaces
-      for api_group in \
-        source.toolkit.fluxcd.io \
-        kustomize.toolkit.fluxcd.io \
-        helm.toolkit.fluxcd.io \
-        notification.toolkit.fluxcd.io \
-        cilium.io \
-        gatus.io \
-        tailscale.com \
-        longhorn.io \
-        aquasecurity.github.io \
-        metrics.k8s.io; do
-        for verb in get list watch; do
-          assert_can_i yes "$subject" "$verb" '*' --api-group="$api_group" --all-namespaces
-        done
-      done
-      assert_can_i no "$subject" get secrets --all-namespaces
-      assert_can_i no "$subject" patch kustomizations.kustomize.toolkit.fluxcd.io --all-namespaces
-      assert_can_i no "$subject" delete pods --all-namespaces
-      assert_can_i no "$subject" impersonate users
-      assert_can_i no "$subject" bind clusterroles.rbac.authorization.k8s.io
-      assert_can_i no "$subject" escalate clusterroles.rbac.authorization.k8s.io
-    done
-    assert_can_i no "$observer" create pods/exec --all-namespaces
-    assert_can_i no "$observer" create pods/portforward --all-namespaces
-    assert_can_i yes "$diagnostic" create pods/exec --all-namespaces
-    assert_can_i yes "$diagnostic" create pods/portforward --all-namespaces
+    # With an admin kubeconfig, the shared verifier selects its complete ServiceAccount
+    # impersonation path (username plus all three Kubernetes identity groups). Worktree
+    # scoped contexts use the same matrix directly without impersonation.
+    scripts/verify/agent-access.sh "$kubeconfig" '{{talosconfig}}'
 
     bootstrap_complete=true
     echo 'agent-access authorization acceptance passed. Change the Git source to suspend=false in a separate reviewed change.'

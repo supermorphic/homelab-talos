@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Live acceptance for FlareSolverr. It has NO HTTPRoute/DNS/gateway path (in-cluster only),
 # so instead of a gateway probe we port-forward the ClusterIP Service and hit GET / directly,
-# asserting the "FlareSolverr is ready!" JSON. Operator-only; NOT part of just ci.
+# asserting the "FlareSolverr is ready!" JSON. Diagnostic tier; NOT part of just ci.
 # NOTE: this proves the service is UP — it does NOT prove any Cloudflare-protected indexer
 # (e.g. 1337x) works. That is a manual Prowlarr proxy + indexer test, by design.
 [[ "$#" -eq 1 ]] || {

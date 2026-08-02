@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import catalog_validator
 import yaml
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -601,6 +602,102 @@ def fail_fast_contract(root: Path, canonical: dict[str, Any]) -> None:
         "Duplicate test catalog IDs: validation.ci\n",
     )
 
+
+def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
+    analyze = catalog_validator.forbidden_kubernetes_operations
+    cases = {
+        "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
+        "renamed-secret": 'k=kubectl\n"$k" get --namespace monitoring secret foo',
+        "option-between": "kubectl get --output name --namespace monitoring secrets",
+        "helper-secret": 'kg() { kubectl get "$@"; }\nkg --output name secrets',
+        "helm-storage": "helm get values cilium --namespace kube-system",
+        "mutation": "kubectl --namespace default patch deployment app -p {}",
+    }
+    for name, source in cases.items():
+        assert analyze(source), f"{name}: forbidden operation was not detected"
+    assert analyze("kubectl auth can-i get secrets") == []
+    assert analyze("assert_can_i observer no create pods/exec") == []
+
+    fixture = root / "access-reachability"
+    (fixture / "scripts/verify").mkdir(parents=True)
+    (fixture / "kubernetes").mkdir()
+    (fixture / "scripts/verify/root.sh").write_text(
+        "#!/usr/bin/env bash\njust kube root-check\n", encoding="utf-8"
+    )
+    (fixture / "kubernetes/mod.just").write_text(
+        "root-check: nested-check\n    true\n"
+        "nested-check:\n    kubectl get --output name secrets\n",
+        encoding="utf-8",
+    )
+    reachable = catalog_validator.reachable_verifier_source(fixture, "scripts/verify/root.sh")
+    assert analyze(reachable), "nested Just recipe bypass was not detected"
+
+    def diagnostic_without_context(data: dict[str, Any]) -> None:
+        suite(data, "verification.homepage")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "diagnostic-context-contract",
+        diagnostic_without_context,
+        "Diagnostic verifier verification.homepage must select homelab-diagnostic "
+        "conditionally.\n",
+    )
+
+    def agent_access_without_matrix(data: dict[str, Any]) -> None:
+        suite(data, "verification.agent-access")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "agent-access-matrix-contract",
+        agent_access_without_matrix,
+        "verification.agent-access does not cover the required authorization matrix.\n",
+    )
+
+    def portainer_without_rbac_oracle(data: dict[str, Any]) -> None:
+        suite(data, "verification.portainer")["runner"]["implementation"] = (
+            "scripts/verify/metrics-server.sh"
+        )
+
+    expect_rejection(
+        root,
+        canonical,
+        "portainer-rbac-oracle",
+        portainer_without_rbac_oracle,
+        "verification.portainer must prove exact live RBAC without impersonation.\n",
+    )
+
+    def campaign_rbac_drift(data: dict[str, Any]) -> None:
+        data["campaigns"]["scoped-verification"]["access"]["required_read_rules"][
+            "cilium.io"
+        ].remove("ciliumnodes")
+
+    expect_rejection(
+        root,
+        canonical,
+        "scoped-campaign-rbac-drift",
+        campaign_rbac_drift,
+        "Scoped verifier campaign requirements and observer RBAC grants differ.\n",
+    )
+
+    def operator_only_full_campaign(data: dict[str, Any]) -> None:
+        suite(data, "verification.monitoring")["access"]["tier"] = "operator"
+        data["campaigns"]["scoped-verification"]["members"].remove("verification.monitoring")
+
+    expect_rejection(
+        root,
+        canonical,
+        "operator-only-full-campaign",
+        operator_only_full_campaign,
+        "The full verification campaign must run with either scoped contexts or admin "
+        "impersonation; operator-only suites remain: verification.monitoring.\n",
+    )
+
     def entry_before_campaign(data: dict[str, Any]) -> None:
         suite(data, "validation.ci")["metadata"]["source"] = "other"
         data["campaigns"]["standard"]["includes"].append("full")
@@ -643,6 +740,7 @@ def main() -> int:
         "campaign-composition": campaign_composition_contract,
         "execution": execution_contract,
         "fail-fast": fail_fast_contract,
+        "access-boundary": access_boundary_contract,
     }
     selected = sys.argv[1:] or list(groups)
     unknown = set(selected) - groups.keys()

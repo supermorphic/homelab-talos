@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -64,27 +65,226 @@ SAFE_RUNNER = re.compile(
 VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
 
 
-def verifier_command_text(implementation: str) -> str:
-    """Return executable-looking verifier text without comments or continuations."""
-    content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
-    lines = []
-    pending = ""
-    for raw_line in content.splitlines():
-        stripped = raw_line.lstrip()
-        if stripped.startswith("#"):
+def scoped_read_rules(catalog: dict[str, Any]) -> dict[str, set[str]]:
+    raw = (
+        catalog.get("campaigns", {})
+        .get("scoped-verification", {})
+        .get("access", {})
+        .get("required_read_rules")
+    )
+    if (
+        not isinstance(raw, dict)
+        or not raw
+        or any(
+            not isinstance(api_group, str)
+            or not api_group
+            or not isinstance(resources, list)
+            or not resources
+            or any(
+                not isinstance(resource, str) or not resource or resource == "*"
+                for resource in resources
+            )
+            for api_group, resources in (raw or {}).items()
+        )
+    ):
+        fail("Campaign scoped-verification must declare bounded required_read_rules.\n")
+    return {api_group: set(resources) for api_group, resources in raw.items()}
+
+
+def _shell_tokens(source: str) -> list[list[str]]:
+    logical = source.replace("\\\n", " ")
+    statements: list[list[str]] = []
+    lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    current: list[str] = []
+    try:
+        for token in lexer:
+            if token and all(character in ";&|()<>\n" for character in token):
+                if current:
+                    statements.append(current)
+                    current = []
+            else:
+                current.append(token)
+    except ValueError:
+        statements = []
+        for line in logical.splitlines():
+            try:
+                tokens = shlex.split(line, comments=True, posix=True)
+            except ValueError:
+                tokens = line.split()
+            if tokens:
+                statements.append(tokens)
+        current = []
+    if current:
+        statements.append(current)
+    return statements
+
+
+def _command_aliases(source: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    aliases: dict[str, list[str]] = {"kubectl": []}
+    for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=\(\s*kubectl\b([^)]*)\)", source):
+        aliases[match.group(1)] = shlex.split(match.group(2), comments=True, posix=True)
+    for match in re.finditer(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=(?:['\"])?kubectl(?:['\"])?\s*$", source
+    ):
+        aliases[match.group(1)] = []
+
+    wrappers: dict[str, list[str]] = {}
+    for match in re.finditer(
+        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{([^\n}]*)",
+        source,
+    ):
+        name = match.group(1)
+        body_start = match.start(2)
+        same_line_close = source.find("}", body_start, source.find("\n", body_start) + 1)
+        if same_line_close >= 0:
+            body = source[body_start:same_line_close]
+        else:
+            close = re.search(r"(?m)^\s*}\s*$", source[body_start:])
+            body = source[body_start : body_start + close.start()] if close else match.group(2)
+        for tokens in _shell_tokens(body):
+            invocation = _kubectl_invocation(tokens, aliases, {})
+            if invocation is not None:
+                wrappers[name] = invocation
+                break
+    return aliases, wrappers
+
+
+def _alias_name(token: str) -> str:
+    token = token.strip("\"'")
+    match = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)(?:\[@\])?\}?", token)
+    return match.group(1) if match else token
+
+
+def _kubectl_invocation(
+    tokens: list[str], aliases: dict[str, list[str]], wrappers: dict[str, list[str]]
+) -> list[str] | None:
+    for index, token in enumerate(tokens):
+        name = _alias_name(token)
+        if name in aliases:
+            return [*aliases[name], *tokens[index + 1 :]]
+        if name in wrappers:
+            return [*wrappers[name], *tokens[index + 1 :]]
+    return None
+
+
+def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = False) -> list[str]:
+    """Find cluster operations forbidden to scoped verifier credentials."""
+    aliases, wrappers = _command_aliases(source)
+    violations: set[str] = set()
+    mutating_verbs = {
+        "annotate",
+        "apply",
+        "bind",
+        "create",
+        "delete",
+        "edit",
+        "escalate",
+        "impersonate",
+        "label",
+        "patch",
+        "replace",
+        "scale",
+        "set",
+    }
+    read_verbs = {"describe", "get", "list", "watch"}
+    for tokens in _shell_tokens(source):
+        if "helm" in tokens:
+            helm_index = tokens.index("helm")
+            if any(
+                token in {"get", "history", "list", "status"} for token in tokens[helm_index + 1 :]
+            ):
+                violations.add("Helm release storage read")
+
+        invocation = _kubectl_invocation(tokens, aliases, wrappers)
+        if invocation is None or ("auth" in invocation and "can-i" in invocation):
             continue
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
+        verb_index = next(
+            (
+                index
+                for index, token in enumerate(invocation)
+                if token in read_verbs
+                or token in mutating_verbs
+                or token in {"exec", "port-forward"}
+            ),
+            None,
+        )
+        if verb_index is None:
             continue
-        pending = f"{pending} {line}".strip()
-        if pending.endswith("\\"):
-            pending = pending[:-1].rstrip()
-            continue
-        lines.append(pending)
-        pending = ""
-    if pending:
-        lines.append(pending)
-    return "\n".join(lines)
+        verb = invocation[verb_index]
+        resource_tokens = {
+            token.lower().split("/", 1)[0]
+            for token in invocation[verb_index + 1 :]
+            if token and not token.startswith("-")
+        }
+        if verb in read_verbs and resource_tokens & {"secret", "secrets"}:
+            violations.add("Secret API read")
+        if verb in mutating_verbs:
+            violations.add(f"Kubernetes mutation ({verb})")
+        if not allow_interactive and verb in {"exec", "port-forward"}:
+            violations.add(verb)
+    return sorted(violations)
+
+
+def _just_recipes(root: Path) -> dict[str, str]:
+    path = root / "kubernetes/mod.just"
+    if not path.is_file():
+        return {}
+    recipes: dict[str, list[str]] = {}
+    current = ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        header = re.match(r"^([a-zA-Z0-9_-]+)(?:\s+[^:]*)?:", line)
+        if header:
+            current = header.group(1)
+            recipes[current] = [line]
+        elif current and (line.startswith("    ") or not line.strip()):
+            recipes[current].append(line)
+        elif line and not line.startswith((" ", "#")):
+            current = ""
+    return {name: "\n".join(lines) for name, lines in recipes.items()}
+
+
+def reachable_verifier_source(root: Path, implementation: str) -> str:
+    """Resolve verifier files, sourced helpers, and literal nested kube Just recipes."""
+    recipes = _just_recipes(root)
+    pending_files = [implementation]
+    pending_recipes: list[str] = []
+    seen_files: set[str] = set()
+    seen_recipes: set[str] = set()
+    chunks: list[str] = []
+    while pending_files or pending_recipes:
+        if pending_files:
+            relative = pending_files.pop()
+            if relative in seen_files:
+                continue
+            seen_files.add(relative)
+            path = root / relative
+            if not path.is_file():
+                continue
+            source = path.read_text(encoding="utf-8")
+        else:
+            recipe = pending_recipes.pop()
+            if recipe in seen_recipes:
+                continue
+            seen_recipes.add(recipe)
+            source = recipes.get(recipe, "")
+            header = source.splitlines()[0] if source else ""
+            for dependency in header.partition(":")[2].split():
+                if dependency in recipes:
+                    pending_recipes.append(dependency)
+        chunks.append(source)
+        for line in source.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "echo ", "printf ")):
+                continue
+            just_call = re.search(r"(?:^|\s)just\s+kube\s+([a-zA-Z0-9_-]+)", stripped)
+            if just_call:
+                pending_recipes.append(just_call.group(1))
+            pending_files.extend(
+                re.findall(r"(?:source\s+)?(scripts/[a-zA-Z0-9_./-]+\.sh)", stripped)
+            )
+    return "\n".join(chunks)
 
 
 def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
@@ -103,71 +303,15 @@ def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
         path = REPO_ROOT / implementation
         if not path.is_file():
             continue
-        commands = verifier_command_text(implementation)
-        secret_read = bool(
-            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bget\s+secrets?\b", commands)
+        source = reachable_verifier_source(REPO_ROOT, implementation)
+        forbidden = forbidden_kubernetes_operations(
+            source, allow_interactive=access_tier == "diagnostic"
         )
-        exec_command = bool(
-            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bexec\b", commands)
-        )
-        port_forward = bool(
-            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bport-forward\b", commands)
-        )
-        privileged = [
-            label
-            for present, label in (
-                (secret_read, "Secret API read"),
-                (exec_command, "exec"),
-                (port_forward, "port-forward"),
-            )
-            if present
-        ]
-        forbidden = []
-        if access_tier in {"observer", "diagnostic"} and secret_read:
-            forbidden.append("Secret API read")
-        if access_tier == "observer" and exec_command:
-            forbidden.append("exec")
-        if access_tier == "observer" and port_forward:
-            forbidden.append("port-forward")
-        if forbidden:
+        if access_tier in {"observer", "diagnostic"} and forbidden:
             violations.append(f"{suite_id}: {' and '.join(forbidden)}")
-        elif not access_tier and privileged:
-            violations.append(
-                f"{suite_id}: {' and '.join(privileged)} but tier is absent"
-            )
+        elif not access_tier and forbidden:
+            violations.append(f"{suite_id}: {' and '.join(forbidden)} but tier is absent")
     return violations
-
-
-def test_canonical_verifiers_declare_compatible_access() -> None:
-    catalog = load_yaml(REPO_ROOT / "tests/catalog.yaml")
-    violations = verification_access_violations(catalog)
-    assert violations == [], "\n" + "\n".join(violations)
-
-
-def test_diagnostic_verifiers_select_context_conditionally() -> None:
-    for name in ("flaresolverr", "homepage", "ntfy"):
-        content = (REPO_ROOT / f"scripts/verify/{name}.sh").read_text(encoding="utf-8")
-        assert "config get-contexts homelab-diagnostic" in content, name
-        assert "--context homelab-diagnostic" in content, name
-
-
-def test_agent_access_verifier_covers_required_boundaries() -> None:
-    path = REPO_ROOT / "scripts/verify/agent-access.sh"
-    assert path.is_file(), path
-    content = path.read_text(encoding="utf-8")
-    for expected in (
-        "homelab-observer",
-        "homelab-diagnostic",
-        "get pods/log",
-        "get secrets",
-        "create pods/exec",
-        "create pods/portforward",
-        "patch kustomizations.kustomize.toolkit.fluxcd.io",
-        "delete deployments.apps",
-        "talosctl version",
-        "talosctl services",
-    ):
-        assert expected in content, expected
 
 
 @dataclass(frozen=True)
@@ -280,6 +424,111 @@ class CatalogValidator:
         violations = verification_access_violations(self.catalog)
         if violations:
             fail("Verifier access contract violations:\n" + "\n".join(violations) + "\n")
+        self.validate_diagnostic_contexts()
+        self.validate_agent_access_matrix()
+        self.validate_portainer_rbac_oracle()
+        self.validate_scoped_rbac_source()
+
+    def validate_diagnostic_contexts(self) -> None:
+        for entry in self.suites:
+            suite_id = shell_text(entry.get("metadata", {}).get("id"))
+            if (
+                not suite_id.startswith("verification.")
+                or entry.get("access", {}).get("tier") != "diagnostic"
+                or suite_id == "verification.agent-access"
+            ):
+                continue
+            implementation = shell_text(entry.get("runner", {}).get("implementation"))
+            content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
+            if not all(
+                marker in content
+                for marker in (
+                    "config get-contexts homelab-diagnostic",
+                    "--context homelab-diagnostic",
+                )
+            ):
+                fail(
+                    f"Diagnostic verifier {suite_id} must select homelab-diagnostic "
+                    "conditionally.\n"
+                )
+
+    def validate_agent_access_matrix(self) -> None:
+        entry = self.entry_by_id("verification.agent-access")
+        implementation = shell_text(entry.get("runner", {}).get("implementation"))
+        content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
+        required = {
+            "homelab-observer",
+            "homelab-diagnostic",
+            "named-contexts",
+            "admin-impersonation",
+            "system:authenticated",
+            "system:serviceaccounts",
+            "system:serviceaccounts:kube-system",
+            "for verb in get list watch",
+            "get secrets",
+            "create pods/exec",
+            "create pods/portforward",
+            "patch kustomizations.kustomize.toolkit.fluxcd.io",
+            "bind clusterroles.rbac.authorization.k8s.io",
+            "escalate clusterroles.rbac.authorization.k8s.io",
+            "impersonate users",
+            "talosctl version",
+            "talosctl services",
+        }
+        required.update(
+            f"{resource}.{api_group}"
+            for api_group, resources in scoped_read_rules(self.catalog).items()
+            for resource in resources
+        )
+        if not all(marker in content for marker in required):
+            fail("verification.agent-access does not cover the required authorization matrix.\n")
+
+    def validate_scoped_rbac_source(self) -> None:
+        path = REPO_ROOT / "kubernetes/apps/kube-system/agent-access/app/rbac.yaml"
+        documents = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        roles = [
+            document
+            for document in documents
+            if document.get("kind") == "ClusterRole"
+            and document.get("metadata", {}).get("name") == "homelab-observer-extra"
+        ]
+        if len(roles) != 1:
+            fail("Scoped verifier RBAC must define exactly one homelab-observer-extra role.\n")
+        actual = {
+            (api_group, resource, verb)
+            for rule in roles[0].get("rules", [])
+            for api_group in rule.get("apiGroups", [])
+            for resource in rule.get("resources", [])
+            for verb in rule.get("verbs", [])
+        }
+        expected = {("", "pods/log", "get")}
+        expected.update(
+            (api_group, resource, verb)
+            for api_group, resources in scoped_read_rules(self.catalog).items()
+            for resource in resources
+            for verb in ("get", "list", "watch")
+        )
+        if actual != expected or any("*" in item for item in actual):
+            fail("Scoped verifier campaign requirements and observer RBAC grants differ.\n")
+
+    def validate_portainer_rbac_oracle(self) -> None:
+        entry = self.entry_by_id("verification.portainer")
+        implementation = shell_text(entry.get("runner", {}).get("implementation"))
+        content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
+        required = {
+            "get clusterrole portainer-readonly",
+            "get clusterrolebinding portainer-readonly",
+            "get clusterrolebindings --output json",
+            "get rolebindings --all-namespaces --output json",
+            "system:serviceaccount:portainer:portainer-readonly",
+            "system:authenticated",
+            "system:serviceaccounts:portainer",
+            "Live portainer-readonly ClusterRole rules differ",
+            "Unexpected ClusterRoleBinding grants Portainer access",
+            "Unexpected RoleBinding grants Portainer access",
+        }
+        if "--as" in content or not all(marker in content for marker in required):
+            fail("verification.portainer must prove exact live RBAC without impersonation.\n")
 
     def validate_duplicates(self) -> None:
         duplicate_ids = duplicates(
@@ -615,7 +864,20 @@ class CatalogValidator:
         )
         actual_scoped = sorted(self.campaigns["scoped-verification"]["members"])
         if actual_scoped != expected_scoped:
-            fail(exact_diff("Campaign scoped-verification members", expected_scoped, actual_scoped))
+            fail(
+                exact_diff("Campaign scoped-verification members", expected_scoped, actual_scoped)
+            )
+        operator_only = sorted(
+            entry["metadata"]["id"]
+            for entry in self.suites
+            if entry["metadata"]["tier"] == "verification"
+            and entry["access"]["tier"] == "operator"
+        )
+        if operator_only:
+            fail(
+                "The full verification campaign must run with either scoped contexts or "
+                f"admin impersonation; operator-only suites remain: {', '.join(operator_only)}.\n"
+            )
 
         expected_conformance = sorted(
             entry["metadata"]["id"]
