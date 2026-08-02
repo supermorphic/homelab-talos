@@ -538,6 +538,11 @@ plex-verify: require-bash
 plex-relay-status: require-bash
     @scripts/diagnose/plex-relay-status.sh {{quote(kubeconfig)}}
 
+# Observe Plex L3/L4 Hubble flows for 1-600 seconds through a local port-forward.
+# Operator-only and read-only; no packet payloads or cluster mutations.
+plex-network-observe seconds='300': require-bash
+    @scripts/diagnose/plex-network-observe.sh {{quote(kubeconfig)}} {{quote(seconds)}}
+
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
 intel-gpu-plugin-validate: require-bash
