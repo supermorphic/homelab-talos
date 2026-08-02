@@ -47,6 +47,7 @@ allowed=(
   'git clean -f && git status -d'
   'git clean -f || git status -d'
   'git clean -f | git status -d'
+  'git clean -f --exclude=foo; git status -d'
   'echo git reset --hard'
 )
 

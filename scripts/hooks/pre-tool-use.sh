@@ -47,11 +47,12 @@ if [[ "$command" =~ ^git[[:space:]]+clean([[:space:]]|$) ]]; then
         dry_run=true
         ;;
       -*)
-        [[ "$option" == --* ]] && continue
-        flags="${option#-}"
-        [[ "$flags" == *f* ]] && force=true
-        [[ "$flags" == *d* || "$flags" == *x* ]] && expands_untracked=true
-        [[ "$flags" == *n* ]] && dry_run=true
+        if [[ "$option" != --* ]]; then
+          flags="${option#-}"
+          [[ "$flags" == *f* ]] && force=true
+          [[ "$flags" == *d* || "$flags" == *x* ]] && expands_untracked=true
+          [[ "$flags" == *n* ]] && dry_run=true
+        fi
         ;;
     esac
 
