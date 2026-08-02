@@ -8,20 +8,48 @@
 controllers:
   plex:
     type: deployment
+    replicas: 1
     strategy: Recreate
     pod:
       # Give Plex time to close its SQLite database cleanly on a planned drain.
       terminationGracePeriodSeconds: 120
+      automountServiceAccountToken: false
       securityContext:
+        runAsNonRoot: true
         runAsUser: 568
         runAsGroup: 568
         fsGroup: 568
         fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+    initContainers:
+      runtime-identity:
+        image:
+          repository: ghcr.io/home-operations/plex
+          tag: 1.43.3.10828
+          digest: sha256:0c0b6899339503af17cb190b25af6acf10f0030e2820985e16ee14ef428f49d7
+        command: ["/bin/bash", "-ceu"]
+        args:
+          - |-
+            cp /etc/passwd /runtime-identity/passwd
+            if ! awk -F: '$3 == 568 { found=1 } END { exit !found }' /runtime-identity/passwd; then
+              printf '%s\n' 'plex:x:568:568:Plex Media Server:/config:/usr/sbin/nologin' >>/runtime-identity/passwd
+            fi
+            awk -F: '$3 == 568 { found=1 } END { exit !found }' /runtime-identity/passwd
+            chmod 0644 /runtime-identity/passwd
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 568
+          runAsGroup: 568
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
     containers:
       app:
         image:
           repository: ghcr.io/home-operations/plex
           tag: 1.43.3.10828
+          digest: sha256:0c0b6899339503af17cb190b25af6acf10f0030e2820985e16ee14ef428f49d7
         env:
           TZ: America/Denver
         resources:
@@ -36,6 +64,9 @@ controllers:
             # for extended (device) resources.
             gpu.intel.com/i915: 1
         securityContext:
+          runAsNonRoot: true
+          runAsUser: 568
+          runAsGroup: 568
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
@@ -105,12 +136,25 @@ persistence:
     type: emptyDir
     globalMounts:
       - path: /transcode
+  runtime-identity:
+    type: emptyDir
+    advancedMounts:
+      plex:
+        runtime-identity:
+          - path: /runtime-identity
+        app:
+          - path: /etc/passwd
+            subPath: passwd
+            readOnly: true
   media:
     type: persistentVolumeClaim
     existingClaim: media-data
-    globalMounts:
-      # Mounted at /Volumes/Prometheus (the SMB share root) to match the paths the
-      # previous Mac-mini Plex used (/Volumes/Prometheus/media/{movies,tv}), so the
-      # migrated library database resolves with zero re-matching. Plex-specific; the
-      # later *arr apps mount this same share at /data.
-      - path: /Volumes/Prometheus
+    # Mounted at /Volumes/Prometheus (the SMB share root) to match the paths the
+    # previous Mac-mini Plex used (/Volumes/Prometheus/media/{movies,tv}), so the
+    # migrated library database resolves with zero re-matching. Plex-specific; the
+    # later *arr apps mount this same share at /data.
+    advancedMounts:
+      plex:
+        app:
+          - path: /Volumes/Prometheus
+            readOnly: true
