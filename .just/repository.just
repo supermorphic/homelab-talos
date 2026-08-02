@@ -705,6 +705,46 @@ homepage-plex-secrets:
     mv -- "$temp_dir/homepage-plex.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-plex in homepage)."
 
+homepage-tautulli-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:homepage-tautulli:sops'
+    target='kubernetes/apps/monitoring/homepage/app/homepage-tautulli.sops.yaml'
+    temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-tautulli.XXXXXX)"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    umask 077
+
+    just repo secrets
+    [[ -n "${TAUTULLI_API_KEY:-}" ]] || {
+      echo 'Set TAUTULLI_API_KEY to the API key generated in Tautulli.' >&2
+      exit 1
+    }
+    [[ "${HOMEPAGE_TAUTULLI_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Homepage Tautulli Secret.' >&2
+      echo "Set HOMEPAGE_TAUTULLI_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    export TAUTULLI_API_KEY
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "homepage-tautulli" |
+       .metadata.namespace = "homepage" |
+       .type = "Opaque" |
+       .stringData."apiKey" = strenv(TAUTULLI_API_KEY)' \
+      >"$temp_dir/homepage-tautulli.yaml"
+
+    sops --encrypt --filename-override "$target" \
+      "$temp_dir/homepage-tautulli.yaml" >"$temp_dir/homepage-tautulli.sops.yaml"
+    [[ "$(sops filestatus "$temp_dir/homepage-tautulli.sops.yaml" | yq -r '.encrypted')" == 'true' ]]
+    [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-tautulli.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+    ! rg -Fq -- "$TAUTULLI_API_KEY" "$temp_dir/homepage-tautulli.sops.yaml"
+
+    mv -- "$temp_dir/homepage-tautulli.sops.yaml" "$target"
+    echo "Wrote SOPS-encrypted $target (homepage-tautulli in homepage)."
+
 # Write ONLY the SOPS-encrypted Homepage Seerr widget Secret
 # (homepage-seerr in the homepage namespace) from SEERR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.
@@ -1204,7 +1244,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 25  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 26  # Update when adding/removing a guarded rollout recipe.
     @agent_access_recipe="$(just --dry-run bootstrap agent-access 2>&1)"; \
       normalized_recipe="$(tr '\n\t' '  ' <<<"$agent_access_recipe" | sed -E 's/\\[[:space:]]+/ /g; s/[[:space:]]+/ /g')"; \
       matrix_contract="scripts/verify/agent-access.sh \"\$kubeconfig\" '.talos/config'"; \

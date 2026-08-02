@@ -1354,6 +1354,74 @@ arr app:
     bootstrap_complete=true
     echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
 
+# Reconcile a suspended config-only media app after guarded checks, then verify.
+# Operator-run. The allowlist intentionally contains only Tautulli.
+media-app app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    app='{{app}}'
+    case "$app" in
+      tautulli) ;;
+      *) echo 'Usage: just bootstrap media-app tautulli' >&2; exit 1 ;;
+    esac
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation="bootstrap:media-app:$app"
+    ks="kubernetes/apps/media/$app/ks.yaml"
+    resumed=false
+    bootstrap_complete=false
+    cleanup_media_app() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo "$app did not pass; suspending it while preserving its resources." >&2
+        flux suspend kustomization "$app" --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_media_app EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source "$app bootstrap" \
+      .just/bootstrap.just kubernetes/mod.just \
+      scripts/lib/rollout.sh scripts/lib/network.sh \
+      scripts/validate/tautulli.sh scripts/validate/media-alerts.sh \
+      scripts/verify/tautulli.sh tests/catalog.yaml \
+      tests/prometheus/media-alerts_test.yaml \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/namespace \
+      kubernetes/apps/media/alerts \
+      "kubernetes/apps/media/$app"
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo "$app must be staged suspended in Git." >&2
+      exit 1
+    }
+
+    just kube tautulli-validate
+    just kube media-alerts-validate
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$app" --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo "$app is not suspended in the live cluster." >&2
+      exit 1
+    }
+
+    [[ "${MEDIA_APP_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo "Set MEDIA_APP_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing both validators." >&2
+      exit 1
+    }
+
+    resumed=true
+    flux resume kustomization "$app" --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization "$app" --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait --for=condition=Ready "kustomization/$app" --timeout=15m
+    just kube tautulli-verify
+    bootstrap_complete=true
+    echo "$app liveness passed. Complete authentication, Plex connection, exact-status, library, and playback gates before activation."
+
 # Reconcile the suspended Phase 14 Seerr app after guarded checks, then verify. Operator-run.
 # Requires the suspended source to match deployed origin/main and
 # SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr'. On failure the resumed Kustomization is
