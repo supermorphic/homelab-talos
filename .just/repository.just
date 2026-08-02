@@ -1190,6 +1190,7 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
+    @if rg --files docs/decisions/reviews | rg --pcre2 -q '/([0-9]{4}-[0-9]{2}-[0-9]{2})-\1-'; then echo "decision review filenames must not repeat their ISO date" >&2; exit 1; fi
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

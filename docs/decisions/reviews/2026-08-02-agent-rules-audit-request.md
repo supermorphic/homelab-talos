@@ -10,7 +10,7 @@ miss the same four things. Those four things are your entire job.
 
 **Spec under review:** /Users/ksiggins/Development/homelab-talos.challenge-agent-rules/docs/decisions/2026-08-02-agent-rules-audit.md
 **Written by:** claude-code
-**Write your review to:** /Users/ksiggins/Development/homelab-talos.challenge-agent-rules/docs/decisions/reviews/2026-08-02-2026-08-02-agent-rules-audit-review.md
+**Write your review to:** /Users/ksiggins/Development/homelab-talos.challenge-agent-rules/docs/decisions/reviews/2026-08-02-agent-rules-audit-review.md
 
 Read the spec in full before writing anything.
 
@@ -295,7 +295,7 @@ failed to try.
 
 ## Output format
 
-Write exactly this shape to /Users/ksiggins/Development/homelab-talos.challenge-agent-rules/docs/decisions/reviews/2026-08-02-2026-08-02-agent-rules-audit-review.md:
+Write exactly this shape to /Users/ksiggins/Development/homelab-talos.challenge-agent-rules/docs/decisions/reviews/2026-08-02-agent-rules-audit-review.md:
 
 ```
 # Spec Review

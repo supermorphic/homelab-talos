@@ -1,7 +1,7 @@
 # Spec Review Response
 
 **Spec:** `docs/decisions/2026-08-02-agent-rules-audit.md`
-**Review:** `docs/decisions/reviews/2026-08-02-2026-08-02-agent-rules-audit-review.md`
+**Review:** `docs/decisions/reviews/2026-08-02-agent-rules-audit-review.md`
 **Reviewer verdict:** Not ready — 12 evidence-backed findings
 
 **Every finding's evidence held.** Nothing was rejected. That is unusual and worth
