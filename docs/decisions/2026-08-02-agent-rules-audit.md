@@ -272,21 +272,50 @@ rollouts.
 `just talos kubeconfig` **resolves conditionally** on where it runs:
 
 - **In the main clone** — downloads the admin kubeconfig from Talos. Unchanged.
-- **In a worktree** — mints a bounded observer/diagnostic token using the main clone's
+- **In a worktree** — mints a 30-day observer/diagnostic token using the main clone's
   admin config and writes the scoped kubeconfig locally. Fails with a clear message if
   the main clone holds no admin config.
 
-The same command is therefore the **token refresh recipe**: when a bounded token
-expires, re-running it re-mints. `README.md` documents the mapping explicitly —
-main clone → admin, worktree → observer — because a credential whose scope depends on
-directory is exactly the kind of thing that must not be inferred.
+The same command is therefore the **token refresh recipe**: when a token expires,
+re-running it re-mints. `README.md` documents the mapping explicitly — main clone →
+admin, worktree → observer — because a credential whose scope depends on directory is
+exactly the kind of thing that must not be inferred.
+
+#### Credentials are minted on demand, not at worktree creation
+
+**A worktree starts with no cluster credentials.** When a session needs cluster access,
+the agent **stops and asks the operator to mint it**, and the operator runs the recipe
+above in that worktree. Agents never mint their own, because minting reads the main
+clone's admin config.
+
+This is deliberate signal rather than friction. Cluster access becomes a visible event
+the operator is told about, instead of an ambient capability every session silently
+holds.
+
+The evidence supports it. All four live worktree branches touch only `docs/` and
+`scripts/` — authoring work that `just ci` covers offline. Against that, 10 of 32 `fix:`
+commits (31%) trace to behaviour only visible at runtime: FlareSolverr's UID,
+qbit-manage's `root_dir`, hardened Caddy startup, Lease timestamps, connector route
+parsing, Cilium tombstones. **Most sessions never query the cluster; a minority need it
+badly, and which is which is not knowable when the worktree is created.** Minting on
+demand is the only distribution that matches that shape.
+
+It also resolves an interaction that per-worktree credentials plus bounded tokens would
+otherwise create. Issuing at creation would mean *N* worktrees × *N* refresh commands per
+expiry cycle, for credentials most of those worktrees never use. On demand, most
+worktrees never receive one, and a feature branch rarely outlives a 30-day token — so
+refresh is a rare event rather than a recurring chore. A shared credential symlinked
+across worktrees was considered and rejected: it would restore ambient access and remove
+the signal that is the point of asking.
 
 #### Lifetime, revocation, rotation
 
-- **Kubernetes:** a bounded ServiceAccount token, re-minted by the recipe above. Chosen
-  over a long-lived Secret-backed token so a leaked worktree config expires on its own.
-  The cost is acknowledged in the risks: a token can expire mid-diagnosis, and the
-  remedy is one operator command.
+- **Kubernetes:** a **30-day** ServiceAccount token, re-minted by the recipe above.
+  Chosen over a long-lived Secret-backed token so a leaked worktree config expires on
+  its own. Thirty days is long enough that most feature branches finish inside one
+  token's life, and on-demand minting means only worktrees that actually needed access
+  ever hold one. The cost is acknowledged in the risks: a token can expire
+  mid-diagnosis, and the remedy is one operator command.
 - **Talos:** `os:reader` at a **90-day** TTL — short enough that a stale or leaked
   config self-heals within a quarter, long enough that renewal is a rare chore.
 - **Revocation** is deleting the ClusterRoleBinding and rotating the ServiceAccount for
@@ -429,6 +458,23 @@ An earlier draft said `<app>-verify` runs "by either the operator or an agent" a
 
 Where automation is not yet available, the operator runs it — but the obligation is
 recorded and its absence is visible, rather than being optional by construction.
+
+**Open conflict with decision 1: where does the automation get credentials?** On-demand
+minting gives credentials to a *worktree* when a session asks. Post-merge acceptance
+runs after the branch is merged, when that worktree is gone. None of the three obvious
+homes works:
+
+- a feature worktree — no longer exists at that point;
+- CI — cluster-independent and secret-free by contract, which `just ci` must stay;
+- the main clone — holds **admin**, and using admin for routine acceptance defeats the
+  tiering entirely.
+
+The candidate resolution is to run acceptance **in-cluster**, as a Kubernetes Job with
+its own ServiceAccount scoped to exactly the verifier's permissions. Flux creates it, no
+workstation credential is involved, and results land in the retained reporting pipeline.
+This is recorded as unresolved rather than assumed: it changes decision 2's actor from
+workstation automation to an in-cluster Job, and that is a design change requiring
+operator approval, not an implementation detail.
 
 #### Platform tier, by criteria rather than label
 
@@ -596,6 +642,7 @@ rule carries its category and control:
 | Fetch and rebase before every push | **Operator policy** | — |
 | Never `reset --hard`, `clean -fd`, unqualified `checkout .`/`restore .`, or force-push without a lease | Authoritative (bypassable) | `PreToolUse` hook (decision 5) |
 | Reads are direct; changes to Flux-managed state go through Git | Authoritative | Credential tiers (decision 1) |
+| A worktree has no cluster credentials until asked for. Stop and ask the operator to mint them | Gotcha | Absence of a kubeconfig |
 | Bootstrap, break-glass and recovery are operator-run under `*_CONFIRM` | Authoritative | Admin credential custody |
 | GitHub protection mutation needs per-invocation authorization | Authoritative | Guarded recipe + token scope |
 | Secrets are SOPS-encrypted; the age key stays with the operator | Authoritative | Key custody; gitleaks; staged-blob check |
@@ -810,8 +857,10 @@ deleted, and policy must exist before the assertions it replaces are deleted.
     observer/diagnostic, at the same repository-relative paths. `just talos kubeconfig`
     resolves conditionally and doubles as the token-refresh recipe. `README.md`
     documents the mapping.
-22. Kubernetes tokens are bounded and re-minted on demand; the `os:reader` talosconfig
-    carries a 90-day TTL.
+22. Kubernetes tokens carry a 30-day TTL; the `os:reader` talosconfig carries 90 days.
+    Credentials are minted **on demand**, never at worktree creation: a worktree starts
+    with none, and an agent needing cluster access stops and asks the operator to mint
+    it. Shared or symlinked credentials are rejected — the ask is the signal.
 23. A `SessionStart` hook announces the credential tier and branch, warns when a session
     runs in the main clone on `main`, and warns when SOPS key material is present in the
     environment. It warns; it does not block.
@@ -923,13 +972,17 @@ wt switch -c my-feature
 mise trust                            # idempotent; avoids a first-run prompt
 mise exec -- just ci                  # first run builds .venv: slow, needs network
 
-mise exec -- just talos kubeconfig    # (proposed) mints a bounded observer token here;
+# NOT run at creation. Only when a session turns out to need the cluster:
+mise exec -- just talos kubeconfig    # (proposed) mints a 30-day observer token here;
                                       # unchanged admin download in the main clone.
                                       # Re-run to refresh an expired token.
 ```
 
-No `.kube/config` or `.talos/config` is created in a worktree today, which is correct —
-agents currently have no cluster access.
+No `.kube/config` or `.talos/config` is created in a worktree — today because nothing
+creates one, and after workstream 1 because credentials are minted **on demand**. An
+agent that needs cluster access stops and asks; the operator runs the recipe above in
+that worktree. Most worktrees never need it: all four current branches touch only
+`docs/` and `scripts/`.
 
 ### First-run failure modes in a fresh worktree
 
