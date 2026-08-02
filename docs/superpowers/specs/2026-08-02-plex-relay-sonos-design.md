@@ -178,9 +178,14 @@ control requires Plex Pass. See
 
 Because the iPhone and Sonos Ports are on different VLANs, a routed allow rule does
 not necessarily satisfy the initial same-local-network discovery step. The first
-test after Relay is permanent is therefore to place the iPhone temporarily on the
-IoT VLAN/SSID, open the Players menu, select the Sonos linking entry, and complete
-Sonos OAuth. After linking, return the iPhone to the Main VLAN and test normal use.
+test after Relay is permanent is therefore to place the iPhone temporarily on an
+SSID mapped to the IoT VLAN, open the Players menu, select the Sonos linking entry,
+and complete Sonos OAuth. If no such SSID exists, create a temporary VLAN-20 test
+SSID for this acceptance step and remove it afterward; do not widen inter-VLAN
+firewall policy as a substitute. After linking, return the iPhone to the Main VLAN
+and test normal use. Sonos itself documents same-subnet operation as its supported
+network topology in
+[Sonos system requirements](https://support.sonos.com/en-gb/article/sonos-system-requirements).
 
 Do not add broad multicast reflection or an any-to-any inter-VLAN rule merely because
 the Players menu is empty. If same-VLAN linking succeeds but Main-VLAN control still
@@ -389,8 +394,7 @@ Keep or set:
 - **Allowed without auth:** empty.
 - **GDM/local discovery:** retain for local Plex discovery; do not assume it crosses
   VLANs.
-- **Remote streams per user:** set a finite operator-chosen value rather than
-  `Unlimited`.
+- **Remote streams per user:** `2`, rather than `Unlimited`.
 - **Upload speed / remote bitrate:** record real WAN upload capacity; Relay's own
   2 Mbps ceiling still applies.
 
