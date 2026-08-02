@@ -79,7 +79,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=97.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=98.\n"
     assert completed.stderr == ""
 
 
@@ -177,10 +177,10 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
         "@@ -1,4 +1,3 @@\n"
-        "-verification.alertmanager-ntfy\n"
+        "-verification.agent-access\n"
+        " verification.alertmanager-ntfy\n"
         " verification.cilium\n"
-        " verification.csi-driver-smb\n"
-        " verification.flaresolverr\n",
+        " verification.csi-driver-smb\n",
         normalize_diff=True,
     )
     expect_rejection(
@@ -408,7 +408,7 @@ def campaign_contract(root: Path, canonical: dict[str, Any]) -> None:
         "Test catalog campaign names differ from the supported public interface.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -9,4 +9,3 @@\n"
+        "@@ -10,4 +10,3 @@\n"
         " standard\n"
         " validation\n"
         " verification\n"
@@ -630,7 +630,7 @@ def fail_fast_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=97.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=98.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

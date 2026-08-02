@@ -11,24 +11,28 @@ source scripts/lib/network.sh
 kubeconfig="$1"
 ns='homepage'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
+kc=(kubectl --kubeconfig "$kubeconfig")
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
 
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization homepage --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Homepage Kustomization is not Ready.' >&2; exit 1; }
-kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/homepage --timeout=5m
+[[ "$("${kc[@]}" --namespace flux-system get kustomization homepage --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Homepage Kustomization is not Ready.' >&2; exit 1; }
+"${kc[@]}" --namespace "$ns" rollout status deployment/homepage --timeout=5m
 
 accepted=false
 for _ in {1..18}; do
-  route="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute homepage --output json 2>/dev/null)"
+  route="$("${kc[@]}" --namespace "$ns" get httproute homepage --output json 2>/dev/null)"
   if [[ "$(yq -r '[.status.parents[].conditions[]? | select(.type == "Accepted") | .status] | unique | join(" ")' - <<<"$route")" == 'True' ]]; then accepted=true; break; fi
   sleep 5
 done
 [[ "$accepted" == 'true' ]] || { echo 'Homepage HTTPRoute is not Accepted.' >&2; exit 1; }
 
-homepage_pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pods \
+homepage_pod="$("${kc[@]}" --namespace "$ns" get pods \
   --selector app.kubernetes.io/name=homepage \
   --field-selector status.phase=Running \
   --output jsonpath='{.items[0].metadata.name}')"
 [[ -n "$homepage_pod" ]] || { echo 'Homepage has no running pod.' >&2; exit 1; }
-kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$homepage_pod" -- \
+"${kc[@]}" --namespace "$ns" exec "$homepage_pod" -- \
   test -f /app/public/icons/allure.svg
 
 dns_answer=''

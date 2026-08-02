@@ -23,6 +23,7 @@ EXPECTED_CAMPAIGNS = [
     "integration",
     "probes",
     "resilience",
+    "scoped-verification",
     "smoke",
     "standard",
     "validation",
@@ -60,6 +61,113 @@ SAFE_RUNNER = re.compile(
     r"mise\s+exec\s+--\s+just\s+[a-zA-Z0-9_.-]+"
     r"(?:\s+[a-zA-Z0-9._:/<>-]+)*$"
 )
+VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
+
+
+def verifier_command_text(implementation: str) -> str:
+    """Return executable-looking verifier text without comments or continuations."""
+    content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
+    lines = []
+    pending = ""
+    for raw_line in content.splitlines():
+        stripped = raw_line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        pending = f"{pending} {line}".strip()
+        if pending.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        lines.append(pending)
+        pending = ""
+    if pending:
+        lines.append(pending)
+    return "\n".join(lines)
+
+
+def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
+    """Collect missing tiers and privileged operations in scoped verifiers."""
+    violations: list[str] = []
+    for entry in catalog["suites"]:
+        metadata = entry.get("metadata", {})
+        suite_id = shell_text(metadata.get("id"))
+        if not suite_id.startswith("verification."):
+            continue
+        access_tier = shell_text(entry.get("access", {}).get("tier"))
+        if access_tier not in VERIFICATION_ACCESS_TIERS:
+            violations.append(f"{suite_id}: access tier is absent or invalid")
+
+        implementation = shell_text(entry.get("runner", {}).get("implementation"))
+        path = REPO_ROOT / implementation
+        if not path.is_file():
+            continue
+        commands = verifier_command_text(implementation)
+        secret_read = bool(
+            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bget\s+secrets?\b", commands)
+        )
+        exec_command = bool(
+            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bexec\b", commands)
+        )
+        port_forward = bool(
+            re.search(r"(?:kubectl|\$\{kc\[@\]\}).*\bport-forward\b", commands)
+        )
+        privileged = [
+            label
+            for present, label in (
+                (secret_read, "Secret API read"),
+                (exec_command, "exec"),
+                (port_forward, "port-forward"),
+            )
+            if present
+        ]
+        forbidden = []
+        if access_tier in {"observer", "diagnostic"} and secret_read:
+            forbidden.append("Secret API read")
+        if access_tier == "observer" and exec_command:
+            forbidden.append("exec")
+        if access_tier == "observer" and port_forward:
+            forbidden.append("port-forward")
+        if forbidden:
+            violations.append(f"{suite_id}: {' and '.join(forbidden)}")
+        elif not access_tier and privileged:
+            violations.append(
+                f"{suite_id}: {' and '.join(privileged)} but tier is absent"
+            )
+    return violations
+
+
+def test_canonical_verifiers_declare_compatible_access() -> None:
+    catalog = load_yaml(REPO_ROOT / "tests/catalog.yaml")
+    violations = verification_access_violations(catalog)
+    assert violations == [], "\n" + "\n".join(violations)
+
+
+def test_diagnostic_verifiers_select_context_conditionally() -> None:
+    for name in ("flaresolverr", "homepage", "ntfy"):
+        content = (REPO_ROOT / f"scripts/verify/{name}.sh").read_text(encoding="utf-8")
+        assert "config get-contexts homelab-diagnostic" in content, name
+        assert "--context homelab-diagnostic" in content, name
+
+
+def test_agent_access_verifier_covers_required_boundaries() -> None:
+    path = REPO_ROOT / "scripts/verify/agent-access.sh"
+    assert path.is_file(), path
+    content = path.read_text(encoding="utf-8")
+    for expected in (
+        "homelab-observer",
+        "homelab-diagnostic",
+        "get pods/log",
+        "get secrets",
+        "create pods/exec",
+        "create pods/portforward",
+        "patch kustomizations.kustomize.toolkit.fluxcd.io",
+        "delete deployments.apps",
+        "talosctl version",
+        "talosctl services",
+    ):
+        assert expected in content, expected
 
 
 @dataclass(frozen=True)
@@ -162,10 +270,16 @@ class CatalogValidator:
         self.validate_duplicates()
         for index, entry in enumerate(self.suites):
             self.validate_entry(index, entry)
+        self.validate_verification_access()
         self.validate_campaigns()
         self.validate_campaign_contracts()
         self.validate_ci_execution()
         self.validate_chainsaw_completeness()
+
+    def validate_verification_access(self) -> None:
+        violations = verification_access_violations(self.catalog)
+        if violations:
+            fail("Verifier access contract violations:\n" + "\n".join(violations) + "\n")
 
     def validate_duplicates(self) -> None:
         duplicate_ids = duplicates(
@@ -493,6 +607,16 @@ class CatalogValidator:
         ):
             self.assert_campaign_covers_tier(campaign, tier, field)
 
+        expected_scoped = sorted(
+            entry["metadata"]["id"]
+            for entry in self.suites
+            if entry["metadata"]["tier"] == "verification"
+            and entry["access"]["tier"] in {"observer", "diagnostic"}
+        )
+        actual_scoped = sorted(self.campaigns["scoped-verification"]["members"])
+        if actual_scoped != expected_scoped:
+            fail(exact_diff("Campaign scoped-verification members", expected_scoped, actual_scoped))
+
         expected_conformance = sorted(
             entry["metadata"]["id"]
             for entry in self.suites
@@ -534,6 +658,8 @@ class CatalogValidator:
 
     def validate_ci_execution(self) -> None:
         ci_ids = self.catalog["executions"]["ci"]
+        if any(suite_id.startswith("verification.") for suite_id in ci_ids):
+            fail("executions.ci must remain cluster-independent and exclude live verification.\n")
         duplicate_ci_ids = duplicates(ci_ids)
         if duplicate_ci_ids:
             fail(f"Duplicate executions.ci suite IDs: {'\n'.join(duplicate_ci_ids)}\n")

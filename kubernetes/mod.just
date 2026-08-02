@@ -145,6 +145,12 @@ validator-tests:
     fi
     exit "$result"
 
+# Prove the observer, diagnostic, and Talos reader authorization boundaries. This is a
+# live, read-only gate and must run only after agent-access is deployed and scoped
+# credentials have been minted into the current worktree.
+agent-access-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.agent-access -- scripts/verify/agent-access.sh {{quote(kubeconfig)}} {{quote(talosconfig)}}
+
 # Enforce cross-application media source policy without contacting the cluster.
 media-policy-validate:
     #!/usr/bin/env bash

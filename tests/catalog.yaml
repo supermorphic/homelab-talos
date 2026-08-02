@@ -78,6 +78,39 @@ campaigns:
       - verification.tailscale-subnet-router
       - verification.ntfy
       - verification.alertmanager-ntfy
+      - verification.agent-access
+  scoped-verification:
+    description: Read-only and reduced-privilege live checks runnable with worktree credentials.
+    mutates_cluster: false
+    disruptive: false
+    members:
+      - verification.metrics-server
+      - verification.cilium
+      - verification.flux
+      - verification.foundation
+      - verification.storage
+      - verification.csi-driver-smb
+      - verification.media-storage
+      - verification.plex
+      - verification.intel-gpu-plugin
+      - verification.qbittorrent
+      - verification.prowlarr
+      - verification.sonarr
+      - verification.radarr
+      - verification.lidarr
+      - verification.seerr
+      - verification.flaresolverr
+      - verification.qbit-manage
+      - verification.gatus
+      - verification.portainer
+      - verification.test-reports
+      - verification.homepage
+      - verification.trivy
+      - verification.tailscale-operator
+      - verification.tailscale-subnet-router
+      - verification.ntfy
+      - verification.alertmanager-ntfy
+      - verification.agent-access
   smoke:
     description: Non-overlapping aggregate entrypoints covering every smoke scenario.
     mutates_cluster: false
@@ -317,112 +350,144 @@ suites:
     native_results: {strategy: wrapper-junit}
 
   - metadata: {id: verification.metrics-server, source: verification, framework: bash, suite: platform, tier: verification, target: metrics-server, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube metrics-server-verify", implementation: scripts/verify/metrics-server.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.cilium, source: verification, framework: bash, suite: platform, tier: verification, target: cilium, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.flux, source: verification, framework: bash, suite: platform, tier: verification, target: flux, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flux-verify", implementation: scripts/verify/flux.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.foundation, source: verification, framework: bash, suite: platform, tier: verification, target: foundation, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube foundation-verify", implementation: scripts/verify/foundation.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube storage-verify", implementation: scripts/verify/storage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.csi-driver-smb, source: verification, framework: bash, suite: media, tier: verification, target: csi-driver-smb, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube csi-driver-smb-verify", implementation: scripts/verify/csi-driver-smb.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.media-storage, source: verification, framework: bash, suite: media, tier: verification, target: media-storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube media-storage-verify", implementation: scripts/verify/media-storage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.plex, source: verification, framework: bash, suite: media, tier: verification, target: plex, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-verify", implementation: scripts/verify/plex.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.intel-gpu-plugin, source: verification, framework: bash, suite: media, tier: verification, target: intel-gpu-plugin, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube intel-gpu-plugin-verify", implementation: scripts/verify/intel-gpu-plugin.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.qbittorrent, source: verification, framework: bash, suite: media, tier: verification, target: qbittorrent, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube qbittorrent-verify", implementation: scripts/verify/qbittorrent.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.prowlarr, source: verification, framework: bash, suite: media, tier: verification, target: prowlarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify prowlarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.sonarr, source: verification, framework: bash, suite: media, tier: verification, target: sonarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify sonarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.radarr, source: verification, framework: bash, suite: media, tier: verification, target: radarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify radarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.lidarr, source: verification, framework: bash, suite: media, tier: verification, target: lidarr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify lidarr", implementation: scripts/verify/arr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.seerr, source: verification, framework: bash, suite: media, tier: verification, target: seerr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube seerr-verify", implementation: scripts/verify/seerr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.flaresolverr, source: verification, framework: bash, suite: media, tier: verification, target: flaresolverr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flaresolverr-verify", implementation: scripts/verify/flaresolverr.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.qbit-manage, source: verification, framework: bash, suite: media, tier: verification, target: qbit-manage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube qbit-manage-verify", implementation: scripts/verify/qbit-manage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.monitoring, source: verification, framework: bash, suite: platform, tier: verification, target: monitoring, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: operator}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube monitoring-verify", implementation: scripts/verify/monitoring.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.gatus, source: verification, framework: bash, suite: platform, tier: verification, target: gatus, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube gatus-verify", implementation: scripts/verify/gatus.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.portainer, source: verification, framework: bash, suite: platform, tier: verification, target: portainer, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube portainer-verify", implementation: scripts/verify/portainer.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.test-reports, source: verification, framework: bash, suite: platform, tier: verification, target: test-reports, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube test-reports-verify", implementation: scripts/verify/test-reports.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.homepage, source: verification, framework: bash, suite: platform, tier: verification, target: homepage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube homepage-verify", implementation: scripts/verify/homepage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.trivy, source: verification, framework: bash, suite: platform, tier: verification, target: trivy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube trivy-verify", implementation: scripts/verify/trivy.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.tailscale-operator, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-operator, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-operator-verify", implementation: scripts/verify/tailscale-operator.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.tailscale-subnet-router, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-subnet-router, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-subnet-router-verify", implementation: scripts/verify/tailscale-subnet-router.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube ntfy-verify", implementation: scripts/verify/ntfy.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.alertmanager-ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: alertmanager-ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube alertmanager-ntfy-verify", implementation: scripts/verify/alertmanager-ntfy.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.agent-access, source: verification, framework: bash, suite: platform, tier: verification, target: agent-access, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube agent-access-verify", implementation: scripts/verify/agent-access.sh}
     native_results: {strategy: wrapper-junit}
 
   - metadata: {id: test.cilium-connectivity, source: test, framework: bash, suite: platform, tier: integration, target: cilium, scenario: connectivity, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}

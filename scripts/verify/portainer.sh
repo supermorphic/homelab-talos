@@ -69,9 +69,6 @@ assert_equal 'PVC StorageClass' 'longhorn' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get persistentvolumeclaim portainer --output jsonpath='{.spec.storageClassName}')"
 assert_equal 'PVC Helm retention annotation' 'keep' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get persistentvolumeclaim portainer --output jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')"
-assert_present 'administrator bootstrap Secret' \
-  "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get secret portainer-admin-password --output name)"
-
 assert_equal 'read-only ClusterRoleBinding roleRef' 'portainer-readonly' \
   "$(kubectl --kubeconfig "$kubeconfig" get clusterrolebinding portainer-readonly --output jsonpath='{.roleRef.name}')"
 if kubectl --kubeconfig "$kubeconfig" get clusterrolebinding portainer >/dev/null 2>&1; then
@@ -139,4 +136,7 @@ assert_cannot create pods/exec portainer
 assert_cannot create pods/attach portainer
 assert_cannot create pods/portforward portainer
 
-echo 'Portainer Phase 1 acceptance passed: Ready, retained PVC, internal HTTPS, isolated network paths, and effective read-only Kubernetes authorization.'
+just kube portainer-validate
+just kube portainer-policy-validate
+
+echo 'Portainer Phase 1 acceptance passed: Ready, retained PVC, internal HTTPS, isolated network paths, rendered policy, and effective read-only Kubernetes authorization.'
