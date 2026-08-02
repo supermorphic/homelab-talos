@@ -444,6 +444,11 @@ assert_pid_reaped() {
 }
 
 assert_forbidden_absent() {
+  local allowed_kubectl="kubectl --kubeconfig $kubeconfig config get-contexts homelab-diagnostic --no-headers"
+  if rg '^kubectl ' "$command_log" | rg -Fvx "$allowed_kubectl" >/dev/null; then
+    echo "Observer used an unexpected kubectl operation in $scenario_dir." >&2
+    exit 1
+  fi
   if rg -qi -e '(^|[[:space:]])(flux|helm|talosctl|talhelper|kustomize|create|apply|patch|delete|rollout|suspend|resume)([[:space:]]|$)' "$command_log"; then
     echo "Observer used a forbidden command in $scenario_dir." >&2
     exit 1
@@ -488,6 +493,17 @@ if should_run tool-isolation; then
     fi
     rg -q "^cluster-client ${client} mutation-probe$" "$command_log"
   done
+fi
+
+if should_run kubectl-guard; then
+  new_scenario kubectl-guard
+  printf 'kubectl --kubeconfig %s config get-contexts homelab-diagnostic --no-headers\n' "$kubeconfig" >>"$command_log"
+  assert_forbidden_absent
+  printf 'kubectl --kubeconfig %s --namespace media exec plex -- /bin/bash -ceu touch /config/unsafe\n' "$kubeconfig" >>"$command_log"
+  if (assert_forbidden_absent); then
+    echo 'Observer safety assertion allowed an unexpected kubectl exec invocation.' >&2
+    exit 1
+  fi
 fi
 
 if should_run validation; then
