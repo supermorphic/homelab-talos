@@ -25,6 +25,8 @@
 /.test-reports/
 /.test-campaigns/
 /.test-private-results/
+# Local Superpowers visual-companion state includes browser session keys.
+/.superpowers/
 *.dec.yaml
 *.decrypted.yaml
 

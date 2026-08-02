@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck disable=SC1091
 source scripts/lib/network.sh
 
 [[ "$#" -eq 1 ]] || {
@@ -9,23 +10,42 @@ source scripts/lib/network.sh
 }
 
 kubeconfig="$1"
+kc=(kubectl --kubeconfig "$kubeconfig")
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
 ns='media'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
 host='plex.lab.supermorphic.com'
 
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
+[[ "$("${kc[@]}" --namespace flux-system get kustomization plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
   echo 'plex Kustomization is not Ready.' >&2
   exit 1
 }
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
+[[ "$("${kc[@]}" --namespace "$ns" get helmrelease plex --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
   echo 'plex HelmRelease is not Ready.' >&2
   exit 1
 }
-kubectl --kubeconfig "$kubeconfig" --namespace "$ns" rollout status deployment/plex --timeout=5m
+"${kc[@]}" --namespace "$ns" rollout status deployment/plex --timeout=5m
+
+pod="$("${kc[@]}" --namespace media get pods \
+  --selector app.kubernetes.io/name=plex \
+  --field-selector status.phase=Running \
+  --output jsonpath='{.items[0].metadata.name}')"
+# This single-quoted program expands only inside the Plex container.
+# shellcheck disable=SC2016
+"${kc[@]}" --namespace media exec "$pod" -c app -- \
+  /bin/bash -ceu '
+    [[ "$(id -u)" == "568" ]]
+    [[ "$(getent passwd 568 | cut -d: -f1)" == "plex" ]]
+    [[ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ]]
+    findmnt -n -o OPTIONS /Volumes/Prometheus | tr "," "\n" | rg -qx "ro"
+    [[ -w /config ]]
+  '
 
 accepted=false
 for _ in {1..24}; do
-  if [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get httproute plex --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]]; then
+  if [[ "$("${kc[@]}" --namespace "$ns" get httproute plex --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]]; then
     accepted=true
     break
   fi
@@ -41,4 +61,4 @@ curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/identity" 
   echo "Plex /identity is not reachable via the internal gateway." >&2
   exit 1
 }
-echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'
+echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, UID 568 plex runtime identity, API token absent, media read-only, config writable, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'
