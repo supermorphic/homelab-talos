@@ -884,7 +884,78 @@ regular expression and should be treated as approximate; the qualitative finding
 a large majority of assertions restate values from the files they read — is what the
 decisions rest on.
 
-## Appendix B — Expected size
+## Appendix B — Operator bootstrap
+
+Source material for the `docs/runbooks/` entry that workstream 2 creates. Steps marked
+**(proposed)** do not exist until workstream 1 lands; everything else works today.
+
+### Fresh clone of `main` — once
+
+```bash
+# Clone over HTTPS. Bootstrap guards assert
+# https://github.com/7yXwscXEzv6phzUnKfrw/homelab-talos.git, so an SSH clone
+# fails every require_deployed_source check.
+git clone https://github.com/7yXwscXEzv6phzUnKfrw/homelab-talos.git
+cd homelab-talos
+
+mise trust
+mise install --locked
+mise exec -- just repo tools          # installs and prints every pinned version
+mise exec -- just repo hooks          # pre-commit — see the known gap below
+
+export SOPS_AGE_KEY='AGE-SECRET-KEY-…'   # operator shell only, never a shell profile
+mise exec -- just repo secrets           # asserts the identity matches .sops.yaml
+
+mise exec -- just talos generate      # → .talos/config  (requires the age key)
+mise exec -- just talos kubeconfig    # → .kube/config   (admin, from Talos PKI)
+
+mise exec -- just ci
+```
+
+Git resolves hooks from `$GIT_COMMON_DIR/hooks`, which every worktree shares, so
+`just repo hooks` is run once in the main clone and covers all of them.
+
+### New worktree — per worktree
+
+```bash
+cd ~/Development/homelab-talos        # run wt from the main clone
+wt switch -c my-feature
+mise trust                            # idempotent; avoids a first-run prompt
+mise exec -- just ci                  # first run builds .venv: slow, needs network
+
+mise exec -- just talos kubeconfig    # (proposed) mints a bounded observer token here;
+                                      # unchanged admin download in the main clone.
+                                      # Re-run to refresh an expired token.
+```
+
+No `.kube/config` or `.talos/config` is created in a worktree today, which is correct —
+agents currently have no cluster access.
+
+### First-run failure modes in a fresh worktree
+
+| Cause | Symptom | Prevention |
+|---|---|---|
+| `.venv` absent | First `uv run` inside `just ci` stalls building the environment | Run `just ci` once after creating the worktree |
+| `mise` config untrusted | Prompt or refusal on first tool call — **an unattended agent hangs** | `mise trust` |
+| Pre-commit not installed | Commits silently unchecked | `just repo hooks`, once, in the main clone |
+
+The trust prompt is the only hard failure for automation; the others cost time or
+coverage rather than blocking.
+
+### Known gap: pre-commit is not installed
+
+Verified on 2026-08-02: no pre-commit hook exists in the main clone, in any worktree
+gitdir, or in the shared common dir. `just repo hooks` exists but has never taken
+effect, so the staged-file layer described in `AGENTS.md` currently provides nothing.
+`just ci` still gates every pull request, so this is a loss of local fast feedback
+rather than of enforcement.
+
+Workstream 1 fixes it, and the fix must **confirm empirically** that `pre-commit
+install` targets `$GIT_COMMON_DIR/hooks` rather than the per-worktree gitdir. If it
+targets the latter, the hook covers one worktree while appearing installed, and
+`core.hooksPath` must be set explicitly instead. This is a test, not a command.
+
+## Appendix C — Expected size
 
 Non-binding, and deliberately not a design signal. Roughly −1,100 lines of rollout
 scaffolding, −1,500 to −1,900 validators, and −3,131 of prose, against additions for
