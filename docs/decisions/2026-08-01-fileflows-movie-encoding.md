@@ -1,14 +1,19 @@
 # Movie encoding benchmark — design
 
-Status: Draft
+Status: Accepted
 Date: 2026-08-01.
+Accepted: 2026-08-02.
 Branch: `fileflows-movie-encoding-strategy`.
 
-Revised after a code review and an independent spec review (codex). Two open
-decisions remain — scratch placement and the temporary Plex library — recorded in
-`reviews/2026-08-01-fileflows-movie-encoding-design-response.md`. Draft rather
-than Accepted precisely because those are open: an accepted record is superseded,
-never revised.
+Revised after a code review and an independent spec review (codex), then accepted
+by the operator. Both open decisions were resolved at acceptance: the scratch
+placement gap is accepted as bounded (§9), and the temporary Plex library is
+approved as a UI-level, reversible change distinct from a Plex deployment change
+(§2). Review artifacts are under `reviews/`.
+
+This record is accepted and is therefore superseded, never revised. Changes to
+the approach belong in a new dated record marking this one
+`Superseded by <filename>`.
 
 ## 1. Purpose
 
@@ -60,7 +65,12 @@ Out of scope (deliberately deferred):
 - Audio track pruning, subtitle cleanup, and metadata hygiene. The census
   gathers audio inventory as reconnaissance; no audio is modified.
 - Any change to `intel-gpu-plugin`. See §5.
-- Any change to Plex, including assigning it a PriorityClass. See §5.3.
+- Any change to Plex's **deployment** — no manifest edit, no `priorityClassName`,
+  no HelmRelease change. See §5.3. This is deliberately narrower than "no change
+  to Plex": §8.7 adds a temporary Plex **library** through the UI for reviewing
+  finalist encodes, which mutates Plex's persisted config on its PVC and leaves
+  bounded thumbnail residue (§9.1). That is accepted and operator-approved — it
+  is reversible from the UI and touches no GitOps source.
 
 ## 3. Context and findings
 
@@ -603,12 +613,21 @@ mitigations:
   on a node with real headroom.
 - `ephemeral-storage` limit set marginally above the request.
 - Preflight refuses to launch unless free NVMe exceeds the budget by a stated
-  margin. **Open:** the Job has no binding to the node preflight measured, so a
-  preflight pass on one node does not constrain placement. Resolving this needs
-  one of: preflight requiring *every* eligible node to pass; the recipe selecting
-  a verified node at dispatch and pinning to it; or accepting the gap and
-  treating a scratch-exhaustion eviction as an ordinary failed run. Not chosen
-  here — see the response file.
+  margin on the node it measures.
+
+**Accepted gap: preflight does not constrain placement.** The Job has no binding
+to the node preflight measured, so it can be scheduled onto a different eligible
+node whose allocatable budget passes while its actual free disk does not. Two
+alternatives were considered and rejected: requiring *every* eligible node to
+pass (refuses to run when one node is low, even though the Job would have
+succeeded on another), and having the recipe select a verified node at dispatch
+and pin to it (more recipe machinery, and it reintroduces node-pinning that was
+withdrawn earlier for deadlocking against Plex's GPU slot).
+
+The gap is accepted because its consequence is bounded: with `backoffLimit: 0`,
+read-only sources, and an `emptyDir.sizeLimit`, a scratch-exhaustion eviction is
+one wasted encode. Nothing is corrupted and no original is touched. Treat such an
+eviction as an ordinary failed run, and re-dispatch.
 
 Together these make node-pressure eviction unlikely and make the benchmark the
 most likely victim if it occurs. They do not make it impossible.

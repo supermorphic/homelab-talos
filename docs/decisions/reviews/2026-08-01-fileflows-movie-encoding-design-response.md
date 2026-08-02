@@ -11,7 +11,28 @@ you.
 
 ---
 
-## For you to decide
+## Resolved at acceptance (2026-08-02)
+
+Both items below were ruled on by the operator and the spec was updated
+accordingly before being marked `Accepted`. Retained as a record of what was
+decided and why.
+
+- **§1 scratch placement — accept the gap.** The two alternatives (all-nodes
+  preflight; dispatch-time node selection and pinning) were rejected. §9 now
+  records the gap as accepted, with the bounding argument: `backoffLimit: 0`,
+  read-only sources, and `emptyDir.sizeLimit` make a scratch-exhaustion eviction
+  one wasted encode rather than damage.
+- **§2 temporary Plex library — approved.** §2's out-of-scope entry was narrowed
+  from "any change to Plex" to "any change to Plex's *deployment*," which is what
+  was actually meant. The UI-level library is explicitly permitted and noted as
+  reversible, touching no GitOps source. This resolves the finding by correcting
+  the spec's own overbroad wording rather than by removing the library.
+- **§3 grounding items** remain open questions rather than decisions — notably
+  that no alert source exists to generate benchmark completion notifications.
+
+---
+
+## For you to decide (as presented at the gate)
 
 ### 1. Scratch placement has a real hole, and closing it reopens a decision you already made
 
@@ -84,7 +105,7 @@ Flagged as questions rather than facts:
 
 ## Ledger
 
-### F1 — Defect — evidence holds — PARTIALLY FIXED, SURFACED
+### F1 — Defect — evidence holds — FIXED (surfaced, then resolved at acceptance)
 **Changed:** §7.3 and §9 no longer claim the `ephemeral-storage` request
 guarantees placement on a node with free space; both now state what the request
 actually bounds. §9 carries the open item with all three candidate mechanisms
@@ -144,7 +165,7 @@ in `/scratch` and discarded. §13 updated to match.
 Persisting all savings-panel encodes would be roughly 600 GB. Only selective
 persistence preserves an already-stated figure.
 
-### F8 — Scope — evidence holds — SURFACED
+### F8 — Scope — evidence holds — SURFACED, then approved at acceptance
 **Question:** §8.7's temp Plex library mutates Plex's persisted config, against
 the brief's "no change to Plex." Never fixed per the disposition rules — adding
 or removing scope is yours. See *For you to decide* §2, including the note that
