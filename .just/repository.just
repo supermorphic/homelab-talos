@@ -10,6 +10,10 @@ tools:
 # Print the tool versions used by this repository.
 versions:
     @bash --version | head -n 1
+    @bats --version
+    @shfmt --version
+    @ffmpeg -version | head -n 1
+    @ffprobe -version | head -n 1
     @talosctl version --client --short
     @talhelper --version
     @kubectl version --client
