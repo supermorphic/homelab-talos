@@ -132,6 +132,10 @@ YAML
       exit 66
     }
     output="$3"
+    [[ ! -e "$output" ]] || {
+      echo "talosconfig file already exists: $output" >&2
+      exit 79
+    }
     cat >"$output" <<'YAML'
 context: homelab-reader
 contexts:
