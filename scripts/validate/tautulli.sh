@@ -36,6 +36,7 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.controllers.tautulli.pod.securityContext.runAsUser' "$values")" == '568' ]]
 [[ "$(yq -r '.controllers.tautulli.pod.securityContext.runAsGroup' "$values")" == '568' ]]
 [[ "$(yq -r '.controllers.tautulli.pod.securityContext.fsGroup' "$values")" == '568' ]]
+[[ "$(yq -r '.controllers.tautulli.pod.securityContext.fsGroupChangePolicy' "$values")" == 'OnRootMismatch' ]]
 [[ "$(yq -r '.controllers.tautulli.containers.app.securityContext.allowPrivilegeEscalation' "$values")" == 'false' ]]
 [[ "$(yq -r '.controllers.tautulli.containers.app.securityContext.capabilities.drop | join(",")' "$values")" == 'ALL' ]]
 [[ "$(yq -r '.controllers.tautulli.containers.app.resources.requests.cpu' "$values")" == '25m' ]]
@@ -63,6 +64,7 @@ done
 [[ "$(yq -r '.persistence.config.globalMounts[0].path' "$values")" == '/config' ]]
 [[ "$(yq -r '.persistence.data // "none"' "$values")" == 'none' ]]
 [[ "$(yq -r '.persistence.media // "none"' "$values")" == 'none' ]]
+[[ "$(yq -r '.persistence.shared // "none"' "$values")" == 'none' ]]
 
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'tautulli.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
