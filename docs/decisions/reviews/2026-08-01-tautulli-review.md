@@ -49,7 +49,7 @@
   **Found:** `104234d67e1022acb79ab3afc37ce345df47f77bca54097bcf31dd274dabcff6`, matching the supplied first 16 characters.
 
 - **Assumption:** qBittorrent’s existing rule conflicts with the proposed validator.  
-  **Checked:** [`kubernetes/apps/media/qbittorrent/app/prometheusrule.yaml`](/Users/ksiggins/Development/homelab-talos.tautulli-monitoring-addition/kubernetes/apps/media/qbittorrent/app/prometheusrule.yaml) and §7.2’s asserted directory-wide invariant.  
+  **Checked:** [`kubernetes/apps/media/qbittorrent/app/prometheusrule.yaml`](../../../kubernetes/apps/media/qbittorrent/app/prometheusrule.yaml) and §7.2’s asserted directory-wide invariant.
   **Found:** the existing file is a `PrometheusRule` under exactly the directory pattern the validator forbids; F1 is confirmed.
 
 - **Assumption:** the rollout-guard count is currently 24 and one new guarded recipe makes 25.  
@@ -57,7 +57,7 @@
   **Found:** 22 + 2 = 24 today, and the repository assertion is `-eq 24`; the proposed single new occurrence correctly requires 25.
 
 - **Assumption:** resource sizing is omitted despite the Seerr-clone decision.  
-  **Checked:** [`seerr/app/values.yaml`](/Users/ksiggins/Development/homelab-talos.tautulli-monitoring-addition/kubernetes/apps/media/seerr/app/values.yaml) and all current media `values.yaml` files.  
+  **Checked:** [`seerr/app/values.yaml`](../../../kubernetes/apps/media/seerr/app/values.yaml) and all current media `values.yaml` files.
   **Found:** Seerr specifies 25m CPU/256Mi memory requests and a 1Gi memory limit. Most media siblings specify resources, although qBittorrent is a counterexample to the brief’s statement that every sibling does. The Tautulli spec selects no resource behavior; F4 is confirmed.
 
 - **Assumption:** no existing named verification covers the post-activation media rules or Tautulli Gatus series.  
