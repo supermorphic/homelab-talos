@@ -2,8 +2,8 @@
 
 ## Status
 
-- **Status: Draft.** Revised 2026-08-02 after independent review. Awaiting operator
-  acceptance.
+- **Status: Accepted.** Approved by the operator on 2026-08-02, after two independent
+  reviews. No implementation performed beyond the interim change noted below.
 - Date: 2026-08-02
 - Branch: `challenge-agent-rules`
 
