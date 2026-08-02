@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: encode-benchmark-samples
+data:
+  samples.yaml: |
+    schemaVersion: 1
+    runtime:
+      image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
+      capabilityStatus: candidate
+      capabilityEvidence: {}
+    savingsSeed: 20260802
+    qualityPanel: []
+    savingsPanel: []
+    chosenSettings: {}

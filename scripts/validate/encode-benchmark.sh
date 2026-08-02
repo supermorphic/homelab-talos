@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+base='kubernetes/apps/media/encode-benchmark'
+app="$base/app"
+ks="$base/ks.yaml"
+kustomization="$app/kustomization.yaml"
+priority="$app/priorityclass.yaml"
+samples="$app/samples.yaml"
+alerts="$app/alerts.yaml"
+scaffold="$app/scripts/not-ready.sh"
+template="$base/templates/job.yaml"
+tests_dir="$base/tests"
+contract_test="$tests_dir/source-contract.bats"
+validator='scripts/validate/encode-benchmark.sh'
+media_kustomization='kubernetes/apps/media/kustomization.yaml'
+temp_dir="$(mktemp -d /tmp/homelab-talos-encode-benchmark-validate.XXXXXX)"
+trap 'rm -rf -- "$temp_dir"' EXIT
+render="$temp_dir/render.yaml"
+conform="$temp_dir/conform.yaml"
+
+fail() {
+	echo "encode-benchmark validation failed: $*" >&2
+	exit 1
+}
+
+assert_eq() {
+	local actual="$1"
+	local expected="$2"
+	local contract="$3"
+	[[ "$actual" == "$expected" ]] ||
+		fail "$contract (expected '$expected', got '$actual')"
+}
+
+for file in \
+	"$ks" \
+	"$kustomization" \
+	"$priority" \
+	"$samples" \
+	"$alerts" \
+	"$scaffold" \
+	"$template" \
+	"$contract_test" \
+	"$validator" \
+	"$media_kustomization"; do
+	[[ -f "$file" ]] || fail "missing required source: $file"
+done
+[[ -x "$scaffold" ]] || fail "$scaffold must be executable"
+
+# The shared structural scaffold must fail closed until each real command lands.
+set +e
+scaffold_output="$($scaffold 2>&1)"
+scaffold_status="$?"
+set -e
+assert_eq "$scaffold_status" '64' 'the not-ready scaffold exit status'
+assert_eq "$scaffold_output" \
+	'This benchmark command is unavailable in the structural source revision.' \
+	'the not-ready scaffold diagnostic'
+
+# Flux must reconcile only this suspended, inert child and must keep its dependency graph.
+assert_eq "$(yq -r '.metadata.name' "$ks")" 'encode-benchmark' 'Flux child name'
+assert_eq "$(yq -r '.metadata.namespace' "$ks")" 'flux-system' 'Flux child namespace'
+assert_eq "$(yq -r '.spec.path' "$ks")" \
+	'./kubernetes/apps/media/encode-benchmark/app' 'Flux child path'
+assert_eq "$(yq -r '[.spec.dependsOn[].name] | join(",")' "$ks")" \
+	'media-storage,intel-gpu-plugin,qbit-manage,kube-prometheus-stack' \
+	'Flux dependency order'
+assert_eq "$(yq -r '.spec.interval' "$ks")" '1h' 'Flux interval'
+assert_eq "$(yq -r '.spec.prune' "$ks")" 'true' 'Flux prune setting'
+assert_eq "$(yq -r '.spec.retryInterval' "$ks")" '1m' 'Flux retry interval'
+assert_eq "$(yq -r '.spec.sourceRef.kind' "$ks")" 'GitRepository' 'Flux source kind'
+assert_eq "$(yq -r '.spec.sourceRef.name' "$ks")" 'flux-system' 'Flux source name'
+assert_eq "$(yq -r '.spec.sourceRef.namespace' "$ks")" 'flux-system' 'Flux source namespace'
+assert_eq "$(yq -r '.spec.timeout' "$ks")" '10m' 'Flux timeout'
+assert_eq "$(yq -r '.spec.wait' "$ks")" 'true' 'Flux wait setting'
+suspend_state="$(yq -r '.spec.suspend' "$ks")"
+[[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]] ||
+	fail 'Flux spec.suspend must be an explicit boolean'
+
+storage_index="$(yq -r '.resources | to_entries | .[] | select(.value == "./storage/ks.yaml") | .key' "$media_kustomization")"
+benchmark_index="$(yq -r '.resources | to_entries | .[] | select(.value == "./encode-benchmark/ks.yaml") | .key' "$media_kustomization")"
+[[ "$storage_index" != 'null' && "$benchmark_index" != 'null' ]] ||
+	fail 'Flux child is not registered in the media Kustomization'
+((benchmark_index == storage_index + 1)) ||
+	fail 'Flux child must be registered immediately after media storage'
+
+# The app render contains only inert inputs. The Job remains a parsed, non-reconciled template.
+assert_eq "$(yq -r '[.resources[]] | join(",")' "$kustomization")" \
+	'./priorityclass.yaml,./samples.yaml,./alerts.yaml' 'inert app resources'
+assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
+	'scripts ConfigMap generator count'
+assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
+	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
+expected_mappings='probe.sh=scripts/not-ready.sh,census.sh=scripts/not-ready.sh,runmeta.sh=scripts/not-ready.sh,benchmark.sh=scripts/not-ready.sh,stills.sh=scripts/not-ready.sh'
+assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
+	"$expected_mappings" 'structural command mappings'
+assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
+	'encode-benchmark' 'generated ConfigMap app label'
+if mise exec -- rg -l 'templates/job\.yaml' "$base" --glob 'kustomization.yaml' >/dev/null; then
+	fail 'the render-only Job template is listed by a Kustomization'
+fi
+
+kustomize build "$app" >"$render"
+cp "$render" "$conform"
+printf '\n---\n' >>"$conform"
+mise exec -- sed -n "1,\$p" "$template" >>"$conform"
+kubeconform -strict -summary -ignore-missing-schemas "$conform"
+
+[[ -z "$(yq -r 'select(.kind == "Job") | .metadata.name' "$render")" ]] ||
+	fail 'the inert Flux render unexpectedly contains a Job'
+rendered_kinds="$(yq -N -r '.kind' "$render" | sort | tr '\n' ',')"
+assert_eq "$rendered_kinds" 'ConfigMap,ConfigMap,PriorityClass,PrometheusRule,' \
+	'inert rendered resource kinds'
+
+scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .metadata.name' "$render")"
+[[ "$scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
+	fail "rendered scripts ConfigMap is not hash-suffixed: $scripts_name"
+scripts_keys="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data | keys | sort | join(",")' "$render")"
+assert_eq "$scripts_keys" 'benchmark.sh,census.sh,probe.sh,runmeta.sh,stills.sh' \
+	'rendered scripts ConfigMap command keys'
+
+# Scheduling and alerting remain present even though execution is absent.
+assert_eq "$(yq -r '.kind' "$priority")" 'PriorityClass' 'priority class kind'
+assert_eq "$(yq -r '.metadata.name' "$priority")" \
+	'encode-benchmark-background' 'priority class name'
+assert_eq "$(yq -r '.value' "$priority")" '-10' 'background priority value'
+assert_eq "$(yq -r '.globalDefault' "$priority")" 'false' 'global priority default'
+assert_eq "$(yq -r '.preemptionPolicy' "$priority")" 'Never' 'preemption policy'
+
+assert_eq "$(yq -r '.kind' "$alerts")" 'PrometheusRule' 'alert resource kind'
+assert_eq "$(yq -r '.metadata.name' "$alerts")" 'encode-benchmark' 'alert resource name'
+assert_eq "$(yq -r '.spec.groups[0].rules | length' "$alerts")" '2' 'alert rule count'
+for alert in EncodeBenchmarkJobFailed EncodeBenchmarkJobCompleted; do
+	rule="$(yq -o=json -I=0 ".spec.groups[0].rules[] | select(.alert == \"$alert\")" "$alerts")"
+	[[ -n "$rule" ]] || fail "missing alert $alert"
+	assert_eq "$(yq -p=json -r '.for' <<<"$rule")" '1m' "$alert hold time"
+	assert_eq "$(yq -p=json -r '.labels.severity' <<<"$rule")" 'warning' "$alert severity"
+	yq -p=json -r '[.annotations.summary, .annotations.description] | join(" ")' <<<"$rule" |
+		rg -Fq '{{ $labels.job_name }}' || fail "$alert annotations must name the Job"
+	yq -p=json -r '.annotations.description' <<<"$rule" |
+		rg -Fq 'mise exec -- just kube encode-benchmark-results <run-id>' ||
+		fail "$alert must direct the operator to the guarded results recipe"
+done
+failed_expr="$(yq -r '.spec.groups[0].rules[] | select(.alert == "EncodeBenchmarkJobFailed") | .expr' "$alerts" | tr -d '[:space:]')"
+completed_expr="$(yq -r '.spec.groups[0].rules[] | select(.alert == "EncodeBenchmarkJobCompleted") | .expr' "$alerts" | tr -d '[:space:]')"
+assert_eq "$failed_expr" \
+	'kube_job_status_failed{namespace="media",job_name=~"encode-benchmark-.*"}>0' \
+	'failed Job alert expression'
+assert_eq "$completed_expr" \
+	'kube_job_status_succeeded{namespace="media",job_name=~"encode-benchmark-.*"}>0' \
+	'completed Job alert expression'
+
+# Parse the embedded panel document and gate evidence before any source media is runnable.
+samples_doc="$(yq -r '.data."samples.yaml"' "$samples")"
+assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '1' 'samples schema version'
+assert_eq "$(yq -r '.savingsSeed' <<<"$samples_doc")" '20260802' 'savings selection seed'
+runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
+[[ "$runtime_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] ||
+	fail "runtime image must use an immutable SHA-256 digest: $runtime_image"
+capability_status="$(yq -r '.runtime.capabilityStatus' <<<"$samples_doc")"
+[[ "$capability_status" == 'candidate' || "$capability_status" == 'verified' ]] ||
+	fail 'runtime capabilityStatus must be candidate or verified'
+
+quality_count="$(yq -r '.qualityPanel | length' <<<"$samples_doc")"
+savings_count="$(yq -r '.savingsPanel | length' <<<"$samples_doc")"
+if [[ "$capability_status" != 'verified' ]] &&
+	((quality_count != 0 || savings_count != 0)); then
+	fail 'sample panels must stay empty until runtime capabilities are verified'
+fi
+
+if [[ "$capability_status" == 'verified' ]]; then
+	for evidence in \
+		digestResolvable hevcQsv realQsvEncode libvmaf4k libx265 shellTools ffprobe nonRootUid568; do
+		assert_eq "$(yq -r ".runtime.capabilityEvidence.$evidence" <<<"$samples_doc")" \
+			'true' "verified capability evidence $evidence"
+	done
+	for evidence in verifiedAt nodeName imageId; do
+		value="$(yq -r ".runtime.capabilityEvidence.$evidence // \"\"" <<<"$samples_doc")"
+		[[ -n "$value" ]] || fail "verified capability evidence $evidence must be non-empty"
+	done
+fi
+
+declare -A seen_sample_ids=()
+validate_sample() {
+	local sample_json="$1"
+	local panel="$2"
+	local sample_id cohort path size sha
+	sample_id="$(yq -p=json -r '.id // ""' <<<"$sample_json")"
+	cohort="$(yq -p=json -r '.cohort // ""' <<<"$sample_json")"
+	path="$(yq -p=json -r '.path // ""' <<<"$sample_json")"
+	size="$(yq -p=json -r '.sizeBytes // 0' <<<"$sample_json")"
+	sha="$(yq -p=json -r '.sha256 // ""' <<<"$sample_json")"
+
+	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ ]] ||
+		fail "$panel sample has an invalid id: $sample_id"
+	[[ -z "${seen_sample_ids[$sample_id]:-}" ]] ||
+		fail "sample id is duplicated across panels: $sample_id"
+	seen_sample_ids[$sample_id]=1
+	[[ "$cohort" =~ ^(avc|vc1|hdr10|dolby-vision)$ ]] ||
+		fail "$sample_id has an unsupported cohort: $cohort"
+	[[ "$path" =~ ^/media/.+ ]] ||
+		fail "$sample_id path must be an absolute descendant of /media/: $path"
+	[[ ! "$path" =~ (^|/)\.\.(/|$) ]] ||
+		fail "$sample_id path must not escape /media with '..': $path"
+	[[ "$size" =~ ^[1-9][0-9]*$ ]] || fail "$sample_id sizeBytes must be positive"
+	[[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "$sample_id sha256 must contain 64 lowercase hex characters"
+}
+
+if ((quality_count != 0)); then
+	assert_eq "$quality_count" '7' 'quality panel sample count'
+	detection_count=0
+	while IFS= read -r sample_json; do
+		validate_sample "$sample_json" 'qualityPanel'
+		sample_id="$(yq -p=json -r '.id' <<<"$sample_json")"
+		cohort="$(yq -p=json -r '.cohort' <<<"$sample_json")"
+		detection_only="$(yq -p=json -r '.detectionOnly // false' <<<"$sample_json")"
+		if [[ "$detection_only" == 'true' ]]; then
+			((detection_count += 1))
+			assert_eq "$cohort" 'dolby-vision' "$sample_id detection-only cohort"
+			assert_eq "$(yq -p=json -r '.clips | length' <<<"$sample_json")" '0' \
+				"$sample_id detection-only clips"
+			continue
+		fi
+		[[ "$cohort" != 'dolby-vision' ]] ||
+			fail "$sample_id Dolby Vision source must be detection-only"
+		assert_eq "$(yq -p=json -r '.clips | length' <<<"$sample_json")" '3' \
+			"$sample_id quality clip count"
+		clip_keys="$(yq -p=json -r '.clips | keys | sort | join(",")' <<<"$sample_json")"
+		assert_eq "$clip_keys" 'dark,detail,motion' "$sample_id quality clip names"
+		timestamps="$(yq -p=json -r '.clips | [.detail, .dark, .motion] | .[]' <<<"$sample_json")"
+		while IFS= read -r timestamp; do
+			[[ "$timestamp" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$ ]] ||
+				fail "$sample_id has an invalid clip timestamp: $timestamp"
+		done <<<"$timestamps"
+		assert_eq "$(sort -u <<<"$timestamps" | wc -l | tr -d ' ')" '3' \
+			"$sample_id distinct quality clip timestamps"
+	done < <(yq -o=json -I=0 '.qualityPanel[]' <<<"$samples_doc")
+	assert_eq "$detection_count" '1' 'detection-only Dolby Vision sample count'
+fi
+
+if ((savings_count != 0)); then
+	while IFS= read -r sample_json; do
+		validate_sample "$sample_json" 'savingsPanel'
+		assert_eq "$(yq -p=json -r '.detectionOnly // false' <<<"$sample_json")" 'false' \
+			'savings sample detection-only setting'
+		cohort="$(yq -p=json -r '.cohort' <<<"$sample_json")"
+		[[ "$cohort" =~ ^(avc|vc1|hdr10)$ ]] ||
+			fail "savingsPanel contains a non-major cohort: $cohort"
+	done < <(yq -o=json -I=0 '.savingsPanel[]' <<<"$samples_doc")
+	for cohort in avc vc1 hdr10; do
+		cohort_count="$(yq -r "[.savingsPanel[] | select(.cohort == \"$cohort\")] | length" <<<"$samples_doc")"
+		((cohort_count >= 6 && cohort_count <= 10)) ||
+			fail "savingsPanel must contain about eight $cohort samples (accepted range 6-10; got $cohort_count)"
+	done
+fi
+
+# The template is valid, tightly scoped, non-root, non-preempting, and bounded.
+assert_eq "$(yq -r '.apiVersion' "$template")" 'batch/v1' 'Job API version'
+assert_eq "$(yq -r '.kind' "$template")" 'Job' 'Job template kind'
+assert_eq "$(yq -r '.metadata.name' "$template")" \
+	'encode-benchmark-template' 'Job template name'
+assert_eq "$(yq -r '.metadata.namespace' "$template")" 'media' 'Job template namespace'
+for label in metadata.labels spec.template.metadata.labels; do
+	assert_eq "$(yq -r ".$label.\"app.kubernetes.io/name\"" "$template")" \
+		'encode-benchmark' "$label app label"
+	assert_eq "$(yq -r ".$label.\"homelab-talos/benchmark-run\"" "$template")" \
+		'template' "$label run label"
+	assert_eq "$(yq -r ".$label.\"homelab-talos/benchmark-mode\"" "$template")" \
+		'template' "$label mode label"
+done
+assert_eq "$(yq -r '.spec.backoffLimit' "$template")" '0' 'Job retry limit'
+assert_eq "$(yq -r '.spec.ttlSecondsAfterFinished' "$template")" '86400' 'Job TTL'
+assert_eq "$(yq -r '.spec.activeDeadlineSeconds' "$template")" '129600' 'Job deadline'
+pod='.spec.template.spec'
+container="$pod.containers[0]"
+assert_eq "$(yq -r "$pod.priorityClassName" "$template")" \
+	'encode-benchmark-background' 'Job priority class'
+assert_eq "$(yq -r "$pod.restartPolicy" "$template")" 'Never' 'Job restart policy'
+assert_eq "$(yq -r "$pod.containers | length" "$template")" '1' 'Job container count'
+assert_eq "$(yq -r "$container.name" "$template")" 'benchmark' 'Job container name'
+assert_eq "$(yq -r "$container.image" "$template")" "$runtime_image" 'Job runtime image'
+assert_eq "$(yq -r "$container.command | join(\" \" )" "$template")" \
+	'/scripts/benchmark.sh template' 'Job command'
+assert_eq "$(yq -r "$container.env[] | select(.name == \"NODE_NAME\") | .valueFrom.fieldRef.fieldPath" "$template")" \
+	'spec.nodeName' 'Job NODE_NAME source'
+assert_eq "$(yq -r "$container.securityContext.allowPrivilegeEscalation" "$template")" \
+	'false' 'container privilege escalation'
+assert_eq "$(yq -r "$container.securityContext.capabilities.drop | join(\",\")" "$template")" \
+	'ALL' 'container dropped capabilities'
+for contract in \
+	'runAsNonRoot=true' \
+	'runAsUser=568' \
+	'runAsGroup=568' \
+	'fsGroup=568' \
+	'fsGroupChangePolicy=OnRootMismatch' \
+	'seccompProfile.type=RuntimeDefault'; do
+	key="${contract%%=*}"
+	expected="${contract#*=}"
+	assert_eq "$(yq -r "$pod.securityContext.$key" "$template")" "$expected" \
+		"pod securityContext $key"
+done
+
+anti_affinity="$pod.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]"
+assert_eq "$(yq -r "$anti_affinity.topologyKey" "$template")" \
+	'kubernetes.io/hostname' 'Plex anti-affinity topology'
+match="$anti_affinity.labelSelector.matchExpressions[0]"
+assert_eq "$(yq -r "$match.key" "$template")" 'app.kubernetes.io/name' \
+	'Plex anti-affinity label'
+assert_eq "$(yq -r "$match.operator" "$template")" 'In' 'Plex anti-affinity operator'
+assert_eq "$(yq -r "$match.values | join(\",\")" "$template")" 'plex' \
+	'Plex anti-affinity value'
+
+for resource in \
+	'requests|cpu|2' \
+	'requests|memory|2Gi' \
+	'requests|ephemeral-storage|150Gi' \
+	'requests|gpu.intel.com/i915|1' \
+	'limits|cpu|8' \
+	'limits|memory|8Gi' \
+	'limits|ephemeral-storage|160Gi' \
+	'limits|gpu.intel.com/i915|1'; do
+	IFS='|' read -r scope key expected <<<"$resource"
+	assert_eq "$(yq -r "$container.resources.$scope.\"$key\"" "$template")" "$expected" \
+		"Job resource $scope.$key"
+done
+
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"media\") | .persistentVolumeClaim.claimName" "$template")" \
+	'media-data' 'media PVC'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"out\") | .persistentVolumeClaim.claimName" "$template")" \
+	'media-data' 'output PVC'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"scratch\") | .emptyDir.sizeLimit" "$template")" \
+	'150Gi' 'scratch size limit'
+template_scripts_name="$(yq -r "$pod.volumes[] | select(.name == \"scripts\") | .configMap.name" "$template")"
+[[ "$template_scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
+	fail 'Job scripts volume must name a hash-suffixed scripts ConfigMap placeholder'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"scripts\") | .configMap.defaultMode" "$template")" \
+	'0555' 'scripts ConfigMap defaultMode 0555'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.name" "$template")" \
+	'encode-benchmark-samples' 'samples ConfigMap name'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.items[0].key" "$template")" \
+	'samples.yaml' 'samples ConfigMap key'
+
+assert_mount() {
+	local name="$1"
+	local path="$2"
+	local subpath="$3"
+	local readonly="$4"
+	local mount
+	mount="$(yq -o=json -I=0 "$container.volumeMounts[] | select(.name == \"$name\")" "$template")"
+	[[ -n "$mount" ]] || fail "missing $name volume mount"
+	assert_eq "$(yq -p=json -r '.mountPath' <<<"$mount")" "$path" "$name mount path"
+	assert_eq "$(yq -p=json -r '.subPath // ""' <<<"$mount")" "$subpath" "$name subPath"
+	assert_eq "$(yq -p=json -r '.readOnly // false' <<<"$mount")" "$readonly" "$name readOnly"
+}
+assert_mount media /media media/movies true
+assert_mount out /out benchmark false
+assert_mount scratch /scratch '' false
+assert_mount scripts /scripts '' true
+assert_mount samples /config/samples.yaml samples.yaml true
+
+if rg -n '/data|media/tv|downloads' "$app/scripts" "$template"; then
+	fail 'benchmark scripts or Job template can access forbidden TV/download paths'
+fi
+
+# Use only the pinned toolchain for all executable source checks and run every Bats contract.
+mapfile -t shell_sources < <(find "$app/scripts" -type f -name '*.sh' -print | sort)
+shell_sources+=("$validator")
+shfmt -d "${shell_sources[@]}"
+shellcheck --external-sources "${shell_sources[@]}"
+mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort)
+(("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
+bats "${bats_files[@]}"
+
+echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, fail-closed scripts, candidate/verified evidence gates, safe media mounts, and offline contracts."

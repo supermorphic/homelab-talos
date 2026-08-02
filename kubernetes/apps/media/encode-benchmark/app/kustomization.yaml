@@ -1,0 +1,19 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: media
+resources:
+  - ./priorityclass.yaml
+  - ./samples.yaml
+  - ./alerts.yaml
+configMapGenerator:
+  - name: encode-benchmark-scripts
+    files:
+      - probe.sh=scripts/not-ready.sh
+      - census.sh=scripts/not-ready.sh
+      - runmeta.sh=scripts/not-ready.sh
+      - benchmark.sh=scripts/not-ready.sh
+      - stills.sh=scripts/not-ready.sh
+generatorOptions:
+  labels:
+    app.kubernetes.io/name: encode-benchmark

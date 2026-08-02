@@ -629,6 +629,10 @@ flaresolverr-verify: require-bash
 qbit-manage-validate: require-bash
     @scripts/validate/qbit-manage.sh
 
+# Validate the suspended, inert encoding benchmark sources without contacting the cluster.
+encode-benchmark-validate: require-bash
+    @scripts/validate/encode-benchmark.sh
+
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash
