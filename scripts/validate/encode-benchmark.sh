@@ -222,11 +222,13 @@ declare -A seen_sample_ids=()
 validate_sample() {
 	local sample_json="$1"
 	local panel="$2"
-	local sample_id cohort path size sha
+	local sample_id cohort path size width height sha
 	sample_id="$(yq -p=json -r '.id // ""' <<<"$sample_json")"
 	cohort="$(yq -p=json -r '.cohort // ""' <<<"$sample_json")"
 	path="$(yq -p=json -r '.path // ""' <<<"$sample_json")"
 	size="$(yq -p=json -r '.sizeBytes // 0' <<<"$sample_json")"
+	width="$(yq -p=json -r '.width // 0' <<<"$sample_json")"
+	height="$(yq -p=json -r '.height // 0' <<<"$sample_json")"
 	sha="$(yq -p=json -r '.sha256 // ""' <<<"$sample_json")"
 
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ ]] ||
@@ -241,6 +243,8 @@ validate_sample() {
 	[[ ! "$path" =~ (^|/)\.\.(/|$) ]] ||
 		fail "$sample_id path must not escape /media with '..': $path"
 	[[ "$size" =~ ^[1-9][0-9]*$ ]] || fail "$sample_id sizeBytes must be positive"
+	[[ "$width" =~ ^[1-9][0-9]*$ ]] || fail "$sample_id width must be positive"
+	[[ "$height" =~ ^[1-9][0-9]*$ ]] || fail "$sample_id height must be positive"
 	[[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "$sample_id sha256 must contain 64 lowercase hex characters"
 }
 
@@ -301,6 +305,8 @@ assert_eq "$(yq -r '.metadata.namespace' "$template")" 'media' 'Job template nam
 for label in metadata.labels spec.template.metadata.labels; do
 	assert_eq "$(yq -r ".$label.\"app.kubernetes.io/name\"" "$template")" \
 		'encode-benchmark' "$label app label"
+	assert_eq "$(yq -r ".$label.\"homelab-talos/benchmark-dispatch\"" "$template")" \
+		'template' "$label dispatch label"
 	assert_eq "$(yq -r ".$label.\"homelab-talos/benchmark-run\"" "$template")" \
 		'template' "$label run label"
 	assert_eq "$(yq -r ".$label.\"homelab-talos/benchmark-mode\"" "$template")" \
@@ -313,6 +319,8 @@ pod='.spec.template.spec'
 container="$pod.containers[0]"
 assert_eq "$(yq -r "$pod.priorityClassName" "$template")" \
 	'encode-benchmark-background' 'Job priority class'
+assert_eq "$(yq -r "$pod.automountServiceAccountToken" "$template")" \
+	'false' 'Job service account token automount'
 assert_eq "$(yq -r "$pod.restartPolicy" "$template")" 'Never' 'Job restart policy'
 assert_eq "$(yq -r "$pod.containers | length" "$template")" '1' 'Job container count'
 assert_eq "$(yq -r "$container.name" "$template")" 'benchmark' 'Job container name'

@@ -62,6 +62,10 @@ plex_pods="$(kubectl --kubeconfig "$kubeconfig" --namespace media get pods \
 benchmark_pods="$(kubectl --kubeconfig "$kubeconfig" --namespace media get pods \
 	--selector app.kubernetes.io/name=encode-benchmark --output json)"
 plex_nodes="$(yq -p=json -r '.items[] | select(.status.phase == "Running") | .spec.nodeName // ""' <<<"$plex_pods" | sort -u)"
+[[ -n "$plex_nodes" ]] || {
+	echo 'Plex has no Running pod with a scheduled node.' >&2
+	exit 1
+}
 while IFS= read -r pod_node; do
 	[[ -n "$pod_node" ]] || continue
 	if rg -Fxq "$pod_node" <<<"$plex_nodes"; then

@@ -92,6 +92,9 @@ write_census_fixtures() {
 	expected_sha="$(sha256sum "$MOVIE_ROOT/avc-1.mkv" | awk '{print $1}')"
 	[ "$(yq -r ".savingsPanel[] | select(.path == \"$path\") | .sha256" <<<"$document")" = "$expected_sha" ]
 	[ "$(yq -r ".savingsPanel[] | select(.path == \"$path\") | .path" <<<"$document")" = "$path" ]
+	[ "$(yq -r ".savingsPanel[] | select(.path == \"$path\") | .width" <<<"$document")" = '1920' ]
+	[ "$(yq -r ".savingsPanel[] | select(.path == \"$path\") | .height" <<<"$document")" = '1080' ]
+	[ "$(yq -r '.savingsPanel[] | select(.path == "/media/hdr10-1.mkv") | [.width,.height] | join("x")' <<<"$document")" = '3840x2160' ]
 	! rg -F "$MOVIE_ROOT" <<<"$document"
 
 	printf 'changed-size' >>"$MOVIE_ROOT/avc-1.mkv"

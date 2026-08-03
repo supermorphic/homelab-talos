@@ -885,13 +885,18 @@ append_audio_inventory() {
 
 capabilities() {
 	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
-	local encoders filters uid configured_image configured_digest node_name
+	local encoders filters uid configured_image configured_digest dispatch_image node_name
 	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
 		echo 'configured runtime image is missing' >&2
 		return 65
 	}
 	[[ "$configured_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
 		echo 'configured runtime image must use an immutable sha256 digest' >&2
+		return 65
+	}
+	dispatch_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	[[ "$dispatch_image" == "$configured_image" ]] || {
+		echo 'runtime image identity does not match dispatched source' >&2
 		return 65
 	}
 	configured_digest="${configured_image##*@}"
@@ -905,7 +910,7 @@ capabilities() {
 	rg -q 'hevc_qsv' <<<"$encoders" || return 1
 	rg -q 'libvmaf' <<<"$filters" || return 1
 	rg -q 'libx265' <<<"$encoders" || return 1
-	command -v sh awk jq stat sha256sum ffprobe >/dev/null || return 1
+	command -v sh awk jq stat sha256sum realpath ffprobe >/dev/null || return 1
 	uid="$(id -u)"
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"
@@ -1583,7 +1588,7 @@ finalist_mode() {
 contention_mode() (
 	local requested_run_id="$1" contention_case="$2" worker_id="$3" requested_sample_id="$4"
 	local sample sample_id cohort setting run_id run_directory run_scratch attempt fragment staged
-	local output encode_log busy_log row_fixture start end wall encode_status=0 status qsv failures
+	local output encode_log busy_log row_fixture start end wall encode_status=0 status qsv failures resolution
 	trap 'rm -f -- "${output:-}" "${row_fixture:-}" "${staged:-}" 2>/dev/null || true
 		if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
 	validate_run_id "$requested_run_id" || return
@@ -1608,16 +1613,21 @@ contention_mode() (
 	}
 	sample_id="$(jq -r '.id' <<<"$sample")"
 	cohort="$(jq -r '.cohort' <<<"$sample")"
+	resolution="$(jq -e -r '
+		select((.width | type) == "number" and (.width | floor) == .width and
+			(.height | type) == "number" and (.height | floor) == .height) |
+		"\(.width)x\(.height)"
+	' <<<"$sample" 2>/dev/null || true)"
 	if [[ "$(jq -r '.detectionOnly // false' <<<"$sample")" == 'true' || "$cohort" == 'dolby-vision' ]]; then
 		echo 'Dolby Vision samples cannot be encoded' >&2
 		return 65
 	fi
-	if [[ "$contention_case" == 'a' && "$cohort" != 'hdr10' ]]; then
-		echo 'contention case a requires an eligible 4K HDR10 quality sample' >&2
+	if [[ "$contention_case" == 'a' && ("$cohort" != 'hdr10' || "$resolution" != '3840x2160') ]]; then
+		echo 'contention case a requires an eligible 3840x2160 HDR10 quality sample' >&2
 		return 65
 	fi
-	if [[ "$contention_case" != 'a' && ! "$cohort" =~ ^(avc|vc1)$ ]]; then
-		echo "contention case $contention_case requires an eligible 1080p non-DV quality sample" >&2
+	if [[ "$contention_case" != 'a' && (! "$cohort" =~ ^(avc|vc1)$ || "$resolution" != '1920x1080') ]]; then
+		echo "contention case $contention_case requires an eligible 1920x1080 non-DV quality sample" >&2
 		return 65
 	fi
 	setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
@@ -1677,7 +1687,8 @@ findings_mode() {
 	local run_id="$1" run_directory inputs quality_run savings_run contention_file
 	local quality_results quality_comparisons comparisons_json comparison savings_results contention
 	local findings_temp cohort distribution stats comparison_status sample_id clip_id qsv_setting
-	local premium verdict
+	local premium verdict contention_fragments='[]' fragment fragment_run fragment_file fragment_path
+	local fragment_header fragment_row fragment_fields fragment_case fragment_worker fragment_attempt
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
 	inputs="$run_directory/findings-inputs.json"
@@ -1688,6 +1699,20 @@ findings_mode() {
 	quality_run="$(jq -e -r '.qualityRunId | strings' "$inputs")"
 	savings_run="$(jq -e -r '.savingsRunId | strings' "$inputs")"
 	contention_file="$(jq -e -r '.contentionFile | strings' "$inputs")"
+	contention_fragments="$(jq -e -c '
+		.contentionFragments |
+		select(type == "array" and length >= 1 and length <= 16) |
+		if
+			all(.[];
+				(type == "object") and (keys == ["file", "runId"]) and
+				(.runId | type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
+				(.file | type == "string" and test("^contention-[a-d]-worker-[12]-attempt-[1-9][0-9]*[.]csv$"))) and
+			([.[] | (.runId + "|" + .file)] | unique | length) == length
+		then . else error("invalid contention fragments") end
+	' "$inputs")" || {
+		echo 'invalid contention fragment inputs' >&2
+		return 65
+	}
 	validate_run_id "$quality_run" || return
 	validate_run_id "$savings_run" || return
 	[[ "$contention_file" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]json$ ]] || return 64
@@ -1702,6 +1727,56 @@ findings_mode() {
 		return 66
 	}
 	[[ -f "$contention" && ! -L "$contention" ]] || return 66
+	contention_rows='[]'
+	while IFS= read -r fragment; do
+		fragment_run="$(jq -r '.runId' <<<"$fragment")"
+		fragment_file="$(jq -r '.file' <<<"$fragment")"
+		fragment_path="$benchmark_out/runs/$fragment_run/$fragment_file"
+		[[ -f "$fragment_path" && ! -L "$fragment_path" ]] || {
+			echo 'named contention fragment not found' >&2
+			return 66
+		}
+		fragment_header="$(head -n 1 "$fragment_path")"
+		[[ "$fragment_header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition' &&
+			"$(wc -l <"$fragment_path" | tr -d ' ')" == '2' ]] || {
+			echo 'invalid named contention fragment' >&2
+			return 65
+		}
+		fragment_row="$(tail -n 1 "$fragment_path")"
+		fragment_fields="$(jq -R -e -c '
+			split(",") |
+			select(length == 12 and all(.[]; startswith("\"") and endswith("\""))) |
+			map(.[1:-1])
+		' <<<"$fragment_row")" || {
+			echo 'invalid named contention fragment' >&2
+			return 65
+		}
+		jq -e --arg run "$fragment_run" '
+			.[0] == $run and
+			(.[1] | test("^[a-d]$")) and
+			(.[2] | test("^worker-[12]$")) and
+			(.[3] | test("^[a-z0-9][a-z0-9._-]*$")) and
+			(.[4] | test("^(avc|vc1|hdr10)$")) and
+			(.[5] | test("^(20|22|24|26|28)$")) and
+			(.[6] | test("^(passed|failed|invalid)$")) and
+			(.[7] | test("^[1-9][0-9]*$")) and
+			(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
+			(.[9] | test("^(passed|suspect)$")) and
+			(.[10] | test("^[a-z0-9;-]*$")) and
+			.[11] == "discarded"
+		' <<<"$fragment_fields" >/dev/null || {
+			echo 'invalid named contention fragment' >&2
+			return 65
+		}
+		fragment_case="$(jq -r '.[1]' <<<"$fragment_fields")"
+		fragment_worker="$(jq -r '.[2]' <<<"$fragment_fields")"
+		fragment_attempt="$(jq -r '.[7]' <<<"$fragment_fields")"
+		[[ "$fragment_file" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
+			echo 'named contention fragment identity mismatch' >&2
+			return 65
+		}
+		contention_rows="$(jq -c --argjson row "$fragment_fields" '. + [$row]' <<<"$contention_rows")"
+	done < <(jq -c '.[]' <<<"$contention_fragments")
 	comparisons_json="$(jq -e -s '
 		if all(.[];
 			(type == "object") and
@@ -1769,7 +1844,12 @@ findings_mode() {
 				"$qsv_setting" "$comparison_status" "$premium" "$verdict"
 		done < <(jq -c '.[]' <<<"$comparisons_json")
 		printf '\n'
-		printf '## Contention summary\n\n'
+		printf '## Contention encode workers\n\n'
+		printf '| Run | Case | Worker | Sample | Cohort | Setting | Status | Wall seconds |\n'
+		printf '|---|---|---|---|---|---:|---|---:|\n'
+		jq -r '.[] | "| \(.[0]) | \(.[1]) | \(.[2]) | \(.[3]) | \(.[4]) | \(.[5]) | \(.[6]) | \(.[8]) |"' \
+			<<<"$contention_rows"
+		printf '\n## Contention summary\n\n'
 		jq -r '
 			"- Baseline start latency: \(.baselineStartLatencySeconds) seconds\n" +
 			"- Buffering count: \(.bufferingCount)\n" +

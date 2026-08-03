@@ -241,6 +241,7 @@ EOF
 @test "capabilities proves the real five-second QSV path and prints compact path-free JSON" {
 	create_capability_tools
 	write_capability_samples
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export NODE_NAME='talos-03'
 	export KUBERNETES_IMAGE_ID='containerd://sha256:must-not-be-claimed-by-the-job'
 
@@ -267,6 +268,26 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -F -- 'libvmaf=model=version=vmaf_4k_v0.6.1' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
+}
+
+# Catches capability mode running even a synthetic ffmpeg encode before the
+# immutable image chosen by dispatch is proven identical to committed source.
+@test "capabilities rejects missing or mismatched dispatch image before ffmpeg" {
+	create_capability_tools
+	write_capability_samples
+	export NODE_NAME='talos-03'
+
+	unset BENCHMARK_DISPATCH_IMAGE
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 65 ]
+	[ "$output" = 'runtime image identity does not match dispatched source' ]
+	[ ! -s "$BENCHMARK_COMMAND_LOG" ]
+
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 65 ]
+	[ "$output" = 'runtime image identity does not match dispatched source' ]
+	[ ! -s "$BENCHMARK_COMMAND_LOG" ]
 }
 
 @test "capabilities refuses missing or malformed configured immutable image evidence" {
@@ -1048,7 +1069,7 @@ EOF
 	run_id='20260802T121500Z-deadbeef'
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 b-1080-avc
 	[ "$status" -ne 0 ]
-	[ "$output" = 'contention case a requires an eligible 4K HDR10 quality sample' ]
+	[ "$output" = 'contention case a requires an eligible 3840x2160 HDR10 quality sample' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 
 	yq -i 'del(.chosenSettings.avc)' "$BENCHMARK_SAMPLES_FILE"
@@ -1060,6 +1081,25 @@ EOF
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" b '../worker' b-1080-avc
 	[ "$status" -eq 64 ]
 	[ "$output" = 'invalid contention worker id: ../worker' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+}
+
+# Catches a direct worker bypassing dispatch and relying on cohort alone for
+# the 4K/1080p contention contract before it creates immutable run state.
+@test "contention runtime rejects missing or wrong exact sample resolution" {
+	prepare_contention_samples
+	run_id='20260802T121500Z-deadbeef'
+	yq -i '.qualityPanel[0].width = 1920' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
+	[ "$status" -eq 65 ]
+	[ "$output" = 'contention case a requires an eligible 3840x2160 HDR10 quality sample' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+
+	prepare_contention_samples
+	yq -i 'del(.qualityPanel[1].height)' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" b worker-1 b-1080-avc
+	[ "$status" -eq 65 ]
+	[ "$output" = 'contention case b requires an eligible 1920x1080 non-DV quality sample' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 }
 
@@ -1105,7 +1145,10 @@ EOF
 	target='20260802T120000Z-cccccccc'
 	quality='20260802T120000Z-aaaaaaaa'
 	savings='20260802T120000Z-bbbbbbbb'
-	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings"
+	worker_1='20260802T120000Z-11111111'
+	worker_2='20260802T120000Z-22222222'
+	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings" \
+		"$BENCHMARK_OUT/runs/$worker_1" "$BENCHMARK_OUT/runs/$worker_2"
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
 	cat >"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl" <<'EOF'
 {"status":"bracketed","lower_crf":24,"upper_crf":22,"matched_bit_rate":6000,"premium_percent":12.5,"sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}
@@ -1116,8 +1159,15 @@ EOF
 	for reduction in 10 20 30 40 50 60 70 80; do
 		printf '%s\n' "$savings,savings,sample-$reduction,avc,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,full,qsv,22,LA-ICQ,passed,1,1000,600,$reduction,8000,4800,10,30,1,,,,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/sample.log,discarded" >>"$results"
 	done
+	contention_header='run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition'
+	printf '%s\n' "$contention_header" \
+		'"20260802T120000Z-11111111","b","worker-1","sample-avc","avc","24","passed","1","120.500000","passed","","discarded"' \
+		>"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv"
+	printf '%s\n' "$contention_header" \
+		'"20260802T120000Z-22222222","b","worker-2","sample-vc1","vc1","26","passed","1","130.250000","passed","","discarded"' \
+		>"$BENCHMARK_OUT/runs/$worker_2/contention-b-worker-2-attempt-1.csv"
 	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
-{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","plexToken":"must-not-leak"}
+{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker_1","file":"contention-b-worker-1-attempt-1.csv"},{"runId":"$worker_2","file":"contention-b-worker-2-attempt-1.csv"}],"plexToken":"must-not-leak"}
 EOF
 	cat >"$BENCHMARK_OUT/runs/$target/contention.json" <<'EOF'
 {"baselineStartLatencySeconds":1.2,"bufferingCount":0,"startLatencySeconds":2.1,"seekToResumeSeconds":3.2,"nasUplinkMbps":10000,"measuredThroughputMbps":812,"plexToken":"also-must-not-leak","sourcePath":"/media/Secret Movie.mkv"}
@@ -1138,6 +1188,10 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -F '| sample-hdr | grain | 24 | unbracketed |  | No verdict |' "$findings"
 	[ "$status" -eq 0 ]
+	run rg -F "| $worker_1 | b | worker-1 | sample-avc | avc | 24 | passed | 120.500000 |" "$findings"
+	[ "$status" -eq 0 ]
+	run rg -F "| $worker_2 | b | worker-2 | sample-vc1 | vc1 | 26 | passed | 130.250000 |" "$findings"
+	[ "$status" -eq 0 ]
 	run rg -n 'must-not-leak|Secret Movie|plexToken|sourcePath' "$findings"
 	[ "$status" -eq 1 ]
 }
@@ -1146,13 +1200,18 @@ EOF
 	target='20260802T120000Z-dddddddd'
 	quality='20260802T120000Z-aaaaaaaa'
 	savings='20260802T120000Z-bbbbbbbb'
-	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings"
+	worker='20260802T120000Z-11111111'
+	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings" "$BENCHMARK_OUT/runs/$worker"
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$savings/results.csv"
 	printf '%s\n' '{"status":"unbracketed","sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}' \
 		>"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl"
+	printf '%s\n' \
+		'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition' \
+		'"20260802T120000Z-11111111","a","worker-1","sample-hdr","hdr10","22","passed","1","120.500000","passed","","discarded"' \
+		>"$BENCHMARK_OUT/runs/$worker/contention-a-worker-1-attempt-1.csv"
 	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
-{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json"}
+{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker","file":"contention-a-worker-1-attempt-1.csv"}]}
 EOF
 	cat >"$BENCHMARK_OUT/runs/$target/contention.json" <<'EOF'
 {"baselineStartLatencySeconds":"1\n## injected","bufferingCount":0,"startLatencySeconds":2.1,"seekToResumeSeconds":3.2,"nasUplinkMbps":10000,"measuredThroughputMbps":812}

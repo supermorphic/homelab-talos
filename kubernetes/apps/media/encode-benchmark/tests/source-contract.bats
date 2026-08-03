@@ -19,3 +19,10 @@
   [ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .subPath' "$template")" = media/movies ]
   ! rg -n '/data|media/tv|downloads' "$template"
 }
+
+# Catches every rendered benchmark Job inheriting Kubernetes API credentials
+# even though none of the runtime commands needs in-cluster API access.
+@test "template disables automatic service account token mounting" {
+  template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
+  [ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$template")" = false ]
+}

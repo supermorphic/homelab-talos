@@ -41,6 +41,11 @@ job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
 	echo "no owned benchmark Jobs found for run $run_id" >&2
 	exit 66
 }
+capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
+if ((capability_job_count > 0 && (capability_job_count != 1 || job_count != 1))); then
+	echo 'capability result provenance rejected: expected exactly one capability Job' >&2
+	exit 1
+fi
 
 normalize_image_id() {
 	local image_id="$1" stripped
@@ -92,6 +97,7 @@ while IFS= read -r job_json; do
 	actual_run="$(yq -p=json -r '.metadata.labels."homelab-talos/benchmark-run" // ""' <<<"$job_json")"
 	actual_app="$(yq -p=json -r '.metadata.labels."app.kubernetes.io/name" // ""' <<<"$job_json")"
 	mode="$(yq -p=json -e -r '.metadata.labels."homelab-talos/benchmark-mode" | select(test("^[a-z][a-z0-9-]*$"))' <<<"$job_json")" || exit 65
+	job_uid="$(yq -p=json -r '.metadata.uid // ""' <<<"$job_json")"
 	[[ "$actual_run" == "$run_id" && "$actual_app" == 'encode-benchmark' ]] || {
 		echo "refusing results for incorrectly owned Job: $name" >&2
 		exit 65
@@ -107,6 +113,27 @@ while IFS= read -r job_json; do
 	node=''
 	if ((pod_count > 0)); then
 		node="$(yq -p=json -r '.[0].spec.nodeName // ""' <<<"$matching_pods")"
+	fi
+	if [[ "$mode" == 'capabilities' ]]; then
+		[[ "$phase" == 'Complete' && "$succeeded" == '1' && "$failed" == '0' ]] || {
+			echo "capability result provenance rejected: Job $name is not Complete" >&2
+			exit 1
+		}
+		[[ "$job_uid" =~ ^[a-zA-Z0-9._-]+$ && "$pod_count" == '1' ]] || {
+			echo "capability result provenance rejected: Job $name does not have one exact pod" >&2
+			exit 1
+		}
+		pod_phase="$(yq -p=json -r '.[0].status.phase // ""' <<<"$matching_pods")"
+		controller_count="$(JOB_NAME="$name" JOB_UID="$job_uid" yq -p=json -r '
+			[.[0].metadata.ownerReferences[]? | select(
+				.controller == true and .apiVersion == "batch/v1" and .kind == "Job" and
+				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID)
+			)] | length
+		' <<<"$matching_pods")"
+		[[ "$pod_phase" == 'Succeeded' && "$controller_count" == '1' ]] || {
+			echo "capability result provenance rejected: pod is not Succeeded and controlled by Job $name" >&2
+			exit 1
+		}
 	fi
 	printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
 		"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"

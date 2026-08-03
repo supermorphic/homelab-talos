@@ -6,6 +6,7 @@ metadata:
   namespace: media
   labels:
     app.kubernetes.io/name: encode-benchmark
+    homelab-talos/benchmark-dispatch: template
     homelab-talos/benchmark-run: template
     homelab-talos/benchmark-mode: template
 spec:
@@ -16,9 +17,11 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: encode-benchmark
+        homelab-talos/benchmark-dispatch: template
         homelab-talos/benchmark-run: template
         homelab-talos/benchmark-mode: template
     spec:
+      automountServiceAccountToken: false
       priorityClassName: encode-benchmark-background
       restartPolicy: Never
       securityContext:

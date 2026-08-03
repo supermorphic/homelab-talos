@@ -71,9 +71,11 @@ try:
             try:
                 source_size = int(row["source_size_bytes"])
                 bit_rate = int(row["video_bit_rate"])
+                width = int(row["width"])
+                height = int(row["height"])
             except ValueError:
                 fail(f"invalid numeric census field at row {row_number}")
-            if source_size <= 0 or bit_rate <= 0:
+            if source_size <= 0 or bit_rate <= 0 or width <= 0 or height <= 0:
                 continue
             rank = hashlib.sha256(f"{seed_text}|{source_path}".encode()).hexdigest()
             rows_by_cohort[cohort].append(
@@ -81,6 +83,8 @@ try:
                     "path": source_path,
                     "size": source_size,
                     "bit_rate": bit_rate,
+                    "width": width,
+                    "height": height,
                     "rank": rank,
                 }
             )
@@ -136,6 +140,8 @@ for cohort in major_cohorts:
                 "cohort": cohort,
                 "path": row["path"],
                 "size": row["size"],
+                "width": row["width"],
+                "height": row["height"],
                 "sha256": digest.hexdigest(),
             }
         )
@@ -151,5 +157,7 @@ for sample in selected:
     print(f"    cohort: {sample['cohort']}")
     print(f"    path: {json.dumps(sample['path'], ensure_ascii=False)}")
     print(f"    sizeBytes: {sample['size']}")
+    print(f"    width: {sample['width']}")
+    print(f"    height: {sample['height']}")
     print(f"    sha256: {sample['sha256']}")
 PYTHON
