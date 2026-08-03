@@ -25,7 +25,8 @@ if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
 		BENCHMARK_TEST_BUSY_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
-		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND; do
+		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
+		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE; do
 		if [[ -v "$test_hook" ]]; then
 			echo 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' >&2
 			exit 64
@@ -713,20 +714,102 @@ record_result() {
 	return "$status"
 }
 
+filter_audio_inventory() {
+	local input="$1" header="$2" source_path="$3"
+	BENCHMARK_INVENTORY_SOURCE_VALUE="$source_path" awk -v expected_header="$header" '
+		function fail() {
+			failure = 65
+			exit failure
+		}
+		function reset_record() {
+			delete fields
+			field_count = 0
+			field = ""
+			at_field_start = 1
+			in_quotes = 0
+			closed_quote = 0
+			raw_record = ""
+			record_active = 0
+		}
+		function finish_field() {
+			fields[++field_count] = field
+			field = ""
+			at_field_start = 1
+			closed_quote = 0
+		}
+		function finish_record(   key) {
+			finish_field()
+			record_count += 1
+			if (record_count == 1) {
+				if (raw_record != expected_header || field_count != 10) fail()
+				print raw_record
+			} else {
+				if (field_count != 10 || fields[1] == "" || fields[2] !~ /^[0-9]+$/) fail()
+				if (fields[1] != ENVIRON["BENCHMARK_INVENTORY_SOURCE_VALUE"]) {
+					key = fields[1] SUBSEP fields[2]
+					if (key in seen) fail()
+					seen[key] = 1
+					print raw_record
+				}
+			}
+			reset_record()
+		}
+		BEGIN { reset_record() }
+		{
+			if (record_active) raw_record = raw_record ORS $0
+			else raw_record = $0
+			record_active = 1
+			line = $0
+			for (position = 1; position <= length(line); position += 1) {
+				character = substr(line, position, 1)
+				if (in_quotes) {
+					if (character == "\"") {
+						if (substr(line, position + 1, 1) == "\"") {
+							field = field "\""
+							position += 1
+						} else {
+							in_quotes = 0
+							closed_quote = 1
+						}
+					} else {
+						field = field character
+					}
+				} else if (closed_quote) {
+					if (character != ",") fail()
+					finish_field()
+				} else if (at_field_start && character == "\"") {
+					in_quotes = 1
+					at_field_start = 0
+				} else if (character == ",") {
+					finish_field()
+				} else {
+					if (character == "\"") fail()
+					field = field character
+					at_field_start = 0
+				}
+			}
+			if (in_quotes) {
+				field = field ORS
+				next
+			}
+			finish_record()
+		}
+		END {
+			if (failure) exit failure
+			if (in_quotes || record_active || record_count == 0) exit 65
+		}
+	' "$input"
+}
+
 append_audio_inventory() {
 	local packets="$1"
 	local probe="$2"
 	local output="$3"
 	local header='source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method'
-	local sums track index bytes existing staged tracks_json line source_path source_csv
-	local -a tracks
+	local sums track index bytes staged tracks_json line source_path track_count position
 	declare -A packet_bytes=()
 	if [[ -e "$output" || -L "$output" ]]; then
 		[[ -f "$output" && ! -L "$output" ]] || return 65
-		IFS= read -r existing <"$output" || true
-		[[ "$existing" == "$header" ]] || return 65
-	else
-		existing=''
 	fi
 	sums="$(awk -F, '
 		NF == 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { bytes[$1] += $2; seen[$1] = 1; next }
@@ -743,28 +826,42 @@ append_audio_inventory() {
 				(.codec | type) != "string" or (.channels | type) != "number" or
 				(.channelLayout | type) != "string" or (.language | type) != "string" or
 				((.bitRate | type) != "number" and (.bitRate | type) != "null") or
-				(.durationSeconds | type) != "number")
-		then error("invalid audio inventory probe") else .audioTracks[] end
+				(.durationSeconds | type) != "number") or
+			([.audioTracks[].index] | unique | length) != (.audioTracks | length)
+		then error("invalid audio inventory probe") else .audioTracks end
 	' "$probe")" || return
 	source_path="$(jq -e -r '.path | strings' "$probe")" || return
-	source_csv="$(jq -n -r --arg source "$source_path" '[$source] | @csv')"
-	mapfile -t tracks <<<"$tracks_json"
+	track_count="$(jq -e -r 'length' <<<"$tracks_json")" || return
 	staged="$output.$$.tmp"
-	rm -f -- "$staged"
-	if [[ -n "$existing" ]]; then
-		while IFS= read -r line || [[ -n "$line" ]]; do
-			[[ "$line" == "$source_csv,"* ]] || printf '%s\n' "$line" >>"$staged"
-		done <"$output"
+	rm -f -- "$staged" || return 74
+	if [[ -e "$output" ]]; then
+		filter_audio_inventory "$output" "$header" "$source_path" >"$staged" || {
+			rm -f -- "$staged" || true
+			return 65
+		}
 	else
-		printf '%s\n' "$header" >"$staged"
+		printf '%s\n' "$header" >"$staged" || {
+			rm -f -- "$staged" || true
+			return 74
+		}
 	fi
-	for track in "${tracks[@]}"; do
-		[[ -n "$track" ]] || continue
-		index="$(jq -r '.index' <<<"$track")"
+	if [[ "$test_mode" == '1' && "${BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE:-0}" == '1' ]]; then
+		rm -f -- "$staged" || true
+		return 74
+	fi
+	for ((position = 0; position < track_count; position += 1)); do
+		track="$(jq -e -c --argjson position "$position" '.[$position]' <<<"$tracks_json")" || {
+			rm -f -- "$staged" || true
+			return 65
+		}
+		index="$(jq -e -r '.index' <<<"$track")" || {
+			rm -f -- "$staged" || true
+			return 65
+		}
 		bytes="${packet_bytes[$index]:-0}"
 		line="$(jq -r \
 			--argjson bytes "$bytes" \
-			--arg source_path "$(jq -r '.path' "$probe")" '
+			--arg source_path "$source_path" '
 			[
 				$source_path, .index, .codec, .channels, .channelLayout, .language,
 				.bitRate,
@@ -775,9 +872,15 @@ append_audio_inventory() {
 			rm -f -- "$staged"
 			return 65
 		}
-		printf '%s\n' "$line" >>"$staged"
+		printf '%s\n' "$line" >>"$staged" || {
+			rm -f -- "$staged" || true
+			return 74
+		}
 	done
-	mv -f -- "$staged" "$output"
+	mv -f -- "$staged" "$output" || {
+		rm -f -- "$staged" || true
+		return 74
+	}
 }
 
 capabilities() {

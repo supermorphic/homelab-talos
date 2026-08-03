@@ -216,6 +216,12 @@ EOF
 	run "$SCRIPTS/benchmark.sh" _test results-header
 	[ "$status" -eq 64 ]
 	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
+
+	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
+	export BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE=1
+	run "$SCRIPTS/benchmark.sh" _test results-header
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
 }
 
 # Catches capability claims based only on encoder listings: this public mode must
@@ -799,6 +805,83 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" savings "$run_id"
 	[ "$status" -eq 0 ]
 	[ "$(awk 'NR > 1 { count += 1 } END { print count + 0 }' "$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv")" -eq 2 ]
+}
+
+@test "savings staged inventory write failure records non-passed and preserves no partial inventory" {
+	prepare_execution_run
+	export BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE=1
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$(awk -F, 'NR == 2 { print $10 }' "$results")" != 'passed' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv" ]
+	[ "$(find "$BENCHMARK_OUT/runs/$run_id" -type f -name 'audio-inventory.csv.*.tmp' | wc -l | tr -d ' ')" -eq 0 ]
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" \
+		'savings|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|full|qsv|22'
+	[ "$status" -eq 1 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "savings retry strictly upserts multiline CSV source paths by source and track" {
+	prepare_execution_run
+	newline_source="$BATS_TEST_TMPDIR/"$'movie\nname.mkv'
+	cp "$source_media" "$newline_source"
+	export NEWLINE_SOURCE="$newline_source"
+	yq -i '.savingsPanel[0].path = strenv(NEWLINE_SOURCE)' "$BENCHMARK_SAMPLES_FILE"
+	newline_probe="$BATS_TEST_TMPDIR/newline-source-probe.json"
+	jq --arg path "$newline_source" '.path = $path' \
+		"$FIXTURES/metrics/probe-source.json" >"$newline_probe"
+	export BENCHMARK_TEST_SOURCE_PROBE="$newline_probe"
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-22-attempt'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+
+	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	run python3 - "$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv" "$newline_source" <<'PYTHON'
+import csv
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = list(csv.DictReader(stream))
+assert len(rows) == 2, rows
+assert {row["track_index"] for row in rows} == {"1", "2"}, rows
+assert all(row["source_path"] == sys.argv[2] for row in rows), rows
+PYTHON
+	[ "$status" -eq 0 ]
+}
+
+@test "savings accepts a zero-audio title with durable header-only inventory" {
+	prepare_execution_run
+	zero_source_probe="$BATS_TEST_TMPDIR/zero-audio-source.json"
+	zero_output_probe="$BATS_TEST_TMPDIR/zero-audio-output.json"
+	empty_packets="$BATS_TEST_TMPDIR/zero-audio-packets.csv"
+	jq '.audioTrackCount = 0 | .audioTracks = []' \
+		"$FIXTURES/metrics/probe-source.json" >"$zero_source_probe"
+	jq '.audioTrackCount = 0 | .audioTracks = []' \
+		"$FIXTURES/metrics/probe-output-valid.json" >"$zero_output_probe"
+	: >"$empty_packets"
+	export BENCHMARK_TEST_SOURCE_PROBE="$zero_source_probe"
+	export BENCHMARK_TEST_OUTPUT_PROBE="$zero_output_probe"
+	export BENCHMARK_PACKET_FIXTURE="$empty_packets"
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(awk -F, 'NR == 2 { print $10 }' "$BENCHMARK_OUT/runs/$run_id/results.csv")" = 'passed' ]
+	[ "$(wc -l <"$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv" | tr -d ' ')" -eq 1 ]
+	[ "$(<"$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv")" = 'source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method' ]
 }
 
 # Catches the public finalist mode selecting an uncommitted setting, copying a
