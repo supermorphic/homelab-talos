@@ -94,21 +94,26 @@ rule, but they are not its source of authority. Mandatory policy is stated direc
 
 ### Git and worktree boundary
 
+Branch and merge authority appears first in the runtime section: agents work on the
+assigned feature branch, never commit or push to `main`, and never merge or enable
+auto-merge without authorization for that specific merge.
+
 The assigned worktree remains the filesystem boundary for implementation work. Agents
 do not use files from another worktree or the primary checkout as implementation inputs
 and never modify them. Read-only inspection of committed objects, refs, and history is
 allowed because it does not cross the filesystem implementation boundary.
 
-WorkTrunk lifecycle remains operator-run. Agents do not create, remove, move, prune,
-repair, or otherwise manage worktrees. An inconsistent or unsafe assigned worktree is a
+Worktree lifecycle is operator-run. Agents do not create, remove, move, prune, repair,
+or otherwise manage worktrees. An inconsistent or unsafe assigned worktree is a
 stop condition, and unrelated changes are preserved.
 
 Before each push, the agent fetches `origin` and inspects both `origin/main` and the
 remote feature branch. Unexpected commits on the remote feature branch are a hard stop;
 the agent does not overwrite or automatically reconcile them. If only `origin/main`
 advanced, the agent rebases the clean assigned branch and reruns required validation.
-A dirty branch is never rebased. An authorized rewritten feature branch uses only
-`--force-with-lease`, and a failed lease is a hard stop.
+A dirty branch is never rebased. When pushing rebased commits requires rewriting the
+assigned remote feature branch, the agent uses only `--force-with-lease`; a failed lease
+is a hard stop.
 
 The following remain prohibited regardless of hook coverage:
 

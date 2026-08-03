@@ -17,23 +17,24 @@ assumptions.
 ## Git and worktrees
 
 - Never commit or push directly to `main`; work on the assigned feature branch.
+- Never merge or enable auto-merge without explicit operator authorization for that
+  specific merge. General or stale approval does not count.
 - The assigned worktree is the filesystem boundary for implementation work. Do not use
   files from another worktree or the primary checkout as implementation inputs, and
   never modify them. Read-only inspection of committed Git objects, refs, and history
   is allowed.
-- Do not create, remove, move, prune, repair, or otherwise manage worktrees. WorkTrunk
-  lifecycle remains operator-run.
+- Do not create, remove, move, prune, repair, or otherwise manage worktrees. Worktree
+  lifecycle is operator-run.
 - Stop if the assigned branch or worktree is inconsistent or unsafe. Preserve unrelated
   changes.
-- Never merge or enable auto-merge without explicit operator authorization for that
-  specific merge. General or stale approval does not count.
 - Keep commits scoped and reviewable.
 - Before each push, fetch `origin` and inspect both `origin/main` and the remote feature
   branch. If the remote feature branch contains unexpected commits absent locally, stop
   rather than overwriting or automatically reconciling it. Otherwise, if `origin/main`
   advanced, rebase the clean assigned branch onto it and rerun required validation.
-- Never rebase a dirty branch. When an authorized rebase rewrites the assigned remote
-  feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
+- Never rebase a dirty branch. When pushing rebased commits requires rewriting the
+  assigned remote feature branch, use only `--force-with-lease`; a failed lease is a
+  hard stop.
 - Do not use `git reset --hard`, `git clean -fd`, repository-wide `git checkout .` or
   `git restore .`, or an unconditional force-push. Hooks may enforce these rules, but
   the rules remain mandatory independently of hooks.
