@@ -7,7 +7,7 @@ cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
 talosconfig := ".talos/config"
 kubeconfig := ".kube/config"
-github_owner := "7yXwscXEzv6phzUnKfrw"
+github_owner := "supermorphic"
 github_repository := "homelab-talos"
 
 # Render the pinned Cilium chart to standard output without writing generated YAML.

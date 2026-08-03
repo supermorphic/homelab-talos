@@ -59,7 +59,7 @@ Flux runtime Git access uses the private key in the
 `flux-system/flux-system` Secret and a matching read-only GitHub deploy key. The
 bootstrap PAT is not stored in the cluster and is not needed for normal
 reconciliation. The canonical source endpoint is
-`ssh://git@ssh.github.com:443/7yXwscXEzv6phzUnKfrw/homelab-talos`; GitHub's SSH
+`ssh://git@ssh.github.com:443/supermorphic/homelab-talos`; GitHub's SSH
 port 443 avoids environments that block or time out port 22.
 
 If the URL already uses port 443 but source-controller reports
@@ -80,7 +80,7 @@ access:
 
 ```bash
 export GITHUB_TOKEN='github_pat_...'
-export FLUX_BOOTSTRAP_CONFIRM='bootstrap:flux:prod:7yXwscXEzv6phzUnKfrw/homelab-talos:read-only'
+export FLUX_BOOTSTRAP_CONFIRM='bootstrap:flux:prod:supermorphic/homelab-talos:read-only'
 mise exec -- just kube flux-preflight
 mise exec -- just bootstrap flux
 unset FLUX_BOOTSTRAP_CONFIRM GITHUB_TOKEN

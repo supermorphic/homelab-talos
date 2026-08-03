@@ -9,7 +9,7 @@ import subprocess
 import sys
 from typing import Any
 
-REPOSITORY = "7yXwscXEzv6phzUnKfrw/homelab-talos"
+REPOSITORY = "supermorphic/homelab-talos"
 RULESET_NAME = "Protect main"
 TARGET_REF = "refs/heads/main"
 WORKFLOW = "ci.yml"

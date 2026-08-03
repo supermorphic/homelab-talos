@@ -491,7 +491,7 @@ flux:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     kubeconfig='{{kubeconfig}}'
     expected_confirmation="bootstrap:flux:prod:${owner}/${repository}:read-only"
@@ -566,7 +566,7 @@ flux-ssh-known-hosts:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    expected_url='ssh://git@ssh.github.com:443/7yXwscXEzv6phzUnKfrw/homelab-talos'
+    expected_url='ssh://git@ssh.github.com:443/supermorphic/homelab-talos'
     expected_fingerprint='SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM'
     expected_confirmation='repair:flux-system:known-hosts:ssh.github.com:443'
     key_file="$(mktemp /tmp/homelab-talos-flux-identity.XXXXXX)"
@@ -788,7 +788,7 @@ foundation:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_network_confirmation='reserve:192.168.90.30-39:gateway:192.168.90.30'
@@ -952,7 +952,7 @@ storage:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase9:storage:longhorn'
@@ -1038,7 +1038,7 @@ csi-driver-smb:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:csi-driver-smb'
@@ -1099,7 +1099,7 @@ media-storage:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:media-storage'
@@ -1170,7 +1170,7 @@ plex:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:plex'
@@ -1232,7 +1232,7 @@ qbittorrent:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase12:qbittorrent'
@@ -1300,7 +1300,7 @@ arr app:
       *) echo "Usage: just bootstrap arr <prowlarr|sonarr|radarr|lidarr>" >&2; exit 1 ;;
     esac
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation="bootstrap:arr:$app"
@@ -1366,7 +1366,7 @@ media-app app:
       *) echo 'Usage: just bootstrap media-app tautulli' >&2; exit 1 ;;
     esac
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation="bootstrap:media-app:$app"
@@ -1431,7 +1431,7 @@ seerr:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase14:seerr'
@@ -1493,7 +1493,7 @@ flaresolverr:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase13:flaresolverr'
@@ -1557,7 +1557,7 @@ qbit-manage:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:qbit-manage'
@@ -1623,7 +1623,7 @@ intel-gpu-plugin:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:intel-gpu-plugin'
@@ -1683,7 +1683,7 @@ monitoring:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:monitoring:kube-prometheus-stack'
@@ -1767,7 +1767,7 @@ gatus:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:gatus'
@@ -1831,7 +1831,7 @@ portainer:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:portainer'
@@ -1895,7 +1895,7 @@ test-reports:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:test-reports'
@@ -1959,7 +1959,7 @@ homepage:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:homepage'
@@ -2023,7 +2023,7 @@ trivy:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:trivy-operator'
@@ -2089,7 +2089,7 @@ tailscale-operator:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:networking:tailscale-operator'
@@ -2165,7 +2165,7 @@ tailscale-subnet-router:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:networking:tailscale-subnet-router'
@@ -2232,7 +2232,7 @@ ntfy:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:monitoring:ntfy'
@@ -2297,7 +2297,7 @@ alertmanager-ntfy:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:monitoring:alertmanager-ntfy'
@@ -2360,7 +2360,7 @@ metrics-server:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:metrics-server'
@@ -2423,7 +2423,7 @@ agent-access:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:agent-access'
