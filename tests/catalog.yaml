@@ -121,6 +121,7 @@ campaigns:
       - verification.media-storage
       - verification.plex
       - verification.intel-gpu-plugin
+      - verification.encode-benchmark
       - verification.qbittorrent
       - verification.prowlarr
       - verification.sonarr
@@ -443,6 +444,7 @@ suites:
     runner: {command: "mise exec -- just kube intel-gpu-plugin-verify", implementation: scripts/verify/intel-gpu-plugin.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.encode-benchmark, source: verification, framework: bash, suite: media, tier: verification, target: encode-benchmark, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube encode-benchmark-verify", implementation: scripts/verify/encode-benchmark.sh}
     native_results: {strategy: wrapper-junit}

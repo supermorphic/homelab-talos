@@ -154,8 +154,9 @@ assert_flux_not_called() {
 @test "catalog exposes offline validation and human-owned read-only verification" {
 	[ "$("$REAL_YQ" -r '.executions.ci | to_entries | .[] | select(.value == "validation.encode-benchmark") | .key' "$CATALOG")" = '15' ]
 	[ "$("$REAL_YQ" -r '.campaigns.verification.members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")" = '9' ]
+	[ "$("$REAL_YQ" -r '.campaigns."scoped-verification".members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")" = '9' ]
 	[ "$("$REAL_YQ" -r '.suites[] | select(.metadata.id == "validation.encode-benchmark") | [.metadata.framework, .metadata.tier, .metadata.mutates_cluster, .metadata.execution_owner, .runner.command] | @tsv' "$CATALOG")" = $'bash\toffline\tfalse\tshared\tmise exec -- just kube encode-benchmark-validate' ]
-	[ "$("$REAL_YQ" -r '.suites[] | select(.metadata.id == "verification.encode-benchmark") | [.metadata.mutates_cluster, .metadata.execution_owner, .runner.command] | @tsv' "$CATALOG")" = $'false\thuman\tmise exec -- just kube encode-benchmark-verify' ]
+	[ "$("$REAL_YQ" -r '.suites[] | select(.metadata.id == "verification.encode-benchmark") | [.metadata.mutates_cluster, .metadata.execution_owner, .access.tier, .runner.command] | @tsv' "$CATALOG")" = $'false\thuman\tobserver\tmise exec -- just kube encode-benchmark-verify' ]
 }
 
 # Catches adding or removing a guarded rollout without updating repository accounting.
