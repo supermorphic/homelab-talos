@@ -115,7 +115,9 @@ Before each push, the agent fetches `origin` and inspects both `origin/main` and
 remote feature branch. Unexpected commits on the remote feature branch are a hard stop;
 the agent does not overwrite or automatically reconcile them. If only `origin/main`
 advanced, the agent rebases the clean assigned branch and reruns required validation.
-A dirty branch is never rebased. When pushing rebased commits requires rewriting the
+A rebase never runs with uncommitted changes; when unrelated changes prevent a required
+rebase, the agent stops and asks the operator, rather than pushing without the rebase or
+committing the unrelated work. When pushing rebased commits requires rewriting the
 assigned remote feature branch, the agent uses only `--force-with-lease`; a failed lease
 is a hard stop.
 
