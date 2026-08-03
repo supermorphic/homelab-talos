@@ -1075,9 +1075,8 @@ In the Tautulli setup wizard, complete these steps in order:
 10. Confirm at least one Plex library appears.
 11. Play authorized media and require the session to appear in Tautulli history.
 
-Before PR 2, record the chosen authentication mode and prove `/status` returns exact HTTP
-`200` with redirects disabled both from the cluster and through
-`tautulli.lab.supermorphic.com`. A 3xx is a failed gate even if Kubernetes probes are green.
+Web authentication is enabled using **Plex OAuth (Plex admin)**.
+With that mode active, GET `/status` returned exact HTTP `200` with redirects disabled both through the `media/tautulli` Service and through `tautulli.lab.supermorphic.com`.
 Run `mise exec -- just kube tautulli-verify` after authentication is enabled.
 
 The operator creates the Homepage Secret only after the API key exists:

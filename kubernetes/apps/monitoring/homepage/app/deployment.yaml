@@ -124,6 +124,12 @@ spec:
                   name: homepage-seerr
                   key: apiKey
                   optional: true
+            - name: HOMEPAGE_VAR_TAUTULLI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-tautulli
+                  key: apiKey
+                  optional: true
           resources:
             requests:
               cpu: 25m

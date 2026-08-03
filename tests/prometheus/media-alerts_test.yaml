@@ -91,3 +91,45 @@ tests:
       - eval_time: 10m
         alertname: PlexPersistentVolumeClaimNotBound
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media", name="tautulli"}'
+        values: '_x18 1x6'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TautulliProbeMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: TautulliProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media, name: tautulli}
+            exp_annotations:
+              summary: Tautulli probe metric is missing
+              description: The Media/tautulli Gatus success series has been absent for 15 minutes.
+      - eval_time: 20m
+        alertname: TautulliProbeMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="plex", phase="Bound"}'
+        values: '1x14'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="tautulli", phase="Bound"}'
+        values: '_x8 1x6'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TautulliPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: TautulliPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Tautulli database claim is absent or unbound
+              description: The media/tautulli PVC has not reported Bound for five minutes; watch history persistence is at risk.
+      - eval_time: 10m
+        alertname: TautulliPersistentVolumeClaimNotBound
+        exp_alerts: []

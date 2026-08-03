@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: homepage-tautulli
+    namespace: homepage
+type: Opaque
+stringData:
+    apiKey: ENC[AES256_GCM,data:VoHBctaHFhSRWvN5goV8yWjzJJAenIbTFLlygXLcUaU=,iv:pk99+QQO2neAyQGYNTK+06+yAM5KsZTh027FGngs6Rk=,tag:YzZWU6mTCsF+MeTKrgSZsg==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA3VGZzWVlSYXdJaHdhQW5s
+            UGMyM0xGUDBKQU5oNHZCNFM4a3R0RHU2MDBvClY3T0dpU2FGTWJxZFBCeFB2Qlp1
+            WW9GdDF0NVJBWGFXREwzOXBlUjdBYncKLS0tIFFTeUFIR2M2emJhTEtUOVNSZlVY
+            eEdFajN6TmI1MzVxREJXSWdnUlpFeTAKMdD0G46EjMIW6KnvlbRaFfmBEuH7ZHNC
+            Ji7dcADOWgXOh/qLeO1pFKGBgmio50OnC619VzUSnbc5yPTbNlzKKw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-08-02T23:29:19Z"
+    mac: ENC[AES256_GCM,data:EMJP7OVrmFCk5nq+M6M1yQ4WfVjq+fvudKcjviB/eL8tgP6fhiBSt+vtA5BV7W9zkTxWSm0h+d9pM4a4Epkk9PvWUo2pU5Ne2gFJ59LXCUI6d2g1tlLsGuKS5+ospU7Jplw5DVgrhJi2IQUu7p9kvhfJ3e/f8Iy6RaWMfNK3ckg=,iv:zIGXd5S13SXnGmuB3+n2HDSFyuflQdj2G/iDZf0nv5o=,tag:IBx0rJYn+q/L3qyY8saYcg==,type:str]
+    version: 3.13.2

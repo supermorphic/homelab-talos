@@ -34,6 +34,14 @@ spec:
           annotations:
             summary: Plex probe metric is missing
             description: The Media/plex Gatus success series has been absent for 15 minutes.
+        - alert: TautulliProbeMissing
+          expr: absent(gatus_results_endpoint_success{group="Media", name="tautulli"})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tautulli probe metric is missing
+            description: The Media/tautulli Gatus success series has been absent for 15 minutes.
     - name: media-persistence
       rules:
         - alert: PlexPersistentVolumeClaimNotBound
@@ -44,3 +52,11 @@ spec:
           annotations:
             summary: Plex database claim is absent or unbound
             description: The media/plex PVC has not reported Bound for five minutes; Plex library state is at risk.
+        - alert: TautulliPersistentVolumeClaimNotBound
+          expr: absent(kube_persistentvolumeclaim_status_phase{namespace="media", persistentvolumeclaim="tautulli", phase="Bound"} == 1)
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Tautulli database claim is absent or unbound
+            description: The media/tautulli PVC has not reported Bound for five minutes; watch history persistence is at risk.
