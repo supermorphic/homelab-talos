@@ -37,9 +37,11 @@ expect_pass 'egress equals vpn'           check_egress_matches_vpn 1.2.3.4 1.2.3
 expect_fail 'egress empty'                check_egress_matches_vpn '' 1.2.3.4
 expect_fail 'egress differs from vpn'     check_egress_matches_vpn 9.9.9.9 1.2.3.4
 
-expect_pass 'no leak: differs from home'  check_no_home_leak 1.2.3.4 24.8.29.48 vpn-ip
-expect_pass 'no leak: egress blocked'     check_no_home_leak '' 24.8.29.48 app-egress
-expect_fail 'leak: equals home'           check_no_home_leak 24.8.29.48 24.8.29.48 app-egress
+# 192.0.2.1 is an RFC 5737 documentation address standing in for the home WAN IP,
+# which the live probe discovers at runtime and never commits.
+expect_pass 'no leak: differs from home'  check_no_home_leak 1.2.3.4 192.0.2.1 vpn-ip
+expect_pass 'no leak: egress blocked'     check_no_home_leak '' 192.0.2.1 app-egress
+expect_fail 'leak: equals home'           check_no_home_leak 192.0.2.1 192.0.2.1 app-egress
 expect_fail 'no home reference'           check_no_home_leak 1.2.3.4 '' vpn-ip
 
 expect_pass 'single loopback resolver'    check_loopback_resolvers '127.0.0.1'
