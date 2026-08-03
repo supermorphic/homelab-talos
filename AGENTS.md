@@ -27,7 +27,8 @@ assumptions.
   lifecycle is operator-run.
 - Stop if the assigned branch or worktree is inconsistent or unsafe. Preserve unrelated
   changes.
-- Keep commits scoped and reviewable.
+- Keep each commit limited to one coherent change. Do not include unrelated edits, and
+  split changes when they can be independently reviewed or reverted.
 - Before each push, fetch `origin` and inspect both `origin/main` and the remote feature
   branch. If the remote feature branch contains unexpected commits absent locally, stop
   rather than overwriting or automatically reconciling it. Otherwise, if `origin/main`
