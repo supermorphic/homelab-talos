@@ -1,10 +1,23 @@
 # Plex Relay and Sonos integration — design
 
-Status: Accepted (2026-08-02)
+Status: Accepted (2026-08-02); **remote-path selection superseded (2026-08-03)**
 Implementation is sequenced in the
 [Plex Relay and Sonos implementation plan](../plans/2026-08-02-plex-relay-sonos-implementation-plan.md).
 Date: 2026-08-02.
 Branch: `investigate-plex-remote-access`.
+
+> **Partial supersession.** The selection of Plex Relay as the *primary* remote path,
+> the prohibition on any UniFi WAN port forward, and the acceptance claims that
+> depended on Relay sufficiency are superseded by
+> [Plex public Envoy and split-horizon remote access — amendment](2026-08-03-plex-public-envoy-amendment.md).
+> Relay does not satisfy the Sonos objective: it has a 2 Mbps ceiling and incomplete
+> client support, and the custom access URL was subsequently shown to be load-bearing
+> for Apple TV and Plexamp.
+>
+> Everything else in this document remains in force — the Relay identity repair, pod
+> and filesystem hardening, read-only media, the containment analysis, the rejection
+> of Cloudflare Tunnel and Tailscale Funnel for media delivery, and Relay itself as a
+> retained fallback. Sections 6, 8.1, and 8.2 are unchanged.
 
 ## 1. Decision
 
