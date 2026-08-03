@@ -92,17 +92,18 @@ Most changes are made by an AI agent. The division of labor:
 | Step | Who |
 |---|---|
 | Plan approval (substantial or cross-cutting changes only) | agent proposes → **you approve** |
-| Branch → changes → staged commits → push → open PR | agent |
+| Branch → source changes → offline validation → staged commits → push → open PR | agent |
+| Scoped live verification after the operator mints the required credential | agent |
+| Credential minting, secret handling, platform rollout, and break-glass or recovery | **you** |
+| GitHub protection mutation | **you**, with per-invocation authorization |
 | Review the PR diff and required green `ci` check | **you** |
 | Squash-merge | **you** |
-| Flux reconciles `main`; run guarded `just bootstrap …` rollouts | Flux / **you** |
 
-The agent owns branch-through-open-PR; you own review, merge, and rollout. The
-agent **never self-merges** and **never runs live cluster rollouts unprompted** —
-cluster-mutating `bootstrap …` recipes stay behind operator `*_CONFIRM` gates.
-Because merging to `main` deploys via Flux, the PR plus a green `ci` check is the
-review gate before anything reaches the cluster; the active ruleset makes that gate
-mandatory rather than conventional.
+The agent owns offline validation and scoped live verification; you own minting,
+secrets, platform rollout, break-glass, protection mutation, and merge. The agent
+never self-merges or runs a platform rollout. Because merging to `main` deploys via
+Flux, the PR plus a green `ci` check is the review gate before anything reaches the
+cluster; the active ruleset makes that gate mandatory rather than conventional.
 
 ## Physical KVM Note
 

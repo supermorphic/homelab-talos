@@ -250,4 +250,30 @@ if rg -q "$fake_age_key|$fake_age_key_file" "$sops_session"; then
   exit 1
 fi
 
+invalid_agent_rules="$(
+  awk '
+    /^- / && $0 !~ /^- \[(Authoritative — [^]]+|Operator policy — operator|Gotcha)\] / {
+      print FNR ": " $0
+    }
+  ' "$repo_root/AGENTS.md"
+)"
+if [[ -n "$invalid_agent_rules" ]]; then
+  echo 'Every AGENTS.md rule bullet must declare its category and control:' >&2
+  printf '%s\n' "$invalid_agent_rules" >&2
+  exit 1
+fi
+
+rg -qx '@AGENTS.md' "$repo_root/CLAUDE.md" || {
+  echo 'CLAUDE.md must import AGENTS.md.' >&2
+  exit 1
+}
+rg -q '^## Claude Code specifics$' "$repo_root/CLAUDE.md" || {
+  echo 'CLAUDE.md must retain the Claude-specific operating heading.' >&2
+  exit 1
+}
+if rg -q 'SOPS-encrypted|Never push|ReadWriteOnce' "$repo_root/CLAUDE.md"; then
+  echo 'CLAUDE.md must not repeat repository rules from AGENTS.md.' >&2
+  exit 1
+fi
+
 echo 'Claude and Codex hook command and session visibility checks passed.'

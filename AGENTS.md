@@ -1,79 +1,29 @@
-# Agent Instructions
+# Repository Rules
 
 Canonical, vendor-neutral rules for agents and contributors. `CLAUDE.md` imports
 this file.
 
-## Repository purpose
-
-`homelab-talos` manages a three-node Talos Linux + Flux GitOps Kubernetes cluster.
-Git is the source of truth, and `main` is the Flux production deployment boundary.
-
-## Git and worktrees
-
-- Never commit or push directly to `main`; work on the assigned feature branch.
-- Stay within the assigned worktree and branch. Preserve unrelated user changes.
-- Immediately before every push, fetch `origin` and, when needed, safely rebase a
-  clean branch onto `origin/main`.
-- Never merge or enable auto-merge without explicit operator authorization for that
-  specific merge. General or stale approval does not count.
-- Keep commits scoped and reviewable.
-- Report changed files, validation actually performed, and remaining risks or
-  deferred work.
-
-## Tools and cluster access
-
-- Run repository workflows through the pinned toolchain with `mise exec -- just …`.
-  Use `mise exec -- <tool> …` for pinned ad hoc inspection when no recipe exists.
-  Never use unpinned or system tools.
-- All cluster mutations and health checks use guarded `just` recipes. Never run raw
-  `kubectl`, `talosctl`, `helm`, or `flux` against the live cluster.
-- If a needed cluster operation has no recipe, add an appropriately guarded recipe.
-- Cluster-mutating `bootstrap …` recipes require an explicit `*_CONFIRM` value and
-  are operator-run. Agents stage and validate source, then hand off the rollout.
-- Guarded rollouts must verify their implementation and rollout-specific sources
-  match the current remote `origin/main` commit.
-- GitHub protection checks and plans are read-only. Any protection mutation requires
-  explicit authorization for that invocation and must use the guarded
-  `mise exec -- just repo github-protection-apply` recipe; never use ad-hoc API calls.
-
-## Validation
-
-- Commit-time pre-commit hooks are staged-file fast feedback. Run the same hooks
-  repository-wide with `mise exec -- just repo lint` when useful.
-- `mise exec -- just ci` is the canonical full, cluster-independent, secret-free
-  validation command used by the required GitHub pull-request check.
-- Keep cluster-dependent `*-verify`, `*-status`, `*-preflight`, and diagnostics out
-  of `just ci`; they remain operator-only.
-
-## Secrets
-
-- All secrets are SOPS-encrypted (`*.sops.yaml`); the age private key remains only
-  with the operator.
-- Never handle the age key, decrypt or rewrite encrypted manifests, expose secret
-  values, copy legacy ciphertext, or commit plaintext credentials.
-- Secrets are created under this repository's age key through guarded,
-  operator-run `*-secrets` recipes.
-
-## Public repository
-
-- This repository is public. Every file, commit message, and pull request is
-  world-readable, and anything already pushed cannot be retracted.
-- State residual risk as mitigated or accepted. Do not publish a dated list of
-  known-unimplemented controls; that is a schedule of what is currently undefended.
-- Never commit live public IP addresses, hardware serials, or MAC addresses. Use
-  RFC 5737 documentation addresses in test fixtures and bracketed placeholders in
-  documentation.
-- These rules govern new writing. Existing records are history; do not rewrite them
-  to comply.
-
-## Talos and Flux invariants
-
-- Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml`
-  and `talos/patches/`, then run the `just talos generate` flow. Preserve
-  Talos/Kubernetes/Cilium compatibility.
-- Follow `kubernetes/apps/<domain>/<app>/{ks.yaml, app/, config/}` and existing
-  Flux source, HelmRelease, Kustomization, and `dependsOn` patterns.
-- New apps begin suspended, roll out through guarded `just bootstrap <app>`, then
-  persist the unsuspended state. Do not suspend Flux resources without approval.
-- A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate` (or a StatefulSet),
-  never `RollingUpdate`.
+- [Authoritative — branch protection] Never push to `main`.
+- [Operator policy — operator] Never commit on a checked-out `main` branch.
+- [Operator policy — operator] Never merge or enable auto-merge without per-merge authorization.
+- [Operator policy — operator] Work on the assigned branch in the current worktree; preserve unrelated changes.
+- [Operator policy — operator] Worktree lifecycle (`wt switch --create`, `wt remove`) is operator-run.
+- [Operator policy — operator] Keep commits scoped and reviewable.
+- [Operator policy — operator] Report changed files, validation performed, and remaining risk.
+- [Operator policy — operator] Fetch and rebase before every push.
+- [Authoritative — PreToolUse hook (bypassable)] Never use `git reset --hard`, `git clean -fd`, unqualified `git checkout .` or `git restore .`, or force-push without a lease.
+- [Authoritative — credential tiers] Reads are direct; changes to Flux-managed state go through Git.
+- [Gotcha] A worktree has no cluster credentials until asked for; stop and ask the operator to mint them.
+- [Authoritative — admin credential custody] Platform rollouts, break-glass, recovery, secrets, and protection changes are operator-run under `*_CONFIRM`.
+- [Authoritative — guarded recipe and token scope] GitHub protection mutation needs per-invocation authorization; use `mise exec -- just repo github-protection-apply`.
+- [Authoritative — key custody, gitleaks, and staged-blob check] Secrets are SOPS-encrypted; the age key stays with the operator.
+- [Authoritative — required GitHub check] `just ci` is the authoritative cluster-independent gate.
+- [Authoritative — validation.test-harness] Cluster-dependent suites never enter `just ci`.
+- [Authoritative — mise.lock] Run workflows through `mise exec -- just`; do not use unpinned tools.
+- [Gotcha] Never hand-edit `clusterconfig/`; regenerate it from `talos/talconfig.yaml`.
+- [Authoritative — source-layer policy] Follow the `apps/<domain>/<app>/` layout.
+- [Authoritative — rendered-layer policy] A Deployment mounting an RWO PVC uses `Recreate` or a StatefulSet.
+- [Operator policy — operator] Portainer must not become a deployment authority.
+- [Authoritative — validation.decisions] Design decisions go in `docs/decisions/`; plans are not committed.
+- [Authoritative — validation.decisions] An `Accepted` record is superseded, never revised.
+- [Operator policy — operator] An assertion must have an independent oracle or encode an invariant.

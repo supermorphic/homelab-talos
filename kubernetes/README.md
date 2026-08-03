@@ -119,9 +119,10 @@ There is not yet a Just recipe for interactive SOPS editing, so this is an
 intentional direct use of a mise-pinned CLI. Never commit a decrypted Secret or
 place the private age identity in this tree.
 
-After Flux bootstrap, normal Kubernetes changes are made in Git and reconciled by
-Flux. Direct `kubectl apply` is reserved for documented bootstrap or recovery
-steps; it is not the steady-state deployment workflow.
+After Flux bootstrap, use a scoped kubeconfig only for direct reads. Make
+Flux-managed changes in Git and let Flux reconcile them. For bootstrap or recovery,
+use the documented guarded `mise exec -- just bootstrap …` recipe rather than
+`kubectl apply`.
 
 See the root [`README.md`](../README.md) for workstation setup and
 [`docs/phase-6-flux.md`](../docs/phase-6-flux.md) for the staged bootstrap and
