@@ -63,11 +63,14 @@ Collected read-only through the Talos maintenance API on 2026-07-18:
 | Install target | `/dev/nvme0n1` | Pass |
 | Model | `Samsung SSD 990 PRO 1TB` | Pass |
 | Capacity | `1,000,204,886,016` bytes | Pass |
-| Serial | `S7LANL0L418256N` | Recorded |
+| Serial | `<nuc1-nvme-serial>` | Recorded |
 | Transport | Native NVMe | Pass |
 | Other internal disk | None | Pass |
 | Boot media | `/dev/sda`, SanDisk Cruzer Glide, 15 GB USB | Pass |
 | Rendered config validation | Strict metal and Phase 2 policy checks | Pass |
+
+Disk serials are redacted to placeholders throughout this document. The real
+values are held out-of-band and are not published here.
 
 The successful Secure Boot maintenance boot proves that the existing firmware
 trust database accepts the new Sidero Labs Image Factory image. No Secure Boot
@@ -84,7 +87,7 @@ Collected read-only through the Talos maintenance API on 2026-07-18:
 | Install target | `/dev/nvme0n1` | Pass |
 | Model | `Samsung SSD 990 PRO 1TB` | Pass |
 | Capacity | `1,000,204,886,016` bytes | Pass |
-| Serial | `S7LANL0L418299M` | Recorded |
+| Serial | `<nuc2-nvme-serial>` | Recorded |
 | Transport | Native NVMe | Pass |
 | Other internal disk | None | Pass |
 | Talos USB visible | Yes | Pass |
@@ -104,7 +107,7 @@ Collected read-only through the Talos maintenance API on 2026-07-18:
 | Install target | `/dev/nvme0n1` | Pass |
 | Model | `Samsung SSD 990 PRO 1TB` | Pass |
 | Capacity | `1,000,204,886,016` bytes | Pass |
-| Serial | `S7LANL0L418289H` | Recorded |
+| Serial | `<nuc3-nvme-serial>` | Recorded |
 | Transport | Native NVMe | Pass |
 | Other internal disk | None | Pass |
 | Talos USB visible | Yes | Pass |

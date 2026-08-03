@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import leak_sentinel as ls  # noqa: E402
 
 
-HOME = "24.8.29.48"
-VPN = "169.150.208.144"
+# RFC 5737 documentation addresses. These are opaque fixtures compared for equality;
+# the real addresses are discovered live at probe time and never committed.
+HOME = "192.0.2.1"
+VPN = "198.51.100.1"
 
 
 def egress(ip, ts="2026-07-25T00:00:00Z"):

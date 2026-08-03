@@ -34,9 +34,12 @@ rollback media.
 
 | Node | IP | Role | Disk | Interface | MAC Address |
 |---|---:|---|---|---|---|
-| nuc1 | 192.168.90.10 | controlplane | /dev/nvme0n1 | enp88s0 | 54:b2:03:f0:aa:03 |
-| nuc2 | 192.168.90.11 | controlplane | /dev/nvme0n1 | enp88s0 | 54:b2:03:fd:40:53 |
-| nuc3 | 192.168.90.12 | controlplane | /dev/nvme0n1 | enp88s0 | 48:21:0b:35:01:0c |
+| nuc1 | 192.168.90.10 | controlplane | /dev/nvme0n1 | enp88s0 | `<nuc1-mac>` |
+| nuc2 | 192.168.90.11 | controlplane | /dev/nvme0n1 | enp88s0 | `<nuc2-mac>` |
+| nuc3 | 192.168.90.12 | controlplane | /dev/nvme0n1 | enp88s0 | `<nuc3-mac>` |
+
+MAC addresses are redacted to placeholders. The real values are held out-of-band
+and are not published here.
 
 ## Image Factory
 
