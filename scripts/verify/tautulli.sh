@@ -64,6 +64,7 @@ rules_response="$(
 )"
 [[ "$(yq -r '.status // ""' <<<"$rules_response")" == 'success' ]]
 expected_rules_csv="$(IFS=,; echo "${expected_rules[*]}")"
+# shellcheck disable=SC2016  # $name is a yq expression variable, not a shell variable
 mapfile -t media_rule_rows < <(
   EXPECTED_RULES="$expected_rules_csv" yq -r '
     .data.groups[]?.rules[]? |
@@ -77,7 +78,10 @@ mapfile -t media_rule_rows < <(
 }
 loaded_names="$(printf '%s\n' "${media_rule_rows[@]}" | cut -f1 | sort)"
 expected_names="$(printf '%s\n' "${expected_rules[@]}" | sort)"
-[[ "$loaded_names" == "$expected_names" ]]
+[[ "$loaded_names" == "$expected_names" ]] || {
+  echo 'Prometheus loaded rule names do not exactly match the six expected media rules.' >&2
+  exit 1
+}
 for row in "${media_rule_rows[@]}"; do
   IFS=$'\t' read -r rule_name rule_health rule_error <<<"$row"
   [[ "$rule_health" == 'ok' && -z "$rule_error" ]] || {

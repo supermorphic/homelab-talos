@@ -98,9 +98,23 @@ if [[ " $* " == *' https://prometheus.lab.supermorphic.com/api/v1/rules?type=ale
 {"status":"success","data":{"groups":[{"name":"media.rules","file":"/etc/prometheus/rules/media.rules","rules":[{"state":"inactive","name":"MediaEndpointDown","query":"gatus_results_endpoint_success == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media endpoint down"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"MediaEndpointsProbeMissing","query":"absent(gatus_results_endpoint_success)","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media probes missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"plex\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"tautulli\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"}] }]}}
 JSON
       ;;
-    unhealthy-rules)
+    unhealthy-empty-error)
       cat <<'JSON'
-{"status":"success","data":{"groups":[{"name":"media.rules","file":"/etc/prometheus/rules/media.rules","rules":[{"state":"inactive","name":"MediaEndpointDown","query":"gatus_results_endpoint_success == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media endpoint down"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"MediaEndpointsProbeMissing","query":"absent(gatus_results_endpoint_success)","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media probes missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"plex\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"tautulli\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli probe missing"},"alerts":[],"health":"err","lastError":"rule evaluation failed","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"}] }]}}
+{"status":"success","data":{"groups":[{"name":"media.rules","file":"/etc/prometheus/rules/media.rules","rules":[{"state":"inactive","name":"MediaEndpointDown","query":"gatus_results_endpoint_success == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media endpoint down"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"MediaEndpointsProbeMissing","query":"absent(gatus_results_endpoint_success)","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media probes missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"plex\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"tautulli\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli probe missing"},"alerts":[],"health":"err","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"}] }]}}
+JSON
+      ;;
+    duplicate-replacement-rules|healthy-nonempty-last-error)
+      case "$FAKE_LAYOUT" in
+        duplicate-replacement-rules)
+          yq_program='.data.groups[0].rules[5].name = "PlexPersistentVolumeClaimNotBound"'
+          ;;
+        healthy-nonempty-last-error)
+          yq_program='.data.groups[0].rules[3].lastError = "stale evaluation error"'
+          ;;
+      esac
+      cat <<'JSON' | yq -o=json \
+        "$yq_program"
+{"status":"success","data":{"groups":[{"name":"media.rules","file":"/etc/prometheus/rules/media.rules","rules":[{"state":"inactive","name":"MediaEndpointDown","query":"gatus_results_endpoint_success == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media endpoint down"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"MediaEndpointsProbeMissing","query":"absent(gatus_results_endpoint_success)","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Media probes missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"plex\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliProbeMissing","query":"absent(gatus_results_endpoint_success{name=\"tautulli\"})","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli probe missing"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"PlexPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Plex PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"},{"state":"inactive","name":"TautulliPersistentVolumeClaimNotBound","query":"kube_persistentvolumeclaim_status_phase{phase=\"Bound\"} == 0","duration":0,"labels":{"severity":"warning"},"annotations":{"summary":"Tautulli PVC not bound"},"alerts":[],"health":"ok","lastError":"","evaluationTime":0.001,"lastEvaluation":"2026-08-02T00:00:00Z","type":"alerting"}] }]}}
 JSON
       ;;
     *)
@@ -136,7 +150,11 @@ run_layout_expect_failure() {
     echo "$layout verification unexpectedly passed." >&2
     exit 1
   fi
-  rg -F -q -- "$expected_error" "$fixture/$layout.err"
+  if ! rg -F -q -- "$expected_error" "$fixture/$layout.err"; then
+    cat "$fixture/$layout.err" >&2
+    echo "$layout verification did not report: $expected_error" >&2
+    exit 1
+  fi
   printf '%s\n' "$log"
 }
 
@@ -165,7 +183,13 @@ rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/query' "$missing_ser
 incomplete_rules_log="$(run_layout_expect_failure incomplete-rules 'Prometheus loaded 5 of 6 expected media rules.')"
 rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/rules\?type=alert' "$incomplete_rules_log"
 
-unhealthy_rules_log="$(run_layout_expect_failure unhealthy-rules 'Prometheus rule TautulliProbeMissing is unhealthy: rule evaluation failed.')"
-rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/rules\?type=alert' "$unhealthy_rules_log"
+duplicate_replacement_rules_log="$(run_layout_expect_failure duplicate-replacement-rules 'Prometheus loaded rule names do not exactly match the six expected media rules.')"
+rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/rules\?type=alert' "$duplicate_replacement_rules_log"
+
+unhealthy_empty_error_log="$(run_layout_expect_failure unhealthy-empty-error 'Prometheus rule TautulliProbeMissing is unhealthy: no error text.')"
+rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/rules\?type=alert' "$unhealthy_empty_error_log"
+
+healthy_nonempty_last_error_log="$(run_layout_expect_failure healthy-nonempty-last-error 'Prometheus rule TautulliProbeMissing is unhealthy: stale evaluation error.')"
+rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/rules\?type=alert' "$healthy_nonempty_last_error_log"
 
 echo 'Tautulli Service, gateway, metric, and rule verifier tests passed.'

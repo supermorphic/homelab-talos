@@ -1737,7 +1737,7 @@ mise exec -- git commit -m "feat(media): activate tautulli integrations"
 ### Task 11: Extend Live Verification to the Metric and Loaded Rules
 
 **Files:**
-- Create: `scripts/test/tautulli-verify-test.sh`
+- Modify: `scripts/test/tautulli-verify-test.sh`
 - Modify: `scripts/verify/tautulli.sh`
 
 **Interfaces:**
@@ -1833,7 +1833,7 @@ Expected: both pass.
 - [ ] **Step 5: Commit live integration verification**
 
 ```bash
-mise exec -- git add scripts/verify/tautulli.sh
+mise exec -- git add scripts/verify/tautulli.sh scripts/test/tautulli-verify-test.sh
 mise exec -- git commit -m "feat(verification): check tautulli monitoring path"
 ```
 
