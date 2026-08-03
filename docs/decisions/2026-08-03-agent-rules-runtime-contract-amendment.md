@@ -234,7 +234,7 @@ one primary disposition. These labels remain in design traceability only.
 | Stay within the assigned worktree and preserve unrelated changes | Retained in root | Expanded into a filesystem boundary, committed-ref exception, and stop condition. |
 | Fetch and rebase before a push | Retained in root | Corrected to inspect both remote branches and rebase only when `origin/main` advanced. |
 | Never merge or auto-merge without specific authorization | Retained in root | Operator authority boundary. |
-| Keep commits scoped and reviewable | Retained in root | Repository-wide completion behavior. |
+| Keep commits scoped and reviewable | Retained in root | Clarified as one coherent change per commit, split when independently reviewable or revertible. |
 | Report files, validation, and remaining risk | Retained in root | Expanded into the completion contract and public/private risk boundary. |
 | Run pinned tools through mise | Retained in root | One statement under Authority boundaries; not repeated under Validation. |
 | All cluster mutations and health checks use guarded recipes | Retained in root | Reframed by effect: scoped reads and verification are allowed; privileged mutations remain operator-run. |
