@@ -106,7 +106,7 @@ drift if any part differs.
 For this repository, a passing result resembles:
 
 ```text
-Repository: 7yXwscXEzv6phzUnKfrw/homelab-talos
+Repository: supermorphic/homelab-talos
 GitHub Actions source: integration 15368 from successful commit <sha>
 Ruleset: Protect main (ID 20116777)
 GitHub protection check: PASS
@@ -134,7 +134,7 @@ it or explicitly authorize an agent to run it for that invocation. After reviewi
 the plan, use the exact repository-scoped guard:
 
 ```bash
-GITHUB_PROTECTION_CONFIRM='apply:github-protection:7yXwscXEzv6phzUnKfrw/homelab-talos' \
+GITHUB_PROTECTION_CONFIRM='apply:github-protection:supermorphic/homelab-talos' \
   mise exec -- just repo github-protection-apply
 ```
 

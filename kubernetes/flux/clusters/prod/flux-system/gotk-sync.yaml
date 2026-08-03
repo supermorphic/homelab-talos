@@ -11,7 +11,7 @@ spec:
     branch: main
   secretRef:
     name: flux-system
-  url: ssh://git@ssh.github.com:443/7yXwscXEzv6phzUnKfrw/homelab-talos
+  url: ssh://git@ssh.github.com:443/supermorphic/homelab-talos
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

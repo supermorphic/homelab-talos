@@ -6,7 +6,7 @@
 - Completed: 2026-07-19
 - State: Complete
 - Flux CLI and controllers: `2.9.2`
-- Git source: `ssh://git@ssh.github.com:443/7yXwscXEzv6phzUnKfrw/homelab-talos`
+- Git source: `ssh://git@ssh.github.com:443/supermorphic/homelab-talos`
 - Sync path: `kubernetes/flux/clusters/prod`
 - Branch and polling: `main`, one minute
 
@@ -28,7 +28,7 @@ Phase 6 does not install image automation or grant Flux Git write access.
 ## One-Time GitHub Credential
 
 Create a fine-grained personal access token owned by
-`7yXwscXEzv6phzUnKfrw`, limited to the private `homelab-talos` repository. Use
+`supermorphic`, limited to the private `homelab-talos` repository. Use
 these repository permissions:
 
 - Administration: read and write
@@ -125,7 +125,7 @@ Bootstrap Flux and its read-only deploy key:
 
 ```bash
 export GITHUB_TOKEN='github_pat_...'
-export FLUX_BOOTSTRAP_CONFIRM='bootstrap:flux:prod:7yXwscXEzv6phzUnKfrw/homelab-talos:read-only'
+export FLUX_BOOTSTRAP_CONFIRM='bootstrap:flux:prod:supermorphic/homelab-talos:read-only'
 mise exec -- just bootstrap flux
 unset FLUX_BOOTSTRAP_CONFIRM GITHUB_TOKEN
 ```
