@@ -141,6 +141,11 @@ plex.lab.supermorphic.com
 - No Cloudflare proxy or Tunnel; no Tailscale Tunnel or Funnel.
 - No public IPv6 or AAAA.
 - Relay remains enabled as a fallback.
+- The public EnvoyProxy **mirrors the internal one** — replica count, resource requests,
+  and PodDisruptionBudget — differing only in address pool and `loadBalancerIPs`,
+  listener hostname, certificate reference, and `allowedRoutes`. The internal data plane
+  is proven to carry Plex streaming, so any further divergence is a defect rather than a
+  tuning opportunity.
 
 ## 5. TLS and certificate design
 
@@ -228,8 +233,8 @@ it is staged as an independent, regression-gated step ahead of any public resour
 | # | Control | Enforced by |
 |---|---|---|
 | 1 | Separate GatewayClass `public` with its own EnvoyProxy, Deployment, and Service | Envoy Gateway provisions infrastructure per Gateway |
-| 2 | Listener hostname is exactly `plex.lab.supermorphic.com` | Gateway API hostname intersection. A route for any other hostname **cannot** attach. This is the primary control and it is specification-guaranteed |
-| 3 | `allowedRoutes.namespaces.from: Selector` on a new label `gateway.supermorphic.com/public-plex: "true"`, with `kinds: [HTTPRoute]` | Reusing `access: internal` would admit all of `media` — Sonarr, Radarr, qBittorrent, Prowlarr, Seerr, Lidarr, Tautulli |
+| 2 | Listener hostname is exactly `plex.lab.supermorphic.com` | Gateway API hostname intersection: a route naming any **other** hostname cannot attach, and that much is specification-guaranteed. Its limit must be stated — a route that omits `hostnames` inherits the listener's, so this control constrains which hostname is served, not which backend serves it |
+| 3 | `allowedRoutes.namespaces.from: Selector` on a new label `gateway.supermorphic.com/public-plex: "true"`, with `kinds: [HTTPRoute]` | Narrows admission to `media` alone instead of every namespace labelled `access: internal`. It does **not** isolate Plex *within* `media`: namespace selection cannot distinguish the Plex route from the Sonarr, Radarr, qBittorrent, Prowlarr, Seerr, Lidarr, and Tautulli routes beside it. All eight pin their own hostname today, so none attaches, but nothing structural prevents a future `media` route from attaching to the public Gateway and serving the Plex hostname to another backend |
 | 4 | Dedicated MetalLB pool `public`, single address, `autoAssign: false`, explicit `loadBalancerIPs` | Gives UniFi a stable, unambiguous DNAT target that cannot drift onto another service |
 | 5 | Service exposes 443/TCP only; Envoy admin remains on localhost | Envoy Gateway default, verified by negative test rather than assumed |
 | 6 | UniFi DNAT names exactly WAN 443/TCP to the public VIP | Must not be a forward-to-LAN-any rule |
@@ -298,9 +303,16 @@ proxy from the public one. The Gateway-owner pod label is used instead. The actu
 placement is confirmed during phase 1 rather than assumed, and the pod-label approach
 is correct under either deployment mode.
 
-Egress is restricted to cluster DNS and the Plex cloud over `world:443`. The media
-share is mounted by the CSI driver on the node, not by the pod, so no SMB egress rule
-is expected — this is confirmed during the capture rather than assumed.
+Egress is restricted to cluster DNS and to TCP 443 through Cilium's `world` entity.
+What that does and does not mean must be stated precisely: `world` is **every endpoint
+outside the cluster**, not a Plex-cloud selector. It permits TCP 443 to any off-cluster
+host, including the NAS, the UniFi gateway, and any VLAN device listening on HTTPS. It
+bounds protocol and port, not destination. This matches the existing cluster pattern —
+the ntfy policy uses the same broad `world:443` rule, because the cluster has no
+FQDN-egress baseline — and narrowing it remains an open question against this design.
+
+The media share is mounted by the CSI driver on the node, not by the pod, so no SMB
+egress rule is expected — this is confirmed during the capture rather than assumed.
 
 ## 8. Dynamic DNS
 
@@ -358,6 +370,12 @@ address is dynamic and cannot be pinned.
 **Required for attribution:** access logging on the public Envoy data plane. Plex
 displays the Envoy pod address for every proxied session, so per-client attribution
 for public sessions exists only in Envoy's logs.
+
+This means Envoy Gateway's **default access log to container stdout**, read live during
+the experiment. No log aggregation, persistent sink, or retention policy is introduced:
+the cluster runs no collector today, and adding one is outside this scope. Attribution
+therefore does not survive pod restart or log rotation. That is accepted for an
+attended, time-boxed experiment and is a named input to the permanence decision.
 
 **Accepted blind spot.** Loss of Internet reachability caused by ISP filtering, DNAT
 removal, or listener failure is not automatically detected. It presents as the Sonos
@@ -467,7 +485,9 @@ recipes; these remain operator-only and outside `just ci`.
 
 6. A pod in an unrelated namespace cannot reach `plex:32400`.
 7. Plex cannot reach the Kubernetes API.
-8. Plex cannot reach NAS administration, the UniFi gateway, or arbitrary VLAN hosts.
+8. Plex cannot reach NAS administration, the UniFi gateway, or arbitrary VLAN hosts **on
+   any port other than 443**. Egress to off-cluster hosts on 443 is permitted by the
+   `world` entity (§7.2), so this test cannot disprove it.
 9. Plex cannot reach another namespace's services.
 10. Every consumer identified in phase 1 still reaches Plex.
 
@@ -500,7 +520,13 @@ rollback-order error.
 
 ### 14.2 What is retained on failure
 
-Phases 2a, 2b, and 2c are **kept**. The Cilium policy and the CI assertion are
+Phases 2a, 2b, and 2c are **kept — provided each passed its own gate.** Retention
+applies only to changes proven non-regressive. If a phase-2 change is itself the cause
+of an internal regression — a Cilium policy that breaks native Sonos, say — it is
+reverted under §10.1 gate 2 and §14.3, because §2's non-regression constraint outranks
+retention and a policy that breaks local playback is not a containment improvement.
+
+Subject to that, the Cilium policy and the CI assertion are
 containment improvements worth having whether or not Plex is ever published; removing
 them would leave the cluster worse off than before the experiment. The widened
 controller selector is inert once no namespace carries the `public` label, and
