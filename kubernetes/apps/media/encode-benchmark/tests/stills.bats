@@ -53,3 +53,58 @@ pixel_rgb() {
 	[ ! -e "$prefix-encoded.png" ]
 	[ "$(find "$BATS_TEST_TMPDIR/stills" -type f 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
 }
+
+@test "stills rejects a symlink destination escape" {
+	outside="$BATS_TEST_TMPDIR/outside"
+	container="$BATS_TEST_TMPDIR/container"
+	mkdir -p "$outside"
+	mkdir -p "$container"
+	ln -s "$outside" "$container/link"
+	prefix="$container/link/nested/sample-clip-qsv-22"
+
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' "$prefix"
+	[ "$status" -ne 0 ]
+	[ ! -e "$outside/nested/sample-clip-qsv-22-source.png" ]
+	[ ! -e "$outside/nested/sample-clip-qsv-22-encoded.png" ]
+}
+
+@test "stills second-publication failure removes a new pair and restores a prior pair" {
+	prefix="$BATS_TEST_TMPDIR/stills/sample-clip-qsv-22"
+	mkdir -p "$(dirname "$prefix")"
+	export BENCHMARK_TEST_FAIL_STILLS_SECOND_PUBLISH=1
+
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' "$prefix"
+	[ "$status" -ne 0 ]
+	[ ! -e "$prefix-source.png" ]
+	[ ! -e "$prefix-encoded.png" ]
+
+	printf '%s' 'prior source' >"$prefix-source.png"
+	printf '%s' 'prior encoded' >"$prefix-encoded.png"
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' "$prefix"
+	[ "$status" -ne 0 ]
+	[ "$(<"$prefix-source.png")" = 'prior source' ]
+	[ "$(<"$prefix-encoded.png")" = 'prior encoded' ]
+	[ "$(find "$(dirname "$prefix")" -type f -name '*.tmp.png' | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "stills encoded-backup failure preserves both untouched prior names" {
+	prefix="$BATS_TEST_TMPDIR/stills/sample-clip-qsv-22"
+	mkdir -p "$(dirname "$prefix")"
+	printf '%s' 'prior source' >"$prefix-source.png"
+	printf '%s' 'prior encoded' >"$prefix-encoded.png"
+	export BENCHMARK_TEST_FAIL_STILLS_ENCODED_BACKUP=1
+
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' "$prefix"
+	[ "$status" -ne 0 ]
+	[ "$(<"$prefix-source.png")" = 'prior source' ]
+	[ "$(<"$prefix-encoded.png")" = 'prior encoded' ]
+}
+
+@test "stills failure hooks are rejected outside test mode" {
+	export BENCHMARK_TEST_MODE=0
+	export BENCHMARK_TEST_FAIL_STILLS_SECOND_PUBLISH=1
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' \
+		'/out/runs/20260802T120000Z-aaaaaaaa/stills/sample-clip-qsv-22'
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
+}

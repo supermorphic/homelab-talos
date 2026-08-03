@@ -21,6 +21,17 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" != '1' ]]; then
+	for test_hook in \
+		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
+		BENCHMARK_TEST_BUSY_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
+		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND; do
+		if [[ -v "$test_hook" ]]; then
+			echo 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' >&2
+			exit 64
+		fi
+	done
+fi
 
 usage() {
 	echo 'usage: benchmark.sh capabilities | quality [run-id] | savings <run-id> | finalist <run-id> <sample-id> | findings <run-id>' >&2
@@ -191,7 +202,7 @@ x265_match() {
 	qsv_vmaf="$(jq -e -r '.qsvVmaf | numbers' "$fixture")"
 	qsv_bit_rate="$(jq -e -r '.qsvBitRate | numbers | select(. > 0)' "$fixture")"
 	mapfile -t points < <(jq -e -r '
-		if (.points | type) != "array" or (.points | length) == 0 or
+		if (.points | type) != "array" or
 			([.points[] | select(
 				(.crf | type) == "number" and (.vmaf | type) == "number" and
 				(.bitRate | type) == "number" and .bitRate > 0
@@ -201,6 +212,10 @@ x265_match() {
 		end
 	' "$fixture")
 	point_count="${#points[@]}"
+	if ((point_count == 0)); then
+		printf '%s\n' '{"status":"unbracketed"}'
+		return
+	fi
 	for ((index = 0; index < point_count; index += 1)); do
 		IFS=$'\t' read -r v1 b1 crf1 <<<"${points[$index]}"
 		if awk -v q="$qsv_vmaf" -v v="$v1" 'BEGIN { exit !(q == v) }'; then
@@ -233,24 +248,38 @@ x265_match() {
 
 x265_next() {
 	local fixture="$1"
-	local qsv_vmaf minimum_vmaf maximum_vmaf minimum_crf maximum_crf next
+	local qsv_vmaf minimum_vmaf maximum_vmaf next point_count
+	local attempted_min attempted_max
 	qsv_vmaf="$(jq -e -r '.qsvVmaf | numbers' "$fixture")"
+	jq -e '
+		(.points | type) == "array" and
+		((.attemptedCrfs // [.points[].crf]) | type) == "array" and
+		((.points | length) == 0 or ((.attemptedCrfs // [.points[].crf]) | length) > 0) and
+		all((.attemptedCrfs // [.points[].crf])[]; type == "number" and floor == . and . >= 10 and . <= 34) and
+		all(.points[]; (.crf | type) == "number" and (.vmaf | type) == "number" and
+			(.bitRate | type) == "number" and .bitRate > 0)
+	' "$fixture" >/dev/null
+	point_count="$(jq -r '.points | length' "$fixture")"
+	if ((point_count == 0)); then
+		printf '%s\n' '{"status":"unbracketed"}'
+		return
+	fi
 	minimum_vmaf="$(jq -e -r '[.points[].vmaf] | min' "$fixture")"
 	maximum_vmaf="$(jq -e -r '[.points[].vmaf] | max' "$fixture")"
-	minimum_crf="$(jq -e -r '[.points[].crf] | min' "$fixture")"
-	maximum_crf="$(jq -e -r '[.points[].crf] | max' "$fixture")"
+	attempted_min="$(jq -e -r '[((.attemptedCrfs // [.points[].crf])[])] | min' "$fixture")"
+	attempted_max="$(jq -e -r '[((.attemptedCrfs // [.points[].crf])[])] | max' "$fixture")"
 	if awk -v q="$qsv_vmaf" -v low="$minimum_vmaf" -v high="$maximum_vmaf" \
 		'BEGIN { exit !(low <= q && q <= high) }'; then
 		printf '%s\n' '{"status":"bracketed"}'
 	elif awk -v q="$qsv_vmaf" -v high="$maximum_vmaf" 'BEGIN { exit !(q > high) }'; then
-		next=$((minimum_crf - 2))
+		next=$((attempted_min - 2))
 		if ((next < 10)); then
 			printf '%s\n' '{"status":"unbracketed"}'
 		else
 			printf '{"status":"extend","next_crf":%s}\n' "$next"
 		fi
 	else
-		next=$((maximum_crf + 2))
+		next=$((attempted_max + 2))
 		if ((next > 34)); then
 			printf '%s\n' '{"status":"unbracketed"}'
 		else
@@ -298,15 +327,11 @@ qsv_proof() {
 		! rg -q 'Device creation failed|Failed to (initialise|initialize)' "$encode_log"; then
 		initialization='passed'
 	fi
-	if rg -q 'LA[_-]ICQ|LA-ICQ' "$encode_log"; then
-		selected='LA-ICQ'
-	elif rg -q '(^|[^A-Z])CQP([^A-Z]|$)' "$encode_log"; then
-		selected='CQP'
-	elif rg -q '(^|[^A-Z])ICQ([^A-Z]|$)' "$encode_log"; then
-		selected='ICQ'
-	elif value="$(rg -o '(CBR|VBR|AVBR|QVBR)' "$encode_log" | tail -n 1)" && [[ -n "$value" ]]; then
-		selected="$value"
-	fi
+	value="$(rg -o -i 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' "$encode_log" | tail -n 1 || true)"
+	case "${value^^}" in
+	LA_ICQ | LA-ICQ | LAICQ) selected='LA-ICQ' ;;
+	CQP | ICQ | CBR | VBR | AVBR | QVBR) selected="${value^^}" ;;
+	esac
 	value="$(rg -o 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	value="$(rg -o 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
@@ -342,47 +367,98 @@ passed_or_failed() {
 	fi
 }
 
+normalized_rational() {
+	local value="$1" numerator denominator divisor a b remainder
+	[[ "$value" =~ ^([0-9]{1,10})/([0-9]{1,10})$ ]] || return 1
+	numerator="${BASH_REMATCH[1]}"
+	denominator="${BASH_REMATCH[2]}"
+	((10#$numerator > 0 && 10#$denominator > 0 && 10#$numerator <= 2147483647 && 10#$denominator <= 2147483647)) || return 1
+	a=$((10#$numerator))
+	b=$((10#$denominator))
+	while ((b != 0)); do
+		remainder=$((a % b))
+		a="$b"
+		b="$remainder"
+	done
+	divisor="$a"
+	printf '%s/%s\n' "$((10#$numerator / divisor))" "$((10#$denominator / divisor))"
+}
+
 validate_probes() {
 	local source_probe="$1"
 	local output_probe="$2"
 	local scope="$3"
 	local decode_status="$4"
-	local tolerance source_duration output_duration duration_difference
+	local tolerance source_duration='0' output_duration='0' duration_difference='0'
 	local codec duration resolution frame_rate bit_depth hdr audio subtitle chapters
-	local failures=''
+	local failures='' source_frame output_frame source_base output_base
 	[[ "$scope" == 'clip' || "$scope" == 'full' ]] || return 64
 	if [[ "$scope" == 'clip' ]]; then tolerance='1.0'; else tolerance='2.0'; fi
-	source_duration="$(jq -e -r '.durationSeconds | numbers' "$source_probe")"
-	output_duration="$(jq -e -r '.durationSeconds | numbers' "$output_probe")"
-	duration_difference="$(awk -v source="$source_duration" -v output="$output_duration" '
-		BEGIN { difference = source - output; if (difference < 0) difference = -difference; print difference }
-	')"
+	source_base="$(passed_or_failed jq -e '
+		(.durationSeconds | type) == "number" and
+		(.videoCodec | type) == "string" and
+		(.width | type) == "number" and (.width | floor) == .width and .width > 0 and
+		(.height | type) == "number" and (.height | floor) == .height and .height > 0 and
+		(.frameRate | type) == "string" and
+		(.bitDepth | type) == "number" and (.bitDepth | floor) == .bitDepth and .bitDepth > 0 and
+		(.hdrFormat | type) == "string" and (.colorPrimaries | type) == "string" and
+		(.colorTransfer | type) == "string" and (.colorSpace | type) == "string" and
+		has("masteringDisplay") and (.masteringDisplay | type) as $md | ($md == "object" or $md == "null") and
+		has("maxCLL") and (.maxCLL | type) as $cll | ($cll == "object" or $cll == "null") and
+		(.audioTrackCount | type) == "number" and (.audioTrackCount | floor) == .audioTrackCount and .audioTrackCount >= 0 and
+		(.subtitleCount | type) == "number" and (.subtitleCount | floor) == .subtitleCount and .subtitleCount >= 0 and
+		(.chapterCount | type) == "number" and (.chapterCount | floor) == .chapterCount and .chapterCount >= 0
+	' "$source_probe")"
+	output_base="$(passed_or_failed jq -e '
+		(.durationSeconds | type) == "number" and
+		(.videoCodec | type) == "string" and
+		(.width | type) == "number" and (.width | floor) == .width and .width > 0 and
+		(.height | type) == "number" and (.height | floor) == .height and .height > 0 and
+		(.frameRate | type) == "string" and
+		(.bitDepth | type) == "number" and (.bitDepth | floor) == .bitDepth and .bitDepth > 0 and
+		(.hdrFormat | type) == "string" and (.colorPrimaries | type) == "string" and
+		(.colorTransfer | type) == "string" and (.colorSpace | type) == "string" and
+		has("masteringDisplay") and (.masteringDisplay | type) as $md | ($md == "object" or $md == "null") and
+		has("maxCLL") and (.maxCLL | type) as $cll | ($cll == "object" or $cll == "null") and
+		(.audioTrackCount | type) == "number" and (.audioTrackCount | floor) == .audioTrackCount and .audioTrackCount >= 0 and
+		(.subtitleCount | type) == "number" and (.subtitleCount | floor) == .subtitleCount and .subtitleCount >= 0 and
+		(.chapterCount | type) == "number" and (.chapterCount | floor) == .chapterCount and .chapterCount >= 0
+	' "$output_probe")"
+	if [[ "$source_base" == 'passed' && "$output_base" == 'passed' ]]; then
+		source_duration="$(jq -r '.durationSeconds' "$source_probe")"
+		output_duration="$(jq -r '.durationSeconds' "$output_probe")"
+		duration_difference="$(awk -v source="$source_duration" -v output="$output_duration" '
+			BEGIN { difference = source - output; if (difference < 0) difference = -difference; print difference }
+		')"
+	fi
 
-	codec="$(passed_or_failed jq -e '.videoCodec == "hevc"' "$output_probe")"
-	duration="$(passed_or_failed awk -v difference="$duration_difference" -v tolerance="$tolerance" \
-		'BEGIN { exit !(difference <= tolerance) }')"
+	codec="$(passed_or_failed jq -e '(.videoCodec | type) == "string" and .videoCodec == "hevc"' "$output_probe")"
+	if [[ "$source_base" == 'passed' && "$output_base" == 'passed' ]]; then
+		duration="$(passed_or_failed awk -v difference="$duration_difference" -v tolerance="$tolerance" \
+			'BEGIN { exit !(difference <= tolerance) }')"
+	else
+		duration='failed'
+	fi
 	resolution="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" \
-		'$source[0].width == $output[0].width and $source[0].height == $output[0].height')"
-	frame_rate="$(passed_or_failed awk \
-		-v source="$(jq -r '.frameRate' "$source_probe")" \
-		-v output="$(jq -r '.frameRate' "$output_probe")" '
-		function rational(value, parts) {
-			split(value, parts, "/")
-			if (length(parts) != 2 || parts[2] == 0) return -1
-			return parts[1] / parts[2]
-		}
-		BEGIN {
-			a = rational(source)
-			b = rational(output)
-			difference = a - b
-			if (difference < 0) difference = -difference
-			exit !(a >= 0 && b >= 0 && difference < 0.000001)
-		}')"
+		'($source[0].width | type) == "number" and ($output[0].width | type) == "number" and
+		 ($source[0].height | type) == "number" and ($output[0].height | type) == "number" and
+		 $source[0].width == $output[0].width and $source[0].height == $output[0].height')"
+	frame_rate='failed'
+	if source_frame="$(normalized_rational "$(jq -r '.frameRate // empty' "$source_probe")")" &&
+		output_frame="$(normalized_rational "$(jq -r '.frameRate // empty' "$output_probe")")" &&
+		[[ "$source_frame" == "$output_frame" ]]; then
+		frame_rate='passed'
+	fi
 	bit_depth="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" '
+		($source[0].bitDepth | type) == "number" and ($output[0].bitDepth | type) == "number" and
 		$source[0].bitDepth == $output[0].bitDepth and
 		(if $source[0].hdrFormat == "hdr10" then $output[0].bitDepth == 10 else true end)
 	')"
 	hdr="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" '
+		($source[0].hdrFormat | type) == "string" and ($output[0].hdrFormat | type) == "string" and
+		($source[0].colorPrimaries | type) == "string" and ($output[0].colorPrimaries | type) == "string" and
+		($source[0].colorTransfer | type) == "string" and ($output[0].colorTransfer | type) == "string" and
+		($source[0].colorSpace | type) == "string" and ($output[0].colorSpace | type) == "string" and
 		$source[0].hdrFormat == $output[0].hdrFormat and
 		$source[0].colorPrimaries == $output[0].colorPrimaries and
 		$source[0].colorTransfer == $output[0].colorTransfer and
@@ -391,11 +467,11 @@ validate_probes() {
 		($source[0].maxCLL // "") == ($output[0].maxCLL // "")
 	')"
 	audio="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" \
-		'$source[0].audioTrackCount == $output[0].audioTrackCount')"
+		'($source[0].audioTrackCount | type) == "number" and ($output[0].audioTrackCount | type) == "number" and $source[0].audioTrackCount == $output[0].audioTrackCount')"
 	subtitle="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" \
-		'$source[0].subtitleCount == $output[0].subtitleCount')"
+		'($source[0].subtitleCount | type) == "number" and ($output[0].subtitleCount | type) == "number" and $source[0].subtitleCount == $output[0].subtitleCount')"
 	chapters="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" \
-		'$source[0].chapterCount == $output[0].chapterCount')"
+		'($source[0].chapterCount | type) == "number" and ($output[0].chapterCount | type) == "number" and $source[0].chapterCount == $output[0].chapterCount')"
 
 	if [[ "$decode_status" != '0' ]]; then failures='decode'; fi
 	for field in \
@@ -469,12 +545,14 @@ safe_csv_field() {
 	[[ "$value" != *','* && "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *'"'* ]]
 }
 
-record_result() {
+record_result_inner() {
 	local run_id="$1"
 	local fixture="$2"
 	local scratch_output="$3"
 	local run_directory results panel sample_id cohort source_sha clip encoder setting
 	local selected status attempt disposition='discarded' confirmation destination
+	local encodes_directory='' staged_destination='' backup_destination='' published=0 had_prior=0
+	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
 	local -a columns
 	validate_run_id "$run_id" || return
 	[[ -f "$fixture" ]] || return 66
@@ -483,20 +561,35 @@ record_result() {
 		echo "run directory not found: $run_id" >&2
 		return 66
 	}
-	panel="$(jq -e -r '.panel | strings' "$fixture")"
-	sample_id="$(jq -e -r '.sample_id | strings' "$fixture")"
-	cohort="$(jq -e -r '.cohort | strings' "$fixture")"
-	source_sha="$(jq -e -r '.source_sha256 | strings' "$fixture")"
-	clip="$(jq -e -r '.clip_id | strings' "$fixture")"
-	encoder="$(jq -e -r '.encoder | strings' "$fixture")"
-	setting="$(jq -e -r '.requested_setting | strings' "$fixture")"
-	selected="$(jq -e -r '.selected_rate_control | strings' "$fixture")"
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" &&
+		-d "$benchmark_out/runs" && ! -L "$benchmark_out/runs" ]] || {
+		echo 'benchmark output hierarchy is not confined' >&2
+		return 65
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	runs_physical="$(cd -P "$benchmark_out/runs" && pwd)"
+	run_physical="$(cd -P "$run_directory" && pwd)"
+	[[ "$runs_physical" == "$out_physical/runs" && "$run_physical" == "$runs_physical/$run_id" ]] || {
+		echo 'run directory escapes the benchmark output hierarchy' >&2
+		return 65
+	}
+	panel="$(jq -e -r '.panel | strings' "$fixture")" || return 65
+	sample_id="$(jq -e -r '.sample_id | strings' "$fixture")" || return 65
+	cohort="$(jq -e -r '.cohort | strings' "$fixture")" || return 65
+	source_sha="$(jq -e -r '.source_sha256 | strings' "$fixture")" || return 65
+	clip="$(jq -e -r '.clip_id | strings' "$fixture")" || return 65
+	encoder="$(jq -e -r '.encoder | strings' "$fixture")" || return 65
+	setting="$(jq -e -r '.requested_setting | strings' "$fixture")" || return 65
+	selected="$(jq -e -r '.selected_rate_control | strings' "$fixture")" || return 65
 	validate_sample_id "$sample_id" || return
+	[[ "$panel" == 'quality' || "$panel" == 'savings' || "$panel" == 'finalist' ]] || return 65
+	[[ "$encoder" == 'qsv' || "$encoder" == 'x265' ]] || return 65
+	[[ "$setting" =~ ^[0-9]+$ ]] || return 65
+	[[ "$source_sha" =~ ^[0-9a-f]{64}$ ]] || return 65
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
 	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
 		attempt=$(("$(result_attempt "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting")" - 1))
-		rm -f -- "$scratch_output"
 		printf '{"status":"skipped","attempt":%s,"output_disposition":"not-created"}\n' "$attempt"
 		return
 	fi
@@ -514,19 +607,15 @@ record_result() {
 	if [[ "$panel" == 'finalist' ]]; then
 		confirmation="copy:encode-benchmark:$run_id:$sample_id"
 		if [[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" != "$confirmation" ]]; then
-			rm -f -- "$scratch_output"
 			echo "missing finalist confirmation for $run_id/$sample_id" >&2
 			return 64
 		fi
 		if [[ "$status" == 'passed' ]]; then
-			mkdir -p "$run_directory/encodes"
-			destination="$run_directory/encodes/$sample_id-$encoder-gq$setting.mkv"
-			cp -- "$scratch_output" "$destination"
 			disposition='copied'
 		fi
 	fi
 
-	mapfile -t columns < <(jq -e -r '
+	columns_text="$(jq -e -r '
 		[
 			.panel, .sample_id, .cohort, .source_sha256, .clip_id, .encoder,
 			.requested_setting, .selected_rate_control,
@@ -540,7 +629,9 @@ record_result() {
 			.validation_chapters, .validation_failures, .log_path
 		] | if length == 32 and all(.[]; type == "string")
 		then .[] else error("invalid result fixture") end
-	' "$fixture")
+	' "$fixture")" || return 65
+	mapfile -t columns <<<"$columns_text"
+	((${#columns[@]} == 32)) || return 65
 	columns=(
 		"$run_id" "${columns[0]}" "${columns[1]}" "${columns[2]}" "${columns[3]}"
 		"${columns[4]}" "${columns[5]}" "${columns[6]}" "${columns[7]}" "$status"
@@ -552,13 +643,74 @@ record_result() {
 			return 65
 		}
 	done
-	(
-		IFS=,
-		printf '%s\n' "${columns[*]}"
-	) >>"$results"
-	rm -f -- "$scratch_output"
+	if [[ "$panel" == 'finalist' && "$status" == 'passed' ]]; then
+		[[ -f "$scratch_output" && ! -L "$scratch_output" ]] || {
+			echo 'validated finalist scratch output is not a regular file' >&2
+			return 66
+		}
+		encodes_directory="$run_directory/encodes"
+		if [[ -e "$encodes_directory" || -L "$encodes_directory" ]]; then
+			[[ -d "$encodes_directory" && ! -L "$encodes_directory" ]] || {
+				echo 'finalist encodes directory is not a confined directory' >&2
+				return 65
+			}
+		else
+			mkdir -- "$encodes_directory"
+		fi
+		encodes_physical="$(cd -P "$encodes_directory" && pwd)"
+		[[ "$encodes_physical" == "$run_physical/encodes" ]] || {
+			echo 'finalist encodes directory escapes the run' >&2
+			return 65
+		}
+		destination="$encodes_directory/$sample_id-$encoder-gq$setting.mkv"
+		[[ ! -L "$destination" && (! -e "$destination" || -f "$destination") ]] || {
+			echo 'finalist destination is not a regular file' >&2
+			return 65
+		}
+		staged_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.tmp.mkv"
+		backup_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.backup.mkv"
+		rm -f -- "$staged_destination" "$backup_destination"
+		cp -- "$scratch_output" "$staged_destination" || return
+		if [[ -e "$destination" ]]; then
+			mv -- "$destination" "$backup_destination" || {
+				rm -f -- "$staged_destination"
+				return 74
+			}
+			had_prior=1
+		fi
+		if ! mv -- "$staged_destination" "$destination"; then
+			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
+			return 74
+		fi
+		published=1
+	fi
+	if [[ "$test_mode" == '1' && "${BENCHMARK_TEST_FAIL_RESULT_APPEND:-0}" == '1' ]]; then
+		append_status=74
+	else
+		(
+			IFS=,
+			printf '%s\n' "${columns[*]}"
+		) >>"$results" || append_status=$?
+	fi
+	if ((append_status != 0)); then
+		if ((published)); then
+			rm -f -- "$destination"
+			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
+		fi
+		if [[ -n "$staged_destination" ]]; then rm -f -- "$staged_destination"; fi
+		if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
+		return "$append_status"
+	fi
+	if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
 	printf '{"status":"%s","attempt":%s,"output_disposition":"%s"}\n' \
 		"$status" "$attempt" "$disposition"
+}
+
+record_result() {
+	local run_id="$1" fixture="$2" scratch_output="$3" status=0
+	record_result_inner "$run_id" "$fixture" "$scratch_output" || status=$?
+	rm -f -- "$scratch_output"
+	return "$status"
 }
 
 append_audio_inventory() {
@@ -566,13 +718,15 @@ append_audio_inventory() {
 	local probe="$2"
 	local output="$3"
 	local header='source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method'
-	local sums track index bytes
+	local sums track index bytes existing staged tracks_json line source_path source_csv
+	local -a tracks
 	declare -A packet_bytes=()
-	if [[ -e "$output" ]]; then
+	if [[ -e "$output" || -L "$output" ]]; then
+		[[ -f "$output" && ! -L "$output" ]] || return 65
 		IFS= read -r existing <"$output" || true
 		[[ "$existing" == "$header" ]] || return 65
 	else
-		printf '%s\n' "$header" >"$output"
+		existing=''
 	fi
 	sums="$(awk -F, '
 		NF == 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { bytes[$1] += $2; seen[$1] = 1; next }
@@ -583,10 +737,32 @@ append_audio_inventory() {
 		[[ -n "$index" ]] || continue
 		packet_bytes[$index]="$bytes"
 	done <<<"$sums"
-	while IFS= read -r track; do
+	tracks_json="$(jq -e -c '
+		if (.path | type) != "string" or (.audioTracks | type) != "array" or
+			any(.audioTracks[]; (.index | type) != "number" or (.index | floor) != .index or
+				(.codec | type) != "string" or (.channels | type) != "number" or
+				(.channelLayout | type) != "string" or (.language | type) != "string" or
+				((.bitRate | type) != "number" and (.bitRate | type) != "null") or
+				(.durationSeconds | type) != "number")
+		then error("invalid audio inventory probe") else .audioTracks[] end
+	' "$probe")" || return
+	source_path="$(jq -e -r '.path | strings' "$probe")" || return
+	source_csv="$(jq -n -r --arg source "$source_path" '[$source] | @csv')"
+	mapfile -t tracks <<<"$tracks_json"
+	staged="$output.$$.tmp"
+	rm -f -- "$staged"
+	if [[ -n "$existing" ]]; then
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			[[ "$line" == "$source_csv,"* ]] || printf '%s\n' "$line" >>"$staged"
+		done <"$output"
+	else
+		printf '%s\n' "$header" >"$staged"
+	fi
+	for track in "${tracks[@]}"; do
+		[[ -n "$track" ]] || continue
 		index="$(jq -r '.index' <<<"$track")"
 		bytes="${packet_bytes[$index]:-0}"
-		jq -r \
+		line="$(jq -r \
 			--argjson bytes "$bytes" \
 			--arg source_path "$(jq -r '.path' "$probe")" '
 			[
@@ -595,13 +771,32 @@ append_audio_inventory() {
 				(if (.durationSeconds | floor) == .durationSeconds then (.durationSeconds | floor) else .durationSeconds end),
 				$bytes, "packet-counted"
 			] | @csv
-		' <<<"$track" >>"$output"
-	done < <(jq -c '.audioTracks[]' "$probe")
+		' <<<"$track")" || {
+			rm -f -- "$staged"
+			return 65
+		}
+		printf '%s\n' "$line" >>"$staged"
+	done
+	mv -f -- "$staged" "$output"
 }
 
 capabilities() {
 	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
-	local encoders filters uid
+	local encoders filters uid configured_image configured_digest node_name
+	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
+		echo 'configured runtime image is missing' >&2
+		return 65
+	}
+	[[ "$configured_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+		echo 'configured runtime image must use an immutable sha256 digest' >&2
+		return 65
+	}
+	configured_digest="${configured_image##*@}"
+	node_name="${NODE_NAME:-}"
+	[[ "$node_name" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || {
+		echo 'capability node name is missing or malformed' >&2
+		return 65
+	}
 	encoders="$(ffmpeg -hide_banner -encoders)"
 	filters="$(ffmpeg -hide_banner -filters)"
 	rg -q 'hevc_qsv' <<<"$encoders" || return 1
@@ -629,14 +824,16 @@ capabilities() {
 	jq -n -c \
 		--arg ffmpeg "$ffmpeg_version" \
 		--arg ffprobe "$ffprobe_version" \
-		--arg node "${NODE_NAME:-}" \
-		--arg image "${KUBERNETES_IMAGE_ID:-}" \
+		--arg node "$node_name" \
+		--arg configured_image "$configured_image" \
+		--arg configured_digest "$configured_digest" \
 		--argjson uid "$uid" '{
 			status: "passed", uid: $uid,
 			hevcQsv: true, realQsvEncode: true, decoded: true,
 			libvmaf4k: true, libx265: true,
 			ffmpegVersion: $ffmpeg, ffprobeVersion: $ffprobe,
-			nodeName: $node, imageId: $image
+			nodeName: $node, configuredImage: $configured_image,
+			configuredImageDigest: $configured_digest
 		}'
 }
 
@@ -645,6 +842,10 @@ probe_media() {
 	local path="$2"
 	if [[ "$test_mode" == '1' && "$role" == 'source' && -n "${BENCHMARK_TEST_SOURCE_PROBE:-}" ]]; then
 		jq -c . "$BENCHMARK_TEST_SOURCE_PROBE"
+	elif [[ "$test_mode" == '1' && "$role" == 'output' &&
+		-n "${BENCHMARK_TEST_INVALID_OUTPUT_MATCH:-}" &&
+		"$path" =~ ${BENCHMARK_TEST_INVALID_OUTPUT_MATCH} ]]; then
+		jq -c . "$BENCHMARK_TEST_INVALID_OUTPUT_PROBE"
 	elif [[ "$test_mode" == '1' && "$role" == 'output' && -n "${BENCHMARK_TEST_OUTPUT_PROBE:-}" ]]; then
 		jq -c . "$BENCHMARK_TEST_OUTPUT_PROBE"
 	else
@@ -743,13 +944,31 @@ encoder_progress() {
 	printf '%s|%s\n' "$fps" "$speed"
 }
 
+failed_validation() {
+	local reason="$1"
+	jq -n -c --arg reason "$reason" '{
+		validation_codec:"failed", validation_duration:"failed",
+		validation_resolution:"failed", validation_frame_rate:"failed",
+		validation_bit_depth:"failed", validation_hdr:"failed",
+		validation_audio_tracks:"failed", validation_subtitle_tracks:"failed",
+		validation_chapters:"failed", validation_failures:$reason
+	}'
+}
+
+add_validation_failure() {
+	local validation="$1" reason="$2"
+	jq -c --arg reason "$reason" '
+		.validation_failures = ((.validation_failures + ";" + $reason) | ltrimstr(";"))
+	' <<<"$validation"
+}
+
 process_variant() {
 	local run_id="$1" panel="$2" sample_id="$3" cohort="$4" source_sha="$5"
 	local clip_id="$6" encoder="$7" setting="$8" reference="$9" output="${10}"
 	local scope="${11}" encode_status="${12}" wall_seconds="${13}" encode_log="${14}"
-	local busy_log="${15}" still_prefix="${16:-}"
-	local run_directory logs_directory source_probe_file output_probe_file validation_file
-	local vmaf_file ssim_file row_fixture source_probe output_probe validation
+	local busy_log="${15}" still_prefix="${16:-}" attempt="${17}" row_fixture="${18}"
+	local run_directory logs_directory evidence_base source_probe_file output_probe_file validation_file
+	local vmaf_file ssim_file source_probe validation metrics value height='0'
 	local input_bytes='0' output_bytes='0' duration='0' input_rate='0' output_rate='0'
 	local reduction='0.000000' fps='0.000000' speed='0.000000' vmaf_harmonic=''
 	local vmaf_low='' ssim='' gpu_busy='' qsv_status='not-applicable' selected='CRF'
@@ -759,77 +978,101 @@ process_variant() {
 
 	run_directory="$benchmark_out/runs/$run_id"
 	logs_directory="$run_directory/logs"
+	evidence_base="$sample_id-$clip_id-$encoder-$setting-attempt-$attempt"
 	mkdir -p "$logs_directory"
-	source_probe_file="$logs_directory/$sample_id-$clip_id-$encoder-$setting-source-probe.json"
-	output_probe_file="$logs_directory/$sample_id-$clip_id-$encoder-$setting-output-probe.json"
-	validation_file="$logs_directory/$sample_id-$clip_id-$encoder-$setting-validation.json"
-	vmaf_file="$logs_directory/$sample_id-$clip_id-$encoder-$setting-vmaf.json"
-	ssim_file="$logs_directory/$sample_id-$clip_id-$encoder-$setting-ssim.log"
-	row_fixture="$scratch_root/$run_id/$sample_id-$clip_id-$encoder-$setting-row.json"
-	probe_media source "$reference" >"$source_probe_file"
-	source_probe="$(jq -c . "$source_probe_file")"
-	duration="$(jq -r '.durationSeconds // 0' <<<"$source_probe")"
-	input_bytes="$(file_size "$reference")"
+	source_probe_file="$logs_directory/$evidence_base-source-probe.json"
+	output_probe_file="$logs_directory/$evidence_base-output-probe.json"
+	validation_file="$logs_directory/$evidence_base-validation.json"
+	vmaf_file="$logs_directory/$evidence_base-vmaf.json"
+	ssim_file="$logs_directory/$evidence_base-ssim.log"
+	validation="$(failed_validation encode)"
+
+	if probe_media source "$reference" >"$source_probe_file" 2>&1 &&
+		source_probe="$(jq -e -c . "$source_probe_file" 2>/dev/null)"; then
+		duration="$(jq -r 'if (.durationSeconds | type) == "number" then .durationSeconds else 0 end' <<<"$source_probe")"
+		height="$(jq -r 'if (.height | type) == "number" then .height else 0 end' <<<"$source_probe")"
+	else
+		source_probe='{}'
+		validation="$(failed_validation source-probe)"
+	fi
+	if value="$(file_size "$reference" 2>/dev/null)"; then input_bytes="$value"; fi
 	input_rate="$(awk -v bytes="$input_bytes" -v seconds="$duration" \
 		'BEGIN { if (seconds > 0) printf "%.0f", bytes * 8 / seconds; else print 0 }')"
 
-	if [[ "$encode_status" == '0' && -f "$output" ]]; then
-		output_bytes="$(file_size "$output")"
+	if [[ "$encode_status" == '0' && -f "$output" && ! -L "$output" ]]; then
+		if value="$(file_size "$output" 2>/dev/null)"; then output_bytes="$value"; fi
 		output_rate="$(awk -v bytes="$output_bytes" -v seconds="$duration" \
 			'BEGIN { if (seconds > 0) printf "%.0f", bytes * 8 / seconds; else print 0 }')"
 		reduction="$(awk -v input="$input_bytes" -v output="$output_bytes" \
 			'BEGIN { if (input > 0) printf "%.6f", (input - output) * 100 / input; else print "0.000000" }')"
-		set +e
-		ffmpeg -v error -i "$output" -map 0 -f null -
-		decode_status=$?
-		set -e
-		probe_media output "$output" >"$output_probe_file"
-		output_probe="$(jq -c . "$output_probe_file")"
-		validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status")"
-		printf '%s\n' "$validation" >"$validation_file"
-		if [[ "$panel" == 'quality' ]]; then
-			ffmpeg -v error -i "$output" -i "$reference" -lavfi \
-				"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
-				-f null -
-			metrics="$(vmaf_stats "$vmaf_file")"
-			vmaf_harmonic="$(jq -r '.harmonic_mean' <<<"$metrics")"
-			vmaf_low="$(jq -r '.one_percent_low' <<<"$metrics")"
-			ffmpeg -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
-				-f null - >"$ssim_file" 2>&1
-			ssim="$(rg -o 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)"
+		if ffmpeg -v error -i "$output" -map 0 -f null -; then decode_status=0; fi
+		if [[ "$source_probe" != '{}' ]] && probe_media output "$output" >"$output_probe_file" 2>&1 &&
+			jq -e . "$output_probe_file" >/dev/null 2>&1; then
+			if ! validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status" 2>/dev/null)"; then
+				validation="$(failed_validation validation-parse)"
+			fi
+		else
+			validation="$(failed_validation output-probe)"
 		fi
-		if [[ -n "$still_prefix" ]]; then
-			if ! "$script_directory/stills.sh" "$reference" "$output" '00:00:00.000' "$still_prefix"; then
-				validation="$(jq -c '.validation_failures = ((.validation_failures + ";stills") | ltrimstr(";"))' <<<"$validation")"
+		if [[ "$panel" == 'quality' ]]; then
+			if ffmpeg -v error -i "$output" -i "$reference" -lavfi \
+				"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
+				-f null - && metrics="$(vmaf_stats "$vmaf_file" 2>/dev/null)" &&
+				vmaf_harmonic="$(jq -e -r '.harmonic_mean | numbers' <<<"$metrics" 2>/dev/null)" &&
+				vmaf_low="$(jq -e -r '.one_percent_low | numbers' <<<"$metrics" 2>/dev/null)"; then
+				:
+			else
+				vmaf_harmonic=''
+				vmaf_low=''
+				validation="$(add_validation_failure "$validation" vmaf)"
+			fi
+			if ffmpeg -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
+				-f null - >"$ssim_file" 2>&1 &&
+				value="$(rg -o 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
+				[[ -n "$value" ]]; then
+				ssim="$value"
+			else
+				ssim=''
+				validation="$(add_validation_failure "$validation" ssim)"
 			fi
 		fi
-	else
-		validation='{"validation_codec":"failed","validation_duration":"failed","validation_resolution":"failed","validation_frame_rate":"failed","validation_bit_depth":"failed","validation_hdr":"failed","validation_audio_tracks":"failed","validation_subtitle_tracks":"failed","validation_chapters":"failed","validation_failures":"encode"}'
-		printf '%s\n' "$validation" >"$validation_file"
+		if [[ -n "$still_prefix" ]] &&
+			! "$script_directory/stills.sh" "$reference" "$output" '00:00:00.000' "$still_prefix"; then
+			validation="$(add_validation_failure "$validation" stills)"
+		fi
 	fi
+	printf '%s\n' "$validation" >"$validation_file"
 
 	if [[ "$encoder" == 'qsv' ]]; then
-		proof_json="$(qsv_proof "$encode_log" "$busy_log" "$(jq -r '.height // 0' <<<"$source_probe")")"
-		selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
-		fps="$(jq -r '.encode_fps' <<<"$proof_json")"
-		speed="$(jq -r '.encode_speed' <<<"$proof_json")"
-		gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
-		qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
+		if proof_json="$(qsv_proof "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
+			jq -e . <<<"$proof_json" >/dev/null 2>&1; then
+			selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+			fps="$(jq -r '.encode_fps' <<<"$proof_json")"
+			speed="$(jq -r '.encode_speed' <<<"$proof_json")"
+			gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
+			qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
+		else
+			selected='unknown'
+			qsv_status='suspect'
+			validation="$(add_validation_failure "$validation" qsv-proof)"
+			printf '%s\n' "$validation" >"$validation_file"
+		fi
 	else
-		progress="$(encoder_progress "$encode_log")"
-		IFS='|' read -r fps speed <<<"$progress"
+		if progress="$(encoder_progress "$encode_log" 2>/dev/null)"; then
+			IFS='|' read -r fps speed <<<"$progress"
+		fi
 	fi
 
-	validation_codec="$(jq -r '.validation_codec' <<<"$validation")"
-	validation_duration="$(jq -r '.validation_duration' <<<"$validation")"
-	validation_resolution="$(jq -r '.validation_resolution' <<<"$validation")"
-	validation_frame_rate="$(jq -r '.validation_frame_rate' <<<"$validation")"
-	validation_bit_depth="$(jq -r '.validation_bit_depth' <<<"$validation")"
-	validation_hdr="$(jq -r '.validation_hdr' <<<"$validation")"
-	validation_audio="$(jq -r '.validation_audio_tracks' <<<"$validation")"
-	validation_subtitle="$(jq -r '.validation_subtitle_tracks' <<<"$validation")"
-	validation_chapters="$(jq -r '.validation_chapters' <<<"$validation")"
-	validation_failures="$(jq -r '.validation_failures' <<<"$validation")"
+	validation_codec="$(jq -r '.validation_codec // "failed"' <<<"$validation")"
+	validation_duration="$(jq -r '.validation_duration // "failed"' <<<"$validation")"
+	validation_resolution="$(jq -r '.validation_resolution // "failed"' <<<"$validation")"
+	validation_frame_rate="$(jq -r '.validation_frame_rate // "failed"' <<<"$validation")"
+	validation_bit_depth="$(jq -r '.validation_bit_depth // "failed"' <<<"$validation")"
+	validation_hdr="$(jq -r '.validation_hdr // "failed"' <<<"$validation")"
+	validation_audio="$(jq -r '.validation_audio_tracks // "failed"' <<<"$validation")"
+	validation_subtitle="$(jq -r '.validation_subtitle_tracks // "failed"' <<<"$validation")"
+	validation_chapters="$(jq -r '.validation_chapters // "failed"' <<<"$validation")"
+	validation_failures="$(jq -r '.validation_failures // "processing"' <<<"$validation")"
 
 	jq -n -c \
 		--arg panel "$panel" --arg sample_id "$sample_id" --arg cohort "$cohort" \
@@ -860,8 +1103,6 @@ process_variant() {
 			validation_subtitle_tracks: $subtitle, validation_chapters: $chapters,
 			validation_failures: $failures, log_path: $log_path
 		}' >"$row_fixture"
-	record_result "$run_id" "$row_fixture" "$output"
-	rm -f -- "$row_fixture"
 }
 
 row_is_complete() {
@@ -905,11 +1146,17 @@ encoder_commands_for_mode() {
 encode_one_variant() {
 	local run_id="$1" panel="$2" sample_id="$3" cohort="$4" sha="$5" clip_id="$6"
 	local encoder="$7" setting="$8" input="$9" scope="${10}" still_prefix="${11:-}"
-	local run_directory output encode_log busy_log start end wall status=0
+	local disposition="${12:-record}" run_directory results attempt evidence_base
+	local output encode_log busy_log row_fixture start end wall status=0 record_status=0
 	run_directory="$benchmark_out/runs/$run_id"
-	output="$scratch_root/$run_id/$sample_id-$clip_id-$encoder-$setting.mkv"
-	encode_log="$run_directory/logs/$sample_id-$clip_id-$encoder-$setting.log"
-	busy_log="$run_directory/logs/$sample_id-$clip_id-$encoder-$setting-busy.log"
+	results="$run_directory/results.csv"
+	ensure_results_file "$results"
+	attempt="$(result_attempt "$results" "$panel" "$sha" "$clip_id" "$encoder" "$setting")"
+	evidence_base="$sample_id-$clip_id-$encoder-$setting-attempt-$attempt"
+	output="$scratch_root/$run_id/$evidence_base.mkv"
+	encode_log="$run_directory/logs/$evidence_base.log"
+	busy_log="$run_directory/logs/$evidence_base-busy.log"
+	row_fixture="$scratch_root/$run_id/$evidence_base-row.json"
 	start="$(now_nanoseconds)"
 	if [[ "$encoder" == 'qsv' ]]; then
 		run_qsv_encode "$input" "$output" "$setting" "$encode_log" "$busy_log" || status=$?
@@ -921,12 +1168,42 @@ encode_one_variant() {
 	wall="$(awk -v start="$start" -v end="$end" 'BEGIN { printf "%.6f", (end - start) / 1000000000 }')"
 	process_variant "$run_id" "$panel" "$sample_id" "$cohort" "$sha" "$clip_id" \
 		"$encoder" "$setting" "$input" "$output" "$scope" "$status" "$wall" \
-		"$encode_log" "$busy_log" "$still_prefix"
+		"$encode_log" "$busy_log" "$still_prefix" "$attempt" "$row_fixture"
+	if [[ "$disposition" == 'defer' ]]; then
+		printf '%s|%s\n' "$row_fixture" "$output"
+		return
+	fi
+	record_result "$run_id" "$row_fixture" "$output" || record_status=$?
+	rm -f -- "$row_fixture"
+	return "$record_status"
+}
+
+append_comparison_once() {
+	local output="$1" comparison="$2" sample_id="$3" clip_id="$4" setting="$5" staged
+	staged="$output.$$.tmp"
+	rm -f -- "$staged"
+	if [[ -e "$output" || -L "$output" ]]; then
+		[[ -f "$output" && ! -L "$output" ]] || return 65
+		jq -e -s 'all(.[]; type == "object")' "$output" >/dev/null || return 65
+		jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" '
+			select(.sample_id != $sample or .clip_id != $clip or .qsv_setting != $setting)
+		' "$output" >"$staged" || {
+			rm -f -- "$staged"
+			return 65
+		}
+	else
+		: >"$staged"
+	fi
+	printf '%s\n' "$comparison" >>"$staged" || {
+		rm -f -- "$staged"
+		return 74
+	}
+	mv -f -- "$staged" "$output"
 }
 
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
-	local source sha detection clip_id timestamp clip x265_points qsv_points setting
+	local source sha detection clip_id timestamp clip x265_points qsv_points setting attempted_crfs
 	local comparison_fixture comparison decision target next_crf
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
@@ -979,11 +1256,15 @@ quality_mode() {
 							printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
 						}
 					' "$run_directory/results.csv")"
+					attempted_crfs="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
+						NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" { print $8 }
+					' "$run_directory/results.csv" | sort -nu | jq -R -s -c 'split("\n") | map(select(length > 0) | tonumber)')"
 					comparison_fixture="$run_scratch/next-comparison.json"
 					jq -n -c \
 						--argjson points "$(jq -s . <<<"$x265_points")" \
+						--argjson attempted "$attempted_crfs" \
 						--argjson qsv_vmaf "$target" \
-						'{points: $points, qsvVmaf: $qsv_vmaf, qsvBitRate: 1}' >"$comparison_fixture"
+						'{points: $points, attemptedCrfs: $attempted, qsvVmaf: $qsv_vmaf, qsvBitRate: 1}' >"$comparison_fixture"
 					decision="$(x265_next "$comparison_fixture")"
 					[[ "$(jq -r '.status' <<<"$decision")" == 'extend' ]] || break
 					next_crf="$(jq -r '.next_crf' <<<"$decision")"
@@ -1007,9 +1288,11 @@ quality_mode() {
 					--argjson qsv_vmaf "$qsv_vmaf" --argjson qsv_rate "$qsv_rate" \
 					'{points: $points, qsvVmaf: $qsv_vmaf, qsvBitRate: $qsv_rate}' >"$comparison_fixture"
 				comparison="$(x265_match "$comparison_fixture")"
-				jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" \
+				comparison="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" \
 					'. + {sample_id: $sample, clip_id: $clip, qsv_setting: $setting}' \
-					<<<"$comparison" >>"$run_directory/x265-comparisons.jsonl"
+					<<<"$comparison")"
+				append_comparison_once "$run_directory/x265-comparisons.jsonl" "$comparison" \
+					"$sample_id" "$clip_id" "$setting"
 			done <<<"$qsv_points"
 			rm -f -- "$clip"
 		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
@@ -1020,7 +1303,8 @@ quality_mode() {
 
 savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
-	local source sha setting packets probe_file
+	local source sha setting packets probe_file detection prepared row_fixture output
+	local failed_row inventory_status
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create savings "$requested_run_id")"
@@ -1032,18 +1316,43 @@ savings_mode() {
 		cohort="$(jq -r '.cohort' <<<"$sample")"
 		source="$(jq -r '.path' <<<"$sample")"
 		sha="$(jq -r '.sha256' <<<"$sample")"
+		detection="$(jq -r '.detectionOnly // false' <<<"$sample")"
+		if [[ "$detection" == 'true' || "$cohort" == 'dolby-vision' ]]; then
+			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
+			continue
+		fi
 		setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
 		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
 		if row_is_complete "$run_id" savings "$sha" full qsv "$setting"; then continue; fi
-		encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
-			qsv "$setting" "$source" full '' >/dev/null
+		prepared="$(encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
+			qsv "$setting" "$source" full '' defer)"
+		IFS='|' read -r row_fixture output <<<"$prepared"
 		packets="$run_scratch/$sample_id-audio-packets.csv"
-		ffprobe -show_packets -select_streams a -show_entries packet=stream_index,size \
-			-of csv=p=0 "$source" >"$packets"
 		probe_file="$run_scratch/$sample_id-source-probe.json"
-		probe_media source "$source" >"$probe_file"
-		append_audio_inventory "$packets" "$probe_file" "$run_directory/audio-inventory.csv"
-		rm -f -- "$packets" "$probe_file"
+		inventory_status=0
+		ffprobe -show_packets -select_streams a -show_entries packet=stream_index,size \
+			-of csv=p=0 "$source" >"$packets" || inventory_status=$?
+		if ((inventory_status == 0)); then
+			probe_media source "$source" >"$probe_file" 2>/dev/null || inventory_status=$?
+		fi
+		if ((inventory_status == 0)); then
+			append_audio_inventory "$packets" "$probe_file" "$run_directory/audio-inventory.csv" || inventory_status=$?
+		fi
+		if ((inventory_status != 0)); then
+			failed_row="$row_fixture.inventory-failed"
+			jq -c '
+				.encode_status = "1" |
+				.validation_codec = "failed" | .validation_duration = "failed" |
+				.validation_resolution = "failed" | .validation_frame_rate = "failed" |
+				.validation_bit_depth = "failed" | .validation_hdr = "failed" |
+				.validation_audio_tracks = "failed" | .validation_subtitle_tracks = "failed" |
+				.validation_chapters = "failed" |
+				.validation_failures = ((.validation_failures + ";audio-inventory") | ltrimstr(";"))
+			' "$row_fixture" >"$failed_row"
+			mv -f -- "$failed_row" "$row_fixture"
+		fi
+		record_result "$run_id" "$row_fixture" "$output" >/dev/null
+		rm -f -- "$row_fixture" "$packets" "$probe_file"
 	done < <(yq -o=json -I=0 '.savingsPanel[]?' "$samples_file")
 	rm -rf -- "$run_scratch"
 	printf '%s\n' "$run_id"
@@ -1092,7 +1401,9 @@ finalist_mode() {
 
 findings_mode() {
 	local run_id="$1" run_directory inputs quality_run savings_run contention_file
-	local quality_results savings_results contention findings_temp cohort distribution stats
+	local quality_results quality_comparisons comparisons_json comparison savings_results contention
+	local findings_temp cohort distribution stats comparison_status sample_id clip_id qsv_setting
+	local premium verdict
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
 	inputs="$run_directory/findings-inputs.json"
@@ -1107,11 +1418,39 @@ findings_mode() {
 	validate_run_id "$savings_run" || return
 	[[ "$contention_file" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]json$ ]] || return 64
 	quality_results="$benchmark_out/runs/$quality_run/results.csv"
+	quality_comparisons="$benchmark_out/runs/$quality_run/x265-comparisons.jsonl"
 	savings_results="$benchmark_out/runs/$savings_run/results.csv"
 	contention="$run_directory/$contention_file"
 	ensure_results_file "$quality_results" || return
 	ensure_results_file "$savings_results" || return
+	[[ -f "$quality_comparisons" && ! -L "$quality_comparisons" ]] || {
+		echo 'quality x265 comparisons not found' >&2
+		return 66
+	}
 	[[ -f "$contention" && ! -L "$contention" ]] || return 66
+	comparisons_json="$(jq -e -s '
+		if all(.[];
+			(type == "object") and
+			(.sample_id | type) == "string" and (.sample_id | test("^[a-z0-9][a-z0-9._-]*$")) and
+			(.clip_id | type) == "string" and (.clip_id | test("^[a-z0-9][a-z0-9._-]*$")) and
+			(.qsv_setting | type) == "string" and (.qsv_setting | test("^[0-9]+$")) and
+			((.status == "unbracketed") or
+			 (.status == "bracketed" and (.lower_crf | type) == "number" and
+			  (.upper_crf | type) == "number" and (.matched_bit_rate | type) == "number" and
+			  .matched_bit_rate > 0 and (.premium_percent | type) == "number")))
+		then . else error("invalid x265 comparison evidence") end
+	' "$quality_comparisons")" || return 65
+	jq -e '
+		(.baselineStartLatencySeconds | type) == "number" and .baselineStartLatencySeconds >= 0 and
+		(.bufferingCount | type) == "number" and (.bufferingCount | floor) == .bufferingCount and .bufferingCount >= 0 and
+		(.startLatencySeconds | type) == "number" and .startLatencySeconds >= 0 and
+		(.seekToResumeSeconds | type) == "number" and .seekToResumeSeconds >= 0 and
+		(.nasUplinkMbps | type) == "number" and .nasUplinkMbps > 0 and
+		(.measuredThroughputMbps | type) == "number" and .measuredThroughputMbps >= 0
+	' "$contention" >/dev/null || {
+		echo 'invalid contention evidence' >&2
+		return 65
+	}
 	findings_temp="$run_directory/findings.md.tmp"
 	{
 		printf '# Encode benchmark findings\n\n'
@@ -1134,6 +1473,28 @@ findings_mode() {
 		done < <(awk -F, 'NR > 1 && $2 == "savings" && $10 == "passed" { print $4 }' "$savings_results" | sort -u)
 		printf '\n## Quality summary\n\n'
 		printf 'Passed variants: %s\n\n' "$(awk -F, 'NR > 1 && $2 == "quality" && $10 == "passed" { count += 1 } END { print count + 0 }' "$quality_results")"
+		printf '## x265 matched-VMAF comparison\n\n'
+		printf '| Sample | Clip | QSV setting | Status | Premium %% | Verdict |\n'
+		printf '|---|---|---:|---|---:|---|\n'
+		while IFS= read -r comparison; do
+			sample_id="$(jq -r '.sample_id' <<<"$comparison")"
+			clip_id="$(jq -r '.clip_id' <<<"$comparison")"
+			qsv_setting="$(jq -r '.qsv_setting' <<<"$comparison")"
+			comparison_status="$(jq -r '.status' <<<"$comparison")"
+			premium=''
+			verdict='No verdict'
+			if [[ "$comparison_status" == 'bracketed' ]]; then
+				premium="$(awk -v value="$(jq -r '.premium_percent' <<<"$comparison")" 'BEGIN { printf "%.6f", value }')"
+				verdict="$(awk -v value="$premium" 'BEGIN {
+					if (value <= 15) print "QSV preferred"
+					else if (value <= 30) print "QSV acceptable"
+					else print "Escalate"
+				}')"
+			fi
+			printf '| %s | %s | %s | %s | %s | %s |\n' "$sample_id" "$clip_id" \
+				"$qsv_setting" "$comparison_status" "$premium" "$verdict"
+		done < <(jq -c '.[]' <<<"$comparisons_json")
+		printf '\n'
 		printf '## Contention summary\n\n'
 		jq -r '
 			"- Baseline start latency: \(.baselineStartLatencySeconds) seconds\n" +

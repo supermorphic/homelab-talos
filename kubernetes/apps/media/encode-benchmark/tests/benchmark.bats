@@ -58,6 +58,16 @@ EOF
 	: >"$BENCHMARK_COMMAND_LOG"
 }
 
+write_capability_samples() {
+	image="${1:-docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb}"
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/capability-samples.yaml"
+	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
+schemaVersion: 1
+runtime:
+  image: '$image'
+EOF
+}
+
 create_execution_tools() {
 	stub_bin="$BATS_TEST_TMPDIR/execution-bin"
 	mkdir -p "$stub_bin"
@@ -102,12 +112,32 @@ if [[ "$arguments" == *'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_pa
 	*) score=96 ;;
 	esac
 	mkdir -p "$(dirname "$metrics_path")"
+	if [[ "${BENCHMARK_TEST_VMAF_COMMAND_FAILURE:-0}" == '1' ]]; then
+		exit 88
+	fi
+	if [[ "${BENCHMARK_TEST_VMAF_PARSE_FAILURE:-0}" == '1' ]]; then
+		printf '%s\n' '{"frames":"invalid"}' >"$metrics_path"
+		exit 0
+	fi
 	jq -n --argjson score "$score" '{version:"3.0.0",fps:24,frames:[range(0;4) | {frameNum:.,metrics:{vmaf:$score}}]}' >"$metrics_path"
 	exit 0
 fi
 if [[ "$arguments" == *'[0:v][1:v]ssim'* ]]; then
+	if [[ "${BENCHMARK_TEST_SSIM_COMMAND_FAILURE:-0}" == '1' ]]; then
+		exit 89
+	fi
+	if [[ "${BENCHMARK_TEST_SSIM_PARSE_FAILURE:-0}" == '1' ]]; then
+		printf '%s\n' '[Parsed_ssim_0 @ 0x3000] no aggregate score' >&2
+		exit 0
+	fi
 	printf '%s\n' '[Parsed_ssim_0 @ 0x3000] SSIM Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >&2
 	exit 0
+fi
+if [[ "${BENCHMARK_TEST_FAIL_X265_EXTENSION:-0}" == '1' && "$arguments" == *'-c:v libx265'* ]]; then
+	last="${!#}"
+	case "$last" in
+	*x265-10-*|*x265-12-*|*x265-14-*|*x265-16-*) exit 90 ;;
+	esac
 fi
 if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
 	printf '%s\n' \
@@ -125,6 +155,7 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *'-show_packets -select_streams a -show_entries packet=stream_index,size -of csv=p=0'* ]]; then
+	if [[ "${BENCHMARK_TEST_PACKET_FAILURE:-0}" == '1' ]]; then exit 91; fi
 	exec cat "$BENCHMARK_PACKET_FIXTURE"
 fi
 exit 97
@@ -178,12 +209,22 @@ EOF
 	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition' ]
 }
 
+@test "benchmark failure hooks are rejected outside test mode" {
+	unset BENCHMARK_OUT BENCHMARK_SCRATCH BENCHMARK_SAMPLES_FILE
+	export BENCHMARK_TEST_MODE=0
+	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
+	run "$SCRIPTS/benchmark.sh" _test results-header
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
+}
+
 # Catches capability claims based only on encoder listings: this public mode must
 # run the synthetic QSV encode, full decode, and vmaf_4k score and redact paths.
 @test "capabilities proves the real five-second QSV path and prints compact path-free JSON" {
 	create_capability_tools
+	write_capability_samples
 	export NODE_NAME='talos-03'
-	export KUBERNETES_IMAGE_ID='docker.io/linuxserver/ffmpeg@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+	export KUBERNETES_IMAGE_ID='containerd://sha256:must-not-be-claimed-by-the-job'
 
 	run "$SCRIPTS/benchmark.sh" capabilities
 	[ "$status" -eq 0 ]
@@ -194,7 +235,9 @@ EOF
 		.libvmaf4k == true and .libx265 == true and
 		.ffmpegVersion == "8.1.2" and .ffprobeVersion == "8.1.2" and
 		.nodeName == "talos-03" and
-		.imageId == "docker.io/linuxserver/ffmpeg@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		.configuredImage == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
+		.configuredImageDigest == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
+		(has("imageId") | not)
 	' <<<"$output"
 	[ "$status" -eq 0 ]
 
@@ -206,6 +249,20 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -F -- 'libvmaf=model=version=vmaf_4k_v0.6.1' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
+}
+
+@test "capabilities refuses missing or malformed configured immutable image evidence" {
+	create_capability_tools
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/missing-image.yaml"
+	printf '%s\n' 'schemaVersion: 1' >"$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -ne 0 ]
+	[[ "$output" != *'"status":"passed"'* ]]
+
+	write_capability_samples 'docker.io/linuxserver/ffmpeg:latest'
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -ne 0 ]
+	[[ "$output" != *'"status":"passed"'* ]]
 }
 
 # Catches a production break where the requested LA-ICQ controls, lossless clip
@@ -309,6 +366,11 @@ EOF
 		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-nonzero.log" 1080
 	[ "$status" -eq 0 ]
 	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"speed"}' ]
+
+	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
+		"$FIXTURES/logs/qsv-requested-la-fallback-cqp.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
 }
 
 # Catches validation short-circuiting after the first failure, wrong duration
@@ -348,6 +410,30 @@ EOF
 		"$FIXTURES/metrics/probe-source.json" "$boundary" full 0
 	[ "$status" -eq 0 ]
 	[ "$(jq -r '.validation_duration' <<<"$output")" = 'passed' ]
+}
+
+@test "output validation uses exact normalized rationals and fails closed on incomplete probes" {
+	equivalent="$BATS_TEST_TMPDIR/equivalent.json"
+	close_but_unequal="$BATS_TEST_TMPDIR/close-but-unequal.json"
+	incomplete="$BATS_TEST_TMPDIR/incomplete.json"
+	jq '.frameRate = "48000/2002"' "$FIXTURES/metrics/probe-output-valid.json" >"$equivalent"
+	jq '.frameRate = "24000001/1001000"' "$FIXTURES/metrics/probe-output-valid.json" >"$close_but_unequal"
+	jq 'del(.width) | .height = null | .audioTrackCount = "2"' \
+		"$FIXTURES/metrics/probe-output-valid.json" >"$incomplete"
+
+	run "$SCRIPTS/benchmark.sh" _test validate-probes \
+		"$FIXTURES/metrics/probe-source.json" "$equivalent" clip 0
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.validation_frame_rate' <<<"$output")" = 'passed' ]
+	run "$SCRIPTS/benchmark.sh" _test validate-probes \
+		"$FIXTURES/metrics/probe-source.json" "$close_but_unequal" clip 0
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.validation_frame_rate' <<<"$output")" = 'failed' ]
+	run "$SCRIPTS/benchmark.sh" _test validate-probes \
+		"$FIXTURES/metrics/probe-source.json" "$incomplete" clip 0
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.validation_resolution' <<<"$output")" = 'failed' ]
+	[ "$(jq -r '.validation_audio_tracks' <<<"$output")" = 'failed' ]
 }
 
 # Catches a regression where failed/invalid attempts overwrite evidence, a
@@ -467,6 +553,127 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
+@test "quality records probe metric and parser failures cleans scratch and continues the panel" {
+	invalid_json="$BATS_TEST_TMPDIR/invalid-probe.json"
+	printf '%s\n' '{' >"$invalid_json"
+	case_number=0
+	for failure in source-probe output-probe vmaf-command vmaf-parse ssim-command ssim-parse; do
+		case_number=$((case_number + 1))
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+		prepare_execution_run
+		unset BENCHMARK_TEST_VMAF_COMMAND_FAILURE BENCHMARK_TEST_VMAF_PARSE_FAILURE
+		unset BENCHMARK_TEST_SSIM_COMMAND_FAILURE BENCHMARK_TEST_SSIM_PARSE_FAILURE
+		export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
+		export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
+		case "$failure" in
+		source-probe) export BENCHMARK_TEST_SOURCE_PROBE="$invalid_json" ;;
+		output-probe) export BENCHMARK_TEST_OUTPUT_PROBE="$invalid_json" ;;
+		vmaf-command) export BENCHMARK_TEST_VMAF_COMMAND_FAILURE=1 ;;
+		vmaf-parse) export BENCHMARK_TEST_VMAF_PARSE_FAILURE=1 ;;
+		ssim-command) export BENCHMARK_TEST_SSIM_COMMAND_FAILURE=1 ;;
+		ssim-parse) export BENCHMARK_TEST_SSIM_PARSE_FAILURE=1 ;;
+		esac
+		run "$SCRIPTS/benchmark.sh" quality
+		[ "$status" -eq 0 ]
+		run_id="$output"
+		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count }' "$results"
+		[ "$status" -eq 0 ]
+		[ "$output" = '9' ]
+		[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+	done
+}
+
+@test "quality advances past failed and invalid x265 extensions and terminates at CRF 10" {
+	for disposition in failed invalid; do
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+		prepare_execution_run
+		export BENCHMARK_X265_18_SCORE=96 BENCHMARK_X265_20_SCORE=94
+		export BENCHMARK_X265_22_SCORE=92 BENCHMARK_X265_24_SCORE=90
+		if [[ "$disposition" == 'failed' ]]; then
+			export BENCHMARK_TEST_FAIL_X265_EXTENSION=1
+			unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
+		else
+			unset BENCHMARK_TEST_FAIL_X265_EXTENSION
+			export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='x265-1[0246]-attempt'
+			export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+		fi
+		run "$SCRIPTS/benchmark.sh" quality
+		[ "$status" -eq 0 ]
+		run_id="$output"
+		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+		run awk -F, '$7 == "x265" {print $8}' "$results"
+		[ "$status" -eq 0 ]
+		[ "$output" = $'18\n20\n22\n24\n16\n14\n12\n10' ]
+		run awk -F, '$7 == "x265" && $8 <= 16 {print $10}' "$results"
+		[ "$status" -eq 0 ]
+		[ "$output" = "$(printf '%s\n%s\n%s\n%s' "$disposition" "$disposition" "$disposition" "$disposition")" ]
+	done
+}
+
+@test "quality terminates without extending when no passed x265 point exists" {
+	prepare_execution_run
+	export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	run awk -F, '$7 == "x265" {print $8}' "$results"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'18\n20\n22\n24' ]
+}
+
+@test "quality attempt evidence is immutable and a passed resume does not duplicate comparisons" {
+	prepare_execution_run
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-20-attempt'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	for expected_attempt in 2; do
+		run "$SCRIPTS/benchmark.sh" quality "$run_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "$run_id" ]
+	done
+	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+
+	run awk -F, '$7 == "qsv" && $8 == 20 {print $10 ":" $11}' "$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'invalid:1\ninvalid:2\npassed:3' ]
+	for evidence_pattern in \
+		'sample-hdr-detail-qsv-20-attempt-[123].log' \
+		'sample-hdr-detail-qsv-20-attempt-*-source-probe.json' \
+		'sample-hdr-detail-qsv-20-attempt-*-output-probe.json' \
+		'sample-hdr-detail-qsv-20-attempt-*-validation.json' \
+		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json'; do
+		[ "$(find "$BENCHMARK_OUT/runs/$run_id/logs" -type f -name "$evidence_pattern" | wc -l | tr -d ' ')" -eq 3 ]
+	done
+	[ "$(wc -l <"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl" | tr -d ' ')" -eq 5 ]
+}
+
+@test "quality resume replaces stale unbracketed comparisons after x265 succeeds" {
+	prepare_execution_run
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='x265-'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run jq -e -s 'length == 5 and all(.[]; .status == "unbracketed")' \
+		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+	[ "$status" -eq 0 ]
+
+	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e -s 'length == 5 and all(.[]; .status == "bracketed")' \
+		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+	[ "$status" -eq 0 ]
+}
+
 # Catches resume identity omitting the production commands whose bytes and
 # parameters determine every measured variant.
 @test "quality manifest identities the clip command and every bounded encoder setting" {
@@ -523,6 +730,77 @@ PYTHON
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
+@test "savings rejects detection-only and Dolby Vision and records packet inventory failure before resume" {
+	prepare_execution_run
+	cat >>"$BENCHMARK_SAMPLES_FILE" <<EOF
+  dolby-vision: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
+EOF
+	python3 - "$BENCHMARK_SAMPLES_FILE" <<'PYTHON'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+entry = """  - id: savings-dv
+    cohort: dolby-vision
+    path: '{source}'
+    sizeBytes: 20
+    sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    detectionOnly: false
+  - id: savings-detection
+    cohort: hdr10
+    path: '{source}'
+    sizeBytes: 20
+    sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    detectionOnly: true
+""".format(source=next(line.split("'", 2)[1] for line in text.splitlines() if "path: '" in line))
+text = text.replace("chosenSettings:\n", entry + "chosenSettings:\n")
+path.write_text(text)
+PYTHON
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(awk -F, 'NR > 1 { count += 1 } END { print count + 0 }' "$BENCHMARK_OUT/runs/$run_id/results.csv")" -eq 1 ]
+	run rg -F 'savings-dv,dolby-vision,detection-only' "$BENCHMARK_OUT/runs/$run_id/skips.csv"
+	[ "$status" -eq 0 ]
+	run rg -F 'savings-detection,hdr10,detection-only' "$BENCHMARK_OUT/runs/$run_id/skips.csv"
+	[ "$status" -eq 0 ]
+
+	rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	prepare_execution_run
+	export BENCHMARK_TEST_PACKET_FAILURE=1
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$(awk -F, 'NR == 2 { print $10 }' "$results")" != 'passed' ]
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" \
+		'savings|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|full|qsv|22'
+	[ "$status" -eq 1 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "savings retry upserts packet inventory instead of duplicating source tracks" {
+	prepare_execution_run
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-22-attempt'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+
+	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(awk 'NR > 1 { count += 1 } END { print count + 0 }' "$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv")" -eq 2 ]
+}
+
 # Catches the public finalist mode selecting an uncommitted setting, copying a
 # scratch file under an ambiguous name, or losing exact run/sample confirmation.
 @test "finalist mode re-encodes one named sample and copies the validated full title" {
@@ -540,6 +818,42 @@ PYTHON
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
+@test "finalist publication rejects symlink escape and rolls back when durable append fails" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	finalist_row="$BATS_TEST_TMPDIR/finalist-safe.json"
+	jq '.panel = "finalist" | .clip_id = "full"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$finalist_row"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:sample-avc"
+
+	outside="$BATS_TEST_TMPDIR/outside"
+	mkdir -p "$outside"
+	ln -s "$outside" "$run_dir/encodes"
+	scratch_output="$BENCHMARK_SCRATCH/finalist-symlink.mkv"
+	printf '%s' 'must stay confined' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ ! -e "$outside/sample-avc-qsv-gq22.mkv" ]
+	[ ! -e "$scratch_output" ]
+	rm "$run_dir/encodes"
+
+	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
+	printf '%s' 'new finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ ! -e "$run_dir/encodes/sample-avc-qsv-gq22.mkv" ]
+	[ ! -e "$scratch_output" ]
+	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
+
+	printf '%s' 'prior finalist' >"$run_dir/encodes/sample-avc-qsv-gq22.mkv"
+	printf '%s' 'replacement finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ "$(<"$run_dir/encodes/sample-avc-qsv-gq22.mkv")" = 'prior finalist' ]
+	[ ! -e "$scratch_output" ]
+}
+
 # Catches findings silently mixing unnamed runs or copying raw credential and
 # path fields into the Markdown artifact instead of using an allowlisted summary.
 @test "findings combines explicitly named run inputs and excludes credentials" {
@@ -548,6 +862,10 @@ PYTHON
 	savings='20260802T120000Z-bbbbbbbb'
 	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings"
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
+	cat >"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl" <<'EOF'
+{"status":"bracketed","lower_crf":24,"upper_crf":22,"matched_bit_rate":6000,"premium_percent":12.5,"sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}
+{"status":"unbracketed","sample_id":"sample-hdr","clip_id":"grain","qsv_setting":"24"}
+EOF
 	results="$BENCHMARK_OUT/runs/$savings/results.csv"
 	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition' >"$results"
 	for reduction in 10 20 30 40 50 60 70 80; do
@@ -571,8 +889,32 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -F "Savings run: \`$savings\`" "$findings"
 	[ "$status" -eq 0 ]
+	run rg -F '| sample-avc | detail | 22 | bracketed | 12.500000 | QSV preferred |' "$findings"
+	[ "$status" -eq 0 ]
+	run rg -F '| sample-hdr | grain | 24 | unbracketed |  | No verdict |' "$findings"
+	[ "$status" -eq 0 ]
 	run rg -n 'must-not-leak|Secret Movie|plexToken|sourcePath' "$findings"
 	[ "$status" -eq 1 ]
+}
+
+@test "findings rejects malicious values in allowed contention fields" {
+	target='20260802T120000Z-dddddddd'
+	quality='20260802T120000Z-aaaaaaaa'
+	savings='20260802T120000Z-bbbbbbbb'
+	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings"
+	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
+	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$savings/results.csv"
+	printf '%s\n' '{"status":"unbracketed","sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}' \
+		>"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl"
+	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
+{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json"}
+EOF
+	cat >"$BENCHMARK_OUT/runs/$target/contention.json" <<'EOF'
+{"baselineStartLatencySeconds":"1\n## injected","bufferingCount":0,"startLatencySeconds":2.1,"seekToResumeSeconds":3.2,"nasUplinkMbps":10000,"measuredThroughputMbps":812}
+EOF
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$target/findings.md" ]
 }
 
 # Catches summing container estimates instead of packet bytes or merging audio
