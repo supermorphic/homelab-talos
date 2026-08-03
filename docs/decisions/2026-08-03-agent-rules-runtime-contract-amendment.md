@@ -81,9 +81,13 @@ Runtime rules use these headings:
 - Authority boundaries
 - Secrets and credentials
 - Public repository
-- Validation
 - Repository invariants
+- Validation
 - Completion
+
+The order follows the agent's execution flow: establish context and boundaries, apply
+repository constraints, validate the result, and report completion. It is not a ranking
+of authority; every mandatory rule applies regardless of its position.
 
 Bracketed labels such as `[Authoritative — …]`, `[Operator policy — …]`, and `[Gotcha]`
 are design-time traceability metadata and do not appear in runtime instructions. The
@@ -291,7 +295,7 @@ The proposed hierarchy was evaluated as if a fresh agent began each task with on
 `scripts/test/hooks-test.sh` enforces only stable instruction-architecture invariants:
 
 - `AGENTS.md` is the only tracked repository instruction file;
-- all eight semantic headings exist;
+- all eight semantic headings exist in the approved order;
 - design-time provenance labels are absent;
 - `CLAUDE.md` imports root `AGENTS.md`; and
 - the vendor shim does not duplicate representative repository rules.
