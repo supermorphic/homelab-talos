@@ -51,7 +51,7 @@ validate_mode() {
 
 sha256_file() {
 	local path="$1"
-	printf 'sha256:%s\n' "$(sha256sum "$path" | awk '{print $1}')"
+	printf 'sha256:%s\n' "$(sha256sum "$path" | awk 'NR == 1 { value = $1; sub(/^\\/, "", value); print value }')"
 }
 
 normalize_identity() {
@@ -328,27 +328,42 @@ create_run() {
 	local identity identity_digest now run_id run_directory manifest
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
-		verify_run "$explicit_run_id" "$mode" || return
-		printf '%s\n' "$explicit_run_id"
-		return
-	fi
-
-	identity="$(discover_identity "$mode")" || return
-	identity_digest="$(printf '%s\n' "$identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
-	if [[ -n "$clock_override" ]]; then
-		[[ "$test_mode" == '1' ]] || {
-			echo 'BENCHMARK_NOW requires BENCHMARK_TEST_MODE=1' >&2
+		validate_run_id "$explicit_run_id" || return
+		run_directory="$runs_root/$explicit_run_id"
+		if [[ -L "$run_directory" || (-e "$run_directory" && ! -d "$run_directory") ]]; then
+			echo "run path is not a confined directory: $explicit_run_id" >&2
+			return 73
+		fi
+		if [[ -d "$run_directory" ]]; then
+			if [[ ! -f "$run_directory/manifest.json" || -L "$run_directory/manifest.json" ]]; then
+				echo "run already exists without a manifest: $explicit_run_id" >&2
+				return 73
+			fi
+			verify_run "$explicit_run_id" "$mode" || return
+			printf '%s\n' "$explicit_run_id"
+			return
+		fi
+		identity="$(discover_identity "$mode")" || return
+		now="${explicit_run_id%-*}"
+		run_id="$explicit_run_id"
+	else
+		identity="$(discover_identity "$mode")" || return
+		identity_digest="$(printf '%s\n' "$identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
+		if [[ -n "$clock_override" ]]; then
+			[[ "$test_mode" == '1' ]] || {
+				echo 'BENCHMARK_NOW requires BENCHMARK_TEST_MODE=1' >&2
+				return 64
+			}
+			now="$clock_override"
+		else
+			now="$(date -u '+%Y%m%dT%H%M%SZ')"
+		fi
+		[[ "$now" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
+			echo "invalid benchmark timestamp: $now" >&2
 			return 64
 		}
-		now="$clock_override"
-	else
-		now="$(date -u '+%Y%m%dT%H%M%SZ')"
+		run_id="$now-$identity_digest"
 	fi
-	[[ "$now" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
-		echo "invalid benchmark timestamp: $now" >&2
-		return 64
-	}
-	run_id="$now-$identity_digest"
 	mkdir -p "$runs_root"
 	run_directory="$runs_root/$run_id"
 	if ! mkdir "$run_directory"; then

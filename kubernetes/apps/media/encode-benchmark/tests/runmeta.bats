@@ -65,6 +65,74 @@ prepare_configmap_script_mount() {
 	[ "$(run_directory_count)" -eq 2 ]
 }
 
+# Catches the dispatcher-owned run handle being treated as resume-only. The
+# first exact handle must atomically publish its manifest, and the second call
+# must verify/resume without changing a byte.
+@test "first explicit run id creates immutable identity and exact repeat resumes" {
+	run_id='20260802T121500Z-deadbeef'
+	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	[ -f "$manifest" ]
+	[ "$(jq -r '.createdAt' "$manifest")" = '20260802T121500Z' ]
+	[ "$(file_mode "$manifest")" = '444' ]
+	before="$BATS_TEST_TMPDIR/explicit-manifest-before"
+	cp "$manifest" "$before"
+
+	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	cmp -s "$before" "$manifest"
+	[ "$(run_directory_count)" -eq 1 ]
+}
+
+# Catches an explicit creator claiming or removing a pre-existing directory it
+# did not create, or overwriting an immutable manifest after identity drift.
+@test "explicit create preserves collision ownership and refuses identity mismatch" {
+	collision_id='20260802T121500Z-cafef00d'
+	collision="$BENCHMARK_OUT/runs/$collision_id"
+	mkdir "$collision"
+	run "$SCRIPTS/runmeta.sh" create quality "$collision_id"
+	[ "$status" -eq 73 ]
+	[ "$output" = "run already exists without a manifest: $collision_id" ]
+	[ -d "$collision" ]
+	[ ! -e "$collision/manifest.json" ]
+
+	run_id='20260802T121500Z-deadbeef'
+	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+	[ "$status" -eq 0 ]
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	before="$BATS_TEST_TMPDIR/mismatch-before"
+	cp "$manifest" "$before"
+	changed_identity="$BATS_TEST_TMPDIR/changed-identity.json"
+	jq '.node.name = "different-node"' "$BENCHMARK_IDENTITY_FIXTURE" >"$changed_identity"
+	export BENCHMARK_IDENTITY_FIXTURE="$changed_identity"
+	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'identity mismatch: node.name'* ]]
+	cmp -s "$before" "$manifest"
+}
+
+# Catches an explicit run handle following a pre-existing symlink out of the
+# confined runs tree and treating another directory's manifest as its own.
+@test "explicit create refuses a symlinked run directory" {
+	source_id='20260802T121500Z-deadbeef'
+	link_id='20260802T121501Z-cafef00d'
+	run "$SCRIPTS/runmeta.sh" create quality "$source_id"
+	[ "$status" -eq 0 ]
+	source_manifest="$BENCHMARK_OUT/runs/$source_id/manifest.json"
+	before="$BATS_TEST_TMPDIR/symlink-source-before"
+	cp "$source_manifest" "$before"
+	ln -s "$BENCHMARK_OUT/runs/$source_id" "$BENCHMARK_OUT/runs/$link_id"
+
+	run "$SCRIPTS/runmeta.sh" create quality "$link_id"
+	[ "$status" -eq 73 ]
+	[ "$output" = "run path is not a confined directory: $link_id" ]
+	[ -L "$BENCHMARK_OUT/runs/$link_id" ]
+	cmp -s "$before" "$source_manifest"
+}
+
 # Catches a production break where collision cleanup removes an empty run
 # directory that existed before this process attempted its atomic mkdir.
 @test "failed create preserves an existing empty run directory" {

@@ -21,7 +21,14 @@ census_test="$tests_dir/census.bats"
 runmeta_test="$tests_dir/runmeta.bats"
 benchmark_test="$tests_dir/benchmark.bats"
 stills_test="$tests_dir/stills.bats"
+dispatch_test="$tests_dir/dispatch.bats"
+selection_test="$tests_dir/selection.bats"
 inventory='scripts/encode-benchmark/torrent-inventory.py'
+preflight_helper='scripts/encode-benchmark/preflight.sh'
+dispatch_helper='scripts/encode-benchmark/dispatch.sh'
+results_helper='scripts/encode-benchmark/results.sh'
+selection_helper='scripts/encode-benchmark/select-samples.sh'
+live_verifier='scripts/verify/encode-benchmark.sh'
 validator='scripts/validate/encode-benchmark.sh'
 media_kustomization='kubernetes/apps/media/kustomization.yaml'
 temp_dir="$(mktemp -d /tmp/homelab-talos-encode-benchmark-validate.XXXXXX)"
@@ -59,7 +66,14 @@ for file in \
 	"$runmeta_test" \
 	"$benchmark_test" \
 	"$stills_test" \
+	"$dispatch_test" \
+	"$selection_test" \
 	"$inventory" \
+	"$preflight_helper" \
+	"$dispatch_helper" \
+	"$results_helper" \
+	"$selection_helper" \
+	"$live_verifier" \
 	"$validator" \
 	"$media_kustomization"; do
 	[[ -f "$file" ]] || fail "missing required source: $file"
@@ -71,6 +85,11 @@ done
 [[ -x "$benchmark" ]] || fail "$benchmark must be executable"
 [[ -x "$stills" ]] || fail "$stills must be executable"
 [[ -x "$inventory" ]] || fail "$inventory must be executable"
+[[ -x "$preflight_helper" ]] || fail "$preflight_helper must be executable"
+[[ -x "$dispatch_helper" ]] || fail "$dispatch_helper must be executable"
+[[ -x "$results_helper" ]] || fail "$results_helper must be executable"
+[[ -x "$selection_helper" ]] || fail "$selection_helper must be executable"
+[[ -x "$live_verifier" ]] || fail "$live_verifier must be executable"
 
 if rg -n 'not-ready[.]sh' "$kustomization" "$app/scripts"; then
 	fail 'a not-ready scaffold mapping or implementation remains'
@@ -383,11 +402,18 @@ fi
 
 # Use only the pinned toolchain for all executable source checks and run every Bats contract.
 mapfile -t shell_sources < <(find "$app/scripts" -type f -name '*.sh' -print | sort)
-shell_sources+=("$validator")
+shell_sources+=(
+	"$preflight_helper"
+	"$dispatch_helper"
+	"$results_helper"
+	"$selection_helper"
+	"$live_verifier"
+	"$validator"
+)
 shfmt -d "${shell_sources[@]}"
 shellcheck --external-sources "${shell_sources[@]}"
 mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort)
 (("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
 bats "${bats_files[@]}"
 
-echo "encode-benchmark inert sources passed validation: Flux suspend=$suspend_state, no reconciled Job, five tested runtime scripts, candidate/verified evidence gates, safe media mounts, and offline contracts."
+echo "encode-benchmark sources passed validation: Flux suspend=$suspend_state, no reconciled Job, five tested runtime scripts, guarded render/read helpers, actual image evidence, safe media mounts, and offline contracts."

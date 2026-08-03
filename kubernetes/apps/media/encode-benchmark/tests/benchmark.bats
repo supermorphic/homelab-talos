@@ -76,6 +76,16 @@ create_execution_tools() {
 set -euo pipefail
 printf '%s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
 arguments="$*"
+case "$arguments" in
+*'-hide_banner -encoders'*)
+	printf '%s\n' ' V..... hevc_qsv Intel Quick Sync Video HEVC encoder' ' V....D libx265 libx265 H.265 / HEVC'
+	exit 0
+	;;
+*'-hide_banner -filters'*)
+	printf '%s\n' ' ... libvmaf VV->V Calculate the VMAF between two video streams.'
+	exit 0
+	;;
+esac
 encoded=''
 previous=''
 for argument in "$@"; do
@@ -176,6 +186,8 @@ prepare_execution_run() {
 	export BENCHMARK_TEST_BUSY_FIXTURE="$FIXTURES/logs/drm-busy-nonzero.log"
 	source_media="$BATS_TEST_TMPDIR/source.mkv"
 	printf '%s' 'source fixture bytes' >"$source_media"
+	source_size="$(wc -c <"$source_media" | tr -d ' ')"
+	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
 	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.yaml"
 	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
 schemaVersion: 1
@@ -186,16 +198,16 @@ qualityPanel:
   - id: sample-hdr
     cohort: hdr10
     path: '$source_media'
-    sizeBytes: 20
-    sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    sizeBytes: $source_size
+    sha256: $source_sha
     clips:
       detail: '00:17:23.456'
 savingsPanel:
   - id: savings-hdr
     cohort: hdr10
     path: '$source_media'
-    sizeBytes: 20
-    sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    sizeBytes: $source_size
+    sha256: $source_sha
 chosenSettings:
   hdr10: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
 EOF
@@ -743,23 +755,27 @@ PYTHON
 EOF
 	python3 - "$BENCHMARK_SAMPLES_FILE" <<'PYTHON'
 from pathlib import Path
+import hashlib
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
+source = Path(next(line.split("'", 2)[1] for line in text.splitlines() if "path: '" in line))
+source_size = source.stat().st_size
+source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
 entry = """  - id: savings-dv
     cohort: dolby-vision
     path: '{source}'
-    sizeBytes: 20
-    sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    sizeBytes: {source_size}
+    sha256: {source_sha}
     detectionOnly: false
   - id: savings-detection
     cohort: hdr10
     path: '{source}'
-    sizeBytes: 20
-    sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    sizeBytes: {source_size}
+    sha256: {source_sha}
     detectionOnly: true
-""".format(source=next(line.split("'", 2)[1] for line in text.splitlines() if "path: '" in line))
+""".format(source=source, source_size=source_size, source_sha=source_sha)
 text = text.replace("chosenSettings:\n", entry + "chosenSettings:\n")
 path.write_text(text)
 PYTHON
@@ -786,7 +802,7 @@ PYTHON
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	[ "$(awk -F, 'NR == 2 { print $10 }' "$results")" != 'passed' ]
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" \
-		'savings|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|full|qsv|22'
+		"savings|$source_sha|full|qsv|22"
 	[ "$status" -eq 1 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
@@ -821,7 +837,7 @@ PYTHON
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id/audio-inventory.csv" ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id" -type f -name 'audio-inventory.csv.*.tmp' | wc -l | tr -d ' ')" -eq 0 ]
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" \
-		'savings|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|full|qsv|22'
+		"savings|$source_sha|full|qsv|22"
 	[ "$status" -eq 1 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
@@ -899,6 +915,152 @@ PYTHON
 	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/sample-hdr-qsv-gq22.mkv" ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id/encodes" -type f | wc -l | tr -d ' ')" -eq 1 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches a Job entering its first encode with stale source bytes. The entrypoint
+# must compare the mounted sample's configured size/hash before invoking ffmpeg.
+@test "runtime pre-encode gate rejects sample size or hash drift before ffmpeg" {
+	prepare_execution_run
+	yq -i '.qualityPanel[0].sizeBytes = 999' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -ne 0 ]
+	[ "$output" = 'sample size mismatch: sample-hdr' ]
+	[ ! -s "$BENCHMARK_COMMAND_LOG" ]
+
+	prepare_execution_run
+	yq -i '.qualityPanel[0].sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -ne 0 ]
+	[ "$output" = 'sample hash mismatch: sample-hdr' ]
+	[ ! -s "$BENCHMARK_COMMAND_LOG" ]
+}
+
+prepare_contention_samples() {
+	prepare_execution_run
+	source_size="$(wc -c <"$source_media" | tr -d ' ')"
+	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
+	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
+schemaVersion: 1
+runtime:
+  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
+savingsSeed: 20260802
+qualityPanel:
+  - id: a-4k-hdr
+    cohort: hdr10
+    path: '$source_media'
+    sizeBytes: $source_size
+    sha256: $source_sha
+    width: 3840
+    height: 2160
+    clips: {detail: '00:17:23.456'}
+  - id: b-1080-avc
+    cohort: avc
+    path: '$source_media'
+    sizeBytes: $source_size
+    sha256: $source_sha
+    width: 1920
+    height: 1080
+    clips: {detail: '00:17:23.456'}
+  - id: c-1080-vc1
+    cohort: vc1
+    path: '$source_media'
+    sizeBytes: $source_size
+    sha256: $source_sha
+    width: 1920
+    height: 1080
+    clips: {detail: '00:17:23.456'}
+savingsPanel: []
+chosenSettings:
+  avc: {globalQuality: 24, qualityRunId: 20260802T120000Z-aaaaaaaa}
+  vc1: {globalQuality: 26, qualityRunId: 20260802T120000Z-aaaaaaaa}
+  hdr10: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
+EOF
+}
+
+# Catches contention workers sharing one results file, persisting full-title
+# output, or omitting worker/attempt-scoped wall-time evidence.
+@test "contention worker discards output and publishes a separate attempt CSV fragment" {
+	prepare_contention_samples
+	run_id='20260802T121500Z-deadbeef'
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	fragment="$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-1.csv"
+	[ -f "$fragment" ]
+	[ "$(wc -l <"$fragment" | tr -d ' ')" -eq 2 ]
+	run python3 - "$fragment" <<'PYTHON'
+import csv
+import json
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = list(csv.DictReader(stream))
+print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+PYTHON
+	[ "$status" -eq 0 ]
+	run jq -e '
+		length == 1 and .[0].run_id == "20260802T121500Z-deadbeef" and
+		.[0].case == "a" and .[0].worker_id == "worker-1" and
+		.[0].sample_id == "a-4k-hdr" and .[0].cohort == "hdr10" and
+		.[0].setting == "22" and .[0].attempt == "1" and
+		(.[0].wall_seconds | tonumber) >= 0 and
+		.[0].output_disposition == "discarded"
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/results.csv" ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
+	[ "$status" -eq 0 ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-2.csv" ]
+}
+
+# Catches a failed fragment publication leaving a full-title encode or staged
+# evidence behind for a retry to misinterpret as durable worker output.
+@test "contention cleans scratch and staged evidence when fragment publication fails" {
+	prepare_contention_samples
+	failure_bin="$BATS_TEST_TMPDIR/contention-failure-bin"
+	mkdir -p "$failure_bin"
+	cat >"$failure_bin/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+destination="${!#}"
+if [[ "$destination" == */contention-a-worker-1-attempt-1.csv ]]; then
+	exit 91
+fi
+exec /bin/mv "$@"
+EOF
+	chmod +x "$failure_bin/mv"
+	export PATH="$failure_bin:$PATH"
+	run_id='20260802T121500Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
+	[ "$status" -eq 91 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-1.csv" ]
+	[ "$(find "$BENCHMARK_OUT/runs/$run_id" -maxdepth 1 -name '.contention-*' | wc -l | tr -d ' ')" -eq 0 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches direct runtime invocation bypassing dispatch sample selection or
+# mutating the run tree before case eligibility and chosen settings are proven.
+@test "contention refuses wrong case samples and missing settings before run creation" {
+	prepare_contention_samples
+	run_id='20260802T121500Z-deadbeef'
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 b-1080-avc
+	[ "$status" -ne 0 ]
+	[ "$output" = 'contention case a requires an eligible 4K HDR10 quality sample' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+
+	yq -i 'del(.chosenSettings.avc)' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" b worker-1 b-1080-avc
+	[ "$status" -ne 0 ]
+	[ "$output" = 'no committed setting for cohort: avc' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" b '../worker' b-1080-avc
+	[ "$status" -eq 64 ]
+	[ "$output" = 'invalid contention worker id: ../worker' ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 }
 
 @test "finalist publication rejects symlink escape and rolls back when durable append fails" {

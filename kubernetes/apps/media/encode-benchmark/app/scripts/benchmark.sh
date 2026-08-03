@@ -35,7 +35,7 @@ if [[ "$test_mode" != '1' ]]; then
 fi
 
 usage() {
-	echo 'usage: benchmark.sh capabilities | quality [run-id] | savings <run-id> | finalist <run-id> <sample-id> | findings <run-id>' >&2
+	echo 'usage: benchmark.sh capabilities | quality [run-id] | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
 	exit 64
 }
 
@@ -966,6 +966,76 @@ file_size() {
 	fi
 }
 
+runtime_pre_encode_gate() {
+	local samples_json="$1"
+	local configured_image dispatch_image sample sample_id source expected_size actual_size
+	local expected_sha actual_sha encoders filters write_probe
+	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
+		echo 'configured runtime image is missing' >&2
+		return 65
+	}
+	[[ "$configured_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+		echo 'configured runtime image must use an immutable sha256 digest' >&2
+		return 65
+	}
+	dispatch_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	if [[ "$test_mode" != '1' && "$dispatch_image" != "$configured_image" ]]; then
+		echo 'runtime image identity does not match dispatched source' >&2
+		return 65
+	fi
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" ]] || {
+		echo 'benchmark output mount is unavailable' >&2
+		return 66
+	}
+	write_probe="$(mktemp "$benchmark_out/.write-probe.XXXXXX")" || {
+		echo 'benchmark output mount is not writable' >&2
+		return 73
+	}
+	rm -f -- "$write_probe" || {
+		echo 'benchmark output write probe could not be removed' >&2
+		return 73
+	}
+	while IFS= read -r sample; do
+		[[ -n "$sample" ]] || continue
+		sample_id="$(jq -e -r '.id | strings | select(test("^[a-z0-9][a-z0-9._-]*$"))' <<<"$sample")" || return 65
+		source="$(jq -e -r '.path | strings' <<<"$sample")" || return 65
+		expected_size="$(jq -e -r '.sizeBytes | numbers | select(. > 0 and floor == .)' <<<"$sample")" || return 65
+		expected_sha="$(jq -e -r '.sha256 | strings | select(test("^[0-9a-f]{64}$"))' <<<"$sample")" || return 65
+		if [[ "$test_mode" != '1' && ! "$source" =~ ^/media/.+ ]]; then
+			echo "sample path is outside /media: $sample_id" >&2
+			return 65
+		fi
+		[[ -f "$source" && -r "$source" ]] || {
+			echo "sample is not readable: $sample_id" >&2
+			return 66
+		}
+		actual_size="$(file_size "$source")" || return
+		[[ "$actual_size" == "$expected_size" ]] || {
+			echo "sample size mismatch: $sample_id" >&2
+			return 65
+		}
+		actual_sha="$(sha256sum "$source" | awk 'NR == 1 { value = $1; sub(/^\\/, "", value); print value }')"
+		[[ "$actual_sha" == "$expected_sha" ]] || {
+			echo "sample hash mismatch: $sample_id" >&2
+			return 65
+		}
+	done < <(jq -c '.[]' <<<"$samples_json")
+	encoders="$(ffmpeg -hide_banner -encoders)" || return
+	filters="$(ffmpeg -hide_banner -filters)" || return
+	rg -q 'hevc_qsv' <<<"$encoders" || {
+		echo 'hevc_qsv encoder is unavailable' >&2
+		return 1
+	}
+	rg -q 'libx265' <<<"$encoders" || {
+		echo 'libx265 encoder is unavailable' >&2
+		return 1
+	}
+	rg -q 'libvmaf' <<<"$filters" || {
+		echo 'libvmaf filter is unavailable' >&2
+		return 1
+	}
+}
+
 now_nanoseconds() {
 	local value
 	value="$(date '+%s%N')"
@@ -1308,7 +1378,10 @@ quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
 	local source sha detection clip_id timestamp clip x265_points qsv_points setting attempted_crfs
 	local comparison_fixture comparison decision target next_crf
+	local panel_samples
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
+	panel_samples="$(yq -o=json -I=0 '[.qualityPanel[]?]' "$samples_file")"
+	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	if [[ -n "$explicit_run_id" ]]; then
@@ -1408,6 +1481,9 @@ savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
+	local panel_samples
+	panel_samples="$(yq -o=json -I=0 '[.savingsPanel[]?]' "$samples_file")"
+	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create savings "$requested_run_id")"
@@ -1470,17 +1546,19 @@ finalist_mode() {
 		echo "missing finalist confirmation for $requested_run_id/$requested_sample_id" >&2
 		return 64
 	}
+	sample="$(SAMPLE_ID="$requested_sample_id" yq -o=json -I=0 \
+		'.qualityPanel[]?, .savingsPanel[]? | select(.id == strenv(SAMPLE_ID))' "$samples_file" | head -n 1)"
+	[[ -n "$sample" ]] || {
+		echo "sample not found: $requested_sample_id" >&2
+		return 66
+	}
+	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode finalist)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create finalist "$requested_run_id")"
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
-	sample="$(yq -o=json -I=0 ".qualityPanel[]?, .savingsPanel[]? | select(.id == \"$requested_sample_id\")" "$samples_file" | head -n 1)"
-	[[ -n "$sample" ]] || {
-		echo "sample not found: $requested_sample_id" >&2
-		return 66
-	}
 	sample_id="$(jq -r '.id' <<<"$sample")"
 	cohort="$(jq -r '.cohort' <<<"$sample")"
 	[[ "$cohort" != 'dolby-vision' && "$(jq -r '.detectionOnly // false' <<<"$sample")" != 'true' ]] || {
@@ -1501,6 +1579,99 @@ finalist_mode() {
 	rm -rf -- "$run_scratch"
 	printf '%s\n' "$run_id"
 }
+
+contention_mode() (
+	local requested_run_id="$1" contention_case="$2" worker_id="$3" requested_sample_id="$4"
+	local sample sample_id cohort setting run_id run_directory run_scratch attempt fragment staged
+	local output encode_log busy_log row_fixture start end wall encode_status=0 status qsv failures
+	trap 'rm -f -- "${output:-}" "${row_fixture:-}" "${staged:-}" 2>/dev/null || true
+		if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
+	validate_run_id "$requested_run_id" || return
+	validate_sample_id "$requested_sample_id" || return
+	[[ "$contention_case" =~ ^[a-d]$ ]] || {
+		echo "invalid contention case: $contention_case" >&2
+		return 64
+	}
+	[[ "$worker_id" =~ ^worker-[12]$ ]] || {
+		echo "invalid contention worker id: $worker_id" >&2
+		return 64
+	}
+	if [[ "$contention_case" == 'a' && "$worker_id" != 'worker-1' ]]; then
+		echo 'contention case a permits only worker-1' >&2
+		return 64
+	fi
+	sample="$(SAMPLE_ID="$requested_sample_id" yq -o=json -I=0 \
+		'.qualityPanel[]? | select(.id == strenv(SAMPLE_ID))' "$samples_file")"
+	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
+		echo "contention sample not found or duplicated: $requested_sample_id" >&2
+		return 66
+	}
+	sample_id="$(jq -r '.id' <<<"$sample")"
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	if [[ "$(jq -r '.detectionOnly // false' <<<"$sample")" == 'true' || "$cohort" == 'dolby-vision' ]]; then
+		echo 'Dolby Vision samples cannot be encoded' >&2
+		return 65
+	fi
+	if [[ "$contention_case" == 'a' && "$cohort" != 'hdr10' ]]; then
+		echo 'contention case a requires an eligible 4K HDR10 quality sample' >&2
+		return 65
+	fi
+	if [[ "$contention_case" != 'a' && ! "$cohort" =~ ^(avc|vc1)$ ]]; then
+		echo "contention case $contention_case requires an eligible 1080p non-DV quality sample" >&2
+		return 65
+	fi
+	setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
+	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
+		echo "no committed setting for cohort: $cohort" >&2
+		return 65
+	}
+	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
+	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode contention)"
+	export BENCHMARK_ENCODER_COMMANDS_JSON
+	run_id="$("$script_directory/runmeta.sh" create "contention-$contention_case" "$requested_run_id")"
+	run_directory="$benchmark_out/runs/$run_id"
+	run_scratch="$scratch_root/$run_id/$worker_id"
+	mkdir -p "$run_directory/logs" "$run_scratch"
+	attempt=1
+	while [[ -e "$run_directory/contention-$contention_case-$worker_id-attempt-$attempt.csv" ||
+		-L "$run_directory/contention-$contention_case-$worker_id-attempt-$attempt.csv" ]]; do
+		((attempt += 1))
+	done
+	fragment="$run_directory/contention-$contention_case-$worker_id-attempt-$attempt.csv"
+	output="$run_scratch/$sample_id-full-qsv-$setting-attempt-$attempt.mkv"
+	encode_log="$run_directory/logs/$sample_id-contention-$contention_case-$worker_id-attempt-$attempt.log"
+	busy_log="$run_directory/logs/$sample_id-contention-$contention_case-$worker_id-attempt-$attempt-busy.log"
+	row_fixture="$run_scratch/$sample_id-contention-$contention_case-$worker_id-attempt-$attempt.json"
+	start="$(now_nanoseconds)"
+	run_qsv_encode "$(jq -r '.path' <<<"$sample")" "$output" "$setting" "$encode_log" "$busy_log" || encode_status=$?
+	end="$(now_nanoseconds)"
+	wall="$(awk -v start="$start" -v end="$end" 'BEGIN { printf "%.6f", (end - start) / 1000000000 }')"
+	process_variant "$run_id" contention "$sample_id" "$cohort" "$(jq -r '.sha256' <<<"$sample")" \
+		"full-$contention_case-$worker_id" qsv "$setting" "$(jq -r '.path' <<<"$sample")" "$output" \
+		full "$encode_status" "$wall" "$encode_log" "$busy_log" '' "$attempt" "$row_fixture"
+	status='passed'
+	if [[ "$(jq -r '.encode_status' "$row_fixture")" != '0' ]]; then
+		status='failed'
+	elif [[ -n "$(jq -r '.validation_failures' "$row_fixture")" || "$(jq -r '.qsv_proof' "$row_fixture")" != 'passed' ]]; then
+		status='invalid'
+	fi
+	qsv="$(jq -r '.qsv_proof' "$row_fixture")"
+	failures="$(jq -r '.validation_failures' "$row_fixture")"
+	staged="$(mktemp "$run_directory/.contention-$contention_case-$worker_id-attempt-$attempt.XXXXXX")"
+	{
+		printf '%s\n' 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition'
+		jq -r \
+			--arg run_id "$run_id" --arg case "$contention_case" --arg worker "$worker_id" \
+			--arg sample "$sample_id" --arg cohort "$cohort" --arg setting "$setting" \
+			--arg status "$status" --arg attempt "$attempt" --arg wall "$wall" \
+			--arg qsv "$qsv" --arg failures "$failures" \
+			'[$run_id,$case,$worker,$sample,$cohort,$setting,$status,$attempt,$wall,$qsv,$failures,"discarded"] | @csv' \
+			<<<'{}'
+	} >"$staged"
+	mv -- "$staged" "$fragment"
+	staged=''
+	printf '%s\n' "$run_id"
+)
 
 findings_mode() {
 	local run_id="$1" run_directory inputs quality_run savings_run contention_file
@@ -1685,6 +1856,10 @@ savings)
 finalist)
 	(($# == 2)) || usage
 	finalist_mode "$1" "$2"
+	;;
+contention)
+	(($# == 4)) || usage
+	contention_mode "$1" "$2" "$3" "$4"
 	;;
 findings)
 	(($# == 1)) || usage
