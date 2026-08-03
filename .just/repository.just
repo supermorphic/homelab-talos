@@ -1190,6 +1190,17 @@ ntfy-subscriber-password:
 links-validate:
     scripts/validate/links-test.sh
 
+# Reject decision-record transitions the accepted lifecycle does not permit. An Accepted
+# record is superseded, never revised. Compares against the merge base with origin/main,
+# so a base ref that is already present locally needs no network access.
+decisions-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+      git fetch --quiet origin main
+    fi
+    uv run --locked --no-dev python scripts/repository/decisions.py validate --base origin/main
+
 # Run repository and declarative Talos source validation.
 verify: verify-files verify-shell-scripts
     just talos source-validate
