@@ -250,18 +250,62 @@ if rg -q "$fake_age_key|$fake_age_key_file" "$sops_session"; then
   exit 1
 fi
 
-invalid_agent_rules="$(
-  awk '
-    /^- / && $0 !~ /^- \[(Authoritative — [^]]+|Operator policy — operator|Gotcha)\] / {
-      print FNR ": " $0
-    }
-  ' "$repo_root/AGENTS.md"
-)"
-if [[ -n "$invalid_agent_rules" ]]; then
-  echo 'Every AGENTS.md rule bullet must declare its category and control:' >&2
-  printf '%s\n' "$invalid_agent_rules" >&2
+validate_agent_rules() {
+  local agent_rules="$1"
+  local invalid_agent_rules
+
+  if ! invalid_agent_rules="$(
+    awk '
+      /^- / {
+        rule = $0
+        markers = 0
+        remaining = rule
+        while (match(remaining, /\[(Authoritative — [^]]+|Operator policy — operator|Gotcha)\]/)) {
+          markers++
+          remaining = substr(remaining, RSTART + RLENGTH)
+        }
+        if (rule !~ /^- \[(Authoritative — [^]]+|Operator policy — operator|Gotcha)\] / || markers != 1) {
+          print FNR ": " rule
+          invalid = 1
+        }
+        rules++
+      }
+      END {
+        if (rules != 24) {
+          print "Expected 24 AGENTS.md rules; found " rules "."
+          invalid = 1
+        }
+        exit invalid
+      }
+    ' "$agent_rules"
+  )"; then
+    echo 'AGENTS.md must contain exactly 24 rules with exactly one category marker each:' >&2
+    printf '%s\n' "$invalid_agent_rules" >&2
+    return 1
+  fi
+}
+
+empty_agent_rules="$fixture/empty-AGENTS.md"
+: >"$empty_agent_rules"
+if validate_agent_rules "$empty_agent_rules" >/dev/null 2>&1; then
+  echo 'An empty AGENTS.md inventory was accepted.' >&2
   exit 1
 fi
+
+double_tagged_agent_rules="$fixture/double-tagged-AGENTS.md"
+printf '%s\n' \
+  '- [Gotcha] [Operator policy — operator] double-tagged fixture rule' \
+  >"$double_tagged_agent_rules"
+for rule_number in {2..24}; do
+  printf -- '- [Gotcha] fixture rule %s\n' "$rule_number" \
+    >>"$double_tagged_agent_rules"
+done
+if validate_agent_rules "$double_tagged_agent_rules" >/dev/null 2>&1; then
+  echo 'A double-tagged AGENTS.md rule was accepted.' >&2
+  exit 1
+fi
+
+validate_agent_rules "$repo_root/AGENTS.md"
 
 rg -qx '@AGENTS.md' "$repo_root/CLAUDE.md" || {
   echo 'CLAUDE.md must import AGENTS.md.' >&2
