@@ -33,9 +33,9 @@ assumptions.
   branch. If the remote feature branch contains unexpected commits absent locally, stop
   rather than overwriting or automatically reconciling it. Otherwise, if `origin/main`
   advanced, rebase the clean assigned branch onto it and rerun required validation.
-- Never rebase a dirty branch. When pushing rebased commits requires rewriting the
-  assigned remote feature branch, use only `--force-with-lease`; a failed lease is a
-  hard stop.
+- Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
+  stop and ask the operator. When pushing rebased commits requires rewriting the assigned
+  remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
 - Do not use `git reset --hard`, `git clean -fd`, repository-wide `git checkout .` or
   `git restore .`, or an unconditional force-push. Hooks may enforce these rules, but
   the rules remain mandatory independently of hooks.
