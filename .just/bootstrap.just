@@ -1674,6 +1674,71 @@ intel-gpu-plugin:
     bootstrap_complete=true
     echo 'Phase 11 intel-gpu-plugin live acceptance passed. Set suspend=false in Git, commit, push. THEN add the gpu.intel.com/i915 request to Plex (PR 11-3b) and confirm HW transcode.'
 
+# Reconcile the suspended encoding benchmark app after guarded source and live-state
+# checks, then verify its inert resources. On any post-resume failure the child is
+# re-suspended while its PriorityClass, ConfigMaps, and PrometheusRule are preserved.
+encode-benchmark:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    owner='7yXwscXEzv6phzUnKfrw'
+    repository='homelab-talos'
+    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_confirmation='bootstrap:media:encode-benchmark'
+    ks='kubernetes/apps/media/encode-benchmark/ks.yaml'
+    resumed=false
+    bootstrap_complete=false
+    cleanup_encode_benchmark() {
+      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
+        echo 'encode-benchmark did not pass; suspending it while preserving its inert resources.' >&2
+        flux suspend kustomization encode-benchmark --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_encode_benchmark EXIT
+
+    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark bootstrap' \
+      .just/bootstrap.just \
+      kubernetes/mod.just \
+      scripts/lib/rollout.sh \
+      scripts/encode-benchmark \
+      scripts/validate/encode-benchmark.sh \
+      scripts/verify/encode-benchmark.sh \
+      tests/catalog.yaml \
+      kubernetes/apps/media/kustomization.yaml \
+      kubernetes/apps/media/encode-benchmark
+    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
+      echo 'Refusing encode-benchmark bootstrap: it must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube encode-benchmark-validate
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization encode-benchmark --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing encode-benchmark bootstrap: it is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    [[ "${ENCODE_BENCHMARK_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the encoding benchmark app.' >&2
+      echo "Set ENCODE_BENCHMARK_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing encode-benchmark-validate." >&2
+      exit 1
+    }
+
+    resumed=true
+    flux resume kustomization encode-benchmark --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization encode-benchmark --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait --for=condition=Ready kustomization/encode-benchmark --timeout=15m
+
+    just kube encode-benchmark-verify
+    bootstrap_complete=true
+    echo 'Encoding benchmark live acceptance passed with inert resources only. Set suspend=false in Git, commit, push, rerun mise exec -- just kube encode-benchmark-verify, then run mise exec -- just kube encode-benchmark-capabilities.'
+
 # Reconcile the suspended Phase 10 monitoring stack (kube-prometheus-stack) after
 # guarded checks, in dependency order, then verify. Flux decrypts the Grafana
 # Secret in-cluster, so this needs no operator SOPS key. On failure the resumed

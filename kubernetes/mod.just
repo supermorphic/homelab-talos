@@ -697,7 +697,7 @@ encode-benchmark-results run_id: require-bash
 
 # Read-only live acceptance for activated inert inputs and ephemeral pod placement.
 encode-benchmark-verify: require-bash
-    @scripts/verify/encode-benchmark.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.encode-benchmark -- scripts/verify/encode-benchmark.sh {{quote(kubeconfig)}}
 
 # Create one short-lived cleanup Job that can remove only the confirmed run tree.
 encode-benchmark-clean run_id: require-bash
