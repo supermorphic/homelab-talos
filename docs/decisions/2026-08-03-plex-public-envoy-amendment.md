@@ -1,6 +1,6 @@
 # Plex public Envoy and split-horizon remote access — amendment
 
-Status: Accepted (2026-08-03)
+Status: **Approved (2026-08-03)** — independently reviewed and revised before approval.
 Amends [Plex Relay and Sonos integration — design](2026-08-02-plex-relay-sonos-design.md).
 Date: 2026-08-03.
 Branch: `investigate-plex-remote-access`.
@@ -8,6 +8,24 @@ Branch: `investigate-plex-remote-access`.
 This document is **additive**. It supersedes one decision in the 2026-08-02 design —
 the selection of Plex Relay as the primary remote path — and the acceptance claims
 that depended on it. Everything else in that document remains in force.
+
+### Review record
+
+This design was reviewed by a second model in a separate client, grounded against the
+repository, before approval. Six findings held and were applied to this document; one
+was rejected on its evidence. The artifacts are kept alongside this decision:
+
+- [Reviewer brief](reviews/2026-08-03-plex-public-envoy-amendment-request.md)
+- [Review](reviews/2026-08-03-plex-public-envoy-amendment-review.md)
+- [Disposition and response](reviews/2026-08-03-plex-public-envoy-amendment-response.md)
+
+**Approval covers the design as written.** The response file records open questions the
+review raised whose resolution was not determinate from this document — route-admission
+hardening, Plex egress scope on 443, how the phase-4 DDNS gate is satisfied, the drift
+check's workload shape and external endpoint, whether the new-risk table gains
+three-way deltas, and access-log handling of credentials passed as URL parameters. Each
+must be settled during implementation planning. None of them is a blocker to approving
+the design; all of them change what the plan builds.
 
 ## 1. Decision
 
