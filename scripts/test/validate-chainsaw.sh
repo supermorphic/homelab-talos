@@ -183,6 +183,7 @@ else
 fi
 uv run --locked ruff check \
   scripts/repository/github_protection.py \
+  scripts/repository/decisions.py \
   scripts/test/catalog_compatibility.py \
   scripts/test/catalog_validator.py \
   scripts/test/allure_report.py \
@@ -193,6 +194,7 @@ uv run --locked ruff check \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
   scripts/test/test_github_protection.py \
+  scripts/test/test_decisions.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/resilience_support.py \
   scripts/test/scenarios/plex_cross_node_reschedule.py \
@@ -207,6 +209,7 @@ uv run --locked ruff check \
   scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
 uv run --locked ruff format --check \
   scripts/repository/github_protection.py \
+  scripts/repository/decisions.py \
   scripts/test/catalog_compatibility.py \
   scripts/test/catalog_validator.py \
   scripts/test/allure_report.py \
@@ -217,6 +220,7 @@ uv run --locked ruff format --check \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
   scripts/test/test_github_protection.py \
+  scripts/test/test_decisions.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/resilience_support.py \
   scripts/test/scenarios/plex_cross_node_reschedule.py \
