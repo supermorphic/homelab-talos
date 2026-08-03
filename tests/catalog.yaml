@@ -390,7 +390,7 @@ suites:
     runner: {command: "mise exec -- just kube metrics-server-verify", implementation: scripts/verify/metrics-server.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.cilium, source: verification, framework: bash, suite: platform, tier: verification, target: cilium, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
-    access: {tier: observer}
+    access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
     native_results: {strategy: wrapper-junit}

@@ -27,13 +27,15 @@ status="$(curl --silent --show-error --fail --max-time 15 \
   --resolve "$alertmanager_resolve" "$alertmanager_url/api/v2/status")"
 am_cfg="$(yq -r '.config.original // ""' <<<"$status")"
 [[ -n "$am_cfg" ]] || { echo 'Alertmanager status API returned no loaded configuration.' >&2; exit 1; }
-grep -q 'alertmanager-ntfy.ntfy.svc.cluster.local:8000/hook' <<<"$am_cfg" || {
-  echo 'Alertmanager loaded config does not reference the alertmanager-ntfy webhook.' >&2
+receiver_count="$(yq -r '[.receivers[]? | select(.name == "ntfy")] | length' <<<"$am_cfg")"
+route_count="$(yq -r '[.route.routes[]? | select(.receiver == "ntfy")] | length' <<<"$am_cfg")"
+[[ "$receiver_count" -ge 1 && "$route_count" -ge 1 ]] || {
+  echo 'Alertmanager loaded config does not contain both the ntfy receiver and route.' >&2
   exit 1
 }
 
 just kube foundation-verify
-echo 'alertmanager-ntfy acceptance passed: Kustomization + HelmRelease Ready, adapter rolled out, and the Alertmanager ntfy receiver is present.'
+echo 'alertmanager-ntfy acceptance passed: Kustomization + HelmRelease Ready, adapter rolled out, and the Alertmanager ntfy receiver and route are loaded.'
 echo
 echo 'E2E (operator confirmation required; allow about 25 minutes):'
 echo "  FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \\"

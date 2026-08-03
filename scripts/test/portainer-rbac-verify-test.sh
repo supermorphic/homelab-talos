@@ -84,6 +84,12 @@ case "$resource:$name" in
             "metadata": {"name": "system:public-info-viewer"},
             "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "system:public-info-viewer"},
             "subjects": [{"kind": "Group", "apiGroup": "rbac.authorization.k8s.io", "name": "system:authenticated"}]
+          },
+          {
+            "kind": "ClusterRoleBinding",
+            "metadata": {"name": "system:service-account-issuer-discovery"},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "system:service-account-issuer-discovery"},
+            "subjects": [{"kind": "Group", "apiGroup": "rbac.authorization.k8s.io", "name": "system:serviceaccounts"}]
           }
         ]
       }
@@ -110,6 +116,14 @@ case "$resource:$name" in
     ;;
   clusterrole:system:public-info-viewer)
     printf '%s\n' '{"kind":"ClusterRole","metadata":{"name":"system:public-info-viewer"},"rules":[{"nonResourceURLs":["/healthz","/livez","/readyz","/version","/version/"],"verbs":["get"]}]}'
+    ;;
+  clusterrole:system:service-account-issuer-discovery)
+    role='{"kind":"ClusterRole","metadata":{"name":"system:service-account-issuer-discovery"},"rules":[{"nonResourceURLs":["/.well-known/openid-configuration","/.well-known/openid-configuration/","/openid/v1/jwks","/openid/v1/jwks/"],"verbs":["get"]}]}'
+    if [[ "${FAKE_ISSUER_DRIFT:-none}" == wildcard ]]; then
+      yq -o=json -I=0 '.rules[0].nonResourceURLs += ["/api/*"]' <<<"$role"
+    else
+      printf '%s\n' "$role"
+    fi
     ;;
   clusterrole:cluster-admin)
     printf '%s\n' '{"kind":"ClusterRole","metadata":{"name":"cluster-admin"},"rules":[{"apiGroups":["*"],"resources":["*"],"verbs":["*"]}]}'
@@ -163,5 +177,19 @@ if PATH="$fixture/bin:$PATH" \
 fi
 rg -q 'Unexpected system:authenticated ClusterRoleBinding.*authenticated-cluster-admin' \
   "$fixture/risky.out"
+
+if PATH="$fixture/bin:$PATH" \
+  FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+  FAKE_RISKY=false \
+  FAKE_ROLE_DRIFT=none \
+  FAKE_ISSUER_DRIFT=wildcard \
+    "$verifier" "$fixture/kubeconfig" \
+      "$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+      >"$fixture/unsafe-issuer.out" 2>&1; then
+  echo 'unsafe ServiceAccount issuer discovery role unexpectedly passed.' >&2
+  exit 1
+fi
+rg -q 'Unsafe system:serviceaccounts ClusterRole rules.*system:service-account-issuer-discovery' \
+  "$fixture/unsafe-issuer.out"
 
 echo 'Portainer effective RBAC graph tests passed.'

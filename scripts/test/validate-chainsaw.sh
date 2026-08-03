@@ -134,7 +134,9 @@ run_shell_case scoped-campaign-preflight scripts/test/scoped-campaign-preflight-
 run_shell_case agent-access-verifier scripts/test/agent-access-verify-test.sh
 run_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
 run_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.sh
+run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
 run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
+run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
 run_shell_case plex-verifier scripts/test/plex-verify-test.sh
 run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
 run_shell_case allure-report scripts/test/allure-report-test.sh

@@ -778,6 +778,8 @@ def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
         if not path.is_file():
             continue
         source = reachable_verifier_source(REPO_ROOT, implementation)
+        if "cilium status" in source and access_tier != "diagnostic":
+            violations.append(f"{suite_id}: cilium status requires diagnostic pod exec")
         forbidden = forbidden_kubernetes_operations(
             source, allow_interactive=access_tier == "diagnostic"
         )
@@ -999,10 +1001,12 @@ class CatalogValidator:
             "system:serviceaccount:portainer:portainer-readonly",
             "system:authenticated",
             "system:serviceaccounts:portainer",
+            "system:service-account-issuer-discovery",
             "Live portainer-readonly ClusterRole rules differ",
             "Unexpected direct ClusterRoleBinding grants Portainer access",
             "Unexpected direct RoleBinding grants Portainer access",
             "Unsafe system:authenticated ClusterRole rules",
+            "Unsafe system:serviceaccounts ClusterRole rules",
         }
         if "--as" in content or not all(marker in content for marker in required):
             fail("verification.portainer must prove exact live RBAC without impersonation.\n")

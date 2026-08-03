@@ -34,6 +34,8 @@ args=("$@")
 verb=''
 resource=''
 subresource=''
+namespace=''
+all_namespaces=false
 diagnostic=false
 for ((index = 0; index < ${#args[@]}; index++)); do
   case "${args[$index]}" in
@@ -54,8 +56,38 @@ for ((index = 0; index < ${#args[@]}; index++)); do
     --subresource=*)
       subresource="${args[$index]#--subresource=}"
       ;;
+    --namespace)
+      namespace="${args[$((index + 1))]}"
+      ;;
+    --namespace=*)
+      namespace="${args[$index]#--namespace=}"
+      ;;
+    --all-namespaces|-A)
+      all_namespaces=true
+      ;;
   esac
 done
+
+case "$resource" in
+  nodes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
+  clusterissuers.cert-manager.io|ciliumclusterwidenetworkpolicies.cilium.io|\
+  ciliumidentities.cilium.io|ciliumnodes.cilium.io|gatewayclasses.gateway.networking.k8s.io|\
+  nodes.metrics.k8s.io|clusterrolebindings.rbac.authorization.k8s.io|\
+  clusterroles.rbac.authorization.k8s.io|csidrivers.storage.k8s.io|\
+  storageclasses.storage.k8s.io|connectors.tailscale.com|dnsconfigs.tailscale.com|\
+  proxyclasses.tailscale.com|proxygroups.tailscale.com|users)
+    [[ -z "$namespace" && "$all_namespaces" == true ]] || {
+      echo "cluster-scoped resource $resource did not use all-namespaces explicitly" >&2
+      exit 65
+    }
+    ;;
+  *)
+    [[ -n "$namespace" && "$all_namespaces" == false ]] || {
+      echo "namespaced resource $resource did not receive only its namespace" >&2
+      exit 66
+    }
+    ;;
+esac
 
 # Match deployed API discovery: Cilium EndpointSlice is disabled and Gatus uses no
 # CRD, so discovery-backed `kubectl auth can-i` rejects both absent resources.
