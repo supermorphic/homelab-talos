@@ -81,9 +81,11 @@ if [[ "$suspend_state" == 'true' ]]; then
   [[ "$homepage_resource_count" == '0' ]]
   [[ ! -e "$homepage_secret" ]]
 else
+  [[ "$widget_count" == '4' ]]
   [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == 'tautulli' ]]
   [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.url"' "$route")" == 'http://tautulli.media.svc.cluster.local:8181' ]]
   [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.key"' "$route")" == '{{HOMEPAGE_VAR_TAUTULLI_API_KEY}}' ]]
+  [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.expandOneStreamToTwoRows"' "$route")" == 'false' ]]
   [[ "$gatus_count" == '1' ]]
   [[ "$(yq -r '.config.endpoints[] | select(.name == "tautulli") | .url' "$gatus_values")" == 'https://tautulli.lab.supermorphic.com/status' ]]
   [[ "$(yq -r '.config.endpoints[] | select(.name == "tautulli") | .conditions | join(",")' "$gatus_values")" == '[STATUS] == 200' ]]
