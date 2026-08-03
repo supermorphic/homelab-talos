@@ -43,7 +43,7 @@ its legacy machine config was also revalidated locally in metal mode.
 | Talos | `v1.13.2` | `v1.13.2` | `v1.13.2` |
 | Product | NUC11TNKi5 | NUC11TNKi5 | NUC11TNKi5 |
 | System revision | M11922-404 | M11922-404 | M11922-405 |
-| System serial | BTTN11600237 | BTTN145002UE | BTTN226005TH |
+| System serial | `<nuc1-system-serial>` | `<nuc2-system-serial>` | `<nuc3-system-serial>` |
 | Baseline BIOS | TNTGL357.0043 | TNTGL357.0070 | TNTGL357.0067 |
 | Baseline BIOS date | 2020-12-23 | 2022-10-28 | 2022-07-18 |
 | Secure Boot | Enabled | Enabled | Enabled |
@@ -51,10 +51,13 @@ its legacy machine config was also revalidated locally in metal mode.
 | Module signatures | Enforced | Enforced | Enforced |
 | TPM devices | `/dev/tpm0`, `/dev/tpmrm0` | `/dev/tpm0`, `/dev/tpmrm0` | `/dev/tpm0`, `/dev/tpmrm0` |
 | NIC | `enp88s0`, Intel I225-LM | `enp88s0`, Intel I225-LM | `enp88s0`, Intel I225-LM |
-| NIC MAC | `54:b2:03:f0:aa:03` | `54:b2:03:fd:40:53` | `48:21:0b:35:01:0c` |
+| NIC MAC | `<nuc1-mac>` | `<nuc2-mac>` | `<nuc3-mac>` |
 | Link | 2.5 Gbps full duplex | 2.5 Gbps full duplex | 2.5 Gbps full duplex |
 | Old NVMe | KINGSTON SA2000M8250G, 250 GB | FPI256MWR7, 256 GB | KINGSTON SNVS250G, 250 GB |
-| Old NVMe serial | 50026B768468915D | GC50917100000057 | 50026B7685B0EFAB |
+| Old NVMe serial | `<nuc1-old-nvme-serial>` | `<nuc2-old-nvme-serial>` | `<nuc3-old-nvme-serial>` |
+
+Hardware serials and MAC addresses are redacted to placeholders throughout this
+document. The real values are held out-of-band and are not published here.
 
 `nuc1` reports the full BIOS identifier
 `TNTGL357.0043.2020.1223.1022`. All three nodes use Image Factory schematic:
@@ -88,9 +91,9 @@ reservations:
 
 | MAC | Observed address | Result |
 |---|---|---|
-| `54:b2:03:f0:aa:03` | `192.168.90.10/24` | Pass |
-| `54:b2:03:fd:40:53` | `192.168.90.11/24` | Pass |
-| `48:21:0b:35:01:0c` | `192.168.90.12/24` | Pass |
+| `<nuc1-mac>` | `192.168.90.10/24` | Pass |
+| `<nuc2-mac>` | `192.168.90.11/24` | Pass |
+| `<nuc3-mac>` | `192.168.90.12/24` | Pass |
 
 On 2026-07-18, the operator directly verified that the router reservation objects
 map all three documented MAC addresses to their intended node addresses. The live
@@ -155,9 +158,9 @@ exact model and capacity.
 
 | Intended node | Model | Capacity | Serial | Firmware | Health test | Updated |
 |---|---|---:|---|---|---|---|
-| nuc1 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | S7LANL0L418256N | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
-| nuc2 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | S7LANL0L418299M | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
-| nuc3 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | S7LANL0L418289H | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
+| nuc1 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | `<nuc1-nvme-serial>` | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
+| nuc2 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | `<nuc2-nvme-serial>` | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
+| nuc3 | Samsung SSD 990 PRO 1TB | 1,000,204,886,016 bytes | `<nuc3-nvme-serial>` | Unavailable through USB bridge | Waived; direct Talos inventory passed | Not verified |
 
 Do not infer the correct firmware solely from a version found online. Samsung
 publishes different firmware packages by product variant, and Magician should
