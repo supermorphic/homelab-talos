@@ -12,5 +12,9 @@ config:
         watch:
           type: NamespaceSelector
           namespaceSelector:
-            matchLabels:
-              gateway.supermorphic.com/access: internal
+            matchExpressions:
+              - key: gateway.supermorphic.com/access
+                operator: In
+                values:
+                  - internal
+                  - public

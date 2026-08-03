@@ -106,6 +106,18 @@ cert_ks='kubernetes/apps/security/cert-manager/ks.yaml'
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/external-dns/ks.yaml)" == 'internal-gateway' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/testing/echo/ks.yaml)" == 'external-dns-internal' ]]
 
+# The shared Envoy Gateway controller admits namespaces by access class. The
+# selector must stay a single `In` expression over the two known classes so a
+# stray namespace label can never widen the controller's watch scope silently.
+envoy_values='kubernetes/apps/networking/envoy-gateway/app/values.yaml'
+watch_selector='.config.envoyGateway.provider.kubernetes.watch.namespaceSelector'
+[[ "$(yq -r '.config.envoyGateway.provider.kubernetes.watch.type' "$envoy_values")" == 'NamespaceSelector' ]]
+[[ "$(yq -r "$watch_selector | has(\"matchLabels\")" "$envoy_values")" == 'false' ]]
+[[ "$(yq -r "$watch_selector.matchExpressions | length" "$envoy_values")" == '1' ]]
+[[ "$(yq -r "$watch_selector.matchExpressions[0].key" "$envoy_values")" == 'gateway.supermorphic.com/access' ]]
+[[ "$(yq -r "$watch_selector.matchExpressions[0].operator" "$envoy_values")" == 'In' ]]
+[[ "$(yq -r "$watch_selector.matchExpressions[0].values | sort | join(\",\")" "$envoy_values")" == 'internal,public' ]]
+
 metallb_values='kubernetes/apps/networking/metallb/app/values.yaml'
 [[ "$(yq -r '.frrk8s.enabled' "$metallb_values")" == 'false' ]]
 [[ "$(yq -r '.speaker.frr.enabled' "$metallb_values")" == 'false' ]]
