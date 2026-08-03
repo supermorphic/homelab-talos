@@ -73,7 +73,7 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 |---|---|---|
 | `agent-access` | diagnostic | Exercises both named Kubernetes contexts and the Talos reader boundary. |
 | `metrics-server` | observer | Reads rollout, APIService, and metrics state. |
-| `cilium` | observer | Reads Cilium and Kubernetes health. |
+| `cilium` | diagnostic | Reads Cilium and Kubernetes health; `cilium status` executes its status command in each agent pod. |
 | `flux` | observer | Reads controller, source, Kustomization, HelmRelease, and reconciliation state. |
 | `foundation` | observer | Reads foundation controllers and routes. |
 | `storage` | observer | Reads storage health and resources. |
@@ -87,7 +87,7 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 | `radarr` | observer | Reads rollout, route, and application state. |
 | `lidarr` | observer | Reads rollout, route, and application state. |
 | `seerr` | observer | Reads rollout, route, and application state. |
-| `tautulli` | operator | Uses the general API-server Service proxy for the exact direct-Service health oracle. |
+| `tautulli` | diagnostic | Executes an exact `/status` request from the workload through Service DNS, then checks the gateway response. |
 | `flaresolverr` | diagnostic | Port-forwards its in-cluster-only Service to preserve the ready-JSON oracle. |
 | `qbit-manage` | observer | Reads controller and job state. |
 | `monitoring` | observer | Reads stack health, Prometheus telemetry, and Alertmanager's loaded receiver/route through `/api/v2/status`. |
@@ -117,6 +117,8 @@ The gate requires observer workload/CRD/log reads to succeed; observer Secret, e
 port-forward, create, patch, and delete requests to be denied; diagnostic exec and
 port-forward requests to succeed while Secret and Flux mutations remain denied; and
 Talos version and service inspection to succeed with the reader credential.
+Authorization checks omit `--namespace` for cluster-scoped resources so kubectl does not
+emit misleading ignored-namespace warnings; namespaced checks retain an explicit scope.
 
 When both scoped contexts exist, the gate exercises them directly and never depends on
 impersonation. When neither exists, it treats the current kubeconfig as operator admin
