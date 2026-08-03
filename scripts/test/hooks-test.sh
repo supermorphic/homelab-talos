@@ -250,4 +250,46 @@ if rg -q "$fake_age_key|$fake_age_key_file" "$sops_session"; then
   exit 1
 fi
 
+tracked_agent_files="$(
+  mise exec -- git -C "$repo_root" ls-files -- 'AGENTS.md' '**/AGENTS.md'
+)"
+if [[ "$tracked_agent_files" != 'AGENTS.md' ]]; then
+  echo 'AGENTS.md must remain the sole tracked repository-rule surface.' >&2
+  printf '%s\n' "$tracked_agent_files" >&2
+  exit 1
+fi
+
+for heading in \
+  'Repository context' \
+  'Git and worktrees' \
+  'Authority boundaries' \
+  'Secrets and credentials' \
+  'Public repository' \
+  'Validation' \
+  'Repository invariants' \
+  'Completion'; do
+  rg -qx "## $heading" "$repo_root/AGENTS.md" || {
+    echo "AGENTS.md is missing the semantic section: $heading" >&2
+    exit 1
+  }
+done
+
+if rg -q '\[(Authoritative —|Operator policy — operator|Gotcha)\]' "$repo_root/AGENTS.md"; then
+  echo 'AGENTS.md must not expose design-time provenance labels.' >&2
+  exit 1
+fi
+
+rg -qx '@AGENTS.md' "$repo_root/CLAUDE.md" || {
+  echo 'CLAUDE.md must import AGENTS.md.' >&2
+  exit 1
+}
+rg -q '^## Claude Code specifics$' "$repo_root/CLAUDE.md" || {
+  echo 'CLAUDE.md must retain the Claude-specific operating heading.' >&2
+  exit 1
+}
+if rg -q 'SOPS-encrypted|Never push|ReadWriteOnce' "$repo_root/CLAUDE.md"; then
+  echo 'CLAUDE.md must not repeat repository rules from AGENTS.md.' >&2
+  exit 1
+fi
+
 echo 'Claude and Codex hook command and session visibility checks passed.'
