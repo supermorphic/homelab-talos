@@ -88,18 +88,6 @@ assumptions.
   materially sensitive information as an operator-led security incident requiring
   containment and remediation.
 
-## Validation
-
-- Before opening or updating a pull request, run `mise exec -- just ci`.
-- `just ci` is the canonical full, cluster-independent, secret-free validation gate.
-  Cluster-dependent verification, status, preflight, and diagnostic workflows remain
-  outside it.
-- After a required rebase, rerun affected validation, including `mise exec -- just ci`.
-- Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
-  repository-wide hook coverage is useful.
-- Follow the relevant testing documentation for additional task-specific or scoped live
-  validation.
-
 ## Repository invariants
 
 - Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml` and
@@ -120,6 +108,18 @@ assumptions.
   `docs/superpowers/plans/` artifacts unless the operator explicitly changes this
   policy.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
+
+## Validation
+
+- Before opening or updating a pull request, run `mise exec -- just ci`.
+- `just ci` is the canonical full, cluster-independent, secret-free validation gate.
+  Cluster-dependent verification, status, preflight, and diagnostic workflows remain
+  outside it.
+- After a required rebase, rerun affected validation, including `mise exec -- just ci`.
+- Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
+  repository-wide hook coverage is useful.
+- Follow the relevant testing documentation for additional task-specific or scoped live
+  validation.
 
 ## Completion
 
