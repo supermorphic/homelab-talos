@@ -54,6 +54,18 @@ Git is the source of truth, and `main` is the Flux production deployment boundar
 - Secrets are created under this repository's age key through guarded,
   operator-run `*-secrets` recipes.
 
+## Public repository
+
+- This repository is public. Every file, commit message, and pull request is
+  world-readable, and anything already pushed cannot be retracted.
+- State residual risk as mitigated or accepted. Do not publish a dated list of
+  known-unimplemented controls; that is a schedule of what is currently undefended.
+- Never commit live public IP addresses, hardware serials, or MAC addresses. Use
+  RFC 5737 documentation addresses in test fixtures and bracketed placeholders in
+  documentation.
+- These rules govern new writing. Existing records are history; do not rewrite them
+  to comply.
+
 ## Talos and Flux invariants
 
 - Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml`
