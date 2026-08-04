@@ -259,20 +259,23 @@ if [[ "$tracked_agent_files" != 'AGENTS.md' ]]; then
   exit 1
 fi
 
-for heading in \
+expected_agent_headings="$(printf '%s\n' \
   'Repository context' \
   'Git and worktrees' \
   'Authority boundaries' \
   'Secrets and credentials' \
   'Public repository' \
-  'Validation' \
   'Repository invariants' \
-  'Completion'; do
-  rg -qx "## $heading" "$repo_root/AGENTS.md" || {
-    echo "AGENTS.md is missing the semantic section: $heading" >&2
-    exit 1
-  }
-done
+  'Validation' \
+  'Completion')"
+actual_agent_headings="$(sed -n 's/^## //p' "$repo_root/AGENTS.md")"
+if [[ "$actual_agent_headings" != "$expected_agent_headings" ]]; then
+  echo 'AGENTS.md semantic sections are missing, extra, or out of order.' >&2
+  diff -u \
+    <(printf '%s\n' "$expected_agent_headings") \
+    <(printf '%s\n' "$actual_agent_headings") >&2 || true
+  exit 1
+fi
 
 if rg -q '\[(Authoritative —|Operator policy — operator|Gotcha)\]' "$repo_root/AGENTS.md"; then
   echo 'AGENTS.md must not expose design-time provenance labels.' >&2

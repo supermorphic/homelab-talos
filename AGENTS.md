@@ -27,14 +27,15 @@ assumptions.
   lifecycle is operator-run.
 - Stop if the assigned branch or worktree is inconsistent or unsafe. Preserve unrelated
   changes.
-- Keep commits scoped and reviewable.
+- Keep each commit limited to one coherent change. Do not include unrelated edits, and
+  split changes when they can be independently reviewed or reverted.
 - Before each push, fetch `origin` and inspect both `origin/main` and the remote feature
   branch. If the remote feature branch contains unexpected commits absent locally, stop
   rather than overwriting or automatically reconciling it. Otherwise, if `origin/main`
   advanced, rebase the clean assigned branch onto it and rerun required validation.
-- Never rebase a dirty branch. When pushing rebased commits requires rewriting the
-  assigned remote feature branch, use only `--force-with-lease`; a failed lease is a
-  hard stop.
+- Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
+  stop and ask the operator. When pushing rebased commits requires rewriting the assigned
+  remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
 - Do not use `git reset --hard`, `git clean -fd`, repository-wide `git checkout .` or
   `git restore .`, or an unconditional force-push. Hooks may enforce these rules, but
   the rules remain mandatory independently of hooks.
@@ -87,18 +88,6 @@ assumptions.
   materially sensitive information as an operator-led security incident requiring
   containment and remediation.
 
-## Validation
-
-- Before opening or updating a pull request, run `mise exec -- just ci`.
-- `just ci` is the canonical full, cluster-independent, secret-free validation gate.
-  Cluster-dependent verification, status, preflight, and diagnostic workflows remain
-  outside it.
-- After a required rebase, rerun affected validation, including `mise exec -- just ci`.
-- Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
-  repository-wide hook coverage is useful.
-- Follow the relevant testing documentation for additional task-specific or scoped live
-  validation.
-
 ## Repository invariants
 
 - Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml` and
@@ -119,6 +108,18 @@ assumptions.
   `docs/superpowers/plans/` artifacts unless the operator explicitly changes this
   policy.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
+
+## Validation
+
+- Before opening or updating a pull request, run `mise exec -- just ci`.
+- `just ci` is the canonical full, cluster-independent, secret-free validation gate.
+  Cluster-dependent verification, status, preflight, and diagnostic workflows remain
+  outside it.
+- After a required rebase, rerun affected validation, including `mise exec -- just ci`.
+- Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
+  repository-wide hook coverage is useful.
+- Follow the relevant testing documentation for additional task-specific or scoped live
+  validation.
 
 ## Completion
 
