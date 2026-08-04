@@ -2,9 +2,9 @@
 
 ## Status
 
-- **Status: Draft.** Both decisions below were made by the operator on 2026-08-03
-  during review of the phase-1 Hubble capture; this record itself awaits operator
-  review before it is marked Accepted.
+- **Status: Accepted.** Both decisions below were made by the operator on 2026-08-03
+  during review of the phase-1 Hubble capture, and the operator approved this record
+  on 2026-08-04.
 - Date: 2026-08-03
 - Branch: `investigate-plex-remote-access`
 
