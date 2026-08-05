@@ -26,9 +26,16 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$FAKE_KUBECTL_LOG"
 
+if [[ "${FAKE_DIAGNOSTIC_CONTEXT:-false}" == 'true' &&
+      " $* " != *' config get-contexts homelab-diagnostic '* &&
+      " $* " != *' --context homelab-diagnostic '* ]]; then
+  echo "Missing diagnostic context: $*" >&2
+  exit 65
+fi
+
 case " $* " in
   *' config get-contexts homelab-diagnostic '*)
-    exit 1
+    [[ "${FAKE_DIAGNOSTIC_CONTEXT:-false}" == 'true' ]]
     ;;
   *' get svc kubernetes '*)
     printf '10.96.0.1'
@@ -113,6 +120,7 @@ run_scenario() {
     FAKE_KUBECTL_LOG="$kubectl_log" \
     FAKE_MANIFEST_DIR="$fixture/manifests" \
     FAKE_VERIFIER_EXEC_PATTERN="$verifier_exec_pattern" \
+    FAKE_DIAGNOSTIC_CONTEXT="${FAKE_DIAGNOSTIC_CONTEXT:-false}" \
     FAKE_WAIT_SLEEP="${FAKE_WAIT_SLEEP:-0}" \
     FAKE_CONTROL_OK="${FAKE_CONTROL_OK:-true}" \
     FAKE_SELECTED_OK="${FAKE_SELECTED_OK:-false}" \
@@ -199,7 +207,15 @@ fi
 rg -q 'Refusing' "$output"
 [[ ! -s "$kubectl_log" ]]
 
-echo '3. Happy path: control proves each target, the selected pod is denied, and the verifier runs last.'
+echo '3. Available diagnostic credentials are selected for every cluster operation.'
+if ! FAKE_DIAGNOSTIC_CONTEXT=true \
+  PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
+  echo 'Scenario did not select the available homelab-diagnostic context.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+
+echo '4. Happy path: control proves each target, the selected pod is denied, and the verifier runs last.'
 if ! PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
   echo 'Happy-path scenario run failed.' >&2
   cat "$output" >&2
@@ -239,7 +255,7 @@ verify_line="$(line_number ' get kustomization plex ')"
 [[ "$(line_number ' delete pod ')" -gt "$verify_line" ]]
 assert_cleanup_ran
 
-echo '4. A control target failure stops the run before any selected-pod probe.'
+echo '5. A control target failure stops the run before any selected-pod probe.'
 if FAKE_CONTROL_OK=false PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
   echo 'Scenario succeeded although the control target was unreachable.' >&2
   exit 1
@@ -251,7 +267,7 @@ if rg -q ' exec plex-policy-selected-' "$kubectl_log"; then
 fi
 assert_cleanup_ran
 
-echo '5. A selected pod reaching a negative target fails the run.'
+echo '6. A selected pod reaching a negative target fails the run.'
 if FAKE_SELECTED_OK=true PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
   echo 'Scenario succeeded although the selected pod reached a denied target.' >&2
   exit 1
@@ -259,7 +275,7 @@ fi
 rg -q 'reached' "$output"
 assert_cleanup_ran
 
-echo '6. An unrelated probe reaching Plex on 32400 fails the run.'
+echo '7. An unrelated probe reaching Plex on 32400 fails the run.'
 if FAKE_INGRESS_REACHABLE=true PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
   echo 'Scenario succeeded although an unrelated pod reached plex:32400.' >&2
   exit 1
@@ -270,7 +286,7 @@ assert_cleanup_ran
 for signal in TERM INT; do
   expected=143
   [[ "$signal" == 'INT' ]] && expected=130
-  echo "7. SIG$signal mid-run still deletes exactly the two run-scoped pods (exit $expected)."
+  echo "8. SIG$signal mid-run still deletes exactly the two run-scoped pods (exit $expected)."
   : >"$kubectl_log"
   rm -rf -- "$fixture/manifests"
   mkdir -p "$fixture/manifests"
