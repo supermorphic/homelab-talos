@@ -10,6 +10,9 @@ trap 'rm -rf "$temp_root"' EXIT
 # Every repository path named here is assembled from a variable. A literal dead
 # path in this file would itself be reported by the bare-path scan.
 missing_name='absent-runbook'
+docs_dir='docs'
+missing_bare_name='missing-runbook'
+missing_bare_target="$docs_dir/$missing_bare_name.md"
 live_dir='docs/runbooks'
 dollar='$'
 interpolated="${dollar}base/README.md"
@@ -191,7 +194,6 @@ fi
 
 excluded_repo="$temp_root/excluded"
 new_repo "$excluded_repo"
-docs_dir='docs'
 superpowers_dir='superpowers'
 excluded_target='missing-excluded.md'
 mkdir -p "$excluded_repo/$docs_dir/$superpowers_dir"
@@ -233,7 +235,7 @@ decision_bare_repo="$temp_root/decision-bare"
 new_repo "$decision_bare_repo"
 decision_bare_name='2026-08-02-bare-example.md'
 mkdir -p "$decision_bare_repo/$decision_dir"
-printf '# Decision\n\n- **Status: Accepted.**\n\nSee docs/missing-runbook.md.\n' \
+printf '# Decision\n\n- **Status: Accepted.**\n\nSee %s.\n' "$missing_bare_target" \
   >"$decision_bare_repo/$decision_dir/$decision_bare_name"
 git -C "$decision_bare_repo" add -A
 git -C "$decision_bare_repo" commit --quiet -m 'add accepted decision'
@@ -250,7 +252,7 @@ if "$validator" "$decision_bare_repo" >"$temp_root/decision-bare-changed.out" 2>
   echo 'Expected a changed decision bare path to be link-validated.' >&2
   exit 1
 fi
-rg -F -q "$decision_dir/$decision_bare_name:5: missing bare path target 'docs/missing-runbook.md'" \
+rg -F -q "$decision_dir/$decision_bare_name:5: missing bare path target '$missing_bare_target'" \
   "$temp_root/decision-bare-changed.out"
 
 neighbor_repo="$temp_root/neighbor"
