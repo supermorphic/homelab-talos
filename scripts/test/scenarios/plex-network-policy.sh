@@ -133,7 +133,7 @@ targets=(
   "$api_address:443"        # kubernetes.default.svc:443 — Kubernetes API
   "$ntfy_address:80"        # ntfy.ntfy.svc.cluster.local:80 — another namespace Service
   '192.168.90.1:443'        # UniFi gateway administration
-  '192.168.30.6:443'        # NAS administration
+  '192.168.30.6:80'         # Room Alert monitor on another VLAN
 )
 for target in "${targets[@]}"; do
   address="${target%:*}"
