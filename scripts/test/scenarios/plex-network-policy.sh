@@ -44,6 +44,9 @@ trap 'exit 143' TERM
   echo "Refusing state-changing Plex network-policy test; set PLEX_NETWORK_POLICY_CONFIRM='$expected_confirmation' after reviewing its run-scoped Pod lifecycle." >&2
   exit 1
 }
+if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+  kc+=(--context homelab-diagnostic)
+fi
 
 resolve_service_ip() {
   local service_namespace="$1" service="$2" address
