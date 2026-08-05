@@ -543,6 +543,11 @@ plex-relay-status: require-bash
 plex-network-observe seconds='300': require-bash
     @scripts/diagnose/plex-network-observe.sh {{quote(kubeconfig)}} {{quote(seconds)}}
 
+# Prove Plex ingress and egress containment with run-scoped control/selected probes.
+# Operator-only and state-changing; creates and removes only run-scoped Pods.
+plex-network-policy-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.plex-network-policy -- scripts/test/scenarios/plex-network-policy.sh {{quote(kubeconfig)}}
+
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
 intel-gpu-plugin-validate: require-bash

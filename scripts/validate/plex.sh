@@ -6,6 +6,7 @@ ks="$base/ks.yaml"
 hr="$base/app/helmrelease.yaml"
 values="$base/app/values.yaml"
 route="$base/app/httproute.yaml"
+cnp="$base/app/ciliumnetworkpolicy.yaml"
 oci='kubernetes/apps/media/namespace/app/ocirepository.yaml'
 image_repository='ghcr.io/home-operations/plex'
 image_tag='1.43.3.10828'
@@ -14,12 +15,17 @@ controller='.controllers.plex'
 temp_dir="$(mktemp -d /tmp/homelab-talos-plex-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml" "$oci"; do
+for f in "$ks" "$hr" "$values" "$route" "$cnp" "$base/app/kustomization.yaml" "$oci"; do
   [[ -f "$f" ]] || { echo "Missing Phase 11 Plex source: $f" >&2; exit 1; }
 done
 
 rg -qx '  - ./plex/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
   echo 'Refusing: ./plex/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
+  exit 1
+}
+
+rg -qx '  - ./ciliumnetworkpolicy.yaml' "$base/app/kustomization.yaml" || {
+  echo 'Refusing: ./ciliumnetworkpolicy.yaml is not wired into kubernetes/apps/media/plex/app/kustomization.yaml.' >&2
   exit 1
 }
 
@@ -87,6 +93,45 @@ fi
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '32400' ]]
 
+# Observed containment: the CiliumNetworkPolicy is the hard prerequisite for any
+# public ingress. Its allow-list comes from the phase-1 Hubble capture plus the two
+# designed identities observation cannot supply (docs/decisions/2026-08-03-plex-containment-capture.md).
+[[ "$(yq -r '.kind' "$cnp")" == 'CiliumNetworkPolicy' ]]
+[[ "$(yq -r '.metadata.name' "$cnp")" == 'plex' ]]
+[[ "$(yq -r '.metadata.namespace' "$cnp")" == 'media' ]]
+[[ "$(yq -r '.spec.endpointSelector.matchLabels | keys | join(",")' "$cnp")" == 'app.kubernetes.io/name' ]]
+[[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$cnp")" == 'plex' ]]
+
+# TCP 32400 is the only ingress port, from exactly the captured consumer set.
+[[ "$(yq -r '.spec.ingress | length' "$cnp")" == '2' ]]
+[[ "$(yq -r '[.spec.ingress[].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '32400/TCP' ]]
+[[ "$(yq -r '.spec.ingress[0] | keys | sort | join(",")' "$cnp")" == 'fromEndpoints,toPorts' ]]
+[[ "$(yq -r '[.spec.ingress[0].fromEndpoints[] | keys | join(",")] | unique | join(",")' "$cnp")" == 'matchLabels' ]]
+[[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system;gateway.envoyproxy.io/owning-gateway-name=public,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
+[[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
+[[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
+if yq -e '.spec.ingress[].fromEntities[]? | select(. == "world" or . == "cluster")' "$cnp" >/dev/null 2>&1; then
+  echo 'Refusing: Plex policy must not admit ingress from world or cluster entities.' >&2
+  exit 1
+fi
+
+# Egress is cluster DNS plus public-IPv4 TCP 443 only, with every non-global range
+# excluded. No entity-based egress: world would include the NAS, gateway, and VLANs.
+[[ "$(yq -r '.spec.egress | length' "$cnp")" == '2' ]]
+[[ "$(yq -r '.spec.egress[0] | keys | sort | join(",")' "$cnp")" == 'toEndpoints,toPorts' ]]
+[[ "$(yq -r '.spec.egress[0].toEndpoints | length' "$cnp")" == '1' ]]
+[[ "$(yq -r '.spec.egress[0].toEndpoints[0].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")' "$cnp")" == 'k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns' ]]
+[[ "$(yq -r '[.spec.egress[0].toPorts[].ports[] | .port + "/" + .protocol] | sort | join(",")' "$cnp")" == '53/TCP,53/UDP' ]]
+[[ "$(yq -r '.spec.egress[1] | keys | sort | join(",")' "$cnp")" == 'toCIDRSet,toPorts' ]]
+[[ "$(yq -r '.spec.egress[1].toCIDRSet | length' "$cnp")" == '1' ]]
+[[ "$(yq -r '.spec.egress[1].toCIDRSet[0].cidr' "$cnp")" == '0.0.0.0/0' ]]
+[[ "$(yq -r '.spec.egress[1].toCIDRSet[0].except | join(",")' "$cnp")" == '10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4' ]]
+[[ "$(yq -r '[.spec.egress[1].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '443/TCP' ]]
+if yq -e '.spec.egress[] | has("toEntities")' "$cnp" >/dev/null 2>&1; then
+  echo 'Refusing: Plex policy must not use entity-based egress.' >&2
+  exit 1
+fi
+
 chart_url="$(yq -r '.spec.url' "$oci")"
 chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
 
@@ -116,4 +161,4 @@ for container in runtime-identity app; do
   [[ "$(yq -r "(.spec.template.spec.initContainers[], .spec.template.spec.containers[]) | select(.name == \"$container\") | .image" "$rendered")" == "$image_repository:$image_tag@$image_digest" ]]
 done
 
-echo "Plex relay identity, deterministic image, private routing, and pinned render passed validation."
+echo "Plex relay identity, deterministic image, private routing, network containment, and pinned render passed validation."

@@ -172,6 +172,7 @@ campaigns:
       - test.storage-provisioning
       - test.flux-canary
       - test.integration.media-hardlink
+      - test.plex-network-policy
   e2e:
     description: State-changing end-to-end functional tests.
     mutates_cluster: true
@@ -648,6 +649,10 @@ suites:
     runner: {command: "mise exec -- just test integration media-hardlink", implementation: scripts/test/scenarios/media-hardlink.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/media-hardlink.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.plex-network-policy, source: test, framework: bash, suite: media, tier: integration, target: plex, scenario: network-policy, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: PLEX_NETWORK_POLICY_CONFIRM, expected: "test:plex-network-policy"}
+    runner: {command: "PLEX_NETWORK_POLICY_CONFIRM=test:plex-network-policy mise exec -- just kube plex-network-policy-test", implementation: scripts/test/scenarios/plex-network-policy.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: test.e2e.qbit-manage-policy, source: test, framework: python, suite: media, tier: e2e, target: qbit-manage-policy, scenario: null, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_E2E_CONFIRM, expected: "e2e:qbit-manage-policy"}
     runner: {command: "CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy", implementation: scripts/test/scenarios/qbit_manage_policy.py}
