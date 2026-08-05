@@ -1,6 +1,6 @@
 # Movie encoding benchmark — design
 
-Status: Accepted
+- **Status: Accepted.** Approved by the operator on 2026-08-02.
 Date: 2026-08-01.
 Accepted: 2026-08-02.
 Branch: `fileflows-movie-encoding-strategy`.

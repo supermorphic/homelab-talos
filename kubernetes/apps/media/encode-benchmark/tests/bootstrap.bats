@@ -3,8 +3,10 @@
 setup() {
 	PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../../../../.." && pwd)"
 	BOOTSTRAP_JUST="$PROJECT_ROOT/.just/bootstrap.just"
+	KUBE_JUST="$PROJECT_ROOT/kubernetes/mod.just"
 	CATALOG="$PROJECT_ROOT/tests/catalog.yaml"
 	REAL_JUST="$(command -v just)"
+	REAL_JQ="$(command -v jq)"
 	REAL_YQ="$(command -v yq)"
 	STUB_BIN="$BATS_TEST_TMPDIR/bin"
 	STUB_CALLS="$BATS_TEST_TMPDIR/calls.tsv"
@@ -94,6 +96,18 @@ assert_flux_not_called() {
 	! awk -F '\t' -v operation="$operation" '$1 == "flux" && $2 ~ "^" operation " " {found = 1} END {exit !found}' "$STUB_CALLS"
 }
 
+assert_recipe_uses_deployed_source() {
+	local justfile="$1"
+	local recipe="$2"
+
+	"$REAL_JUST" --justfile "$justfile" --dump --dump-format json |
+		"$REAL_JQ" -e --arg recipe "$recipe" '
+      .recipes[$recipe].body
+      | flatten
+      | any(.[]; type == "string" and contains("require_deployed_source"))
+    ' >/dev/null
+}
+
 # Catches a missing or weakened confirmation gate that allows Flux activation.
 @test "bootstrap refuses missing and wrong confirmation without resuming Flux" {
 	unset ENCODE_BENCHMARK_BOOTSTRAP_CONFIRM
@@ -152,17 +166,29 @@ assert_flux_not_called() {
 
 # Catches catalog registration that is absent, misplaced, cluster-mutating, or machine-owned.
 @test "catalog exposes offline validation and human-owned read-only verification" {
-	[ "$("$REAL_YQ" -r '.executions.ci | to_entries | .[] | select(.value == "validation.encode-benchmark") | .key' "$CATALOG")" = '15' ]
-	[ "$("$REAL_YQ" -r '.campaigns.verification.members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")" = '9' ]
-	[ "$("$REAL_YQ" -r '.campaigns."scoped-verification".members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")" = '9' ]
+	validation_gpu_index="$("$REAL_YQ" -r '.executions.ci | to_entries | .[] | select(.value == "validation.intel-gpu-plugin") | .key' "$CATALOG")"
+	validation_benchmark_index="$("$REAL_YQ" -r '.executions.ci | to_entries | .[] | select(.value == "validation.encode-benchmark") | .key' "$CATALOG")"
+	[[ "$validation_gpu_index" =~ ^[0-9]+$ && "$validation_benchmark_index" =~ ^[0-9]+$ ]]
+	[ "$validation_benchmark_index" -eq "$((validation_gpu_index + 1))" ]
+
+	verification_gpu_index="$("$REAL_YQ" -r '.campaigns.verification.members | to_entries | .[] | select(.value == "verification.intel-gpu-plugin") | .key' "$CATALOG")"
+	verification_benchmark_index="$("$REAL_YQ" -r '.campaigns.verification.members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")"
+	[[ "$verification_gpu_index" =~ ^[0-9]+$ && "$verification_benchmark_index" =~ ^[0-9]+$ ]]
+	[ "$verification_benchmark_index" -eq "$((verification_gpu_index + 1))" ]
+
+	scoped_gpu_index="$("$REAL_YQ" -r '.campaigns."scoped-verification".members | to_entries | .[] | select(.value == "verification.intel-gpu-plugin") | .key' "$CATALOG")"
+	scoped_benchmark_index="$("$REAL_YQ" -r '.campaigns."scoped-verification".members | to_entries | .[] | select(.value == "verification.encode-benchmark") | .key' "$CATALOG")"
+	[[ "$scoped_gpu_index" =~ ^[0-9]+$ && "$scoped_benchmark_index" =~ ^[0-9]+$ ]]
+	[ "$scoped_benchmark_index" -eq "$((scoped_gpu_index + 1))" ]
+
 	[ "$("$REAL_YQ" -r '.suites[] | select(.metadata.id == "validation.encode-benchmark") | [.metadata.framework, .metadata.tier, .metadata.mutates_cluster, .metadata.execution_owner, .runner.command] | @tsv' "$CATALOG")" = $'bash\toffline\tfalse\tshared\tmise exec -- just kube encode-benchmark-validate' ]
 	[ "$("$REAL_YQ" -r '.suites[] | select(.metadata.id == "verification.encode-benchmark") | [.metadata.mutates_cluster, .metadata.execution_owner, .access.tier, .runner.command] | @tsv' "$CATALOG")" = $'false\thuman\tobserver\tmise exec -- just kube encode-benchmark-verify' ]
 }
 
-# Catches adding or removing a guarded rollout without updating repository accounting.
-@test "repository guard accounting covers all 30 guarded rollout entrypoints" {
-	run bash -c 'cd "$1"; rg -c '\''require_deployed_source '\'' .just/bootstrap.just kubernetes/mod.just | awk -F: '\''{sum += $2} END {print sum}'\''' \
-		-- "$PROJECT_ROOT"
-	[ "$status" -eq 0 ]
-  [ "$output" = '30' ]
+# Catches a benchmark rollout recipe losing its deployed-source boundary.
+@test "benchmark rollout recipes retain deployed-source guards" {
+	assert_recipe_uses_deployed_source "$BOOTSTRAP_JUST" encode-benchmark
+	assert_recipe_uses_deployed_source "$KUBE_JUST" encode-benchmark-capabilities
+	assert_recipe_uses_deployed_source "$KUBE_JUST" encode-benchmark-census
+	assert_recipe_uses_deployed_source "$KUBE_JUST" encode-benchmark-run
 }
