@@ -241,13 +241,17 @@ first_create="$(line_number ' create --filename ')"
 [[ "$(line_number ' wait ')" -gt "$first_create" ]]
 
 previous=0
-for target in '10.96.0.1/443' '10.96.7.7/80' '192.168.90.1/443' '192.168.30.6/80'; do
+for target in '10.96.0.1/443' '10.96.7.7/80' '192.168.90.1/443'; do
   control_line="$(line_number "exec $control_name -- timeout 10 bash -c </dev/tcp/$target")"
   selected_line="$(line_number "exec $selected_name -- timeout 10 bash -c </dev/tcp/$target")"
   [[ "$control_line" -gt "$previous" ]]
   [[ "$control_line" -lt "$selected_line" ]]
   previous="$selected_line"
 done
+if rg -q -F '/dev/tcp/192.168.30.6/' "$kubectl_log"; then
+  echo 'Scenario still probed the unreachable Room Alert endpoint.' >&2
+  exit 1
+fi
 ingress_line="$(line_number "exec $control_name -- timeout 10 bash -c </dev/tcp/10.96.9.9/32400")"
 [[ "$ingress_line" -gt "$previous" ]]
 verify_line="$(line_number ' get kustomization plex ')"
