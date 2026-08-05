@@ -241,7 +241,7 @@ first_create="$(line_number ' create --filename ')"
 [[ "$(line_number ' wait ')" -gt "$first_create" ]]
 
 previous=0
-for target in '10.96.0.1/443' '10.96.7.7/80' '192.168.90.1/443' '192.168.30.6/443'; do
+for target in '10.96.0.1/443' '10.96.7.7/80' '192.168.90.1/443' '192.168.30.6/80'; do
   control_line="$(line_number "exec $control_name -- timeout 10 bash -c </dev/tcp/$target")"
   selected_line="$(line_number "exec $selected_name -- timeout 10 bash -c </dev/tcp/$target")"
   [[ "$control_line" -gt "$previous" ]]
