@@ -65,6 +65,7 @@ campaigns:
       - verification.csi-driver-smb
       - verification.media-storage
       - verification.plex
+      - verification.plex-public
       - verification.intel-gpu-plugin
       - verification.encode-benchmark
       - verification.qbittorrent
@@ -121,6 +122,7 @@ campaigns:
       - verification.csi-driver-smb
       - verification.media-storage
       - verification.plex
+      - verification.plex-public
       - verification.intel-gpu-plugin
       - verification.encode-benchmark
       - verification.qbittorrent
@@ -177,6 +179,7 @@ campaigns:
       - test.flux-canary
       - test.integration.media-hardlink
       - test.plex-network-policy
+      - test.plex-public-probe
   e2e:
     description: State-changing end-to-end functional tests.
     mutates_cluster: true
@@ -443,6 +446,12 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-verify", implementation: scripts/verify/plex.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.plex-public, source: verification, framework: bash, suite: media, tier: verification, target: plex-public, scenario: isolation, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    description: Verifies the dedicated public Gateway, closed negative paths, split DNS, and internal regressions before WAN activation.
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-public-verify", implementation: scripts/verify/plex-public.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.intel-gpu-plugin, source: verification, framework: bash, suite: media, tier: verification, target: intel-gpu-plugin, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
@@ -669,6 +678,10 @@ suites:
   - metadata: {id: test.plex-network-policy, source: test, framework: bash, suite: media, tier: integration, target: plex, scenario: network-policy, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: PLEX_NETWORK_POLICY_CONFIRM, expected: "test:plex-network-policy"}
     runner: {command: "PLEX_NETWORK_POLICY_CONFIRM=test:plex-network-policy mise exec -- just kube plex-network-policy-test", implementation: scripts/test/scenarios/plex-network-policy.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.plex-public-probe, source: test, framework: bash, suite: media, tier: integration, target: plex-public, scenario: isolation-canary, scope: network, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: PLEX_PUBLIC_PROBE_CONFIRM, expected: "test:plex-public-probe"}
+    runner: {command: "PLEX_PUBLIC_PROBE_CONFIRM=test:plex-public-probe mise exec -- just kube plex-public-probe-test", implementation: scripts/test/scenarios/plex-public-probe.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: test.e2e.qbit-manage-policy, source: test, framework: python, suite: media, tier: e2e, target: qbit-manage-policy, scenario: null, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: CLUSTER_E2E_CONFIRM, expected: "e2e:qbit-manage-policy"}
