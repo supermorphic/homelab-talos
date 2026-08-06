@@ -1,11 +1,20 @@
 # MetalLB
 
 MetalLB chart `0.16.1` advertises LoadBalancer addresses on the LAN in L2 mode.
-Two pools exist and `autoAssign` is disabled on both: `internal`
-(`192.168.90.30-192.168.90.38`), from which the internal Gateway explicitly
-requests `192.168.90.30`; and `public` (`192.168.90.39/32`), reserved for the
-dedicated public Plex Gateway and claimed only while that Kustomization is
-resumed. Each pool has its own L2Advertisement. FRR and FRR-K8s are disabled.
+This Kustomization owns one pool, `internal` (`192.168.90.30-192.168.90.38`,
+`autoAssign` disabled), from which the internal Gateway explicitly requests
+`192.168.90.30`, plus its L2Advertisement. FRR and FRR-K8s are disabled.
+
+A second pool, `public` (`192.168.90.39/32`), is defined by the dedicated public
+Plex Gateway in
+[`../public-gateway/app/address-pool.yaml`](../public-gateway/app/address-pool.yaml)
+rather than here, so `.39` is claimed only while that suspended Kustomization is
+resumed. That placement is required, not stylistic: MetalLB's validating webhook
+refuses a pool overlapping one already defined, and Flux dry-runs a Kustomization's
+objects against current cluster state before applying any of them. Shipping the
+narrowing of `internal` beside the creation of `public` deadlocks — at dry-run time
+`internal` still spans `.30-.39`, so `.39/32` is rejected and the narrowing that
+would free it never applies. `dependsOn: metallb-config` orders them correctly.
 
 The router must exclude `192.168.90.30-192.168.90.39` from DHCP. Use
 `just bootstrap foundation` for the guarded first reconciliation and
