@@ -81,7 +81,16 @@ cat >"$fixture/bin/just" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_JUST_LOG"
 case " $* " in
-  ' kube plex-public-validate '|' kube flux-verify '|' kube plex-public-probe-test ')
+  ' kube plex-public-validate '|' kube flux-verify ')
+    ;;
+  ' kube plex-public-probe-test ')
+    # The probe is confirmation-gated in the catalog, so the bootstrap must supply
+    # that confirmation itself. Stubbing this unconditionally would mock away the
+    # precondition and let a bootstrap that can never reach the probe pass its test.
+    [[ "${PLEX_PUBLIC_PROBE_CONFIRM:-}" == 'test:plex-public-probe' ]] || {
+      echo 'Refusing test.plex-public-probe: set PLEX_PUBLIC_PROBE_CONFIRM to the documented exact value.' >&2
+      exit 1
+    }
     ;;
   ' kube plex-public-verify ')
     [[ "$FAKE_LAYOUT" != bootstrap-verify-fails ]]
@@ -160,14 +169,31 @@ if rg '^suspend kustomization ' "$fixture/flux.log" | rg -v -q '^suspend kustomi
   exit 1
 fi
 
-echo '3. Connection flush refuses mutation without exact post-DNAT confirmation.'
+echo '3. Bootstrap reaches the confirmation-gated probe and completes.'
+KUBECONFIG="$fixture/kubeconfig" \
+  PLEX_PUBLIC_GATEWAY_BOOTSTRAP_CONFIRM='bootstrap:plex-public-gateway:192.168.90.39' \
+  run_recipe bootstrap-success bootstrap plex-public-gateway
+rg -F -q 'resume kustomization public-gateway' "$fixture/flux.log"
+rg -F -q 'kube plex-public-verify' "$fixture/just.log"
+rg -F -q 'kube plex-public-probe-test' "$fixture/just.log"
+if rg -q '^suspend kustomization ' "$fixture/flux.log"; then
+  echo 'Bootstrap re-suspended public-gateway despite completing.' >&2
+  cat "$fixture/output" >&2
+  exit 1
+fi
+rg -F -q 'acceptance passed without WAN exposure' "$fixture/output" || {
+  cat "$fixture/output" >&2
+  exit 1
+}
+
+echo '4. Connection flush refuses mutation without exact post-DNAT confirmation.'
 if KUBECONFIG="$fixture/kubeconfig" run_recipe flush-no-confirm kube plex-public-connection-flush; then
   echo 'Connection flush ran without confirmation.' >&2
   exit 1
 fi
 [[ ! -s "$fixture/git.log" && ! -s "$fixture/kubectl.log" ]]
 
-echo '4. Connection flush refuses an ambiguous public Deployment set.'
+echo '5. Connection flush refuses an ambiguous public Deployment set.'
 if KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-ambiguous kube plex-public-connection-flush; then
@@ -179,7 +205,7 @@ if rg -q 'rollout restart' "$fixture/kubectl.log"; then
   exit 1
 fi
 
-echo '5. Connection flush restarts only the exact selected Deployment and verifies.'
+echo '6. Connection flush restarts only the exact selected Deployment and verifies.'
 KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-success kube plex-public-connection-flush
