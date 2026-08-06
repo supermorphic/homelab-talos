@@ -544,3 +544,29 @@ print(json.dumps(row["torrent_tags"]))
 	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
+
+# Catches a runtime script depending on a command the runtime image does not
+# provide. The live census Job failed on an undeclared python3 while this suite
+# stayed green, because CI runs the scripts against the full host PATH.
+@test "census runs against only the declared runtime commands" {
+	load helpers/runtime-sandbox
+	prepare_library
+	create_qbittorrent_stub
+	run_inventory_to_fixture
+	create_ffprobe_stub
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	output_dir="$BATS_TEST_TMPDIR/output"
+	samples="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml"
+
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/sandbox"
+	[ "$status" -eq 0 ]
+	sandbox="$output"
+
+	run env PATH="$stub_bin:$sandbox" \
+		"$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	[ "$status" -eq 0 ]
+	run diff -u "$GOLDEN/census.csv" "$output_dir/census.csv"
+	[ "$status" -eq 0 ]
+}
