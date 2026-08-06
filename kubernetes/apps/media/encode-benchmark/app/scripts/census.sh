@@ -48,6 +48,7 @@ paths_temp="$(mktemp "$output_directory/.encode-benchmark-census.XXXXXX")"
 state_temp="$(mktemp "$output_directory/.encode-benchmark-census.XXXXXX")"
 census_backup="$(mktemp "$output_directory/.encode-benchmark-census.XXXXXX")"
 audio_backup="$(mktemp "$output_directory/.encode-benchmark-census.XXXXXX")"
+probe_error_temp="$(mktemp "$output_directory/.encode-benchmark-census.XXXXXX")"
 cleanup() {
 	rm -f -- \
 		"$census_temp" \
@@ -55,7 +56,8 @@ cleanup() {
 		"$paths_temp" \
 		"$state_temp" \
 		"$census_backup" \
-		"$audio_backup"
+		"$audio_backup" \
+		"$probe_error_temp"
 }
 trap cleanup EXIT
 
@@ -90,6 +92,8 @@ declare -A category_by_inode=()
 declare -A tags_by_inode=()
 
 record_number=0
+source_count=0
+probe_failures=0
 while read -r inode lifecycle_b64 hash_b64 category_b64 tags_b64; do
 	((record_number += 1))
 	[[ "$inode" =~ ^[0-9]+$ ]] || {
@@ -114,7 +118,7 @@ while read -r inode lifecycle_b64 hash_b64 category_b64 tags_b64; do
 	tags_by_inode[$inode]="$(printf '%s' "$tags_b64" | base64 -d)"
 done <"$state_temp"
 
-printf '%s\n' 'source_path,source_size_bytes,link_count,lifecycle_state,lifecycle_evidence,torrent_hash,torrent_category,torrent_tags,cohort,container,duration_seconds,video_codec,width,height,pixel_format,bit_depth,color_primaries,color_transfer,color_space,hdr_format,dolby_vision_profile,video_bit_rate,frame_rate,audio_track_count,subtitle_count,chapter_count,audio_bytes_total,audio_bytes_method' >"$census_temp"
+printf '%s\n' 'source_path,source_size_bytes,link_count,lifecycle_state,lifecycle_evidence,torrent_hash,torrent_category,torrent_tags,cohort,container,duration_seconds,video_codec,width,height,pixel_format,bit_depth,color_primaries,color_transfer,color_space,hdr_format,dolby_vision_profile,video_bit_rate,frame_rate,audio_track_count,subtitle_count,chapter_count,audio_bytes_total,audio_bytes_method,probe_status,probe_error' >"$census_temp"
 printf '%s\n' 'source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method' >"$audio_temp"
 
 # Enumerate sources with find and resolve containment with realpath. The walk
@@ -184,7 +188,25 @@ while IFS= read -r -d '' source_path; do
 		exit 65
 	}
 	output_path="/media/$relative_path"
-	metadata="$("$script_directory"/probe.sh "$source_path")"
+	((source_count += 1))
+	# A file the prober cannot open is a finding about the library, not a crash:
+	# §9 takes the same stance for output validation. Aborting on the first one
+	# would let a single unreadable title block the whole inventory, and cost a
+	# dispatch cycle to discover each subsequent one. The threshold below still
+	# fails loudly when the mount itself is broken.
+	probe_status='probed'
+	probe_error=''
+	if metadata="$("$script_directory"/probe.sh "$source_path" 2>"$probe_error_temp")"; then
+		:
+	else
+		((probe_failures += 1))
+		probe_status='probe-failed'
+		# One line, bounded: the prober echoes the source path back, which this
+		# row already carries, and a multi-line message would break the CSV.
+		probe_error="$(tr '\n\r\t' '   ' <"$probe_error_temp" | cut -c1-200)"
+		[[ -n "$probe_error" ]] || probe_error='probe failed without a message'
+		metadata='{}'
+	fi
 
 	jq -r \
 		--arg source_path "$output_path" \
@@ -194,10 +216,12 @@ while IFS= read -r -d '' source_path; do
 		--arg evidence "$evidence" \
 		--arg torrent_hash "$torrent_hash" \
 		--arg torrent_category "$torrent_category" \
-		--arg torrent_tags "$torrent_tags" '
-			([.audioTracks[].audioBytes // 0] | add // 0) as $audio_total
-			| ([.audioTracks[].audioBytesMethod] | unique) as $audio_methods
-			| (if (.audioTracks | length) == 0 then "none"
+		--arg torrent_tags "$torrent_tags" \
+		--arg probe_status "$probe_status" \
+		--arg probe_error "$probe_error" '
+			([(.audioTracks // [])[].audioBytes // 0] | add // 0) as $audio_total
+			| ([(.audioTracks // [])[].audioBytesMethod] | unique) as $audio_methods
+			| (if ((.audioTracks // []) | length) == 0 then "none"
 				elif ($audio_methods | length) == 1 then $audio_methods[0]
 				else "mixed"
 				end) as $audio_method
@@ -208,18 +232,25 @@ while IFS= read -r -d '' source_path; do
 				.pixelFormat, .bitDepth, .colorPrimaries, .colorTransfer, .colorSpace,
 				.hdrFormat, .dolbyVisionProfile, .videoBitRate, .frameRate,
 				.audioTrackCount, .subtitleCount, .chapterCount,
-				$audio_total, $audio_method
+				$audio_total, $audio_method, $probe_status, $probe_error
 			] | @csv
 		' <<<"$metadata" >>"$census_temp"
 
 	jq -r --arg source_path "$output_path" '
-		.audioTracks[]
+		(.audioTracks // [])[]
 		| [
 			$source_path, .index, .codec, .channels, .channelLayout, .language,
 			.bitRate, .durationSeconds, .audioBytes, .audioBytesMethod
 		] | @csv
 	' <<<"$metadata" >>"$audio_temp"
 done <"$paths_temp"
+
+# Fail loudly when the failure rate implies a broken mount rather than a bad
+# title: a census of nothing but failure rows would otherwise look complete.
+if ((source_count > 0 && probe_failures * 20 > source_count)); then
+	echo "census aborted: $probe_failures of $source_count sources could not be probed" >&2
+	exit 65
+fi
 
 census_output="$output_directory/census.csv"
 audio_output="$output_directory/audio-inventory.csv"
@@ -262,5 +293,5 @@ if ((second_publish_failed == 1)); then
 	exit 74
 fi
 
-rm -f -- "$paths_temp" "$state_temp" "$census_backup" "$audio_backup"
+rm -f -- "$paths_temp" "$state_temp" "$census_backup" "$audio_backup" "$probe_error_temp"
 trap - EXIT

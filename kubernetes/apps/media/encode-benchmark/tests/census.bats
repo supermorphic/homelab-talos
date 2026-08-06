@@ -576,3 +576,43 @@ print(json.dumps(row["torrent_tags"]))
 	run diff -u "$GOLDEN/census.csv" "$output_dir/census.csv"
 	[ "$status" -eq 0 ]
 }
+
+# Catches the census reverting to aborting on the first unreadable title. One
+# 19GB source that ffprobe cannot open blocked the entire live inventory, and
+# each retry cost a dispatch cycle to discover the next bad file.
+@test "an isolated probe failure is recorded as a row and the census completes" {
+	prepare_library
+	create_qbittorrent_stub
+	run_inventory_to_fixture
+	create_ffprobe_stub
+	# Dilute below the 5% abort threshold: 1 failure in 32 sources is a bad
+	# title, 1 in 7 is the signal of a broken mount the threshold must still catch.
+	for index in $(seq 1 25); do
+		printf 'padding' >"$media_root/Padding $index.mkv"
+	done
+	export PATH="$stub_bin:$PATH"
+	export FFPROBE_FIXTURE_DIR="$FIXTURES/ffprobe"
+	export FFPROBE_FAIL_PATTERN='Unlinked AVC'
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_MEDIA_ROOT="$media_root"
+	output_dir="$BATS_TEST_TMPDIR/output"
+
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
+	[ "$status" -eq 0 ]
+
+	# The unreadable title is present, marked, and carries its reason.
+	run jq -R -r -s '
+		split("\n") | map(select(length > 0)) | .[1:]
+		| map(select(test("Unlinked AVC")))
+	' "$output_dir/census.csv"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'probe-failed'* ]]
+	[[ "$output" == *'fixture ffprobe failure'* ]]
+
+	# Every other source still probed normally, so a failure row cannot be
+	# mistaken for a degraded census.
+	run grep -c 'probe-failed' "$output_dir/census.csv"
+	[ "$output" -eq 1 ]
+	run grep -c '"probed"' "$output_dir/census.csv"
+	[ "$output" -eq 31 ]
+}
