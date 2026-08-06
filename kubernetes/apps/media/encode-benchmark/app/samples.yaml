@@ -45,6 +45,33 @@ data:
         - uname
         - wc
         - yq
+      # Report-only. The probe records which of these the image provides and
+      # never fails on an absent one. They exist so that when a required command
+      # is missing, the same run answers what could replace it.
+      optionalCommands:
+        - base64
+        - busybox
+        - cmp
+        - comm
+        - envsubst
+        - expr
+        - gawk
+        - getopt
+        - grep
+        - iconv
+        - ln
+        - mawk
+        - nproc
+        - paste
+        - perl
+        - python
+        - readlink
+        - realpath
+        - seq
+        - tee
+        - timeout
+        - touch
+        - xargs
     savingsSeed: 20260802
     qualityPanel: []
     savingsPanel: []
