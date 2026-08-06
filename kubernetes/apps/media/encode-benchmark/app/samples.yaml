@@ -16,6 +16,7 @@ data:
       # an undeclared dependency fails in CI rather than on a node.
       requiredCommands:
         - awk
+        - base64
         - bash
         - chmod
         - cp
@@ -32,6 +33,7 @@ data:
         - mktemp
         - mv
         - python3
+        - realpath
         - rg
         - rm
         - rmdir
@@ -49,7 +51,6 @@ data:
       # never fails on an absent one. They exist so that when a required command
       # is missing, the same run answers what could replace it.
       optionalCommands:
-        - base64
         - busybox
         - cmp
         - comm
@@ -66,7 +67,6 @@ data:
         - perl
         - python
         - readlink
-        - realpath
         - seq
         - tee
         - timeout

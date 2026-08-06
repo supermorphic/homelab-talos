@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import csv
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -114,13 +114,25 @@ def main() -> int:
             if current is None or STATE_PRIORITY[state] > STATE_PRIORITY[current.lifecycle_state]:
                 by_inode[inode] = inode_state
 
-    writer = csv.writer(sys.stdout, dialect="excel-tab", lineterminator="\n")
-    writer.writerow(["inode", "lifecycle_state", "torrent_hash", "category", "tags"])
+    # JSON Lines, not TSV. The consumer runs inside the ffmpeg runtime image,
+    # which has no python3; jq is present and parses quoting, embedded tabs and
+    # embedded newlines correctly, so emitting JSON removes the parsing burden
+    # rather than relocating it into a hand-written awk state machine.
     for inode in sorted(by_inode):
         item = by_inode[inode]
-        writer.writerow(
-            [inode, item.lifecycle_state, item.torrent_hash, item.category, item.tags]
+        json.dump(
+            {
+                "inode": inode,
+                "lifecycle_state": item.lifecycle_state,
+                "torrent_hash": item.torrent_hash,
+                "category": item.category,
+                "tags": item.tags,
+            },
+            sys.stdout,
+            separators=(",", ":"),
+            sort_keys=True,
         )
+        sys.stdout.write("\n")
     return 0
 
 

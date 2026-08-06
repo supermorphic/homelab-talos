@@ -214,7 +214,7 @@ dispatch_census() {
 	run_id="$(new_run_id census)" || return
 	require_cluster_target || return
 	ensure_run_available "$run_id" || return
-	inventory="$temp_directory/inodes.tsv"
+	inventory="$temp_directory/inodes.jsonl"
 	umask 077
 	if ! kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" exec -i \
 		deployment/qbit-manage -- python - <"$script_directory/torrent-inventory.py" >"$inventory"; then
@@ -230,7 +230,7 @@ dispatch_census() {
 	name="encode-benchmark-census-${run_id,,}"
 	configmap_name="encode-benchmark-inodes-${run_id,,}"
 	render_job "$job" census "$run_id" "$run_id" '' "$name" \
-		/scripts/census.sh /inventory/inodes.tsv "/out/runs/$run_id"
+		/scripts/census.sh /inventory/inodes.jsonl "/out/runs/$run_id"
 	remove_mounts_and_volumes "$job" scratch
 	INVENTORY_CONFIGMAP="$configmap_name" yq -i '
 		.spec.suspend = true |
@@ -239,8 +239,8 @@ dispatch_census() {
 		del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage") |
 		del(.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915") |
 		del(.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915") |
-		.spec.template.spec.containers[0].volumeMounts += [{"name":"inventory","mountPath":"/inventory/inodes.tsv","subPath":"inodes.tsv","readOnly":true}] |
-		.spec.template.spec.volumes += [{"name":"inventory","configMap":{"name":strenv(INVENTORY_CONFIGMAP),"items":[{"key":"inodes.tsv","path":"inodes.tsv"}]}}]
+		.spec.template.spec.containers[0].volumeMounts += [{"name":"inventory","mountPath":"/inventory/inodes.jsonl","subPath":"inodes.jsonl","readOnly":true}] |
+		.spec.template.spec.volumes += [{"name":"inventory","configMap":{"name":strenv(INVENTORY_CONFIGMAP),"items":[{"key":"inodes.jsonl","path":"inodes.jsonl"}]}}]
 	' "$job"
 	remote_job="$name"
 	remote_cleanup_armed=1
@@ -260,7 +260,7 @@ dispatch_census() {
 			"apiVersion":"batch/v1","kind":"Job","name":strenv(JOB_NAME),
 			"uid":strenv(JOB_UID),"controller":true,"blockOwnerDeletion":true
 		}] |
-		.data."inodes.tsv" = load_str(strenv(INVENTORY_FILE))
+		.data."inodes.jsonl" = load_str(strenv(INVENTORY_FILE))
 	' >"$configmap"
 	remote_configmap="$configmap_name"
 	configmap_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" create \
