@@ -53,9 +53,13 @@ while :; do
 
   if wan_address="$(wget -qO- -T 10 https://api.ipify.org 2>/dev/null)" &&
     dns_output="$(nslookup plex.lab.supermorphic.com 1.1.1.1 2>/dev/null)"; then
+    # busybox nslookup asks for A and AAAA and prints both answer sections, so an
+    # unfiltered "every Address after the first Name" sweep pulls IPv6 into an IPv4
+    # comparison. Take dotted-quad answers only; AAAA detection is a phase-4 gate,
+    # not this check's job.
     dns_address="$(printf '%s\n' "$dns_output" | awk '
       $1 == "Name:" { answer = 1; next }
-      answer && $1 == "Address:" { print $2 }
+      answer && $1 == "Address:" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $2 }
     ')"
     if is_ipv4 "$wan_address" && is_ipv4 "$dns_address"; then
       check_success=1
