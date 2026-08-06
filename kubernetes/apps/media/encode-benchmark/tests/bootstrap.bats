@@ -26,7 +26,7 @@ set -euo pipefail
 printf 'git\t%s\n' "$*" >>"$STUB_CALLS"
 case "${1:-} ${2:-}" in
 	'remote get-url')
-		printf '%s\n' 'https://github.com/7yXwscXEzv6phzUnKfrw/homelab-talos.git'
+		printf '%s\n' "${STUB_ORIGIN_URL:-https://github.com/supermorphic/homelab-talos.git}"
 		;;
 	'status --porcelain') ;;
 	'ls-remote --exit-code')
@@ -106,6 +106,16 @@ assert_recipe_uses_deployed_source() {
       | flatten
       | any(.[]; type == "string" and contains("require_deployed_source"))
     ' >/dev/null
+}
+
+# Catches bootstrap source validation drifting from the repository's current origin.
+@test "bootstrap refuses an unexpected repository origin before Flux access" {
+	export ENCODE_BENCHMARK_BOOTSTRAP_CONFIRM='bootstrap:media:encode-benchmark'
+	export STUB_ORIGIN_URL='https://github.com/example/homelab-talos.git'
+	run_bootstrap
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'Refusing encode-benchmark bootstrap: origin must be https://github.com/supermorphic/homelab-talos.git.'* ]]
+	! awk -F '\t' '$1 == "flux" {found = 1} END {exit !found}' "$STUB_CALLS"
 }
 
 # Catches a missing or weakened confirmation gate that allows Flux activation.
