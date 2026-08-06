@@ -33,7 +33,9 @@ mise exec -- gh pr create
 Commit-time pre-commit hooks are the only automatic local gate and inspect staged
 files, so install them with `mise exec -- just repo hooks` in every fresh clone —
 an uninstalled hook suite silently removes that gate. `mise exec -- just repo lint`
-runs the same hook suite repository-wide.
+runs the same hook suite repository-wide. The hook recipe installs into Git's shared
+common directory and configures `core.hooksPath` to use it. One installation covers the
+clone and its linked worktrees; rerunning the recipe from either location is safe.
 `mise exec -- just ci` remains the single canonical full validation command and can
 be run locally, but the required GitHub Actions `ci` check is the authoritative merge
 gate for every pull request targeting `main`. It needs network egress for public Helm
