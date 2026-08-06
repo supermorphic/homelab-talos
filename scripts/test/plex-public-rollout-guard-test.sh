@@ -55,7 +55,13 @@ case " $* " in
     printf 'true'
     ;;
   *' get services --all-namespaces --output json '*)
-    printf '{"apiVersion":"v1","kind":"List","items":[]}\n'
+    if [[ "$FAKE_LAYOUT" == bootstrap-vip-taken ]]; then
+      # An unrelated Service already holding the public VIP. It carries neither
+      # owning-gateway label, so the recipe's own-Service exemption must not excuse it.
+      printf '{"apiVersion":"v1","kind":"List","items":[{"metadata":{"name":"squatter","namespace":"default"},"spec":{"loadBalancerIP":"192.168.90.39"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.39"}]}}}]}\n'
+    else
+      printf '{"apiVersion":"v1","kind":"List","items":[]}\n'
+    fi
     ;;
   *' --namespace flux-system wait --for=condition=Ready kustomization/public-gateway '*)
     ;;
@@ -169,7 +175,20 @@ if rg '^suspend kustomization ' "$fixture/flux.log" | rg -v -q '^suspend kustomi
   exit 1
 fi
 
-echo '3. Bootstrap reaches the confirmation-gated probe and completes.'
+echo '3. Bootstrap refuses when the public VIP is already claimed elsewhere.'
+if KUBECONFIG="$fixture/kubeconfig" \
+  PLEX_PUBLIC_GATEWAY_BOOTSTRAP_CONFIRM='bootstrap:plex-public-gateway:192.168.90.39' \
+  run_recipe bootstrap-vip-taken bootstrap plex-public-gateway; then
+  echo 'Bootstrap resumed although the public VIP was already assigned.' >&2
+  exit 1
+fi
+rg -F -q 'is already assigned to an unrelated Service' "$fixture/output"
+if rg -q '^resume kustomization ' "$fixture/flux.log"; then
+  echo 'Bootstrap resumed Flux despite a VIP collision.' >&2
+  exit 1
+fi
+
+echo '4. Bootstrap reaches the confirmation-gated probe and completes.'
 KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_GATEWAY_BOOTSTRAP_CONFIRM='bootstrap:plex-public-gateway:192.168.90.39' \
   run_recipe bootstrap-success bootstrap plex-public-gateway
@@ -186,14 +205,14 @@ rg -F -q 'acceptance passed without WAN exposure' "$fixture/output" || {
   exit 1
 }
 
-echo '4. Connection flush refuses mutation without exact post-DNAT confirmation.'
+echo '5. Connection flush refuses mutation without exact post-DNAT confirmation.'
 if KUBECONFIG="$fixture/kubeconfig" run_recipe flush-no-confirm kube plex-public-connection-flush; then
   echo 'Connection flush ran without confirmation.' >&2
   exit 1
 fi
 [[ ! -s "$fixture/git.log" && ! -s "$fixture/kubectl.log" ]]
 
-echo '5. Connection flush refuses an ambiguous public Deployment set.'
+echo '6. Connection flush refuses an ambiguous public Deployment set.'
 if KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-ambiguous kube plex-public-connection-flush; then
@@ -205,7 +224,7 @@ if rg -q 'rollout restart' "$fixture/kubectl.log"; then
   exit 1
 fi
 
-echo '6. Connection flush restarts only the exact selected Deployment and verifies.'
+echo '7. Connection flush restarts only the exact selected Deployment and verifies.'
 KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-success kube plex-public-connection-flush

@@ -50,12 +50,20 @@ if rg -q '(^|[^0-9])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9]|$)' <<<"$collector_logs";
   exit 1
 fi
 
+# Derive the expected alert set from the deployed source instead of restating it, so
+# adding a rule cannot leave this verifier asserting a stale list.
+rule_source='kubernetes/apps/monitoring/plex-ddns-drift/app/prometheusrule.yaml'
+[[ -f "$rule_source" ]] || { echo "Missing $rule_source" >&2; exit 1; }
+expected_rules="$(yq -r '[.spec.groups[].rules[].alert] | sort | join(" ")' "$rule_source")"
+[[ -n "$expected_rules" ]] || { echo "No alert rules declared in $rule_source" >&2; exit 1; }
 rules_response="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/rules?type=alert')"
-loaded_rules="$(yq -r '[.data.groups[]?.rules[]? | select(.name == "PlexDdnsAddressMismatch" or .name == "PlexDdnsCheckFailed" or .name == "PlexDdnsMetricsMissing") | select(.health == "ok" and (.lastError // "") == "") | .name] | unique | sort | join(" ")' - <<<"$rules_response")"
-[[ "$loaded_rules" == 'PlexDdnsAddressMismatch PlexDdnsCheckFailed PlexDdnsMetricsMissing' ]] || {
-  echo 'Prometheus has not loaded all three healthy Plex DDNS drift alert rules.' >&2
-  exit 1
-}
+loaded_rules="$(yq -r '[.data.groups[]?.rules[]? | select(.health == "ok" and (.lastError // "") == "") | .name] | unique | sort | join(" ")' - <<<"$rules_response")"
+for expected_rule in $expected_rules; do
+  rg -F -q -w -- "$expected_rule" <<<"$loaded_rules" || {
+    echo "Prometheus has not loaded a healthy $expected_rule alert rule." >&2
+    exit 1
+  }
+done
 
 alertmanager_status="$(curl --silent --show-error --fail --max-time 15 --resolve "$alertmanager_resolve" "$alertmanager_base_url/api/v2/status")"
 alertmanager_config="$(yq -r '.config.original // ""' - <<<"$alertmanager_status")"

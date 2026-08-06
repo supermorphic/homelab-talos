@@ -41,7 +41,11 @@ case "$FAKE_LAYOUT" in
     ;;
   *) answer='203.0.113.42' ;;
 esac
-printf 'Server: 1.1.1.1\nAddress: 1.1.1.1:53\n\nNon-authoritative answer:\nName: plex.lab.supermorphic.com\nAddress: %s\n' "$answer"
+# Real busybox nslookup queries A and AAAA and prints an answer section for each.
+printf 'Server:\t1.1.1.1\nAddress:\t1.1.1.1:53\n\nNon-authoritative answer:\nName:\tplex.lab.supermorphic.com\nAddress: %s\n' "$answer"
+if [[ "$FAKE_LAYOUT" == aaaa-present ]]; then
+  printf '\nNon-authoritative answer:\nName:\tplex.lab.supermorphic.com\nAddress: 2001:db8::1\n'
+fi
 EOF
 chmod +x "$fixture/bin/nslookup"
 
@@ -133,6 +137,13 @@ for layout in wan-error dns-error invalid-wan invalid-dns multi-wan multi-dns; d
   assert_metrics 0 0 0
   [[ "$(<"$fixture/$layout.out")" == 'error' ]]
 done
+
+# An AAAA alongside the A record must not break the IPv4 comparison: busybox prints
+# both answer sections, and treating the v6 answer as a second address would report a
+# permanent check failure instead of a match.
+run_case aaaa-present
+assert_metrics 1 1 1700000000
+[[ "$(<"$fixture/aaaa-present.out")" == 'success' ]]
 
 run_case success-then-error
 assert_metrics 0 0 1700000000

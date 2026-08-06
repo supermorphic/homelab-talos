@@ -19,7 +19,10 @@ expected_confirmation='test:plex-public-probe'
 namespace='testing'
 run_suffix="${EPOCHSECONDS}-$$"
 probe_pod="plex-public-probe-${run_suffix}"
-request_id="plex-public-canary-${run_suffix}"
+# Envoy regenerates x-request-id for untrusted downstream requests, so a client-supplied
+# value never reaches the access log and cannot correlate the canary. The User-Agent is
+# logged verbatim, so it carries the run-scoped correlator instead.
+canary_agent="homelab-plex-public-canary/${run_suffix}"
 canary='plan-canary-not-a-secret'
 host='plex.lab.supermorphic.com'
 image='ghcr.io/home-operations/plex:1.43.3.10828@sha256:0c0b6899339503af17cb190b25af6acf10f0030e2820985e16ee14ef428f49d7'
@@ -130,8 +133,7 @@ done
 
 "${kc[@]}" --namespace "$namespace" exec "$probe_pod" -- \
   curl --silent --show-error --fail --max-time 15 \
-  --user-agent homelab-plex-public-canary \
-  -H "X-Request-ID: $request_id" \
+  --user-agent "$canary_agent" \
   --resolve "$host:443:$HOMELAB_PUBLIC_GATEWAY_VIP" \
   "https://$host/identity?X-Plex-Token=$canary" >/dev/null || {
   echo 'Plex public canary request failed through the dedicated VIP.' >&2
@@ -144,8 +146,8 @@ for _ in {1..15}; do
     IFS=$'\t' read -r pod_name _ <<<"$envoy_pod"
     while IFS= read -r log_line; do
       [[ -n "$log_line" ]] || continue
-      line_request_id="$(yq -r '.request_id // ""' - <<<"$log_line" 2>/dev/null || true)"
-      if [[ "$line_request_id" == "$request_id" ]]; then
+      line_agent="$(yq -r '.user_agent // ""' - <<<"$log_line" 2>/dev/null || true)"
+      if [[ "$line_agent" == "$canary_agent" ]]; then
         matching_entry="$log_line"
         break 2
       fi
@@ -168,6 +170,12 @@ if rg -q -F -- "$canary" <<<"$matching_entry" ||
 fi
 [[ "$(yq -r '.path // ""' - <<<"$matching_entry")" == '/identity' ]] || {
   echo 'Public Envoy access-log canary did not record the query-free /identity path.' >&2
+  exit 1
+}
+# Envoy must have minted its own request id. An empty field would mean the access log
+# cannot correlate a session at all, which is the whole point of §9 attribution.
+[[ -n "$(yq -r '.request_id // ""' - <<<"$matching_entry")" ]] || {
+  echo 'Public Envoy access-log canary carries no request id for attribution.' >&2
   exit 1
 }
 downstream_address="$(yq -r '.downstream_remote_address // ""' - <<<"$matching_entry")"
