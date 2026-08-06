@@ -1682,7 +1682,7 @@ encode-benchmark:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='7yXwscXEzv6phzUnKfrw'
+    owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:encode-benchmark'
@@ -1698,7 +1698,10 @@ encode-benchmark:
     trap cleanup_encode_benchmark EXIT
 
     [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
+      echo "Refusing encode-benchmark bootstrap: origin must be $expected_origin." >&2
+      exit 1
+    }
     source scripts/lib/rollout.sh
     require_deployed_source 'encode-benchmark bootstrap' \
       .just/bootstrap.just \
