@@ -51,10 +51,18 @@ Those behaviors require their own independent acceptance evidence.
 
 ### Documentation lifecycle
 
-The executed tracked implementation plan is removed. Its Relay/hardening work landed in
-PR #177 and the subsequent containment work landed in the accepted containment series;
-the remote-path remainder belongs to the later public Envoy amendment. Future plans stay
-under ignored `/plans/`, while current operator procedure remains in
+The implementation plan is removed from Git only after preserving an exact local
+execution copy under ignored `/plans/`. Its Relay identity and hardening work landed in
+PR #177, and subsequent network containment landed in the accepted containment series.
+Those source changes do not establish the plan's retained functional completion gates:
+successful Relay allocation, cellular Plexamp playback, native Sonos library playback,
+and Plexamp-to-Sonos playback without AirPlay. The public Envoy amendment supersedes the
+Relay-first remote-path choice, but it does not silently complete or discard the retained
+Sonos goals.
+
+The ignored copy remains operationally useful and unstaged until those gates have durable
+completion evidence or a later accepted decision explicitly supersedes them. Current
+operator procedure remains in
 [`docs/runbooks/plex-relay-sonos.md`](../runbooks/plex-relay-sonos.md).
 
 No separate external review package was retained for the legacy Plex record. This
@@ -65,3 +73,5 @@ successor does not manufacture review files after the fact.
 The legacy record stays byte-identical apart from its status line. Durable Plex design
 remains distributed only where genuine supersession occurred: the original design, the
 public Envoy amendment, the containment capture, and this lifecycle alignment record.
+Unresolved retained completion gates remain in the exact ignored execution copy rather
+than being misreported as executed.

@@ -23,8 +23,10 @@ the Internet.
 - Provision users, topic ACLs, and tokens declaratively from an SOPS-encrypted Secret.
   The human `subscriber` is read-only on `critical`, `homelab`, and `media`;
   `alertmanager` and `seerr` receive distinct write-only tokens; Homepage receives a
-  distinct read-only `critical` token. Each credential can be rotated or retired without
-  widening another consumer.
+  distinct read-only `critical` token; and `automation` is the distinct write-only
+  `homelab` identity for optional scripts and future events. When automation is unused,
+  its registry entry may be retired rather than repurposed or shared. Each credential
+  can be rotated or retired without widening another consumer.
 - Keep ntfy private at the application layer. LAN clients use the internal Envoy path;
   off-site clients use the Tailscale-operated private path. No public Gateway is part of
   this decision.

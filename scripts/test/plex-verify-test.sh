@@ -122,7 +122,7 @@ if [[ "$verifier_status" -ne 0 ]]; then
 fi
 
 [[ "$(wc -l <"$exec_log" | tr -d ' ')" == '1' ]]
-rg -q 'Phase 11 Plex acceptance passed' "$output"
+rg -q 'Plex acceptance passed' "$output"
 
 for mount_options in 'rw,relatime' 'rw,errors=remount-ro'; do
   : >"$exec_log"

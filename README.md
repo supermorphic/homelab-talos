@@ -358,7 +358,7 @@ evidence are documented in
 [`docs/phases/phase-5-cilium.md`](docs/phases/phase-5-cilium.md).
 The Flux credential model, staged Cilium adoption, exact confirmations, and
 Phase 6 acceptance gate are in
-[`docs/phases/phase-6-flux.md`](docs/phases/phase-6-flux.md). Phase 7 credentials, rollout,
+[`docs/phases/phase-6-flux.md`](docs/phases/phase-6-flux.md). Foundation credentials, rollout,
 failure behavior, and acceptance gates are in
 [`docs/phases/phase-7-foundation.md`](docs/phases/phase-7-foundation.md). Pi-hole fresh-install,
 CA rotation, and application-password recovery are in
@@ -552,7 +552,7 @@ complete: cert-manager, MetalLB, Envoy Gateway, and ExternalDNS are reconciled b
 Flux, the production wildcard certificate is issued, the internal Gateway is
 Programmed at `192.168.90.30`, Pi-hole resolves the echo hostname, and trusted
 HTTPS returns the echo response; acceptance evidence and the MetalLB control-plane
-label fix are in [`docs/phases/phase-7-foundation.md`](docs/phases/phase-7-foundation.md). Phase 8
+label fix are in [`docs/phases/phase-7-foundation.md`](docs/phases/phase-7-foundation.md). The foundation soak
 is complete: the rolling-reboot, MetalLB failover, Flux-restart, and echo
 remove/recreate tests passed and the 24-hour soak held with no regressions
 ([`docs/phases/phase-8-soak.md`](docs/phases/phase-8-soak.md)) — closing the Phases 0–8
@@ -563,5 +563,5 @@ deferred to Phase 11 over SMB. See
 [`docs/phases/phase-3-installation.md`](docs/phases/phase-3-installation.md) for installation
 evidence and [`docs/phases/phase-4-bootstrap.md`](docs/phases/phase-4-bootstrap.md) for the
 bootstrap interface and recovery record. Phase 5 commands and live evidence are
-in [`docs/phases/phase-5-cilium.md`](docs/phases/phase-5-cilium.md); Flux ownership and Phase 6
+in [`docs/phases/phase-5-cilium.md`](docs/phases/phase-5-cilium.md); Flux ownership and reconciliation
 acceptance evidence are in [`docs/phases/phase-6-flux.md`](docs/phases/phase-6-flux.md).

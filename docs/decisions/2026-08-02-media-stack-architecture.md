@@ -16,6 +16,10 @@ downloads and efficient hardlink imports on shared storage.
 - Deploy each application as a separate single-replica workload, except that qBittorrent
   and Gluetun share one Pod and network namespace. Only qBittorrent is tunneled; Plex,
   the `*arr` applications, Seerr, Lidarr, and Tautulli use ordinary cluster networking.
+- Keep one `media` namespace with the `privileged` Pod Security admission level. The
+  namespace must admit Gluetun's narrowly scoped `NET_ADMIN` and `/dev/net/tun` access
+  and Plex's `/dev/dri` device access; workload-level security policy still restricts
+  those privileges to the containers that need them.
 - Use the repository's `kubernetes/apps/<domain>/<app>/` Flux shape and the shared pinned
   `bjw-s/app-template` source for this application family. Image tags are pinned, Flux
   dependencies are explicit, and application routes attach only to the internal Gateway.
@@ -24,12 +28,21 @@ downloads and efficient hardlink imports on shared storage.
   maintained `ghcr.io/seerr-team/seerr` image so a compatible legacy image cannot
   silently replace it.
 - Store application configuration on retained Longhorn single-writer claims and use
-  `Recreate`. Store bulk media and downloads on one SMB-backed `media-data` claim mounted
-  at `/data`; do not place bulk media on Longhorn or node-local host paths.
+  `Recreate`. Store bulk media and downloads on one SMB-backed `media-data` claim; do not
+  place bulk media on Longhorn or node-local host paths.
 - Keep consistent download and library paths below `/data` so Sonarr, Radarr, and Lidarr
-  import by hardlink instead of copying. Plex mounts only the library portion read-only.
+  import by hardlink instead of copying. Plex instead mounts the SMB share root read-only
+  at `/Volumes/Prometheus`, preserving the paths already stored in the migrated Plex
+  database.
+- Keep Plex single-replica and use Intel QuickSync through the Intel GPU device plugin
+  and `/dev/dri`. Hardware transcoding stays available without granting Plex Gluetun's
+  network privilege.
 - Use cluster DNS for service-to-service calls. Do not hairpin internal application
   traffic through the Gateway.
+- Keep `*arr` and Seerr API keys and inter-application links as manual first-run
+  configuration persisted in each application's config claim. Declarative automation of
+  those application APIs is intentionally rejected; Git owns the workload and its
+  invariants, not mutable application-database onboarding state.
 - Permit `NET_ADMIN` and `/dev/net/tun` only in the Gluetun sidecar. qBittorrent cannot
   alter routes. Other media applications run non-root with all Linux capabilities
   dropped; no workload uses host networking, host ports, or a runtime socket.
