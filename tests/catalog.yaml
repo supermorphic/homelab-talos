@@ -20,6 +20,7 @@ executions:
     - validation.csi-driver-smb
     - validation.media-storage
     - validation.plex
+    - validation.plex-public
     - validation.intel-gpu-plugin
     - validation.encode-benchmark
     - validation.qbittorrent
@@ -307,6 +308,10 @@ suites:
   - metadata: {id: validation.plex, source: validation, framework: bash, suite: ci, tier: offline, target: plex, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-validate", implementation: scripts/validate/plex.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.plex-public, source: validation, framework: bash, suite: ci, tier: offline, target: plex-public, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-public-validate", implementation: scripts/validate/plex-public.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.intel-gpu-plugin, source: validation, framework: bash, suite: ci, tier: offline, target: intel-gpu-plugin, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

@@ -505,6 +505,11 @@ media-storage-validate: require-bash
 plex-validate: require-bash
     @scripts/validate/plex.sh
 
+# Validate the suspended dedicated public Plex Gateway, exact route cardinality,
+# isolated certificate, MetalLB VIP, and token-safe access-log contract.
+plex-public-validate: require-bash
+    @scripts/validate/plex-public.sh
+
 # Verify live Longhorn state without changing cluster resources: controllers,
 # node disks, default StorageClass, backup target, and recurring jobs.
 storage-verify: require-bash

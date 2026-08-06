@@ -24,3 +24,8 @@ HOMELAB_DNS_RESOLVER='192.168.90.2'
 # inline by the foundation validate/verify scripts.
 # shellcheck disable=SC2034  # consumed by the scripts that source this file
 HOMELAB_GATEWAY_VIP='192.168.90.30'
+
+# Dedicated public Envoy Gateway VIP. This remains a private LAN address and is the
+# sole target of the operator-managed WAN TCP 443 DNAT.
+# shellcheck disable=SC2034
+HOMELAB_PUBLIC_GATEWAY_VIP='192.168.90.39'
