@@ -895,26 +895,41 @@ missing_declared_commands() {
 	((${#missing[@]} == 0)) || printf '%s\n' "${missing[*]}"
 }
 
+# Read the declaration using only shell builtins. Parsing this with yq would make
+# the probe depend on a tool it exists to test for: a first live capability run
+# reported only "yq rg" and could not enumerate the rest of the gap, costing the
+# dispatch cycle this whole check is meant to save. The offline contracts assert
+# this parse against yq's on the same file.
+read_declared_commands() {
+	local file="$1" line in_block=0
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$line" == '  requiredCommands:' ]]; then
+			in_block=1
+			continue
+		fi
+		((in_block)) || continue
+		if [[ "$line" =~ ^' '{4}-' '+([A-Za-z0-9_.-]+)' '*$ ]]; then
+			printf '%s\n' "${BASH_REMATCH[1]}"
+		elif [[ -n "${line//[[:space:]]/}" ]]; then
+			break
+		fi
+	done <"$file"
+}
+
 capabilities() {
 	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
 	local missing
 	local -a required_commands=()
-	# Bootstrap first: the checks below are themselves written in terms of yq and
-	# rg, so a missing one must report itself rather than fail as "command not
-	# found" partway through the probe.
-	missing="$(missing_declared_commands yq rg)"
-	[[ -z "$missing" ]] && {
-		mapfile -t required_commands < <(yq -e -r '.runtime.requiredCommands[]' "$samples_file") || {
-			echo 'runtime requiredCommands declaration is missing or empty' >&2
-			return 65
-		}
-		((${#required_commands[@]} > 0)) || {
-			echo 'runtime requiredCommands declaration is missing or empty' >&2
-			return 65
-		}
-		missing="$(missing_declared_commands "${required_commands[@]}")"
+	# Every check below is written in terms of yq, rg or ffmpeg, so the command
+	# surface must be established before any of them runs; otherwise the probe
+	# dies as "command not found" and reports nothing.
+	mapfile -t required_commands < <(read_declared_commands "$samples_file")
+	((${#required_commands[@]} > 0)) || {
+		echo 'runtime requiredCommands declaration is missing or empty' >&2
+		return 65
 	}
+	missing="$(missing_declared_commands "${required_commands[@]}")"
 	[[ -z "$missing" ]] || {
 		echo "runtime image is missing required commands: $missing" >&2
 		return 1
@@ -1907,6 +1922,10 @@ test_dispatch() {
 	results-header)
 		(($# == 0)) || usage
 		printf '%s\n' "$results_header"
+		;;
+	declared-commands)
+		(($# == 1)) || usage
+		read_declared_commands "$1"
 		;;
 	commands)
 		(($# == 8)) || usage

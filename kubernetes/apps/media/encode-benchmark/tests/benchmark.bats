@@ -1285,3 +1285,18 @@ PYTHON
 	[ "$status" -eq 0 ]
 	[ "$(echo "$output" | tr -d ' ')" -ge 25 ]
 }
+
+# Catches the builtin declaration parser drifting from the YAML it reads. The
+# probe cannot use yq here (it must report a missing yq rather than die on it),
+# so yq is the independent oracle for that parse.
+@test "builtin declaration parser agrees with yq on the deployed samples" {
+	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
+	inner="$BATS_TEST_TMPDIR/inner-samples.yaml"
+	yq -r '.data."samples.yaml"' "$samples" >"$inner"
+
+	run "$SCRIPTS/benchmark.sh" _test declared-commands "$inner"
+	[ "$status" -eq 0 ]
+	yq_list="$(yq -r '.runtime.requiredCommands[]' "$inner")"
+	[ -n "$yq_list" ]
+	[ "$output" = "$yq_list" ]
+}
