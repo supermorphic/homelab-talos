@@ -1168,7 +1168,7 @@ artist or album searches work; the real search is verified during first-run acce
 
 The download and imported files must be hardlinks, not duplicate copies. The
 shared-filesystem proof and prior acceptance evidence are in
-[`phase-11-media.md`](phase-11-media.md).
+[`phase-11-media.md`](phases/phase-11-media.md).
 
 ## Direct Plex library-refresh connections
 

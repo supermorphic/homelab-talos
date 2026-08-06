@@ -106,6 +106,20 @@ deny contains msg if {
 deny contains msg if {
 	some document in input
 	app := media_app(document)
+	app == "seerr"
+	controller := object.get(object.get(document.contents, "controllers", {}), app, {})
+	container := object.get(object.get(controller, "containers", {}), "app", {})
+	repository := object.get(object.get(container, "image", {}), "repository", "")
+	repository != "ghcr.io/seerr-team/seerr"
+	msg := sprintf(
+		"%s: Seerr must use the maintained ghcr.io/seerr-team/seerr image, got %q",
+		[document.path, repository],
+	)
+}
+
+deny contains msg if {
+	some document in input
+	app := media_app(document)
 	required_dependencies[app]
 	some controller_name, controller in object.get(document.contents, "controllers", {})
 	some container_name, container in containers(controller)

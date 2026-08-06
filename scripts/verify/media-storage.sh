@@ -18,4 +18,4 @@ done
   echo 'PVC media/media-data is not Bound.' >&2
   exit 1
 }
-echo 'Phase 11 media storage acceptance passed: media + media-storage Kustomizations Ready and media-data PVC Bound. Run the hardlink proof in docs/phase-11-media.md next.'
+echo 'Phase 11 media storage acceptance passed: media + media-storage Kustomizations Ready and media-data PVC Bound. Run the hardlink proof in docs/phases/phase-11-media.md next.'

@@ -5,7 +5,8 @@
 **Complete / live (2026-07-24, PR #32 — `suspend: false`).** qBittorrent runs beside
 **Gluetun** (ProtonVPN WireGuard) in one Pod, so all of qBittorrent's internet traffic
 egresses through the VPN or is dropped. The **kill switch is a hard, live-tested gate**
-(see `plans/media-stack-architecture-plan.md`, "VPN kill switch"); it passed on the cluster
+(see [`Media stack architecture`](../decisions/2026-08-02-media-stack-architecture.md),
+"VPN kill switch"); it passed on the cluster
 (see "Verified findings" below) before activation. One non-blocking operational follow-up
 remains open — whether a *container* (vs *pod*) restart clears the stuck DoT-DNS cycle;
 tracked under "Recovery hierarchy" and covered meanwhile by the
@@ -88,7 +89,7 @@ config PVC.
 — generated from the ProtonVPN dashboard with NAT-PMP/port-forwarding enabled) + a
 recipe-generated control-server **apikey** baked into the mounted `config.toml`.
 
-See [`protonvpn-gluetun.md`](protonvpn-gluetun.md) for the full assembly (why only the
+See [`protonvpn-gluetun.md`](../protonvpn-gluetun.md) for the full assembly (why only the
 key is used, the "don't mount `wg0.conf`" caveat, the credential-generation options),
 the **annual manual credential-renewal runbook**, and the VPN-expiry monitoring options
 (the live reactive critical VPN-down alert + an external yearly reminder).
@@ -216,4 +217,4 @@ PVC. The credential is kept in the password manager and copied to Homepage only 
 the operator-generated `homepage-qbittorrent.sops.yaml`. Sonarr/Radarr (Phase 13) point
 their download client at `http://qbittorrent.media.svc.cluster.local:8080` and enter the
 same credential in their retained application configuration. See
-[`arr-stack-startup.md`](arr-stack-startup.md) for the exact procedure.
+[`arr-stack-startup.md`](../arr-stack-startup.md) for the exact procedure.

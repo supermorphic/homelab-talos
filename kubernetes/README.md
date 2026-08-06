@@ -102,7 +102,7 @@ Phase 7 foundation workflows preserve the same boundary:
 The Gateway owns one wildcard certificate in `networking`; application routes do
 not copy TLS private keys. ExternalDNS publishes only routes carrying
 `external-dns.k8s.io/audience=internal`. See
-[`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md) for credentials,
+[`docs/phases/phase-7-foundation.md`](../docs/phases/phase-7-foundation.md) for credentials,
 confirmations, rollout order, failure behavior, and acceptance gates.
 
 Kubernetes Secret manifests use the `*.sops.yaml` suffix. SOPS encrypts only
@@ -125,8 +125,8 @@ use the documented guarded `mise exec -- just bootstrap …` recipe rather than
 `kubectl apply`.
 
 See the root [`README.md`](../README.md) for workstation setup and
-[`docs/phase-6-flux.md`](../docs/phase-6-flux.md) for the staged bootstrap and
-adoption procedure. [`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md)
+[`docs/phases/phase-6-flux.md`](../docs/phases/phase-6-flux.md) for the staged bootstrap and
+adoption procedure. [`docs/phases/phase-7-foundation.md`](../docs/phases/phase-7-foundation.md)
 defines the internal service foundation, and
 [`docs/pihole-integration.md`](../docs/pihole-integration.md) covers Pi-hole
 reinstall and credential recovery. [`docs/sops.md`](../docs/sops.md) defines the

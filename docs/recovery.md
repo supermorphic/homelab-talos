@@ -113,7 +113,7 @@ token or Pi-hole application password and rerun the guarded
 `just repo phase7-secrets` writer. It validates both providers and replaces both
 tracked manifests with fresh SOPS ciphertext. Review, validate, commit, and push
 the change; Flux performs the live Secret update. See
-[`phase-7-foundation.md`](phase-7-foundation.md) for the exact inputs and guard.
+[`phase-7-foundation.md`](phases/phase-7-foundation.md) for the exact inputs and guard.
 After a Pi-hole reinstall or TLS rotation, refresh and review its public CA with
 `just repo pihole-ca-refresh` before rotating the application password. The full
 fail-closed procedure is in
@@ -121,4 +121,4 @@ fail-closed procedure is in
 
 After either recovery, use `just kube flux-status`, `just kube flux-verify`, and
 the confirmed `just kube flux-canary-test` gate described in
-[`phase-6-flux.md`](phase-6-flux.md).
+[`phase-6-flux.md`](phases/phase-6-flux.md).

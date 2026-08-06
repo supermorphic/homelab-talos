@@ -2,7 +2,7 @@
 
 Reference for how qBittorrent's VPN egress is assembled: ProtonVPN WireGuard via
 Gluetun's **native provider integration**, with port forwarding (NAT-PMP) and a
-**Sweden** server pin. Read alongside [`phase-12-media.md`](phase-12-media.md) (the
+**Sweden** server pin. Read alongside [`phase-12-media.md`](phases/phase-12-media.md) (the
 pod design + kill-switch gate) and [`sops.md`](sops.md) (secret handling).
 
 ## How it assembles

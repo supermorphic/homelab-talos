@@ -55,7 +55,7 @@ a numeric UID is required to start). It is exempt in `media.rego` from the confi
 HTTPRoute requirements via `stateless_internal_apps`; all other policies (pinned tag,
 drop-ALL caps, dependency order) still apply. Its Gatus probe hits the ClusterIP Service DNS
 directly (no HTTPRoute) and means "solver alive," not "1337x works." See
-[`arr-stack-startup.md`](arr-stack-startup.md) for the Prowlarr proxy wiring and the
+[`arr-stack-startup.md`](../arr-stack-startup.md) for the Prowlarr proxy wiring and the
 experiment's abort condition.
 
 ## Observability
@@ -79,7 +79,7 @@ Recommended order: **Prowlarr first**, then Sonarr and Radarr. All three sources
 activated (`suspend: false`); run each app's guarded `just bootstrap arr <app>` rollout
 if it has not been brought up yet, then confirm with `arr-verify`. The confirmation token
 changed: `bootstrap:phase13:<app>` is no longer accepted; use `bootstrap:arr:<app>`.
-For the canonical current runbook, see [`arr-stack-startup.md`](arr-stack-startup.md).
+For the canonical current runbook, see [`arr-stack-startup.md`](../arr-stack-startup.md).
 
 ```bash
 # from any clean checkout after the rollout source is merged to main
@@ -96,7 +96,7 @@ Repeat with `sonarr` / `radarr` (confirm string `bootstrap:arr:<app>`).
 ### First-run wiring (manual, persists in config PVCs)
 
 Follow the canonical greenfield checklist in
-[`arr-stack-startup.md`](arr-stack-startup.md). The summary below records the
+[`arr-stack-startup.md`](../arr-stack-startup.md). The summary below records the
 Phase 13-specific requirements.
 
 1. On Prowlarr's initial authentication screen select **Forms (Login Page)**, keep
@@ -131,5 +131,5 @@ Phase 13-specific requirements.
 Run a direct Sonarr/Radarr **search → download → hardlink import → visible in Plex**
 test. Phase 12's kill-switch gate has passed and qBittorrent is active, so this gate
 does not depend on Seerr. Capture the test evidence and repeat the hardlink proof from
-`docs/phase-11-media.md`. The full **Seerr request → download → import → Plex** flow is
+`docs/phases/phase-11-media.md`. The full **Seerr request → download → import → Plex** flow is
 the separate Phase 14 acceptance gate.

@@ -9,7 +9,8 @@ config and state). The bulk media `/data` layer is **deferred to Phase 11** and
 will use SMB (`csi-driver-smb` against `//192.168.0.3/Prometheus`), because the
 UNAS Pro serves SMB/CIFS (NFS is disabled), Plex runs off-cluster on the Mac
 Mini, and the in-cluster media/download apps that need `/data` are Phase 11. See
-the scope note in [`plans/talos-flux-platform-plan.md`](../plans/talos-flux-platform-plan.md).
+the scope note in the
+[`Talos and Flux platform decision`](../decisions/2026-08-02-talos-flux-platform.md).
 
 ## Architecture and Ownership
 

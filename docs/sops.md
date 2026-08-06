@@ -53,5 +53,5 @@ temporary record over CA-verified HTTPS. It writes plaintext only inside an
 owner-readable temporary directory, encrypts each Secret for the repository
 recipient, and moves only ciphertext into the tracked application directories.
 Exact environment variables and confirmation text are documented in
-[`phase-7-foundation.md`](phase-7-foundation.md); Pi-hole reinstall and trust-
+[`phase-7-foundation.md`](phases/phase-7-foundation.md); Pi-hole reinstall and trust-
 anchor rotation are in [`pihole-integration.md`](pihole-integration.md).

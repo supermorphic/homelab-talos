@@ -14,4 +14,4 @@ resources are added under a separate, explicitly reviewed change.
 
 Applications attach portable HTTPRoutes from explicitly labeled namespaces.
 They do not receive the wildcard TLS private key. Use the Phase 7 Just workflows
-documented in [`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md).
+documented in [`docs/phases/phase-7-foundation.md`](../../../../docs/phases/phase-7-foundation.md).

@@ -1160,7 +1160,7 @@ media-storage:
 
     just kube media-storage-verify
     bootstrap_complete=true
-    echo 'Phase 11 media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run the hardlink proof in docs/phase-11-media.md.'
+    echo 'Phase 11 media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run the hardlink proof in docs/phases/phase-11-media.md.'
 
 # Reconcile the suspended Phase 11 Plex after guarded checks, then verify. Requires
 # media-storage already bootstrapped (the shared media-data PVC). On failure the
@@ -1220,7 +1220,7 @@ plex:
 
     just kube plex-verify
     bootstrap_complete=true
-    echo 'Phase 11 Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then do the node-failure reschedule test in docs/phase-11-media.md.'
+    echo 'Phase 11 Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then do the node-failure reschedule test in docs/phases/phase-11-media.md.'
 
 # Reconcile only the suspended dedicated public Plex Gateway after proving its VIP
 # is unused and its complete rollout source is deployed. On failure, re-suspend

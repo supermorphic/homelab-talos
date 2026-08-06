@@ -10,5 +10,5 @@ Flux graph deliberately separates three readiness boundaries:
 
 The Cloudflare token is scoped to Zone Read and DNS Edit for only
 `supermorphic.com`. Its tracked Secret is SOPS encrypted. Use the Phase 7 Just
-workflows in [`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md);
+workflows in [`docs/phases/phase-7-foundation.md`](../../../../docs/phases/phase-7-foundation.md);
 do not apply issuers or certificates directly.

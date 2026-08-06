@@ -83,7 +83,7 @@ grafana:
   # "ReadWriteOnce volumes require the Recreate deployment strategy"). The
   # deploymentStrategy.type=Recreate fix cannot be applied while KPS HelmRelease
   # upgrades wedge on a helm-controller in-cache-sync timeout; fix that upgrade
-  # path first (see docs/phase-10-platform.md), then set Recreate.
+  # path first (see docs/phases/phase-10-platform.md), then set Recreate.
   admin:
     existingSecret: grafana-admin-secret
     userKey: admin-user

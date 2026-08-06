@@ -29,6 +29,6 @@ phases.
 
 Use only the repository Just workflows documented in
 [`../../../../README.md`](../../../../README.md) and
-[`../../../../docs/phase-5-cilium.md`](../../../../docs/phase-5-cilium.md).
+[`../../../../docs/phases/phase-5-cilium.md`](../../../../docs/phases/phase-5-cilium.md).
 Do not run an ad hoc Helm installation because Flux adoption depends on the
 release name, namespace, chart, and values remaining identical.

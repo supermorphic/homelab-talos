@@ -79,7 +79,7 @@ Create a dedicated Pi-hole v6 application password for ExternalDNS and enable
 uses `https://pi.hole` with the tracked public Pi-hole CA; TLS verification is
 never skipped. The complete fresh-install, CA rotation, application-password,
 and recovery procedure is in
-[`pihole-integration.md`](pihole-integration.md). Keep both provider credentials
+[`pihole-integration.md`](../pihole-integration.md). Keep both provider credentials
 in the password manager. Do not paste either credential into an issue, chat,
 shell history, or tracked plaintext file.
 
@@ -209,4 +209,4 @@ Talos re-applies it from the machine config. The durable fix deletes the label i
 `talos/patches/machine.yaml` (`$$patch: delete`, escaped for talhelper's env
 substitution) and is applied to each running node with the guarded
 `just talos apply-live <node>` recipe in `--mode=no-reboot`. See
-[`../kubernetes/apps/networking/metallb/README.md`](../kubernetes/apps/networking/metallb/README.md).
+[`../../kubernetes/apps/networking/metallb/README.md`](../../kubernetes/apps/networking/metallb/README.md).

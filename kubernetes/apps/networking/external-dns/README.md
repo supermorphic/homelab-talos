@@ -10,7 +10,7 @@ the controller uses `registry=noop` and `policy=upsert-only`.
 
 The Pi-hole application password is stored only as SOPS ciphertext in Git. Use
 `just repo phase7-secrets` to create it and the Phase 7 Just workflows in
-[`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md) to
+[`docs/phases/phase-7-foundation.md`](../../../../docs/phases/phase-7-foundation.md) to
 validate or reconcile the controller. Fresh Pi-hole installation, CA rotation,
 and application-password steps are documented in
 [`docs/pihole-integration.md`](../../../../docs/pihole-integration.md).

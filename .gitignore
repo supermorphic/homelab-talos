@@ -29,6 +29,7 @@
 /.superpowers/
 # Brainstorming specs and implementation plans stay uncommitted; durable decisions
 # belong in docs/decisions/ instead.
+/plans/
 /docs/superpowers/specs/
 /docs/superpowers/plans/
 *.dec.yaml

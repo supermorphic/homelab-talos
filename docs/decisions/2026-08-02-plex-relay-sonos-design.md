@@ -1,6 +1,6 @@
 # Plex Relay and Sonos integration — design
 
-Status: Accepted (2026-08-02); **remote-path selection superseded (2026-08-03)**
+- **Status: Superseded by 2026-08-02-plex-agent-rules-alignment.md.**
 Implementation is sequenced in the
 [Plex Relay and Sonos implementation plan](../plans/2026-08-02-plex-relay-sonos-implementation-plan.md).
 Date: 2026-08-02.

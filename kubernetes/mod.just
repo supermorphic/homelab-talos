@@ -543,7 +543,7 @@ csi-driver-smb-verify: require-bash
 
 # Verify the live Phase 11 shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)
-# and the documented hardlink proof (docs/phase-11-media.md); binding a static PV is
+# and the documented hardlink proof (docs/phases/phase-11-media.md); binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(kubeconfig)}}

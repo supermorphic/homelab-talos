@@ -72,8 +72,8 @@ value. The recipe applies machine configuration only and never runs
 
 If mise is not activated in the shell, prefix either invocation with
 `mise exec --`, as described in the root README. Record each result in
-[`docs/phase-3-installation.md`](../docs/phase-3-installation.md).
+[`docs/phases/phase-3-installation.md`](../docs/phases/phase-3-installation.md).
 
 See the root [`README.md`](../README.md) for workstation setup and the canonical
-[`plans/talos-flux-platform-plan.md`](../plans/talos-flux-platform-plan.md) for
+[`Talos and Flux platform architecture`](../docs/decisions/2026-08-02-talos-flux-platform.md) for
 machine configuration decisions and phase gates.

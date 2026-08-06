@@ -33,7 +33,7 @@ workflow.
 Without an activated mise shell, prefix each command with `mise exec --`.
 
 For routine operations, follow the
-[`Daily Cluster Health Check`](../README.md#daily-cluster-health-check) in the
+[`Daily Cluster Health Check`](../../README.md#daily-cluster-health-check) in the
 root README. It defines the fast two-command check, healthy expectations,
 diagnostic escalation order, and when the full connectivity suite is warranted.
 

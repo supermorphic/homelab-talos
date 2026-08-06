@@ -5,10 +5,11 @@ cluster and its Flux-managed Kubernetes platform. The cluster is being rebuilt
 from scratch on new NVMe drives; the old manual Talos layout remains only as a
 reference and rollback record.
 
-The canonical design and rollout order are in
-[`plans/talos-flux-platform-plan.md`](plans/talos-flux-platform-plan.md). Start
-there before enabling a new phase. Physical preflight evidence is in
-[`docs/phase-0-preflight.md`](docs/phase-0-preflight.md).
+Durable architecture is indexed in the generated
+[`decision record index`](docs/decisions/README.md). Historical rollout evidence lives
+under [`docs/phases/`](docs/phases/), beginning with
+[`phase-0-preflight.md`](docs/phases/phase-0-preflight.md); current operator procedures
+live under [`docs/runbooks/`](docs/runbooks/).
 Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, and Seerr UI configuration is
 documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
 
@@ -17,18 +18,15 @@ documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
 `main` is the Flux **production deployment boundary** — Flux reconciles it onto the
 live cluster — so every change enters through a protected pull request:
 
-```bash
-mise exec -- just repo hooks     # once per clone; installs the commit-time hooks
-git fetch origin
-git switch -c feat/<short-description> origin/main
-# ... make changes ...
-git add -A
-git commit -m "..."             # staged-file hooks provide fast feedback
-git fetch origin
-git rebase origin/main           # when main advanced and the branch is clean
-git push -u origin HEAD
-mise exec -- gh pr create
-```
+The operator creates feature worktrees with worktrunk; agents use only the assigned
+branch and worktree. From that worktree, changes are validated, committed, pushed, and
+opened as a pull request. Before every push, fetch `origin`, inspect both `origin/main`
+and the remote feature branch, rebase a clean branch when `main` advanced, rerun the
+required validation, and use only `--force-with-lease` when a rebase requires rewriting
+the feature branch. The operator alone reviews and merges.
+
+See the [operator bootstrap and worktree lifecycle runbook](docs/runbooks/operator-bootstrap.md)
+for fresh-clone, worktree, and on-demand credential setup.
 
 Commit-time pre-commit hooks are the only automatic local gate and inspect staged
 files, so install them with `mise exec -- just repo hooks` in every fresh clone —
@@ -130,18 +128,11 @@ by `mise.lock`.
 
 ## First Clone
 
-Install mise, review and trust the repository configuration, install the locked
-tools, and validate the checkout:
-
-```bash
-brew install mise bash
-mise trust
-mise install --locked
-mise exec -- just repo verify
-```
-
-`mise install --locked` is required on the first clone because `just` is itself a
-mise-managed tool. After that bootstrap, use Just for repository workflows.
+Install mise and Bash, then follow the
+[fresh main clone procedure](docs/runbooks/operator-bootstrap.md#fresh-main-clone). It
+orders repository trust, locked-tool installation, hooks, operator SOPS export, secret
+validation, Talos generation, admin kubeconfig retrieval, and `just ci`. This complete
+sequence replaces the former source-only `just repo verify` bootstrap.
 
 ## Shell Setup
 
@@ -361,15 +352,15 @@ verify as the tail of `just bootstrap <app>` avoids this (it reconciles
 
 The Phase 3 apply procedure, including its exact serial-bound confirmation, is
 documented in [`talos/README.md`](talos/README.md) and the installation evidence
-is recorded in [`docs/phase-3-installation.md`](docs/phase-3-installation.md).
+is recorded in [`docs/phases/phase-3-installation.md`](docs/phases/phase-3-installation.md).
 The Cilium ownership boundary, exact confirmation, connectivity test, and Phase 5
 evidence are documented in
-[`docs/phase-5-cilium.md`](docs/phase-5-cilium.md).
+[`docs/phases/phase-5-cilium.md`](docs/phases/phase-5-cilium.md).
 The Flux credential model, staged Cilium adoption, exact confirmations, and
 Phase 6 acceptance gate are in
-[`docs/phase-6-flux.md`](docs/phase-6-flux.md). Phase 7 credentials, rollout,
+[`docs/phases/phase-6-flux.md`](docs/phases/phase-6-flux.md). Phase 7 credentials, rollout,
 failure behavior, and acceptance gates are in
-[`docs/phase-7-foundation.md`](docs/phase-7-foundation.md). Pi-hole fresh-install,
+[`docs/phases/phase-7-foundation.md`](docs/phases/phase-7-foundation.md). Pi-hole fresh-install,
 CA rotation, and application-password recovery are in
 [`docs/pihole-integration.md`](docs/pihole-integration.md). Portainer's read-only
 boundary, staged rollout, credential lifecycle, and recovery procedure are in
@@ -477,7 +468,8 @@ just repo secrets
 
 ## Normal Change Workflow
 
-1. Confirm the current phase and its prerequisites in the canonical plan.
+1. Consult the generated decision index for durable constraints, the phase records for
+   historical evidence, and the current runbook for the procedure being changed.
 2. Run `just repo tools` after pulling a change to `.mise.toml` or `mise.lock`.
 3. Load the SOPS identity only when the change requires encrypted material.
 4. Edit declarative source files, never generated output.
@@ -522,8 +514,12 @@ Use `mise install --locked` when consuming the repository. Use unlocked
   declarative sources; the root `.justfile` only declares namespaces.
 - `clusterconfig/` holds only the three ignored rendered Talos machine configs.
 - `kubernetes/` holds Flux sources beginning in Phase 5.
-- `docs/` holds inventory, recovery, secret handling, and phase evidence.
-- `plans/` holds architectural decisions and phased acceptance gates.
+- `docs/decisions/` holds immutable durable decisions and its generated index.
+- `docs/phases/` holds dated rollout and acceptance evidence.
+- `docs/runbooks/` and the remaining topical files under `docs/` hold current operator
+  procedure.
+- `/plans/` is ignored local workspace for session implementation plans; it is never a
+  committed architecture surface.
 
 The repo-local `.talos/config` and `.kube/config` paths intentionally do not rely
 on the CLIs' `$HOME` defaults or ambient current contexts. Guarded recipes always
@@ -556,16 +552,16 @@ complete: cert-manager, MetalLB, Envoy Gateway, and ExternalDNS are reconciled b
 Flux, the production wildcard certificate is issued, the internal Gateway is
 Programmed at `192.168.90.30`, Pi-hole resolves the echo hostname, and trusted
 HTTPS returns the echo response; acceptance evidence and the MetalLB control-plane
-label fix are in [`docs/phase-7-foundation.md`](docs/phase-7-foundation.md). Phase 8
+label fix are in [`docs/phases/phase-7-foundation.md`](docs/phases/phase-7-foundation.md). Phase 8
 is complete: the rolling-reboot, MetalLB failover, Flux-restart, and echo
 remove/recreate tests passed and the 24-hour soak held with no regressions
-([`docs/phase-8-soak.md`](docs/phase-8-soak.md)) — closing the Phases 0–8
+([`docs/phases/phase-8-soak.md`](docs/phases/phase-8-soak.md)) — closing the Phases 0–8
 foundation milestone, so the old SSDs are clear to wipe. Phase 9 is complete:
 Longhorn `1.12.0` replicated block storage is live with a CIFS backup target
-([`docs/phase-9-storage.md`](docs/phase-9-storage.md)); bulk media storage is
+([`docs/phases/phase-9-storage.md`](docs/phases/phase-9-storage.md)); bulk media storage is
 deferred to Phase 11 over SMB. See
-[`docs/phase-3-installation.md`](docs/phase-3-installation.md) for installation
-evidence and [`docs/phase-4-bootstrap.md`](docs/phase-4-bootstrap.md) for the
+[`docs/phases/phase-3-installation.md`](docs/phases/phase-3-installation.md) for installation
+evidence and [`docs/phases/phase-4-bootstrap.md`](docs/phases/phase-4-bootstrap.md) for the
 bootstrap interface and recovery record. Phase 5 commands and live evidence are
-in [`docs/phase-5-cilium.md`](docs/phase-5-cilium.md); Flux ownership and Phase 6
-acceptance evidence are in [`docs/phase-6-flux.md`](docs/phase-6-flux.md).
+in [`docs/phases/phase-5-cilium.md`](docs/phases/phase-5-cilium.md); Flux ownership and Phase 6
+acceptance evidence are in [`docs/phases/phase-6-flux.md`](docs/phases/phase-6-flux.md).

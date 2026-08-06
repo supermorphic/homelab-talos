@@ -115,7 +115,7 @@ replication, backups, and application-layer secrets.
 | Restart the Flux controllers | `just kube flux-restart` (`FLUX_RESTART_CONFIRM`) |
 | Full acceptance re-verify | `just kube foundation-verify` |
 | Read-only health views | `just bootstrap status`, `just kube foundation-status`, `just kube flux-status` |
-| SOPS/age identity recovery | see [`recovery.md`](recovery.md) |
+| SOPS/age identity recovery | see [`recovery.md`](../recovery.md) |
 
 ### Support-bundle procedure
 

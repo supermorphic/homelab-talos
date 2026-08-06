@@ -142,6 +142,39 @@ tautulli_fixture(dependencies, extra_persistence) := [
 	},
 ]
 
+seerr_fixture(repository) := [
+	{
+		"path": "kubernetes/apps/media/seerr/app/values.yaml",
+		"contents": {
+			"controllers": {"seerr": {
+				"strategy": "Recreate",
+				"containers": {"app": {
+					"image": {
+						"repository": repository,
+						"tag": "v3.0.1",
+					},
+					"securityContext": {"capabilities": {"drop": ["ALL"]}},
+				}},
+			}},
+			"persistence": {"config": {"accessMode": "ReadWriteOnce"}},
+		},
+	},
+	{
+		"path": "kubernetes/apps/media/seerr/ks.yaml",
+		"contents": {"spec": {"dependsOn": [
+			{"name": "internal-gateway"},
+			{"name": "media"},
+		]}},
+	},
+	{
+		"path": "kubernetes/apps/media/seerr/app/httproute.yaml",
+		"contents": {
+			"metadata": {"annotations": {"external-dns.k8s.io/audience": "internal"}},
+			"spec": {"parentRefs": [{"name": "internal"}]},
+		},
+	},
+]
+
 messages_matching(messages, fragment) := {
 message |
 	some message in messages
@@ -193,6 +226,14 @@ test_lidarr_requires_internal_gateway_dependency if {
 test_valid_tautulli_contract_has_no_violations if {
 	messages := deny with input as tautulli_fixture({"internal-gateway", "media"}, {})
 	count(messages) == 0
+}
+
+# Replacing the maintained Seerr distribution with the retired Overseerr image must fail:
+# both expose a compatible request-manager shape, so the generic app-template rules alone
+# cannot distinguish the architectural regression.
+test_seerr_rejects_legacy_overseerr_image if {
+	messages := deny with input as seerr_fixture("sctx/overseerr")
+	count(messages_matching(messages, "must use the maintained ghcr.io/seerr-team/seerr image")) == 1
 }
 
 test_tautulli_requires_internal_gateway_dependency if {

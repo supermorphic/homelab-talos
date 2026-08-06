@@ -3,7 +3,7 @@
 # Gluetun is a native sidecar (restartPolicy: Always) with a startup probe on its control
 # server, so qBittorrent only starts after the tunnel+firewall are up (fail-closed at
 # boot). Only Gluetun holds NET_ADMIN + /dev/net/tun; qBittorrent cannot alter routes.
-# See docs/phase-12-media.md.
+# See docs/phases/phase-12-media.md.
 controllers:
   qbittorrent:
     type: deployment
@@ -78,7 +78,7 @@ controllers:
           # explicitly stopped VPN reports healthy; unreadable, unknown, transitional, and
           # crashed states fail so a hung control server cannot disable the fallback.
           # NOTE: whether a *container* restart clears the DoT cycle (vs needing a fresh
-          # pod/netns) is unvalidated live — see docs/phase-12-media.md; the
+          # pod/netns) is unvalidated live — see docs/phases/phase-12-media.md; the
           # QbittorrentGluetunRestartLoop alerts if this fallback repeats without recovery.
           liveness:
             enabled: true

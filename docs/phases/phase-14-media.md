@@ -51,7 +51,7 @@ just kube seerr-verify
 ### First-run wiring (manual, persists in `/app/config`)
 
 Follow the Seerr section of
-[`arr-stack-startup.md`](arr-stack-startup.md) for every required field and
+[`arr-stack-startup.md`](../arr-stack-startup.md) for every required field and
 in-cluster URL.
 
 Add **Plex** (sign in / server URL), then **Sonarr** and **Radarr** (their in-cluster URLs

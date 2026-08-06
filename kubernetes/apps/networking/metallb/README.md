@@ -19,7 +19,7 @@ would free it never applies. `dependsOn: metallb-config` orders them correctly.
 The router must exclude `192.168.90.30-192.168.90.39` from DHCP. Use
 `just bootstrap foundation` for the guarded first reconciliation and
 `just kube foundation-status` for inspection; see
-[`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md).
+[`docs/phases/phase-7-foundation.md`](../../../../docs/phases/phase-7-foundation.md).
 
 All three nodes are schedulable control planes, so the Talos machine config
 deletes `node.kubernetes.io/exclude-from-external-load-balancers` from

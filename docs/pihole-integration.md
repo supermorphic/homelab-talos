@@ -166,7 +166,7 @@ mise exec -- just kube foundation-verify
 
 If this is the first Phase 7 deployment, continue with the network confirmation
 and `just bootstrap foundation` sequence in
-[`phase-7-foundation.md`](phase-7-foundation.md).
+[`phase-7-foundation.md`](phases/phase-7-foundation.md).
 
 ## Rotation and Failure Behavior
 

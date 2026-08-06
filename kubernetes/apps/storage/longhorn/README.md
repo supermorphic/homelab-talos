@@ -23,6 +23,6 @@ Talos prerequisites (Phase 9 Part A): the `siderolabs/iscsi-tools` and
 `siderolabs/util-linux-tools` extensions, the `/var/mnt/longhorn` user volume, and
 `machine.kubelet.extraMounts` exposing that path with shared propagation.
 
-See [`docs/phase-9-storage.md`](../../../../docs/phase-9-storage.md) and the
+See [`docs/phases/phase-9-storage.md`](../../../../docs/phases/phase-9-storage.md) and the
 guarded `just repo storage-secrets` / `just kube storage-validate` /
 `just bootstrap storage` / `just kube storage-verify` workflow.

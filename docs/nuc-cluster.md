@@ -75,7 +75,7 @@ Enroll Secure Boot keys: auto
 ```
 
 Secure Boot was verified through the guarded Phase 3 installation workflow and
-is recorded in [`phase-3-installation.md`](phase-3-installation.md).
+is recorded in [`phase-3-installation.md`](phases/phase-3-installation.md).
 
 Expected result:
 
