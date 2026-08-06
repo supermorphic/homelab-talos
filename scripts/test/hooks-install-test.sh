@@ -19,11 +19,13 @@ git -C "$main_clone" worktree add --quiet -b linked "$linked_worktree"
 
 install_hooks() {
   local location="$1"
+  local command_path="${2:-$PATH}"
   local git_dir
 
-  git_dir="$(git -C "$location" rev-parse --git-dir)"
+  git_dir="$(git -C "$location" rev-parse --path-format=absolute --git-dir)"
   GIT_DIR="$git_dir" GIT_WORK_TREE="$location" \
-    mise exec -- just --justfile "$repository_justfile" hooks
+    mise exec -- env "PATH=$command_path" \
+      just --justfile "$repository_justfile" hooks
 }
 
 common_dir="$(git -C "$main_clone" rev-parse --path-format=absolute --git-common-dir)"
@@ -40,6 +42,22 @@ assert_shared_hook_path() {
     echo "Expected $location to resolve $expected_hook, got $actual_hook" >&2
     exit 1
   }
+}
+
+failing_bin="$fixture/failing-bin"
+mkdir -p "$failing_bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 77' >"$failing_bin/pre-commit"
+chmod +x "$failing_bin/pre-commit"
+
+prior_hooks_dir="$fixture/prior-hooks"
+git -C "$main_clone" config --local core.hooksPath "$prior_hooks_dir"
+if install_hooks "$linked_worktree" "$failing_bin:$PATH"; then
+  echo 'Expected forced pre-commit installation failure.' >&2
+  exit 1
+fi
+[[ "$(git -C "$main_clone" config --local --get core.hooksPath)" == "$prior_hooks_dir" ]] || {
+  echo 'Failed installation did not restore the prior local core.hooksPath.' >&2
+  exit 1
 }
 
 install_hooks "$main_clone"
