@@ -10,6 +10,16 @@ setup() {
 	cp -R "$SOURCE_FIXTURES" "$FIXTURES"
 }
 
+emit_inventory_record() {
+	jq -c -n -S \
+		--argjson inode "$1" \
+		--arg lifecycle_state "$2" \
+		--arg torrent_hash "$3" \
+		--arg category "$4" \
+		--arg tags "$5" \
+		'{inode: $inode, lifecycle_state: $lifecycle_state, torrent_hash: $torrent_hash, category: $category, tags: $tags}'
+}
+
 create_ffprobe_stub() {
 	stub_bin="$BATS_TEST_TMPDIR/ffprobe-bin"
 	mkdir -p "$stub_bin"
@@ -150,7 +160,7 @@ run_inventory_to_fixture() {
 		BENCHMARK_DOWNLOAD_ROOT="$download_root" \
 		python3 "$INVENTORY"
 	[ "$status" -eq 0 ]
-	printf '%s\n' "$output" >"$FIXTURES/qbittorrent/inodes.tsv"
+	printf '%s\n' "$output" >"$FIXTURES/qbittorrent/inodes.jsonl"
 }
 
 # Catches a production break where real fixture probing stops using the pinned
@@ -257,7 +267,7 @@ run_inventory_to_fixture() {
 
 # Catches a production break where the read-only qBittorrent bridge leaks API
 # details, ignores lifecycle precedence, or does not stat actual hardlinks.
-@test "torrent inventory emits redacted lifecycle TSV with inode precedence" {
+@test "torrent inventory emits redacted lifecycle JSON Lines with inode precedence" {
 	prepare_library
 	create_qbittorrent_stub
 	run_inventory_to_fixture
@@ -267,27 +277,21 @@ run_inventory_to_fixture() {
 	[[ "$output" != *'announce'* ]]
 	[[ "$output" != *'fixture-public-secret'* ]]
 
-	expected="$BATS_TEST_TMPDIR/expected-inodes.tsv"
-	printf 'inode\tlifecycle_state\ttorrent_hash\tcategory\ttags\n' >"$expected"
+	expected="$BATS_TEST_TMPDIR/expected-inodes.jsonl"
 	{
-		printf '%s\tactive\t%s\tmovies\ttracker-public\n' \
-			"$(inode_for "$media_root/Active Public.mkv")" \
-			'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-		printf '%s\tactive\t%s\tmovies\ttracker-public\n' \
-			"$(inode_for "$media_root/Shared Priority VC1.mkv")" \
-			'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-		printf '%s\tpublic-awaiting-cleanup\t%s\tmovies\ttracker-public\n' \
-			"$(inode_for "$media_root/Public Cleanup.mkv")" \
-			'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-		printf '%s\tactive\t%s\tmovies\ttracker-czteam,tracker-private\n' \
-			"$(inode_for "$media_root/Active CZTeam.mkv")" \
-			'cccccccccccccccccccccccccccccccccccccccc'
-		printf '%s\tprivate-permanent\t%s\tmovies\ttracker-czteam,tracker-private\n' \
-			"$(inode_for "$media_root/Dolby \"Private\", Feature.mkv")" \
-			'dddddddddddddddddddddddddddddddddddddddd'
-	} | sort -n >>"$expected"
+		emit_inventory_record "$(inode_for "$media_root/Active Public.mkv")" \
+			active 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' movies tracker-public
+		emit_inventory_record "$(inode_for "$media_root/Shared Priority VC1.mkv")" \
+			active 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' movies tracker-public
+		emit_inventory_record "$(inode_for "$media_root/Public Cleanup.mkv")" \
+			public-awaiting-cleanup 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' movies tracker-public
+		emit_inventory_record "$(inode_for "$media_root/Active CZTeam.mkv")" \
+			active 'cccccccccccccccccccccccccccccccccccccccc' movies tracker-czteam,tracker-private
+		emit_inventory_record "$(inode_for "$media_root/Dolby \"Private\", Feature.mkv")" \
+			private-permanent 'dddddddddddddddddddddddddddddddddddddddd' movies tracker-czteam,tracker-private
+	} | sort -n >"$expected"
 
-	run diff -u "$expected" "$FIXTURES/qbittorrent/inodes.tsv"
+	run diff -u "$expected" "$FIXTURES/qbittorrent/inodes.jsonl"
 	[ "$status" -eq 0 ]
 }
 
@@ -327,7 +331,7 @@ run_inventory_to_fixture() {
 # Catches a production break where BENCHMARK_MEDIA_ROOT can redirect a live
 # census outside the fixed /media mount without explicit test mode.
 @test "census refuses media-root override outside test mode" {
-	torrent_state="$BATS_TEST_TMPDIR/empty-inodes.tsv"
+	torrent_state="$BATS_TEST_TMPDIR/empty-inodes.jsonl"
 	printf 'inode\tlifecycle_state\ttorrent_hash\tcategory\ttags\n' >"$torrent_state"
 	run env \
 		BENCHMARK_MEDIA_ROOT="$SOURCE_FIXTURES/media" \
@@ -349,7 +353,7 @@ run_inventory_to_fixture() {
 	export BENCHMARK_MEDIA_ROOT="$media_root"
 	output_dir="$BATS_TEST_TMPDIR/output"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -eq 0 ]
 	run diff -u "$GOLDEN/census.csv" "$output_dir/census.csv"
 	[ "$status" -eq 0 ]
@@ -374,7 +378,7 @@ run_inventory_to_fixture() {
 	printf 'previous census\n' >"$output_dir/census.csv"
 	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -ne 0 ]
 	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
 	[ "$(<"$output_dir/audio-inventory.csv")" = 'previous audio' ]
@@ -402,7 +406,7 @@ run_inventory_to_fixture() {
 	printf 'previous census\n' >"$output_dir/census.csv"
 	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'source path escapes media root'* ]]
 	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
@@ -429,7 +433,7 @@ run_inventory_to_fixture() {
 	printf 'previous census\n' >"$output_dir/census.csv"
 	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'media walk failed'* ]]
 	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
@@ -449,7 +453,7 @@ run_inventory_to_fixture() {
 	export BENCHMARK_MEDIA_ROOT="$media_root"
 	output_dir="$BATS_TEST_TMPDIR/output"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -eq 0 ]
 	run find "$output_dir" -type f -name '.encode-benchmark-census.*' -print
 	[ "$status" -eq 0 ]
@@ -473,7 +477,7 @@ run_inventory_to_fixture() {
 	printf 'previous census\n' >"$output_dir/census.csv"
 	printf 'previous audio\n' >"$output_dir/audio-inventory.csv"
 
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'second census publication failed; restored prior outputs'* ]]
 	[ "$(<"$output_dir/census.csv")" = 'previous census' ]
@@ -483,7 +487,7 @@ run_inventory_to_fixture() {
 	[ -z "$output" ]
 
 	output_dir="$BATS_TEST_TMPDIR/output-without-prior-generation"
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -ne 0 ]
 	[ ! -e "$output_dir/census.csv" ]
 	[ ! -e "$output_dir/audio-inventory.csv" ]
@@ -491,25 +495,24 @@ run_inventory_to_fixture() {
 
 # Catches a production break where the Excel-tab producer is decoded by raw tab
 # splitting rather than as a five-column quoted record stream.
-@test "torrent TSV round-trips quote tab and newline tag data into census CSV" {
+@test "torrent inventory round-trips quote tab and newline tag data into census CSV" {
 	prepare_library
 	create_qbittorrent_stub
 	export QBT_STUB_TAGS=$'quote"two,alpha\tone,line\nthree'
 	run_inventory_to_fixture
 	expected_tags=$'alpha\tone,line\nthree,quote"two'
 
-	run python3 -c '
-import csv
-import sys
-
-with open(sys.argv[1], newline="", encoding="utf-8") as stream:
-    rows = list(csv.reader(stream, dialect="excel-tab"))
-if any(len(row) != 5 for row in rows):
-    raise SystemExit("TSV record did not contain exactly five columns")
-matching = [row for row in rows[1:] if row[2] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-if not matching or any(row[4] != sys.argv[2] for row in matching):
-    raise SystemExit("complex tag field did not round-trip through inventory TSV")
-' "$FIXTURES/qbittorrent/inodes.tsv" "$expected_tags"
+	# jq, not python3: this asserts the exact parser the runtime image will use.
+	run jq -e -s --arg expected "$expected_tags" '
+		if any(.[]; (keys | length) != 5)
+			then error("inventory record did not contain exactly five fields")
+			else . end
+		| map(select(.torrent_hash == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		| if length == 0
+			then error("no inventory record matched the fixture hash")
+			else . end
+		| all(.[]; .tags == $expected)
+	' "$FIXTURES/qbittorrent/inodes.jsonl"
 	[ "$status" -eq 0 ]
 
 	create_ffprobe_stub
@@ -518,7 +521,7 @@ if not matching or any(row[4] != sys.argv[2] for row in matching):
 	export BENCHMARK_TEST_MODE=1
 	export BENCHMARK_MEDIA_ROOT="$media_root"
 	output_dir="$BATS_TEST_TMPDIR/output"
-	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+	run "$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -eq 0 ]
 	run python3 -c '
 import csv
@@ -560,12 +563,15 @@ print(json.dumps(row["torrent_tags"]))
 	output_dir="$BATS_TEST_TMPDIR/output"
 	samples="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml"
 
-	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/sandbox"
+	# python3, rg and yq are confirmed absent from the runtime image, so the
+	# census path must run without them even though benchmark.sh still declares
+	# them. Withholding them here is what proves the census can actually run.
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/sandbox" python3 rg yq
 	[ "$status" -eq 0 ]
 	sandbox="$output"
 
 	run env PATH="$stub_bin:$sandbox" \
-		"$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.tsv" "$output_dir"
+		"$SCRIPTS/census.sh" "$FIXTURES/qbittorrent/inodes.jsonl" "$output_dir"
 	[ "$status" -eq 0 ]
 	run diff -u "$GOLDEN/census.csv" "$output_dir/census.csv"
 	[ "$status" -eq 0 ]

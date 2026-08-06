@@ -10,12 +10,15 @@ declared_runtime_commands() {
 		yq -r '.runtime.requiredCommands[]'
 }
 
-# Usage: runtime_sandbox_path <samples.yaml> <sandbox-dir>
-# Emits a PATH value restricted to the declared commands.
+# Usage: runtime_sandbox_path <samples.yaml> <sandbox-dir> [excluded-command...]
+# Emits a PATH value restricted to the declared commands. Excluded commands are
+# withheld so a script can be proven to run without a tool the real runtime image
+# does not provide, even while other scripts still declare it.
 runtime_sandbox_path() {
 	local samples="$1"
 	local sandbox="$2"
-	local command_name resolved
+	shift 2
+	local command_name resolved excluded skip
 	local -a declared=()
 
 	mapfile -t declared < <(declared_runtime_commands "$samples")
@@ -26,6 +29,11 @@ runtime_sandbox_path() {
 
 	mkdir -p "$sandbox"
 	for command_name in "${declared[@]}"; do
+		skip=0
+		for excluded in "$@"; do
+			[[ "$command_name" == "$excluded" ]] && skip=1
+		done
+		((skip == 0)) || continue
 		resolved="$(command -v "$command_name" 2>/dev/null)" || {
 			# A declared command absent from the test host would silently weaken
 			# the sandbox into a laxer PATH, so fail loudly instead.

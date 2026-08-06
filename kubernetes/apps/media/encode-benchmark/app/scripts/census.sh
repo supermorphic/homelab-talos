@@ -59,28 +59,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 -c '
-import csv
-import sys
-
-try:
-    with open(sys.argv[1], newline="", encoding="utf-8") as stream:
-        reader = csv.reader(stream, dialect="excel-tab")
-        header = next(reader, None)
-        expected = ["inode", "lifecycle_state", "torrent_hash", "category", "tags"]
-        if header != expected:
-            raise ValueError("invalid torrent-state TSV header")
-        for line_number, row in enumerate(reader, 2):
-            if len(row) != 5:
-                raise ValueError(
-                    f"invalid torrent-state TSV record at physical line {line_number}"
-                )
-            for field in row:
-                sys.stdout.buffer.write(field.encode("utf-8") + b"\0")
-except (csv.Error, OSError, UnicodeError, ValueError) as error:
-    print(error, file=sys.stderr)
-    raise SystemExit(65)
-' "$torrent_state" >"$state_temp"
+# The inventory arrives as JSON Lines so jq owns the quoting: tags carry
+# arbitrary operator text including tabs, newlines and quotes, and jq is the only
+# parser this runtime image provides that handles them correctly.
+#
+# Fields are base64-encoded rather than delimiter-separated. jq silently discards
+# NUL bytes, so a NUL-delimited stream loses every field boundary; and any
+# printable delimiter can legitimately occur inside a tag. base64 output is
+# restricted to [A-Za-z0-9+/=], so a space-separated line is unambiguous by
+# construction rather than by assumption about the data.
+jq -r -e '
+	if (type != "object") then error("torrent-state record is not an object") else . end
+	| if (["category", "inode", "lifecycle_state", "tags", "torrent_hash"] - keys | length) != 0
+		then error("torrent-state record is missing required fields")
+		else . end
+	| if (.inode | type) != "number" then error("torrent-state inode is not a number") else . end
+	| ([.lifecycle_state, .torrent_hash, .category, .tags]
+		| map(if type == "string" then . else error("torrent-state field is not a string") end)
+		| map(@base64)) as $encoded
+	| [(.inode | tostring)] + $encoded
+	| join(" ")
+' "$torrent_state" >"$state_temp" || {
+	echo 'invalid torrent-state inventory' >&2
+	exit 65
+}
 
 declare -A lifecycle_by_inode=()
 declare -A hash_by_inode=()
@@ -88,14 +90,14 @@ declare -A category_by_inode=()
 declare -A tags_by_inode=()
 
 record_number=0
-while IFS= read -r -d '' inode &&
-	IFS= read -r -d '' lifecycle &&
-	IFS= read -r -d '' torrent_hash &&
-	IFS= read -r -d '' category &&
-	IFS= read -r -d '' tags; do
+while read -r inode lifecycle_b64 hash_b64 category_b64 tags_b64; do
 	((record_number += 1))
 	[[ "$inode" =~ ^[0-9]+$ ]] || {
 		echo "invalid inode in torrent-state record $record_number" >&2
+		exit 65
+	}
+	lifecycle="$(printf '%s' "$lifecycle_b64" | base64 -d)" || {
+		echo "undecodable lifecycle state in torrent-state record $record_number" >&2
 		exit 65
 	}
 	[[ "$lifecycle" =~ ^(active|private-permanent|public-awaiting-cleanup)$ ]] || {
@@ -107,48 +109,54 @@ while IFS= read -r -d '' inode &&
 		exit 65
 	}
 	lifecycle_by_inode[$inode]="$lifecycle"
-	hash_by_inode[$inode]="$torrent_hash"
-	category_by_inode[$inode]="$category"
-	tags_by_inode[$inode]="$tags"
+	hash_by_inode[$inode]="$(printf '%s' "$hash_b64" | base64 -d)"
+	category_by_inode[$inode]="$(printf '%s' "$category_b64" | base64 -d)"
+	tags_by_inode[$inode]="$(printf '%s' "$tags_b64" | base64 -d)"
 done <"$state_temp"
 
 printf '%s\n' 'source_path,source_size_bytes,link_count,lifecycle_state,lifecycle_evidence,torrent_hash,torrent_category,torrent_tags,cohort,container,duration_seconds,video_codec,width,height,pixel_format,bit_depth,color_primaries,color_transfer,color_space,hdr_format,dolby_vision_profile,video_bit_rate,frame_rate,audio_track_count,subtitle_count,chapter_count,audio_bytes_total,audio_bytes_method' >"$census_temp"
 printf '%s\n' 'source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method' >"$audio_temp"
 
-python3 -c '
-import os
-import sys
+# Enumerate sources with find and resolve containment with realpath. The walk
+# must fail closed: a permission error that silently truncated the list would
+# under-report the library rather than error, so pipefail plus find's exit status
+# are both load-bearing here.
+media_root_resolved="$(realpath -- "$media_root")" || {
+	echo "media walk failed: cannot resolve media root" >&2
+	exit 65
+}
+if [[ -n "$test_walk_error_path" ]]; then
+	echo "media walk failed: deterministic test walk failure at $test_walk_error_path" >&2
+	exit 65
+fi
+# "! -type d" rather than "-type f": a symlink is not a regular file, so -type f
+# would silently skip an escaping symlink instead of rejecting it, under-reporting
+# the library and losing the explicit containment failure the design requires.
+find "$media_root" ! -type d -print0 | LC_ALL=C sort -z >"$paths_temp" || {
+	echo 'media walk failed: source enumeration did not complete' >&2
+	exit 65
+}
 
-root = os.fsencode(sys.argv[1])
-resolved_root = os.path.realpath(root)
-test_failure = os.environ.get("BENCHMARK_TEST_WALK_ERROR_PATH")
-failure_path = os.fsencode(test_failure) if test_failure else None
-paths = []
-def walk_error(error):
-    raise error
-try:
-    for directory, _, files in os.walk(root, onerror=walk_error):
-        if failure_path is not None and os.path.normpath(directory) == os.path.normpath(failure_path):
-            raise OSError(13, "deterministic test walk failure", os.fsdecode(directory))
-        for filename in files:
-            path = os.path.join(directory, filename)
-            resolved_path = os.path.realpath(path)
-            if os.path.commonpath([resolved_root, resolved_path]) != resolved_root:
-                escaped = os.fsdecode(path)
-                print(f"source path escapes media root: {escaped}", file=sys.stderr)
-                raise SystemExit(65)
-            paths.append(path)
-except OSError as error:
-    print(f"media walk failed: {error}", file=sys.stderr)
-    raise SystemExit(65)
-for path in sorted(paths):
-    sys.stdout.buffer.write(path + b"\0")
-' "$media_root" >"$paths_temp"
+# GNU coreutils in the runtime image, BSD stat on the operator workstation that
+# runs the offline contracts. Both are exercised: the fallback here, and a
+# functional stat check in the capability probe that runs inside the real image.
+stat_fields() {
+	stat -c '%i %h %s' -- "$1" 2>/dev/null || stat -f '%i %l %z' -- "$1"
+}
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while IFS= read -r -d '' source_path; do
-	stat_fields="$(python3 -c 'import os, sys; value = os.stat(sys.argv[1]); print(f"{value.st_ino}\t{value.st_nlink}\t{value.st_size}")' "$source_path")"
-	IFS=$'\t' read -r inode link_count source_size <<<"$stat_fields"
+	# Component-wise containment, not a string prefix: the trailing slash stops a
+	# sibling such as /media-evil from satisfying a /media root.
+	resolved_source="$(realpath -- "$source_path")" || {
+		echo 'media walk failed: cannot resolve source path' >&2
+		exit 65
+	}
+	[[ "$resolved_source" == "$media_root_resolved"/* ]] || {
+		echo "source path escapes media root: $source_path" >&2
+		exit 65
+	}
+	read -r inode link_count source_size <<<"$(stat_fields "$source_path")"
 
 	if ((link_count == 1)); then
 		lifecycle='unlinked'
