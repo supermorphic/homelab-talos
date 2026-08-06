@@ -1,0 +1,39 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "codec_type": "video",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuv420p",
+      "bits_per_raw_sample": "8",
+      "r_frame_rate": "24/1",
+      "avg_frame_rate": "24/1",
+      "bit_rate": "2500000",
+      "disposition": {"default": 1}
+    },
+    {
+      "index": 1,
+      "codec_name": "truehd",
+      "codec_long_name": "TrueHD",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 8,
+      "channel_layout": "7.1",
+      "disposition": {"default": 1},
+      "tags": {"language": "eng", "title": "TrueHD 7.1"}
+    }
+  ],
+  "chapters": [],
+  "format": {
+    "filename": "truehd-unknown.mkv",
+    "nb_streams": 2,
+    "format_name": "matroska,webm",
+    "duration": "90.000000",
+    "size": "80000000",
+    "bit_rate": "7111111",
+    "probe_score": 100
+  }
+}

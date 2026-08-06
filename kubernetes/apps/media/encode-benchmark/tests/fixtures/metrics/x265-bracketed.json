@@ -1,0 +1,9 @@
+{
+  "points": [
+    {"crf": 24, "vmaf": 90.0, "bitRate": 4000},
+    {"crf": 22, "vmaf": 96.0, "bitRate": 7000},
+    {"crf": 20, "vmaf": 98.0, "bitRate": 9000}
+  ],
+  "qsvVmaf": 94.0,
+  "qsvBitRate": 8000
+}

@@ -1,0 +1,5 @@
+ffmpeg version 8.1.2
+[AVHWDeviceContext @ 0x1000] VAAPI driver: Intel iHD driver for Intel(R) Gen Graphics - 25.2.6.
+[AVHWDeviceContext @ 0x1000] Successfully initialized the hardware device qsv=hw:/dev/dri/renderD128.
+[hevc_qsv @ 0x2000] Using the constant quantization parameter (CQP) ratecontrol method
+frame= 2160 fps=74.0 q=-0.0 Lsize=  59000KiB time=00:01:30.00 bitrate=5368.9kbits/s speed=1.30x

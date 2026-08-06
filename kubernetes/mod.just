@@ -629,6 +629,80 @@ flaresolverr-verify: require-bash
 qbit-manage-validate: require-bash
     @scripts/validate/qbit-manage.sh
 
+# Validate the suspended, inert encoding benchmark sources without contacting the cluster.
+encode-benchmark-validate: require-bash
+    @scripts/validate/encode-benchmark.sh
+
+# Read-only cluster placement check: reports every node and requires one non-Plex
+# node with a free i915 slot and at least 200Gi actual node.fs.availableBytes.
+encode-benchmark-preflight: require-bash
+    @scripts/encode-benchmark/preflight.sh {{quote(kubeconfig)}}
+
+# Create one run-owned capability Job after exact confirmation and proof that the
+# renderer/runtime sources match the deployed origin/main boundary.
+encode-benchmark-capabilities: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark capabilities' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' capabilities
+
+# Create a suspended census Job, attach its qbit_manage inode inventory through
+# an owned ConfigMap, then unsuspend only after the lifecycle join is complete.
+encode-benchmark-census: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark census' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' census
+
+# Render and create only the selected run-scoped benchmark mode. Confirmation is
+# bound to the exact mode; an optional run ID is an explicit resume handle.
+encode-benchmark-run mode run_id="" sample_id="": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mode={{quote(mode)}}
+    run_id={{quote(run_id)}}
+    sample_id={{quote(sample_id)}}
+    source scripts/lib/rollout.sh
+    require_deployed_source "encode-benchmark $mode" \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    args=(run "$mode")
+    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
+    if [[ -n "$sample_id" ]]; then
+      [[ -n "$run_id" ]] || {
+        echo 'encode-benchmark-run requires a run ID before a sample ID.' >&2
+        exit 64
+      }
+      args+=("$sample_id")
+    fi
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
+
+# Thin finalist convenience alias. The shared run recipe owns the single source
+# guard and dispatch path; finalist confirmation remains run/sample-bound.
+encode-benchmark-finalist run_id sample_id:
+    @just kube encode-benchmark-run finalist {{quote(run_id)}} {{quote(sample_id)}}
+
+# Read-only Job phase, pod node, sanitized summary, and actual kubelet imageID evidence.
+encode-benchmark-results run_id: require-bash
+    @scripts/encode-benchmark/results.sh {{quote(kubeconfig)}} {{quote(run_id)}}
+
+# Read-only live acceptance for activated inert inputs and ephemeral pod placement.
+encode-benchmark-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.encode-benchmark -- scripts/verify/encode-benchmark.sh {{quote(kubeconfig)}}
+
+# Create one short-lived cleanup Job that can remove only the confirmed run tree.
+encode-benchmark-clean run_id: require-bash
+    @scripts/encode-benchmark/dispatch.sh {{quote(kubeconfig)}} clean {{quote(run_id)}}
+
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash

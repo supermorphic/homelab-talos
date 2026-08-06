@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "mode": "quality",
+  "imageDigest": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+  "scriptDigests": {
+    "benchmark.sh": "sha256:ae253cad22132ee6798cb2f1b541f46a35c4ca38b61f27f29cbf74e0c3c855d3"
+  },
+  "samplesDigest": "sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e",
+  "sources": [],
+  "encoderCommands": [],
+  "node": {
+    "name": "",
+    "kernel": "",
+    "i915": "",
+    "vpl": ""
+  },
+  "vmaf": {
+    "model": "vmaf_4k_v0.6.1",
+    "version": ""
+  },
+  "savingsSeed": 20260802,
+  "clientDevice": null
+}

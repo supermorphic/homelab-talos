@@ -21,6 +21,7 @@ executions:
     - validation.media-storage
     - validation.plex
     - validation.intel-gpu-plugin
+    - validation.encode-benchmark
     - validation.qbittorrent
     - validation.arr
     - validation.qbit-manage
@@ -64,6 +65,7 @@ campaigns:
       - verification.media-storage
       - verification.plex
       - verification.intel-gpu-plugin
+      - verification.encode-benchmark
       - verification.qbittorrent
       - verification.prowlarr
       - verification.sonarr
@@ -119,6 +121,7 @@ campaigns:
       - verification.media-storage
       - verification.plex
       - verification.intel-gpu-plugin
+      - verification.encode-benchmark
       - verification.qbittorrent
       - verification.prowlarr
       - verification.sonarr
@@ -309,6 +312,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube intel-gpu-plugin-validate", implementation: scripts/validate/intel-gpu-plugin.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.encode-benchmark, source: validation, framework: bash, suite: ci, tier: offline, target: encode-benchmark, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube encode-benchmark-validate", implementation: scripts/validate/encode-benchmark.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.qbittorrent, source: validation, framework: bash, suite: ci, tier: offline, target: qbittorrent, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube qbittorrent-validate", implementation: scripts/validate/qbittorrent.sh}
@@ -435,6 +442,11 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube intel-gpu-plugin-verify", implementation: scripts/verify/intel-gpu-plugin.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.encode-benchmark, source: verification, framework: bash, suite: media, tier: verification, target: encode-benchmark, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube encode-benchmark-verify", implementation: scripts/verify/encode-benchmark.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.qbittorrent, source: verification, framework: bash, suite: media, tier: verification, target: qbittorrent, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
