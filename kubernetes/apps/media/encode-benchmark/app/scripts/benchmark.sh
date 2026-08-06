@@ -901,9 +901,9 @@ missing_declared_commands() {
 # dispatch cycle this whole check is meant to save. The offline contracts assert
 # this parse against yq's on the same file.
 read_declared_commands() {
-	local file="$1" line in_block=0
+	local file="$1" key="${2:-requiredCommands}" line in_block=0
 	while IFS= read -r line || [[ -n "$line" ]]; do
-		if [[ "$line" == '  requiredCommands:' ]]; then
+		if [[ "$line" == "  $key:" ]]; then
 			in_block=1
 			continue
 		fi
@@ -919,8 +919,8 @@ read_declared_commands() {
 capabilities() {
 	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
-	local missing
-	local -a required_commands=()
+	local missing candidate present absent
+	local -a required_commands=() optional_commands=()
 	# Every check below is written in terms of yq, rg or ffmpeg, so the command
 	# surface must be established before any of them runs; otherwise the probe
 	# dies as "command not found" and reports nothing.
@@ -931,6 +931,24 @@ capabilities() {
 	}
 	missing="$(missing_declared_commands "${required_commands[@]}")"
 	[[ -z "$missing" ]] || {
+		# Report-only inventory of substitutes, emitted on the diagnostic path
+		# only: the success path's stdout is a strict JSON contract. When a
+		# required command is absent the next question is always "what can
+		# replace it", and answering that from the same run is what keeps a gap
+		# from costing one dispatch cycle per candidate.
+		mapfile -t optional_commands < <(read_declared_commands "$samples_file" optionalCommands)
+		if ((${#optional_commands[@]} > 0)); then
+			present=''
+			absent=''
+			for candidate in "${optional_commands[@]}"; do
+				if command -v "$candidate" >/dev/null 2>&1; then
+					present+="${present:+,}$candidate"
+				else
+					absent+="${absent:+,}$candidate"
+				fi
+			done
+			echo "runtime image substitute inventory: present=${present:-none} absent=${absent:-none}" >&2
+		fi
 		echo "runtime image is missing required commands: $missing" >&2
 		return 1
 	}
@@ -1924,8 +1942,8 @@ test_dispatch() {
 		printf '%s\n' "$results_header"
 		;;
 	declared-commands)
-		(($# == 1)) || usage
-		read_declared_commands "$1"
+		(($# >= 1 && $# <= 2)) || usage
+		read_declared_commands "$@"
 		;;
 	commands)
 		(($# == 8)) || usage

@@ -67,17 +67,23 @@ runtime:
   image: '$image'
   requiredCommands:
 $(capability_required_commands "${@:2}")
+  optionalCommands:
+$(capability_declared_list optionalCommands)
 EOF
 }
 
 # Derive the fixture's command list from the deployed declaration so a probe
 # fixture cannot drift into asserting a command surface the image never claims.
-capability_required_commands() {
+capability_declared_list() {
 	local samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
-	local extra
 	yq -r '.data."samples.yaml"' "$samples" |
-		yq -r '.runtime.requiredCommands[]' |
+		yq -r ".runtime.$1[]" |
 		sed 's/^/    - /'
+}
+
+capability_required_commands() {
+	local extra
+	capability_declared_list requiredCommands
 	for extra in "$@"; do
 		printf '    - %s\n' "$extra"
 	done
@@ -1294,9 +1300,28 @@ PYTHON
 	inner="$BATS_TEST_TMPDIR/inner-samples.yaml"
 	yq -r '.data."samples.yaml"' "$samples" >"$inner"
 
-	run "$SCRIPTS/benchmark.sh" _test declared-commands "$inner"
-	[ "$status" -eq 0 ]
-	yq_list="$(yq -r '.runtime.requiredCommands[]' "$inner")"
-	[ -n "$yq_list" ]
-	[ "$output" = "$yq_list" ]
+	for key in requiredCommands optionalCommands; do
+		run "$SCRIPTS/benchmark.sh" _test declared-commands "$inner" "$key"
+		[ "$status" -eq 0 ]
+		yq_list="$(yq -r ".runtime.$key[]" "$inner")"
+		[ -n "$yq_list" ]
+		[ "$output" = "$yq_list" ]
+	done
+}
+
+# Catches the substitute inventory silently disappearing or turning fatal. It is
+# report-only: an absent optional command must never fail the probe, and the
+# report must survive a required-command failure, which is exactly when the
+# operator needs to know what can replace the missing tool.
+@test "substitute inventory is reported alongside a required-command failure" {
+	create_capability_tools
+	write_capability_samples '' benchmark-absent-required
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export NODE_NAME='talos-03'
+
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'runtime image is missing required commands: benchmark-absent-required'* ]]
+	[[ "$output" == *'runtime image substitute inventory:'* ]]
+	[[ "$output" == *'present='* ]]
 }
