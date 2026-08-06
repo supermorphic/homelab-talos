@@ -10,6 +10,41 @@ data:
       image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
       capabilityStatus: candidate
       capabilityEvidence: {}
+      # Every external command the runtime scripts invoke. The capability probe
+      # reports the full missing set from this list in one run, and the offline
+      # sandbox contracts execute the scripts against exactly these commands, so
+      # an undeclared dependency fails in CI rather than on a node.
+      requiredCommands:
+        - awk
+        - bash
+        - chmod
+        - cp
+        - cut
+        - date
+        - dirname
+        - ffmpeg
+        - ffprobe
+        - find
+        - head
+        - id
+        - jq
+        - mkdir
+        - mktemp
+        - mv
+        - python3
+        - rg
+        - rm
+        - rmdir
+        - sed
+        - sha256sum
+        - sleep
+        - sort
+        - stat
+        - tail
+        - tr
+        - uname
+        - wc
+        - yq
     savingsSeed: 20260802
     qualityPanel: []
     savingsPanel: []

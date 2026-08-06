@@ -883,9 +883,42 @@ append_audio_inventory() {
 	}
 }
 
+# Report every declared command the runtime image is missing, not just the first.
+# A probe that stops at one missing tool costs an operator a full dispatch cycle
+# per gap, which is how an undeclared python3 reached a live census Job.
+missing_declared_commands() {
+	local candidate
+	local -a missing=()
+	for candidate in "$@"; do
+		command -v "$candidate" >/dev/null 2>&1 || missing+=("$candidate")
+	done
+	((${#missing[@]} == 0)) || printf '%s\n' "${missing[*]}"
+}
+
 capabilities() {
 	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
+	local missing
+	local -a required_commands=()
+	# Bootstrap first: the checks below are themselves written in terms of yq and
+	# rg, so a missing one must report itself rather than fail as "command not
+	# found" partway through the probe.
+	missing="$(missing_declared_commands yq rg)"
+	[[ -z "$missing" ]] && {
+		mapfile -t required_commands < <(yq -e -r '.runtime.requiredCommands[]' "$samples_file") || {
+			echo 'runtime requiredCommands declaration is missing or empty' >&2
+			return 65
+		}
+		((${#required_commands[@]} > 0)) || {
+			echo 'runtime requiredCommands declaration is missing or empty' >&2
+			return 65
+		}
+		missing="$(missing_declared_commands "${required_commands[@]}")"
+	}
+	[[ -z "$missing" ]] || {
+		echo "runtime image is missing required commands: $missing" >&2
+		return 1
+	}
 	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
 		echo 'configured runtime image is missing' >&2
 		return 65
@@ -910,7 +943,6 @@ capabilities() {
 	rg -q 'hevc_qsv' <<<"$encoders" || return 1
 	rg -q 'libvmaf' <<<"$filters" || return 1
 	rg -q 'libx265' <<<"$encoders" || return 1
-	command -v sh awk jq stat sha256sum realpath ffprobe >/dev/null || return 1
 	uid="$(id -u)"
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"

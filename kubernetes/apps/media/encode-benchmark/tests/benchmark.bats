@@ -65,7 +65,22 @@ write_capability_samples() {
 schemaVersion: 1
 runtime:
   image: '$image'
+  requiredCommands:
+$(capability_required_commands "${@:2}")
 EOF
+}
+
+# Derive the fixture's command list from the deployed declaration so a probe
+# fixture cannot drift into asserting a command surface the image never claims.
+capability_required_commands() {
+	local samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
+	local extra
+	yq -r '.data."samples.yaml"' "$samples" |
+		yq -r '.runtime.requiredCommands[]' |
+		sed 's/^/    - /'
+	for extra in "$@"; do
+		printf '    - %s\n' "$extra"
+	done
 }
 
 create_execution_tools() {
@@ -1239,4 +1254,34 @@ print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
 PYTHON
 	[ "$status" -eq 0 ]
 	[ "$output" = '[{"audio_bytes":"150","audio_bytes_method":"packet-counted","bit_rate":"","channel_layout":"7.1","channels":"8","codec":"truehd","duration_seconds":"90","language":"eng","source_path":"/media/source.mkv","track_index":"1"},{"audio_bytes":"40","audio_bytes_method":"packet-counted","bit_rate":"640000","channel_layout":"5.1(side)","channels":"6","codec":"ac3","duration_seconds":"90","language":"eng","source_path":"/media/source.mkv","track_index":"2"}]' ]
+}
+
+# Catches a probe that stops at the first absent tool. Each missing command
+# reported late costs a full operator dispatch cycle, so the capability run must
+# name the whole gap at once.
+@test "capabilities reports every missing runtime command in one run" {
+	create_capability_tools
+	write_capability_samples '' benchmark-absent-one benchmark-absent-two
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export NODE_NAME='talos-03'
+
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'runtime image is missing required commands:'* ]]
+	[[ "$output" == *'benchmark-absent-one'* ]]
+	[[ "$output" == *'benchmark-absent-two'* ]]
+}
+
+# Catches the declaration drifting from what the runtime scripts invoke: every
+# declared command must resolve on the test host, or the sandbox contracts
+# silently degrade into an unrestricted PATH.
+@test "declared runtime commands all resolve for the sandbox contracts" {
+	load helpers/runtime-sandbox
+	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
+
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/sandbox"
+	[ "$status" -eq 0 ]
+	run bash -c "ls '$output' | wc -l"
+	[ "$status" -eq 0 ]
+	[ "$(echo "$output" | tr -d ' ')" -ge 25 ]
 }
