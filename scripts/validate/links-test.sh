@@ -27,6 +27,24 @@ new_repo() {
   git -C "$path" update-ref refs/remotes/origin/main HEAD
 }
 
+toolchain_repo="$temp_root/toolchain"
+new_repo "$toolchain_repo"
+printf 'tracked\n' >"$toolchain_repo/source.md"
+git -C "$toolchain_repo" add source.md
+
+toolchain_bin="$temp_root/toolchain-bin"
+mkdir -p "$toolchain_bin"
+for tool in bash basename cat dirname git mise mktemp readlink rg rm; do
+  ln -s "$(command -v "$tool")" "$toolchain_bin/$tool"
+done
+
+if ! PATH="$toolchain_bin" "$validator" "$toolchain_repo" \
+  >"$temp_root/toolchain.out" 2>&1; then
+  cat "$temp_root/toolchain.out" >&2
+  echo 'Expected the validator to resolve pinned tools from its repository root.' >&2
+  exit 1
+fi
+
 markdown_repo="$temp_root/markdown"
 new_repo "$markdown_repo"
 cp "$fixture_root/dead-markdown.md.in" "$markdown_repo/source.md"

@@ -159,7 +159,7 @@ if ! git rev-parse --verify --quiet origin/main >/dev/null; then
 fi
 
 markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\((?:\\\\.|[^()])*\\)))?\\)"
-mise exec -- uv run --locked --no-dev python "$validator_root/scripts/repository/decisions.py" \
+mise exec -C "$validator_root" -- uv run --locked --no-dev python "$validator_root/scripts/repository/decisions.py" \
   changed-content --base origin/main --repo "$repo_root" --null >"$changed_decision_paths"
 
 git ls-files -z '*.md' "${exclude_specs[@]}" >"$markdown_paths"
