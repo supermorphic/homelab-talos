@@ -30,6 +30,10 @@ From a fresh clone of `main`, follow this order exactly:
    mise exec -- just repo hooks
    ```
 
+   The recipe installs the hook in Git's shared common directory and configures
+   `core.hooksPath` to use it. One installation from the main clone covers linked
+   worktrees; rerunning the command from either location is safe.
+
 4. Export the operator-held SOPS identity into the current shell. Use either
    `SOPS_AGE_KEY` or an owner-readable `SOPS_AGE_KEY_FILE` outside the repository; never
    create an age-key file in the checkout. See [`docs/sops.md`](../sops.md).

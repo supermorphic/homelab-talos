@@ -1220,9 +1220,16 @@ verify: verify-files verify-shell-scripts
 # for a failed bare [[ ]] or (( )) mid-recipe, so validation assertions would
 # silently not gate. Recipes use #!/usr/bin/env bash, so a bash >= 5 earlier in
 # PATH (for example brew install bash) is what makes the guards effective.
-# Install the git pre-commit hooks into .git/hooks (idempotent).
+# Install the git pre-commit hooks into the shared Git common directory (idempotent).
 hooks:
-    pre-commit install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+    hooks_dir="$common_dir/hooks"
+    mkdir -p "$hooks_dir"
+    git config --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
+    pre-commit install --install-hooks
+    git config core.hooksPath "$hooks_dir"
 
 # Run every pre-commit hook against the whole tree. Fails if a hook fails or would
 # modify a file. Folded into `just ci` for local fast feedback and CI.
