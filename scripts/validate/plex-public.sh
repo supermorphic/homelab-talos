@@ -133,7 +133,7 @@ listener='select(.kind == "Gateway") | .spec.listeners[0]'
 [[ "$(yq -r '.spec.rules[0].backendRefs[0] | [.group, .kind, .name, .port] | join(",")' "$route")" == ',Service,plex,32400' ]]
 
 mapfile -t kubernetes_yaml < <(rg --files kubernetes -g '*.yaml' | sort)
-public_parent_routes="$(yq ea -r 'select(.kind == "HTTPRoute") | . as $route | .spec.parentRefs[]? | select(.name == "public" and .namespace == "networking-public") | $route.metadata.namespace + "/" + $route.metadata.name' "${kubernetes_yaml[@]}")"
+public_parent_routes="$(yq ea -r 'select(type == "!!map" and .kind == "HTTPRoute") | select([.spec.parentRefs[]? | select(.name == "public" and .namespace == "networking-public")] | length > 0) | .metadata.namespace + "/" + .metadata.name' "${kubernetes_yaml[@]}")"
 [[ "$public_parent_routes" == 'media/plex-public' ]]
 
 if yq ea -e 'select(.kind == "ReferenceGrant")' "$public_app"/*.yaml >/dev/null 2>&1; then

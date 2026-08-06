@@ -5,6 +5,7 @@ resources:
   - ./ciliumnetworkpolicy.yaml
   - ./helmrelease.yaml
   - ./httproute.yaml
+  - ./httproute-public.yaml
 configMapGenerator:
   - name: plex-values
     namespace: media
