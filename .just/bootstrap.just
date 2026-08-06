@@ -1301,7 +1301,7 @@ plex-public-gateway:
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait --for=condition=Ready kustomization/public-gateway --timeout=15m
 
     just kube plex-public-verify
-    just kube plex-public-probe-test
+    PLEX_PUBLIC_PROBE_CONFIRM='test:plex-public-probe' just kube plex-public-probe-test
     bootstrap_complete=true
     echo 'Dedicated public Plex Gateway acceptance passed without WAN exposure. Persist suspend=false only after completing the documented phase gates.'
 
