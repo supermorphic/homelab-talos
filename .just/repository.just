@@ -1353,10 +1353,30 @@ hooks:
     set -euo pipefail
     common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
     hooks_dir="$common_dir/hooks"
+    prior_hooks_path=''
+    prior_hooks_path_set=false
+    if prior_hooks_path="$(git config --local --get core.hooksPath)"; then
+      prior_hooks_path_set=true
+    else
+      status="$?"
+      [[ "$status" -eq 1 ]] || exit "$status"
+    fi
+    restore_prior_hooks_path() {
+      local status="$?"
+      trap - EXIT
+      if [[ "$prior_hooks_path_set" == true ]]; then
+        git config --local core.hooksPath "$prior_hooks_path"
+      else
+        git config --local --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
+      fi
+      exit "$status"
+    }
+    trap restore_prior_hooks_path EXIT
     mkdir -p "$hooks_dir"
-    git config --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
+    git config --local --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
     pre-commit install --install-hooks
-    git config core.hooksPath "$hooks_dir"
+    git config --local core.hooksPath "$hooks_dir"
+    trap - EXIT
 
 # Run every pre-commit hook against the whole tree. Fails if a hook fails or would
 # modify a file. Folded into `just ci` for local fast feedback and CI.
