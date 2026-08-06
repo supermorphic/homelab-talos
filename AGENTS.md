@@ -19,10 +19,12 @@ assumptions.
 - Never commit or push directly to `main`; work on the assigned feature branch.
 - Never merge or enable auto-merge without explicit operator authorization for that
   specific merge. General or stale approval does not count.
-- The assigned worktree is the filesystem boundary for implementation work. Do not use
-  files from another worktree or the primary checkout as implementation inputs, and
-  never modify them. Read-only inspection of committed Git objects, refs, and history
-  is allowed.
+- The assigned worktree is the filesystem boundary for repository implementation files
+  and inputs. Established pinned-toolchain workflows may access their configured
+  user-level installations, caches, and state when permitted by the execution sandbox;
+  this does not make the workflow operator-run. Do not use files from another worktree
+  or the primary checkout as implementation inputs, and never modify them. Read-only
+  inspection of committed Git objects, refs, and history is allowed.
 - Do not create, remove, move, prune, repair, or otherwise manage worktrees. Worktree
   lifecycle is operator-run.
 - Stop if the assigned branch or worktree is inconsistent or unsafe. Preserve unrelated
@@ -45,6 +47,10 @@ assumptions.
 - Run repository workflows through the pinned toolchain with `mise exec -- just …`.
   Use `mise exec -- <tool> …` for pinned ad hoc inspection when no recipe exists. Do not
   substitute unpinned local tools.
+- Sandbox approval required solely for an established agent-owned workflow to access
+  approved toolchain installations, caches, or state does not make the workflow
+  operator-run. Sandbox approval does not authorize any action otherwise prohibited or
+  assigned to the operator by this file.
 - Normal repository and cluster reads may use established read-only workflows with
   scoped worktree credentials. Changes to Flux-managed state go through Git.
 - If the assigned worktree lacks required cluster credentials, stop and ask the operator

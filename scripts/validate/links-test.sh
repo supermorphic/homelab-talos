@@ -10,6 +10,9 @@ trap 'rm -rf "$temp_root"' EXIT
 # Every repository path named here is assembled from a variable. A literal dead
 # path in this file would itself be reported by the bare-path scan.
 missing_name='absent-runbook'
+docs_dir='docs'
+missing_bare_name='missing-runbook'
+missing_bare_target="$docs_dir/$missing_bare_name.md"
 live_dir='docs/runbooks'
 dollar='$'
 interpolated="${dollar}base/README.md"
@@ -18,7 +21,29 @@ new_repo() {
   local path="$1"
   mkdir -p "$path"
   git -C "$path" init --quiet
+  git -C "$path" config user.email 'test@example.invalid'
+  git -C "$path" config user.name 'Test'
+  git -C "$path" commit --quiet --allow-empty -m baseline
+  git -C "$path" update-ref refs/remotes/origin/main HEAD
 }
+
+toolchain_repo="$temp_root/toolchain"
+new_repo "$toolchain_repo"
+printf 'tracked\n' >"$toolchain_repo/source.md"
+git -C "$toolchain_repo" add source.md
+
+toolchain_bin="$temp_root/toolchain-bin"
+mkdir -p "$toolchain_bin"
+for tool in bash basename cat dirname git mise mktemp readlink rg rm; do
+  ln -s "$(command -v "$tool")" "$toolchain_bin/$tool"
+done
+
+if ! PATH="$toolchain_bin" "$validator" "$toolchain_repo" \
+  >"$temp_root/toolchain.out" 2>&1; then
+  cat "$temp_root/toolchain.out" >&2
+  echo 'Expected the validator to resolve pinned tools from its repository root.' >&2
+  exit 1
+fi
 
 markdown_repo="$temp_root/markdown"
 new_repo "$markdown_repo"
@@ -187,7 +212,6 @@ fi
 
 excluded_repo="$temp_root/excluded"
 new_repo "$excluded_repo"
-docs_dir='docs'
 superpowers_dir='superpowers'
 excluded_target='missing-excluded.md'
 mkdir -p "$excluded_repo/$docs_dir/$superpowers_dir"
@@ -199,6 +223,55 @@ if ! "$validator" "$excluded_repo" >"$temp_root/excluded.out" 2>&1; then
   echo 'Expected docs/superpowers to be excluded.' >&2
   exit 1
 fi
+
+decision_repo="$temp_root/decision"
+new_repo "$decision_repo"
+decision_dir='docs/decisions'
+decision_name='2026-08-02-example.md'
+mkdir -p "$decision_repo/$decision_dir"
+printf '# Decision\n\n- **Status: Accepted.**\n\n[missing](missing.md)\n' \
+  >"$decision_repo/$decision_dir/$decision_name"
+git -C "$decision_repo" add -A
+git -C "$decision_repo" commit --quiet -m 'add accepted decision'
+git -C "$decision_repo" update-ref refs/remotes/origin/main HEAD
+if ! "$validator" "$decision_repo" >"$temp_root/decision-frozen.out" 2>&1; then
+  cat "$temp_root/decision-frozen.out" >&2
+  echo 'Expected an unchanged Accepted decision to remain outside link validation.' >&2
+  exit 1
+fi
+printf '\nChanged body.\n' >>"$decision_repo/$decision_dir/$decision_name"
+git -C "$decision_repo" add "$decision_dir/$decision_name"
+git -C "$decision_repo" commit --quiet -m 'revise decision'
+if "$validator" "$decision_repo" >"$temp_root/decision-changed.out" 2>&1; then
+  echo 'Expected a changed decision body to be link-validated.' >&2
+  exit 1
+fi
+rg -F -q "$decision_dir/$decision_name:5: missing Markdown link target 'missing.md'" \
+  "$temp_root/decision-changed.out"
+
+decision_bare_repo="$temp_root/decision-bare"
+new_repo "$decision_bare_repo"
+decision_bare_name='2026-08-02-bare-example.md'
+mkdir -p "$decision_bare_repo/$decision_dir"
+printf '# Decision\n\n- **Status: Accepted.**\n\nSee %s.\n' "$missing_bare_target" \
+  >"$decision_bare_repo/$decision_dir/$decision_bare_name"
+git -C "$decision_bare_repo" add -A
+git -C "$decision_bare_repo" commit --quiet -m 'add accepted decision'
+git -C "$decision_bare_repo" update-ref refs/remotes/origin/main HEAD
+if ! "$validator" "$decision_bare_repo" >"$temp_root/decision-bare-frozen.out" 2>&1; then
+  cat "$temp_root/decision-bare-frozen.out" >&2
+  echo 'Expected an unchanged Accepted decision to remain outside bare-path validation.' >&2
+  exit 1
+fi
+printf '\nChanged body.\n' >>"$decision_bare_repo/$decision_dir/$decision_bare_name"
+git -C "$decision_bare_repo" add "$decision_dir/$decision_bare_name"
+git -C "$decision_bare_repo" commit --quiet -m 'revise decision'
+if "$validator" "$decision_bare_repo" >"$temp_root/decision-bare-changed.out" 2>&1; then
+  echo 'Expected a changed decision bare path to be link-validated.' >&2
+  exit 1
+fi
+rg -F -q "$decision_dir/$decision_bare_name:5: missing bare path target '$missing_bare_target'" \
+  "$temp_root/decision-bare-changed.out"
 
 neighbor_repo="$temp_root/neighbor"
 new_repo "$neighbor_repo"

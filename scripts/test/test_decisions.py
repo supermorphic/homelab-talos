@@ -60,6 +60,11 @@ Written before the lifecycle CLI existed.
 """
 
 
+def record_path(name: str) -> str:
+    """Build a decision path without introducing a bare documentation reference."""
+    return f"{DECISIONS_DIR}/{name}"
+
+
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -210,15 +215,28 @@ class LegacyRecordTest(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.repo = RepoFixture(self.stack)
-        self.legacy_name = Path(decisions.LEGACY_ACCEPTED_PATHS[0]).name
+        self.legacy_name = "2026-08-01-tautulli.md"
         self.repo.write(self.legacy_name, LEGACY_BODY)
         self.repo.commit("baseline legacy record")
         self.repo.branch("feature")
 
-    def test_amendment_record_is_an_imported_legacy_path(self) -> None:
-        self.assertIn(
-            "docs/decisions/2026-08-03-agent-rules-runtime-contract-amendment.md",
-            decisions.LEGACY_ACCEPTED_PATHS,
+    def test_pre_enforcement_records_are_imported_byte_exact(self) -> None:
+        self.assertEqual(
+            decisions.LEGACY_ACCEPTED_STATUS,
+            {
+                "docs/decisions/2026-08-01-tautulli.md": "Status: Accepted (2026-08-02)",
+                "docs/decisions/2026-08-02-plex-relay-sonos-design.md": (
+                    "Status: Accepted (2026-08-02); "
+                    "**remote-path selection superseded (2026-08-03)**"
+                ),
+                "docs/decisions/2026-08-03-agent-rules-runtime-contract-amendment.md": (
+                    "Status: Accepted (2026-08-03)"
+                ),
+                "docs/decisions/2026-08-03-plex-public-envoy-amendment.md": (
+                    "Status: **Approved (2026-08-03)** — independently reviewed and "
+                    "revised before approval."
+                ),
+            },
         )
 
     def test_unchanged_legacy_record_is_accepted(self) -> None:
@@ -339,6 +357,283 @@ class ParseRecordTest(unittest.TestCase):
     def test_two_status_lines_are_an_error(self) -> None:
         with self.assertRaises(decisions.RecordError):
             self._parse(ACCEPTED_BODY + "\n- **Status: Draft.**\n")
+
+
+LEGACY_PLEX_PATH = "docs/decisions/2026-08-02-plex-relay-sonos-design.md"
+LEGACY_PLEX_STATUS = (
+    "Status: Accepted (2026-08-02); **remote-path selection superseded (2026-08-03)**"
+)
+LEGACY_PLEX_BODY = f"""# Plex Relay and Sonos integration — design
+
+{LEGACY_PLEX_STATUS}
+
+## Decision
+
+Imported pre-enforcement record.
+"""
+
+LEGACY_ENVOY_PATH = "docs/decisions/2026-08-03-plex-public-envoy-amendment.md"
+LEGACY_ENVOY_STATUS = (
+    "Status: **Approved (2026-08-03)** — independently reviewed and revised before approval."
+)
+LEGACY_ENVOY_BODY = f"""# Plex public Envoy amendment
+
+{LEGACY_ENVOY_STATUS}
+
+## Decision
+
+Imported pre-enforcement record.
+"""
+
+
+class LegacyByteExactTest(unittest.TestCase):
+    def test_annotated_plex_header_is_accepted_at_its_own_path(self) -> None:
+        record = decisions.parse_text(LEGACY_PLEX_BODY, LEGACY_PLEX_PATH)
+        self.assertEqual(record.status, "Accepted")
+        self.assertTrue(record.legacy)
+
+    def test_annotated_plex_header_is_rejected_at_another_legacy_path(self) -> None:
+        with self.assertRaises(decisions.RecordError):
+            decisions.parse_text(LEGACY_PLEX_BODY, "docs/decisions/2026-08-01-tautulli.md")
+
+    def test_plain_header_is_rejected_at_the_plex_path(self) -> None:
+        body = LEGACY_PLEX_BODY.replace(LEGACY_PLEX_STATUS, "Status: Accepted (2026-08-02)")
+        with self.assertRaises(decisions.RecordError):
+            decisions.parse_text(body, LEGACY_PLEX_PATH)
+
+    def test_envoy_approved_header_is_accepted_at_its_own_path(self) -> None:
+        record = decisions.parse_text(LEGACY_ENVOY_BODY, LEGACY_ENVOY_PATH)
+        self.assertEqual(record.status, "Accepted")
+        self.assertTrue(record.legacy)
+
+    def test_envoy_header_with_another_date_is_rejected(self) -> None:
+        body = LEGACY_ENVOY_BODY.replace("(2026-08-03)", "(2026-08-04)")
+        with self.assertRaises(decisions.RecordError):
+            decisions.parse_text(body, LEGACY_ENVOY_PATH)
+
+
+class ContentChangedTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.repo = RepoFixture(self.stack)
+        self.repo.write("2026-08-02-example.md", ACCEPTED_BODY)
+        self.repo.write("2026-08-01-tautulli.md", LEGACY_BODY)
+        self.repo.commit("baseline records")
+        self.repo.branch("feature")
+
+    def selected(self, base: str = "main") -> list[str]:
+        return decisions.content_changed_records(self.repo.root, base)
+
+    def test_added_record_is_selected(self) -> None:
+        self.repo.write("2026-08-04-new-topic.md", DRAFT_BODY)
+        self.repo.commit("add draft")
+        self.assertEqual(self.selected(), [record_path("2026-08-04-new-topic.md")])
+
+    def test_draft_body_edit_is_selected(self) -> None:
+        self.repo.write("2026-08-04-draft.md", DRAFT_BODY)
+        self.repo.commit("add draft")
+        self.repo.write(
+            "2026-08-04-draft.md",
+            DRAFT_BODY.replace("The chosen approach", "A revised approach"),
+        )
+        self.repo.commit("revise draft")
+        self.assertEqual(self.selected(), [record_path("2026-08-04-draft.md")])
+
+    def test_accepted_body_edit_is_selected(self) -> None:
+        self.repo.write(
+            "2026-08-02-example.md",
+            ACCEPTED_BODY.replace("The chosen approach", "A different approach"),
+        )
+        self.repo.commit("revise accepted body")
+        self.assertEqual(self.selected(), [record_path("2026-08-02-example.md")])
+
+    def test_status_only_supersession_selects_only_the_successor(self) -> None:
+        self.repo.write("2026-08-03-successor.md", SUCCESSOR_BODY)
+        self.repo.write(
+            "2026-08-02-example.md",
+            ACCEPTED_BODY.replace(
+                "- **Status: Accepted.** Approved by the operator on 2026-08-02.",
+                "- **Status: Superseded by 2026-08-03-successor.md.**",
+            ),
+        )
+        self.repo.commit("supersede")
+        self.assertEqual(self.selected(), [record_path("2026-08-03-successor.md")])
+
+    def test_unchanged_accepted_record_is_not_selected(self) -> None:
+        (self.repo.root / "notes.txt").write_text("unrelated\n", encoding="utf-8")
+        self.repo.commit("unrelated change")
+        self.assertEqual(self.selected(), [])
+
+    def test_deleted_record_is_not_selected(self) -> None:
+        self.repo.delete("2026-08-02-example.md")
+        self.repo.commit("delete accepted record")
+        self.assertEqual(self.selected(), [])
+
+    def test_unparseable_modification_is_selected(self) -> None:
+        self.repo.write("2026-08-04-draft.md", DRAFT_BODY)
+        self.repo.commit("add draft")
+        self.repo.write("2026-08-04-draft.md", "# No Status\n\nBody only.\n")
+        self.repo.commit("break draft")
+        self.assertEqual(self.selected(), [record_path("2026-08-04-draft.md")])
+
+    def test_legacy_status_only_supersession_selects_only_the_successor(self) -> None:
+        self.repo.write("2026-08-03-successor.md", SUCCESSOR_BODY)
+        self.repo.write(
+            "2026-08-01-tautulli.md",
+            LEGACY_BODY.replace(
+                "Status: Accepted (2026-08-02)",
+                "- **Status: Superseded by 2026-08-03-successor.md.**",
+            ),
+        )
+        self.repo.commit("supersede legacy record")
+        self.assertEqual(self.selected(), [record_path("2026-08-03-successor.md")])
+
+    def test_legacy_body_edit_is_selected(self) -> None:
+        self.repo.write(
+            "2026-08-01-tautulli.md",
+            LEGACY_BODY.replace("Written before", "Rewritten after"),
+        )
+        self.repo.commit("revise legacy body")
+        self.assertEqual(self.selected(), ["docs/decisions/2026-08-01-tautulli.md"])
+
+
+class ChangedContentCliTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.repo = RepoFixture(self.stack)
+        self.repo.write("2026-08-02-example.md", ACCEPTED_BODY)
+        self.repo.commit("baseline accepted record")
+        self.repo.branch("feature")
+
+    def _run(self, *args: str) -> tuple[int, str]:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stdout):
+            code = decisions.main(list(args))
+        return code, stdout.getvalue()
+
+    def test_null_delimited_output(self) -> None:
+        self.repo.write("2026-08-04-new-topic.md", DRAFT_BODY)
+        self.repo.commit("add draft")
+        code, output = self._run(
+            "changed-content", "--base", "main", "--repo", str(self.repo.root), "--null"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(output, record_path("2026-08-04-new-topic.md") + "\0")
+
+    def test_newline_output_by_default(self) -> None:
+        self.repo.write("2026-08-04-new-topic.md", DRAFT_BODY)
+        self.repo.commit("add draft")
+        code, output = self._run(
+            "changed-content", "--base", "main", "--repo", str(self.repo.root)
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(output, record_path("2026-08-04-new-topic.md") + "\n")
+
+    def test_missing_base_ref_exits_two(self) -> None:
+        code, output = self._run(
+            "changed-content", "--base", "origin/absent", "--repo", str(self.repo.root)
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("origin/absent", output)
+
+
+class RenderIndexTest(unittest.TestCase):
+    def test_exact_document(self) -> None:
+        superseded = ACCEPTED_BODY.replace(
+            "- **Status: Accepted.** Approved by the operator on 2026-08-02.",
+            "- **Status: Superseded by 2026-08-03-example-later.md.**",
+        )
+        records = [
+            decisions.parse_text(ACCEPTED_BODY, record_path("2026-08-02-example.md")),
+            decisions.parse_text(DRAFT_BODY, record_path("2026-08-03-example-alpha.md")),
+            decisions.parse_text(SUCCESSOR_BODY, record_path("2026-08-03-example-later.md")),
+            decisions.parse_text(superseded, record_path("2026-08-01-old.md")),
+            decisions.parse_text(LEGACY_PLEX_BODY, LEGACY_PLEX_PATH),
+        ]
+        self.assertEqual(
+            decisions.render_index(records),
+            """# Decision Records
+
+Generated by `scripts/repository/decisions.py`; regenerate with `just repo decisions-index`. Do not edit by hand.
+
+| Date | Topic | Status | Superseded by |
+| --- | --- | --- | --- |
+| 2026-08-03 | example alpha | Draft | — |
+| 2026-08-03 | example later | Accepted | — |
+| 2026-08-02 | example | Accepted | — |
+| 2026-08-02 | plex relay sonos design | Accepted | — |
+| 2026-08-01 | old | Superseded | 2026-08-03-example-later.md |
+""",
+        )
+
+
+class IndexRecordsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.repo = RepoFixture(self.stack)
+
+    def test_discovery_sorts_and_excludes_non_records(self) -> None:
+        self.repo.write("2026-08-02-b-topic.md", ACCEPTED_BODY)
+        self.repo.write("2026-08-03-a-topic.md", DRAFT_BODY)
+        directory = self.repo.root / DECISIONS_DIR
+        (directory / "README.md").write_text("# Index\n", encoding="utf-8")
+        (directory / "reviews").mkdir()
+        (directory / "reviews" / "2026-08-02-b-topic-review.md").write_text(
+            "review\n", encoding="utf-8"
+        )
+        (directory / "images").mkdir()
+        (directory / "images" / "note.txt").write_text("image\n", encoding="utf-8")
+        paths = [record.path for record in decisions.index_records(self.repo.root)]
+        self.assertEqual(
+            paths,
+            [record_path("2026-08-03-a-topic.md"), record_path("2026-08-02-b-topic.md")],
+        )
+
+
+class IndexCliTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.repo = RepoFixture(self.stack)
+        self.repo.write("2026-08-02-example.md", ACCEPTED_BODY)
+        self.repo.commit("baseline accepted record")
+
+    def _run(self, *args: str) -> tuple[int, str]:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stdout):
+            code = decisions.main(list(args))
+        return code, stdout.getvalue()
+
+    def _index_path(self) -> Path:
+        return self.repo.root / DECISIONS_DIR / "README.md"
+
+    def test_write_then_check_passes(self) -> None:
+        code, _ = self._run("index", "--write", "--repo", str(self.repo.root))
+        self.assertEqual(code, 0)
+        code, _ = self._run("index", "--check", "--repo", str(self.repo.root))
+        self.assertEqual(code, 0)
+
+    def test_written_content_matches_render(self) -> None:
+        self._run("index", "--write", "--repo", str(self.repo.root))
+        self.assertEqual(
+            self._index_path().read_text(encoding="utf-8"),
+            decisions.render_index(decisions.index_records(self.repo.root)),
+        )
+
+    def test_check_fails_when_index_is_stale(self) -> None:
+        self._run("index", "--write", "--repo", str(self.repo.root))
+        self.repo.write("2026-08-04-new-topic.md", DRAFT_BODY)
+        code, output = self._run("index", "--check", "--repo", str(self.repo.root))
+        self.assertEqual(code, 1)
+        self.assertIn("+| 2026-08-04 | new topic | Draft | — |", output)
+
+    def test_check_fails_when_index_is_missing(self) -> None:
+        code, output = self._run("index", "--check", "--repo", str(self.repo.root))
+        self.assertEqual(code, 1)
+        self.assertIn("README.md", output)
 
 
 if __name__ == "__main__":
