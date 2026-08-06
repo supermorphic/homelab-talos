@@ -35,8 +35,25 @@ spec:
               protocol: UDP
             - port: "53"
               protocol: TCP
-    - toEntities:
-        - world
+    # Reaches only the public IP-echo endpoint. Matches the Plex policy's bound:
+    # off-cluster HTTPS minus every private, shared, and documentation range, so
+    # the NAS, the UniFi gateway, and VLAN hosts stay unreachable.
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 100.64.0.0/10
+            - 127.0.0.0/8
+            - 169.254.0.0/16
+            - 172.16.0.0/12
+            - 192.0.0.0/24
+            - 192.0.2.0/24
+            - 192.168.0.0/16
+            - 198.18.0.0/15
+            - 198.51.100.0/24
+            - 203.0.113.0/24
+            - 224.0.0.0/4
+            - 240.0.0.0/4
       toPorts:
         - ports:
             - port: "443"

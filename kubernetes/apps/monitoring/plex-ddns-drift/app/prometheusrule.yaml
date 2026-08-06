@@ -26,6 +26,17 @@ spec:
           annotations:
             summary: Plex DDNS comparison failed
             description: The Plex DDNS collector could not obtain one valid IPv4 address from both comparison endpoints.
+        # A wedged collector keeps serving its last metrics file, so check_success
+        # stays 1 and absent() stays false. Only the success timestamp going stale
+        # distinguishes a hung comparison from a healthy one.
+        - alert: PlexDdnsCheckStale
+          expr: plex_ddns_last_success_unixtime > 0 and time() - plex_ddns_last_success_unixtime > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Plex DDNS comparison has stopped updating
+            description: The Plex DDNS collector recorded no successful comparison in the last 30 minutes while continuing to serve metrics.
         - alert: PlexDdnsMetricsMissing
           expr: absent(plex_ddns_check_success)
           for: 15m

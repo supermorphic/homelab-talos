@@ -11,9 +11,12 @@ app="$tree_root/kubernetes/apps/monitoring/plex-ddns-drift/app"
 
 reset_tree() {
   rm -rf -- "$tree_root"
-  mkdir -p "$tree_root/kubernetes/apps/monitoring" "$tree_root/scripts/lib"
+  mkdir -p "$tree_root/kubernetes/apps/monitoring" "$tree_root/scripts/lib" \
+    "$tree_root/kubernetes/apps/media/plex/app"
   cp -R "$repo_root/kubernetes/apps/monitoring/plex-ddns-drift" \
     "$tree_root/kubernetes/apps/monitoring/plex-ddns-drift"
+  cp "$repo_root/kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml" \
+    "$tree_root/kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml"
   cp "$repo_root/kubernetes/apps/monitoring/kustomization.yaml" \
     "$tree_root/kubernetes/apps/monitoring/kustomization.yaml"
   cp "$repo_root/scripts/lib/common.sh" "$tree_root/scripts/lib/common.sh"
@@ -91,8 +94,27 @@ yq -i '(.spec.egress[] | select(has("toCIDR"))).toPorts += [{"ports": [{"port": 
 expect_fail 'resolver rule gains another port block' 'Cilium resolver port rule must be exact'
 
 reset_tree
-yq -i '(.spec.egress[] | select(has("toEntities"))).toPorts[0].ports += [{"port": "80", "protocol": "TCP"}]' "$app/ciliumnetworkpolicy.yaml"
-expect_fail 'world rule gains another port' 'Cilium HTTPS port list must be exact'
+yq -i '(.spec.egress[] | select(has("toCIDRSet"))).toPorts[0].ports += [{"port": "80", "protocol": "TCP"}]' "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'HTTPS rule gains another port' 'Cilium HTTPS port list must be exact'
+
+reset_tree
+yq -i '(.spec.egress[] | select(has("toCIDRSet"))) = {"toEntities": ["world"], "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}]}' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'HTTPS rule widened back to the world entity' 'Cilium egress must not use a broad entity selector'
+
+reset_tree
+yq -i '(.spec.egress[] | select(has("toCIDRSet"))).toCIDRSet[0].except -= ["192.168.0.0/16"]' "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'HTTPS rule reaches the LAN' 'Cilium HTTPS exclusions must match the deployed Plex egress bound'
+
+reset_tree
+printf "    printf '# TYPE plex_ddns_probe_seconds gauge\\\\n'\n" >>"$app/check.sh"
+expect_fail 'collector exports a metric no alert watches' \
+  'Plex DDNS metrics are exported but never alerted on: plex_ddns_probe_seconds'
+
+reset_tree
+yq -i '.spec.template.spec.containers[] |= (select(.name == "server").securityContext.capabilities.add = ["NET_BIND_SERVICE"])' \
+  "$app/deployment.yaml"
+expect_fail 'metrics server regains a capability' 'Metrics server capabilities must be exact'
 
 reset_tree
 printf '\n:2019 {\n\trespond "ok" 200\n}\n' >>"$app/Caddyfile"

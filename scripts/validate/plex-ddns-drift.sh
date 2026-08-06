@@ -99,9 +99,9 @@ assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "serve
 [[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "collector") | (.securityContext.capabilities.add // []) | length' "$deployment")" == '0' ]]
 assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "collector") | .securityContext.capabilities | keys | join(",")' "$deployment")" \
   'drop' 'Collector capabilities must be exact'
-[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | .securityContext.capabilities.add | join(",")' "$deployment")" == 'NET_BIND_SERVICE' ]]
 assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | .securityContext.capabilities | keys | sort | join(",")' "$deployment")" \
-  'add,drop' 'Metrics server capabilities must be exact'
+  'drop' 'Metrics server capabilities must be exact'
+[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | (.securityContext.capabilities.add // []) | length' "$deployment")" == '0' ]]
 assert_equal "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(" ")' "$deployment")" \
   'config metrics tmp' 'Deployment volumes must be exact'
 assert_equal "$(yq -r '.spec.template.spec.volumes[] | select(.name == "config") | keys | sort | join(",")' "$deployment")" \
@@ -133,10 +133,24 @@ assert_equal "$(yq -r '.spec.endpoints[0] | keys | sort | join(",")' "$app/servi
   'interval,path,port' 'ServiceMonitor endpoint fields must be exact'
 
 rules="$app/prometheusrule.yaml"
-[[ "$(yq -r '.spec.groups[0].rules | map(.alert) | sort | join(" ")' "$rules")" == 'PlexDdnsAddressMismatch PlexDdnsCheckFailed PlexDdnsMetricsMissing' ]]
+[[ "$(yq -r '.spec.groups[0].rules | map(.alert) | sort | join(" ")' "$rules")" == 'PlexDdnsAddressMismatch PlexDdnsCheckFailed PlexDdnsCheckStale PlexDdnsMetricsMissing' ]]
 [[ "$(yq -r '.spec.groups[0].rules[] | select(.alert == "PlexDdnsAddressMismatch") | [.expr, .for, .labels.severity] | join("|")' "$rules")" == 'plex_ddns_check_success == 1 and plex_ddns_addresses_match == 0|10m|warning' ]]
 [[ "$(yq -r '.spec.groups[0].rules[] | select(.alert == "PlexDdnsCheckFailed") | [.expr, .for, .labels.severity] | join("|")' "$rules")" == 'plex_ddns_check_success == 0|15m|warning' ]]
+[[ "$(yq -r '.spec.groups[0].rules[] | select(.alert == "PlexDdnsCheckStale") | [.expr, .for, .labels.severity] | join("|")' "$rules")" == 'plex_ddns_last_success_unixtime > 0 and time() - plex_ddns_last_success_unixtime > 1800|5m|warning' ]]
 [[ "$(yq -r '.spec.groups[0].rules[] | select(.alert == "PlexDdnsMetricsMissing") | [.expr, .for, .labels.severity] | join("|")' "$rules")" == 'absent(plex_ddns_check_success)|15m|warning' ]]
+
+# Every metric the collector publishes must be watched by at least one alert. A
+# metric exported and never evaluated is a blind spot that looks like coverage:
+# a wedged collector keeps serving its last file, so only the success timestamp
+# distinguishes hung from healthy.
+exported_metrics="$(rg -o --replace '$1' '# TYPE (plex_ddns_[a-z_]+) gauge' "$app/check.sh" | sort -u)"
+[[ -n "$exported_metrics" ]]
+alerted_metrics="$(yq -r '.spec.groups[].rules[].expr' "$rules" | rg -o 'plex_ddns_[a-z_]+' | sort -u)"
+unwatched="$(comm -23 <(printf '%s\n' "$exported_metrics") <(printf '%s\n' "$alerted_metrics"))"
+[[ -z "$unwatched" ]] || {
+  echo "Plex DDNS metrics are exported but never alerted on: $(tr '\n' ' ' <<<"$unwatched")" >&2
+  exit 1
+}
 if yq -r '.spec.groups[].rules[].annotations[]' "$rules" | rg -q '([0-9]{1,3}\.){3}[0-9]{1,3}'; then
   echo 'Plex DDNS alert annotations must never contain addresses.' >&2
   exit 1
@@ -188,18 +202,32 @@ assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDR")) | .toPorts[0].port
   'Cilium resolver port list must be exact'
 assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDR")) | .toPorts[0].ports | map(.port + "/" + .protocol) | sort | join(",")' "$policy")" \
   '53/TCP,53/UDP' 'Cilium resolver ports must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | keys | sort | join(",")' "$policy")" \
-  'toEntities,toPorts' 'Cilium HTTPS egress fields must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | .toEntities | length' "$policy")" '1' \
-  'Cilium HTTPS entity list must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | .toPorts | length' "$policy")" '1' \
+assert_equal "$(yq -r '[.spec.egress[] | select(has("toEntities"))] | length' "$policy")" '0' \
+  'Cilium egress must not use a broad entity selector'
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | keys | sort | join(",")' "$policy")" \
+  'toCIDRSet,toPorts' 'Cilium HTTPS egress fields must be exact'
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toCIDRSet | length' "$policy")" '1' \
+  'Cilium HTTPS CIDR set must be exact'
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toCIDRSet[0].cidr' "$policy")" \
+  '0.0.0.0/0' 'Cilium HTTPS CIDR must be exact'
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toPorts | length' "$policy")" '1' \
   'Cilium HTTPS port rule must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | .toPorts[0] | keys | join(",")' "$policy")" \
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toPorts[0] | keys | join(",")' "$policy")" \
   'ports' 'Cilium HTTPS port rule fields must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | .toPorts[0].ports | length' "$policy")" '1' \
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toPorts[0].ports | length' "$policy")" '1' \
   'Cilium HTTPS port list must be exact'
-assert_equal "$(yq -r '.spec.egress[] | select(has("toEntities")) | [.toEntities[], .toPorts[0].ports[0].port, .toPorts[0].ports[0].protocol] | join(" ")' "$policy")" \
-  'world 443 TCP' 'Cilium HTTPS egress must be exact'
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | [.toPorts[0].ports[0].port, .toPorts[0].ports[0].protocol] | join(" ")' "$policy")" \
+  '443 TCP' 'Cilium HTTPS egress must be exact'
+
+# The exporter reaches one public IP-echo endpoint, so its off-cluster HTTPS bound
+# must exclude every private, shared, and documentation range the Plex policy
+# excludes. Derived from that deployed policy rather than restated here, so the two
+# cannot drift apart.
+plex_policy='kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml'
+[[ -f "$plex_policy" ]] || { echo "Missing $plex_policy" >&2; exit 1; }
+assert_equal "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toCIDRSet[0].except | sort | join(",")' "$policy")" \
+  "$(yq -r '.spec.egress[] | select(has("toCIDRSet")) | .toCIDRSet[0].except | sort | join(",")' "$plex_policy")" \
+  'Cilium HTTPS exclusions must match the deployed Plex egress bound'
 
 rg -Fq 'wget -qO- -T 10 https://api.ipify.org 2>/dev/null' "$app/check.sh"
 rg -Fq 'nslookup plex.lab.supermorphic.com 1.1.1.1 2>/dev/null' "$app/check.sh"
