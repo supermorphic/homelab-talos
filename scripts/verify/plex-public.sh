@@ -85,6 +85,24 @@ certificate="$("${kc[@]}" --namespace "$public_namespace" get certificate plex-l
   exit 1
 }
 
+# The public pool ships with this Gateway rather than with metallb-config, so its
+# live shape is this verifier's concern. The internal pool must already have given
+# up .39, or MetalLB's webhook would have refused the pool outright.
+public_pool="$("${kc[@]}" --namespace metallb-system get ipaddresspool public --output json)"
+[[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$public_pool")" == "$HOMELAB_PUBLIC_GATEWAY_VIP/32" ]] || {
+  echo "Public IPAddressPool is not exactly $HOMELAB_PUBLIC_GATEWAY_VIP/32." >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.autoAssign' - <<<"$public_pool")" == 'false' ]] || {
+  echo 'Public IPAddressPool must not auto-assign.' >&2
+  exit 1
+}
+internal_pool="$("${kc[@]}" --namespace metallb-system get ipaddresspool internal --output json)"
+[[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$internal_pool")" == '192.168.90.30-192.168.90.38' ]] || {
+  echo 'Internal IPAddressPool must exclude the public VIP.' >&2
+  exit 1
+}
+
 gateway_class="$("${kc[@]}" get gatewayclass "$public_gateway" --output json)"
 [[ "$(condition_status Accepted <<<"$gateway_class")" == 'True' ]] || {
   echo 'Public GatewayClass is not Accepted.' >&2

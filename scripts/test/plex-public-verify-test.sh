@@ -30,6 +30,21 @@ JSON
 {"apiVersion":"cert-manager.io/v1","kind":"Certificate","metadata":{"name":"plex-lab-supermorphic-com","namespace":"networking-public"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
 JSON
     ;;
+  *' --namespace metallb-system get ipaddresspool public --output json '*)
+    cat <<'JSON'
+{"apiVersion":"metallb.io/v1beta1","kind":"IPAddressPool","metadata":{"name":"public","namespace":"metallb-system"},"spec":{"addresses":["192.168.90.39/32"],"autoAssign":false}}
+JSON
+    ;;
+  *' --namespace metallb-system get ipaddresspool internal --output json '*)
+    if [[ "$FAKE_LAYOUT" == wide-internal-pool ]]; then
+      addresses='["192.168.90.30-192.168.90.39"]'
+    else
+      addresses='["192.168.90.30-192.168.90.38"]'
+    fi
+    cat <<JSON
+{"apiVersion":"metallb.io/v1beta1","kind":"IPAddressPool","metadata":{"name":"internal","namespace":"metallb-system"},"spec":{"addresses":$addresses,"autoAssign":false}}
+JSON
+    ;;
   *' get gatewayclass public --output json '*)
     cat <<'JSON'
 {"apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"public"},"status":{"conditions":[{"type":"Accepted","status":"True"}]}}
@@ -178,6 +193,7 @@ rg -F -q -- 'kube foundation-verify' "$happy_log"
 rg -F -q -- 'kube gatus-verify' "$happy_log"
 rg -F -q -- 'kube plex-verify' "$happy_log"
 
+run_layout_expect_failure wide-internal-pool 'Internal IPAddressPool must exclude the public VIP.'
 run_layout_expect_failure extra-service-port 'Public Envoy Service must expose only TCP 443.'
 run_layout_expect_failure alternate-sni-serves 'Public Envoy served an alternate SNI hostname.'
 run_layout_expect_failure absent-sni-serves 'Public Envoy completed TLS without SNI.'

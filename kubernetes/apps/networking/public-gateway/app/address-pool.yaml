@@ -1,0 +1,29 @@
+---
+# The dedicated public VIP lives here, not with the internal pool, because MetalLB's
+# validating webhook refuses a pool overlapping one already defined. Flux server-side
+# dry-runs every object in a Kustomization against current cluster state before
+# applying any of them, so narrowing `internal` to .30-.38 and creating `public` at
+# .39 in the same Kustomization deadlocks: at dry-run time `internal` still spans
+# .30-.39 (as 192.168.90.30/31 + 192.168.90.32/29), so .39/32 is rejected and the
+# narrowing that would free it never applies.
+#
+# Owning it here orders the two through `dependsOn: metallb-config`: the narrowing
+# lands first, and .39 is claimed only while this suspended Kustomization is resumed.
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: public
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.90.39/32
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: public
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - public

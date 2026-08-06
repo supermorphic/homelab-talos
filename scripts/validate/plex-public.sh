@@ -8,6 +8,7 @@ public_base='kubernetes/apps/networking/public-gateway'
 public_ks="$public_base/ks.yaml"
 public_app="$public_base/app"
 namespace="$public_app/namespace.yaml"
+public_pool="$public_app/address-pool.yaml"
 certificate="$public_app/certificate.yaml"
 envoyproxy="$public_app/envoyproxy.yaml"
 gateway="$public_app/gateway.yaml"
@@ -22,6 +23,7 @@ internal_envoy='kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml'
 required_files=(
   "$public_ks"
   "$namespace"
+  "$public_pool"
   "$certificate"
   "$envoyproxy"
   "$gateway"
@@ -61,11 +63,20 @@ done
 
 [[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "internal") | .spec.addresses | join(",")' "$pool")" == '192.168.90.30-192.168.90.38' ]]
 [[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "internal") | .spec.autoAssign' "$pool")" == 'false' ]]
-[[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "public") | .spec.addresses | join(",")' "$pool")" == "$HOMELAB_PUBLIC_GATEWAY_VIP/32" ]]
-[[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "public") | .spec.autoAssign' "$pool")" == 'false' ]]
-[[ "$(yq ea -r '[select(.kind == "L2Advertisement") | .metadata.name] | sort | join(",")' "$pool")" == 'internal,public' ]]
+[[ "$(yq ea -r '[select(.kind == "L2Advertisement") | .metadata.name] | join(",")' "$pool")" == 'internal' ]]
 [[ "$(yq ea -r 'select(.kind == "L2Advertisement" and .metadata.name == "internal") | .spec.ipAddressPools | join(",")' "$pool")" == 'internal' ]]
-[[ "$(yq ea -r 'select(.kind == "L2Advertisement" and .metadata.name == "public") | .spec.ipAddressPools | join(",")' "$pool")" == 'public' ]]
+
+# MetalLB's webhook refuses a pool overlapping one already defined, and Flux dry-runs
+# a Kustomization's objects against current cluster state before applying any of them.
+# The public pool must therefore never ship beside the narrowing that frees its
+# address: it belongs to the suspended public Gateway, ordered behind metallb-config.
+[[ "$(yq ea -r '[select(.kind == "IPAddressPool" or .kind == "L2Advertisement") | .metadata.name] | sort | unique | join(",")' "$pool")" == 'internal' ]]
+[[ "$(yq -r '.spec.suspend' "$public_ks")" == 'true' ]]
+[[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .metadata.name + "/" + .metadata.namespace' "$public_pool")" == 'public/metallb-system' ]]
+[[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.addresses | join(",")' "$public_pool")" == "$HOMELAB_PUBLIC_GATEWAY_VIP/32" ]]
+[[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.autoAssign' "$public_pool")" == 'false' ]]
+[[ "$(yq ea -r 'select(.kind == "L2Advertisement") | .metadata.name + "/" + .metadata.namespace' "$public_pool")" == 'public/metallb-system' ]]
+[[ "$(yq ea -r 'select(.kind == "L2Advertisement") | .spec.ipAddressPools | join(",")' "$public_pool")" == 'public' ]]
 
 [[ "$(yq -r '.kind' "$envoyproxy")" == 'EnvoyProxy' ]]
 [[ "$(yq -r '.metadata.name + "/" + .metadata.namespace' "$envoyproxy")" == 'public/networking-public' ]]
