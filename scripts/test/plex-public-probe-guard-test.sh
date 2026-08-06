@@ -48,23 +48,33 @@ JSON
   *' --namespace testing exec plex-public-probe-'*' -- curl '*'https://plex.lab.supermorphic.com/identity?X-Plex-Token=plan-canary-not-a-secret'*)
     previous=''
     for argument in "$@"; do
-      if [[ "$previous" == '-H' && "$argument" == X-Request-ID:* ]]; then
-        printf '%s' "${argument#X-Request-ID: }" >"$FAKE_REQUEST_ID_FILE"
+      if [[ "$previous" == '--user-agent' ]]; then
+        printf '%s' "$argument" >"$FAKE_AGENT_FILE"
       fi
       previous="$argument"
     done
     ;;
   *' --namespace envoy-gateway-system logs pod/envoy-public-'*' --container envoy --since=2m '*)
     [[ " $* " == *'pod/envoy-public-a'* ]] || exit 0
-    request_id="$(<"$FAKE_REQUEST_ID_FILE")"
+    agent="$(<"$FAKE_AGENT_FILE")"
+    # Envoy regenerates x-request-id for untrusted downstream requests, so the logged
+    # id is never the one the client sent. Emitting a fresh uuid here keeps the fixture
+    # honest: correlation must survive an id the probe has never seen.
+    envoy_request_id='b165c705-73a8-4692-94e4-eb2076501178'
     case "$FAKE_LAYOUT" in
       missing-canary)
         ;;
+      stale-agent)
+        printf '{"request_id":"%s","user_agent":"homelab-plex-public-canary/other-run","path":"/identity","downstream_remote_address":"10.244.0.5:43210"}\n' "$envoy_request_id"
+        ;;
+      no-request-id)
+        printf '{"request_id":"","user_agent":"%s","path":"/identity","downstream_remote_address":"10.244.0.5:43210"}\n' "$agent"
+        ;;
       leaked-token)
-        printf '{"request_id":"%s","path":"/identity?X-Plex-Token=plan-canary-not-a-secret","downstream_remote_address":"10.244.0.5:43210"}\n' "$request_id"
+        printf '{"request_id":"%s","user_agent":"%s","path":"/identity?X-Plex-Token=plan-canary-not-a-secret","downstream_remote_address":"10.244.0.5:43210"}\n' "$envoy_request_id" "$agent"
         ;;
       *)
-        printf '{"request_id":"%s","path":"/identity","downstream_remote_address":"10.244.0.5:43210","x_forwarded_for":""}\n' "$request_id"
+        printf '{"request_id":"%s","user_agent":"%s","path":"/identity","downstream_remote_address":"10.244.0.5:43210","x_forwarded_for":""}\n' "$envoy_request_id" "$agent"
         ;;
     esac
     ;;
@@ -99,7 +109,7 @@ run_scenario() {
     FAKE_LAYOUT="$layout" \
     FAKE_KUBECTL_LOG="$kubectl_log" \
     FAKE_MANIFEST_DIR="$fixture/manifests" \
-    FAKE_REQUEST_ID_FILE="$fixture/request-id" \
+    FAKE_AGENT_FILE="$fixture/canary-agent" \
     PLEX_PUBLIC_PROBE_CONFIRM="${PLEX_PUBLIC_PROBE_CONFIRM:-}" \
     "$scenario" "$fixture/kubeconfig" >"$output" 2>&1
   local status="$?"
@@ -187,14 +197,30 @@ fi
 rg -F -q 'No attributable public Envoy access-log canary appeared.' "$output"
 assert_cleanup
 
-echo '6. An ambiguous create failure still deletes the exact possibly persisted Pod.'
+echo '6. A canary entry from a different run does not satisfy this run.'
+if PLEX_PUBLIC_PROBE_CONFIRM='test:plex-public-probe' run_scenario stale-agent; then
+  echo 'Scenario matched a canary entry belonging to a different run.' >&2
+  exit 1
+fi
+rg -F -q 'No attributable public Envoy access-log canary appeared.' "$output"
+assert_cleanup
+
+echo '7. A canary entry without a request id fails attribution.'
+if PLEX_PUBLIC_PROBE_CONFIRM='test:plex-public-probe' run_scenario no-request-id; then
+  echo 'Scenario accepted a canary entry with no request id.' >&2
+  exit 1
+fi
+rg -F -q 'carries no request id for attribution.' "$output"
+assert_cleanup
+
+echo '8. An ambiguous create failure still deletes the exact possibly persisted Pod.'
 if PLEX_PUBLIC_PROBE_CONFIRM='test:plex-public-probe' run_scenario create-persisted-error; then
   echo 'Scenario passed after an ambiguous create failure.' >&2
   exit 1
 fi
 assert_cleanup
 
-echo '7. A happy-path deletion failure prevents a success claim.'
+echo '9. A happy-path deletion failure prevents a success claim.'
 if PLEX_PUBLIC_PROBE_CONFIRM='test:plex-public-probe' run_scenario delete-fails; then
   echo 'Scenario claimed success although its probe deletion failed.' >&2
   exit 1
