@@ -456,6 +456,13 @@ assert_hardened_job() {
 	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh capabilities' ]
 	[ "$(yq -r '[.spec.template.spec.volumes[].name] | sort | join(",")' "$job")" = 'samples,scratch,scripts' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915"' "$job")" = '1' ]
+	# The probe writes a five-second synthetic encode, so reserving the benchmark
+	# scratch budget would exceed node allocatable ephemeral storage and leave the
+	# Job permanently Unschedulable while still reporting a clean dispatch.
+	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."ephemeral-storage" // ""' "$job")" = '' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].resources.limits."ephemeral-storage" // ""' "$job")" = '' ]
+	# Anti-affinity must survive: the probe still needs a GPU on a non-Plex node.
+	[ -n "$(yq -r '.spec.template.spec.affinity // ""' "$job")" ]
 	! yq -e '.. | select(tag == "!!str") | select(test("downloads|/media|/out"))' "$job"
 }
 

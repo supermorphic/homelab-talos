@@ -195,6 +195,13 @@ dispatch_capabilities() {
 	name="encode-benchmark-capabilities-${run_id,,}"
 	render_job "$job" capabilities "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh capabilities
 	remove_mounts_and_volumes "$job" media out
+	# The probe writes only a five-second synthetic encode, so it keeps the scratch
+	# volume but must not reserve the benchmark scratch budget: that request exceeds
+	# node allocatable ephemeral storage and leaves the Job permanently Unschedulable.
+	yq -i '
+		del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |
+		del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage")
+	' "$job"
 	create_job "$job" >/dev/null
 	printf 'run_id=%s job=%s\n' "$run_id" "$name"
 }
