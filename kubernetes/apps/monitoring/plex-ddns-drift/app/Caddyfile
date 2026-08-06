@@ -1,0 +1,18 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:9090 {
+	handle /metrics {
+		rewrite * /metrics.prom
+		root * /metrics
+		header Content-Type "text/plain; version=0.0.4; charset=utf-8"
+		file_server
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

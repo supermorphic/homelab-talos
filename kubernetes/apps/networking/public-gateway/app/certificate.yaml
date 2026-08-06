@@ -1,0 +1,21 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: plex-lab-supermorphic-com
+  namespace: networking-public
+spec:
+  dnsNames:
+    - plex.lab.supermorphic.com
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: letsencrypt-production
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+    size: 256
+  secretName: plex-lab-supermorphic-com-tls
+  usages:
+    - digital signature
+    - server auth

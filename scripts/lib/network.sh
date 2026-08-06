@@ -20,7 +20,13 @@ HOMELAB_DNS_RESOLVER='192.168.90.2'
 # `metallb.io/loadBalancerIPs` annotation on the Envoy Service) that every
 # *.lab.supermorphic.com A record points at. Used as the curl --resolve target and the
 # HTTPRoute/DNS acceptance address in the verify scripts, and as the second Connector /32
-# route. The MetalLB pool RANGE (192.168.90.30-192.168.90.39) is a separate fact, asserted
-# inline by the foundation validate/verify scripts.
+# route. The MetalLB internal pool RANGE (192.168.90.30-192.168.90.38) is a separate
+# fact, asserted inline by the foundation validate/verify scripts; .39 belongs to the
+# dedicated public pool below.
 # shellcheck disable=SC2034  # consumed by the scripts that source this file
 HOMELAB_GATEWAY_VIP='192.168.90.30'
+
+# Dedicated public Envoy Gateway VIP. This remains a private LAN address and is the
+# sole target of the operator-managed WAN TCP 443 DNAT.
+# shellcheck disable=SC2034
+HOMELAB_PUBLIC_GATEWAY_VIP='192.168.90.39'

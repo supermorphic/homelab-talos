@@ -122,8 +122,8 @@ metallb_values='kubernetes/apps/networking/metallb/app/values.yaml'
 [[ "$(yq -r '.frrk8s.enabled' "$metallb_values")" == 'false' ]]
 [[ "$(yq -r '.speaker.frr.enabled' "$metallb_values")" == 'false' ]]
 pool='kubernetes/apps/networking/metallb/config/address-pool.yaml'
-[[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.addresses[0]' "$pool")" == '192.168.90.30-192.168.90.39' ]]
-[[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.autoAssign' "$pool")" == 'false' ]]
+[[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "internal") | .spec.addresses[0]' "$pool")" == '192.168.90.30-192.168.90.38' ]]
+[[ "$(yq ea -r 'select(.kind == "IPAddressPool" and .metadata.name == "internal") | .spec.autoAssign' "$pool")" == 'false' ]]
 
 gateway='kubernetes/apps/networking/internal-gateway/app/gateway.yaml'
 [[ "$(yq ea -r 'select(.kind == "Gateway") | .spec.listeners[0].hostname' "$gateway")" == '*.lab.supermorphic.com' ]]

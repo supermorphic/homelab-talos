@@ -11,3 +11,5 @@ metadata:
     pod-security.kubernetes.io/warn: privileged
     # Lets media UI HTTPRoutes attach to the internal gateway.
     gateway.supermorphic.com/access: internal
+    # Admits only the explicitly validated Plex route to the public Gateway.
+    gateway.supermorphic.com/public-plex: "true"

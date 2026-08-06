@@ -1,11 +1,13 @@
 # MetalLB
 
 MetalLB chart `0.16.1` advertises LoadBalancer addresses on the LAN in L2 mode.
-The only pool is `192.168.90.30-192.168.90.39`, `autoAssign` is disabled, and
-the internal Gateway explicitly requests `192.168.90.30`. FRR and FRR-K8s are
-disabled.
+Two pools exist and `autoAssign` is disabled on both: `internal`
+(`192.168.90.30-192.168.90.38`), from which the internal Gateway explicitly
+requests `192.168.90.30`; and `public` (`192.168.90.39/32`), reserved for the
+dedicated public Plex Gateway and claimed only while that Kustomization is
+resumed. Each pool has its own L2Advertisement. FRR and FRR-K8s are disabled.
 
-The router must exclude the entire pool from DHCP. Use
+The router must exclude `192.168.90.30-192.168.90.39` from DHCP. Use
 `just bootstrap foundation` for the guarded first reconciliation and
 `just kube foundation-status` for inspection; see
 [`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md).

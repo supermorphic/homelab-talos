@@ -43,7 +43,7 @@ controller="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get 
 speaker="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset metallb-speaker --output json | yq -r '[.status.desiredNumberScheduled, .status.numberReady, (.status.numberUnavailable // 0)] | join(" ")')"
 [[ "$speaker" == '3 3 0' ]]
 pool="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get ipaddresspool internal --output json)"
-[[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$pool")" == '192.168.90.30-192.168.90.39' ]]
+[[ "$(yq -r '.spec.addresses | join(" ")' - <<<"$pool")" == '192.168.90.30-192.168.90.38' ]]
 [[ "$(yq -r '.spec.autoAssign' - <<<"$pool")" == 'false' ]]
 frr_daemonset="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get daemonset frr-k8s-daemon --ignore-not-found --output name)"
 assert_empty "$frr_daemonset" 'The FRR DaemonSet must remain absent.'
