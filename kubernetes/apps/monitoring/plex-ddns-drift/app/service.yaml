@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plex-ddns-drift
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: plex-ddns-drift
+spec:
+  selector:
+    app.kubernetes.io/name: plex-ddns-drift
+  ports:
+    - name: metrics
+      port: 9090
+      protocol: TCP
+      targetPort: metrics

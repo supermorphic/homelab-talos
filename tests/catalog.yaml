@@ -21,6 +21,7 @@ executions:
     - validation.media-storage
     - validation.plex
     - validation.plex-public
+    - validation.plex-ddns-drift
     - validation.intel-gpu-plugin
     - validation.encode-benchmark
     - validation.qbittorrent
@@ -66,6 +67,7 @@ campaigns:
       - verification.media-storage
       - verification.plex
       - verification.plex-public
+      - verification.plex-ddns-drift
       - verification.intel-gpu-plugin
       - verification.encode-benchmark
       - verification.qbittorrent
@@ -316,6 +318,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-public-validate", implementation: scripts/validate/plex-public.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.plex-ddns-drift, source: validation, framework: bash, suite: ci, tier: offline, target: plex-ddns-drift, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-ddns-drift-validate", implementation: scripts/validate/plex-ddns-drift.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.intel-gpu-plugin, source: validation, framework: bash, suite: ci, tier: offline, target: intel-gpu-plugin, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube intel-gpu-plugin-validate", implementation: scripts/validate/intel-gpu-plugin.sh}
@@ -451,6 +457,11 @@ suites:
     access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube plex-public-verify", implementation: scripts/verify/plex-public.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.plex-ddns-drift, source: verification, framework: bash, suite: monitoring, tier: verification, target: plex-ddns-drift, scenario: metrics, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: operator}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube plex-ddns-drift-verify", implementation: scripts/verify/plex-ddns-drift.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.intel-gpu-plugin, source: verification, framework: bash, suite: media, tier: verification, target: intel-gpu-plugin, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
