@@ -434,3 +434,21 @@ EOF
 	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
+
+# Catches the two copies of the results schema drifting apart. benchmark.sh
+# writes results.csv and runmeta.sh validates it on resume, so a mismatch would
+# make every resume decision wrong while both scripts looked self-consistent.
+@test "runmeta and benchmark agree on the results schema" {
+	benchmark_header="$("$SCRIPTS/benchmark.sh" _test results-header)"
+	runmeta_header="$(
+		# shellcheck disable=SC1090
+		results_header=''
+		eval "$(grep -m1 '^results_header=' "$SCRIPTS/runmeta.sh")"
+		printf '%s\n' "$results_header"
+	)"
+
+	[ -n "$benchmark_header" ]
+	[ -n "$runmeta_header" ]
+	[ "$runmeta_header" = "$benchmark_header" ]
+	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 36 ]
+}

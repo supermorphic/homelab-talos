@@ -1311,12 +1311,11 @@ PYTHON
 	[[ "$output" == *'"qsv_proof":"suspect"'* ]]
 }
 
-# Catches the capability probe itself depending on rg or yq. The probe reads the
-# samples artifact and the encoder listings, so it exercises the jq and grep paths
-# the QSV-telemetry contract never reaches. python3 stays on the PATH here because
-# runmeta.sh still needs it: withholding it would make this assert the unrelated
-# fact that the harness is mid-migration rather than that the probe is rg/yq free.
-@test "capability probe runs without rg or yq" {
+# Catches the capability probe depending on any tool the runtime image lacks. The
+# probe reads the samples artifact and the encoder listings, so it exercises the
+# jq and grep paths the QSV-telemetry contract never reaches. Now that no runtime
+# script needs python3, rg or yq, this runs against the image's real surface.
+@test "capability probe runs on the image's real command surface" {
 	load helpers/runtime-sandbox
 	create_capability_tools
 	write_capability_samples
@@ -1324,7 +1323,7 @@ PYTHON
 	export NODE_NAME='talos-03'
 	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
 
-	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/probe-sandbox" rg yq
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/probe-sandbox" python3 rg yq
 	[ "$status" -eq 0 ]
 	sandbox="$output"
 
