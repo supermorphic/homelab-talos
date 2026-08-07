@@ -1,6 +1,6 @@
 # Movie encoding benchmark storage contract — amendment
 
-- **Status: Draft.** Awaiting operator approval.
+- **Status: Accepted.** Approved by the operator on 2026-08-06.
 Amends [Movie encoding benchmark — design](2026-08-01-fileflows-movie-encoding.md).
 Date: 2026-08-06.
 Branch: `fileflows-movie-encoding-strategy`.

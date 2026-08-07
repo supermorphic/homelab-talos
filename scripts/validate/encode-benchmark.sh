@@ -359,11 +359,11 @@ assert_eq "$(yq -r "$match.values | join(\",\")" "$template")" 'plex' \
 for resource in \
 	'requests|cpu|2' \
 	'requests|memory|2Gi' \
-	'requests|ephemeral-storage|150Gi' \
+	'requests|ephemeral-storage|105Gi' \
 	'requests|gpu.intel.com/i915|1' \
 	'limits|cpu|8' \
 	'limits|memory|8Gi' \
-	'limits|ephemeral-storage|160Gi' \
+	'limits|ephemeral-storage|110Gi' \
 	'limits|gpu.intel.com/i915|1'; do
 	IFS='|' read -r scope key expected <<<"$resource"
 	assert_eq "$(yq -r "$container.resources.$scope.\"$key\"" "$template")" "$expected" \
@@ -375,7 +375,7 @@ assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"media\") | .persistentVol
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"out\") | .persistentVolumeClaim.claimName" "$template")" \
 	'media-data' 'output PVC'
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"scratch\") | .emptyDir.sizeLimit" "$template")" \
-	'150Gi' 'scratch size limit'
+	'105Gi' 'scratch size limit'
 template_scripts_name="$(yq -r "$pod.volumes[] | select(.name == \"scripts\") | .configMap.name" "$template")"
 [[ "$template_scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
 	fail 'Job scripts volume must name a hash-suffixed scripts ConfigMap placeholder'

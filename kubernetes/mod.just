@@ -700,7 +700,7 @@ encode-benchmark-validate: require-bash
     @scripts/validate/encode-benchmark.sh
 
 # Read-only cluster placement check: reports every node and requires one non-Plex
-# node with a free i915 slot and at least 200Gi actual node.fs.availableBytes.
+# node with a free i915 slot and at least 115Gi actual node.fs.availableBytes.
 encode-benchmark-preflight: require-bash
     @scripts/encode-benchmark/preflight.sh {{quote(kubeconfig)}}
 
