@@ -26,6 +26,7 @@ data:
         - ffmpeg
         - ffprobe
         - find
+        - grep
         - head
         - id
         - jq
@@ -34,7 +35,6 @@ data:
         - mv
         - python3
         - realpath
-        - rg
         - rm
         - rmdir
         - sed
@@ -58,7 +58,6 @@ data:
         - expr
         - gawk
         - getopt
-        - grep
         - iconv
         - ln
         - mawk

@@ -324,18 +324,18 @@ qsv_proof() {
 	local height="$3"
 	local selected='unknown' initialization='failed' fps='0.000000' speed='0.000000'
 	local gpu delta telemetry reasons='' proof='suspect' value
-	if rg -q 'Successfully initialized the hardware device|Successfully initialised the hardware device' "$encode_log" &&
-		! rg -q 'Device creation failed|Failed to (initialise|initialize)' "$encode_log"; then
+	if grep -q -E 'Successfully initiali[sz]ed the hardware device' "$encode_log" &&
+		! grep -q -E 'Device creation failed|Failed to initiali[sz]e' "$encode_log"; then
 		initialization='passed'
 	fi
-	value="$(rg -o -i 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' "$encode_log" | tail -n 1 || true)"
+	value="$(grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' "$encode_log" | tail -n 1 || true)"
 	case "${value^^}" in
 	LA_ICQ | LA-ICQ | LAICQ) selected='LA-ICQ' ;;
 	CQP | ICQ | CBR | VBR | AVBR | QVBR) selected="${value^^}" ;;
 	esac
-	value="$(rg -o 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
+	value="$(grep -o -E 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
-	value="$(rg -o 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
+	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
 	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	IFS='|' read -r gpu delta telemetry <<<"$(busy_metrics "$busy_log")"
 
@@ -921,7 +921,7 @@ capabilities() {
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
 	local missing candidate present absent
 	local -a required_commands=() optional_commands=()
-	# Every check below is written in terms of yq, rg or ffmpeg, so the command
+	# Every check below is written in terms of yq, grep or ffmpeg, so the command
 	# surface must be established before any of them runs; otherwise the probe
 	# dies as "command not found" and reports nothing.
 	mapfile -t required_commands < <(read_declared_commands "$samples_file")
@@ -973,9 +973,9 @@ capabilities() {
 	}
 	encoders="$(ffmpeg -hide_banner -encoders)"
 	filters="$(ffmpeg -hide_banner -filters)"
-	rg -q 'hevc_qsv' <<<"$encoders" || return 1
-	rg -q 'libvmaf' <<<"$filters" || return 1
-	rg -q 'libx265' <<<"$encoders" || return 1
+	grep -q -F 'hevc_qsv' <<<"$encoders" || return 1
+	grep -q -F 'libvmaf' <<<"$filters" || return 1
+	grep -q -F 'libx265' <<<"$encoders" || return 1
 	uid="$(id -u)"
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"
@@ -1092,15 +1092,15 @@ runtime_pre_encode_gate() {
 	done < <(jq -c '.[]' <<<"$samples_json")
 	encoders="$(ffmpeg -hide_banner -encoders)" || return
 	filters="$(ffmpeg -hide_banner -filters)" || return
-	rg -q 'hevc_qsv' <<<"$encoders" || {
+	grep -q -F 'hevc_qsv' <<<"$encoders" || {
 		echo 'hevc_qsv encoder is unavailable' >&2
 		return 1
 	}
-	rg -q 'libx265' <<<"$encoders" || {
+	grep -q -F 'libx265' <<<"$encoders" || {
 		echo 'libx265 encoder is unavailable' >&2
 		return 1
 	}
-	rg -q 'libvmaf' <<<"$filters" || {
+	grep -q -F 'libvmaf' <<<"$filters" || {
 		echo 'libvmaf filter is unavailable' >&2
 		return 1
 	}
@@ -1180,9 +1180,9 @@ encoder_progress() {
 	local fps speed value
 	fps='0.000000'
 	speed='0.000000'
-	value="$(rg -o 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
+	value="$(grep -o -E 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
-	value="$(rg -o 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
+	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
 	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	printf '%s|%s\n' "$fps" "$speed"
 }
@@ -1271,7 +1271,7 @@ process_variant() {
 			fi
 			if ffmpeg -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
 				-f null - >"$ssim_file" 2>&1 &&
-				value="$(rg -o 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
+				value="$(grep -o -E 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
 				[[ -n "$value" ]]; then
 				ssim="$value"
 			else
