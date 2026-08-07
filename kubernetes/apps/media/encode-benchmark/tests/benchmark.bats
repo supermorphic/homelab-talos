@@ -1325,3 +1325,28 @@ PYTHON
 	[[ "$output" == *'runtime image substitute inventory:'* ]]
 	[[ "$output" == *'present='* ]]
 }
+
+# Catches the QSV telemetry parsers depending on a tool the runtime image does
+# not provide. These parsers decide whether an encode really used the hardware
+# path, so a silent "command not found" here would let CPU fallback pass as QSV.
+@test "QSV proof parses telemetry without rg, yq or python3" {
+	load helpers/runtime-sandbox
+	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
+
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/sandbox" python3 rg yq
+	[ "$status" -eq 0 ]
+	sandbox="$output"
+
+	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
+		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":50.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
+
+	# The fallback case must stay detectable on the reduced command surface: a
+	# parser that silently returned "unknown" would mark a CPU encode as QSV.
+	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
+		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"selected_rate_control":"CQP"'* ]]
+	[[ "$output" == *'"qsv_proof":"suspect"'* ]]
+}
