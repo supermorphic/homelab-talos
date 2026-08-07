@@ -92,6 +92,10 @@ fi
 [[ "$(yq -r '[.spec.parentRefs[].name] | join(",")' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0].port' "$route")" == '32400' ]]
+# Envoy's route timeout is a whole-response deadline (not an idle timer) and defaults
+# to 15s, which resets every long Plex transfer — Direct Play playback and client
+# Downloads/Sync — at exactly 15s. The route must disable it explicitly.
+[[ "$(yq -r '.spec.rules[0].timeouts.request' "$route")" == '0s' ]]
 
 # Observed containment: the CiliumNetworkPolicy is the hard prerequisite for any
 # public ingress. Its allow-list comes from the phase-1 Hubble capture plus the two

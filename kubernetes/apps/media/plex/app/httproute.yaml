@@ -41,3 +41,12 @@ spec:
         - path:
             type: PathPrefix
             value: /
+      # Envoy's route timeout is a deadline on the whole response, not an idle
+      # timer, and it defaults to 15s. Plex serves originals as one long HTTP
+      # response (Direct Play playback, and client Downloads/Sync of a whole
+      # file), so Envoy reset every such transfer at exactly 15s regardless of
+      # how fast it was flowing. "0s" disables the deadline per the Gateway API
+      # spec; Envoy's 5-minute HTTP stream idle timeout still reaps stalled
+      # streams, which is the correct control for streaming responses.
+      timeouts:
+        request: 0s
