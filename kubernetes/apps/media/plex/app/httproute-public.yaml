@@ -19,3 +19,8 @@ spec:
           kind: Service
           name: plex
           port: 32400
+      # Same reason as the internal route: Envoy's default 15s route timeout is a
+      # whole-response deadline that resets long Plex transfers. Disabled here so
+      # the public plane behaves identically; the stream idle timeout still applies.
+      timeouts:
+        request: 0s

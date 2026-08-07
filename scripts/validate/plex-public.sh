@@ -147,6 +147,9 @@ listener='select(.kind == "Gateway") | .spec.listeners[0]'
 [[ "$(yq -r '.spec.rules | length' "$route")" == '1' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs | length' "$route")" == '1' ]]
 [[ "$(yq -r '.spec.rules[0].backendRefs[0] | [.group, .kind, .name, .port] | join(",")' "$route")" == ',Service,plex,32400' ]]
+# Envoy's default 15s route timeout is a whole-response deadline that resets long
+# Plex transfers; the public plane must disable it exactly as the internal one does.
+[[ "$(yq -r '.spec.rules[0].timeouts.request' "$route")" == '0s' ]]
 
 mapfile -t kubernetes_yaml < <(rg --files kubernetes -g '*.yaml' | sort)
 public_parent_routes="$(yq ea -r 'select(type == "!!map" and .kind == "HTTPRoute") | select([.spec.parentRefs[]? | select(.name == "public" and .namespace == "networking-public")] | length > 0) | .metadata.namespace + "/" + .metadata.name' "${kubernetes_yaml[@]}")"
