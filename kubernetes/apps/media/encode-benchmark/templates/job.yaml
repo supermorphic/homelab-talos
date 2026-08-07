@@ -57,12 +57,12 @@ spec:
             requests:
               cpu: 2
               memory: 2Gi
-              ephemeral-storage: 150Gi
+              ephemeral-storage: 105Gi
               gpu.intel.com/i915: 1
             limits:
               cpu: 8
               memory: 8Gi
-              ephemeral-storage: 160Gi
+              ephemeral-storage: 110Gi
               gpu.intel.com/i915: 1
           volumeMounts:
             - name: media
@@ -90,7 +90,7 @@ spec:
             claimName: media-data
         - name: scratch
           emptyDir:
-            sizeLimit: 150Gi
+            sizeLimit: 105Gi
         - name: scripts
           configMap:
             name: encode-benchmark-scripts-d6ddc44bm8

@@ -896,7 +896,7 @@ EOF
 
 # Catches preflight using allocatable ephemeral-storage as a proxy for current
 # free NVMe, or treating the Plex node as eligible despite available GPU slots.
-@test "preflight reports every node and requires non-Plex GPU plus 200Gi actual free NVMe" {
+@test "preflight reports every node and requires non-Plex GPU plus 115Gi actual free NVMe" {
 	STUB_PODS_JSON="$BATS_TEST_TMPDIR/plex-pods.json"
 	STUB_NODES_JSON="$BATS_TEST_TMPDIR/nodes.json"
 	STUB_PVC_JSON="$BATS_TEST_TMPDIR/pvc.json"
@@ -916,14 +916,14 @@ EOF
 	cat >"$STUB_KUSTOMIZATION_JSON" <<'EOF'
 {"metadata":{"name":"encode-benchmark"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
 EOF
-	printf '%s\n' '{"node":{"fs":{"availableBytes":536870912000}}}' >"$STUB_SUMMARY_DIR/nuc1.json"
+	printf '%s\n' '{"node":{"fs":{"availableBytes":146081611776}}}' >"$STUB_SUMMARY_DIR/nuc1.json"
 	printf '%s\n' '{"node":{"fs":{"availableBytes":107374182400}}}' >"$STUB_SUMMARY_DIR/nuc2.json"
-	printf '%s\n' '{"node":{"fs":{"availableBytes":322122547200}}}' >"$STUB_SUMMARY_DIR/nuc3.json"
+	printf '%s\n' '{"node":{"fs":{"availableBytes":148751507456}}}' >"$STUB_SUMMARY_DIR/nuc3.json"
 
 	run "$PREFLIGHT" "$KUBECONFIG_FIXTURE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'nuc1 FAIL plex-node'* ]]
-	[[ "$output" == *'nuc2 FAIL free-nvme-below-200Gi'* ]]
+	[[ "$output" == *'nuc2 FAIL free-nvme-below-115Gi'* ]]
 	[[ "$output" == *'nuc3 PASS'* ]]
 	assert_no_mutations
 }
@@ -979,4 +979,30 @@ EOF
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'benchmark pod is co-resident with Plex'* ]]
 	assert_no_mutations
+}
+
+# Catches a preflight floor that can never be satisfied. The shipped floor was
+# 200Gi against an EPHEMERAL partition Talos caps at 150GiB, so preflight could
+# not pass on any node at any time. Deriving the ceiling from talconfig.yaml
+# rather than restating it keeps the two from drifting apart again.
+@test "preflight free-space floor is satisfiable within the configured EPHEMERAL partition" {
+	floor="$(rg -o '^minimum_available_bytes=([0-9]+)$' --replace '$1' "$PREFLIGHT")"
+	[ -n "$floor" ]
+
+	capacity_gib="$(yq -r '
+		.. | select(has("name")) | select(.name == "EPHEMERAL") | .provisioning.maxSize
+	' "$PROJECT_ROOT/talos/talconfig.yaml" | head -n 1)"
+	[ -n "$capacity_gib" ]
+	capacity_bytes=$((${capacity_gib%GiB} * 1024 * 1024 * 1024))
+
+	# Strictly below capacity, or the check is unsatisfiable by construction.
+	[ "$floor" -lt "$capacity_bytes" ]
+
+	# Allocatable is materially below the raw partition, so a floor that only just
+	# fits the partition still cannot leave room for a schedulable Job.
+	scratch="$(yq -r '
+		.spec.template.spec.containers[0].resources.requests."ephemeral-storage"
+	' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/templates/job.yaml")"
+	scratch_bytes=$((${scratch%Gi} * 1024 * 1024 * 1024))
+	[ "$scratch_bytes" -le "$floor" ]
 }

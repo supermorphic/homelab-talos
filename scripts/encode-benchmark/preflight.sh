@@ -9,7 +9,9 @@ fi
 kubeconfig="$1"
 namespace='media'
 expected_api='https://192.168.90.20:6443'
-minimum_available_bytes=214748364800
+# 115GiB. The ephemeral partition is 149GiB total, so the previous 200GiB floor
+# could never pass. See docs/decisions/2026-08-06-encode-benchmark-storage-contract-amendment.md.
+minimum_available_bytes=123480309760
 
 [[ -f "$kubeconfig" ]] || {
 	echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
@@ -74,7 +76,7 @@ while IFS= read -r node_json; do
 	elif ((free < 1)); then
 		reasons+=(i915-slot-not-free)
 	fi
-	if ((available < minimum_available_bytes)); then reasons+=(free-nvme-below-200Gi); fi
+	if ((available < minimum_available_bytes)); then reasons+=(free-nvme-below-115Gi); fi
 	if ((${#reasons[@]} == 0)); then
 		printf '%s PASS i915-allocatable=%s i915-used=%s i915-free=%s node.fs.availableBytes=%s\n' \
 			"$name" "$allocatable" "$used" "$free" "$available"
@@ -89,7 +91,7 @@ while IFS= read -r node_json; do
 done < <(yq -p=json -o=json -I=0 '.items[]' <<<"$nodes")
 
 ((eligible > 0)) || {
-	echo 'No eligible non-Plex benchmark node has one free i915 slot and 200Gi actual free NVMe.' >&2
+	echo 'No eligible non-Plex benchmark node has one free i915 slot and 115Gi actual free NVMe.' >&2
 	exit 1
 }
 printf 'encode-benchmark preflight passed: eligible_nodes=%s pvc=Bound kustomization=Ready\n' "$eligible"
