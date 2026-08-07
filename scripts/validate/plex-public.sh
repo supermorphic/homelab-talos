@@ -51,7 +51,10 @@ rg -qx '  - ./httproute-public.yaml' "$plex_kustomization"
 [[ "$(yq -r '.metadata.name' "$public_ks")" == 'public-gateway' ]]
 [[ "$(yq -r '.metadata.namespace' "$public_ks")" == 'flux-system' ]]
 [[ "$(yq -r '.spec.path' "$public_ks")" == './kubernetes/apps/networking/public-gateway/app' ]]
-[[ "$(yq -r '.spec.suspend' "$public_ks")" == 'true' ]]
+# Activated after the phase-3 gates passed live: Gateway Programmed at the dedicated VIP,
+# isolation verified, and the token-safe access-log canary proven. Exposure still begins
+# only with the operator's single WAN DNAT, which no repository source can create.
+[[ "$(yq -r '.spec.suspend' "$public_ks")" == 'false' ]]
 [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$public_ks")" == 'cert-manager-config,envoy-gateway,metallb-config' ]]
 
 [[ "$(yq -r '.kind' "$namespace")" == 'Namespace' ]]
@@ -68,10 +71,12 @@ done
 
 # MetalLB's webhook refuses a pool overlapping one already defined, and Flux dry-runs
 # a Kustomization's objects against current cluster state before applying any of them.
-# The public pool must therefore never ship beside the narrowing that frees its
-# address: it belongs to the suspended public Gateway, ordered behind metallb-config.
+# The public pool must therefore never ship beside the narrowing that frees its address.
+# Keeping it in the public Gateway, ordered behind metallb-config by dependsOn, holds on
+# a rebuilt cluster too: `internal` never spans .39 in source, so no intermediate state
+# overlaps. This separation is the invariant; it does not depend on the suspend state.
 [[ "$(yq ea -r '[select(.kind == "IPAddressPool" or .kind == "L2Advertisement") | .metadata.name] | sort | unique | join(",")' "$pool")" == 'internal' ]]
-[[ "$(yq -r '.spec.suspend' "$public_ks")" == 'true' ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | contains(["metallb-config"])' "$public_ks")" == 'true' ]]
 [[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .metadata.name + "/" + .metadata.namespace' "$public_pool")" == 'public/metallb-system' ]]
 [[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.addresses | join(",")' "$public_pool")" == "$HOMELAB_PUBLIC_GATEWAY_VIP/32" ]]
 [[ "$(yq ea -r 'select(.kind == "IPAddressPool") | .spec.autoAssign' "$public_pool")" == 'false' ]]
@@ -163,4 +168,4 @@ fi
 kustomize build "$public_app" >/dev/null
 kustomize build kubernetes/apps/media/plex/app >/dev/null
 
-echo 'Plex public Gateway source contract passed: dedicated suspended plane, exact route, bounded listener, and token-safe stdout logging.'
+echo 'Plex public Gateway source contract passed: dedicated active plane, exact route, bounded listener, and token-safe stdout logging.'

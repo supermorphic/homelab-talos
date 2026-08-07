@@ -109,6 +109,12 @@ esac
 EOF
 chmod +x "$fixture/bin/just"
 
+# The bootstrap requires a staged-suspended source. Stage one here rather than reading
+# the repository's live ks.yaml, so these cases assert the recipe's contract instead of
+# whatever activation state the branch happens to be in.
+sed 's/^  suspend: .*/  suspend: true/' \
+  "$repo_root/kubernetes/apps/networking/public-gateway/ks.yaml" >"$fixture/ks-suspended.yaml"
+
 run_recipe() {
   local layout="$1"
   shift
@@ -132,7 +138,11 @@ run_recipe() {
       exit 64
       ;;
   esac
-  sed "s|kubeconfig='.kube/config'|kubeconfig='$fixture/kubeconfig'|" \
+  local ks_source="$fixture/ks-suspended.yaml"
+  [[ "$layout" != 'bootstrap-activated-source' ]] || \
+    ks_source="kubernetes/apps/networking/public-gateway/ks.yaml"
+  sed -e "s|kubeconfig='.kube/config'|kubeconfig='$fixture/kubeconfig'|" \
+    -e "s|ks='kubernetes/apps/networking/public-gateway/ks.yaml'|ks='$ks_source'|" \
     "$fixture/rendered-recipe.sh" >"$fixture/executable-recipe.sh"
   set +e
   PATH="$fixture/bin:$PATH" \
@@ -205,14 +215,27 @@ rg -F -q 'acceptance passed without WAN exposure' "$fixture/output" || {
   exit 1
 }
 
-echo '5. Connection flush refuses mutation without exact post-DNAT confirmation.'
+echo '5. Bootstrap refuses an already-activated source.'
+if KUBECONFIG="$fixture/kubeconfig" \
+  PLEX_PUBLIC_GATEWAY_BOOTSTRAP_CONFIRM='bootstrap:plex-public-gateway:192.168.90.39' \
+  run_recipe bootstrap-activated-source bootstrap plex-public-gateway; then
+  echo 'Bootstrap ran against a source that is not staged suspended.' >&2
+  exit 1
+fi
+rg -F -q 'it must be staged suspended in Git' "$fixture/output"
+if rg -q '^resume kustomization ' "$fixture/flux.log"; then
+  echo 'Bootstrap resumed Flux from an already-activated source.' >&2
+  exit 1
+fi
+
+echo '6. Connection flush refuses mutation without exact post-DNAT confirmation.'
 if KUBECONFIG="$fixture/kubeconfig" run_recipe flush-no-confirm kube plex-public-connection-flush; then
   echo 'Connection flush ran without confirmation.' >&2
   exit 1
 fi
 [[ ! -s "$fixture/git.log" && ! -s "$fixture/kubectl.log" ]]
 
-echo '6. Connection flush refuses an ambiguous public Deployment set.'
+echo '7. Connection flush refuses an ambiguous public Deployment set.'
 if KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-ambiguous kube plex-public-connection-flush; then
@@ -224,7 +247,7 @@ if rg -q 'rollout restart' "$fixture/kubectl.log"; then
   exit 1
 fi
 
-echo '7. Connection flush restarts only the exact selected Deployment and verifies.'
+echo '8. Connection flush restarts only the exact selected Deployment and verifies.'
 KUBECONFIG="$fixture/kubeconfig" \
   PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='flush:plex-public:dnat-removed' \
   run_recipe flush-success kube plex-public-connection-flush
