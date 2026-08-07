@@ -5,7 +5,7 @@ set -euo pipefail
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
-samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.yaml}"
+samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
 
@@ -895,22 +895,22 @@ missing_declared_commands() {
 	((${#missing[@]} == 0)) || printf '%s\n' "${missing[*]}"
 }
 
-# Read the declaration using only shell builtins. Parsing this with yq would make
+# Read the declaration using only shell builtins. Parsing this with jq would make
 # the probe depend on a tool it exists to test for: a first live capability run
 # reported only "yq rg" and could not enumerate the rest of the gap, costing the
 # dispatch cycle this whole check is meant to save. The offline contracts assert
-# this parse against yq's on the same file.
+# this parse against jq's on the same file.
 read_declared_commands() {
 	local file="$1" key="${2:-requiredCommands}" line in_block=0
 	while IFS= read -r line || [[ -n "$line" ]]; do
-		if [[ "$line" == "  $key:" ]]; then
+		if [[ "$line" =~ ^[[:space:]]*\"$key\":[[:space:]]*\[[[:space:]]*$ ]]; then
 			in_block=1
 			continue
 		fi
 		((in_block)) || continue
-		if [[ "$line" =~ ^' '{4}-' '+([A-Za-z0-9_.-]+)' '*$ ]]; then
+		if [[ "$line" =~ ^[[:space:]]*\"([A-Za-z0-9_.-]+)\",?[[:space:]]*$ ]]; then
 			printf '%s\n' "${BASH_REMATCH[1]}"
-		elif [[ -n "${line//[[:space:]]/}" ]]; then
+		else
 			break
 		fi
 	done <"$file"
@@ -921,7 +921,7 @@ capabilities() {
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
 	local missing candidate present absent
 	local -a required_commands=() optional_commands=()
-	# Every check below is written in terms of yq, grep or ffmpeg, so the command
+	# Every check below is written in terms of jq, grep or ffmpeg, so the command
 	# surface must be established before any of them runs; otherwise the probe
 	# dies as "command not found" and reports nothing.
 	mapfile -t required_commands < <(read_declared_commands "$samples_file")
@@ -952,7 +952,7 @@ capabilities() {
 		echo "runtime image is missing required commands: $missing" >&2
 		return 1
 	}
-	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
+	configured_image="$(jq -e -r '.runtime.image' "$samples_file")" || {
 		echo 'configured runtime image is missing' >&2
 		return 65
 	}
@@ -1040,7 +1040,7 @@ runtime_pre_encode_gate() {
 	local samples_json="$1"
 	local configured_image dispatch_image sample sample_id source expected_size actual_size
 	local expected_sha actual_sha encoders filters write_probe
-	configured_image="$(yq -e -r '.runtime.image' "$samples_file")" || {
+	configured_image="$(jq -e -r '.runtime.image' "$samples_file")" || {
 		echo 'configured runtime image is missing' >&2
 		return 65
 	}
@@ -1368,7 +1368,7 @@ encoder_commands_for_mode() {
 		commands="$(jq -n -c '["ffmpeg -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		settings=(20 22 24 26 28)
 	else
-		mapfile -t settings < <(yq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
+		mapfile -t settings < <(jq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
 	fi
 	for setting in "${settings[@]}"; do
 		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
@@ -1450,7 +1450,7 @@ quality_mode() {
 	local comparison_fixture comparison decision target next_crf
 	local panel_samples
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
-	panel_samples="$(yq -o=json -I=0 '[.qualityPanel[]?]' "$samples_file")"
+	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -1542,7 +1542,7 @@ quality_mode() {
 			done <<<"$qsv_points"
 			rm -f -- "$clip"
 		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
-	done < <(yq -o=json -I=0 '.qualityPanel[]?' "$samples_file")
+	done < <(jq -c '.qualityPanel[]?' "$samples_file")
 	rm -rf -- "$run_scratch"
 	printf '%s\n' "$run_id"
 }
@@ -1552,7 +1552,7 @@ savings_mode() {
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
 	local panel_samples
-	panel_samples="$(yq -o=json -I=0 '[.savingsPanel[]?]' "$samples_file")"
+	panel_samples="$(jq -c '[.savingsPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -1570,7 +1570,7 @@ savings_mode() {
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
-		setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
+		setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
 		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
 		if row_is_complete "$run_id" savings "$sha" full qsv "$setting"; then continue; fi
 		prepared="$(encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
@@ -1602,7 +1602,7 @@ savings_mode() {
 		fi
 		record_result "$run_id" "$row_fixture" "$output" >/dev/null
 		rm -f -- "$row_fixture" "$packets" "$probe_file"
-	done < <(yq -o=json -I=0 '.savingsPanel[]?' "$samples_file")
+	done < <(jq -c '.savingsPanel[]?' "$samples_file")
 	rm -rf -- "$run_scratch"
 	printf '%s\n' "$run_id"
 }
@@ -1616,8 +1616,8 @@ finalist_mode() {
 		echo "missing finalist confirmation for $requested_run_id/$requested_sample_id" >&2
 		return 64
 	}
-	sample="$(SAMPLE_ID="$requested_sample_id" yq -o=json -I=0 \
-		'.qualityPanel[]?, .savingsPanel[]? | select(.id == strenv(SAMPLE_ID))' "$samples_file" | head -n 1)"
+	sample="$(SAMPLE_ID="$requested_sample_id" jq -c \
+		'.qualityPanel[]?, .savingsPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file" | head -n 1)"
 	[[ -n "$sample" ]] || {
 		echo "sample not found: $requested_sample_id" >&2
 		return 66
@@ -1637,7 +1637,7 @@ finalist_mode() {
 	}
 	source="$(jq -r '.path' <<<"$sample")"
 	sha="$(jq -r '.sha256' <<<"$sample")"
-	setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
+	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
 	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65
@@ -1670,8 +1670,8 @@ contention_mode() (
 		echo 'contention case a permits only worker-1' >&2
 		return 64
 	fi
-	sample="$(SAMPLE_ID="$requested_sample_id" yq -o=json -I=0 \
-		'.qualityPanel[]? | select(.id == strenv(SAMPLE_ID))' "$samples_file")"
+	sample="$(SAMPLE_ID="$requested_sample_id" jq -c \
+		'.qualityPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file")"
 	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
 		echo "contention sample not found or duplicated: $requested_sample_id" >&2
 		return 66
@@ -1695,7 +1695,7 @@ contention_mode() (
 		echo "contention case $contention_case requires an eligible 1920x1080 non-DV quality sample" >&2
 		return 65
 	fi
-	setting="$(yq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
+	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
 	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65

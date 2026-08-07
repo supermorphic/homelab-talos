@@ -32,13 +32,13 @@ prepare_configmap_script_mount() {
 	ln -s '..data/runmeta.sh' "$configmap_root/runmeta.sh"
 	ln -s '..data/benchmark.sh' "$configmap_root/benchmark.sh"
 
-	samples_file="$BATS_TEST_TMPDIR/samples.yaml"
-	printf '%s\n' \
-		'runtime:' \
-		'  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' \
-		'savingsSeed: 20260802' \
-		'qualityPanel: []' \
-		'savingsPanel: []' >"$samples_file"
+	samples_file="$BATS_TEST_TMPDIR/samples.json"
+	jq -n '{
+		runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
+		savingsSeed: 20260802,
+		qualityPanel: [],
+		savingsPanel: []
+	}' >"$samples_file"
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_SAMPLES_FILE="$samples_file"
 }
@@ -354,18 +354,16 @@ EOF
 @test "verify redacts a source path that disappears before resume" {
 	source_path="$BATS_TEST_TMPDIR/Secret Movie Name.mkv"
 	printf '%s' 'media-bytes' >"$source_path"
-	samples_file="$BATS_TEST_TMPDIR/samples-with-source.yaml"
-	printf '%s\n' \
-		'runtime:' \
-		'  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' \
-		'savingsSeed: 20260802' \
-		'qualityPanel:' \
-		'  - id: secret-movie' \
-		'    cohort: avc' \
-		"    path: '$source_path'" \
-		'    sizeBytes: 11' \
-		'    sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-		'savingsPanel: []' >"$samples_file"
+	samples_file="$BATS_TEST_TMPDIR/samples-with-source.json"
+	jq -n --arg path "$source_path" '{
+		runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
+		savingsSeed: 20260802,
+		qualityPanel: [{
+			id: "secret-movie", cohort: "avc", path: $path, sizeBytes: 11,
+			sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}],
+		savingsPanel: []
+	}' >"$samples_file"
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_SAMPLES_FILE="$samples_file"
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
@@ -417,7 +415,7 @@ EOF
 }
 
 # Catches a production break where a samples override can replace the fixed
-# /config/samples.yaml identity input in a live benchmark environment.
+# /config/samples.json identity input in a live benchmark environment.
 @test "samples override is refused outside test mode" {
 	export BENCHMARK_TEST_MODE=0
 	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW BENCHMARK_OUT
@@ -435,4 +433,22 @@ EOF
 	[ "$status" -eq 0 ]
 	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
+}
+
+# Catches the two copies of the results schema drifting apart. benchmark.sh
+# writes results.csv and runmeta.sh validates it on resume, so a mismatch would
+# make every resume decision wrong while both scripts looked self-consistent.
+@test "runmeta and benchmark agree on the results schema" {
+	benchmark_header="$("$SCRIPTS/benchmark.sh" _test results-header)"
+	runmeta_header="$(
+		# shellcheck disable=SC1090
+		results_header=''
+		eval "$(grep -m1 '^results_header=' "$SCRIPTS/runmeta.sh")"
+		printf '%s\n' "$results_header"
+	)"
+
+	[ -n "$benchmark_header" ]
+	[ -n "$runmeta_header" ]
+	[ "$runmeta_header" = "$benchmark_header" ]
+	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 36 ]
 }

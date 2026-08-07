@@ -60,33 +60,23 @@ EOF
 
 write_capability_samples() {
 	image="${1:-docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb}"
-	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/capability-samples.yaml"
-	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
-schemaVersion: 1
-runtime:
-  image: '$image'
-  requiredCommands:
-$(capability_required_commands "${@:2}")
-  optionalCommands:
-$(capability_declared_list optionalCommands)
-EOF
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/capability-samples.json"
+	jq -n \
+		--arg image "$image" \
+		--argjson required "$(capability_declared_list requiredCommands "${@:2}")" \
+		--argjson optional "$(capability_declared_list optionalCommands)" \
+		'{schemaVersion: 1, runtime: {image: $image, requiredCommands: $required, optionalCommands: $optional}}' \
+		>"$BENCHMARK_SAMPLES_FILE"
 }
 
-# Derive the fixture's command list from the deployed declaration so a probe
-# fixture cannot drift into asserting a command surface the image never claims.
 capability_declared_list() {
-	local samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
-	yq -r '.data."samples.yaml"' "$samples" |
-		yq -r ".runtime.$1[]" |
-		sed 's/^/    - /'
-}
-
-capability_required_commands() {
-	local extra
-	capability_declared_list requiredCommands
-	for extra in "$@"; do
-		printf '    - %s\n' "$extra"
-	done
+	local key="$1"
+	shift
+	local samples="$BATS_TEST_TMPDIR/declared-$key.json"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$samples"
+	# The file must arrive on stdin: with --args, jq treats a file argument as a
+	# positional string and then blocks reading stdin.
+	jq -c --args ".runtime.$key + [\$ARGS.positional[]]" -- "$@" <"$samples"
 }
 
 create_execution_tools() {
@@ -209,29 +199,26 @@ prepare_execution_run() {
 	printf '%s' 'source fixture bytes' >"$source_media"
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
-	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.yaml"
-	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
-schemaVersion: 1
-runtime:
-  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
-savingsSeed: 20260802
-qualityPanel:
-  - id: sample-hdr
-    cohort: hdr10
-    path: '$source_media'
-    sizeBytes: $source_size
-    sha256: $source_sha
-    clips:
-      detail: '00:17:23.456'
-savingsPanel:
-  - id: savings-hdr
-    cohort: hdr10
-    path: '$source_media'
-    sizeBytes: $source_size
-    sha256: $source_sha
-chosenSettings:
-  hdr10: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
-EOF
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
+	jq -n \
+		--arg source_media "$source_media" \
+		--argjson source_size "$source_size" \
+		--arg source_sha "$source_sha" \
+		'{
+			schemaVersion: 1,
+			runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
+			savingsSeed: 20260802,
+			qualityPanel: [{
+				id: "sample-hdr", cohort: "hdr10", path: $source_media,
+				sizeBytes: $source_size, sha256: $source_sha,
+				clips: {detail: "00:17:23.456"}
+			}],
+			savingsPanel: [{
+				id: "savings-hdr", cohort: "hdr10", path: $source_media,
+				sizeBytes: $source_size, sha256: $source_sha
+			}],
+			chosenSettings: {hdr10: {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}}
+		}' >"$BENCHMARK_SAMPLES_FILE"
 }
 
 # Catches a production break where the durable result contract drifts from the
@@ -313,8 +300,8 @@ EOF
 
 @test "capabilities refuses missing or malformed configured immutable image evidence" {
 	create_capability_tools
-	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/missing-image.yaml"
-	printf '%s\n' 'schemaVersion: 1' >"$BENCHMARK_SAMPLES_FILE"
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/missing-image.json"
+	jq -n '{schemaVersion: 1}' >"$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" capabilities
 	[ "$status" -ne 0 ]
 	[[ "$output" != *'"status":"passed"'* ]]
@@ -792,35 +779,21 @@ PYTHON
 
 @test "savings rejects detection-only and Dolby Vision and records packet inventory failure before resume" {
 	prepare_execution_run
-	cat >>"$BENCHMARK_SAMPLES_FILE" <<EOF
-  dolby-vision: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
-EOF
-	python3 - "$BENCHMARK_SAMPLES_FILE" <<'PYTHON'
-from pathlib import Path
-import hashlib
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-source = Path(next(line.split("'", 2)[1] for line in text.splitlines() if "path: '" in line))
-source_size = source.stat().st_size
-source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
-entry = """  - id: savings-dv
-    cohort: dolby-vision
-    path: '{source}'
-    sizeBytes: {source_size}
-    sha256: {source_sha}
-    detectionOnly: false
-  - id: savings-detection
-    cohort: hdr10
-    path: '{source}'
-    sizeBytes: {source_size}
-    sha256: {source_sha}
-    detectionOnly: true
-""".format(source=source, source_size=source_size, source_sha=source_sha)
-text = text.replace("chosenSettings:\n", entry + "chosenSettings:\n")
-path.write_text(text)
-PYTHON
+	# jq edit rather than YAML text surgery: the samples artifact is JSON so the
+	# runtime image can read it with jq instead of yq.
+	source_media="$(jq -r '.savingsPanel[0].path' "$BENCHMARK_SAMPLES_FILE")"
+	source_size="$(wc -c <"$source_media" | tr -d ' ')"
+	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
+	jq --arg path "$source_media" --argjson size "$source_size" --arg sha "$source_sha" '
+		.chosenSettings["dolby-vision"] = {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}
+		| .savingsPanel += [
+			{id: "savings-dv", cohort: "dolby-vision", path: $path,
+			 sizeBytes: $size, sha256: $sha, detectionOnly: false},
+			{id: "savings-detection", cohort: "hdr10", path: $path,
+			 sizeBytes: $size, sha256: $sha, detectionOnly: true}
+		]
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/runmeta.sh" create savings
 	[ "$status" -eq 0 ]
 	run_id="$output"
@@ -889,7 +862,7 @@ PYTHON
 	newline_source="$BATS_TEST_TMPDIR/"$'movie\nname.mkv'
 	cp "$source_media" "$newline_source"
 	export NEWLINE_SOURCE="$newline_source"
-	yq -i '.savingsPanel[0].path = strenv(NEWLINE_SOURCE)' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json '.savingsPanel[0].path = strenv(NEWLINE_SOURCE)' "$BENCHMARK_SAMPLES_FILE"
 	newline_probe="$BATS_TEST_TMPDIR/newline-source-probe.json"
 	jq --arg path "$newline_source" '.path = $path' \
 		"$FIXTURES/metrics/probe-source.json" >"$newline_probe"
@@ -963,14 +936,14 @@ PYTHON
 # must compare the mounted sample's configured size/hash before invoking ffmpeg.
 @test "runtime pre-encode gate rejects sample size or hash drift before ffmpeg" {
 	prepare_execution_run
-	yq -i '.qualityPanel[0].sizeBytes = 999' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json '.qualityPanel[0].sizeBytes = 999' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -ne 0 ]
 	[ "$output" = 'sample size mismatch: sample-hdr' ]
 	[ ! -s "$BENCHMARK_COMMAND_LOG" ]
 
 	prepare_execution_run
-	yq -i '.qualityPanel[0].sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json '.qualityPanel[0].sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -ne 0 ]
 	[ "$output" = 'sample hash mismatch: sample-hdr' ]
@@ -981,42 +954,29 @@ prepare_contention_samples() {
 	prepare_execution_run
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
-	cat >"$BENCHMARK_SAMPLES_FILE" <<EOF
-schemaVersion: 1
-runtime:
-  image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
-savingsSeed: 20260802
-qualityPanel:
-  - id: a-4k-hdr
-    cohort: hdr10
-    path: '$source_media'
-    sizeBytes: $source_size
-    sha256: $source_sha
-    width: 3840
-    height: 2160
-    clips: {detail: '00:17:23.456'}
-  - id: b-1080-avc
-    cohort: avc
-    path: '$source_media'
-    sizeBytes: $source_size
-    sha256: $source_sha
-    width: 1920
-    height: 1080
-    clips: {detail: '00:17:23.456'}
-  - id: c-1080-vc1
-    cohort: vc1
-    path: '$source_media'
-    sizeBytes: $source_size
-    sha256: $source_sha
-    width: 1920
-    height: 1080
-    clips: {detail: '00:17:23.456'}
-savingsPanel: []
-chosenSettings:
-  avc: {globalQuality: 24, qualityRunId: 20260802T120000Z-aaaaaaaa}
-  vc1: {globalQuality: 26, qualityRunId: 20260802T120000Z-aaaaaaaa}
-  hdr10: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
-EOF
+	jq -n \
+		--arg path "$source_media" \
+		--argjson size "$source_size" \
+		--arg sha "$source_sha" \
+		'def title($id; $cohort; $w; $h):
+			{id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
+			 width: $w, height: $h, clips: {detail: "00:17:23.456"}};
+		{
+			schemaVersion: 1,
+			runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
+			savingsSeed: 20260802,
+			qualityPanel: [
+				title("a-4k-hdr"; "hdr10"; 3840; 2160),
+				title("b-1080-avc"; "avc"; 1920; 1080),
+				title("c-1080-vc1"; "vc1"; 1920; 1080)
+			],
+			savingsPanel: [],
+			chosenSettings: {
+				avc: {globalQuality: 24, qualityRunId: "20260802T120000Z-aaaaaaaa"},
+				vc1: {globalQuality: 26, qualityRunId: "20260802T120000Z-aaaaaaaa"},
+				hdr10: {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}
+			}
+		}' >"$BENCHMARK_SAMPLES_FILE"
 }
 
 # Catches contention workers sharing one results file, persisting full-title
@@ -1093,7 +1053,7 @@ EOF
 	[ "$output" = 'contention case a requires an eligible 3840x2160 HDR10 quality sample' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 
-	yq -i 'del(.chosenSettings.avc)' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json 'del(.chosenSettings.avc)' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" b worker-1 b-1080-avc
 	[ "$status" -ne 0 ]
 	[ "$output" = 'no committed setting for cohort: avc' ]
@@ -1110,14 +1070,14 @@ EOF
 @test "contention runtime rejects missing or wrong exact sample resolution" {
 	prepare_contention_samples
 	run_id='20260802T121500Z-deadbeef'
-	yq -i '.qualityPanel[0].width = 1920' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json '.qualityPanel[0].width = 1920' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
 	[ "$status" -eq 65 ]
 	[ "$output" = 'contention case a requires an eligible 3840x2160 HDR10 quality sample' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 
 	prepare_contention_samples
-	yq -i 'del(.qualityPanel[1].height)' "$BENCHMARK_SAMPLES_FILE"
+	yq -i -o=json 'del(.qualityPanel[1].height)' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" b worker-1 b-1080-avc
 	[ "$status" -eq 65 ]
 	[ "$output" = 'contention case b requires an eligible 1920x1080 non-DV quality sample' ]
@@ -1292,20 +1252,20 @@ PYTHON
 	[ "$(echo "$output" | tr -d ' ')" -ge 25 ]
 }
 
-# Catches the builtin declaration parser drifting from the YAML it reads. The
-# probe cannot use yq here (it must report a missing yq rather than die on it),
-# so yq is the independent oracle for that parse.
-@test "builtin declaration parser agrees with yq on the deployed samples" {
+# Catches the builtin declaration parser drifting from the JSON it reads. The
+# probe cannot use jq here -- it must report a missing jq rather than die on it --
+# so jq is the independent oracle for that parse.
+@test "builtin declaration parser agrees with jq on the deployed samples" {
 	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
-	inner="$BATS_TEST_TMPDIR/inner-samples.yaml"
-	yq -r '.data."samples.yaml"' "$samples" >"$inner"
+	inner="$BATS_TEST_TMPDIR/inner-samples.json"
+	yq -r '.data."samples.json"' "$samples" >"$inner"
 
 	for key in requiredCommands optionalCommands; do
 		run "$SCRIPTS/benchmark.sh" _test declared-commands "$inner" "$key"
 		[ "$status" -eq 0 ]
-		yq_list="$(yq -r ".runtime.$key[]" "$inner")"
-		[ -n "$yq_list" ]
-		[ "$output" = "$yq_list" ]
+		jq_list="$(jq -r ".runtime.$key[]" "$inner")"
+		[ -n "$jq_list" ]
+		[ "$output" = "$jq_list" ]
 	done
 }
 
@@ -1349,4 +1309,33 @@ PYTHON
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"selected_rate_control":"CQP"'* ]]
 	[[ "$output" == *'"qsv_proof":"suspect"'* ]]
+}
+
+# Catches the capability probe depending on any tool the runtime image lacks. The
+# probe reads the samples artifact and the encoder listings, so it exercises the
+# jq and grep paths the QSV-telemetry contract never reaches. Now that no runtime
+# script needs python3, rg or yq, this runs against the image's real surface.
+@test "capability probe runs on the image's real command surface" {
+	load helpers/runtime-sandbox
+	create_capability_tools
+	write_capability_samples
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export NODE_NAME='talos-03'
+	samples="$BATS_TEST_DIRNAME/../app/samples.yaml"
+
+	run runtime_sandbox_path "$samples" "$BATS_TEST_TMPDIR/probe-sandbox" python3 rg yq
+	[ "$status" -eq 0 ]
+	sandbox="$output"
+
+	run env PATH="$stub_bin:$sandbox" \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_OUT="$BENCHMARK_OUT" \
+		BENCHMARK_SCRATCH="$BENCHMARK_SCRATCH" \
+		BENCHMARK_SAMPLES_FILE="$BENCHMARK_SAMPLES_FILE" \
+		BENCHMARK_DISPATCH_IMAGE="$BENCHMARK_DISPATCH_IMAGE" \
+		NODE_NAME="$NODE_NAME" \
+		"$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"status":"passed"'* ]]
+	[[ "$output" == *'"hevcQsv":true'* ]]
 }

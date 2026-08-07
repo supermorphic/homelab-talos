@@ -95,8 +95,8 @@ load_source() {
 		return 65
 	}
 	scripts_configmap="$(yq -N -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$"))) | .metadata.name' "$render")"
-	samples_document="$temp_directory/samples.yaml"
-	yq -e -r '.data."samples.yaml"' "$app_directory/samples.yaml" >"$samples_document"
+	samples_document="$temp_directory/samples.json"
+	yq -e -r '.data."samples.json"' "$app_directory/samples.yaml" >"$samples_document"
 	configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 	[[ -f "$template" ]] || {
 		echo 'benchmark Job template is missing' >&2

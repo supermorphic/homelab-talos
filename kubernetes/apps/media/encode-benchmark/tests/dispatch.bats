@@ -449,7 +449,7 @@ assert_hardened_job() {
 	render="$BATS_TEST_TMPDIR/app-render.yaml"
 	kustomize build "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app" >"$render"
 	expected_scripts="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .metadata.name' "$render")"
-	expected_image="$(yq -r '.data."samples.yaml" | from_yaml | .runtime.image' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml")"
+	expected_image="$(yq -r '.data."samples.json" | from_yaml | .runtime.image' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml")"
 
 	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' "$job")" = "$expected_scripts" ]
 	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = "$expected_image" ]
@@ -598,58 +598,90 @@ kind: ConfigMap
 metadata:
   name: encode-benchmark-samples
 data:
-  samples.yaml: |
-    schemaVersion: 1
-    runtime:
-      image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
-    savingsSeed: 20260802
-    qualityPanel:
-      - id: z-4k-hdr
-        cohort: hdr10
-        path: /media/z-4k-hdr.mkv
-        sizeBytes: 1
-        width: 3840
-        height: 2160
-        sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        clips: {detail: '00:00:00.000'}
-      - id: a-4k-hdr
-        cohort: hdr10
-        path: /media/a-4k-hdr.mkv
-        sizeBytes: 1
-        width: 3840
-        height: 2160
-        sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        clips: {detail: '00:00:00.000'}
-      - id: c-1080-vc1
-        cohort: vc1
-        path: /media/c-1080-vc1.mkv
-        sizeBytes: 1
-        width: 1920
-        height: 1080
-        sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        clips: {detail: '00:00:00.000'}
-      - id: b-1080-avc
-        cohort: avc
-        path: /media/b-1080-avc.mkv
-        sizeBytes: 1
-        width: 1920
-        height: 1080
-        sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-        clips: {detail: '00:00:00.000'}
-      - id: d-dolby-vision
-        cohort: dolby-vision
-        path: /media/d-dolby-vision.mkv
-        sizeBytes: 1
-        width: 3840
-        height: 2160
-        sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-        detectionOnly: true
-        clips: {}
-    savingsPanel: []
-    chosenSettings:
-      avc: {globalQuality: 24, qualityRunId: 20260802T120000Z-aaaaaaaa}
-      vc1: {globalQuality: 26, qualityRunId: 20260802T120000Z-aaaaaaaa}
-      hdr10: {globalQuality: 22, qualityRunId: 20260802T120000Z-aaaaaaaa}
+  samples.json: |
+    {
+      "schemaVersion": 1,
+      "runtime": {
+        "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+      },
+      "savingsSeed": 20260802,
+      "qualityPanel": [
+        {
+          "id": "z-4k-hdr",
+          "cohort": "hdr10",
+          "path": "/media/z-4k-hdr.mkv",
+          "sizeBytes": 1,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "clips": {
+            "detail": "00:00:00.000"
+          }
+        },
+        {
+          "id": "a-4k-hdr",
+          "cohort": "hdr10",
+          "path": "/media/a-4k-hdr.mkv",
+          "sizeBytes": 1,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "clips": {
+            "detail": "00:00:00.000"
+          }
+        },
+        {
+          "id": "c-1080-vc1",
+          "cohort": "vc1",
+          "path": "/media/c-1080-vc1.mkv",
+          "sizeBytes": 1,
+          "width": 1920,
+          "height": 1080,
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "clips": {
+            "detail": "00:00:00.000"
+          }
+        },
+        {
+          "id": "b-1080-avc",
+          "cohort": "avc",
+          "path": "/media/b-1080-avc.mkv",
+          "sizeBytes": 1,
+          "width": 1920,
+          "height": 1080,
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "clips": {
+            "detail": "00:00:00.000"
+          }
+        },
+        {
+          "id": "d-dolby-vision",
+          "cohort": "dolby-vision",
+          "path": "/media/d-dolby-vision.mkv",
+          "sizeBytes": 1,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "detectionOnly": true,
+          "clips": {}
+        }
+      ],
+      "savingsPanel": [],
+      "chosenSettings": {
+        "avc": {
+          "globalQuality": 24,
+          "qualityRunId": "20260802T120000Z-aaaaaaaa"
+        },
+        "vc1": {
+          "globalQuality": 26,
+          "qualityRunId": "20260802T120000Z-aaaaaaaa"
+        },
+        "hdr10": {
+          "globalQuality": 22,
+          "qualityRunId": "20260802T120000Z-aaaaaaaa"
+        }
+      }
+    }
 EOF
 	export ENCODE_BENCHMARK_TEST_MODE=1
 	export ENCODE_BENCHMARK_APP_DIR="$contention_app"
@@ -745,7 +777,7 @@ EOF
 	assert_no_mutations
 
 	prepare_contention_source
-	yq -i '.data."samples.yaml" |= (from_yaml | del(.chosenSettings.avc) | to_yaml)' "$contention_app/samples.yaml"
+	yq -i '.data."samples.json" |= (from_yaml | del(.chosenSettings.avc) | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
 	run_dispatch run contention-b
 	[ "$status" -ne 0 ]
@@ -757,14 +789,14 @@ EOF
 # the committed probe resolution for every selected contention worker.
 @test "contention dispatch rejects missing or wrong exact resolution before mutation" {
 	prepare_contention_source
-	yq -i '.data."samples.yaml" |= (from_yaml | .qualityPanel[0].width = 1920 | .qualityPanel[1].width = 1920 | to_yaml)' "$contention_app/samples.yaml"
+	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel[0].width = 1920 | .qualityPanel[1].width = 1920 | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
 	run_dispatch run contention-a
 	[ "$status" -ne 0 ]
 	[ "$output" = 'no eligible 3840x2160 HDR10 quality sample for contention case a' ]
 	assert_no_mutations
 
-	yq -i '.data."samples.yaml" |= (from_yaml | .qualityPanel[0].width = 3840 | .qualityPanel[1].width = 3840 | del(.qualityPanel[2].height) | to_yaml)' "$contention_app/samples.yaml"
+	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel[0].width = 3840 | .qualityPanel[1].width = 3840 | del(.qualityPanel[2].height) | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
 	run_dispatch run contention-b
 	[ "$status" -ne 0 ]

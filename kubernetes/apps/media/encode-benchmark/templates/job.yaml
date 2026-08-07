@@ -78,8 +78,8 @@ spec:
               mountPath: /scripts
               readOnly: true
             - name: samples
-              mountPath: /config/samples.yaml
-              subPath: samples.yaml
+              mountPath: /config/samples.json
+              subPath: samples.json
               readOnly: true
       volumes:
         - name: media
@@ -99,5 +99,5 @@ spec:
           configMap:
             name: encode-benchmark-samples
             items:
-              - key: samples.yaml
-                path: samples.yaml
+              - key: samples.json
+                path: samples.json

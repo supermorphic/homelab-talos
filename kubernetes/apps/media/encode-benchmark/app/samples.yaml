@@ -1,77 +1,87 @@
 ---
+# The mounted payload is JSON, not YAML. The runtime image provides jq but not
+# yq, so the benchmark scripts must read this file with jq; shipping it as JSON
+# is what makes that possible without adding a YAML parser to the image.
+#
+# runtime.requiredCommands lists every external command the runtime scripts
+# invoke. The capability probe reports the full missing set from it in one run,
+# and the offline sandbox contracts execute the scripts against exactly these
+# commands, so an undeclared dependency fails in CI rather than on a node.
+#
+# runtime.optionalCommands is report-only. The probe records which of these the
+# image provides and never fails on an absent one; they exist so that when a
+# required command is missing, the same run answers what could replace it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: encode-benchmark-samples
 data:
-  samples.yaml: |
-    schemaVersion: 1
-    runtime:
-      image: docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb
-      capabilityStatus: candidate
-      capabilityEvidence: {}
-      # Every external command the runtime scripts invoke. The capability probe
-      # reports the full missing set from this list in one run, and the offline
-      # sandbox contracts execute the scripts against exactly these commands, so
-      # an undeclared dependency fails in CI rather than on a node.
-      requiredCommands:
-        - awk
-        - base64
-        - bash
-        - chmod
-        - cp
-        - cut
-        - date
-        - dirname
-        - ffmpeg
-        - ffprobe
-        - find
-        - grep
-        - head
-        - id
-        - jq
-        - mkdir
-        - mktemp
-        - mv
-        - python3
-        - realpath
-        - rm
-        - rmdir
-        - sed
-        - sha256sum
-        - sleep
-        - sort
-        - stat
-        - tail
-        - tr
-        - uname
-        - wc
-        - yq
-      # Report-only. The probe records which of these the image provides and
-      # never fails on an absent one. They exist so that when a required command
-      # is missing, the same run answers what could replace it.
-      optionalCommands:
-        - busybox
-        - cmp
-        - comm
-        - envsubst
-        - expr
-        - gawk
-        - getopt
-        - iconv
-        - ln
-        - mawk
-        - nproc
-        - paste
-        - perl
-        - python
-        - readlink
-        - seq
-        - tee
-        - timeout
-        - touch
-        - xargs
-    savingsSeed: 20260802
-    qualityPanel: []
-    savingsPanel: []
-    chosenSettings: {}
+  samples.json: |
+    {
+      "schemaVersion": 1,
+      "runtime": {
+        "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+        "capabilityStatus": "candidate",
+        "capabilityEvidence": {},
+        "requiredCommands": [
+          "awk",
+          "base64",
+          "bash",
+          "chmod",
+          "cp",
+          "cut",
+          "date",
+          "dirname",
+          "ffmpeg",
+          "ffprobe",
+          "find",
+          "grep",
+          "head",
+          "id",
+          "jq",
+          "mkdir",
+          "mktemp",
+          "mv",
+          "realpath",
+          "rm",
+          "rmdir",
+          "sed",
+          "sha256sum",
+          "sleep",
+          "sort",
+          "stat",
+          "tail",
+          "tr",
+          "uname",
+          "wc"
+        ],
+        "optionalCommands": [
+          "busybox",
+          "cmp",
+          "comm",
+          "envsubst",
+          "expr",
+          "gawk",
+          "getopt",
+          "iconv",
+          "ln",
+          "mawk",
+          "nproc",
+          "paste",
+          "perl",
+          "python",
+          "python3",
+          "readlink",
+          "seq",
+          "tee",
+          "timeout",
+          "touch",
+          "xargs",
+          "yq"
+        ]
+      },
+      "savingsSeed": 20260802,
+      "qualityPanel": [],
+      "savingsPanel": [],
+      "chosenSettings": {}
+    }

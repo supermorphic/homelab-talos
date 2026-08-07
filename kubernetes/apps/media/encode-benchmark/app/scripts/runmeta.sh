@@ -8,6 +8,10 @@ identity_fixture="${BENCHMARK_IDENTITY_FIXTURE:-}"
 clock_override="${BENCHMARK_NOW:-}"
 new_run_directory=''
 manifest_temp=''
+# The resume check validates results.csv against this schema. benchmark.sh holds
+# the same list because it writes the file; an offline contract asserts the two
+# stay identical, since a silent drift would make every resume decision wrong.
+results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
 	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
@@ -112,7 +116,7 @@ normalize_identity() {
 
 discover_identity() {
 	local mode="$1"
-	local samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.yaml}"
+	local samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 	local script_directory image_digest samples_digest savings_seed
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha
@@ -136,9 +140,9 @@ discover_identity() {
 		return 66
 	}
 	script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	image_digest="$(yq -r '.runtime.image | split("@") | .[1] // ""' "$samples_file")"
+	image_digest="$(jq -r '.runtime.image | split("@") | .[1] // ""' "$samples_file")"
 	samples_digest="$(sha256_file "$samples_file")"
-	savings_seed="$(yq -r '.savingsSeed' "$samples_file")"
+	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
 
 	while IFS= read -r script_path; do
 		[[ -n "$script_path" ]] || continue
@@ -169,7 +173,7 @@ discover_identity() {
 			--arg sha256 "$source_sha" \
 			'. + [{path: $path, size: $size, sha256: $sha256}]' <<<"$sources")"
 		((source_index += 1))
-	done < <(yq -o=json -I=0 "$panel" "$samples_file")
+	done < <(jq -c "$panel" "$samples_file")
 
 	encoder_commands="${BENCHMARK_ENCODER_COMMANDS_JSON:-[]}"
 	node_name="${NODE_NAME:-}"
@@ -393,78 +397,130 @@ completed_row() {
 	fi
 	results="$runs_root/$run_id/results.csv"
 	[[ -f "$results" && ! -L "$results" ]] || return 1
-	python3 - "$results" "$run_id" "$row_key" "$test_mode" <<'PYTHON'
-import csv
-import sys
+	awk -v expected_run_id="$run_id" -v expected_key="$row_key" \
+		-v test_mode="$test_mode" -v header_spec="$results_header" \
+		'
+	# RFC4180 reader for the resume check. The runtime image has mawk, not gawk, so
+	# FPAT is unavailable and quoted fields must be parsed by hand. Two numbering
+	# schemes are deliberate and match the contract: a malformed record is reported
+	# by physical line, a validated record by record number with the header as 1.
+	function invalid(message) {
+		print message >"/dev/stderr"
+		aborted = 1
+		exit 65
+	}
 
-results_path, expected_run_id, expected_key, test_mode = sys.argv[1:]
-expected_header = [
-    "run_id", "panel", "sample_id", "cohort", "source_sha256", "clip_id",
-    "encoder", "requested_setting", "selected_rate_control", "status", "attempt",
-    "input_bytes", "output_bytes", "reduction_percent", "input_bit_rate",
-    "output_bit_rate", "wall_seconds", "encode_fps", "encode_speed",
-    "vmaf_harmonic_mean", "vmaf_1pct_low", "ssim", "gpu_busy_percent",
-    "qsv_proof", "validation_codec", "validation_duration",
-    "validation_resolution", "validation_frame_rate", "validation_bit_depth",
-    "validation_hdr", "validation_audio_tracks", "validation_subtitle_tracks",
-    "validation_chapters", "validation_failures", "log_path", "output_disposition",
-]
+	function flush_field() {
+		nf += 1
+		field[nf] = cur
+		cur = ""
+	}
 
+	function reset_record() {
+		for (i = 1; i <= nf; i++) delete field[i]
+		nf = 0
+		cur = ""
+	}
 
-def invalid(message):
-    print(message, file=sys.stderr)
-    raise SystemExit(65)
+	function process_record(   candidate, part, bad) {
+		record_no += 1
+		if (record_no == 1) {
+			if (nf == expected_columns) {
+				header_ok = 1
+				for (i = 1; i <= nf; i++)
+					if (field[i] != expected_header[i]) header_ok = 0
+				if (header_ok) { compact = 0; return }
+			}
+			if (test_mode != "1" || nf != 2) invalid("invalid results CSV header")
+			compact = 1
+			# The compact form carries data in its first record too.
+		}
 
+		if (compact) {
+			if (nf != 2) invalid("invalid compact results CSV row " record_no)
+			if (field[2] != "passed" && field[2] != "failed" && field[2] != "invalid")
+				invalid("invalid compact results CSV row " record_no)
+			if (field[1] == expected_key && field[2] == "passed") found = 1
+			return
+		}
 
-try:
-    with open(results_path, newline="", encoding="utf-8") as stream:
-        reader = csv.reader(stream, strict=True)
-        try:
-            first = next(reader)
-        except StopIteration:
-            raise SystemExit(1)
+		if (record_no == 1) return
 
-        if first != expected_header:
-            if test_mode != "1" or len(first) != 2:
-                invalid("invalid results CSV header")
-            rows = [first]
-            try:
-                rows.extend(reader)
-            except csv.Error:
-                invalid(f"invalid results CSV: malformed row {reader.line_num}")
-            for row_number, row in enumerate(rows, 1):
-                if len(row) != 2 or row[1] not in {"passed", "failed", "invalid"}:
-                    invalid(f"invalid compact results CSV row {row_number}")
-            found = any(row[0] == expected_key and row[1] == "passed" for row in rows)
-            raise SystemExit(0 if found else 1)
+		if (nf != expected_columns)
+			invalid("invalid results CSV: row " record_no " has " nf \
+				" columns; expected " expected_columns)
+		if (field[1] != expected_run_id)
+			invalid("invalid results CSV: row " record_no " has a mismatched run id")
+		if (field[10] != "passed" && field[10] != "failed" && field[10] != "invalid")
+			invalid("invalid results CSV: row " record_no " has an invalid status")
+		if (field[11] !~ /^[0-9]+$/ || field[11] + 0 < 1)
+			invalid("invalid results CSV: row " record_no " has an invalid attempt")
 
-        found = False
-        try:
-            for row_number, row in enumerate(reader, 2):
-                if len(row) != len(expected_header):
-                    invalid(
-                        f"invalid results CSV: row {row_number} has {len(row)} columns; "
-                        f"expected {len(expected_header)}"
-                    )
-                if row[0] != expected_run_id:
-                    invalid(f"invalid results CSV: row {row_number} has a mismatched run id")
-                if row[9] not in {"passed", "failed", "invalid"}:
-                    invalid(f"invalid results CSV: row {row_number} has an invalid status")
-                if not row[10].isdigit() or int(row[10]) < 1:
-                    invalid(f"invalid results CSV: row {row_number} has an invalid attempt")
-                key_parts = [row[1], row[4], row[5], row[6], row[7]]
-                if any(not part or "|" in part for part in key_parts):
-                    invalid(f"invalid results CSV: row {row_number} has an invalid row key")
-                candidate = "|".join(key_parts)
-                if candidate == expected_key and row[9] == "passed":
-                    found = True
-        except csv.Error:
-            invalid(f"invalid results CSV: malformed row {reader.line_num}")
-except (OSError, UnicodeError):
-    invalid("invalid results CSV: unreadable input")
+		bad = 0
+		candidate = ""
+		for (k = 1; k <= 5; k++) {
+			part = field[key_index[k]]
+			if (part == "" || index(part, "|") > 0) bad = 1
+			candidate = (k == 1) ? part : candidate "|" part
+		}
+		if (bad) invalid("invalid results CSV: row " record_no " has an invalid row key")
+		if (candidate == expected_key && field[10] == "passed") found = 1
+	}
 
-raise SystemExit(0 if found else 1)
-PYTHON
+	BEGIN {
+		split(header_spec, expected_header, ",")
+		expected_columns = 0
+		for (i in expected_header) expected_columns += 1
+		# panel, source_sha256, clip_id, encoder, requested_setting
+		key_index[1] = 2; key_index[2] = 5; key_index[3] = 6
+		key_index[4] = 7; key_index[5] = 8
+		record_no = 0
+		nf = 0
+		cur = ""
+		in_quotes = 0
+		found = 0
+		compact = 0
+		saw_record = 0
+	}
+
+	{
+		line_no += 1
+		line = $0
+		len = length(line)
+		pos = 1
+		while (pos <= len) {
+			c = substr(line, pos, 1)
+			if (in_quotes) {
+				if (c == "\"") {
+					if (substr(line, pos + 1, 1) == "\"") { cur = cur "\""; pos += 2; continue }
+					in_quotes = 0
+					pos += 1
+					continue
+				}
+				cur = cur c
+				pos += 1
+				continue
+			}
+			if (c == "\"" && cur == "") { in_quotes = 1; pos += 1; continue }
+			if (c == ",") { flush_field(); pos += 1; continue }
+			cur = cur c
+			pos += 1
+		}
+		if (in_quotes) { cur = cur "\n"; next }
+		flush_field()
+		saw_record = 1
+		process_record()
+		reset_record()
+	}
+
+	END {
+		# awk runs END even after exit, so the abort status must survive it.
+		if (aborted) exit 65
+		if (in_quotes) invalid("invalid results CSV: malformed row " line_no)
+		if (!saw_record) exit 1
+		exit (found ? 0 : 1)
+	}
+	' "$results"
 }
 
 (($# >= 1)) || usage
