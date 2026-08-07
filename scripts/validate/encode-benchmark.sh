@@ -189,7 +189,7 @@ assert_eq "$completed_expr" \
 	'completed Job alert expression'
 
 # Parse the embedded panel document and gate evidence before any source media is runnable.
-samples_doc="$(yq -r '.data."samples.yaml"' "$samples")"
+samples_doc="$(yq -r '.data."samples.json"' "$samples")"
 assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '1' 'samples schema version'
 assert_eq "$(yq -r '.savingsSeed' <<<"$samples_doc")" '20260802' 'savings selection seed'
 runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
@@ -384,7 +384,7 @@ assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"scripts\") | .configMap.d
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.name" "$template")" \
 	'encode-benchmark-samples' 'samples ConfigMap name'
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.items[0].key" "$template")" \
-	'samples.yaml' 'samples ConfigMap key'
+	'samples.json' 'samples ConfigMap key'
 
 assert_mount() {
 	local name="$1"
@@ -402,7 +402,7 @@ assert_mount media /media media/movies true
 assert_mount out /out benchmark false
 assert_mount scratch /scratch '' false
 assert_mount scripts /scripts '' true
-assert_mount samples /config/samples.yaml samples.yaml true
+assert_mount samples /config/samples.json samples.json true
 
 if rg -n '/data|media/tv|downloads' "$app/scripts" "$template"; then
 	fail 'benchmark scripts or Job template can access forbidden TV/download paths'

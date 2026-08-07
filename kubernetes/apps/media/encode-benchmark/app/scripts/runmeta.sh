@@ -112,7 +112,7 @@ normalize_identity() {
 
 discover_identity() {
 	local mode="$1"
-	local samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.yaml}"
+	local samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 	local script_directory image_digest samples_digest savings_seed
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha
@@ -136,9 +136,9 @@ discover_identity() {
 		return 66
 	}
 	script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	image_digest="$(yq -r '.runtime.image | split("@") | .[1] // ""' "$samples_file")"
+	image_digest="$(jq -r '.runtime.image | split("@") | .[1] // ""' "$samples_file")"
 	samples_digest="$(sha256_file "$samples_file")"
-	savings_seed="$(yq -r '.savingsSeed' "$samples_file")"
+	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
 
 	while IFS= read -r script_path; do
 		[[ -n "$script_path" ]] || continue
@@ -169,7 +169,7 @@ discover_identity() {
 			--arg sha256 "$source_sha" \
 			'. + [{path: $path, size: $size, sha256: $sha256}]' <<<"$sources")"
 		((source_index += 1))
-	done < <(yq -o=json -I=0 "$panel" "$samples_file")
+	done < <(jq -c "$panel" "$samples_file")
 
 	encoder_commands="${BENCHMARK_ENCODER_COMMANDS_JSON:-[]}"
 	node_name="${NODE_NAME:-}"
