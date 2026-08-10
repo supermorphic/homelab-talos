@@ -21,8 +21,20 @@ data:
       "schemaVersion": 1,
       "runtime": {
         "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
-        "capabilityStatus": "candidate",
-        "capabilityEvidence": {},
+        "capabilityStatus": "verified",
+        "capabilityEvidence": {
+          "digestResolvable": true,
+          "hevcQsv": true,
+          "realQsvEncode": true,
+          "libvmaf4k": true,
+          "libx265": true,
+          "shellTools": true,
+          "ffprobe": true,
+          "nonRootUid568": true,
+          "verifiedAt": "2026-08-10T21:43:00Z",
+          "nodeName": "nuc1",
+          "imageId": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+        },
         "requiredCommands": [
           "awk",
           "base64",
