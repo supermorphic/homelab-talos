@@ -80,6 +80,16 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
+              # Required to EXEC the binary, not to bind the port. The Caddy image ships
+              # /usr/bin/caddy with file capabilities (cap_net_bind_service=+ep), and
+              # allowPrivilegeEscalation: false applies NO_NEW_PRIVS, under which exec of
+              # a file carrying file capabilities fails with EPERM unless that capability
+              # is already permitted. Dropping it because ":9090 needs no capability"
+              # crashloops the container with
+              # "exec /usr/bin/caddy: operation not permitted".
+              # Verified against the pinned digest; PSA restricted permits exactly this
+              # capability. Do not remove.
+              add: [NET_BIND_SERVICE]
               drop: [ALL]
             readOnlyRootFilesystem: true
           volumeMounts:

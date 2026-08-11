@@ -100,8 +100,12 @@ assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "serve
 assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "collector") | .securityContext.capabilities | keys | join(",")' "$deployment")" \
   'drop' 'Collector capabilities must be exact'
 assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | .securityContext.capabilities | keys | sort | join(",")' "$deployment")" \
-  'drop' 'Metrics server capabilities must be exact'
-[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | (.securityContext.capabilities.add // []) | length' "$deployment")" == '0' ]]
+  'add,drop' 'Metrics server capabilities must be exact'
+# NET_BIND_SERVICE is mandatory here and must not be "cleaned up": the Caddy binary
+# carries file capabilities, so under NO_NEW_PRIVS the exec itself fails without it.
+# Assert the exact singleton so neither removing it nor widening it passes.
+assert_equal "$(yq -r '.spec.template.spec.containers[] | select(.name == "server") | .securityContext.capabilities.add | join(",")' "$deployment")" \
+  'NET_BIND_SERVICE' 'Metrics server must add exactly NET_BIND_SERVICE to exec Caddy'
 assert_equal "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(" ")' "$deployment")" \
   'config metrics tmp' 'Deployment volumes must be exact'
 assert_equal "$(yq -r '.spec.template.spec.volumes[] | select(.name == "config") | keys | sort | join(",")' "$deployment")" \

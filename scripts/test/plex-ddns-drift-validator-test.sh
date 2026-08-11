@@ -112,9 +112,16 @@ expect_fail 'collector exports a metric no alert watches' \
   'Plex DDNS metrics are exported but never alerted on: plex_ddns_probe_seconds'
 
 reset_tree
-yq -i '.spec.template.spec.containers[] |= (select(.name == "server").securityContext.capabilities.add = ["NET_BIND_SERVICE"])' \
+# Removing NET_BIND_SERVICE looks like a hardening win and crashloops Caddy, because
+# the binary carries file capabilities and NO_NEW_PRIVS then blocks the exec itself.
+yq -i '.spec.template.spec.containers[] |= (select(.name == "server").securityContext.capabilities = {"drop": ["ALL"]})' \
   "$app/deployment.yaml"
-expect_fail 'metrics server regains a capability' 'Metrics server capabilities must be exact'
+expect_fail 'metrics server loses NET_BIND_SERVICE' 'Metrics server capabilities must be exact'
+
+reset_tree
+yq -i '.spec.template.spec.containers[] |= (select(.name == "server").securityContext.capabilities.add += ["SYS_ADMIN"])' \
+  "$app/deployment.yaml"
+expect_fail 'metrics server widens its capability set' 'Metrics server must add exactly NET_BIND_SERVICE to exec Caddy'
 
 reset_tree
 printf '\n:2019 {\n\trespond "ok" 200\n}\n' >>"$app/Caddyfile"
