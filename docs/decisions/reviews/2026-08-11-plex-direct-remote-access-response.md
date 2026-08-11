@@ -10,6 +10,9 @@ were fixed; one was fixed in part, with its remaining design choice surfaced bel
 
 ## For you to decide
 
+**All four items below were resolved by the operator on 2026-08-11. Their dispositions
+are recorded inline; nothing here is outstanding.**
+
 ### 1. How an established session is terminated after the DNAT is removed
 
 **From F3.** The spec now says plainly that removing the DNAT blocks new connections but
@@ -33,8 +36,12 @@ Candidate mechanisms, none selected:
   ending on its own. Weakest, and it means "rollback" no longer means what it meant in
   the superseded design.
 
-Until this is chosen, rollback should be understood as blocking new exposure rather than
-ending it outright. The spec says so in §8.
+**RESOLVED — restart the Plex Deployment.** Chosen by the operator for the case that
+matters: evicting an intruder. §8 now names it as step 2, states plainly that it
+interrupts local playback and is a short full outage rather than a rolling restart, and
+scopes it to eviction rather than ordinary teardown. The router-side conntrack flush is
+recorded as a possible later improvement, explicitly rejected for now because inventing
+an unrehearsed gateway operation during an incident is a bad plan.
 
 ### 2. The central hypothesis is still unverified
 
@@ -46,8 +53,13 @@ precedence**. The measured states do not include that combination.
 
 This is the same gap flagged in the request, now independently confirmed rather than
 merely self-reported: the exact configuration this design depends on has never been
-observed, and no vendor documentation establishes it. The exposure stage's gate exists to catch it,
-but the design could still fail for this reason.
+observed, and no vendor documentation establishes it. The exposure stage's gate exists to
+catch it, but the design could still fail for this reason.
+
+**RESOLVED — accepted, with the wording kept and the test run early.** The operator
+accepts that the record's central claim is an inference and wants it falsified quickly
+rather than hedged in prose. The Plex log lines that diagnosed the original failure will
+answer it within minutes of the DNAT existing.
 
 ### 3. Whether `192.168.90.31` is genuinely free outside the cluster
 
@@ -57,6 +69,10 @@ Whether UniFi currently assigns it to a host, DHCP reservation, or other object 
 checkable from the repository. The README records `.30–.39` as excluded from DHCP, which
 makes a collision unlikely but not proven. Worth a UniFi check before stage 1.
 
+**RESOLVED — `.31` is free.** The operator confirmed the DHCP range begins at
+`192.168.90.100`, and the only fixed assignments on that network are Pi-hole at `.2` and
+the three nodes at `.10`–`.12`. Nothing outside the cluster claims `.31`.
+
 ### 4. The §4 correction rests on recorded evidence, not a live trace
 
 **Reviewer grounding, marked UNVERIFIED.** The claim that the containment capture's
@@ -65,6 +81,12 @@ was checked against the accepted 2026-08-02 design and the repository's Relay di
 and both support it. No fresh live Relay trace was collected during the review. The
 correction stands on recorded evidence; if you want it stronger before it becomes the
 durable account, a live trace would settle it.
+
+**RESOLVED — noted, no trace required.** The operator accepted the correction on its
+recorded evidence. The claim remains supported by the accepted 2026-08-02 design's own
+description of Relay's loopback termination, the repository's Relay diagnostic, and the
+observed `127.0.0.1` media fetches, rather than by a single combined live observation.
+Recorded here so a future reader knows which it is.
 
 ### 5. Scope added after the review: detection before exposure
 

@@ -317,7 +317,7 @@ The organising principle is unchanged: **rollback removes exposure, not containm
 | # | Action | Effect |
 |---|---|---|
 | 1 | Remove the single UniFi DNAT | Blocks new connections in seconds. Established sessions may survive |
-| 2 | Terminate any established session | Mechanism undecided; see below |
+| 2 | Restart the Plex Deployment | Evicts established sessions. Interrupts local playback too; only when eviction is the point |
 | 3 | Clear Plex's manually specified public port | Plex stops advertising a direct remote connection |
 | 4 | Revert the Service and CNP change in Git | Only when abandoning the design |
 
@@ -331,9 +331,21 @@ untouched because local traffic used a different data plane. That option does no
 here: under direct exposure Plex is itself the listener, so any equivalent flush
 interrupts every client, local ones included.
 
-The mechanism for step 2 is therefore not settled by this decision and must be chosen
-before stage 3. Until it is, rollback should be treated as blocking new exposure rather
-than ending it outright.
+**Step 2 is restarting the Plex Deployment**, and it is deliberately not part of an
+ordinary rollback. It evicts every established session, including local playback, and
+because the config PVC is `ReadWriteOncePod` under a `Recreate` strategy the old pod must
+terminate fully before the new one starts — a short outage for the whole household, not a
+rolling restart.
+
+Use it when eviction is the point: a suspected intrusion, an active attack, or a
+suspected Plex compromise. For an ordinary teardown, step 1 is enough and step 2 is
+skipped, because there is nobody to evict and the interruption buys nothing.
+
+A router-side conntrack flush would be more surgical, since it would drop only the
+forwarded session and leave local playback untouched. It is not selected here: no
+repository recipe performs it, and an unrehearsed manual gateway operation is a poor
+thing to be inventing during the incident that requires it. Adding one later is a
+reasonable improvement.
 
 ## 9. Risk
 
@@ -396,6 +408,6 @@ suite fails.
 | DDNS, public A record, scoped token | Superseded; removed in stage 5 |
 | Plex public port | `32400`, matching the UniFi rule; non-default port deferred |
 | Secure connections | Recorded, unchanged; changing it is a new decision |
-| Exposure control | One UniFi DNAT; removing it blocks new connections. Terminating established sessions needs a mechanism not yet chosen |
+| Exposure control | One UniFi DNAT; removing it blocks new connections. Restarting Plex evicts established sessions when eviction is the point |
 | Detection and alerting | Absent today. A precondition of durable exposure, designed in a companion decision |
 | Permanence | Not decided here. Separate decision after a clean experiment |
