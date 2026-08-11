@@ -118,17 +118,27 @@ fi
 [[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$cnp")" == 'plex' ]]
 
 # TCP 32400 is the only ingress port, from exactly the captured consumer set.
-[[ "$(yq -r '.spec.ingress | length' "$cnp")" == '2' ]]
+[[ "$(yq -r '.spec.ingress | length' "$cnp")" == '3' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '32400/TCP' ]]
 [[ "$(yq -r '.spec.ingress[0] | keys | sort | join(",")' "$cnp")" == 'fromEndpoints,toPorts' ]]
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[] | keys | join(",")] | unique | join(",")' "$cnp")" == 'matchLabels' ]]
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system;gateway.envoyproxy.io/owning-gateway-name=public,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
 [[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
 [[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
-if yq -e '.spec.ingress[].fromEntities[]? | select(. == "world" or . == "cluster")' "$cnp" >/dev/null 2>&1; then
-  echo 'Refusing: Plex policy must not admit ingress from world or cluster entities.' >&2
+# Publishing Plex means off-cluster traffic must reach 32400, so `world` is admitted —
+# but only there, and `cluster` never. Cilium's `world` is everything outside the cluster
+# CIDR, so this also admits LAN clients to the LoadBalancer address; that is an accepted
+# cost of the decision, not an oversight.
+[[ "$(yq -r '.spec.ingress[2] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
+[[ "$(yq -r '.spec.ingress[2].fromEntities | join(",")' "$cnp")" == 'world' ]]
+[[ "$(yq -r '[.spec.ingress[2].toPorts[].ports[] | .port + "/" + .protocol] | join(",")' "$cnp")" == '32400/TCP' ]]
+if yq -e '.spec.ingress[].fromEntities[]? | select(. == "cluster")' "$cnp" >/dev/null 2>&1; then
+  echo 'Refusing: Plex policy must not admit ingress from the cluster entity.' >&2
   exit 1
 fi
+# `world` belongs to exactly one rule. A second occurrence would mean a port other than
+# 32400 had been opened to the Internet.
+[[ "$(yq -r '[.spec.ingress[] | select(has("fromEntities")) | select(.fromEntities[] == "world")] | length' "$cnp")" == '1' ]]
 
 # Egress is cluster DNS plus public-IPv4 TCP 443 only, with every non-global range
 # excluded. No entity-based egress: world would include the NAS, gateway, and VLANs.
