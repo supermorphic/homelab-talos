@@ -86,7 +86,18 @@ fi
 [[ "$(yq -r '.persistence.media.advancedMounts.plex.app[0].readOnly' "$values")" == 'true' ]]
 [[ "$(yq -r '.persistence.media | has("globalMounts")' "$values")" == 'false' ]]
 
-[[ "$(yq -r '.service.app.type' "$values")" == 'ClusterIP' ]]
+# The DNAT needs a stable LAN target and Plex is otherwise ClusterIP-only. The address
+# is explicit from the existing internal pool (autoAssign is false there, so nothing can
+# drift onto it); a dedicated pool would require narrowing `internal` in the same change,
+# which is the MetalLB admission deadlock that froze reconciliation on 2026-08-06.
+[[ "$(yq -r '.service.app.type' "$values")" == 'LoadBalancer' ]]
+[[ "$(yq -r '.service.app.annotations."metallb.io/address-pool"' "$values")" == 'internal' ]]
+[[ "$(yq -r '.service.app.annotations."metallb.io/loadBalancerIPs"' "$values")" == '192.168.90.31' ]]
+# Local preserves the client address, so Plex can attribute remote sessions and classify
+# LAN bandwidth correctly. Cluster would SNAT every client to a node address.
+[[ "$(yq -r '.service.app.externalTrafficPolicy' "$values")" == 'Local' ]]
+[[ "$(yq -r '.service.app.ports | keys | join(",")' "$values")" == 'http' ]]
+[[ "$(yq -r '.service.app.ports.http.port' "$values")" == '32400' ]]
 
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'plex.lab.supermorphic.com' ]]
 [[ "$(yq -r '[.spec.parentRefs[].name] | join(",")' "$route")" == 'internal' ]]
