@@ -136,8 +136,10 @@ if yq -e '.spec.ingress[].fromEntities[]? | select(. == "cluster")' "$cnp" >/dev
   echo 'Refusing: Plex policy must not admit ingress from the cluster entity.' >&2
   exit 1
 fi
-# `world` belongs to exactly one rule. A second occurrence would mean a port other than
-# 32400 had been opened to the Internet.
+# `world` belongs to exactly one rule. A second occurrence would mean a port
+# other than 32400 had been opened to the Internet. This is defence-in-depth:
+# the exact-shape assertions above already imply it, so no mutation can make it
+# fire today -- it earns its place only if those are ever relaxed.
 [[ "$(yq -r '[.spec.ingress[] | select(has("fromEntities")) | select(.fromEntities[] == "world")] | length' "$cnp")" == '1' ]]
 
 # Egress is cluster DNS plus public-IPv4 TCP 443 only, with every non-global range

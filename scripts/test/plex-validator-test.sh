@@ -33,8 +33,8 @@ expect_fail() {
   output="$(run_validator)"
   status="$?"
   set -e
-  [[ "$status" -ne 0 ]] || {
-    echo "$description: expected a non-zero exit, got 0." >&2
+  [[ "$status" -eq 1 ]] || {
+    echo "$description: expected exit 1, got $status." >&2
     echo "$output" >&2
     exit 1
   }
@@ -48,38 +48,63 @@ reset_tree
 yq -i '.service.app.type = "ClusterIP"' "$app/values.yaml"
 expect_fail 'service type reverted to ClusterIP'
 
-echo '2. A different LoadBalancer address is rejected.'
+echo '2. A different LoadBalancer address-pool annotation is rejected.'
+reset_tree
+yq -i '.service.app.annotations."metallb.io/address-pool" = "public"' "$app/values.yaml"
+expect_fail 'address-pool annotation drifted off internal'
+
+echo '3. A different LoadBalancer address is rejected.'
 reset_tree
 yq -i '.service.app.annotations."metallb.io/loadBalancerIPs" = "192.168.90.32"' "$app/values.yaml"
 expect_fail 'service address drifted'
 
-echo '3. externalTrafficPolicy Cluster is rejected.'
+echo '4. externalTrafficPolicy Cluster is rejected.'
 reset_tree
 yq -i '.service.app.externalTrafficPolicy = "Cluster"' "$app/values.yaml"
 expect_fail 'client-address preservation lost'
 
-echo '4. Removing the world ingress rule is rejected.'
+echo '5. A renamed/second Service port key is rejected.'
+reset_tree
+yq -i '.service.app.ports.https.port = 443' "$app/values.yaml"
+expect_fail 'service port key widened beyond http'
+
+echo '6. The Service port number drifting from 32400 is rejected.'
+reset_tree
+yq -i '.service.app.ports.http.port = 32401' "$app/values.yaml"
+expect_fail 'service port number drifted'
+
+echo '7. Removing the world ingress rule is rejected.'
 reset_tree
 yq -i 'del(.spec.ingress[2])' "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'world ingress removed'
 
-echo '5. Opening a second port to world is rejected.'
+echo '8. A second port anywhere in ingress widens the global port set and is rejected.'
 reset_tree
 yq -i '.spec.ingress[2].toPorts[0].ports += [{"port": "32401", "protocol": "TCP"}]' "$app/ciliumnetworkpolicy.yaml"
-expect_fail 'world admitted on a second port'
+expect_fail 'global ingress port set widened beyond 32400/TCP'
 
-echo '6. A second world rule is rejected.'
+echo '9. A duplicated port entry inside the world rule itself is rejected.'
+reset_tree
+yq -i '.spec.ingress[2].toPorts[0].ports += [{"port": "32400", "protocol": "TCP"}]' "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'world rule port list no longer exactly 32400/TCP'
+
+echo '10. Widening the world rule shape (e.g. adding an ICMP rule) is rejected.'
+reset_tree
+yq -i '.spec.ingress[2].icmps = [{"fields": [{"type": 8}]}]' "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'world rule keys no longer exactly fromEntities,toPorts'
+
+echo '11. A second world rule widens the ingress rule count and is rejected.'
 reset_tree
 yq -i '.spec.ingress += [{"fromEntities": ["world"], "toPorts": [{"ports": [{"port": "32400", "protocol": "TCP"}]}]}]' \
   "$app/ciliumnetworkpolicy.yaml"
-expect_fail 'world admitted by a second rule'
+expect_fail 'ingress rule count widened beyond 3'
 
-echo '7. Admitting the cluster entity is rejected.'
+echo '12. Admitting the cluster entity is rejected.'
 reset_tree
 yq -i '.spec.ingress[2].fromEntities += ["cluster"]' "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'cluster entity admitted'
 
-echo '8. Widening egress is rejected.'
+echo '13. Widening egress is rejected.'
 reset_tree
 yq -i '.spec.egress += [{"toEntities": ["world"]}]' "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'entity-based egress reintroduced'
