@@ -40,7 +40,11 @@ assert_equal "$(yq -r '.generatorOptions.disableNameSuffixHash // false' "$kusto
 
 ks="$root/ks.yaml"
 [[ "$(yq -r '.metadata.name + " " + .metadata.namespace' "$ks")" == 'plex-ddns-drift flux-system' ]]
-[[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]]
+# Activated after the phase-4 gates passed live: the public A record follows the
+# observed WAN address, UniFi restored it from a deliberately corrupted value, and the
+# exporter reports a match without logging either address. This exporter reads only
+# public data and holds no credential, so activating it grants no exposure.
+[[ "$(yq -r '.spec.suspend' "$ks")" == 'false' ]]
 [[ "$(yq -r '.spec.path' "$ks")" == './kubernetes/apps/monitoring/plex-ddns-drift/app' ]]
 [[ "$(yq -r '.spec.dependsOn | map(.name) | sort | join(" ")' "$ks")" == 'kube-prometheus-stack' ]]
 
@@ -267,4 +271,4 @@ rendered="$validation_tmp/rendered.yaml"
 kustomize build "$app" >"$rendered"
 [[ "$(rg -c '^kind:' "$rendered")" == '6' ]]
 
-echo 'Plex DDNS drift source contract passed: suspended credential-free exporter, hardened runtime, exact endpoints, bounded policy, metrics, and alerts.'
+echo 'Plex DDNS drift source contract passed: active credential-free exporter, hardened runtime, exact endpoints, bounded policy, metrics, and alerts.'
