@@ -150,14 +150,25 @@ sample_ids = [sample["id"] for sample in selected]
 if len(sample_ids) != len(set(sample_ids)):
     fail("deterministic sample id collision")
 
-print(f"savingsSeed: {int(seed_text)}")
-print("savingsPanel:")
-for sample in selected:
-    print(f"  - id: {sample['id']}")
-    print(f"    cohort: {sample['cohort']}")
-    print(f"    path: {json.dumps(sample['path'], ensure_ascii=False)}")
-    print(f"    sizeBytes: {sample['size']}")
-    print(f"    width: {sample['width']}")
-    print(f"    height: {sample['height']}")
-    print(f"    sha256: {sample['sha256']}")
+json.dump(
+    {
+        "savingsSeed": int(seed_text),
+        "savingsPanel": [
+            {
+                "id": sample["id"],
+                "cohort": sample["cohort"],
+                "path": sample["path"],
+                "sizeBytes": sample["size"],
+                "width": sample["width"],
+                "height": sample["height"],
+                "sha256": sample["sha256"],
+            }
+            for sample in selected
+        ],
+    },
+    sys.stdout,
+    indent=2,
+    sort_keys=True,
+)
+sys.stdout.write("\n")
 PYTHON
