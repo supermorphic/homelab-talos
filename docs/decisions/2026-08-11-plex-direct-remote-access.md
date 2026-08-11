@@ -27,8 +27,8 @@ configuration. Permanence is a separate decision.
 |---|---|
 | Dedicated external Envoy Gateway as the primary remote path | **Superseded.** It failed §12 row 1 |
 | Split-horizon DNS on `plex.lab.supermorphic.com` for the public horizon | **Superseded.** The public horizon is now Plex's own `plex.direct` name |
-| Public Gateway, `networking-public`, dedicated certificate, public MetalLB pool | **Superseded.** Removed in stage 4 |
-| UniFi-managed Cloudflare DDNS and the credential-free drift exporter | **Superseded.** Removed in stage 4 |
+| Public Gateway, `networking-public`, dedicated certificate, public MetalLB pool | **Superseded.** Removed in stage 5 |
+| UniFi-managed Cloudflare DDNS and the credential-free drift exporter | **Superseded.** Removed in stage 5 |
 | "Direct publication of Plex `32400` remains rejected" | **Superseded.** It is the selected path here |
 
 ### 1.2 What is retained
@@ -126,9 +126,9 @@ Relay. Relay terminates on pod loopback `127.0.0.1:32401`, so a Cilium ingress c
 on `32400` cannot observe it by construction. Zero flows is what a *working* Relay
 session looks like.
 
-The §7.1 prerequisite it was trying to satisfy was therefore unobtainable for a reason
-unrelated to the fault under investigation, and the deviation recorded there can be
-closed rather than carried.
+The superseded amendment's §7.1 prerequisite that the capture was trying to satisfy was
+therefore unobtainable for a reason unrelated to the fault under investigation, and the
+deviation recorded there can be closed rather than carried.
 
 **The amendment's §3 understated the cost of clearing the custom URL.** It recorded
 "Apple TV cannot connect to Plex at all". On the current build Apple TV connects and
@@ -212,9 +212,18 @@ and no other port, source, or destination opens.
 
 **Plex settings.** Remote Access stays enabled. The manually specified public port is
 set to `32400`, matching the UniFi rule, as §8.3 requires. The custom server access URL
-is restored to `https://plex.lab.supermorphic.com/`. Unauthenticated networks stay
-empty. The current **Secure connections** value is recorded before any change and is
-not changed by this decision; changing it would be a new decision.
+is restored **with an explicit port**, as `https://plex.lab.supermorphic.com:443/`.
+
+The port is not optional. Plex applies the Remote Access port to any custom URL that
+omits one, so the previously stored portless value would publish
+`plex.lab.supermorphic.com:32400` once the manual port is set. Pi-hole resolves that
+name to the internal Gateway VIP, which listens only on `443`, so a rediscovering local
+client would follow the published connection to a port nothing serves and fall back —
+regressing the hard local rows this design exists to protect.
+
+Unauthenticated networks stay empty. The current **Secure connections** value is
+recorded before any change and is not changed by this decision; changing it would be a
+new decision.
 
 The default port `32400` is used rather than a non-standard external port. A high
 random port is cheap obscurity and a reasonable later hardening step, but it is an
@@ -230,24 +239,73 @@ guarded recipe.
 | Stage | Steps | Gate to proceed |
 |---|---|---|
 | **1 — Cluster, no exposure** | LoadBalancer Service at `.31`; CNP `world:32400` | Plex healthy internally; `.31` assigned; from off-network nothing is reachable |
-| **2 — Exposure** | Plex manual public port `32400`; one UniFi DNAT | Plex mapping state leaves `Not Published (Not Reachable)` |
-| **3 — Acceptance** | Full client matrix against the phase-0 baseline; external negative scans | Row 1 passes **and** rows 2–5 and 9–11 match baseline |
-| **4 — Teardown** | Remove the superseded public plane | Only after stage 3 passes |
-| **5 — Decide** | Permanence proposed only after a clean run | Separate decision |
+| **2 — Detection** | Companion decision designed, implemented, and exercised | Alerts fire on synthetic abuse and reach ntfy |
+| **3 — Exposure** | Plex manual public port `32400`; one UniFi DNAT | Plex publishes a `*.plex.direct` remote connection |
+| **4 — Acceptance** | Full client matrix against the phase-0 baseline; external negative scans | Row 1 passes **and** rows 2–5 and 9–11 match baseline |
+| **5 — Teardown** | Remove the superseded public plane | Only after stage 4 passes |
+| **6 — Decide** | Permanence proposed only after a clean run | Separate decision |
 
-Stage 2's gate is the first honest signal. Plex reporting itself reachable is the
-observable that failed throughout the Envoy experiment, and it is the precondition for
-Plex constructing the media URL the speaker needs.
+Stage 3's gate is the connection Plex publishes, not the reachability state it reports.
+§3 measured Sonos playing while the state read `Mapped - Not Published (Not Reachable)`,
+so that state demonstrably does not prevent Plex from constructing a media URL and
+cannot serve as a precondition. What §2.2 identifies as the mechanism is the
+connection's *name*, and whether Plex now publishes a `*.plex.direct` remote connection
+is directly observable in its published resource list.
 
-Stage 4 removes the public Gateway and `networking-public`, the DDNS drift exporter,
-the public Cloudflare A record, the UniFi DDNS entry, and the scoped token, each
-through a reviewed Git revert rather than a live edit. It is deliberately gated: the
+The mapping state remains worth recording as an indicator — it is the observable that
+failed throughout the Envoy experiment — but it does not gate the stage.
+
+Stage 5 removes the superseded machinery through two different mechanisms, because it
+lives in two different places. The public Gateway, `networking-public`, and the DDNS
+drift exporter are Flux-managed and come out through a reviewed Git revert, never a
+live edit. The public Cloudflare A record, the UniFi DDNS entry, and the scoped token
+are external state the operator created directly; no Git change can delete, disable, or
+revoke them, so each is an explicit operator action with the token revocation last. It
+is deliberately gated: the
 superseded machinery is the fallback position until the replacement is proven.
 
-### 7.1 Hard gates — any one triggers immediate revert
+### 7.1 Detection and alerting precede durable exposure
+
+Nothing in this cluster would notice this port being abused. Hubble is enabled, but
+`hubble-metrics` is not configured and no ServiceMonitor scrapes Cilium or Hubble into
+Prometheus. Plex records every request with its source address, but writes it to its
+config PVC, and the cluster runs no log collector — a fact the superseded amendment
+already noted about its own access logs. Probing, a connection flood, repeated
+authentication failures, and bandwidth saturation would all pass unobserved and leave no
+durable evidence.
+
+**No exposure begins until detection exists and has been shown to work.** Stage 2 is a
+gate, not a parallel track: the DNAT is not created until alerts demonstrably fire on
+synthetic abuse and arrive over the existing ntfy path. Being attended is not a
+substitute — an operator watching a dashboard is not a detection system, and the
+superseded design's time-boxed-and-attended reasoning is deliberately not reused here.
+
+Their design is deliberately not attempted here, because appending it would be worse
+than giving it a proper pass. A companion decision must cover at minimum: which signals
+are already available and which require enabling `hubble-metrics` plus a ServiceMonitor;
+what constitutes an attack expressed in those signals rather than in adjectives; which
+alerts route through the existing ntfy path; how each alert is proven to fire, since an
+untested alert rule is not detection; and whether any rate limiting is achievable
+without reintroducing a proxy in front of Plex, given that removing that proxy is what
+this design does.
+
+**Thresholds cannot be derived from a measured baseline of remote traffic**, because no
+remote traffic exists until the DNAT does, and the DNAT is gated on this work. Requiring
+one would repeat the mistake §4 records: the superseded design made a native Sonos
+capture a prerequisite for a policy that had to exist before native Sonos could work,
+and the prerequisite was unobtainable by construction. The companion decision must
+instead set initial thresholds from the *local* traffic profile and from what the link
+can physically carry, treat them as provisional, and tune them once real remote traffic
+exists. Provisional-and-stated beats precise-and-impossible.
+
+Two measures are available immediately and need no cluster change: UniFi's syslog option
+on the forwarding rule itself, and Plex's existing per-user remote stream limit of `2`
+from §10 of the 2026-08-02 design.
+
+### 7.2 Hard gates — any one triggers immediate revert
 
 1. Any internal consumer regresses, at any stage.
-2. Row 1 fails at stage 3.
+2. Row 1 fails at stage 4.
 3. Any WAN port other than `32400`/TCP is reachable.
 4. An AAAA record exists for any published Plex name.
 5. Plex opens its own port via UPnP or NAT-PMP.
@@ -258,13 +316,24 @@ The organising principle is unchanged: **rollback removes exposure, not containm
 
 | # | Action | Effect |
 |---|---|---|
-| 1 | Remove the single UniFi DNAT | Exposure ends in seconds. Sufficient on its own |
-| 2 | Clear Plex's manually specified public port | Plex stops advertising a direct remote connection |
-| 3 | Revert the Service and CNP change in Git | Only when abandoning the design |
+| 1 | Remove the single UniFi DNAT | Blocks new connections in seconds. Established sessions may survive |
+| 2 | Terminate any established session | Mechanism undecided; see below |
+| 3 | Clear Plex's manually specified public port | Plex stops advertising a direct remote connection |
+| 4 | Revert the Service and CNP change in Git | Only when abandoning the design |
 
-Local access never depended on any of this and is unaffected at every step. Step 1
-alone is complete rollback, so a partial or interrupted rollback still leaves the
-system safe.
+Local access never depended on any of this and is unaffected by steps 1, 3, and 4.
+
+**Step 1 is not complete rollback.** Deleting a forwarding rule blocks new connections
+but does not necessarily drop sessions UniFi already holds in conntrack; the accepted
+runbook records exactly this and follows DNAT deletion with a connection flush. The
+superseded design could flush by restarting the public Envoy, which left local playback
+untouched because local traffic used a different data plane. That option does not exist
+here: under direct exposure Plex is itself the listener, so any equivalent flush
+interrupts every client, local ones included.
+
+The mechanism for step 2 is therefore not settled by this decision and must be chosen
+before stage 3. Until it is, rollback should be treated as blocking new exposure rather
+than ending it outright.
 
 ## 9. Risk
 
@@ -323,9 +392,10 @@ suite fails.
 | MetalLB address | `192.168.90.31`, explicit, from the existing `internal` pool; no new pool |
 | Service policy | `externalTrafficPolicy: Local`, preserving client attribution |
 | Containment | Plex Cilium policy retained and extended with `world:32400` only |
-| Public Envoy plane | Superseded; removed in stage 4 after the replacement is proven |
-| DDNS, public A record, scoped token | Superseded; removed in stage 4 |
+| Public Envoy plane | Superseded; removed in stage 5 after the replacement is proven |
+| DDNS, public A record, scoped token | Superseded; removed in stage 5 |
 | Plex public port | `32400`, matching the UniFi rule; non-default port deferred |
 | Secure connections | Recorded, unchanged; changing it is a new decision |
-| Exposure control | One UniFi DNAT; removing it is a complete rollback |
+| Exposure control | One UniFi DNAT; removing it blocks new connections. Terminating established sessions needs a mechanism not yet chosen |
+| Detection and alerting | Absent today. A precondition of durable exposure, designed in a companion decision |
 | Permanence | Not decided here. Separate decision after a clean experiment |
