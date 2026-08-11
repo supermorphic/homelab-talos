@@ -38,6 +38,13 @@ case " $* " in
     program="${program//\/config/$FAKE_REMOTE_CONFIG}"
     PATH="$FAKE_REMOTE_BIN" /bin/bash -ceu "$program"
     ;;
+  *' --namespace media get service plex --output json '*)
+    if [[ "${FAKE_LAYOUT:-}" == service-wrong-address ]]; then
+      printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.32"}]}}}\n'
+    else
+      printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+    fi
+    ;;
   *' --namespace media get httproute plex '*)
     printf 'True'
     ;;
@@ -100,9 +107,11 @@ exec_log="$fixture/exec.log"
 
 run_verifier() {
   local mount_options="$1"
+  local layout="${2:-}"
   PATH="$fixture/bin:$PATH" \
     FAKE_EXEC_LOG="$exec_log" \
     FAKE_MOUNT_OPTIONS="$mount_options" \
+    FAKE_LAYOUT="$layout" \
     FAKE_REMOTE_BIN="$fixture/remote-bin" \
     FAKE_REMOTE_CONFIG="$fixture/remote-config" \
     FAKE_REMOTE_MEDIA="$fixture/remote-media" \
@@ -137,5 +146,21 @@ for mount_options in 'rw,relatime' 'rw,errors=remount-ro'; do
   fi
   [[ "$(wc -l <"$exec_log" | tr -d ' ')" == '1' ]]
 done
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-wrong-address >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted a Service that does not hold 192.168.90.31.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service does not hold exactly 192.168.90.31.' "$output" || {
+  echo 'Plex verifier failed the wrong-address case, but not with the expected message.' >&2
+  cat "$output" >&2
+  exit 1
+}
 
 echo 'Plex verifier minimal-container test passed.'
