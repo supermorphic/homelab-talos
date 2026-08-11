@@ -64,8 +64,11 @@ and privilege escalation disabled. The Plex Cilium policy is a hard prerequisite
 for public ingress.
 
 The internal Pi-hole record, internal HTTPRoute and Gateway, wildcard certificate,
-internal VIP `192.168.90.30`, Plex `ClusterIP:32400`, and existing VLAN rules remain
-unchanged in every phase.
+internal VIP `192.168.90.30`, and existing VLAN rules remain unchanged in every stage.
+Plex's Service is now `type: LoadBalancer` at `192.168.90.31:32400`
+(`docs/decisions/2026-08-11-plex-direct-remote-access.md`), for the operator's WAN DNAT;
+it is not an advertised client path — Plex still advertises its pod IP, not the
+LoadBalancer address, so local clients are unaffected.
 
 ## Evidence record
 

@@ -38,6 +38,22 @@ case " $* " in
     program="${program//\/config/$FAKE_REMOTE_CONFIG}"
     PATH="$FAKE_REMOTE_BIN" /bin/bash -ceu "$program"
     ;;
+  *' --namespace media get service plex --output json '*)
+    case "${FAKE_LAYOUT:-}" in
+      service-wrong-address)
+        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.32"}]}}}\n'
+        ;;
+      service-not-loadbalancer)
+        printf '{"spec":{"type":"ClusterIP","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        ;;
+      service-cluster-policy)
+        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Cluster"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        ;;
+      *)
+        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        ;;
+    esac
+    ;;
   *' --namespace media get httproute plex '*)
     printf 'True'
     ;;
@@ -100,9 +116,11 @@ exec_log="$fixture/exec.log"
 
 run_verifier() {
   local mount_options="$1"
+  local layout="${2:-}"
   PATH="$fixture/bin:$PATH" \
     FAKE_EXEC_LOG="$exec_log" \
     FAKE_MOUNT_OPTIONS="$mount_options" \
+    FAKE_LAYOUT="$layout" \
     FAKE_REMOTE_BIN="$fixture/remote-bin" \
     FAKE_REMOTE_CONFIG="$fixture/remote-config" \
     FAKE_REMOTE_MEDIA="$fixture/remote-media" \
@@ -137,5 +155,53 @@ for mount_options in 'rw,relatime' 'rw,errors=remount-ro'; do
   fi
   [[ "$(wc -l <"$exec_log" | tr -d ' ')" == '1' ]]
 done
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-wrong-address >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted a Service that does not hold 192.168.90.31.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service does not hold exactly 192.168.90.31.' "$output" || {
+  echo 'Plex verifier failed the wrong-address case, but not with the expected message.' >&2
+  cat "$output" >&2
+  exit 1
+}
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-not-loadbalancer >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted a Service that is not a LoadBalancer.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service is not a LoadBalancer; the DNAT would have no target.' "$output" || {
+  echo 'Plex verifier failed the not-a-LoadBalancer case, but not with the expected message.' >&2
+  cat "$output" >&2
+  exit 1
+}
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-cluster-policy >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted a Service with externalTrafficPolicy Cluster.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service must preserve client addresses with externalTrafficPolicy Local.' "$output" || {
+  echo 'Plex verifier failed the Cluster-policy case, but not with the expected message.' >&2
+  cat "$output" >&2
+  exit 1
+}
 
 echo 'Plex verifier minimal-container test passed.'

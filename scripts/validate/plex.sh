@@ -86,7 +86,18 @@ fi
 [[ "$(yq -r '.persistence.media.advancedMounts.plex.app[0].readOnly' "$values")" == 'true' ]]
 [[ "$(yq -r '.persistence.media | has("globalMounts")' "$values")" == 'false' ]]
 
-[[ "$(yq -r '.service.app.type' "$values")" == 'ClusterIP' ]]
+# The DNAT needs a stable LAN target and Plex is otherwise ClusterIP-only. The address
+# is explicit from the existing internal pool (autoAssign is false there, so nothing can
+# drift onto it); a dedicated pool would require narrowing `internal` in the same change,
+# which is the MetalLB admission deadlock that froze reconciliation on 2026-08-06.
+[[ "$(yq -r '.service.app.type' "$values")" == 'LoadBalancer' ]]
+[[ "$(yq -r '.service.app.annotations."metallb.io/address-pool"' "$values")" == 'internal' ]]
+[[ "$(yq -r '.service.app.annotations."metallb.io/loadBalancerIPs"' "$values")" == '192.168.90.31' ]]
+# Local preserves the client address, so Plex can attribute remote sessions and classify
+# LAN bandwidth correctly. Cluster would SNAT every client to a node address.
+[[ "$(yq -r '.service.app.externalTrafficPolicy' "$values")" == 'Local' ]]
+[[ "$(yq -r '.service.app.ports | keys | join(",")' "$values")" == 'http' ]]
+[[ "$(yq -r '.service.app.ports.http.port' "$values")" == '32400' ]]
 
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'plex.lab.supermorphic.com' ]]
 [[ "$(yq -r '[.spec.parentRefs[].name] | join(",")' "$route")" == 'internal' ]]
@@ -106,18 +117,37 @@ fi
 [[ "$(yq -r '.spec.endpointSelector.matchLabels | keys | join(",")' "$cnp")" == 'app.kubernetes.io/name' ]]
 [[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$cnp")" == 'plex' ]]
 
-# TCP 32400 is the only ingress port, from exactly the captured consumer set.
-[[ "$(yq -r '.spec.ingress | length' "$cnp")" == '2' ]]
+# TCP 32400 is the only ingress port. Rules 0-1 are the captured consumer set from the
+# phase-1 Hubble capture; rule 2 (world) is a deliberate later widening, not a captured
+# consumer.
+[[ "$(yq -r '.spec.ingress | length' "$cnp")" == '3' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '32400/TCP' ]]
 [[ "$(yq -r '.spec.ingress[0] | keys | sort | join(",")' "$cnp")" == 'fromEndpoints,toPorts' ]]
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[] | keys | join(",")] | unique | join(",")' "$cnp")" == 'matchLabels' ]]
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system;gateway.envoyproxy.io/owning-gateway-name=public,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
 [[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
 [[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
-if yq -e '.spec.ingress[].fromEntities[]? | select(. == "world" or . == "cluster")' "$cnp" >/dev/null 2>&1; then
-  echo 'Refusing: Plex policy must not admit ingress from world or cluster entities.' >&2
+# §6 of docs/decisions/2026-08-11-plex-direct-remote-access.md accepts `world:32400` as
+# the containment cost of publishing Plex — but only there, and `cluster` never. Cilium's
+# `world` is everything outside the cluster CIDR, so as an observed consequence of that
+# mechanism, this also admits LAN clients to the LoadBalancer address.
+[[ "$(yq -r '.spec.ingress[2] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
+[[ "$(yq -r '.spec.ingress[2].fromEntities | join(",")' "$cnp")" == 'world' ]]
+[[ "$(yq -r '[.spec.ingress[2].toPorts[].ports[] | .port + "/" + .protocol] | join(",")' "$cnp")" == '32400/TCP' ]]
+# Structurally unreachable today, like its sibling below: the exact-shape assertions
+# on ingress rules 0-2 above already pin every `fromEntities` value, so no mutation can
+# put `cluster` anywhere in one without failing one of those first. Kept anyway — it
+# carries the only human-readable Plex-policy refusal message and earns its place if
+# those are relaxed.
+if yq -e '.spec.ingress[].fromEntities[]? | select(. == "cluster")' "$cnp" >/dev/null 2>&1; then
+  echo 'Refusing: Plex policy must not admit ingress from the cluster entity.' >&2
   exit 1
 fi
+# `world` belongs to exactly one rule. A second occurrence would mean a port
+# other than 32400 had been opened to the Internet. This is defence-in-depth:
+# the exact-shape assertions above already imply it, so no mutation can make it
+# fire today -- it earns its place only if those are ever relaxed.
+[[ "$(yq -r '[.spec.ingress[] | select(has("fromEntities")) | select(.fromEntities[] == "world")] | length' "$cnp")" == '1' ]]
 
 # Egress is cluster DNS plus public-IPv4 TCP 443 only, with every non-global range
 # excluded. No entity-based egress: world would include the NAS, gateway, and VLANs.
@@ -164,5 +194,16 @@ fi
 for container in runtime-identity app; do
   [[ "$(yq -r "(.spec.template.spec.initContainers[], .spec.template.spec.containers[]) | select(.name == \"$container\") | .image" "$rendered")" == "$image_repository:$image_tag@$image_digest" ]]
 done
+
+# The Service assertions above read values.yaml and compare it to the literal just
+# written there — not an independent check. The render is: it is Helm's own output,
+# not the input we wrote.
+yq -o=yaml 'select(.kind == "Service" and .metadata.name == "plex")' \
+  "$temp_dir/render.yaml" >"$temp_dir/service.yaml"
+rendered_service="$temp_dir/service.yaml"
+
+[[ "$(yq -r '.spec.type' "$rendered_service")" == 'LoadBalancer' ]]
+[[ "$(yq -r '.spec.externalTrafficPolicy' "$rendered_service")" == 'Local' ]]
+[[ "$(yq -r '.metadata.annotations."metallb.io/loadBalancerIPs"' "$rendered_service")" == '192.168.90.31' ]]
 
 echo "Plex relay identity, deterministic image, private routing, network containment, and pinned render passed validation."

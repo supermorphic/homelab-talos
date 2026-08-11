@@ -46,6 +46,23 @@ pod="$("${kc[@]}" --namespace media get pods \
     [[ -w /config ]]
   '
 
+# Stage-1 gate: the DNAT target exists and holds the exact address the decision names.
+# MetalLB assigns nothing implicitly here (autoAssign is false on the internal pool), so
+# a missing address means the annotation or the pool is wrong, not that it is pending.
+service="$("${kc[@]}" --namespace "$ns" get service plex --output json)"
+[[ "$(yq -r '.spec.type' - <<<"$service")" == 'LoadBalancer' ]] || {
+  echo 'Plex Service is not a LoadBalancer; the DNAT would have no target.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.externalTrafficPolicy' - <<<"$service")" == 'Local' ]] || {
+  echo 'Plex Service must preserve client addresses with externalTrafficPolicy Local.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.status.loadBalancer.ingress[]?.ip] | join(",")' - <<<"$service")" == '192.168.90.31' ]] || {
+  echo 'Plex Service does not hold exactly 192.168.90.31.' >&2
+  exit 1
+}
+
 accepted=false
 for _ in {1..24}; do
   if [[ "$("${kc[@]}" --namespace "$ns" get httproute plex --output jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)" == 'True' ]]; then

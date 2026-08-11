@@ -110,7 +110,16 @@ controllers:
 service:
   app:
     controller: plex
-    type: ClusterIP
+    # LoadBalancer, not ClusterIP: the operator-created WAN DNAT needs a stable LAN
+    # target, and a ClusterIP has no address the gateway can forward to. This grants no
+    # Internet exposure on its own — nothing routes to it until that DNAT exists.
+    type: LoadBalancer
+    annotations:
+      metallb.io/address-pool: internal
+      metallb.io/loadBalancerIPs: 192.168.90.31
+    # Preserve the client source address. Cluster would SNAT every remote client to a
+    # node address, destroying session attribution on the one service being published.
+    externalTrafficPolicy: Local
     ports:
       http:
         port: 32400

@@ -75,10 +75,13 @@ config volume, and Plex starts and checks its database.
   zero re-matching; the later *arr apps mount this same share at `/data`), transcode
   scratch on a node-local `emptyDir` (never the NAS). A 120s termination grace period
   lets Plex close its SQLite DB cleanly on planned drains.
-- Exposed at `plex.lab.supermorphic.com` through the internal Envoy gateway only,
-  LAN-only; remote/public streaming deferred. **No MetalLB LoadBalancer / no direct
-  `:32400` LAN IP** — so local GDM auto-discovery does not work; clients connect via the
-  custom access URL (below).
+- Exposed at `plex.lab.supermorphic.com` through the internal Envoy gateway;
+  local clients connect via the custom access URL (below). A dedicated LoadBalancer
+  address, `192.168.90.31`, also exists (`kubernetes/apps/media/plex/app/values.yaml`)
+  for the operator's WAN DNAT to Plex's own `32400` listener — see
+  `docs/decisions/2026-08-11-plex-direct-remote-access.md`. **It is not an advertised
+  client path**: Plex still advertises its pod IP, not the LoadBalancer address, so
+  local GDM auto-discovery still does not work off it.
 - Plex stays a single replica (no active-active support). The RWX SMB share is
   shared across pods/apps, not for Plex replicas.
 
@@ -87,7 +90,7 @@ config volume, and Plex starts and checks its database.
   is never committed).
 - **Settings → Network → Custom server access URLs:** add
   `https://plex.lab.supermorphic.com` so clients reach Plex through the gateway (needed
-  because there is no direct `:32400` LAN IP).
+  because Plex advertises its pod IP, not the LoadBalancer address, as a client path).
 - Add libraries from `/data/media/movies` and `/data/media/tv`.
 - **Settings → Transcoder:** set the transcode temporary directory to `/transcode`.
 - **Enable Plex's scheduled database backups** (Settings → Scheduled Tasks) as a second
