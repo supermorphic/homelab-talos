@@ -116,3 +116,21 @@ write_census_fixtures() {
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'invalid census media path'* ]]
 }
+
+# Catches the selector emitting YAML after the samples artifact became JSON.
+# Its output is merged into samples.json, so a YAML fragment cannot be applied.
+@test "selection emits a JSON object mergeable into samples.json" {
+	run "$SELECT_SAMPLES" "$CENSUS_ASC" 20260802 "$MOVIE_ROOT"
+	[ "$status" -eq 0 ]
+
+	run jq -e '
+		(.savingsSeed == 20260802) and
+		(.savingsPanel | type == "array") and
+		(.savingsPanel | length > 0) and
+		all(.savingsPanel[];
+			(keys | sort) == ["cohort","height","id","path","sha256","sizeBytes","width"]
+			and (.sizeBytes | type == "number")
+			and (.sha256 | test("^[0-9a-f]{64}$")))
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+}
