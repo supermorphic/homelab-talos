@@ -51,8 +51,9 @@ fi
 [[ "$(yq -r '.kind' "$prometheusrule")" == 'PrometheusRule' ]]
 [[ "$(yq -r '.metadata.namespace' "$prometheusrule")" == 'tailscale' ]]
 # Alerts must cover the operator and both proxy StatefulSets (subnet router + ntfy ingress).
+prometheus_alerts="$(yq -r '.spec.groups[].rules[].alert' "$prometheusrule")"
 for a in TailscaleOperatorDown TailscaleSubnetRouterDown TailscaleNtfyIngressDown; do
-  yq -r '.spec.groups[].rules[].alert' "$prometheusrule" | rg -qx "$a" || {
+  rg -qx "$a" <<<"$prometheus_alerts" || {
     echo "Refusing: PrometheusRule is missing the $a alert." >&2
     exit 1
   }

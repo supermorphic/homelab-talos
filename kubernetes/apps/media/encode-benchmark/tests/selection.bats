@@ -11,7 +11,7 @@ setup() {
 }
 
 write_census_fixtures() {
-	header='source_path,source_size_bytes,link_count,lifecycle_state,lifecycle_evidence,torrent_hash,torrent_category,torrent_tags,cohort,container,duration_seconds,video_codec,width,height,pixel_format,bit_depth,color_primaries,color_transfer,color_space,hdr_format,dolby_vision_profile,video_bit_rate,frame_rate,audio_track_count,subtitle_count,chapter_count,audio_bytes_total,audio_bytes_method'
+	header='source_path,source_size_bytes,link_count,lifecycle_state,lifecycle_evidence,torrent_hash,torrent_category,torrent_tags,cohort,container,duration_seconds,video_codec,width,height,pixel_format,bit_depth,color_primaries,color_transfer,color_space,hdr_format,dolby_vision_profile,video_bit_rate,frame_rate,audio_track_count,subtitle_count,chapter_count,audio_bytes_total,audio_bytes_method,probe_status,probe_error'
 	rows="$BATS_TEST_TMPDIR/rows.csv"
 	: >"$rows"
 	for cohort in avc vc1 hdr10; do
@@ -43,7 +43,7 @@ write_census_fixtures() {
 			lifecycle='public-awaiting-cleanup'
 			[[ "$index" != 8 ]] || lifecycle='active'
 			bitrate=$((index * 1000000))
-			printf '"/media/%s",%s,2,%s,torrent-inventory,,,tracker-public,%s,matroska,7200,%s,%s,%s,yuv420p,8,bt709,bt709,bt709,%s,,%s,24000/1001,1,0,0,100,estimated\n' \
+			printf '"/media/%s",%s,2,%s,torrent-inventory,,,tracker-public,%s,matroska,7200,%s,%s,%s,yuv420p,8,bt709,bt709,bt709,%s,,%s,24000/1001,1,0,0,100,estimated,probed,\n' \
 				"$name" "$size" "$lifecycle" "$cohort" "$codec" "$width" "$height" "$hdr" "$bitrate" >>"$rows"
 		done
 	done
@@ -109,7 +109,7 @@ write_census_fixtures() {
 	malformed="$BATS_TEST_TMPDIR/census-traversal.csv"
 	{
 		head -n 1 "$CENSUS_ASC"
-		printf '%s\n' '"/media/../secret.mkv",1,1,active,link-count-1,,,,avc,matroska,1,h264,1920,1080,yuv420p,8,bt709,bt709,bt709,,,1000000,24/1,1,0,0,1,estimated'
+		printf '%s\n' '"/media/../secret.mkv",1,1,active,link-count-1,,,,avc,matroska,1,h264,1920,1080,yuv420p,8,bt709,bt709,bt709,,,1000000,24/1,1,0,0,1,estimated,probed,'
 	} >"$malformed"
 
 	run "$SELECT_SAMPLES" "$malformed" 20260802 "$MOVIE_ROOT"

@@ -27,6 +27,7 @@ expected_header = [
     "hdr_format", "dolby_vision_profile", "video_bit_rate", "frame_rate",
     "audio_track_count", "subtitle_count", "chapter_count", "audio_bytes_total",
     "audio_bytes_method",
+    "probe_status", "probe_error",
 ]
 major_cohorts = ("avc", "vc1", "hdr10")
 root = Path(local_root_text).resolve()
