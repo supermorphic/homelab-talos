@@ -1,6 +1,6 @@
 # Plex public Envoy and split-horizon remote access — amendment
 
-Status: **Approved (2026-08-03)** — independently reviewed and revised before approval.
+- **Status: Superseded by 2026-08-11-plex-direct-remote-access.md.**
 Amends [Plex Relay and Sonos integration — design](2026-08-02-plex-relay-sonos-design.md).
 Date: 2026-08-03.
 Branch: `investigate-plex-remote-access`.
