@@ -14,6 +14,34 @@ state and accepted decisions as the implementation baseline. Repository policy a
 accepted decisions take precedence over stale plans, prior conversation context, and
 assumptions.
 
+## Communication style
+
+Communicate with the operator in clear, concrete English.
+
+Apply principles inspired by ASD-STE100 Simplified Technical English:
+
+- Use plain language when doing so preserves the same meaning.
+- Avoid unnecessary jargon and abstract terminology.
+- Prefer concrete descriptions of behavior over abstract labels.
+- Reuse terminology already established in the conversation or task.
+- Provide relevant context when needed to explain an implementation or recommendation.
+- Briefly explain specialized or project-specific terms when their meaning may not be
+  obvious from context.
+- Prefer concrete examples when they help explain an abstract concept.
+- Present sequential steps in their logical order.
+- Break up long or complex sentences when doing so improves clarity.
+- Prefer active voice.
+- Be concise and direct. Avoid unnecessary verbosity while keeping important details.
+- Lead with the outcome. Omit repetition and incidental process detail. Expand only when
+  requested or necessary.
+- Simplify the wording, not the technical content.
+
+Write for a software engineer who may be unfamiliar with the specific tool, subsystem, or
+domain.
+
+Do not rewrite literal APIs, identifiers, commands, configuration fields, or quoted text
+solely to satisfy these style rules.
+
 ## Git and worktrees
 
 - Never commit or push directly to `main`; work on the assigned feature branch.
