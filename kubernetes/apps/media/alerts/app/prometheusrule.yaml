@@ -113,8 +113,9 @@ spec:
         # otherwise suggest itself: it exists only to keep the ratio from dividing by
         # noise, and the `source=~".*reserved:world.*"` matcher already does the work of
         # excluding internal traffic. At 0.5/s a scanner needs 300 connections per 10
-        # minutes to be visible; 0.1/s widens that band fivefold while staying far above
-        # plausible Internet background noise on a single port (well under 0.05/s).
+        # minutes to be visible; 0.1/s widens that band fivefold. It is a low value
+        # chosen for margin, not a measured Internet-noise rate — no off-cluster traffic
+        # to this port has ever been observed, so there is nothing to measure one against.
         #
         # This rule detects half-open scans only, by design. The `< 3` threshold is
         # strict because a completed TCP handshake delivers at least 3 arriving flows
