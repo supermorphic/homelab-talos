@@ -53,7 +53,7 @@ Captured 2026-08-12, before any stage 3 change:
 | Allowed without auth | empty | empty | ✅ |
 | Remote streams allowed per user | `2` | **unlimited** | ⚠️ see 0.1.1 |
 | Custom server access URL | *record verbatim* | `https://plex.lab.supermorphic.com` — **no port** | ⚠️ see 0.1.2 |
-| LAN Networks | trusted local CIDRs only | `192.168.10.0/24,192.168.12.0/24,192.168.20.0/24` | see 0.1.3 |
+| LAN Networks | must include the pod network | was `192.168.10.0/24,192.168.12.0/24,192.168.20.0/24` | ⚠️ fixed, see 0.1.3 |
 
 ### 0.1.1 Remote streams per user is unlimited, and the design assumes `2`
 
@@ -66,12 +66,14 @@ Set it to `2` before the baseline, so the baseline reflects the configuration st
 will run under. This is restoring a documented invariant, not a new decision — unlike
 Secure connections, which §6 explicitly freezes.
 
-**Check one thing first.** Confirm in Tautulli that a local session registers as **LAN**,
-not WAN. Local clients reach Plex through the internal Envoy, so Plex sees Envoy's pod
-address as the source rather than the client's. None of the three LAN Networks CIDRs
-above covers the pod network. If Plex is classifying local sessions as remote, a limit of
-`2` would throttle the household rather than bound remote abuse. If they register as WAN,
-stop and raise it before changing the limit.
+**Check one thing first, and it is not a formality.** Confirm in Tautulli that a local
+session registers as **LAN**, not WAN. If Plex classifies local sessions as remote, a
+limit of `2` throttles the household rather than bounding remote abuse.
+
+This check ran on 2026-08-12 and **returned WAN**. See 0.1.3 — LAN Networks omitted the
+pod network, so every local session was being treated as remote. It is fixed, and local
+sessions now register as LAN. Had the limit been set to `2` first, the household would
+have been capped at two concurrent local streams.
 
 ### 0.1.2 The custom URL has no port — this is the documented trap, and it is live
 
@@ -83,12 +85,48 @@ VIP, which listens only on `443`.
 It is harmless right now only because the manual public port is disabled. Step 3.1 fixes
 it, and 3.1 runs before 3.3 for exactly this reason.
 
-### 0.1.3 LAN Networks does not include the cluster network
+### 0.1.3 LAN Networks omitted the pod network — every local session was classified WAN
 
-The three CIDRs are client VLANs. The cluster VLAN `192.168.90.0/24` and the pod network
-are absent. Whether that matters depends on 0.1.1's Tautulli check: if local sessions
-already register as LAN, Plex is classifying them correctly and nothing needs to change.
-Recorded here because it is the kind of thing that looks like a cause later.
+**Found and fixed 2026-08-12.** The Tautulli check in 0.1.1 returned **WAN** for a local
+phone session, and playback was stuttering.
+
+Local clients do not reach Plex directly. They go through the internal Envoy, so Plex
+sees the Envoy pod address — `10.244.1.77` or `10.244.2.177` — and never the client's
+real address. Setting LAN Networks *restricts* what counts as local, and the three
+recorded CIDRs are client VLANs that cannot contain a pod address. Every local session
+therefore fell outside LAN Networks and Plex treated it as remote, applying remote-stream
+quality treatment to household playback. That is the stutter.
+
+The fix is to add the pod network:
+
+```
+192.168.10.0/24,192.168.12.0/24,192.168.20.0/24,10.244.0.0/16
+```
+
+Confirmed working: local phone sessions now register as **LAN** in Tautulli.
+
+**Do not add `192.168.90.0/24`.** The cluster VLAN looks like the natural companion and is
+a trap. Remote clients currently arrive with their real public address because
+`externalTrafficPolicy: Local` preserves it. If that were ever changed to `Cluster`,
+remote clients would be SNATed to node addresses inside `192.168.90.0/24`, and listing
+that range here would classify **Internet clients as local**, exempting them from every
+remote limit. The pod CIDR carries no equivalent risk, because nothing outside the
+cluster can source from it.
+
+This was not caused by any change in this design. The Plex pod had zero restarts and had
+been running since 2026-08-02; the misclassification dates from whenever the internal
+Envoy became the local path. It went unnoticed because nothing measured it until the
+0.1.1 precondition forced the question.
+
+**It does correct a claim in the decision.** §6 says `externalTrafficPolicy: Local` keeps
+Plex's `LAN Networks` bandwidth classification correct. That holds for remote clients
+arriving through the DNAT, whose real addresses are preserved. It was never true for
+local clients arriving through Envoy, whose addresses are the proxy's.
+
+**Order matters because of this.** Fix LAN Networks before running the baseline matrix.
+Rows 4 and 5 measure bitrate through the internal Envoy; baselining them while throttled
+would record the stutter as normal and then "prove" no regression against a broken
+reference.
 
 Secure connections is recorded because §6 forbids changing it here; if it drifts later
 you will want to know what it was. The custom URL is recorded verbatim because step 3.1
