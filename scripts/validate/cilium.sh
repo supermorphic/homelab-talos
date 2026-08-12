@@ -49,15 +49,15 @@ done
 # exists at 32400 today (docs/decisions/2026-08-12-plex-remote-access-detection.md §3).
 [[ "$(yq -r '.hubble.metrics.enabled | length' "$values_file")" == '3' ]]
 [[ "$(yq -r '[.hubble.metrics.enabled[] | split(":")[0]] | sort | join(",")' "$values_file")" == 'drop,flow,tcp' ]]
+if yq -e '.hubble.metrics.enabled[] | select(test("sourceContext=ip"))' "$values_file" >/dev/null 2>&1; then
+  echo 'Refusing: Hubble sourceContext=ip would make every source address a Prometheus label.' >&2
+  exit 1
+fi
 # Identity context collapses every off-cluster address to reserved:world, so the series
 # count does not grow with the number of hosts probing the port. `ip` would mint a
 # Prometheus series per source address on an Internet-facing port.
 [[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("sourceContext=identity"))] | length' "$values_file")" == '3' ]]
 [[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("destinationContext=pod"))] | length' "$values_file")" == '3' ]]
-if yq -e '.hubble.metrics.enabled[] | select(test("sourceContext=ip"))' "$values_file" >/dev/null 2>&1; then
-  echo 'Refusing: Hubble sourceContext=ip would make every source address a Prometheus label.' >&2
-  exit 1
-fi
 # `just bootstrap cilium` installs from this same file onto a bare cluster where the
 # Prometheus operator CRDs do not exist yet. A chart-rendered ServiceMonitor would fail
 # that install, and the failure would only surface during a rebuild.
