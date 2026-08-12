@@ -133,3 +133,80 @@ tests:
       - eval_time: 10m
         alertname: TautulliPersistentVolumeClaimNotBound
         exp_alerts: []
+
+  # Scanning shape: one connection per second carrying only two flows each.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="reserved:world", flag="SYN", node="nuc1"}'
+        values: '0x9 60+60x25'
+      - series: 'hubble_flows_processed_total{destination="media/plex", source="reserved:world", node="nuc1"}'
+        values: '0x9 120+120x25'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PlexRemoteProbeSurge
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: PlexRemoteProbeSurge
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Off-cluster connections to Plex are carrying almost no traffic
+              description: Off-cluster clients opened connections to Plex that carried fewer than 3 flows each for 10 minutes, which is what scanning looks like.
+  # Real sessions: same connection rate, ten flows each. Must stay silent.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="reserved:world", flag="SYN", node="nuc1"}'
+        values: '0x9 60+60x25'
+      - series: 'hubble_flows_processed_total{destination="media/plex", source="reserved:world", node="nuc1"}'
+        values: '0x9 600+600x25'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: PlexRemoteProbeSurge
+        exp_alerts: []
+  # Idle: no connections at all, so the ratio is undefined. The guard must hold it silent.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_flows_processed_total{destination="media/plex", source="reserved:world", node="nuc1"}'
+        values: '100x35'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: PlexRemoteProbeSurge
+        exp_alerts: []
+  # Detection itself goes blind.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_flows_processed_total{destination="media/other", node="nuc1"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PlexRemoteFlowMetricsMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PlexRemoteFlowMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, destination: media/plex}
+            exp_annotations:
+              summary: Hubble flow metrics for Plex are missing
+              description: No Hubble flow series for Plex has been present for 15 minutes, so remote-access detection is blind.
+  # The compound identity that CIDR policies produce must still match.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="cidr:192.168.0.0/16,reserved:world", flag="SYN", node="nuc1"}'
+        values: '0x9 600+600x15'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: PlexRemoteConnectionFlood
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Off-cluster connection rate to Plex is abnormally high
+              description: Off-cluster clients opened more than 5 connections per second to Plex for 5 minutes.
+  # Internal clients must never trip it, however busy they are.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="k8s:app.kubernetes.io/name=envoy,k8s:io.kubernetes.pod.namespace=envoy-gateway-system", flag="SYN", node="nuc1"}'
+        values: '0x9 6000+6000x15'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: PlexRemoteConnectionFlood
+        exp_alerts: []

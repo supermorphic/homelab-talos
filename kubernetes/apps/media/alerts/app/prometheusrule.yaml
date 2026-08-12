@@ -60,3 +60,65 @@ spec:
           annotations:
             summary: Tautulli database claim is absent or unbound
             description: The media/tautulli PVC has not reported Bound for five minutes; watch history persistence is at risk.
+    # Detection for Plex's off-cluster port, per
+    # docs/decisions/2026-08-12-plex-remote-access-detection.md.
+    #
+    # Two corrections to that decision, found by measuring after stage A merged and
+    # recorded here because accepted decisions are superseded rather than revised:
+    #
+    # 1. §4 says identity context collapses every off-cluster address to
+    #    `reserved:world`. It also produces compound values such as
+    #    `cidr:192.168.0.0/16,reserved:world` when a CIDR policy matches, so every rule
+    #    below matches `source` with a regex rather than equality.
+    # 2. §6 defines the probe alert as attempts "that do not become established
+    #    sessions". That is not measurable: Hubble records only flows arriving at the
+    #    endpoint, so Plex never appears as a `source` and its SYN-ACKs cannot be
+    #    counted. The ratio below reaches the same intent by a different route.
+    #
+    # There is no port label on any Hubble metric, so `destination="media/plex"` stands
+    # in for "traffic to 32400". That holds because the Plex CiliumNetworkPolicy admits
+    # no other ingress port. It is an inference, not a measurement.
+    - name: plex-remote-access
+      rules:
+        # `flag="SYN"` is what separates inbound connections from Plex's own egress to
+        # plex.tv, whose replies arrive as SYN-ACK with the same source and destination
+        # labels. Without this the rule would fire on Plex's normal outbound traffic.
+        - alert: PlexRemoteConnectionFlood
+          expr: |
+            sum(rate(hubble_tcp_flags_total{destination="media/plex", source=~".*reserved:world.*", flag="SYN"}[5m])) > 5
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Off-cluster connection rate to Plex is abnormally high
+            description: Off-cluster clients opened more than 5 connections per second to Plex for 5 minutes.
+        # Flows per connection. A streaming session moves many flows down one
+        # connection; a scanner opens one and leaves. The second clause is load-bearing:
+        # without it the ratio divides by a near-zero connection rate and fires on noise
+        # whenever nobody is connected.
+        - alert: PlexRemoteProbeSurge
+          expr: |
+            (
+              sum(rate(hubble_flows_processed_total{destination="media/plex", source=~".*reserved:world.*"}[10m]))
+              /
+              sum(rate(hubble_tcp_flags_total{destination="media/plex", source=~".*reserved:world.*", flag="SYN"}[10m]))
+            ) < 3
+            and
+            sum(rate(hubble_tcp_flags_total{destination="media/plex", source=~".*reserved:world.*", flag="SYN"}[10m])) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Off-cluster connections to Plex are carrying almost no traffic
+            description: Off-cluster clients opened connections to Plex that carried fewer than 3 flows each for 10 minutes, which is what scanning looks like.
+        # Without this, "no alerts" stops being evidence and becomes an assumption.
+        # 15m is deliberate: a three-node Cilium roll must not trip it, or the alert
+        # teaches the operator to ignore it.
+        - alert: PlexRemoteFlowMetricsMissing
+          expr: absent(hubble_flows_processed_total{destination="media/plex"})
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Hubble flow metrics for Plex are missing
+            description: No Hubble flow series for Plex has been present for 15 minutes, so remote-access detection is blind.
