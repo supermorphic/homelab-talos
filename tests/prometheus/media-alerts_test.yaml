@@ -188,6 +188,67 @@ tests:
             exp_annotations:
               summary: Hubble flow metrics for Plex are missing
               description: No Hubble flow series for Plex has been present for 15 minutes, so remote-access detection is blind.
+  # The tcp companion must fire on its own: flow metric present, tcp metric absent.
+  # This is the exact failure PlexRemoteFlowMetricsMissing cannot see, because it only
+  # watches hubble_flows_processed_total.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_flows_processed_total{destination="media/plex", source="reserved:world", node="nuc1"}'
+        values: '100x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PlexRemoteTcpMetricsMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PlexRemoteTcpMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, destination: media/plex}
+            exp_annotations:
+              summary: Hubble TCP flag metrics for Plex are missing
+              description: No Hubble TCP flag series for Plex has been present for 15 minutes, so both remote-access detection rules are blind.
+      # The flow companion must stay silent in this same window: the flow series is
+      # present, so only detection's tcp half is blind, not both.
+      - eval_time: 20m
+        alertname: PlexRemoteFlowMetricsMissing
+        exp_alerts: []
+  # The tcp companion must stay silent when the tcp metric is present, even though the
+  # only present series carries no `reserved:world` source — it is deliberately not
+  # qualified by `source`, because absence of the world series alone is the normal
+  # state today and must never alert.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="k8s:app.kubernetes.io/name=envoy,k8s:io.kubernetes.pod.namespace=envoy-gateway-system", flag="SYN", node="nuc1"}'
+        values: '0x9 60+60x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PlexRemoteTcpMetricsMissing
+        exp_alerts: []
+  # Corridor rule: sustained full-handshake abuse at 1.5 connections/sec, below the
+  # flood rule's threshold of 5 and above the probe rule's implicit reach, must fire.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="reserved:world", flag="SYN", node="nuc1"}'
+        values: '0x9 90+90x25'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: PlexRemoteConnectionRateElevated
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: PlexRemoteConnectionRateElevated
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Off-cluster connection rate to Plex is elevated
+              description: Off-cluster clients opened more than 1 connection per second to Plex for 10 minutes, which is above any plausible legitimate remote load.
+  # Internal clients must never trip it, however busy they are.
+  - interval: 1m
+    input_series:
+      - series: 'hubble_tcp_flags_total{destination="media/plex", source="k8s:app.kubernetes.io/name=envoy,k8s:io.kubernetes.pod.namespace=envoy-gateway-system", flag="SYN", node="nuc1"}'
+        values: '0x9 6000+6000x15'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: PlexRemoteConnectionRateElevated
+        exp_alerts: []
   # The compound identity that CIDR policies produce must still match.
   - interval: 1m
     input_series:
