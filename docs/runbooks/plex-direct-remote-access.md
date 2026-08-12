@@ -51,9 +51,14 @@ Captured 2026-08-12, before any stage 3 change:
 | Enable Relay | enabled | enabled | ✅ |
 | Secure connections | *record, do not change* | **Preferred** | recorded |
 | Allowed without auth | empty | empty | ✅ |
-| Remote streams allowed per user | `2` | **unlimited** | ⚠️ see 0.1.1 |
+| Remote streams allowed per user | `2` | was `unlimited`, **now `2`** | ✅ fixed, see 0.1.1 |
 | Custom server access URL | *record verbatim* | `https://plex.lab.supermorphic.com` — **no port** | ⚠️ see 0.1.2 |
-| LAN Networks | must include the pod network | was `192.168.10.0/24,192.168.12.0/24,192.168.20.0/24` | ⚠️ fixed, see 0.1.3 |
+| LAN Networks | must include the pod network | `192.168.10.0/24,192.168.12.0/24,192.168.20.0/24,10.244.0.0/16` | ✅ fixed, see 0.1.3 |
+
+Two of the eight did not match and both are now corrected. The custom access URL is the
+only outstanding item, and it is deliberately left alone — step 3.1 fixes it as the first
+action of stage 3, because changing it now would publish the wrong value the moment the
+manual public port is enabled.
 
 ### 0.1.1 Remote streams per user is unlimited, and the design assumes `2`
 
@@ -62,9 +67,12 @@ decision leans on it: bandwidth saturation is explicitly **deferred and unobserv
 the per-user remote stream limit is named as the thing partially bounding it. With the
 limit unset, that risk is neither detected nor bounded.
 
-Set it to `2` before the baseline, so the baseline reflects the configuration stage 3
-will run under. This is restoring a documented invariant, not a new decision — unlike
-Secure connections, which §6 explicitly freezes.
+**Set to `2` on 2026-08-12**, before the baseline, so the baseline reflects the
+configuration stage 3 runs under. This restored a documented invariant rather than making
+a new decision — unlike Secure connections, which §6 explicitly freezes at `Preferred`.
+
+The risk §2 describes as "deferred but partially bounded" was, until this change,
+unbounded. The control the acceptance rested on had never been configured.
 
 **Check one thing first, and it is not a formality.** Confirm in Tautulli that a local
 session registers as **LAN**, not WAN. If Plex classifies local sessions as remote, a
