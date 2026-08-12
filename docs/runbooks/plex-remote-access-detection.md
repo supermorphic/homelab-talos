@@ -119,6 +119,31 @@ off-cluster client has ever connected, so only total absence of the metric
 `PlexRemoteFlowMetricsMissing`: check `hubble.metrics` lists `tcp`, and check the
 DaemonSet and ServiceMonitor are healthy.
 
+## Policy drops are a separate signal, and nothing alerts on them
+
+No rule here watches `hubble_drop_total`. Drops to Plex mean the CiliumNetworkPolicy
+refused a consumer, which is containment working — but it is also how a legitimate
+consumer left out of the allow-list looks, and it is silent.
+
+```promql
+sum by (reason, source) (increase(hubble_drop_total{destination="media/plex"}[6h]))
+```
+
+`POLICY_DENIED` from an in-cluster source with **zero** matching forwarded flows means
+that consumer cannot reach Plex at all, rather than being rate-limited or intermittent:
+
+```promql
+sum(increase(hubble_flows_processed_total{destination="media/plex", source=~".*<name>.*", verdict="FORWARDED"}[6h]))
+```
+
+Seerr was found this way on 2026-08-12 — 5,103 drops in six hours, ~14 per minute, and no
+forwarded flow at all. Its Plex library sync and user authentication had been failing
+since the containment policy landed. The phase-1 Hubble capture that produced the
+allow-list did not observe it, and nothing measured the gap afterwards.
+
+Worth running after any change to the Plex policy, and worth remembering that an
+allow-list derived from a capture is only as complete as the window it was captured in.
+
 ## Why the rules are shaped the way they are
 
 The rule file itself carries only a pointer here. This section is the record of
