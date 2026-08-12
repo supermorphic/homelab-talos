@@ -42,16 +42,53 @@ because `externalTrafficPolicy: Local` preserves them.
 
 ### 0.1 Record Plex settings without changing them
 
-| Setting | Expected now | Record |
-|---|---|---|
-| Remote Access | enabled | |
-| Manually specify public port | **disabled** | |
-| Enable Relay | enabled | |
-| Secure connections | *record the current value* | |
-| Allowed without auth | empty | |
-| Remote streams allowed per user | `2` | |
-| Custom server access URL | *record verbatim, including whether it carries a port* | |
-| LAN Networks | trusted local CIDRs only | |
+Captured 2026-08-12, before any stage 3 change:
+
+| Setting | Expected | Recorded | |
+|---|---|---|---|
+| Remote Access | enabled | enabled | ✅ |
+| Manually specify public port | disabled | disabled | ✅ |
+| Enable Relay | enabled | enabled | ✅ |
+| Secure connections | *record, do not change* | **Preferred** | recorded |
+| Allowed without auth | empty | empty | ✅ |
+| Remote streams allowed per user | `2` | **unlimited** | ⚠️ see 0.1.1 |
+| Custom server access URL | *record verbatim* | `https://plex.lab.supermorphic.com` — **no port** | ⚠️ see 0.1.2 |
+| LAN Networks | trusted local CIDRs only | `192.168.10.0/24,192.168.12.0/24,192.168.20.0/24` | see 0.1.3 |
+
+### 0.1.1 Remote streams per user is unlimited, and the design assumes `2`
+
+The invariants table in the superseded runbook requires `2`, and §2 of the detection
+decision leans on it: bandwidth saturation is explicitly **deferred and unobserved**, and
+the per-user remote stream limit is named as the thing partially bounding it. With the
+limit unset, that risk is neither detected nor bounded.
+
+Set it to `2` before the baseline, so the baseline reflects the configuration stage 3
+will run under. This is restoring a documented invariant, not a new decision — unlike
+Secure connections, which §6 explicitly freezes.
+
+**Check one thing first.** Confirm in Tautulli that a local session registers as **LAN**,
+not WAN. Local clients reach Plex through the internal Envoy, so Plex sees Envoy's pod
+address as the source rather than the client's. None of the three LAN Networks CIDRs
+above covers the pod network. If Plex is classifying local sessions as remote, a limit of
+`2` would throttle the household rather than bound remote abuse. If they register as WAN,
+stop and raise it before changing the limit.
+
+### 0.1.2 The custom URL has no port — this is the documented trap, and it is live
+
+§6 records that Plex applies the Remote Access port to any custom URL omitting one. The
+stored value is portless, so the moment the manual public port is set, Plex would publish
+`plex.lab.supermorphic.com:32400`. Pi-hole resolves that name to the internal Gateway
+VIP, which listens only on `443`.
+
+It is harmless right now only because the manual public port is disabled. Step 3.1 fixes
+it, and 3.1 runs before 3.3 for exactly this reason.
+
+### 0.1.3 LAN Networks does not include the cluster network
+
+The three CIDRs are client VLANs. The cluster VLAN `192.168.90.0/24` and the pod network
+are absent. Whether that matters depends on 0.1.1's Tautulli check: if local sessions
+already register as LAN, Plex is classifying them correctly and nothing needs to change.
+Recorded here because it is the kind of thing that looks like a cause later.
 
 Secure connections is recorded because §6 forbids changing it here; if it drifts later
 you will want to know what it was. The custom URL is recorded verbatim because step 3.1
