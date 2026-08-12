@@ -5,6 +5,7 @@ source scripts/lib/common.sh
 require_bash
 
 app_dir='kubernetes/apps/kube-system/cilium/app'
+monitoring_dir='kubernetes/apps/kube-system/cilium/monitoring'
 values_file='kubernetes/apps/kube-system/cilium/app/values.yaml'
 chart='oci://quay.io/cilium/charts/cilium'
 version="$(yq -r '.spec.ref.tag' "$app_dir/ocirepository.yaml")"
@@ -16,7 +17,10 @@ for file in \
   "$app_dir/ocirepository.yaml" \
   "$app_dir/helmrelease.yaml" \
   "$values_file" \
-  'kubernetes/apps/kube-system/cilium/ks.yaml'; do
+  'kubernetes/apps/kube-system/cilium/ks.yaml' \
+  "$monitoring_dir/kustomization.yaml" \
+  "$monitoring_dir/servicemonitor.yaml" \
+  ; do
   [[ -f "$file" ]] || {
     echo "Missing required Cilium source: $file" >&2
     exit 1
@@ -62,6 +66,20 @@ fi
 # Prometheus operator CRDs do not exist yet. A chart-rendered ServiceMonitor would fail
 # that install, and the failure would only surface during a rebuild.
 [[ "$(yq -r '.hubble.metrics | has("serviceMonitor")' "$values_file")" == 'false' ]]
+# The ServiceMonitor is hand-written and applied by its own Kustomization rather than
+# rendered by the chart, so that the values file stays free of CRD-dependent kinds and
+# bootstrap keeps working. It must wait for the Prometheus CRDs.
+monitoring_ks="$(yq ea -r 'select(.metadata.name == "cilium-monitoring")' 'kubernetes/apps/kube-system/cilium/ks.yaml')"
+[[ -n "$monitoring_ks" ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | join(",")' - <<<"$monitoring_ks")" == 'kube-prometheus-stack' ]]
+[[ "$(yq -r '.spec.path' - <<<"$monitoring_ks")" == './kubernetes/apps/kube-system/cilium/monitoring' ]]
+[[ "$(yq -r '.spec.suspend // false' - <<<"$monitoring_ks")" == 'false' ]]
+[[ "$(yq -r '.kind' "$monitoring_dir/servicemonitor.yaml")" == 'ServiceMonitor' ]]
+[[ "$(yq -r '.metadata.namespace' "$monitoring_dir/servicemonitor.yaml")" == 'kube-system' ]]
+# These three must match the Service the chart renders, asserted separately below.
+[[ "$(yq -r '.spec.selector.matchLabels."k8s-app"' "$monitoring_dir/servicemonitor.yaml")" == 'hubble' ]]
+[[ "$(yq -r '[.spec.namespaceSelector.matchNames[]] | join(",")' "$monitoring_dir/servicemonitor.yaml")" == 'kube-system' ]]
+[[ "$(yq -r '[.spec.endpoints[].port] | join(",")' "$monitoring_dir/servicemonitor.yaml")" == 'hubble-metrics' ]]
 [[ "$(yq -r '.envoy.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.gatewayAPI.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.l2announcements.enabled' "$values_file")" == 'false' ]]

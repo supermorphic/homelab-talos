@@ -1,0 +1,27 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/monitoring.coreos.com/servicemonitor_v1.json
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: hubble-metrics
+  namespace: kube-system
+spec:
+  # Selects the headless Service the Cilium chart renders once hubble.metrics.enabled is
+  # set. Written by hand rather than via the chart's serviceMonitor option so the values
+  # file declares no CRD-dependent kind and bootstrap still works without Prometheus.
+  selector:
+    matchLabels:
+      k8s-app: hubble
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  endpoints:
+    - port: hubble-metrics
+      interval: 30s
+      relabelings:
+        # Flow metrics are per-agent; without this every series is labelled by pod name
+        # only, and a node's contribution cannot be separated after a pod restart.
+        - sourceLabels:
+            - __meta_kubernetes_pod_node_name
+          targetLabel: node
+          action: replace
