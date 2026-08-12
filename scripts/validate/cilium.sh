@@ -45,6 +45,23 @@ done
 [[ "$(yq -r '.operator.replicas' "$values_file")" == '2' ]]
 [[ "$(yq -r '.hubble.relay.enabled' "$values_file")" == 'true' ]]
 [[ "$(yq -r '.hubble.ui.enabled' "$values_file")" == 'false' ]]
+# Hubble is enabled but exports nothing until these are set, which is why no signal
+# exists at 32400 today (docs/decisions/2026-08-12-plex-remote-access-detection.md §3).
+[[ "$(yq -r '.hubble.metrics.enabled | length' "$values_file")" == '3' ]]
+[[ "$(yq -r '[.hubble.metrics.enabled[] | split(":")[0]] | sort | join(",")' "$values_file")" == 'drop,flow,tcp' ]]
+# Identity context collapses every off-cluster address to reserved:world, so the series
+# count does not grow with the number of hosts probing the port. `ip` would mint a
+# Prometheus series per source address on an Internet-facing port.
+[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("sourceContext=identity"))] | length' "$values_file")" == '3' ]]
+[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("destinationContext=pod"))] | length' "$values_file")" == '3' ]]
+if yq -e '.hubble.metrics.enabled[] | select(test("sourceContext=ip"))' "$values_file" >/dev/null 2>&1; then
+  echo 'Refusing: Hubble sourceContext=ip would make every source address a Prometheus label.' >&2
+  exit 1
+fi
+# `just bootstrap cilium` installs from this same file onto a bare cluster where the
+# Prometheus operator CRDs do not exist yet. A chart-rendered ServiceMonitor would fail
+# that install, and the failure would only surface during a rebuild.
+[[ "$(yq -r '.hubble.metrics | has("serviceMonitor")' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.envoy.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.gatewayAPI.enabled' "$values_file")" == 'false' ]]
 [[ "$(yq -r '.l2announcements.enabled' "$values_file")" == 'false' ]]
@@ -68,5 +85,15 @@ helm template cilium "$chart" \
 [[ -n "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "hubble-relay") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
 [[ -z "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "hubble-ui") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
 [[ -z "$(yq ea -r 'select(.kind == "DaemonSet" and .metadata.name == "cilium-envoy") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
+
+# The chart's own interpretation of the values, not a re-read of them: enabling the
+# metric sets is what makes this Service exist, and Task 2's ServiceMonitor selects it
+# by these exact label and port names.
+[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "hubble-metrics") | .metadata.labels."k8s-app"' "$temp_dir/rendered.yaml")" == 'hubble' ]]
+[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "hubble-metrics") | .spec.ports[0].name' "$temp_dir/rendered.yaml")" == 'hubble-metrics' ]]
+[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "hubble-metrics") | .spec.ports[0].port' "$temp_dir/rendered.yaml")" == '9965' ]]
+# Bootstrap safety, proven against the render rather than the source: the chart must not
+# emit a ServiceMonitor from these values.
+[[ -z "$(yq ea -r 'select(.kind == "ServiceMonitor") | .metadata.name' "$temp_dir/rendered.yaml")" ]]
 
 echo "Cilium $version app sources and Helm render passed validation."
