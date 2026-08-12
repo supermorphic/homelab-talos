@@ -64,15 +64,34 @@ Available only after enabling `hubble.metrics`, which is the whole of stage A:
 | `tcp` | TCP flag counts — the difference between attempts and established sessions |
 | `drop` | Policy-denied counts by reason |
 
-Context is set to `destinationContext=pod`, `sourceContext=identity`. Identity context
-collapses every off-cluster address to `reserved:world`, so the series count is
-independent of how many hosts probe the port.
+Context is set to `sourceContext=identity`, `destinationContext=workload`. Both sides of
+the cardinality question get a bounded context, for different reasons.
 
 `sourceContext=ip` is rejected. It would mint a Prometheus series per source address on
 an Internet-facing port, against a single-replica Prometheus with 50GiB and 30 days of
 retention. The precision it buys is available on demand from Hubble itself and is not
 worth an unbounded cardinality surface. A source validator asserts the setting is never
-`ip`, and that guard is proven by reintroducing the defect.
+`ip`, and that guard is proven by reintroducing the defect. Identity context collapses
+every off-cluster address to `reserved:world`, so the series count is independent of how
+many hosts probe the port.
+
+`destinationContext=pod` was the first draft and is rejected in favor of `workload`. Pod
+context renders `namespace/pod-name`. A pod name changes on every rollout — every Cilium
+roll, Flux upgrade, or node drain mints a fresh label value that then persists for the
+full 30-day retention window, so the series count grows over time even though it is
+bounded at any single instant. It also breaks stage B before stage B is written: an alert
+matching on `destination="media/plex-7d9f4c8b6-x2klm"` stops matching the next time Plex
+restarts. `workload` resolves to the owning Deployment or StatefulSet name instead, which
+is stable across restarts and rollouts. A validator assertion holds the setting to
+`workload`, exact-match rather than substring, so a fallback list such as
+`destinationContext=workload|ip` — which contains the literal substring
+`destinationContext=workload` but would still mint a per-address series whenever the
+`workload` context fails to resolve — is also rejected.
+
+The chart passes these strings through to the agent configuration without validating
+them against an enum; `helm template` succeeding does not prove `workload` is accepted at
+1.19.6, only that the chart's Go templates render without error. This is accepted risk,
+not resolved risk — see §9.
 
 ## 5. Architecture
 
@@ -106,7 +125,9 @@ Service by `k8s-app: hubble` on the named port `hubble-metrics`.
 
 Stage A rolls the Cilium DaemonSet across all three nodes. The operator accepted that as
 an ordinary Flux change rather than a staged rollout. The rollback is reverting the
-commit; no state outside Git is created, and the metrics port is additive.
+commit; no state outside Git is created. The metrics port is additive to the agent's
+existing exposure, not additive risk-free: it is reachable from the LAN with no
+authentication, the same as the two hostPorts Cilium already opens. See §9.
 
 Gate: the Hubble series are present in Prometheus and the ServiceMonitor is being
 scraped. Stage B is written against what is observed there.
@@ -160,6 +181,18 @@ deliberate non-goal. The available bound stays Plex's per-user remote stream lim
 
 ## 9. Accepted residual risk
 
+- **The Hubble metrics port is unauthenticated on the LAN.** Enabling `hubble.metrics`
+  adds `hostPort: 9965` to the Cilium agent DaemonSet, with
+  `hubble-metrics-server-enable-tls: "false"`. No Talos ingress firewall exists in
+  `talos/patches/` restricting node ports, so `<node-ip>:9965` is readable in plaintext
+  by anything on the LAN — pod names, namespaces, identities, and flow verdicts for every
+  workload, not only Plex. This matches the cluster's existing posture: the agent's
+  `9879` health port and `4244` Hubble peer port are already open the same way, and this
+  is not a new class of exposure, just one more instance of it. Accepted rather than
+  blocked, because closing it is a Talos-wide ingress firewall project out of scope for
+  this design, and because `hubble.metrics.tls.enabled` exists as an option if the
+  operator later disagrees, at the cost of adding a `tlsConfig` to the ServiceMonitor and
+  managing certificates for it.
 - **Thresholds are public.** The PrometheusRule is committed for Flux to reconcile, so
   its thresholds are readable by anyone. This is inherent to GitOps on a public
   repository and is accepted rather than mitigated; the alternative is detection that
@@ -218,6 +251,8 @@ makes this gate testable before any exposure exists.
 | Auth failures, bandwidth saturation | Explicitly deferred; unobserved after this work |
 | Signal source | Hubble flow metrics via Cilium; `flow`, `tcp`, `drop` |
 | Source context | `identity`; `sourceContext=ip` rejected and guarded against |
+| Destination context | `workload`, not `pod`; pod names change every rollout, workload owner names do not; fallback lists rejected and guarded against |
+| Metrics port exposure | `9965` reachable unauthenticated on the LAN; accepted, matches existing `9879`/`4244` posture |
 | Attribution | Out of band, via existing `plex-network-observe` |
 | Cilium rollout | Ordinary Flux change; revert the commit to roll back |
 | ServiceMonitor | Hand-written in its own Kustomization gated on kube-prometheus-stack; chart's `serviceMonitor.enabled` rejected to keep bootstrap working without the Prometheus CRDs |
