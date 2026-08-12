@@ -89,4 +89,9 @@ reset_tree
 yq -i '.hubble.metrics.enabled[2] = "drop:sourceContext=namespace;destinationContext=pod"' "$cilium/app/values.yaml"
 expect_fail 'source context drifted off identity without tripping the ip refusal'
 
+echo '10. Renaming a metric set (drop,flow,tcp no longer intact) is rejected.'
+reset_tree
+yq -i '.hubble.metrics.enabled[2] = "http:sourceContext=identity;destinationContext=pod"' "$cilium/app/values.yaml"
+expect_fail 'metric set name drifted while list length and context stayed valid'
+
 echo 'Cilium validator mutation tests passed.'
