@@ -39,11 +39,14 @@ root='kubernetes/flux/clusters/prod/apps.yaml'
 [[ "$(yq -r '.spec.deletionPolicy' "$root")" == 'Orphan' ]]
 
 cilium='kubernetes/apps/kube-system/cilium/ks.yaml'
-[[ "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' "$cilium")" == 'disabled' ]]
-[[ "$(yq -r '.spec.deletionPolicy' "$cilium")" == 'Orphan' ]]
-[[ "$(yq -r '.spec.decryption.provider' "$cilium")" == 'sops' ]]
-[[ "$(yq -r '.spec.decryption.secretRef.name' "$cilium")" == 'sops-age' ]]
-cilium_suspend="$(yq -r '.spec.suspend // false' "$cilium")"
+# ks.yaml now holds a second document (cilium-monitoring), so select the "cilium"
+# document explicitly rather than reading the file as a single object.
+cilium_ks="$(yq ea -r 'select(.metadata.name == "cilium")' "$cilium")"
+[[ "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' - <<<"$cilium_ks")" == 'disabled' ]]
+[[ "$(yq -r '.spec.deletionPolicy' - <<<"$cilium_ks")" == 'Orphan' ]]
+[[ "$(yq -r '.spec.decryption.provider' - <<<"$cilium_ks")" == 'sops' ]]
+[[ "$(yq -r '.spec.decryption.secretRef.name' - <<<"$cilium_ks")" == 'sops-age' ]]
+cilium_suspend="$(yq -r '.spec.suspend // false' - <<<"$cilium_ks")"
 [[ "$cilium_suspend" == 'true' || "$cilium_suspend" == 'false' ]]
 [[ "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' kubernetes/apps/kube-system/cilium/app/helmrelease.yaml)" == 'disabled' ]]
 

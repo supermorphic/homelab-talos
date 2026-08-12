@@ -56,6 +56,20 @@ hubble:
     enabled: true
   ui:
     enabled: false
+  # Flow-level signal for the Plex remote-access detection gate
+  # (docs/decisions/2026-08-12-plex-remote-access-detection.md §4). Identity source
+  # context collapses every off-cluster address to reserved:world, so the series count
+  # does not grow with the number of hosts probing the port; `ip` would mint a series
+  # per source address on an Internet-facing port. destinationContext is `workload`, not
+  # `pod`: a pod name changes on every rollout and would mint a fresh label value each
+  # time, so `pod` would still grow cardinality over the 30-day retention even though it
+  # is bounded at any single instant. No serviceMonitor key belongs here: this file also
+  # installs Cilium during bootstrap, before the Prometheus CRDs exist.
+  metrics:
+    enabled:
+      - "flow:sourceContext=identity;destinationContext=workload"
+      - "tcp:sourceContext=identity;destinationContext=workload"
+      - "drop:sourceContext=identity;destinationContext=workload"
 
 envoy:
   enabled: false
