@@ -59,9 +59,17 @@ if yq -e '.hubble.metrics.enabled[] | select(test("sourceContext=ip"))' "$values
 fi
 # Identity context collapses every off-cluster address to reserved:world, so the series
 # count does not grow with the number of hosts probing the port. `ip` would mint a
-# Prometheus series per source address on an Internet-facing port.
-[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("sourceContext=identity"))] | length' "$values_file")" == '3' ]]
-[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("destinationContext=pod"))] | length' "$values_file")" == '3' ]]
+# Prometheus series per source address on an Internet-facing port. Exact-match on the
+# option value, not substring: Hubble accepts fallback lists such as
+# `sourceContext=identity|ip`, which contains the substring `sourceContext=identity` but
+# is not the same guarantee.
+[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("[:;]sourceContext=identity(;|$)"))] | length' "$values_file")" == '3' ]]
+# destinationContext=workload, not =pod: a pod name changes on every rollout and would
+# mint a fresh label value each time. Exact-match for the same reason as above — a
+# fallback list like `destinationContext=workload|ip` contains the substring
+# `destinationContext=workload` and would otherwise pass while minting a per-address
+# series for any destination that fails to resolve a workload owner.
+[[ "$(yq -r '[.hubble.metrics.enabled[] | select(test("[:;]destinationContext=workload(;|$)"))] | length' "$values_file")" == '3' ]]
 # `just bootstrap cilium` installs from this same file onto a bare cluster where the
 # Prometheus operator CRDs do not exist yet. A chart-rendered ServiceMonitor would fail
 # that install, and the failure would only surface during a rebuild.

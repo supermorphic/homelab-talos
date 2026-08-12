@@ -50,13 +50,13 @@ expect_fail 'hubble metrics removed'
 
 echo '2. Dropping a metric set is rejected.'
 reset_tree
-yq -i '.hubble.metrics.enabled = ["flow:sourceContext=identity;destinationContext=pod","tcp:sourceContext=identity;destinationContext=pod"]' \
+yq -i '.hubble.metrics.enabled = ["flow:sourceContext=identity;destinationContext=workload","tcp:sourceContext=identity;destinationContext=workload"]' \
   "$cilium/app/values.yaml"
 expect_fail 'metric set dropped'
 
 echo '3. sourceContext=ip is rejected.'
 reset_tree
-yq -i '.hubble.metrics.enabled[0] = "flow:sourceContext=ip;destinationContext=pod"' "$cilium/app/values.yaml"
+yq -i '.hubble.metrics.enabled[0] = "flow:sourceContext=ip;destinationContext=workload"' "$cilium/app/values.yaml"
 expect_fail 'unbounded source cardinality'
 
 echo '4. A different destinationContext is rejected.'
@@ -86,12 +86,24 @@ expect_fail 'servicemonitor port does not match the rendered Service'
 
 echo '9. A non-ip, non-identity sourceContext is rejected.'
 reset_tree
-yq -i '.hubble.metrics.enabled[2] = "drop:sourceContext=namespace;destinationContext=pod"' "$cilium/app/values.yaml"
+yq -i '.hubble.metrics.enabled[2] = "drop:sourceContext=namespace;destinationContext=workload"' "$cilium/app/values.yaml"
 expect_fail 'source context drifted off identity without tripping the ip refusal'
 
 echo '10. Renaming a metric set (drop,flow,tcp no longer intact) is rejected.'
 reset_tree
-yq -i '.hubble.metrics.enabled[2] = "http:sourceContext=identity;destinationContext=pod"' "$cilium/app/values.yaml"
+yq -i '.hubble.metrics.enabled[2] = "http:sourceContext=identity;destinationContext=workload"' "$cilium/app/values.yaml"
 expect_fail 'metric set name drifted while list length and context stayed valid'
+
+echo '11. Enabling the Cilium agent Prometheus metrics is rejected at the render.'
+reset_tree
+yq -i '.prometheus.enabled = true |
+       .prometheus.serviceMonitor.enabled = true |
+       .prometheus.serviceMonitor.trustCRDsExist = true' "$cilium/app/values.yaml"
+expect_fail 'agent-level ServiceMonitor rendered by the chart would break bootstrap'
+
+echo '12. A fallback destinationContext list is rejected.'
+reset_tree
+yq -i '.hubble.metrics.enabled[2] = "drop:sourceContext=identity;destinationContext=workload|ip"' "$cilium/app/values.yaml"
+expect_fail 'fallback list reintroduces per-address destination cardinality'
 
 echo 'Cilium validator mutation tests passed.'
