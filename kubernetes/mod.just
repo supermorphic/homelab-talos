@@ -505,16 +505,6 @@ media-storage-validate: require-bash
 plex-validate: require-bash
     @scripts/validate/plex.sh
 
-# Validate the suspended credential-free Plex DDNS drift exporter, metrics,
-# alerts, and bounded network policy.
-plex-ddns-drift-validate: require-bash
-    @scripts/validate/plex-ddns-drift.sh
-
-# Verify the live Plex DDNS drift target, metrics, address-free logs, alert rules,
-# and existing warning route to ntfy without changing cluster state.
-plex-ddns-drift-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.plex-ddns-drift -- scripts/verify/plex-ddns-drift.sh {{quote(kubeconfig)}}
-
 # Verify live Longhorn state without changing cluster resources: controllers,
 # node disks, default StorageClass, backup target, and recurring jobs.
 storage-verify: require-bash
