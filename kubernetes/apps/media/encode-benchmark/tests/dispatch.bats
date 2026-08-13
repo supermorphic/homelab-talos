@@ -770,6 +770,8 @@ EOF
 # Catches cluster mutation before the local committed panel proves every
 # contention worker has an eligible sample and committed cohort setting.
 @test "contention refuses absent eligible samples or chosen settings before mutation" {
+	prepare_contention_source
+	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel = [] | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
 	run_dispatch run contention-a
 	[ "$status" -ne 0 ]

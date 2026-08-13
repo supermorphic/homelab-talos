@@ -93,7 +93,103 @@ data:
         ]
       },
       "savingsSeed": 20260802,
-      "qualityPanel": [],
+      "qualityPanel": [
+        {
+          "id": "vc1-fugitive",
+          "cohort": "vc1",
+          "path": "/media/Fugitive (1993).mkv",
+          "sizeBytes": 20911950843,
+          "width": 1920,
+          "height": 1080,
+          "sha256": "074f6d6cb5e9e4d8b3d3c58dba52673bdd91beebd6a7d640de056018fa79718c",
+          "clips": {
+            "detail": "01:15:00.000",
+            "dark": "00:35:00.000",
+            "motion": "01:20:00.000"
+          }
+        },
+        {
+          "id": "avc-clean-coco",
+          "cohort": "avc",
+          "path": "/media/Coco (2017).mkv",
+          "sizeBytes": 28598269146,
+          "width": 1920,
+          "height": 1080,
+          "sha256": "13a22931a96515fe19288a7c70d793688182828159de7308ca86a3ea3300dd3d",
+          "clips": {
+            "detail": "00:10:00.000",
+            "dark": "00:45:00.000",
+            "motion": "00:05:00.000"
+          }
+        },
+        {
+          "id": "avc-grain-memento",
+          "cohort": "avc",
+          "path": "/media/Memento (2000).mkv",
+          "sizeBytes": 31129986254,
+          "width": 1920,
+          "height": 1080,
+          "sha256": "be40d68b9d27cd5a77289c39a5be18377f2a774909400d6a5d3b31f043e9557e",
+          "clips": {
+            "detail": "00:23:00.000",
+            "dark": "00:38:00.000",
+            "motion": "01:15:30.000"
+          }
+        },
+        {
+          "id": "hdr10-clean-ministry",
+          "cohort": "hdr10",
+          "path": "/media/Ministry Of Ungentlemanly Warfare (2024).mkv",
+          "sizeBytes": 74903823218,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "5932c30be04061161409afdcc72e7437e47d5746bb379d970b813fb69c5c5fa8",
+          "clips": {
+            "detail": "01:04:15.000",
+            "dark": "01:19:15.000",
+            "motion": "00:29:15.000"
+          }
+        },
+        {
+          "id": "hdr10-grain-goodfellas",
+          "cohort": "hdr10",
+          "path": "/media/Goodfellas (1990).mkv",
+          "sizeBytes": 88003030794,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "1b55c338fbac0ab1cf1ae5fe9da5efd2b0da6c3722ca7164190db34f331862c9",
+          "clips": {
+            "detail": "01:06:25.000",
+            "dark": "00:36:55.000",
+            "motion": "00:40:45.000"
+          }
+        },
+        {
+          "id": "hdr10-motion-john-wick-2",
+          "cohort": "hdr10",
+          "path": "/media/John Wick Chapter 2 (2017).mkv",
+          "sizeBytes": 77017937124,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "76574fde84f5ad90fc9efb5d401969f15179d61fd767545e0c8db299c69476dc",
+          "clips": {
+            "detail": "01:04:50.000",
+            "dark": "00:06:30.000",
+            "motion": "01:38:00.000"
+          }
+        },
+        {
+          "id": "dolby-vision-sisu",
+          "cohort": "dolby-vision",
+          "path": "/media/Sisu (2022).mkv",
+          "sizeBytes": 59416136163,
+          "width": 3840,
+          "height": 2160,
+          "sha256": "0172138cf5a35c947dbbe9dfaf4669f5d2cb3680579d2d8ab9c39cf4d329ec63",
+          "detectionOnly": true,
+          "clips": {}
+        }
+      ],
       "savingsPanel": [
         {
           "cohort": "avc",
