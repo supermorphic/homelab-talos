@@ -80,7 +80,6 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 | `csi-driver-smb` | observer | Reads driver rollout and storage state. |
 | `media-storage` | observer | Reads the media storage contract. |
 | `plex` | diagnostic | Executes read-only runtime identity, Kubernetes API-token, and filesystem assertions inside the Plex pod. |
-| `plex-public` | diagnostic | Reads the dedicated public Gateway isolation state, then runs the nested Plex runtime check that requires pod exec. |
 | `intel-gpu-plugin` | observer | Reads plugin rollout and advertised resources. |
 | `qbittorrent` | observer | Reads rollout, route, and functional endpoint state. |
 | `prowlarr` | observer | Reads rollout, route, and application state. |

@@ -5,16 +5,17 @@ This Kustomization owns one pool, `internal` (`192.168.90.30-192.168.90.38`,
 `autoAssign` disabled), from which the internal Gateway explicitly requests
 `192.168.90.30`, plus its L2Advertisement. FRR and FRR-K8s are disabled.
 
-A second pool, `public` (`192.168.90.39/32`), is defined by the dedicated public
-Plex Gateway in
-[`../public-gateway/app/address-pool.yaml`](../public-gateway/app/address-pool.yaml)
-rather than here, so `.39` is claimed only while that suspended Kustomization is
-resumed. That placement is required, not stylistic: MetalLB's validating webhook
-refuses a pool overlapping one already defined, and Flux dry-runs a Kustomization's
-objects against current cluster state before applying any of them. Shipping the
-narrowing of `internal` beside the creation of `public` deadlocks — at dry-run time
-`internal` still spans `.30-.39`, so `.39/32` is rejected and the narrowing that
-would free it never applies. `dependsOn: metallb-config` orders them correctly.
+`192.168.90.39` is unallocated. It previously held a second pool, `public`, owned by
+the dedicated public Plex Gateway; that plane was retired once direct remote access
+was accepted, and the pool went with it.
+
+Keep the ordering lesson it left behind if a second pool is ever added: MetalLB's
+validating webhook refuses a pool overlapping one already defined, and Flux dry-runs
+a Kustomization's objects against current cluster state before applying any of them.
+Narrowing `internal` in the same Kustomization that creates the new pool therefore
+deadlocks — at dry-run time `internal` still spans the wider range, so the new pool
+is rejected and the narrowing that would free it never applies. Split them across
+Kustomizations and order with `dependsOn`.
 
 The router must exclude `192.168.90.30-192.168.90.39` from DHCP. Use
 `just bootstrap foundation` for the guarded first reconciliation and
