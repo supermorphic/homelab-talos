@@ -174,7 +174,7 @@ seconds of sustained playback, not at start.
 |---|---|---|---|
 | 1 | Plexamp switches to Sonos without AirPlay and plays | Primary objective | **fail** — expected at baseline |
 | 2 | Apple TV local playback uses the internal Envoy | Hard | pass — Direct Play above 2 Mbps |
-| 3 | Native Sonos plays the Plex library | Hard | pass |
+| 3 | Native Sonos plays the Plex library | Hard | **not tested** — see 0.4.2 |
 | 4 | Plexamp "This device" uses internal Envoy, not Relay, above 2 Mbps | Hard | pass |
 | 5 | Plex iOS local 4K Direct Play at high bitrate through internal Envoy | Hard | pass |
 | 6 | Plex Web switches to Sonos | Soft | fail |
@@ -184,8 +184,8 @@ seconds of sustained playback, not at start.
 | 10 | Homepage Plex widget remains populated | Hard | pass |
 | 11 | Gatus Plex endpoint remains green | Hard | pass |
 
-Captured 2026-08-12, before any stage 3 change. **Every hard row passes**, which is the
-condition stage 4 compares against. Row 1 failing is the reason this design exists.
+Captured 2026-08-12, before any stage 3 change. Row 1 failing is the reason this design
+exists.
 
 ### 0.4.1 Row 8 is inconclusive, not a failure
 
@@ -206,6 +206,19 @@ support.
 
 Retest with the client fully signed out and back in before recording anything stronger.
 
+### 0.4.2 Row 3 was never run
+
+An earlier version of this table recorded row 3 as `pass`, and summarised the table as
+"every hard row passes". Neither was true: row 3 was reported as working without being
+exercised, and the operator corrected that during stage 3. Both statements are withdrawn.
+
+This matters beyond bookkeeping. Row 3 was in fact **failing** at baseline, for a cause
+unrelated to this design — see stage 4's results. A row recorded as passing on no
+measurement concealed a months-old outage, and stage 4's comparison basis was one row
+weaker than it claimed.
+
+Record a row as `not tested` when it was not tested. It costs nothing and it stays true.
+
 Row 1 is expected to **fail** at baseline. That failure is the reason this design
 exists. Rows 7 and 8 will reflect Relay, since no direct path exists yet.
 
@@ -218,20 +231,30 @@ Three changes, in this order. The order is not arbitrary.
 
 ### 3.1 Fix the custom server access URL first
 
-Set it to exactly:
+Set it to exactly one URL — the `plex.direct` name for the Plex `LoadBalancer` address:
 
 ```
-https://plex.lab.supermorphic.com:443/
+https://<lb-address-with-dashes>.<certificate-uuid>.plex.direct:32400
 ```
+
+`<certificate-uuid>` is the server's `CertificateUUID` from `Preferences.xml`, which is
+also the wildcard in the certificate Plex serves. `<lb-address-with-dashes>` is the
+`LoadBalancer` address with dots replaced by dashes. Plex's DNS resolves that name to the
+address it encodes, and the wildcard certificate covers it, so local clients get a direct,
+valid-TLS path with no extra hop.
+
+**Do not list the internal Envoy hostname here.** An earlier version of this step
+instructed exactly that, and it is why row 1 failed through all of stage 3. Plex's cloud
+handed the Envoy URL to the Sonos speaker for the Plexamp cast; that hostname resolves to
+the internal Gateway VIP, which the Sonos VLAN has no route to, so the cast never started.
+Native Sonos playback worked throughout because it received a `plex.direct` URL instead.
+Removing the Envoy URL fixed row 1 immediately and regressed nothing — row 2 still reports
+full Direct Play without it.
 
 **The port is not optional and this step comes first.** Plex applies the Remote Access
-port to any custom URL that omits one. If you set the manual public port while the URL
-is portless, Plex publishes `plex.lab.supermorphic.com:32400`. Pi-hole resolves that
-name to the internal Gateway VIP, which listens only on `443`, so a rediscovering local
-client follows the published connection to a port nothing serves and falls back to
-Relay — regressing the hard rows this design exists to protect.
-
-Doing this before the manual port is set means the wrong value never gets published.
+port to any custom URL that omits one, so a portless entry gets `:32400` appended to
+whatever host it names. Setting this before the manual public port means no wrong value
+is ever published, and clients cache failures.
 
 ### 3.2 Create the UniFi DNAT
 
@@ -310,6 +333,82 @@ Also run external negative scans from off-network:
 
 **Row 1 failing is a failed experiment**, not a partial success. §7.2 hard gate 2 makes
 it an immediate revert.
+
+### Stage 4 results — 2026-08-12, ACCEPTED
+
+| # | Gate | Baseline | Stage 4 | |
+|---|---|---|---|---|
+| 1 | Plexamp → Sonos | fail | **pass** | primary objective |
+| 2 | Apple TV local | pass | pass | full Direct Play |
+| 3 | Native Sonos | *not tested* | **pass** | was broken at baseline |
+| 4 | Plexamp "This device" | pass | pass | above 2 Mbps |
+| 5 | Plex iOS local 4K | pass | pass | |
+| 6 | Plex Web → Sonos | fail | **pass** | soft |
+| 7 | Off-site cellular | fail | direct, not Relay | soft; client-capped, see below |
+| 8 | Relay serves separately | inconclusive | *not tested* | soft; deliberately skipped |
+| 9 | Tautulli | pass | pass | |
+| 10 | Homepage widget | pass | pass | |
+| 11 | Gatus endpoint | pass | pass | |
+
+**Accepted.** Row 1 passes and every hard row matches or exceeds baseline. Rows 1, 3 and
+6 moved from failing to passing. No hard row regressed.
+
+Row 7 reached Plex over the DNAT, not Relay — confirmed by the relay process moving only
+24 bytes/sec (keepalive) and being torn down sixteen minutes before the measurement. It
+is recorded as direct rather than `pass` because the iOS client's own remote-quality
+setting capped the stream at 2 Mbps, so the "above 2 Mbps" threshold was never exercised.
+Raise the client's remote quality before claiming that row.
+
+Row 8 was skipped by decision: testing it requires disabling the DNAT, which interrupts
+remote access for the household. It is recorded as `not tested`, not `inconclusive`.
+
+External negative scans, all three satisfied:
+
+| Gate | Method | Result |
+|---|---|---|
+| Only `32400`/TCP reachable | `nmap` from off-network cellular | `32400` open, 1027 filtered |
+| No AAAA on published names | `dig AAAA` via public resolver | none on any name |
+| No UPnP/NAT-PMP mapping | Plex prefs + log | manual mapping only |
+
+Scan validity matters here: a first attempt run from inside the LAN reported `22`, `80`,
+`443`, `8080` and `8443` open — the gateway's own management ports, reached over the LAN
+interface. Sub-millisecond latency and `conn-refused` rather than `filtered` are the tells.
+**A negative scan is only evidence when it originates off-network.**
+
+### Stage 4 findings — two causes, both outside the cluster
+
+Row 1 and row 3 shared a cause and needed no repository change:
+
+1. **A UniFi rule pointed at a retired host.** The rule granting the Sonos VLAN access to
+   Plex still named the pre-migration Mac mini. The speakers had been unable to reach
+   Plex since Plex moved into the cluster — which is why row 3 was failing, unnoticed,
+   behind an unmeasured `pass`. Repointed at the Plex `LoadBalancer` address, scoped to
+   `32400`/TCP.
+2. **A stale custom access URL.** Plex still advertised the internal Envoy hostname, which
+   resolves to the internal gateway address — one the Sonos VLAN has no route to. Plex's
+   cloud handed the speaker *that* URL for the Plexamp cast, so the cast never started
+   while native playback, which received a `plex.direct` URL, worked. Removing it left
+   only the `plex.direct` connection and row 1 passed immediately.
+
+**The design's central assumption was backwards.** §6 assumed Sonos would prefer the
+published `plex.direct` connection over the retained custom URL. The cast preferred the
+custom URL, and that preference was the defect. Treat client connection choice as
+something to observe, not predict: query the client for the URL it actually holds.
+
+### Operator-side state this depends on
+
+None of the following lives in Git. All of it is load-bearing.
+
+| Where | Setting | Why |
+|---|---|---|
+| Plex → Network | Custom access URLs contain **only** the `plex.direct` URL | An Envoy URL here breaks the Sonos cast |
+| UniFi | Sonos VLAN → Plex `LoadBalancer` address, `32400`/TCP | Speakers fetch audio directly |
+| UniFi | UPnP and NAT-PMP disabled | Plex probes hourly and will map a port if permitted |
+| Pi-hole | `plex.direct` private-IP answers must resolve | Rebind protection otherwise strips them |
+
+The Pi-hole entry is the fragile one. A per-name A record pins the server's certificate
+UUID and the address; `rebind-domain-ok=/plex.direct/` achieves the same result without
+pinning either, and survives certificate regeneration and address changes.
 
 ## Hard gates — any one triggers immediate revert
 
