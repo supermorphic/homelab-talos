@@ -26,6 +26,10 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: tautulli
+        # Missed by the phase-1 capture; Seerr had zero forwarded flows to Plex.
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+            app.kubernetes.io/name: seerr
       toPorts:
         - ports:
             - port: "32400"

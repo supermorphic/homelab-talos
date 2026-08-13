@@ -109,4 +109,10 @@ reset_tree
 yq -i '.spec.egress += [{"toEntities": ["world"]}]' "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'entity-based egress reintroduced'
 
+echo '14. Dropping Seerr from the consumer set is rejected.'
+reset_tree
+yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "seerr"))' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'seerr removed from the Plex consumer set'
+
 echo 'Plex validator mutation tests passed.'
