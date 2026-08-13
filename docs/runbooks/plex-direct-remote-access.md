@@ -448,10 +448,18 @@ thing to invent during the incident that needs it.
 
 Stage 5 removes the superseded public plane, and is gated on stage 4 passing — the old
 machinery is the fallback position until the replacement is proven. It comes out through
-two different mechanisms because it lives in two places: the public Gateway,
-`networking-public`, and the DDNS drift exporter are Flux-managed and leave through a
-reviewed Git revert; the public Cloudflare A record, the UniFi DDNS entry, and the scoped
-token are external state no Git change can touch, so each is an explicit operator action
-with the token revocation last.
+two different mechanisms because it lives in two places.
+
+**Flux-managed — done.** The public Gateway and its `networking-public` namespace,
+certificate, EnvoyProxy and dedicated MetalLB pool at `.39` were removed once stage 4 was
+accepted, together with the `plex-public` route, the matching network-policy consumer, and
+the namespace label that admitted it. The DDNS drift exporter followed in its own change.
+`192.168.90.39` is unallocated.
+
+**External state — operator actions, none reachable from Git.** In order: delete the
+public Cloudflare A record, disable the UniFi DDNS entry, then revoke the scoped token
+**last**. Revoking first leaves the updater failing against a record it can no longer
+correct. The drift exporter that used to watch for exactly that condition is gone, so
+nothing will alert on a half-finished teardown — complete all three in one sitting.
 
 Permanence is a separate decision and is not implied by a clean run.

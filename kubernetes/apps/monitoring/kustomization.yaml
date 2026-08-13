@@ -9,5 +9,4 @@ resources:
   - ./kube-prometheus-stack/ks.yaml
   - ./ntfy/ks.yaml
   - ./portainer/ks.yaml
-  - ./plex-ddns-drift/ks.yaml
   - ./test-reports/ks.yaml

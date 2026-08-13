@@ -1222,65 +1222,6 @@ plex:
     bootstrap_complete=true
     echo 'Phase 11 Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then do the node-failure reschedule test in docs/phase-11-media.md.'
 
-# Reconcile only the suspended credential-free Plex DDNS drift exporter. On
-# failure, re-suspend only this child while preserving its resources.
-plex-ddns-drift:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    owner='supermorphic'
-    repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:plex-ddns-drift'
-    ks='kubernetes/apps/monitoring/plex-ddns-drift/ks.yaml'
-    resumed=false
-    bootstrap_complete=false
-    cleanup_plex_ddns_drift() {
-      if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Plex DDNS drift acceptance failed; suspending only plex-ddns-drift while preserving its resources.' >&2
-        flux suspend kustomization plex-ddns-drift --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
-      fi
-    }
-    trap cleanup_plex_ddns_drift EXIT
-
-    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "$(git remote get-url origin)" == "$expected_origin" ]]
-    source scripts/lib/rollout.sh
-    require_deployed_source 'Plex DDNS drift bootstrap' \
-      .just/bootstrap.just kubernetes/mod.just tests/catalog.yaml \
-      kubernetes/apps/monitoring/kustomization.yaml \
-      kubernetes/apps/monitoring/plex-ddns-drift \
-      scripts/lib/network.sh scripts/lib/flux-alerts.sh \
-      scripts/test/plex-ddns-drift-test.sh scripts/test/plex-ddns-drift-validator-test.sh \
-      scripts/validate/plex-ddns-drift.sh scripts/verify/plex-ddns-drift.sh
-    [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
-      echo 'Refusing Plex DDNS drift bootstrap: it must be staged suspended in Git.' >&2
-      exit 1
-    }
-
-    just kube plex-ddns-drift-validate
-    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
-    just kube flux-verify
-    flux reconcile kustomization cluster-apps --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m
-    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization plex-ddns-drift --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
-      echo 'Refusing Plex DDNS drift bootstrap: it is not suspended in the live cluster.' >&2
-      exit 1
-    }
-    [[ "${PLEX_DDNS_DRIFT_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Plex DDNS drift exporter.' >&2
-      echo "Set PLEX_DDNS_DRIFT_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing source validation." >&2
-      exit 1
-    }
-
-    resumed=true
-    flux resume kustomization plex-ddns-drift --namespace flux-system --kubeconfig "$kubeconfig"
-    flux reconcile kustomization plex-ddns-drift --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 15m
-    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait --for=condition=Ready kustomization/plex-ddns-drift --timeout=15m
-    just kube plex-ddns-drift-verify
-    bootstrap_complete=true
-    echo 'Plex DDNS drift acceptance passed. Persist suspend=false only after the operator completes the deterministic DDNS correction drill.'
-
 # Reconcile the suspended Phase 12 qBittorrent+Gluetun after guarded checks, then verify.
 # Requires the protonvpn Secret (just repo protonvpn-secrets) and media-storage already
 # bootstrapped. Flux decrypts the Secret in-cluster. After verify, run the BLOCKING
