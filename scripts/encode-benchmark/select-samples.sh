@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 
 census_path, seed_text, local_root_text = sys.argv[1:]
@@ -71,10 +72,17 @@ try:
             seen_paths.add(source_path)
             try:
                 source_size = int(row["source_size_bytes"])
-                bit_rate = int(row["video_bit_rate"])
                 width = int(row["width"])
                 height = int(row["height"])
-            except ValueError:
+                bit_rate_text = row["video_bit_rate"]
+                if bit_rate_text:
+                    bit_rate = Decimal(int(bit_rate_text))
+                else:
+                    duration = Decimal(row["duration_seconds"])
+                    if not duration.is_finite() or duration <= 0:
+                        fail(f"invalid numeric census field at row {row_number}")
+                    bit_rate = Decimal(source_size * 8) / duration
+            except (ValueError, InvalidOperation):
                 fail(f"invalid numeric census field at row {row_number}")
             if source_size <= 0 or bit_rate <= 0 or width <= 0 or height <= 0:
                 continue

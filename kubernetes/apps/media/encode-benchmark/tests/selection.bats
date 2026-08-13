@@ -57,6 +57,78 @@ write_census_fixtures() {
 	} >"$CENSUS_DESC"
 }
 
+write_single_row_census() {
+	output="$1"
+	bitrate="$2"
+	duration="$3"
+	size="$(wc -c <"$MOVIE_ROOT/avc-1.mkv" | tr -d ' ')"
+	{
+		head -n 1 "$CENSUS_ASC"
+		printf '"/media/avc-1.mkv",%s,2,active,torrent-inventory,,,tracker-public,avc,matroska,%s,h264,1920,1080,yuv420p,8,bt709,bt709,bt709,,,%s,24000/1001,1,0,0,100,estimated,probed,\n' \
+			"$size" "$duration" "$bitrate"
+	} >"$output"
+}
+
+write_formula_ranking_census() {
+	output="$1"
+	rows="$BATS_TEST_TMPDIR/formula-ranking-rows.csv"
+	: >"$rows"
+	while IFS=',' read -r index size duration bitrate; do
+		printf '%*s' "$size" '' >"$MOVIE_ROOT/formula-$index.mkv"
+		printf '"/media/formula-%s.mkv",%s,2,active,torrent-inventory,,,tracker-public,avc,matroska,%s,h264,1920,1080,yuv420p,8,bt709,bt709,bt709,,,%s,24000/1001,1,0,0,100,estimated,probed,\n' \
+			"$index" "$size" "$duration" "$bitrate" >>"$rows"
+	done <<'ROWS'
+1,1815,104,1843
+2,1104,171,3447
+3,1148,122,
+4,1661,197,
+5,198,132,
+6,414,183,
+7,1710,134,
+8,1690,145,
+9,1515,64,
+10,1984,43,
+11,792,50,
+12,836,61,
+ROWS
+	{
+		head -n 1 "$CENSUS_ASC"
+		cat "$rows"
+	} >"$output"
+}
+
+# Catches replacing the fallback with a positive constant or calculating it
+# without either source_size_bytes or duration_seconds. With size * 8 /
+# duration, formula-7 is selected and formula-4 is omitted; all three broken
+# rankings reverse those identities for this hand-checked fixture.
+@test "derived bitrate uses source size and duration to rank mixed candidates" {
+	census="$BATS_TEST_TMPDIR/census-formula-ranking.csv"
+	write_formula_ranking_census "$census"
+
+	run "$SELECT_SAMPLES" "$census" 20260802 "$MOVIE_ROOT"
+	[ "$status" -eq 0 ]
+	[ "$(yq -r '.savingsPanel | length' <<<"$output")" -eq 8 ]
+	[ "$(yq -r '[.savingsPanel[].path] | join(",")' <<<"$output")" = '/media/formula-1.mkv,/media/formula-10.mkv,/media/formula-11.mkv,/media/formula-2.mkv,/media/formula-5.mkv,/media/formula-6.mkv,/media/formula-7.mkv,/media/formula-9.mkv' ]
+}
+
+@test "selection rejects malformed reported bitrate instead of applying the fallback" {
+	census="$BATS_TEST_TMPDIR/census-malformed-video-bitrate.csv"
+	write_single_row_census "$census" 'not-a-number' 7200
+
+	run "$SELECT_SAMPLES" "$census" 20260802 "$MOVIE_ROOT"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'invalid numeric census field at row 2'* ]]
+}
+
+@test "selection rejects unusable duration when deriving a bitrate" {
+	census="$BATS_TEST_TMPDIR/census-unusable-duration.csv"
+	write_single_row_census "$census" '' 0
+
+	run "$SELECT_SAMPLES" "$census" 20260802 "$MOVIE_ROOT"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'invalid numeric census field at row 2'* ]]
+}
+
 # Catches input-order dependence, a changed seed, duplicate IDs, lifecycle
 # filtering, and selection that misses a populated source-bitrate quartile.
 @test "seeded savings selection is stable stratified unique and lifecycle-neutral" {
