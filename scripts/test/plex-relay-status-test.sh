@@ -74,7 +74,7 @@ elif [[ "${args[4]:-}" == 'exec' || "${args[6]:-}" == 'exec' ]]; then
     && "${args[$((7 + context_args))]}" == 'app' \
     && "${args[$((8 + context_args))]}" == '--' \
     && "${args[$((9 + context_args))]}" == '/bin/bash' \
-    && "${args[$((10 + context_args))]}" == '-ceu' \
+    && "${args[$((10 + context_args))]}" == '-cu' \
     && -n "${args[$((11 + context_args))]}" ]] || {
       echo "Unexpected exec invocation: $*" >&2
       exit 9
@@ -97,6 +97,16 @@ case "$operation" in
     printf 'plex-test-pod'
     ;;
   exec)
+    if [[ "${FAKE_EXEC_MODE:-ok}" == 'partial-failure' ]]; then
+      # Emits real facts, then dies — exactly what the container did when the
+      # absent secureConnections attribute killed the program mid-run.
+      printf '%s\n' \
+        'relay_current_uid=568' \
+        'relay_current_user=plex' \
+        'relay_key_cache_readable=yes'
+      echo 'xmlstarlet: no matching node' >&2
+      exit 1
+    fi
     printf '%s\n' \
       'relay_current_uid=568' \
       'relay_current_user=plex' \
@@ -116,9 +126,18 @@ chmod +x "$fake_bin/kubectl"
 run_case() {
   local layout="$1"
   : >"$fake_log"
+  set +e
   PATH="$fake_bin:$PATH" FAKE_KUBECTL_LOG="$fake_log" \
     FAKE_KUBECONFIG="$temp_dir/kubeconfig" FAKE_KUBECONFIG_LAYOUT="$layout" \
+    FAKE_EXEC_MODE="${FAKE_EXEC_MODE:-ok}" \
     scripts/diagnose/plex-relay-status.sh "$temp_dir/kubeconfig" >"$output" 2>&1
+  script_status="$?"
+  set -e
+  [[ "$script_status" -eq 0 ]] || {
+    echo "Relay status exited $script_status on the happy path." >&2
+    cat "$output" >&2
+    exit 1
+  }
 
 rg -q '^relay_current_uid=568$' "$output"
 rg -q '^relay_current_user=plex$' "$output"
@@ -155,5 +174,33 @@ touch "$temp_dir/kubeconfig"
 
 run_case scoped
 run_case operator
+
+# The defect this diagnostic actually shipped with: the in-container program died
+# partway and the command substitution discarded everything it had produced, so the
+# script exited non-zero having printed nothing. Silence is the worst possible
+# failure for a diagnostic, because it is indistinguishable from a clean run.
+: >"$fake_log"
+set +e
+PATH="$fake_bin:$PATH" FAKE_KUBECTL_LOG="$fake_log" \
+  FAKE_KUBECONFIG="$temp_dir/kubeconfig" FAKE_KUBECONFIG_LAYOUT=scoped \
+  FAKE_EXEC_MODE=partial-failure \
+  scripts/diagnose/plex-relay-status.sh "$temp_dir/kubeconfig" >"$output" 2>&1
+partial_status="$?"
+set -e
+
+[[ "$partial_status" -ne 0 ]] || {
+  echo 'Relay status hid an in-container failure behind a zero exit.' >&2
+  exit 1
+}
+rg -q '^relay_current_uid=568$' "$output" || {
+  echo 'Relay status discarded output produced before the in-container failure.' >&2
+  cat "$output" >&2
+  exit 1
+}
+rg -q 'in-container program exited' "$output" || {
+  echo 'Relay status failed without saying why.' >&2
+  cat "$output" >&2
+  exit 1
+}
 
 echo 'Plex Relay status diagnostic tests passed.'

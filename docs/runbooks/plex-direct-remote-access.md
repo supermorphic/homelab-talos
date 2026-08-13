@@ -172,17 +172,39 @@ seconds of sustained playback, not at start.
 
 | # | Client / action | Gate | Baseline result |
 |---|---|---|---|
-| 1 | Plexamp switches to Sonos without AirPlay and plays | Primary objective | |
-| 2 | Apple TV local playback uses the internal Envoy | Hard | |
-| 3 | Native Sonos plays the Plex library | Hard | |
-| 4 | Plexamp "This device" uses internal Envoy, not Relay, above 2 Mbps | Hard | |
-| 5 | Plex iOS local 4K Direct Play at high bitrate through internal Envoy | Hard | |
-| 6 | Plex Web switches to Sonos | Soft | |
-| 7 | Off-site cellular reaches Plex above 2 Mbps | Soft | |
-| 8 | Relay serves separately when direct access is unavailable | Soft | |
-| 9 | Tautulli continues recording sessions | Hard | |
-| 10 | Homepage Plex widget remains populated | Hard | |
-| 11 | Gatus Plex endpoint remains green | Hard | |
+| 1 | Plexamp switches to Sonos without AirPlay and plays | Primary objective | **fail** — expected at baseline |
+| 2 | Apple TV local playback uses the internal Envoy | Hard | pass — Direct Play above 2 Mbps |
+| 3 | Native Sonos plays the Plex library | Hard | pass |
+| 4 | Plexamp "This device" uses internal Envoy, not Relay, above 2 Mbps | Hard | pass |
+| 5 | Plex iOS local 4K Direct Play at high bitrate through internal Envoy | Hard | pass |
+| 6 | Plex Web switches to Sonos | Soft | fail |
+| 7 | Off-site cellular reaches Plex above 2 Mbps | Soft | fail — expected, no DNAT at baseline |
+| 8 | Relay serves separately when direct access is unavailable | Soft | **inconclusive** — see 0.4.1 |
+| 9 | Tautulli continues recording sessions | Hard | pass |
+| 10 | Homepage Plex widget remains populated | Hard | pass |
+| 11 | Gatus Plex endpoint remains green | Hard | pass |
+
+Captured 2026-08-12, before any stage 3 change. **Every hard row passes**, which is the
+condition stage 4 compares against. Row 1 failing is the reason this design exists.
+
+### 0.4.1 Row 8 is inconclusive, not a failure
+
+Off-site cellular with Tailscale disabled did not load the library, which reads as Relay
+being dead. It is not. `just kube plex-relay-status` shows the full successful lifecycle
+during that window:
+
+```
+startRelay  →  [PlexRelay] Authenticated to <relay>  →  Allocated port … → 127.0.0.1:32401
+```
+
+The boundary table in the superseded runbook maps that exactly: an allocated port with a
+client that cannot browse points at **client or account authorization**, not the relay
+path and not the cluster. Recorded as inconclusive so that a later reader does not treat
+"Relay is broken" as an established fact, and so §8's rollback — which assumes Relay
+remains as the fallback — is not quietly undermined by a conclusion the evidence does not
+support.
+
+Retest with the client fully signed out and back in before recording anything stronger.
 
 Row 1 is expected to **fail** at baseline. That failure is the reason this design
 exists. Rows 7 and 8 will reflect Relay, since no direct path exists yet.
