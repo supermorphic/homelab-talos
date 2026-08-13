@@ -115,4 +115,16 @@ yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernete
   "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'seerr removed from the Plex consumer set'
 
+echo '15. Dropping the 32400 egress publish-check port is rejected.'
+reset_tree
+yq -i '.spec.egress[1].toPorts[0].ports = [{"port": "443", "protocol": "TCP"}]' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'egress publish-check port removed'
+
+echo '16. Widening egress to a third port is rejected.'
+reset_tree
+yq -i '.spec.egress[1].toPorts[0].ports += [{"port": "8080", "protocol": "TCP"}]' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'egress widened beyond 443 and 32400'
+
 echo 'Plex validator mutation tests passed.'
