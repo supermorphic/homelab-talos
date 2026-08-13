@@ -85,3 +85,10 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+            # Publishing requires Plex to reach its OWN public address on the port it
+            # publishes: it GETs https://<wan>.<hash>.plex.direct:32400/identity and marks
+            # itself Not Published if that fails. Verified by testing both ports from the
+            # pod — 443 forwarded, 32400 DENIED — which is why no plex.direct connection
+            # was ever published. This is egress only; ingress still admits 32400 alone.
+            - port: "32400"
+              protocol: TCP
