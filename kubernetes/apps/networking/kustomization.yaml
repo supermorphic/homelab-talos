@@ -6,5 +6,4 @@ resources:
   - ./external-dns/ks.yaml
   - ./internal-gateway/ks.yaml
   - ./metallb/ks.yaml
-  - ./public-gateway/ks.yaml
   - ./tailscale-operator/ks.yaml

@@ -1,7 +1,7 @@
 ---
 # Observed containment for Plex. The ingress allow-list is derived from the phase-1
-# Hubble capture plus the two designed identities observation cannot supply; the
-# capture basis and the deliberate SSDP/UPnP multicast block are recorded in
+# Hubble capture plus the designed identities observation cannot supply; the capture
+# basis and the deliberate SSDP/UPnP multicast block are recorded in
 # docs/decisions/2026-08-03-plex-containment-capture.md.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -17,9 +17,6 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: envoy-gateway-system
             gateway.envoyproxy.io/owning-gateway-name: internal
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: envoy-gateway-system
-            gateway.envoyproxy.io/owning-gateway-name: public
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: homepage
             app.kubernetes.io/name: homepage

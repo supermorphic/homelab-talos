@@ -1,5 +1,13 @@
 # Plex public Envoy, Relay, and Sonos operator runbook
 
+> **SUPERSEDED — do not follow.** The public Envoy experiment this runbook drives was
+> superseded by
+> [Plex direct remote access](../decisions/2026-08-11-plex-direct-remote-access.md), and
+> the public Gateway, its address pool, and every `plex-public` recipe and script named
+> below have since been removed from the repository. The commands here will not run.
+> Kept as the historical record of the experiment. For current operation see
+> [the direct remote access runbook](plex-direct-remote-access.md).
+
 This runbook executes the reversible experiment approved by the
 [Plex public Envoy amendment](../decisions/2026-08-03-plex-public-envoy-amendment.md).
 The amendment is additive to the

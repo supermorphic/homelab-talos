@@ -109,7 +109,7 @@ fi
 [[ "$(yq -r '.spec.rules[0].timeouts.request' "$route")" == '0s' ]]
 
 # Observed containment: the CiliumNetworkPolicy is the hard prerequisite for any
-# public ingress. Its allow-list comes from the phase-1 Hubble capture plus the two
+# off-cluster ingress. Its allow-list comes from the phase-1 Hubble capture plus the
 # designed identities observation cannot supply (docs/decisions/2026-08-03-plex-containment-capture.md).
 [[ "$(yq -r '.kind' "$cnp")" == 'CiliumNetworkPolicy' ]]
 [[ "$(yq -r '.metadata.name' "$cnp")" == 'plex' ]]
@@ -124,7 +124,7 @@ fi
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '32400/TCP' ]]
 [[ "$(yq -r '.spec.ingress[0] | keys | sort | join(",")' "$cnp")" == 'fromEndpoints,toPorts' ]]
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[] | keys | join(",")] | unique | join(",")' "$cnp")" == 'matchLabels' ]]
-[[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=seerr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system;gateway.envoyproxy.io/owning-gateway-name=public,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
+[[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=seerr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
 [[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
 [[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
 # §6 of docs/decisions/2026-08-11-plex-direct-remote-access.md accepts `world:32400` as

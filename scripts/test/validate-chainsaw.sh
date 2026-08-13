@@ -140,9 +140,6 @@ run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.s
 run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
 run_shell_case plex-verifier scripts/test/plex-verify-test.sh
 run_shell_case plex-validator scripts/test/plex-validator-test.sh
-run_shell_case plex-public-verifier scripts/test/plex-public-verify-test.sh
-run_shell_case plex-public-probe-guard scripts/test/plex-public-probe-guard-test.sh
-run_shell_case plex-public-rollout-guard scripts/test/plex-public-rollout-guard-test.sh
 run_shell_case plex-ddns-drift scripts/test/plex-ddns-drift-test.sh
 run_shell_case plex-ddns-drift-verifier scripts/test/plex-ddns-drift-verify-test.sh
 run_shell_case plex-ddns-drift-validator scripts/test/plex-ddns-drift-validator-test.sh

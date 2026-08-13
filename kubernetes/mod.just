@@ -505,20 +505,10 @@ media-storage-validate: require-bash
 plex-validate: require-bash
     @scripts/validate/plex.sh
 
-# Validate the suspended dedicated public Plex Gateway, exact route cardinality,
-# isolated certificate, MetalLB VIP, and token-safe access-log contract.
-plex-public-validate: require-bash
-    @scripts/validate/plex-public.sh
-
 # Validate the suspended credential-free Plex DDNS drift exporter, metrics,
 # alerts, and bounded network policy.
 plex-ddns-drift-validate: require-bash
     @scripts/validate/plex-ddns-drift.sh
-
-# Verify the active dedicated public Plex Gateway, negative listener behavior,
-# and all internal foundation/Gatus/Plex acceptance without changing cluster state.
-plex-public-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.plex-public -- scripts/verify/plex-public.sh {{quote(kubeconfig)}}
 
 # Verify the live Plex DDNS drift target, metrics, address-free logs, alert rules,
 # and existing warning route to ntfy without changing cluster state.
@@ -567,52 +557,6 @@ plex-network-observe seconds='300': require-bash
 # Operator-only and state-changing; creates and removes only run-scoped Pods.
 plex-network-policy-test: require-bash
     @scripts/test/run-catalog-suite.sh test.plex-network-policy -- scripts/test/scenarios/plex-network-policy.sh {{quote(kubeconfig)}}
-
-# Prove public Envoy pod-admin isolation and token-safe access logging with one
-# run-scoped probe Pod. Operator-only and state-changing.
-plex-public-probe-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.plex-public-probe -- scripts/test/scenarios/plex-public-probe.sh {{quote(kubeconfig)}}
-
-# After the operator has removed the WAN DNAT, restart only the dedicated public
-# Envoy Deployment to terminate any established stateful sessions, then verify.
-plex-public-connection-flush: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    expected_confirmation='flush:plex-public:dnat-removed'
-    owner_selector='gateway.envoyproxy.io/owning-gateway-namespace=networking-public,gateway.envoyproxy.io/owning-gateway-name=public'
-
-    [[ -f "$kubeconfig" ]] || { echo "Missing $kubeconfig; run just talos kubeconfig." >&2; exit 1; }
-    [[ "${PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to restart public Envoy before explicit confirmation that DNAT is removed.' >&2
-      echo "Set PLEX_PUBLIC_CONNECTION_FLUSH_CONFIRM='$expected_confirmation' only after deleting the WAN rule." >&2
-      exit 1
-    }
-
-    source scripts/lib/rollout.sh
-    require_deployed_source 'Plex public connection flush' \
-      kubernetes/mod.just tests/catalog.yaml \
-      scripts/lib/network.sh scripts/verify/plex-public.sh \
-      scripts/verify/foundation.sh scripts/verify/gatus.sh scripts/verify/plex.sh \
-      kubernetes/apps/networking/public-gateway
-
-    deployments="$(kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system get deployments \
-      --selector "$owner_selector" --output json)"
-    [[ "$(yq -r '.items | length' - <<<"$deployments")" == '1' ]] || {
-      echo 'Refusing connection flush: expected exactly one public-owned Envoy Deployment.' >&2
-      exit 1
-    }
-    deployment="$(yq -r '.items[0].metadata.name' - <<<"$deployments")"
-    [[ -n "$deployment" && "$deployment" != 'null' ]] || {
-      echo 'Refusing connection flush: public Envoy Deployment name is empty.' >&2
-      exit 1
-    }
-
-    kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system rollout restart "deployment/$deployment"
-    kubectl --kubeconfig "$kubeconfig" --namespace envoy-gateway-system rollout status "deployment/$deployment" --timeout=10m
-    just kube plex-public-verify
-    echo 'Public Envoy established connections flushed after DNAT removal; dedicated gateway and internal acceptance remain healthy.'
 
 # Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
