@@ -1,5 +1,7 @@
 rule_files:
+  - encode-benchmark.yaml
   - media.yaml
+  - qbittorrent.yaml
 evaluation_interval: 1m
 tests:
   - interval: 1m

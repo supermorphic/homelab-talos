@@ -7,7 +7,9 @@ ks="$base/ks.yaml"
 kustomization="$app/kustomization.yaml"
 priority="$app/priorityclass.yaml"
 samples="$app/samples.yaml"
-alerts="$app/alerts.yaml"
+# The rule lives in the media alerts application; placement and wiring belong to
+# `just kube alerts-validate media`. The content contract stays here.
+alerts='kubernetes/apps/media/alerts/app/encode-benchmark.yaml'
 scaffold="$app/scripts/not-ready.sh"
 probe="$app/scripts/probe.sh"
 census="$app/scripts/census.sh"
@@ -124,7 +126,7 @@ benchmark_index="$(yq -r '.resources | to_entries | .[] | select(.value == "./en
 
 # The app render contains only inert inputs. The Job remains a parsed, non-reconciled template.
 assert_eq "$(yq -r '[.resources[]] | join(",")' "$kustomization")" \
-	'./priorityclass.yaml,./samples.yaml,./alerts.yaml' 'inert app resources'
+	'./priorityclass.yaml,./samples.yaml' 'inert app resources'
 assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
@@ -147,7 +149,7 @@ kubeconform -strict -summary -ignore-missing-schemas "$conform"
 [[ -z "$(yq -r 'select(.kind == "Job") | .metadata.name' "$render")" ]] ||
 	fail 'the inert Flux render unexpectedly contains a Job'
 rendered_kinds="$(yq -N -r '.kind' "$render" | sort | tr '\n' ',')"
-assert_eq "$rendered_kinds" 'ConfigMap,ConfigMap,PriorityClass,PrometheusRule,' \
+assert_eq "$rendered_kinds" 'ConfigMap,ConfigMap,PriorityClass,' \
 	'inert rendered resource kinds'
 
 scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .metadata.name' "$render")"

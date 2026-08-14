@@ -56,6 +56,17 @@ for rule in "${rule_files[@]}"; do
   extracted+=("$temp_dir/$(basename "$rule")")
 done
 
+# No PrometheusRule may live outside a domain alerts application. This is the invariant
+# the refactor exists to hold; without it the tree silently re-fragments.
+mapfile -t stray < <(rg --files kubernetes/apps | rg '\.yaml$' \
+  | xargs rg -l '^kind: PrometheusRule' 2>/dev/null \
+  | rg -v '/alerts/app/' | sort)
+[[ "${#stray[@]}" -eq 0 ]] || {
+  echo 'PrometheusRule files must live in kubernetes/apps/<domain>/alerts/app/:' >&2
+  printf '  %s\n' "${stray[@]}" >&2
+  exit 1
+}
+
 kustomize build "$base/app" >/dev/null
 # Check only the extracted rule files by name. A `"$temp_dir"/*.yaml` glob would also
 # feed the copied fixture to `promtool check rules`, which rejects a unit-test file.

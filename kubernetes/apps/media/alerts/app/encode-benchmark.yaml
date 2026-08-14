@@ -3,6 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: encode-benchmark
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: encode-benchmark
 spec:
