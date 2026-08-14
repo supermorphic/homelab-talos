@@ -198,26 +198,60 @@ runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
 [[ "$runtime_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] ||
 	fail "runtime image must use an immutable SHA-256 digest: $runtime_image"
 capability_status="$(yq -r '.runtime.capabilityStatus' <<<"$samples_doc")"
-[[ "$capability_status" == 'candidate' || "$capability_status" == 'verified' ]] ||
-	fail 'runtime capabilityStatus must be candidate or verified'
+[[ "$capability_status" == 'pending' || "$capability_status" == 'verified' ]] ||
+	fail 'runtime capabilityStatus must be pending or verified'
 
 quality_count="$(yq -r '.qualityPanel | length' <<<"$samples_doc")"
 savings_count="$(yq -r '.savingsPanel | length' <<<"$samples_doc")"
-if [[ "$capability_status" != 'verified' ]] &&
-	((quality_count != 0 || savings_count != 0)); then
-	fail 'sample panels must stay empty until runtime capabilities are verified'
-fi
-
 if [[ "$capability_status" == 'verified' ]]; then
-	for evidence in \
-		digestResolvable hevcQsv realQsvEncode libvmaf4k libx265 shellTools ffprobe nonRootUid568; do
-		assert_eq "$(yq -r ".runtime.capabilityEvidence.$evidence" <<<"$samples_doc")" \
-			'true' "verified capability evidence $evidence"
-	done
-	for evidence in verifiedAt nodeName imageId; do
-		value="$(yq -r ".runtime.capabilityEvidence.$evidence // \"\"" <<<"$samples_doc")"
-		[[ -n "$value" ]] || fail "verified capability evidence $evidence must be non-empty"
-	done
+	configured_digest="${runtime_image##*@}"
+	jq -e --arg digest "$configured_digest" '
+		def reasons:
+			[]
+			+ (if .initialization == "passed" then [] else ["initialization"] end)
+			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
+			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
+			+ (if .decode == "passed" then [] else ["decode"] end)
+			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
+		def expected_status:
+			if .telemetryStatus != "available" then "harness-blocked"
+			elif (reasons | length) == 0 then "passed"
+			else "failed" end;
+		def valid_node:
+			type == "object" and
+			(keys == ["configuredImageDigest","decode","encodeFps","encodeSpeed","imageId","initialization","nodeName","proofReasons","proofSchemaVersion","proofStatus","selectedRateControl","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
+			.proofSchemaVersion == 2 and
+			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
+			(.initialization == "passed" or .initialization == "failed") and
+			(.selectedRateControl | type == "string") and
+			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
+			(.telemetryReason | type == "string") and
+			((.telemetryStatus == "available" and .telemetryReason == "") or
+				(.telemetryStatus == "harness-blocked" and (.telemetryReason | length) > 0)) and
+			(.videoBusyNanoseconds | type == "number" and . >= 0) and
+			(.videoBusyPercent | type == "number" and . >= 0) and
+			(.encodeFps | type == "number" and . >= 0) and
+			(.encodeSpeed | type == "number" and . >= 0) and
+			(.decode == "passed" or .decode == "failed") and
+			(.vmaf == "passed" or .vmaf == "failed") and
+			.proofStatus == expected_status and
+			.proofReasons == (reasons | join(";")) and
+			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+			.configuredImageDigest == $digest and
+			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest));
+		.runtime.capabilityEvidence
+		| (keys == ["nodes"]) and
+		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
+			([.[].nodeName] | unique | length) == length)
+	' <<<"$samples_doc" >/dev/null ||
+		fail 'verified capability evidence must contain unique valid schema-v2 node records'
+else
+	jq -e '
+		.runtime.capabilityEvidence |
+		((has("nodes") | not) or (.nodes | type == "array" and length == 0))
+	' <<<"$samples_doc" >/dev/null ||
+		fail 'pending capability evidence must not claim schema-v2 node proof'
 fi
 
 declare -A seen_sample_ids=()

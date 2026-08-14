@@ -24,7 +24,7 @@ fi
 if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
-		BENCHMARK_TEST_BUSY_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
+		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
 		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
 		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE; do
 		if [[ -v "$test_hook" ]]; then
@@ -289,41 +289,91 @@ x265_next() {
 	fi
 }
 
-busy_metrics() {
+drm_fdinfo_metrics() {
 	local fixture="$1"
 	awk '
-		($2 ~ /\/engine\/video/ || $2 ~ /\/engine\/vcs/ || $2 ~ /\/engine\/vecs/) &&
-			$2 ~ /\/busy$/ && $1 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
-			path = $2
-			if (!(path in first_value)) {
-				first_value[path] = $3
-				first_time[path] = $1
+		function block_error(value) {
+			if (reason == "") reason = value
+		}
+		function finish_snapshot() {
+			if (!snapshot) return
+			if (!driver_seen) block_error("missing-driver")
+			if (!video_seen) block_error("missing-video-counter")
+			if (reason != "") return
+			if (!first_seen) {
+				first_seen = 1
+				first_time = timestamp
+				last_time = timestamp
+				first_video = video
+				maximum_video = video
+				capacity_value = capacity
+			} else {
+				last_time = timestamp
+				if (video > maximum_video) maximum_video = video
+				if (capacity != capacity_value) block_error("changed-video-capacity")
 			}
-			last_value[path] = $3
-			last_time[path] = $1
-			present = 1
+		}
+		function start_snapshot(value) {
+			finish_snapshot()
+			snapshot = 1
+			timestamp = value
+			driver_seen = 0
+			video_seen = 0
+			capacity = 1
+		}
+		/^[0-9]+$/ {
+			start_snapshot($1)
+			next
+		}
+		$1 == "drm-driver:" {
+			if (!snapshot || NF != 2) {
+				block_error("malformed-driver")
+				next
+			}
+			driver_seen = 1
+			driver = $2
+			if ($2 != "i915") block_error("wrong-driver")
+			next
+		}
+		$1 == "drm-engine-video:" {
+			if (!snapshot || NF != 3 || $2 !~ /^[0-9]+$/ || $3 != "ns") {
+				block_error("malformed-video-counter")
+				next
+			}
+			video_seen = 1
+			video = $2
+			next
+		}
+		$1 == "drm-engine-capacity-video:" {
+			if (!snapshot || NF != 2 || $2 !~ /^[0-9]+$/ || $2 <= 0) {
+				block_error("invalid-video-capacity")
+				next
+			}
+			capacity = $2
+			next
 		}
 		END {
-			total_delta = 0
-			elapsed = 0
-			for (path in first_value) {
-				delta = last_value[path] - first_value[path]
-				span = last_time[path] - first_time[path]
-				if (delta > 0) total_delta += delta
-				if (span > elapsed) elapsed = span
+			finish_snapshot()
+			if (!snapshot && reason == "") reason = "missing-snapshots"
+			if (!first_seen && reason == "") reason = "missing-video-counter"
+			if (reason != "") {
+				printf "{\"status\":\"harness-blocked\",\"driver\":\"%s\",\"video_busy_nanoseconds\":0,\"video_busy_percent\":0.000000,\"reason\":\"%s\"}\n", driver, reason
+				exit
 			}
-			percent = (elapsed > 0 ? total_delta * 100 / elapsed : 0)
-			printf "%.6f|%.0f|%d\n", percent, total_delta, present
+			delta = maximum_video - first_video
+			elapsed = last_time - first_time
+			percent = (elapsed > 0 ? delta * 100 / elapsed / capacity_value : 0)
+			printf "{\"status\":\"available\",\"driver\":\"%s\",\"video_busy_nanoseconds\":%.0f,\"video_busy_percent\":%.6f,\"reason\":\"\"}\n", driver, delta, percent
 		}
 	' "$fixture"
 }
 
 qsv_proof() {
 	local encode_log="$1"
-	local busy_log="$2"
+	local fdinfo_log="$2"
 	local height="$3"
 	local selected='unknown' initialization='failed' fps='0.000000' speed='0.000000'
-	local gpu delta telemetry reasons='' proof='suspect' value
+	local gpu delta telemetry metrics reasons='' proof='suspect' value
 	if grep -q -E 'Successfully initiali[sz]ed the hardware device' "$encode_log" &&
 		! grep -q -E 'Device creation failed|Failed to initiali[sz]e' "$encode_log"; then
 		initialization='passed'
@@ -337,7 +387,11 @@ qsv_proof() {
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
 	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
-	IFS='|' read -r gpu delta telemetry <<<"$(busy_metrics "$busy_log")"
+	metrics="$(drm_fdinfo_metrics "$fdinfo_log")"
+	telemetry="$(jq -r '.status' <<<"$metrics")"
+	delta="$(jq -r '.video_busy_nanoseconds' <<<"$metrics")"
+	gpu="$(awk -v value="$(jq -r '.video_busy_percent' <<<"$metrics")" \
+		'BEGIN { printf "%.6f", value }')"
 
 	if [[ "$initialization" != 'passed' ]]; then
 		reasons='initialization'
@@ -345,10 +399,14 @@ qsv_proof() {
 	if [[ "$selected" != 'LA-ICQ' ]]; then
 		reasons="${reasons:+$reasons;}rate-control"
 	fi
-	if [[ "$telemetry" != '1' ]] || ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
+	if [[ "$telemetry" != 'available' ]] || ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
 		reasons="${reasons:+$reasons;}telemetry"
 	fi
-	if ((height >= 2160)); then
+	if ((height == 0)); then
+		if ! awk -v value="$speed" 'BEGIN { exit !(value > 0) }'; then
+			reasons="${reasons:+$reasons;}speed"
+		fi
+	elif ((height >= 2160)); then
 		if ! awk -v value="$speed" 'BEGIN { exit !(value >= 0.5 && value <= 2.0) }'; then
 			reasons="${reasons:+$reasons;}speed"
 		fi
@@ -916,10 +974,10 @@ read_declared_commands() {
 	done <"$file"
 }
 
-capabilities() {
-	local capability_directory source encoded encode_log ffmpeg_version ffprobe_version
+capabilities() (
+	local capability_directory source encode_log fdinfo_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
-	local missing candidate present absent
+	local missing candidate present absent proof_json proof_exit
 	local -a required_commands=() optional_commands=()
 	# Every check below is written in terms of jq, grep or ffmpeg, so the command
 	# surface must be established before any of them runs; otherwise the probe
@@ -980,18 +1038,16 @@ capabilities() {
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"
 	capability_directory="$(mktemp -d "$scratch_root/capabilities.XXXXXX")"
-	trap 'rm -rf -- "$capability_directory"' RETURN
+	trap 'rm -rf -- "$capability_directory"' EXIT
 	source="$capability_directory/source.mkv"
-	encoded="$capability_directory/qsv.mkv"
 	encode_log="$capability_directory/qsv.log"
-	ffmpeg -v error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 5 \
+	fdinfo_log="$capability_directory/drm-fdinfo.log"
+	ffmpeg -v error -nostdin -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 5 \
 		-pix_fmt yuv420p "$source"
-	ffmpeg -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
-		-filter_hw_device hw -i "$source" -map 0:v:0 -c:v hevc_qsv -preset veryslow \
-		-global_quality 22 -look_ahead 1 -extbrc 1 "$encoded" >"$encode_log" 2>&1
-	ffmpeg -v error -i "$encoded" -map 0:v:0 -f null -
-	ffmpeg -v error -i "$encoded" -i "$source" -lavfi \
-		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1' -f null -
+	set +e
+	proof_json="$(capability_proof "$encode_log" "$fdinfo_log")"
+	proof_exit=$?
+	set -e
 	ffmpeg_version="$(ffmpeg -version | awk 'NR == 1 { print $3 }')"
 	ffprobe_version="$(ffprobe -version | awk 'NR == 1 { print $3 }')"
 	jq -n -c \
@@ -1000,14 +1056,19 @@ capabilities() {
 		--arg node "$node_name" \
 		--arg configured_image "$configured_image" \
 		--arg configured_digest "$configured_digest" \
-		--argjson uid "$uid" '{
-			status: "passed", uid: $uid,
-			hevcQsv: true, realQsvEncode: true, decoded: true,
-			libvmaf4k: true, libx265: true,
+		--argjson uid "$uid" \
+		--argjson proof "$proof_json" '$proof + {
+			status: $proof.proofStatus, uid: $uid,
+			hevcQsv: true, libx265: true,
 			ffmpegVersion: $ffmpeg, ffprobeVersion: $ffprobe,
 			nodeName: $node, configuredImage: $configured_image,
 			configuredImageDigest: $configured_digest
 		}'
+	return "$proof_exit"
+)
+
+assigned_node_capability_gate() {
+	capabilities >/dev/null
 }
 
 probe_media() {
@@ -1116,21 +1177,31 @@ now_nanoseconds() {
 	fi
 }
 
-sample_drm_busy() {
+sample_drm_fdinfo() {
 	local ffmpeg_pid="$1"
-	local output="$2"
-	local timestamp path value
-	local -a busy_paths
+	local render_node="$2"
+	local output="$3"
+	local timestamp fd_path target fdinfo
+	local -a fd_paths
 	: >"$output"
 	while kill -0 "$ffmpeg_pid" 2>/dev/null; do
-		timestamp="$(now_nanoseconds)"
 		shopt -s nullglob
-		busy_paths=(/sys/class/drm/card*/engine/*/busy)
+		fd_paths=(/proc/"$ffmpeg_pid"/fd/*)
 		shopt -u nullglob
-		for path in "${busy_paths[@]}"; do
-			if IFS= read -r value <"$path" && [[ "$value" =~ ^[0-9]+$ ]]; then
-				printf '%s %s %s\n' "$timestamp" "$path" "$value" >>"$output"
-			fi
+		for fd_path in "${fd_paths[@]}"; do
+			[[ "${fd_path##*/}" =~ ^[0-9]+$ ]] || continue
+			target="$(realpath "$fd_path" 2>/dev/null || true)"
+			[[ "$target" == "$render_node" ]] || continue
+			fdinfo="/proc/$ffmpeg_pid/fdinfo/${fd_path##*/}"
+			[[ -r "$fdinfo" ]] || continue
+			timestamp="$(now_nanoseconds)"
+			{
+				printf '%s\n' "$timestamp"
+				awk '$1 == "drm-driver:" || $1 == "drm-engine-video:" ||
+					$1 == "drm-engine-capacity-video:" { print }' "$fdinfo"
+				printf '\n'
+			} >>"$output"
+			break
 		done
 		sleep 1
 	done
@@ -1141,22 +1212,22 @@ run_qsv_encode() {
 	local output="$2"
 	local setting="$3"
 	local encode_log="$4"
-	local busy_log="$5"
+	local fdinfo_log="$5"
 	local ffmpeg_pid sampler_pid status
-	if [[ "$test_mode" == '1' && -n "${BENCHMARK_TEST_BUSY_FIXTURE:-}" ]]; then
-		cp "$BENCHMARK_TEST_BUSY_FIXTURE" "$busy_log"
-		ffmpeg -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
+	if [[ "$test_mode" == '1' && -n "${BENCHMARK_TEST_FDINFO_FIXTURE:-}" ]]; then
+		cp "$BENCHMARK_TEST_FDINFO_FIXTURE" "$fdinfo_log"
+		ffmpeg -v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 \
 			-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
 			-global_quality "$setting" -look_ahead 1 -extbrc 1 \
 			-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1
 		return
 	fi
-	ffmpeg -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
+	ffmpeg -v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 \
 		-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
 		-global_quality "$setting" -look_ahead 1 -extbrc 1 \
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1 &
 	ffmpeg_pid=$!
-	sample_drm_busy "$ffmpeg_pid" "$busy_log" &
+	sample_drm_fdinfo "$ffmpeg_pid" '/dev/dri/renderD128' "$fdinfo_log" &
 	sampler_pid=$!
 	set +e
 	wait "$ffmpeg_pid"
@@ -1164,6 +1235,91 @@ run_qsv_encode() {
 	wait "$sampler_pid"
 	set -e
 	return "$status"
+}
+
+capability_proof() {
+	local encode_log="$1"
+	local fdinfo_log="$2"
+	local capability_directory source encoded proof_json metrics_json
+	local encode_status decode='failed' vmaf='failed' proof_status='passed' reasons=''
+	local initialization selected telemetry delta percent fps speed telemetry_reason
+	capability_directory="$(dirname "$encode_log")"
+	source="$capability_directory/source.mkv"
+	encoded="$capability_directory/qsv.mkv"
+
+	set +e
+	run_qsv_encode "$source" "$encoded" 22 "$encode_log" "$fdinfo_log"
+	encode_status=$?
+	set -e
+	proof_json="$(qsv_proof "$encode_log" "$fdinfo_log" 0)"
+	metrics_json="$(drm_fdinfo_metrics "$fdinfo_log")"
+	initialization="$(jq -r '.initialization' <<<"$proof_json")"
+	selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+	fps="$(jq -r '.encode_fps' <<<"$proof_json")"
+	speed="$(jq -r '.encode_speed' <<<"$proof_json")"
+	telemetry="$(jq -r '.status' <<<"$metrics_json")"
+	delta="$(jq -r '.video_busy_nanoseconds' <<<"$metrics_json")"
+	percent="$(jq -r '.video_busy_percent' <<<"$metrics_json")"
+	telemetry_reason="$(jq -r '.reason' <<<"$metrics_json")"
+
+	if ((encode_status == 0)) && ffmpeg -v error -nostdin -i "$encoded" -map 0:v:0 -f null - \
+		>/dev/null 2>&1; then
+		decode='passed'
+	fi
+	if ((encode_status == 0)) && ffmpeg -v error -nostdin -i "$encoded" -i "$source" -lavfi \
+		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1' -f null - >/dev/null 2>&1; then
+		vmaf='passed'
+	fi
+
+	[[ "$initialization" == 'passed' ]] || reasons='initialization'
+	[[ "$selected" == 'LA-ICQ' ]] || reasons="${reasons:+$reasons;}rate-control"
+	if [[ "$telemetry" == 'available' ]]; then
+		awk -v value="$delta" 'BEGIN { exit !(value > 0) }' ||
+			reasons="${reasons:+$reasons;}telemetry"
+	else
+		reasons="${reasons:+$reasons;}telemetry"
+		proof_status='harness-blocked'
+	fi
+	awk -v value="$speed" 'BEGIN { exit !(value > 0) }' ||
+		reasons="${reasons:+$reasons;}progress"
+	[[ "$decode" == 'passed' ]] || reasons="${reasons:+$reasons;}decode"
+	[[ "$vmaf" == 'passed' ]] || reasons="${reasons:+$reasons;}vmaf"
+	if [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then
+		proof_status='failed'
+	fi
+
+	jq -n -c \
+		--arg initialization "$initialization" \
+		--arg selected "$selected" \
+		--arg telemetry "$telemetry" \
+		--arg telemetry_reason "$telemetry_reason" \
+		--argjson delta "$delta" \
+		--argjson percent "$percent" \
+		--argjson fps "$fps" \
+		--argjson speed "$speed" \
+		--arg decode "$decode" \
+		--arg vmaf "$vmaf" \
+		--arg proof_status "$proof_status" \
+		--arg reasons "$reasons" '{
+			proofSchemaVersion: 2,
+			initialization: $initialization,
+			selectedRateControl: $selected,
+			telemetryStatus: $telemetry,
+			telemetryReason: $telemetry_reason,
+			videoBusyNanoseconds: $delta,
+			videoBusyPercent: $percent,
+			encodeFps: $fps,
+			encodeSpeed: $speed,
+			decode: $decode,
+			vmaf: $vmaf,
+			proofStatus: $proof_status,
+			proofReasons: $reasons
+		}'
+	case "$proof_status" in
+	passed) return 0 ;;
+	failed) return 1 ;;
+	*) return 2 ;;
+	esac
 }
 
 run_x265_encode() {
@@ -1450,6 +1606,7 @@ quality_mode() {
 	local comparison_fixture comparison decision target next_crf
 	local panel_samples
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
+	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
@@ -1552,6 +1709,7 @@ savings_mode() {
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
 	local panel_samples
+	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.savingsPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
@@ -1622,6 +1780,7 @@ finalist_mode() {
 		echo "sample not found: $requested_sample_id" >&2
 		return 66
 	}
+	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode finalist)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -1700,6 +1859,7 @@ contention_mode() (
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65
 	}
+	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode contention)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -1964,6 +2124,10 @@ test_dispatch() {
 	x265-next)
 		(($# == 1)) || usage
 		x265_next "$1"
+		;;
+	drm-fdinfo-metrics)
+		(($# == 1)) || usage
+		drm_fdinfo_metrics "$1"
 		;;
 	qsv-proof)
 		(($# == 3)) || usage
