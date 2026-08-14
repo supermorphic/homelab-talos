@@ -175,6 +175,13 @@ if [[ "$arguments" == *'[0:v][1:v]ssim'* ]]; then
 	printf '%s\n' '[Parsed_ssim_0 @ 0x3000] SSIM Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >&2
 	exit 0
 fi
+if [[ "${BENCHMARK_TEST_PGS_DECODE:-0}" == '1' && "$arguments" == *'-f null -'* &&
+	"$arguments" != *'libvmaf='* && " $arguments " == *' -map 0 '* ]]; then
+	exit 92
+fi
+if [[ "${BENCHMARK_TEST_FFMPEG_CONSUME_STDIN:-0}" == '1' && " $arguments " != *' -nostdin '* ]]; then
+	while IFS= read -r _line || [[ -n "${_line:-}" ]]; do :; done
+fi
 if [[ "${BENCHMARK_TEST_FAIL_X265_EXTENSION:-0}" == '1' && "$arguments" == *'-c:v libx265'* ]]; then
 	last="${!#}"
 	case "$last" in
@@ -230,6 +237,7 @@ prepare_execution_run() {
 	export BENCHMARK_NOW=20260802T120000Z
 	export BENCHMARK_IDENTITY_FIXTURE="$FIXTURES/manifests/identity.json"
 	export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
+	export BENCHMARK_TEST_TITLE_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
 	export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
 	source_media="$BATS_TEST_TMPDIR/source.mkv"
@@ -253,6 +261,7 @@ prepare_execution_run() {
 			qualityPanel: [{
 				id: "sample-hdr", cohort: "hdr10", path: $source_media,
 				sizeBytes: $source_size, sha256: $source_sha,
+				x265Reference: true,
 				clips: {detail: "00:17:23.456"}
 			}],
 			savingsPanel: [{
@@ -263,6 +272,31 @@ prepare_execution_run() {
 		}' >"$BENCHMARK_SAMPLES_FILE"
 	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export NODE_NAME='nuc1'
+}
+
+expand_execution_panels_to_three_samples() {
+	local quality='[]' savings='[]' index source size sha quality_item savings_item
+	for index in 1 2 3; do
+		source="$BATS_TEST_TMPDIR/source-$index.mkv"
+		printf 'source fixture bytes %s' "$index" >"$source"
+		size="$(wc -c <"$source" | tr -d ' ')"
+		sha="$(sha256sum "$source" | awk '{print $1}')"
+		quality_item="$(jq -n --arg id "quality-$index" --arg path "$source" \
+			--arg sha "$sha" --argjson size "$size" '{
+				id:$id, cohort:"hdr10", path:$path, sizeBytes:$size, sha256:$sha,
+				x265Reference:false, clips:{detail:"00:17:23.456"}
+			}')"
+		savings_item="$(jq -n --arg id "savings-$index" --arg path "$source" \
+			--arg sha "$sha" --argjson size "$size" '{
+				id:$id, cohort:"hdr10", path:$path, sizeBytes:$size, sha256:$sha
+			}')"
+		quality="$(jq -c --argjson item "$quality_item" '. + [$item]' <<<"$quality")"
+		savings="$(jq -c --argjson item "$savings_item" '. + [$item]' <<<"$savings")"
+	done
+	jq --argjson quality "$quality" --argjson savings "$savings" \
+		'.qualityPanel = $quality | .savingsPanel = $savings' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 }
 
 # Catches a production break where the durable result contract drifts from the
@@ -320,7 +354,7 @@ prepare_execution_run() {
 	[ "$status" -eq 0 ]
 	run rg -F -- '-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
-	run rg -F -- '-v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128' "$BENCHMARK_COMMAND_LOG"
+	run rg -F -- '-nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run rg -F -- '-f null -' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
@@ -416,11 +450,11 @@ prepare_execution_run() {
 	commands="$output"
 
 	run jq -e '
-		.clip == ["ffmpeg","-v","error","-ss","00:17:23.456","-i","/media/Movie.mkv","-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
-		.qsv == ["ffmpeg","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality","22","-look_ahead","1","-extbrc","1","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/qsv-22.mkv"] and
-		.x265 == ["ffmpeg","-v","verbose","-i","/scratch/detail.mkv","-map","0","-c:v","libx265","-preset","slow","-crf","20","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/x265-20.mkv"] and
-		.vmaf == ["ffmpeg","-v","error","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
-		.ssim == ["ffmpeg","-v","info","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
+		.clip == ["ffmpeg","-nostdin","-v","error","-ss","00:17:23.456","-i","/media/Movie.mkv","-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
+		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality","22","-look_ahead","1","-extbrc","1","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/qsv-22.mkv"] and
+		.x265 == ["ffmpeg","-nostdin","-v","verbose","-i","/scratch/detail.mkv","-map","0","-c:v","libx265","-preset","slow","-crf","20","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/x265-20.mkv"] and
+		.vmaf == ["ffmpeg","-nostdin","-v","error","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
+		.ssim == ["ffmpeg","-nostdin","-v","info","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
 	' <<<"$commands"
 	[ "$status" -eq 0 ]
 }
@@ -627,6 +661,27 @@ prepare_execution_run() {
 	[ "$(jq -r '.validation_audio_tracks' <<<"$output")" = 'failed' ]
 }
 
+@test "title-level HDR metadata is the static HDR oracle for a clip" {
+	run "$SCRIPTS/benchmark.sh" _test validate-probes \
+		"$FIXTURES/metrics/probe-source-clip-hdr-missing.json" \
+		"$FIXTURES/metrics/probe-output-valid.json" clip 0 \
+		"$FIXTURES/metrics/probe-source.json"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.validation_hdr' <<<"$output")" = 'passed' ]
+}
+
+@test "quality passes title HDR metadata through orchestration and rejects missing output metadata" {
+	prepare_execution_run
+	export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source-clip-hdr-missing.json"
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-20-.*[.]mkv$'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-hdr-missing.json"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$output/results.csv"
+	[ "$(awk -F, '$7 == "qsv" && $8 == 20 {print $30}' "$results")" = 'failed' ]
+	[ "$(awk -F, '$7 == "qsv" && $8 == 22 {print $30}' "$results")" = 'passed' ]
+}
+
 # Catches a regression where failed/invalid attempts overwrite evidence, a
 # fallback mode resumes, suspect output survives scratch, or the exact passed
 # row is encoded again.
@@ -720,6 +775,70 @@ PYTHON
 	[ -f "$run_dir/stills/sample-hdr-detail-x265-24-encoded.png" ]
 	[ ! -d "$run_dir/encodes" ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "quality runs x265 reference encodes only for marked samples" {
+	prepare_execution_run
+	jq '.qualityPanel[0].x265Reference = false' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$output/results.csv"
+	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 5 ]
+	[ "$(awk -F, 'NR > 1 && $7 == "x265" {count += 1} END {print count + 0}' "$results")" -eq 0 ]
+	run yq -r '.data."samples.json" | from_yaml | [.qualityPanel[] | select(.x265Reference == true) | .id] | sort | join(",")' \
+		"$BATS_TEST_DIRNAME/../app/samples.yaml"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'avc-grain-memento,hdr10-grain-goodfellas' ]
+}
+
+@test "PGS decode maps video only while probe validation still detects subtitle loss" {
+	prepare_execution_run
+	export BENCHMARK_TEST_PGS_DECODE=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run rg -F -- '-nostdin -v error -i ' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run awk '
+		/-f null -$/ && !/libvmaf=/ && !/\[0:v\]\[1:v\]ssim/ {
+			seen = 1
+			if ($0 !~ /(^| )-map 0:v:0( |$)/) { bad = 1; exit }
+		}
+		END { if (bad || !seen) exit 1 }
+	' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run "$SCRIPTS/benchmark.sh" _test validate-probes \
+		"$FIXTURES/metrics/probe-source.json" \
+		"$FIXTURES/metrics/probe-output-subtitle-loss.json" clip 0
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.validation_subtitle_tracks' <<<"$output")" = 'failed' ]
+}
+
+@test "quality processes every sample when FFmpeg would otherwise consume loop stdin" {
+	prepare_execution_run
+	expand_execution_panels_to_three_samples
+	export BENCHMARK_TEST_FFMPEG_CONSUME_STDIN=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$output/results.csv"
+	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 15 ]
+	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+}
+
+@test "savings processes every sample when FFmpeg would otherwise consume loop stdin" {
+	prepare_execution_run
+	expand_execution_panels_to_three_samples
+	export BENCHMARK_TEST_FFMPEG_CONSUME_STDIN=1
+	run "$SCRIPTS/runmeta.sh" create savings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$(awk -F, 'NR > 1 {count += 1} END {print count + 0}' "$results")" -eq 3 ]
+	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
 }
 
 # Catches the public quality loop ignoring its x265-next decision and reporting
@@ -878,7 +997,7 @@ PYTHON
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	run jq -e '
 		.encoderCommands | length == 19 and
-		.[0] == "ffmpeg -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
+		.[0] == "ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
 		([.[] | select(test("-c:v hevc_qsv"))] | length) == 5 and
 		([.[] | select(test("-c:v libx265"))] | length) == 13 and
 		any(.[]; contains("-global_quality 20 -look_ahead 1 -extbrc 1")) and

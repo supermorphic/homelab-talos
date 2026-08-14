@@ -23,7 +23,7 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 fi
 if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
-		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
+		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
 		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
 		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
 		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE; do
@@ -71,24 +71,24 @@ build_commands() {
 	local -a clip_command qsv_command x265_command vmaf_command ssim_command
 	local clip_json qsv_json x265_json vmaf_json ssim_json
 
-	clip_command=(ffmpeg -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip")
+	clip_command=(ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip")
 	qsv_command=(
-		ffmpeg -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128
+		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128
 		-filter_hw_device hw -i "$clip" -map 0 -c:v hevc_qsv -preset veryslow
 		-global_quality "$gq" -look_ahead 1 -extbrc 1 -c:a copy -c:s copy
 		-map_metadata 0 -map_chapters 0 "$qsv_output"
 	)
 	x265_command=(
-		ffmpeg -v verbose -i "$clip" -map 0 -c:v libx265 -preset slow -crf "$crf"
+		ffmpeg -nostdin -v verbose -i "$clip" -map 0 -c:v libx265 -preset slow -crf "$crf"
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$x265_output"
 	)
 	vmaf_command=(
-		ffmpeg -v error -i "$qsv_output" -i "$clip" -lavfi
+		ffmpeg -nostdin -v error -i "$qsv_output" -i "$clip" -lavfi
 		"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_log"
 		-f null -
 	)
 	ssim_command=(
-		ffmpeg -v info -i "$qsv_output" -i "$clip" -lavfi '[0:v][1:v]ssim'
+		ffmpeg -nostdin -v info -i "$qsv_output" -i "$clip" -lavfi '[0:v][1:v]ssim'
 		-f null -
 	)
 
@@ -448,6 +448,7 @@ validate_probes() {
 	local output_probe="$2"
 	local scope="$3"
 	local decode_status="$4"
+	local hdr_source_probe="${5:-$source_probe}"
 	local tolerance source_duration='0' output_duration='0' duration_difference='0'
 	local codec duration resolution frame_rate bit_depth hdr audio subtitle chapters
 	local failures='' source_frame output_frame source_base output_base
@@ -513,7 +514,7 @@ validate_probes() {
 		$source[0].bitDepth == $output[0].bitDepth and
 		(if $source[0].hdrFormat == "hdr10" then $output[0].bitDepth == 10 else true end)
 	')"
-	hdr="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" '
+	hdr="$(passed_or_failed jq -e -n --slurpfile source "$hdr_source_probe" --slurpfile output "$output_probe" '
 		($source[0].hdrFormat | type) == "string" and ($output[0].hdrFormat | type) == "string" and
 		($source[0].colorPrimaries | type) == "string" and ($output[0].colorPrimaries | type) == "string" and
 		($source[0].colorTransfer | type) == "string" and ($output[0].colorTransfer | type) == "string" and
@@ -1029,8 +1030,8 @@ capabilities() (
 		echo 'capability node name is missing or malformed' >&2
 		return 65
 	}
-	encoders="$(ffmpeg -hide_banner -encoders)"
-	filters="$(ffmpeg -hide_banner -filters)"
+	encoders="$(ffmpeg -nostdin -hide_banner -encoders)"
+	filters="$(ffmpeg -nostdin -hide_banner -filters)"
 	grep -q -F 'hevc_qsv' <<<"$encoders" || return 1
 	grep -q -F 'libvmaf' <<<"$filters" || return 1
 	grep -q -F 'libx265' <<<"$encoders" || return 1
@@ -1042,13 +1043,13 @@ capabilities() (
 	source="$capability_directory/source.mkv"
 	encode_log="$capability_directory/qsv.log"
 	fdinfo_log="$capability_directory/drm-fdinfo.log"
-	ffmpeg -v error -nostdin -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 5 \
+	ffmpeg -nostdin -v error -f lavfi -i 'testsrc2=size=1920x1080:rate=30' -t 5 \
 		-pix_fmt yuv420p "$source"
 	set +e
 	proof_json="$(capability_proof "$encode_log" "$fdinfo_log")"
 	proof_exit=$?
 	set -e
-	ffmpeg_version="$(ffmpeg -version | awk 'NR == 1 { print $3 }')"
+	ffmpeg_version="$(ffmpeg -nostdin -version | awk 'NR == 1 { print $3 }')"
 	ffprobe_version="$(ffprobe -version | awk 'NR == 1 { print $3 }')"
 	jq -n -c \
 		--arg ffmpeg "$ffmpeg_version" \
@@ -1074,7 +1075,9 @@ assigned_node_capability_gate() {
 probe_media() {
 	local role="$1"
 	local path="$2"
-	if [[ "$test_mode" == '1' && "$role" == 'source' && -n "${BENCHMARK_TEST_SOURCE_PROBE:-}" ]]; then
+	if [[ "$test_mode" == '1' && "$role" == 'title' && -n "${BENCHMARK_TEST_TITLE_SOURCE_PROBE:-}" ]]; then
+		jq -c . "$BENCHMARK_TEST_TITLE_SOURCE_PROBE"
+	elif [[ "$test_mode" == '1' && "$role" == 'source' && -n "${BENCHMARK_TEST_SOURCE_PROBE:-}" ]]; then
 		jq -c . "$BENCHMARK_TEST_SOURCE_PROBE"
 	elif [[ "$test_mode" == '1' && "$role" == 'output' &&
 		-n "${BENCHMARK_TEST_INVALID_OUTPUT_MATCH:-}" &&
@@ -1151,8 +1154,8 @@ runtime_pre_encode_gate() {
 			return 65
 		}
 	done < <(jq -c '.[]' <<<"$samples_json")
-	encoders="$(ffmpeg -hide_banner -encoders)" || return
-	filters="$(ffmpeg -hide_banner -filters)" || return
+	encoders="$(ffmpeg -nostdin -hide_banner -encoders)" || return
+	filters="$(ffmpeg -nostdin -hide_banner -filters)" || return
 	grep -q -F 'hevc_qsv' <<<"$encoders" || {
 		echo 'hevc_qsv encoder is unavailable' >&2
 		return 1
@@ -1216,13 +1219,13 @@ run_qsv_encode() {
 	local ffmpeg_pid sampler_pid status
 	if [[ "$test_mode" == '1' && -n "${BENCHMARK_TEST_FDINFO_FIXTURE:-}" ]]; then
 		cp "$BENCHMARK_TEST_FDINFO_FIXTURE" "$fdinfo_log"
-		ffmpeg -v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 \
+		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 			-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
 			-global_quality "$setting" -look_ahead 1 -extbrc 1 \
 			-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1
 		return
 	fi
-	ffmpeg -v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 \
+	ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 		-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
 		-global_quality "$setting" -look_ahead 1 -extbrc 1 \
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1 &
@@ -1262,11 +1265,11 @@ capability_proof() {
 	percent="$(jq -r '.video_busy_percent' <<<"$metrics_json")"
 	telemetry_reason="$(jq -r '.reason' <<<"$metrics_json")"
 
-	if ((encode_status == 0)) && ffmpeg -v error -nostdin -i "$encoded" -map 0:v:0 -f null - \
+	if ((encode_status == 0)) && ffmpeg -nostdin -v error -i "$encoded" -map 0:v:0 -f null - \
 		>/dev/null 2>&1; then
 		decode='passed'
 	fi
-	if ((encode_status == 0)) && ffmpeg -v error -nostdin -i "$encoded" -i "$source" -lavfi \
+	if ((encode_status == 0)) && ffmpeg -nostdin -v error -i "$encoded" -i "$source" -lavfi \
 		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1' -f null - >/dev/null 2>&1; then
 		vmaf='passed'
 	fi
@@ -1327,7 +1330,7 @@ run_x265_encode() {
 	local output="$2"
 	local setting="$3"
 	local encode_log="$4"
-	ffmpeg -v verbose -i "$input" -map 0 -c:v libx265 -preset slow -crf "$setting" \
+	ffmpeg -nostdin -v verbose -i "$input" -map 0 -c:v libx265 -preset slow -crf "$setting" \
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1
 }
 
@@ -1374,12 +1377,14 @@ process_variant() {
 	local validation_failures validation_codec validation_duration validation_resolution
 	local validation_frame_rate validation_bit_depth validation_hdr validation_audio
 	local validation_subtitle validation_chapters decode_status=1 proof_json progress
+	local hdr_source_probe_file="${19:-}"
 
 	run_directory="$benchmark_out/runs/$run_id"
 	logs_directory="$run_directory/logs"
 	evidence_base="$sample_id-$clip_id-$encoder-$setting-attempt-$attempt"
 	mkdir -p "$logs_directory"
 	source_probe_file="$logs_directory/$evidence_base-source-probe.json"
+	[[ -n "$hdr_source_probe_file" ]] || hdr_source_probe_file="$source_probe_file"
 	output_probe_file="$logs_directory/$evidence_base-output-probe.json"
 	validation_file="$logs_directory/$evidence_base-validation.json"
 	vmaf_file="$logs_directory/$evidence_base-vmaf.json"
@@ -1404,17 +1409,17 @@ process_variant() {
 			'BEGIN { if (seconds > 0) printf "%.0f", bytes * 8 / seconds; else print 0 }')"
 		reduction="$(awk -v input="$input_bytes" -v output="$output_bytes" \
 			'BEGIN { if (input > 0) printf "%.6f", (input - output) * 100 / input; else print "0.000000" }')"
-		if ffmpeg -v error -i "$output" -map 0 -f null -; then decode_status=0; fi
+		if ffmpeg -nostdin -v error -i "$output" -map 0:v:0 -f null -; then decode_status=0; fi
 		if [[ "$source_probe" != '{}' ]] && probe_media output "$output" >"$output_probe_file" 2>&1 &&
 			jq -e . "$output_probe_file" >/dev/null 2>&1; then
-			if ! validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status" 2>/dev/null)"; then
+			if ! validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status" "$hdr_source_probe_file" 2>/dev/null)"; then
 				validation="$(failed_validation validation-parse)"
 			fi
 		else
 			validation="$(failed_validation output-probe)"
 		fi
 		if [[ "$panel" == 'quality' ]]; then
-			if ffmpeg -v error -i "$output" -i "$reference" -lavfi \
+			if ffmpeg -nostdin -v error -i "$output" -i "$reference" -lavfi \
 				"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
 				-f null - && metrics="$(vmaf_stats "$vmaf_file" 2>/dev/null)" &&
 				vmaf_harmonic="$(jq -e -r '.harmonic_mean | numbers' <<<"$metrics" 2>/dev/null)" &&
@@ -1425,7 +1430,7 @@ process_variant() {
 				vmaf_low=''
 				validation="$(add_validation_failure "$validation" vmaf)"
 			fi
-			if ffmpeg -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
+			if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
 				-f null - >"$ssim_file" 2>&1 &&
 				value="$(grep -o -E 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
 				[[ -n "$value" ]]; then
@@ -1521,7 +1526,7 @@ encoder_commands_for_mode() {
 	local commands='[]' setting
 	local -a settings
 	if [[ "$mode" == 'quality' ]]; then
-		commands="$(jq -n -c '["ffmpeg -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
+		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		settings=(20 22 24 26 28)
 	else
 		mapfile -t settings < <(jq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
@@ -1529,13 +1534,13 @@ encoder_commands_for_mode() {
 	for setting in "${settings[@]}"; do
 		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
 		commands="$(jq -c --arg command \
-			"ffmpeg -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 1 -extbrc 1 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
+			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 1 -extbrc 1 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
 			'. + [$command]' <<<"$commands")"
 	done
 	if [[ "$mode" == 'quality' ]]; then
 		for ((setting = 10; setting <= 34; setting += 2)); do
 			commands="$(jq -c --arg command \
-				"ffmpeg -v verbose -i <input> -map 0 -c:v libx265 -preset slow -crf $setting -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
+				"ffmpeg -nostdin -v verbose -i <input> -map 0 -c:v libx265 -preset slow -crf $setting -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
 				'. + [$command]' <<<"$commands")"
 		done
 	fi
@@ -1546,6 +1551,7 @@ encode_one_variant() {
 	local run_id="$1" panel="$2" sample_id="$3" cohort="$4" sha="$5" clip_id="$6"
 	local encoder="$7" setting="$8" input="$9" scope="${10}" still_prefix="${11:-}"
 	local disposition="${12:-record}" run_directory results attempt evidence_base
+	local hdr_source_probe_file="${13:-}"
 	local output encode_log busy_log row_fixture start end wall status=0 record_status=0
 	run_directory="$benchmark_out/runs/$run_id"
 	results="$run_directory/results.csv"
@@ -1567,7 +1573,7 @@ encode_one_variant() {
 	wall="$(awk -v start="$start" -v end="$end" 'BEGIN { printf "%.6f", (end - start) / 1000000000 }')"
 	process_variant "$run_id" "$panel" "$sample_id" "$cohort" "$sha" "$clip_id" \
 		"$encoder" "$setting" "$input" "$output" "$scope" "$status" "$wall" \
-		"$encode_log" "$busy_log" "$still_prefix" "$attempt" "$row_fixture"
+		"$encode_log" "$busy_log" "$still_prefix" "$attempt" "$row_fixture" "$hdr_source_probe_file"
 	if [[ "$disposition" == 'defer' ]]; then
 		printf '%s|%s\n' "$row_fixture" "$output"
 		return
@@ -1602,7 +1608,8 @@ append_comparison_once() {
 
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
-	local source sha detection clip_id timestamp clip x265_points qsv_points setting attempted_crfs
+	local source sha detection x265_reference title_probe_file clip_id timestamp clip
+	local x265_points qsv_points setting attempted_crfs
 	local comparison_fixture comparison decision target next_crf
 	local panel_samples
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
@@ -1625,78 +1632,85 @@ quality_mode() {
 		source="$(jq -r '.path' <<<"$sample")"
 		sha="$(jq -r '.sha256' <<<"$sample")"
 		detection="$(jq -r '.detectionOnly // false' <<<"$sample")"
+		x265_reference="$(jq -r '.x265Reference // false' <<<"$sample")"
 		if [[ "$detection" == 'true' || "$cohort" == 'dolby-vision' ]]; then
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
+		title_probe_file="$run_directory/logs/$sample_id-title-source-probe.json"
+		if ! probe_media title "$source" >"$title_probe_file" 2>/dev/null; then
+			printf '%s\n' '{}' >"$title_probe_file"
+		fi
 		while IFS=$'\t' read -r clip_id timestamp; do
 			clip="$run_scratch/$sample_id-$clip_id-source.mkv"
-			ffmpeg -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip" </dev/null
+			ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip"
 			for setting in "${qsv_settings[@]}"; do
 				if row_is_complete "$run_id" quality "$sha" "$clip_id" qsv "$setting"; then continue; fi
 				encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
 					qsv "$setting" "$clip" clip \
-					"$run_directory/stills/$sample_id-$clip_id-qsv-$setting" >/dev/null
+					"$run_directory/stills/$sample_id-$clip_id-qsv-$setting" record "$title_probe_file" >/dev/null
 			done
-			for setting in "${x265_settings[@]}"; do
-				if row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$setting"; then continue; fi
-				encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-					x265 "$setting" "$clip" clip \
-					"$run_directory/stills/$sample_id-$clip_id-x265-$setting" >/dev/null
-			done
-			qsv_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
+			if [[ "$x265_reference" == 'true' ]]; then
+				for setting in "${x265_settings[@]}"; do
+					if row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$setting"; then continue; fi
+					encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
+						x265 "$setting" "$clip" clip \
+						"$run_directory/stills/$sample_id-$clip_id-x265-$setting" record "$title_probe_file" >/dev/null
+				done
+				qsv_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
 				NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "qsv" && $10 == "passed" {
 					printf "%s\t%s\t%s\n", $8, $20, $16
 				}
 			' "$run_directory/results.csv")"
-			for target in \
-				"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 > value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")" \
-				"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 < value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")"; do
-				[[ -n "$target" ]] || continue
-				while :; do
-					x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
+				for target in \
+					"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 > value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")" \
+					"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 < value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")"; do
+					[[ -n "$target" ]] || continue
+					while :; do
+						x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
 						NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" && $10 == "passed" {
 							printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
 						}
 					' "$run_directory/results.csv")"
-					attempted_crfs="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
+						attempted_crfs="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
 						NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" { print $8 }
 					' "$run_directory/results.csv" | sort -nu | jq -R -s -c 'split("\n") | map(select(length > 0) | tonumber)')"
-					comparison_fixture="$run_scratch/next-comparison.json"
-					jq -n -c \
-						--argjson points "$(jq -s . <<<"$x265_points")" \
-						--argjson attempted "$attempted_crfs" \
-						--argjson qsv_vmaf "$target" \
-						'{points: $points, attemptedCrfs: $attempted, qsvVmaf: $qsv_vmaf, qsvBitRate: 1}' >"$comparison_fixture"
-					decision="$(x265_next "$comparison_fixture")"
-					[[ "$(jq -r '.status' <<<"$decision")" == 'extend' ]] || break
-					next_crf="$(jq -r '.next_crf' <<<"$decision")"
-					if ! row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$next_crf"; then
-						encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-							x265 "$next_crf" "$clip" clip \
-							"$run_directory/stills/$sample_id-$clip_id-x265-$next_crf" >/dev/null
-					fi
+						comparison_fixture="$run_scratch/next-comparison.json"
+						jq -n -c \
+							--argjson points "$(jq -s . <<<"$x265_points")" \
+							--argjson attempted "$attempted_crfs" \
+							--argjson qsv_vmaf "$target" \
+							'{points: $points, attemptedCrfs: $attempted, qsvVmaf: $qsv_vmaf, qsvBitRate: 1}' >"$comparison_fixture"
+						decision="$(x265_next "$comparison_fixture")"
+						[[ "$(jq -r '.status' <<<"$decision")" == 'extend' ]] || break
+						next_crf="$(jq -r '.next_crf' <<<"$decision")"
+						if ! row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$next_crf"; then
+							encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
+								x265 "$next_crf" "$clip" clip \
+								"$run_directory/stills/$sample_id-$clip_id-x265-$next_crf" record "$title_probe_file" >/dev/null
+						fi
+					done
 				done
-			done
-			x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
+				x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
 				NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" && $10 == "passed" {
 					printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
 				}
 			' "$run_directory/results.csv")"
-			while IFS=$'\t' read -r setting qsv_vmaf qsv_rate; do
-				[[ -n "$setting" ]] || continue
-				comparison_fixture="$run_scratch/comparison.json"
-				jq -n -c \
-					--argjson points "$(jq -s . <<<"$x265_points")" \
-					--argjson qsv_vmaf "$qsv_vmaf" --argjson qsv_rate "$qsv_rate" \
-					'{points: $points, qsvVmaf: $qsv_vmaf, qsvBitRate: $qsv_rate}' >"$comparison_fixture"
-				comparison="$(x265_match "$comparison_fixture")"
-				comparison="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" \
-					'. + {sample_id: $sample, clip_id: $clip, qsv_setting: $setting}' \
-					<<<"$comparison")"
-				append_comparison_once "$run_directory/x265-comparisons.jsonl" "$comparison" \
-					"$sample_id" "$clip_id" "$setting"
-			done <<<"$qsv_points"
+				while IFS=$'\t' read -r setting qsv_vmaf qsv_rate; do
+					[[ -n "$setting" ]] || continue
+					comparison_fixture="$run_scratch/comparison.json"
+					jq -n -c \
+						--argjson points "$(jq -s . <<<"$x265_points")" \
+						--argjson qsv_vmaf "$qsv_vmaf" --argjson qsv_rate "$qsv_rate" \
+						'{points: $points, qsvVmaf: $qsv_vmaf, qsvBitRate: $qsv_rate}' >"$comparison_fixture"
+					comparison="$(x265_match "$comparison_fixture")"
+					comparison="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" \
+						'. + {sample_id: $sample, clip_id: $clip, qsv_setting: $setting}' \
+						<<<"$comparison")"
+					append_comparison_once "$run_directory/x265-comparisons.jsonl" "$comparison" \
+						"$sample_id" "$clip_id" "$setting"
+				done <<<"$qsv_points"
+			fi
 			rm -f -- "$clip"
 		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
 	done < <(jq -c '.qualityPanel[]?' "$samples_file")
@@ -2134,7 +2148,7 @@ test_dispatch() {
 		qsv_proof "$@"
 		;;
 	validate-probes)
-		(($# == 4)) || usage
+		(($# >= 4 && $# <= 5)) || usage
 		validate_probes "$@"
 		;;
 	record-result)

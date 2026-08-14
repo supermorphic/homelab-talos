@@ -126,6 +126,7 @@ data:
         {
           "id": "vc1-fugitive",
           "cohort": "vc1",
+          "x265Reference": false,
           "path": "/media/Fugitive (1993).mkv",
           "sizeBytes": 20911950843,
           "width": 1920,
@@ -140,6 +141,7 @@ data:
         {
           "id": "avc-clean-coco",
           "cohort": "avc",
+          "x265Reference": false,
           "path": "/media/Coco (2017).mkv",
           "sizeBytes": 28598269146,
           "width": 1920,
@@ -154,6 +156,7 @@ data:
         {
           "id": "avc-grain-memento",
           "cohort": "avc",
+          "x265Reference": true,
           "path": "/media/Memento (2000).mkv",
           "sizeBytes": 31129986254,
           "width": 1920,
@@ -168,6 +171,7 @@ data:
         {
           "id": "hdr10-clean-ministry",
           "cohort": "hdr10",
+          "x265Reference": false,
           "path": "/media/Ministry Of Ungentlemanly Warfare (2024).mkv",
           "sizeBytes": 74903823218,
           "width": 3840,
@@ -182,6 +186,7 @@ data:
         {
           "id": "hdr10-grain-goodfellas",
           "cohort": "hdr10",
+          "x265Reference": true,
           "path": "/media/Goodfellas (1990).mkv",
           "sizeBytes": 88003030794,
           "width": 3840,
@@ -196,6 +201,7 @@ data:
         {
           "id": "hdr10-motion-john-wick-2",
           "cohort": "hdr10",
+          "x265Reference": false,
           "path": "/media/John Wick Chapter 2 (2017).mkv",
           "sizeBytes": 77017937124,
           "width": 3840,
@@ -210,6 +216,7 @@ data:
         {
           "id": "dolby-vision-sisu",
           "cohort": "dolby-vision",
+          "x265Reference": false,
           "path": "/media/Sisu (2022).mkv",
           "sizeBytes": 59416136163,
           "width": 3840,
