@@ -31,6 +31,19 @@ case "$*" in
 	exit 0
 	;;
 esac
+if [[ "$*" == *'-c:v hevc_qsv'* ]]; then
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		printf '%s\n' "$line"
+	done <"${BENCHMARK_CAPABILITY_ENCODE_FIXTURE:?}" >&2
+fi
+if [[ "$*" == *'libvmaf=model=version=vmaf_4k_v0.6.1'* &&
+	"${BENCHMARK_CAPABILITY_VMAF_FAILURE:-0}" == '1' ]]; then
+	exit 86
+fi
+if [[ "$*" == *'-map 0:v:0 -f null -'* && "$*" != *'libvmaf='* &&
+	"${BENCHMARK_CAPABILITY_DECODE_FAILURE:-0}" == '1' ]]; then
+	exit 87
+fi
 last="${!#}"
 if [[ "$last" != '-' && "$last" != '/dev/null' ]]; then
 	mkdir -p "$(dirname "$last")"
@@ -55,6 +68,9 @@ EOF
 	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id"
 	export PATH="$stub_bin:$PATH"
 	export BENCHMARK_COMMAND_LOG="$BATS_TEST_TMPDIR/capability-commands.log"
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-la-icq.log"
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
+	unset BENCHMARK_CAPABILITY_DECODE_FAILURE BENCHMARK_CAPABILITY_VMAF_FAILURE
 	: >"$BENCHMARK_COMMAND_LOG"
 }
 
@@ -194,7 +210,7 @@ prepare_execution_run() {
 	export BENCHMARK_IDENTITY_FIXTURE="$FIXTURES/manifests/identity.json"
 	export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
 	export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
-	export BENCHMARK_TEST_BUSY_FIXTURE="$FIXTURES/logs/drm-busy-nonzero.log"
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
 	source_media="$BATS_TEST_TMPDIR/source.mkv"
 	printf '%s' 'source fixture bytes' >"$source_media"
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
@@ -244,8 +260,8 @@ prepare_execution_run() {
 	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
 }
 
-# Catches capability claims based only on encoder listings: this public mode must
-# run the synthetic QSV encode, full decode, and vmaf_4k score and redact paths.
+# Catches capability claims based only on encoder exit status: this public mode
+# must prove LA-ICQ, video-engine work, progress, decode, and vmaf_4k.
 @test "capabilities proves the real five-second QSV path and prints compact path-free JSON" {
 	create_capability_tools
 	write_capability_samples
@@ -257,9 +273,13 @@ prepare_execution_run() {
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"$BENCHMARK_SCRATCH"* ]]
 	run jq -e -c '
-		.status == "passed" and .uid == 568 and
-		.hevcQsv == true and .realQsvEncode == true and .decoded == true and
-		.libvmaf4k == true and .libx265 == true and
+		.status == "passed" and .proofSchemaVersion == 2 and .uid == 568 and
+		.initialization == "passed" and .selectedRateControl == "LA-ICQ" and
+		.telemetryStatus == "available" and .videoBusyNanoseconds == 800000000 and
+		.videoBusyPercent == 40 and .encodeFps == 72 and .encodeSpeed == 1.25 and
+		.decode == "passed" and .vmaf == "passed" and
+		.proofStatus == "passed" and .proofReasons == "" and
+		.hevcQsv == true and .libx265 == true and
 		.ffmpegVersion == "8.1.2" and .ffprobeVersion == "8.1.2" and
 		.nodeName == "talos-03" and
 		.configuredImage == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
@@ -272,10 +292,56 @@ prepare_execution_run() {
 	[ "$status" -eq 0 ]
 	run rg -F -- '-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
+	run rg -F -- '-v verbose -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
 	run rg -F -- '-f null -' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run rg -F -- 'libvmaf=model=version=vmaf_4k_v0.6.1' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
+}
+
+# Catches semantic capability failures being collapsed into encode success and
+# keeps telemetry-contract failures distinct from a proven platform failure.
+@test "capability proof rejects semantic failures and reports telemetry blocks" {
+	create_capability_tools
+	write_capability_samples
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export NODE_NAME='talos-03'
+
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-fallback.log"
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:rate-control' ]
+
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-init-failed.log"
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:initialization;rate-control;progress' ]
+
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-la-icq.log"
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-idle.log"
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:telemetry' ]
+	jq -e '.encodeSpeed == 1.25' <<<"$output" >/dev/null
+
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
+	export BENCHMARK_CAPABILITY_DECODE_FAILURE=1
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:decode' ]
+	unset BENCHMARK_CAPABILITY_DECODE_FAILURE
+
+	export BENCHMARK_CAPABILITY_VMAF_FAILURE=1
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 1 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:vmaf' ]
+	unset BENCHMARK_CAPABILITY_VMAF_FAILURE
+
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-malformed.log"
+	run "$SCRIPTS/benchmark.sh" capabilities
+	[ "$status" -eq 2 ]
+	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'harness-blocked:telemetry' ]
 }
 
 # Catches capability mode running even a synthetic ffmpeg encode before the
@@ -388,36 +454,86 @@ prepare_execution_run() {
 
 # Catches trusting the requested QSV mode instead of verbose runtime evidence or
 # accepting initialization without a non-zero video-engine busy delta.
+@test "fdinfo metrics require valid i915 video nanosecond counters" {
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics \
+		"$FIXTURES/logs/drm-fdinfo-active.log"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"status":"available","driver":"i915","video_busy_nanoseconds":800000000,"video_busy_percent":40.000000,"reason":""}' ]
+
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics \
+		"$FIXTURES/logs/drm-fdinfo-idle.log"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"status":"available","driver":"i915","video_busy_nanoseconds":0,"video_busy_percent":0.000000,"reason":""}' ]
+
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics \
+		"$FIXTURES/logs/drm-fdinfo-malformed.log"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"status":"harness-blocked","driver":"i915","video_busy_nanoseconds":0,"video_busy_percent":0.000000,"reason":"malformed-video-counter"}' ]
+}
+
+# Catches treating a permitted temporary counter decrease as negative work or
+# resetting the baseline and over-counting the later recovery.
+@test "fdinfo metrics retain the largest video counter across a regression" {
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics \
+		"$FIXTURES/logs/drm-fdinfo-regression.log"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"status":"available","driver":"i915","video_busy_nanoseconds":80000000,"video_busy_percent":4.000000,"reason":""}' ]
+}
+
+# Catches telemetry from a different DRM driver or an invalid capacity being
+# accepted as an i915 video-engine oracle.
+@test "fdinfo metrics reject wrong drivers and invalid video capacity" {
+	wrong_driver="$BATS_TEST_TMPDIR/fdinfo-wrong-driver.log"
+	invalid_capacity="$BATS_TEST_TMPDIR/fdinfo-invalid-capacity.log"
+	printf '%s\n' \
+		'1000000000' 'drm-driver: xe' 'drm-engine-video: 100000000 ns' '' \
+		'2000000000' 'drm-driver: xe' 'drm-engine-video: 200000000 ns' \
+		>"$wrong_driver"
+	printf '%s\n' \
+		'1000000000' 'drm-driver: i915' 'drm-engine-video: 100000000 ns' \
+		'drm-engine-capacity-video: 0' '' \
+		'2000000000' 'drm-driver: i915' 'drm-engine-video: 200000000 ns' \
+		'drm-engine-capacity-video: 0' >"$invalid_capacity"
+
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics "$wrong_driver"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.status + ":" + .reason' <<<"$output")" = 'harness-blocked:wrong-driver' ]
+
+	run "$SCRIPTS/benchmark.sh" _test drm-fdinfo-metrics "$invalid_capacity"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.status + ":" + .reason' <<<"$output")" = 'harness-blocked:invalid-video-capacity' ]
+}
+
 @test "QSV proof requires initialization LA-ICQ video telemetry and expected speed" {
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":50.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
+	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
+	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-init-failed.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-init-failed.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"unknown","initialization":"failed","encode_fps":0.000000,"encode_speed":0.000000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"initialization;rate-control;speed"}' ]
+	[ "$output" = '{"selected_rate_control":"unknown","initialization":"failed","encode_fps":0.000000,"encode_speed":0.000000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"initialization;rate-control;speed"}' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-zero.log" 2160
+		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-idle.log" 2160
 	[ "$status" -eq 0 ]
 	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":0.000000,"qsv_proof":"suspect","suspect_reasons":"telemetry"}' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-nonzero.log" 1080
+		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 1080
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"speed"}' ]
+	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"speed"}' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-requested-la-fallback-cqp.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-requested-la-fallback-cqp.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":50.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
+	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
 }
 
 # Catches validation short-circuiting after the first failure, wrong duration
@@ -1298,14 +1414,14 @@ PYTHON
 	sandbox="$output"
 
 	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":50.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
+	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
 
 	# The fallback case must stay detectable on the reduced command surface: a
 	# parser that silently returned "unknown" would mark a CPU encode as QSV.
 	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-busy-nonzero.log" 2160
+		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"selected_rate_control":"CQP"'* ]]
 	[[ "$output" == *'"qsv_proof":"suspect"'* ]]
