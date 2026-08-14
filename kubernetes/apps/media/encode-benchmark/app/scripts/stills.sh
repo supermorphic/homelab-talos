@@ -115,9 +115,9 @@ rollback_pair() {
 }
 
 crop_filter="crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2'"
-ffmpeg -v error -ss "$timestamp" -i "$source_path" \
+ffmpeg -nostdin -v error -ss "$timestamp" -i "$source_path" \
 	-frames:v 1 -vf "$crop_filter" -y "$source_temp"
-ffmpeg -v error -ss "$timestamp" -i "$encoded_path" \
+ffmpeg -nostdin -v error -ss "$timestamp" -i "$encoded_path" \
 	-frames:v 1 -vf "$crop_filter" -y "$encoded_temp"
 
 if [[ -e "$source_final" ]]; then

@@ -2,6 +2,7 @@
 
 setup() {
 	STILLS="$BATS_TEST_DIRNAME/../app/scripts/stills.sh"
+	REAL_FFMPEG="$(command -v ffmpeg)"
 	export BENCHMARK_TEST_MODE=1
 	source_video="$BATS_TEST_TMPDIR/source.mkv"
 	encoded_video="$BATS_TEST_TMPDIR/encoded.mkv"
@@ -11,6 +12,27 @@ setup() {
 		-filter_complex '[0:v][1:v]concat=n=2:v=1:a=0' \
 		-c:v ffv1 "$source_video"
 	cp "$source_video" "$encoded_video"
+}
+
+@test "stills uses nostdin for every FFmpeg invocation" {
+	stub_bin="$BATS_TEST_TMPDIR/stub-bin"
+	command_log="$BATS_TEST_TMPDIR/ffmpeg-commands.log"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$STILLS_COMMAND_LOG"
+exec "$REAL_FFMPEG" "$@"
+EOF
+	chmod +x "$stub_bin/ffmpeg"
+	export REAL_FFMPEG STILLS_COMMAND_LOG="$command_log"
+	export PATH="$stub_bin:$PATH"
+	prefix="$BATS_TEST_TMPDIR/stills/nostdin"
+	run "$STILLS" "$source_video" "$encoded_video" '00:00:01.500' "$prefix"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$command_log" | tr -d ' ')" -eq 2 ]
+	run awk '$1 != "-nostdin" {exit 1}' "$command_log"
+	[ "$status" -eq 0 ]
 }
 
 pixel_rgb() {
