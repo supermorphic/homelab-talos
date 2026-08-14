@@ -103,7 +103,7 @@ assert_eq "$(yq -r '.metadata.namespace' "$ks")" 'flux-system' 'Flux child names
 assert_eq "$(yq -r '.spec.path' "$ks")" \
 	'./kubernetes/apps/media/encode-benchmark/app' 'Flux child path'
 assert_eq "$(yq -r '[.spec.dependsOn[].name] | join(",")' "$ks")" \
-	'media-storage,intel-gpu-plugin,qbit-manage,kube-prometheus-stack' \
+	'media-storage,intel-gpu-plugin,qbit-manage' \
 	'Flux dependency order'
 assert_eq "$(yq -r '.spec.interval' "$ks")" '1h' 'Flux interval'
 assert_eq "$(yq -r '.spec.prune' "$ks")" 'true' 'Flux prune setting'

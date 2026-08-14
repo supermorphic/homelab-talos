@@ -10,7 +10,6 @@ spec:
     - name: media-storage
     - name: intel-gpu-plugin
     - name: qbit-manage
-    - name: kube-prometheus-stack
   interval: 1h
   path: ./kubernetes/apps/media/encode-benchmark/app
   prune: true

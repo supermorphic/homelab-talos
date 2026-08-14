@@ -49,7 +49,7 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.decryption.provider // "none"' "$ks")" == 'sops' ]]
 [[ "$(yq -r '.spec.decryption.secretRef.name // "none"' "$ks")" == 'sops-age' ]]
 dependencies="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")"
-[[ "$dependencies" == 'cilium,internal-gateway,kube-prometheus-stack,longhorn' ]] || {
+[[ "$dependencies" == 'cilium,internal-gateway,longhorn' ]] || {
   echo "Unexpected Portainer dependencies: $dependencies" >&2
   exit 1
 }
