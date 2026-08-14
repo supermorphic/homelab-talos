@@ -27,6 +27,23 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: seerr
+        # Also missed by the phase-1 capture, for the same reason Seerr was: the capture
+        # exercised playback clients, not the import pipeline. Each of these has a Plex
+        # Media Server connection under Settings -> Connect, which posts a library-update
+        # request to 32400 when media is imported or upgraded. That is event-driven, so a
+        # capture window with no import observes nothing. Lidarr was measured being denied
+        # (354 events, zero forwarded flows); Sonarr and Radarr were silent only because
+        # they imported nothing during the window. All three are admitted together rather
+        # than one at a time as each is discovered.
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+            app.kubernetes.io/name: sonarr
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+            app.kubernetes.io/name: radarr
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: media
+            app.kubernetes.io/name: lidarr
       toPorts:
         - ports:
             - port: "32400"

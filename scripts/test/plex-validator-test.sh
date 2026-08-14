@@ -115,6 +115,24 @@ yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernete
   "$app/ciliumnetworkpolicy.yaml"
 expect_fail 'seerr removed from the Plex consumer set'
 
+echo '14a. Dropping Sonarr from the consumer set is rejected.'
+reset_tree
+yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "sonarr"))' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'sonarr removed from the Plex consumer set'
+
+echo '14b. Dropping Radarr from the consumer set is rejected.'
+reset_tree
+yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "radarr"))' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'radarr removed from the Plex consumer set'
+
+echo '14c. Dropping Lidarr from the consumer set is rejected.'
+reset_tree
+yq -i 'del(.spec.ingress[0].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "lidarr"))' \
+  "$app/ciliumnetworkpolicy.yaml"
+expect_fail 'lidarr removed from the Plex consumer set'
+
 echo '15. Dropping the 32400 egress publish-check port is rejected.'
 reset_tree
 yq -i '.spec.egress[1].toPorts[0].ports = [{"port": "443", "protocol": "TCP"}]' \
