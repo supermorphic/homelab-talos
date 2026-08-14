@@ -119,30 +119,46 @@ off-cluster client has ever connected, so only total absence of the metric
 `PlexRemoteFlowMetricsMissing`: check `hubble.metrics` lists `tcp`, and check the
 DaemonSet and ServiceMonitor are healthy.
 
-## Policy drops are a separate signal, and nothing alerts on them
+## PlexWorkloadPolicyDenied (warning)
 
-No rule here watches `hubble_drop_total`. Drops to Plex mean the CiliumNetworkPolicy
-refused a consumer, which is containment working — but it is also how a legitimate
-consumer left out of the allow-list looks, and it is silent.
+At least three Cilium `POLICY_DENIED` events from Kubernetes workloads to
+`media/plex` occurred in six hours and the condition remained observable for 30
+minutes. This is the signature of a Plex consumer missing from the allow-list. It is
+not a general network-policy alert and does not prove which endpoint enforced the
+denial.
 
-```promql
-sum by (reason, source) (increase(hubble_drop_total{destination="media/plex"}[6h]))
-```
-
-`POLICY_DENIED` from an in-cluster source with **zero** matching forwarded flows means
-that consumer cannot reach Plex at all, rather than being rate-limited or intermittent:
+Start by grouping the same bounded increase by source:
 
 ```promql
-sum(increase(hubble_flows_processed_total{destination="media/plex", source=~".*<name>.*", verdict="FORWARDED"}[6h]))
+sum by (source) (
+  increase(
+    hubble_drop_total{
+      destination="media/plex",
+      reason="POLICY_DENIED",
+      source=~".*k8s:io.kubernetes.pod.namespace=.*"
+    }[6h]
+  )
+)
 ```
 
-Seerr was found this way on 2026-08-12 — 5,103 drops in six hours, ~14 per minute, and no
-forwarded flow at all. Its Plex library sync and user authentication had been failing
-since the containment policy landed. The phase-1 Hubble capture that produced the
-allow-list did not observe it, and nothing measured the gap afterwards.
+The source is the complete Cilium identity, so find the
+`k8s:app.kubernetes.io/name` label inside it. If traffic is still occurring, capture
+current Plex flows for attribution:
 
-Worth running after any change to the Plex policy, and worth remembering that an
-allow-list derived from a capture is only as complete as the window it was captured in.
+```bash
+mise exec -- just kube plex-network-observe 600
+```
+
+If the source is an intended Plex consumer, update the ingress allow-list in
+`kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml`, the pinned consumer set in
+`scripts/validate/plex.sh`, and the mutation cases in
+`scripts/test/plex-validator-test.sh` together. If the source should not reach Plex,
+inspect its application configuration instead of widening policy.
+
+The alert aggregates all sources and can remain active until the last denial burst
+leaves the six-hour window. One or two denied events remain below the selected noise
+threshold. Deliberate Plex SSDP and UPnP multicast containment has no workload
+destination and does not match.
 
 ## Why the rules are shaped the way they are
 

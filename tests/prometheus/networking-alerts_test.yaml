@@ -11,6 +11,7 @@
 # than merely that absent() works. eval interval is 1m throughout. exp_annotations are matched
 # too (promtool requires it), so alert text is covered as a bonus.
 rule_files:
+  - network-policy.yaml
   - tailscale.yaml
 evaluation_interval: 1m
 tests:
@@ -191,4 +192,57 @@ tests:
                 delivery still works but has no failover until the second replica recovers.
       - eval_time: 23m
         alertname: TailscaleNtfyIngressHADegraded
+        exp_alerts: []
+
+  # --- PlexWorkloadPolicyDenied: identity variants aggregate, then resolve ----------
+  - interval: 1m
+    input_series:
+      - series: 'hubble_drop_total{destination="media/plex", reason="POLICY_DENIED", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=lidarr"}'
+        values: '0 0 0 1 2 2x400'
+      - series: 'hubble_drop_total{destination="media/plex", reason="POLICY_DENIED", source="k8s:app.kubernetes.io/name=lidarr,k8s:io.cilium.k8s.namespace.labels.gateway.supermorphic.com/public-plex=true,k8s:io.kubernetes.pod.namespace=media"}'
+        values: '0 0 0 1 2 2x400'
+    alert_rule_test:
+      - eval_time: 33m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Kubernetes workload is denied while reaching Plex
+              description: >-
+                At least three Cilium POLICY_DENIED events from Kubernetes workloads to media/plex occurred in the last six hours and remained observable for 30 minutes. A Plex integration may be missing from the ingress allow-list. Group hubble_drop_total by source to identify it, then use `mise exec -- just kube plex-network-observe` if live flow attribution is needed.
+      - eval_time: 370m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts: []
+
+  # --- PlexWorkloadPolicyDenied: fewer than three events stay silent ----------------
+  - interval: 1m
+    input_series:
+      - series: 'hubble_drop_total{destination="media/plex", reason="POLICY_DENIED", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=radarr"}'
+        values: '0 0 1 2 2x70'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts: []
+
+  # --- PlexWorkloadPolicyDenied: every exclusion stays silent -----------------------
+  - interval: 1m
+    input_series:
+      # Deliberate Plex multicast containment has no workload destination.
+      - series: 'hubble_drop_total{reason="POLICY_DENIED", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=plex"}'
+        values: '0 0 10 10x70'
+      # Plex egress denied to another workload has that workload as destination.
+      - series: 'hubble_drop_total{destination="media/radarr", reason="POLICY_DENIED", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=plex"}'
+        values: '0 0 10 10x70'
+      # Off-cluster or reserved identities are not Kubernetes workload consumers.
+      - series: 'hubble_drop_total{destination="media/plex", reason="POLICY_DENIED", source="reserved:world"}'
+        values: '0 0 10 10x70'
+      # Other drop reasons are not network-policy refusal.
+      - series: 'hubble_drop_total{destination="media/plex", reason="UNSUPPORTED_L3_PROTOCOL", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=lidarr"}'
+        values: '0 0 10 10x70'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: PlexWorkloadPolicyDenied
         exp_alerts: []
