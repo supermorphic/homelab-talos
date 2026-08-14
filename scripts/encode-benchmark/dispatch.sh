@@ -255,9 +255,26 @@ eligible_capability_nodes() {
 	done < <(yq -p=json -o=json -I=0 '.items | sort_by(.metadata.name) | .[]' <<<"$nodes")
 }
 
+capability_job_name() {
+	local run_id="${1,,}" node="$2"
+	local prefix="encode-benchmark-cap-$run_id-node-" name node_hash max_node_length
+	name="$prefix$node"
+	if ((${#name} <= 63)); then
+		printf '%s\n' "$name"
+		return
+	fi
+	node_hash="$(printf '%s\n' "$node" | sha256sum | awk '{print substr($1, 1, 8)}')"
+	max_node_length=$((63 - ${#prefix} - ${#node_hash} - 1))
+	((max_node_length > 0)) || {
+		echo 'capability Job name prefix leaves no room for node identity' >&2
+		return 65
+	}
+	printf '%s%s-%s\n' "$prefix" "${node:0:max_node_length}" "$node_hash"
+}
+
 dispatch_capabilities() {
-	local run_id job name node suffix
-	local -a nodes=() created_names=()
+	local run_id job name node index
+	local -a nodes=() jobs=() names=() created_names=()
 	require_confirmation ENCODE_BENCHMARK_CAPABILITIES_CONFIRM 'run:encode-benchmark:capabilities' || return
 	load_source || return
 	run_id="$(new_run_id capabilities)" || return
@@ -269,9 +286,8 @@ dispatch_capabilities() {
 		return 1
 	}
 	for node in "${nodes[@]}"; do
-		suffix="node-$node"
-		job="$temp_directory/capabilities-$node.yaml"
-		name="encode-benchmark-capabilities-${run_id,,}-$suffix"
+		name="$(capability_job_name "$run_id" "$node")" || return
+		job="$temp_directory/$name.yaml"
 		render_job "$job" capabilities "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh capabilities
 		remove_mounts_and_volumes "$job" media out
 		NODE_NAME="$node" yq -i '
@@ -279,6 +295,12 @@ dispatch_capabilities() {
 			del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage") |
 			.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME)
 		' "$job"
+		jobs+=("$job")
+		names+=("$name")
+	done
+	for index in "${!jobs[@]}"; do
+		job="${jobs[$index]}"
+		name="${names[$index]}"
 		if ! create_job "$job" >/dev/null; then
 			for name in "${created_names[@]}"; do
 				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \

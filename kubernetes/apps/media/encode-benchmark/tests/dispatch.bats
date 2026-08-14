@@ -228,6 +228,16 @@ set -euo pipefail
 if [[ "${STUB_CONFIGMAP_RENDER_FAIL:-0}" == '1' && -n "${INVENTORY_FILE:-}" ]]; then
 	exit 28
 fi
+if [[ -n "${JOB_NAME:-}" && "${STUB_JOB_RENDER_FAIL_AT:-0}" != '0' ]]; then
+	count_file="$STUB_CAPTURE_DIR/.job-render-count"
+	count=0
+	[[ ! -f "$count_file" ]] || read -r count <"$count_file"
+	count=$((count + 1))
+	printf '%s\n' "$count" >"$count_file"
+	if [[ "$count" == "$STUB_JOB_RENDER_FAIL_AT" ]]; then
+		exit 30
+	fi
+fi
 exec "$REAL_YQ" "$@"
 EOF
 
@@ -369,9 +379,46 @@ valid_capability_evidence() {
 		job="$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name "Job-*-node-$node.yaml" -print)"
 		[ -n "$job" ]
 		[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "$job")" = "$node" ]
-		[[ "$(yq -r '.metadata.name' "$job")" =~ ^encode-benchmark-capabilities-20260802t120000z-[0-9a-f]{8}-node-$node$ ]]
+		name="$(yq -r '.metadata.name' "$job")"
+		[ "${#name}" -le 63 ]
+		[[ "$name" =~ ^encode-benchmark-cap-20260802t120000z-[0-9a-f]{8}-node-$node$ ]]
 	done
 	[[ "$output" == *'nodes=nuc1 nuc3'* ]]
+}
+
+# Catches truncation that either exceeds the Job controller label limit or maps
+# two long node names with the same prefix to one capability Job name.
+@test "capability dispatch bounds and disambiguates long node Job names" {
+	label="$(printf 'a%.0s' {1..59})"
+	tail="$(printf 'b%.0s' {1..53})"
+	first_node="$label.$label.$label.${tail}alpha"
+	second_node="$label.$label.$label.${tail}bravo"
+	jq -n --arg first "$first_node" --arg second "$second_node" '{items:[$first,$second] | map({metadata:{name:.},status:{allocatable:{"gpu.intel.com/i915":"1"}}})}' \
+		>"$STUB_NODES_JSON"
+	printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	run_dispatch capabilities
+	[ "$status" -eq 0 ]
+	mapfile -t jobs < <(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' -print | sort)
+	[ "${#jobs[@]}" -eq 2 ]
+
+	first_name="$(yq -r '.metadata.name' "${jobs[0]}")"
+	second_name="$(yq -r '.metadata.name' "${jobs[1]}")"
+	[ "${#first_name}" -le 63 ]
+	[ "${#second_name}" -le 63 ]
+	[ "$first_name" != "$second_name" ]
+	[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[0]}")" != \
+		"$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[1]}")" ]
+}
+
+# Catches creating an earlier node Job before every later node manifest has
+# rendered successfully, which would leave a partial dispatch on local failure.
+@test "capability dispatch renders every node before the first create" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_JOB_RENDER_FAIL_AT=2
+	run_dispatch capabilities
+	[ "$status" -ne 0 ]
+	assert_no_mutations
 }
 
 # Catches broad rollback that deletes pre-existing Jobs or the failed create
@@ -381,8 +428,8 @@ valid_capability_evidence() {
 	export STUB_JOB_CREATE_FAIL_AT=2
 	run_dispatch capabilities
 	[ "$status" -ne 0 ]
-	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-capabilities-.*-node-nuc1 / {found=1} END {exit !found}' "$STUB_CALLS"
-	! awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-capabilities-.*-node-nuc3 / {found=1} END {exit !found}' "$STUB_CALLS"
+	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-cap-.*-node-nuc1 / {found=1} END {exit !found}' "$STUB_CALLS"
+	! awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-cap-.*-node-nuc3 / {found=1} END {exit !found}' "$STUB_CALLS"
 }
 
 # Catches dispatch trusting capabilityStatus or proofStatus without recomputing
