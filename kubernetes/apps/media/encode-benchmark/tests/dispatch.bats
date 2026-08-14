@@ -1072,7 +1072,7 @@ write_multi_node_results_fixtures() {
 	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 
 	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True"}] | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
+	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] | del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
 		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
 	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
 	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
@@ -1083,9 +1083,11 @@ write_multi_node_results_fixtures() {
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"proofStatus":"failed","proofReasons":"initialization"'* ]]
+	[[ "$output" == *'"verifiedAt":"2026-08-14T18:01:30Z"'* ]]
+	[[ "$output" != *'Error: no matches found'* ]]
 
 	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True"}] | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
+	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] | del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
 		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
 	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
 	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"

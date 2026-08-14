@@ -73,9 +73,9 @@ normalize_image_id() {
 
 phase_for_job() {
 	local job_json="$1"
-	if yq -p=json -e '.status.conditions[]? | select(.type == "Complete" and .status == "True")' <<<"$job_json" >/dev/null; then
+	if yq -p=json -e '.status.conditions[]? | select(.type == "Complete" and .status == "True")' <<<"$job_json" >/dev/null 2>&1; then
 		printf '%s\n' 'Complete'
-	elif yq -p=json -e '.status.conditions[]? | select(.type == "Failed" and .status == "True")' <<<"$job_json" >/dev/null; then
+	elif yq -p=json -e '.status.conditions[]? | select(.type == "Failed" and .status == "True")' <<<"$job_json" >/dev/null 2>&1; then
 		printf '%s\n' 'Failed'
 	elif [[ "$(yq -p=json -r '.status.active // 0' <<<"$job_json")" != '0' ]]; then
 		printf '%s\n' 'Active'
@@ -166,7 +166,11 @@ while IFS= read -r job_json; do
 	succeeded="$(yq -p=json -r '.status.succeeded // 0' <<<"$job_json")"
 	failed="$(yq -p=json -r '.status.failed // 0' <<<"$job_json")"
 	start="$(yq -p=json -r '.status.startTime // ""' <<<"$job_json")"
-	completion="$(yq -p=json -r '.status.completionTime // ""' <<<"$job_json")"
+	completion="$(yq -p=json -r '
+		.status.completionTime //
+		([.status.conditions[]? | select(.type == "Failed" and .status == "True") | .lastTransitionTime][0]) //
+		""
+	' <<<"$job_json")"
 	matching_pods="$(JOB_NAME="$name" yq -p=json -o=json -I=0 \
 		'[.items[] | select(.metadata.labels."job-name" == strenv(JOB_NAME))]' <<<"$pods")"
 	pod_count="$(yq -p=json -r 'length' <<<"$matching_pods")"
