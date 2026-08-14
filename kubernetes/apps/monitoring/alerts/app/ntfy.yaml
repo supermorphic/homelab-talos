@@ -1,13 +1,12 @@
 ---
 # ntfy black-box availability and persistence coverage. Gatus proves the internal
 # /v1/health path and exports gatus_results_endpoint_success; kube-state-metrics
-# independently proves the retained SQLite claim is Bound. Prometheus discovers this
-# rule cluster-wide (ruleSelectorNilUsesHelmValues: false in kube-prometheus-stack).
+# independently proves the retained SQLite claim is Bound.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: ntfy
-  namespace: ntfy
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: ntfy
 spec:

@@ -5,12 +5,11 @@
 # catches the partial failure where Gluetun still reports status=running but cannot
 # reacquire a forwarded port and its container-level fallback does not recover it.
 # Gluetun's firewall keeps qBittorrent fail-closed throughout.
-# Prometheus discovers this rule cluster-wide (ruleSelectorNilUsesHelmValues: false).
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: qbittorrent-vpn
-  namespace: media
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: qbittorrent
 spec:

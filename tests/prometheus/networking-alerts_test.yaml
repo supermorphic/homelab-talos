@@ -1,8 +1,8 @@
-# promtool unit tests for the Tailscale PrometheusRule alerts
-# (kubernetes/apps/networking/tailscale-operator/monitoring/prometheusrule.yaml).
+# promtool unit tests for the networking alerts application
+# (kubernetes/apps/networking/alerts/app/).
 #
-# scripts/validate/tailscale-alerts.sh extracts the live rule .spec into rules.yaml next to
-# this file and runs `promtool test rules`, so the PromQL is single-sourced (no duplication).
+# scripts/validate/alerts.sh extracts each rule file's .spec next to this file and runs
+# `promtool test rules`, so the PromQL is single-sourced (no duplication).
 #
 # Each alert is exercised across three temporal states — before its `for:` (silent),
 # at/after (firing), and after recovery (silent) — so a `for:` regression fails as surely as a
@@ -11,7 +11,7 @@
 # than merely that absent() works. eval interval is 1m throughout. exp_annotations are matched
 # too (promtool requires it), so alert text is covered as a bonus.
 rule_files:
-  - rules.yaml
+  - tailscale.yaml
 evaluation_interval: 1m
 tests:
   # --- TailscaleOperatorDown (deployment available == 0, for 10m) -----------------------------

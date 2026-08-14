@@ -17,7 +17,7 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$values" "$server" "$hr" "$oci" "$secret" "$app/namespace.yaml" \
   "$route" "$ingress" "$app/servicemonitor.yaml" "$app/ciliumnetworkpolicy.yaml" \
-  "$app/prometheusrule.yaml" "$app/kustomization.yaml"; do
+  "$app/kustomization.yaml"; do
   [[ -f "$f" ]] || { echo "Missing ntfy source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./ntfy/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {

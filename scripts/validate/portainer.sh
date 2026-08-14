@@ -12,7 +12,9 @@ ns="$app/namespace.yaml"
 rbac="$app/rbac.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 secret="$app/portainer-admin-password.sops.yaml"
-rule="$app/prometheusrule.yaml"
+# The rule lives in the monitoring alerts application; placement and wiring belong to
+# `just kube alerts-validate monitoring`. The content contract stays here.
+rule='kubernetes/apps/monitoring/alerts/app/portainer.yaml'
 verify_script='scripts/verify/portainer.sh'
 temp_dir="$(mktemp -d /tmp/homelab-talos-portainer-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -47,7 +49,7 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.decryption.provider // "none"' "$ks")" == 'sops' ]]
 [[ "$(yq -r '.spec.decryption.secretRef.name // "none"' "$ks")" == 'sops-age' ]]
 dependencies="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")"
-[[ "$dependencies" == 'cilium,internal-gateway,kube-prometheus-stack,longhorn' ]] || {
+[[ "$dependencies" == 'cilium,internal-gateway,longhorn' ]] || {
   echo "Unexpected Portainer dependencies: $dependencies" >&2
   exit 1
 }
@@ -93,10 +95,8 @@ fi
 
 # Activation alert contract: black-box failure, missing telemetry, and database
 # claim absence/unbound state must remain independently detectable.
-rg -qx '  - ./prometheusrule.yaml' "$app/kustomization.yaml"
 [[ "$(yq -r '.kind' "$rule")" == 'PrometheusRule' ]]
 [[ "$(yq -r '.metadata.name' "$rule")" == 'portainer' ]]
-[[ "$(yq -r '.metadata.namespace' "$rule")" == 'portainer' ]]
 alerts="$(yq -r '[.spec.groups[].rules[].alert] | sort | join(",")' "$rule")"
 [[ "$alerts" == 'PortainerDown,PortainerPersistentVolumeClaimNotBound,PortainerProbeMissing' ]] || {
   echo "Unexpected Portainer alert set: $alerts" >&2

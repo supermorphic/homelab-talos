@@ -83,9 +83,11 @@ lps="$(yq -r '.controllers.qbittorrent.initContainers.gluetun.probes.liveness.sp
 # Reactive VPN-down alerting: in-cluster control-server Service (no HTTPRoute) +
 # a critical PrometheusRule fed by the Gatus health probe.
 svc="$base/app/service-gluetun-control.yaml"
-rule="$base/app/prometheusrule.yaml"
+# The rule lives in the media alerts application; placement and wiring belong to
+# `just kube alerts-validate media`. The content contract stays here.
+rule='kubernetes/apps/media/alerts/app/qbittorrent.yaml'
 [[ -f "$svc" && -f "$rule" ]] || {
-  echo "Missing Phase 12 VPN-alert source ($svc / $rule)." >&2
+  echo "Missing VPN-alert source ($svc / $rule)." >&2
   exit 1
 }
 [[ "$(yq -r '.kind' "$svc")" == 'Service' ]]

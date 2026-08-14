@@ -3,7 +3,7 @@
 A dedicated, single-purpose [kube-state-metrics](https://github.com/kubernetes/kube-state-metrics)
 instance that exports **only** Flux custom-resource state as `gotk_resource_info`. It is the
 metrics source for the `FluxReconciliationFailure` / `FluxResourceMetricsMissing` alerts in
-`../kube-prometheus-stack/config/flux-alerts.yaml`.
+`../alerts/app/flux.yaml`.
 
 ## Why a separate exporter instead of the bundled KSM?
 

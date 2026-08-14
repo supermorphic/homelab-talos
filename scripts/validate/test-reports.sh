@@ -13,7 +13,9 @@ pvc="$app/persistentvolumeclaim.yaml"
 route="$app/httproute.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 monitor="$app/servicemonitor.yaml"
-rule="$app/prometheusrule.yaml"
+# The rule lives in the monitoring alerts application; placement and wiring belong to
+# `just kube alerts-validate monitoring`. The content contract stays here.
+rule='kubernetes/apps/monitoring/alerts/app/test-reports.yaml'
 dashboard="$app/dashboards/test-reports.json"
 diagnostics='scripts/diagnose/test-reports.sh'
 gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'

@@ -593,10 +593,10 @@ seerr-validate: require-bash
 tautulli-validate: require-bash
     @scripts/validate/tautulli.sh
 
-# Validate the isolated media-alerts Flux dependency/placement contract, then extract the
-# manifest rule spec and run promtool syntax and temporal/matcher unit tests.
-media-alerts-validate: require-bash
-    @scripts/validate/media-alerts.sh
+# Extract each domain alerts application's rule specs and run promtool syntax and
+# temporal/matcher unit tests. One recipe serves every domain.
+alerts-validate domain: require-bash
+    @scripts/validate/alerts.sh {{domain}}
 
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
@@ -961,12 +961,6 @@ tailscale-subnet-router-validate: require-bash
 # Programmed, and a representative HTTPRoute Accepted. Route approval stays a manual step.
 tailscale-subnet-router-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.tailscale-subnet-router -- scripts/verify/tailscale-subnet-router.sh {{quote(kubeconfig)}}
-
-# Validate the Tailscale alert rules offline: extract the PrometheusRule .spec (single source)
-# and run promtool check + unit tests — the 7 alerts across three temporal states (silent →
-# firing → silent) and the absent() matcher cases (unrelated object present, target absent).
-tailscale-alerts-validate: require-bash
-    @scripts/validate/tailscale-alerts.sh
 
 # Validate the ntfy source: files, wiring, staged suspend, dependency graph, SOPS
 # decryption, pinned image, hardened non-root pod, RWO PVC, server.yml (deny-all,

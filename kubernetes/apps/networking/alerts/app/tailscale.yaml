@@ -1,7 +1,6 @@
 ---
 # Health/availability alerts for the Tailscale data paths, driven by kube-state-metrics
-# (already scraped cluster-wide by kube-prometheus-stack). Prometheus discovers this rule
-# cluster-wide (ruleSelectorNilUsesHelmValues: false).
+# (already scraped cluster-wide by kube-prometheus-stack).
 #
 # Scope note: this covers the KUBERNETES-level health of the operator and its proxies
 # (Deployment/StatefulSet readiness). Tailnet-level state — Connector ConnectorReady, the
@@ -13,7 +12,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: tailscale-operator
-  namespace: tailscale
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: tailscale-operator
 spec:

@@ -3,7 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: media-alerts
-  namespace: media
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: media-alerts
 spec:

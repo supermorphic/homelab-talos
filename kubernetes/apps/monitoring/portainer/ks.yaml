@@ -9,7 +9,6 @@ spec:
   dependsOn:
     - name: cilium
     - name: internal-gateway
-    - name: kube-prometheus-stack
     - name: longhorn
   decryption:
     provider: sops

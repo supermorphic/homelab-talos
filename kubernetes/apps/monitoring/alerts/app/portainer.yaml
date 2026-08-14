@@ -2,13 +2,12 @@
 # Portainer black-box availability and persistence coverage. Gatus proves the
 # complete internal user path and exports gatus_results_endpoint_success.
 # kube-state-metrics independently proves that the retained database claim exists
-# and is Bound. Prometheus discovers this rule cluster-wide because
-# ruleSelectorNilUsesHelmValues is false in kube-prometheus-stack.
+# and is Bound.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: portainer
-  namespace: portainer
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: portainer
 spec:

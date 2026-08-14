@@ -5,7 +5,6 @@ namespace: monitoring
 resources:
   - ./httproutes.yaml
   - ./flux-podmonitor.yaml
-  - ./flux-alerts.yaml
 # The Grafana sidecar watches every namespace for ConfigMaps labeled
 # grafana_dashboard=1 and auto-provisions them. This ships the community Trivy
 # Operator vulnerability dashboard (grafana.com/dashboards/16337) so image/config

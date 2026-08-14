@@ -1387,7 +1387,7 @@ media-app app:
     require_deployed_source "$app bootstrap" \
       .just/bootstrap.just kubernetes/mod.just \
       scripts/lib/rollout.sh scripts/lib/network.sh \
-      scripts/validate/tautulli.sh scripts/validate/media-alerts.sh \
+      scripts/validate/tautulli.sh scripts/validate/alerts.sh \
       scripts/verify/tautulli.sh tests/catalog.yaml \
       tests/prometheus/media-alerts_test.yaml \
       kubernetes/apps/media/kustomization.yaml \
@@ -1400,7 +1400,7 @@ media-app app:
     }
 
     just kube tautulli-validate
-    just kube media-alerts-validate
+    just kube alerts-validate media
     flux reconcile source git flux-system --kubeconfig "$kubeconfig"
     just kube flux-verify
     flux reconcile kustomization cluster-apps --namespace flux-system --with-source --kubeconfig "$kubeconfig" --timeout 10m

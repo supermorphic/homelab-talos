@@ -28,6 +28,7 @@ executions:
     - validation.seerr
     - validation.tautulli
     - validation.media-alerts
+    - validation.monitoring-alerts
     - validation.flaresolverr
     - validation.media-policy
     - validation.monitoring
@@ -39,7 +40,7 @@ executions:
     - validation.trivy
     - validation.tailscale-operator
     - validation.tailscale-subnet-router
-    - validation.tailscale-alerts
+    - validation.networking-alerts
     - validation.ntfy
     - validation.alertmanager-ntfy
 
@@ -338,7 +339,11 @@ suites:
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.media-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: media-alerts, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just kube media-alerts-validate", implementation: scripts/validate/media-alerts.sh}
+    runner: {command: "mise exec -- just kube alerts-validate media", implementation: scripts/validate/alerts.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.monitoring-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: monitoring-alerts, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube alerts-validate monitoring", implementation: scripts/validate/alerts.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.flaresolverr, source: validation, framework: bash, suite: ci, tier: offline, target: flaresolverr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
@@ -384,9 +389,9 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-subnet-router-validate", implementation: scripts/validate/tailscale-subnet-router.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.tailscale-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: tailscale-alerts, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.networking-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: networking-alerts, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just kube tailscale-alerts-validate", implementation: scripts/validate/tailscale-alerts.sh}
+    runner: {command: "mise exec -- just kube alerts-validate networking", implementation: scripts/validate/alerts.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.ntfy, source: validation, framework: bash, suite: ci, tier: offline, target: ntfy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

@@ -3,7 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: test-reports
-  namespace: test-reports
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: test-reports
 spec:

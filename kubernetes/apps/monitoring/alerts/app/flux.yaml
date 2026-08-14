@@ -3,8 +3,7 @@
 # dedicated flux-kube-state-metrics instance — Flux v2.9.2 no longer exposes the per-object
 # gotk_reconcile_condition controller metric, so it must not be used. Controller/target
 # scrape failure is covered by the active KPS general.rules "TargetDown" alert, so no
-# controller-down rule is defined here. Prometheus discovers this rule cluster-wide
-# (ruleSelectorNilUsesHelmValues: false); severity "warning" routes to the ntfy "homelab"
+# controller-down rule is defined here. Severity "warning" routes to the ntfy "homelab"
 # topic via the existing Alertmanager -> alertmanager-ntfy path (no routing change).
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

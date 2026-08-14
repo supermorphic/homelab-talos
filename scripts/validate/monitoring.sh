@@ -70,14 +70,15 @@ cfg="$base/config"
 fksm_values="$fksm/app/values.yaml"
 flux_alerts_lib='scripts/lib/flux-alerts.sh'
 flux_alerts_diagnostics='scripts/diagnose/flux-alerts.sh'
-flux_alerts_promql='scripts/validate/flux-alerts-promql.sh'
-flux_alerts_promql_test='tests/prometheus/flux-alerts.test.yaml'
+# The rule itself now lives in the monitoring alerts application. Its placement, wiring,
+# and promtool coverage belong to `just kube alerts-validate monitoring`; what stays here
+# is the content contract that ties the rule to this exporter's configuration.
+flux_rule='kubernetes/apps/monitoring/alerts/app/flux.yaml'
 
 for f in "$fksm/ks.yaml" "$fksm/app/kustomization.yaml" "$fksm/app/helmrelease.yaml" \
   "$fksm_values" "$fksm/app/rbac.yaml" "$fksm/README.md" \
-  "$cfg/flux-podmonitor.yaml" "$cfg/flux-alerts.yaml" \
-  "$flux_alerts_lib" "$flux_alerts_diagnostics" \
-  "$flux_alerts_promql" "$flux_alerts_promql_test"; do
+  "$cfg/flux-podmonitor.yaml" "$flux_rule" \
+  "$flux_alerts_lib" "$flux_alerts_diagnostics"; do
   [[ -f "$f" ]] || {
     echo "Missing Flux monitoring source: $f" >&2
     exit 1
@@ -90,7 +91,6 @@ rg -qx '  - ./flux-kube-state-metrics/ks.yaml' kubernetes/apps/monitoring/kustom
   exit 1
 }
 rg -qx '  - ./flux-podmonitor.yaml' "$cfg/kustomization.yaml"
-rg -qx '  - ./flux-alerts.yaml' "$cfg/kustomization.yaml"
 
 # The bundled kube-state-metrics MUST stay untouched — changing KPS HelmRelease values trips
 # the documented helm-controller upgrade wedge, which is exactly why the Flux exporter is a
@@ -173,7 +173,7 @@ pm="$cfg/flux-podmonitor.yaml"
 # Flux PrometheusRule: gotk_resource_info based, warning severity, excludes suspended, and
 # never references the metric Flux v2 removed. (Exact alert-name set is intentionally not
 # asserted until live verification confirms KPS TargetDown covers controller scrape-down.)
-fr="$cfg/flux-alerts.yaml"
+fr="$flux_rule"
 [[ "$(yq -r '.kind' "$fr")" == 'PrometheusRule' ]]
 [[ "$(yq -r '.metadata.name' "$fr")" == 'flux' ]]
 for a in FluxReconciliationFailure FluxResourceMetricsMissing; do
@@ -211,9 +211,7 @@ yq -e '
   select(.metadata.mutates_cluster == false) |
   select(.runner.implementation == "scripts/diagnose/flux-alerts.sh")
 ' tests/catalog.yaml >/dev/null
-bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics" "$flux_alerts_promql"
-shellcheck --external-sources \
-  "$flux_alerts_lib" "$flux_alerts_diagnostics" "$flux_alerts_promql"
-"$flux_alerts_promql"
+bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics"
+shellcheck --external-sources "$flux_alerts_lib" "$flux_alerts_diagnostics"
 
 echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
