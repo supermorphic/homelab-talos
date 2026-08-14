@@ -7,7 +7,6 @@ resources:
   - ./httproute.yaml
   - ./namespace.yaml
   - ./persistentvolumeclaim.yaml
-  - ./prometheusrule.yaml
   - ./service.yaml
   - ./servicemonitor.yaml
 configMapGenerator:

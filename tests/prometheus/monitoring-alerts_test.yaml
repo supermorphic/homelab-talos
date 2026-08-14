@@ -1,5 +1,8 @@
 rule_files:
-  - flux-alerts.rules.yaml
+  - flux.yaml
+  - ntfy.yaml
+  - portainer.yaml
+  - test-reports.yaml
 
 evaluation_interval: 1m
 

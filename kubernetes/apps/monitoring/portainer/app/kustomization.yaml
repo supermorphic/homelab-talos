@@ -8,7 +8,6 @@ resources:
   - ./httproute.yaml
   - ./namespace.yaml
   - ./portainer-admin-password.sops.yaml
-  - ./prometheusrule.yaml
   - ./rbac.yaml
 configMapGenerator:
   - name: portainer-values
