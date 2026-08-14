@@ -18,6 +18,17 @@ setup() {
 	export ENCODE_BENCHMARK_TEST_MODE=1
 	export ENCODE_BENCHMARK_NOW=20260802T120000Z
 	create_cluster_stubs
+	STUB_NODES_JSON="$BATS_TEST_TMPDIR/default-nodes.json"
+	STUB_PODS_JSON="$BATS_TEST_TMPDIR/default-pods.json"
+	export STUB_NODES_JSON STUB_PODS_JSON
+	cat >"$STUB_NODES_JSON" <<'EOF'
+{"items":[{"metadata":{"name":"nuc1"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc2"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc3"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}}]}
+EOF
+	cat >"$STUB_PODS_JSON" <<'EOF'
+{"items":[{"metadata":{"name":"plex-0","namespace":"media","labels":{"app.kubernetes.io/name":"plex"}},"spec":{"nodeName":"nuc2","containers":[{"name":"plex","resources":{"requests":{"gpu.intel.com/i915":"0"}}}]},"status":{"phase":"Running"}}]}
+EOF
+	prepare_evidence_source
+	set_capability_evidence verified "$(valid_capability_evidence)"
 }
 
 create_cluster_stubs() {
@@ -85,7 +96,8 @@ if contains create "$@"; then
 	if [[ "${STUB_CONFIGMAP_CREATE_FAIL:-0}" == '1' && "$kind" == 'ConfigMap' ]]; then
 		exit 24
 	fi
-	if [[ "${STUB_JOB_CREATE_FAIL:-0}" == '1' && "$kind" == 'Job' ]]; then
+	if [[ "$kind" == 'Job' && ("${STUB_JOB_CREATE_FAIL:-0}" == '1' ||
+		"${STUB_JOB_CREATE_FAIL_AT:-0}" == "$count") ]]; then
 		exit 25
 	fi
 	jq -n -c \
@@ -109,7 +121,13 @@ if contains delete "$@"; then
 fi
 
 if contains logs "$@"; then
-	if [[ -n "${STUB_LOGS_FILE:-}" ]]; then
+	if [[ -n "${STUB_LOGS_DIR:-}" ]]; then
+		resource=''
+		for argument in "$@"; do
+			if [[ "$argument" == job/* ]]; then resource="${argument#job/}"; fi
+		done
+		sed -n '1,$p' "$STUB_LOGS_DIR/$resource.log"
+	elif [[ -n "${STUB_LOGS_FILE:-}" ]]; then
 		sed -n '1,$p' "$STUB_LOGS_FILE"
 	fi
 	exit 0
@@ -304,6 +322,30 @@ assert_hardened_job() {
 	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$job")" = 'false' ]
 }
 
+prepare_evidence_source() {
+	evidence_app="$BATS_TEST_TMPDIR/evidence-app"
+	if [[ ! -d "$evidence_app" ]]; then
+		cp -R "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app" "$evidence_app"
+	fi
+	export ENCODE_BENCHMARK_APP_DIR="$evidence_app"
+}
+
+set_capability_evidence() {
+	local status="$1" evidence="$2"
+	CAPABILITY_STATUS="$status" CAPABILITY_EVIDENCE="$evidence" yq -i '
+		.data."samples.json" |= (
+			from_yaml |
+			.runtime.capabilityStatus = strenv(CAPABILITY_STATUS) |
+			.runtime.capabilityEvidence = (strenv(CAPABILITY_EVIDENCE) | from_json) |
+			to_json
+		)
+	' "$evidence_app/samples.yaml"
+}
+
+valid_capability_evidence() {
+	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","proofSchemaVersion":2,"initialization":"passed","selectedRateControl":"LA-ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
+}
+
 # Catches any confirmation branch that treats an absent, empty, or merely
 # similar capability token as authority to create a cluster resource.
 @test "capabilities requires the exact confirmation before creating a Job" {
@@ -312,7 +354,98 @@ assert_hardened_job() {
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	run_dispatch capabilities
 	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
+}
+
+# Catches capability dispatch proving only a scheduler-selected node instead of
+# every currently eligible non-Plex node with a free i915 slot.
+@test "capability dispatch creates one deterministic targeted Job per eligible node" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	run_dispatch capabilities
+	[ "$status" -eq 0 ]
+	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 2 ]
+
+	for node in nuc1 nuc3; do
+		job="$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name "Job-*-node-$node.yaml" -print)"
+		[ -n "$job" ]
+		[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "$job")" = "$node" ]
+		[[ "$(yq -r '.metadata.name' "$job")" =~ ^encode-benchmark-capabilities-20260802t120000z-[0-9a-f]{8}-node-$node$ ]]
+	done
+	[[ "$output" == *'nodes=nuc1 nuc3'* ]]
+}
+
+# Catches broad rollback that deletes pre-existing Jobs or the failed create
+# target instead of only Jobs successfully created by this dispatch.
+@test "partial per-node capability create deletes only Jobs created by that dispatch" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_JOB_CREATE_FAIL_AT=2
+	run_dispatch capabilities
+	[ "$status" -ne 0 ]
+	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-capabilities-.*-node-nuc1 / {found=1} END {exit !found}' "$STUB_CALLS"
+	! awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-capabilities-.*-node-nuc3 / {found=1} END {exit !found}' "$STUB_CALLS"
+}
+
+# Catches dispatch trusting capabilityStatus or proofStatus without recomputing
+# every versioned field and matching it to the configured immutable image.
+@test "expensive dispatch requires one current semantically valid capability node" {
+	prepare_evidence_source
+	valid="$(valid_capability_evidence)"
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+
+	set_capability_evidence pending '{"digestResolvable":true,"hevcQsv":true,"realQsvEncode":true}'
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+	assert_no_mutations
+
+	for invalid in \
+		"$(jq -c '.nodes[0].initialization="failed" | .nodes[0].proofStatus="failed" | .nodes[0].proofReasons="initialization"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].telemetryStatus="harness-blocked" | .nodes[0].proofStatus="harness-blocked" | .nodes[0].proofReasons="telemetry"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].proofSchemaVersion=1' <<<"$valid")" \
+		"$(jq -c '.nodes[0].selectedRateControl="ICQ"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].configuredImageDigest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].encodeSpeed=0' <<<"$valid")"; do
+		set_capability_evidence verified "$invalid"
+		run_dispatch run quality
+		[ "$status" -ne 0 ]
+		[[ "$output" == *'capability evidence'* ]]
+		assert_no_mutations
+	done
+
+	set_capability_evidence verified "$valid"
+	run_dispatch run quality
+	[ "$status" -eq 0 ]
 	[ "$(mutation_count)" -eq 1 ]
+}
+
+# Catches a mode-specific bypass that validates evidence only for quality while
+# savings, finalist, or contention can still create an expensive Job.
+@test "all expensive modes refuse pending capability evidence before create" {
+	prepare_evidence_source
+	set_capability_evidence pending '{"nodes":[]}'
+	run_id='20260802T120000Z-1234abcd'
+
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:savings'
+	run_dispatch run savings "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:finalist'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
+	run_dispatch run finalist "$run_id" avc-grain-memento
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
+	run_dispatch run contention-a
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+	assert_no_mutations
 }
 
 # Catches the corresponding missing guard on the census lifecycle, including
@@ -685,6 +818,8 @@ data:
 EOF
 	export ENCODE_BENCHMARK_TEST_MODE=1
 	export ENCODE_BENCHMARK_APP_DIR="$contention_app"
+	evidence_app="$contention_app"
+	set_capability_evidence verified "$(valid_capability_evidence)"
 }
 
 # Catches contention case selection drifting with panel row order, rendering
@@ -813,14 +948,38 @@ write_results_fixtures() {
 	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/logs.txt"
 	export STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_FILE
 	cat >"$STUB_JOBS_JSON" <<EOF
-{"apiVersion":"v1","items":[{"metadata":{"name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","labels":{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":"$run_id","homelab-talos/benchmark-mode":"capabilities"}},"status":{"conditions":[{"type":"Complete","status":"True"}],"succeeded":1,"failed":0,"startTime":"2026-08-02T12:00:00Z","completionTime":"2026-08-02T12:01:00Z"}}]}
+{"apiVersion":"v1","items":[{"metadata":{"name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","labels":{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":"$run_id","homelab-talos/benchmark-mode":"capabilities"}},"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"nuc2"}}}},"status":{"conditions":[{"type":"Complete","status":"True"}],"succeeded":1,"failed":0,"startTime":"2026-08-02T12:00:00Z","completionTime":"2026-08-02T12:01:00Z"}}]}
 EOF
 	cat >"$STUB_PODS_JSON" <<EOF
 {"apiVersion":"v1","items":[{"metadata":{"name":"encode-benchmark-capabilities-fixture-pod","labels":{"job-name":"encode-benchmark-capabilities-fixture","homelab-talos/benchmark-run":"$run_id"},"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","controller":true,"blockOwnerDeletion":true}]},"spec":{"nodeName":"nuc2"},"status":{"phase":"Succeeded","containerStatuses":[{"name":"benchmark","imageID":"$image_id"}]}}]}
 EOF
 	cat >"$STUB_LOGS_FILE" <<'EOF'
-{"status":"passed","uid":568,"hevcQsv":true,"realQsvEncode":true,"decoded":true,"libvmaf4k":true,"libx265":true,"nodeName":"nuc2","configuredImage":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","sourcePath":"/media/Secret Movie.mkv","source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","credential":"dont-print-me"}
+{"status":"passed","proofSchemaVersion":2,"initialization":"passed","selectedRateControl":"LA-ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","uid":568,"hevcQsv":true,"libx265":true,"nodeName":"nuc2","configuredImage":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","sourcePath":"/media/Secret Movie.mkv","source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","credential":"dont-print-me"}
 EOF
+}
+
+write_multi_node_results_fixtures() {
+	local run_id="$1" image_id="$2"
+	local lower_run="${run_id,,}"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/jobs-multi.json"
+	STUB_PODS_JSON="$BATS_TEST_TMPDIR/pods-multi.json"
+	STUB_LOGS_DIR="$BATS_TEST_TMPDIR/logs-multi"
+	export STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_DIR
+	unset STUB_LOGS_FILE
+	mkdir -p "$STUB_LOGS_DIR"
+	jq -n --arg run "$run_id" --arg lower "$lower_run" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({
+		metadata:{name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"capabilities"}},
+		spec:{template:{spec:{nodeSelector:{"kubernetes.io/hostname":.}}}},
+		status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0,startTime:"2026-08-14T18:00:00Z",completionTime:"2026-08-14T18:01:00Z"}
+	})}' >"$STUB_JOBS_JSON"
+	jq -n --arg run "$run_id" --arg lower "$lower_run" --arg image "$image_id" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({
+		metadata:{name:("capability-pod-" + .),labels:{"job-name":("encode-benchmark-capabilities-" + $lower + "-node-" + .)},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),controller:true,blockOwnerDeletion:true}]},
+		spec:{nodeName:.},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:$image}]}
+	})}' >"$STUB_PODS_JSON"
+	for node in nuc1 nuc3; do
+		printf '%s\n' "{\"status\":\"passed\",\"proofSchemaVersion\":2,\"initialization\":\"passed\",\"selectedRateControl\":\"LA-ICQ\",\"telemetryStatus\":\"available\",\"telemetryReason\":\"\",\"videoBusyNanoseconds\":800000000,\"videoBusyPercent\":40,\"encodeFps\":72,\"encodeSpeed\":1.25,\"decode\":\"passed\",\"vmaf\":\"passed\",\"proofStatus\":\"passed\",\"proofReasons\":\"\",\"uid\":568,\"hevcQsv\":true,\"libx265\":true,\"nodeName\":\"$node\",\"configuredImageDigest\":\"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"sourcePath\":\"/media/Secret Movie.mkv\"}" \
+			>"$STUB_LOGS_DIR/encode-benchmark-capabilities-$lower_run-node-$node.log"
+	done
 }
 
 # Catches trusting benchmark-reported configured identity as runtime evidence;
@@ -837,7 +996,59 @@ EOF
 	[[ "$output" != *'/media/Secret Movie.mkv'* ]]
 	[[ "$output" != *'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'* ]]
 	[[ "$output" != *'dont-print-me'* ]]
+	[[ "$output" == *'capability_evidence={"nodeName":"nuc2","proofSchemaVersion":2'* ]]
 	awk -F '\t' -v run_id="$run_id" '$1 == "kubectl" && $2 ~ ("homelab-talos/benchmark-run=" run_id) {selected=1} END {exit !selected}' "$STUB_CALLS"
+	assert_no_mutations
+}
+
+# Catches a collector that assumes one capability Job per dispatch or merges
+# node provenance into one scheduler-selected result.
+@test "results emits one sanitized capability evidence record per targeted node" {
+	run_id='20260802T120000Z-1234abcd'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	write_multi_node_results_fixtures "$run_id" "$image_id"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(grep -c '^capability_evidence=' <<<"$output")" -eq 2 ]
+	[[ "$output" == *'"nodeName":"nuc1"'* ]]
+	[[ "$output" == *'"nodeName":"nuc3"'* ]]
+	[[ "$output" == *'"verifiedAt":"2026-08-14T18:01:00Z"'* ]]
+	[[ "$output" == *'"imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"'* ]]
+	[[ "$output" != *'/media/Secret Movie.mkv'* ]]
+	assert_no_mutations
+}
+
+# Catches losing diagnostic evidence because the capability command correctly
+# exits nonzero for semantic failure or a blocked telemetry oracle.
+@test "results sanitizes terminal failed and harness-blocked capability proofs" {
+	run_id='20260802T120000Z-1234abcd'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+
+	write_results_fixtures "$run_id" "$image_id"
+	jq '.items[0].status.conditions = [{type:"Failed",status:"True"}] | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
+		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq -c '.status="failed" | .initialization="failed" | .proofStatus="failed" | .proofReasons="initialization"' \
+		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
+	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"proofStatus":"failed","proofReasons":"initialization"'* ]]
+
+	write_results_fixtures "$run_id" "$image_id"
+	jq '.items[0].status.conditions = [{type:"Failed",status:"True"}] | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
+		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq -c '.status="harness-blocked" | .telemetryStatus="harness-blocked" | .telemetryReason="malformed-video-counter" | .videoBusyNanoseconds=0 | .videoBusyPercent=0 | .proofStatus="harness-blocked" | .proofReasons="telemetry"' \
+		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
+	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"proofStatus":"harness-blocked","proofReasons":"telemetry"'* ]]
 	assert_no_mutations
 }
 

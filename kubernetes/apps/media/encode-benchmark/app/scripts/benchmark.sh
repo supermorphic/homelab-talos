@@ -974,7 +974,7 @@ read_declared_commands() {
 	done <"$file"
 }
 
-capabilities() {
+capabilities() (
 	local capability_directory source encode_log fdinfo_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
 	local missing candidate present absent proof_json proof_exit
@@ -1038,7 +1038,7 @@ capabilities() {
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"
 	capability_directory="$(mktemp -d "$scratch_root/capabilities.XXXXXX")"
-	trap 'rm -rf -- "$capability_directory"' RETURN
+	trap 'rm -rf -- "$capability_directory"' EXIT
 	source="$capability_directory/source.mkv"
 	encode_log="$capability_directory/qsv.log"
 	fdinfo_log="$capability_directory/drm-fdinfo.log"
@@ -1065,6 +1065,10 @@ capabilities() {
 			configuredImageDigest: $configured_digest
 		}'
 	return "$proof_exit"
+)
+
+assigned_node_capability_gate() {
+	capabilities >/dev/null
 }
 
 probe_media() {
@@ -1602,6 +1606,7 @@ quality_mode() {
 	local comparison_fixture comparison decision target next_crf
 	local panel_samples
 	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
+	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
@@ -1704,6 +1709,7 @@ savings_mode() {
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
 	local panel_samples
+	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.savingsPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
@@ -1774,6 +1780,7 @@ finalist_mode() {
 		echo "sample not found: $requested_sample_id" >&2
 		return 66
 	}
+	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode finalist)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -1852,6 +1859,7 @@ contention_mode() (
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65
 	}
+	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode contention)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON

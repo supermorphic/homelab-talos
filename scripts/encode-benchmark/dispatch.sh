@@ -104,6 +104,42 @@ load_source() {
 	}
 }
 
+require_capability_evidence() {
+	local configured_digest="${configured_image##*@}"
+	if jq -e --arg digest "$configured_digest" '
+		def immutable_image_id:
+			type == "string" and
+			test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and
+			(sub("^.*@"; "") == $digest);
+		def valid_node:
+			type == "object" and
+			.proofSchemaVersion == 2 and
+			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
+			.initialization == "passed" and
+			.selectedRateControl == "LA-ICQ" and
+			.telemetryStatus == "available" and
+			.telemetryReason == "" and
+			(.videoBusyNanoseconds | type == "number" and . > 0) and
+			(.videoBusyPercent | type == "number" and . >= 0) and
+			(.encodeFps | type == "number" and . >= 0) and
+			(.encodeSpeed | type == "number" and . > 0) and
+			.decode == "passed" and
+			.vmaf == "passed" and
+			.proofStatus == "passed" and
+			.proofReasons == "" and
+			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+			.configuredImageDigest == $digest and
+			(.imageId | immutable_image_id);
+		.runtime.capabilityStatus == "verified" and
+		(.runtime.capabilityEvidence.nodes | type == "array") and
+		any(.runtime.capabilityEvidence.nodes[]; valid_node)
+	' "$samples_document" >/dev/null; then
+		return 0
+	fi
+	echo 'Refusing benchmark dispatch: committed schema-v2 capability evidence has no current passing node.' >&2
+	return 1
+}
+
 new_run_id() {
 	local mode="$1" now correlation
 	if [[ -n "${ENCODE_BENCHMARK_NOW:-}" ]]; then
@@ -184,26 +220,75 @@ create_job() {
 		--filename "$job" --output json
 }
 
+eligible_capability_nodes() {
+	local nodes all_pods node_json name allocatable used free plex
+	nodes="$(kubectl --kubeconfig "$kubeconfig" get nodes --output json)"
+	all_pods="$(kubectl --kubeconfig "$kubeconfig" get pods --all-namespaces --output json)"
+	while IFS= read -r node_json; do
+		[[ -n "$node_json" ]] || continue
+		name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' \
+			<<<"$node_json")" || return 65
+		allocatable="$(yq -p=json -r '.status.allocatable."gpu.intel.com/i915" // "0"' \
+			<<<"$node_json")"
+		[[ "$allocatable" =~ ^[0-9]+$ ]] || allocatable=0
+		used="$(NODE_NAME="$name" jq -r '
+			[
+				.items[]
+				| select(.spec.nodeName == env.NODE_NAME)
+				| select(.status.phase != "Succeeded" and .status.phase != "Failed")
+				| .spec.containers[]?.resources.requests."gpu.intel.com/i915" // "0"
+				| tonumber
+			] | add // 0
+		' <<<"$all_pods")"
+		free=$((allocatable - used))
+		plex="$(NODE_NAME="$name" jq -r '
+			[
+				.items[]
+				| select(.metadata.namespace == "media")
+				| select(.metadata.labels."app.kubernetes.io/name" == "plex")
+				| select(.status.phase == "Running" and .spec.nodeName == env.NODE_NAME)
+			] | length
+		' <<<"$all_pods")"
+		if ((free > 0 && plex == 0)); then
+			printf '%s\n' "$name"
+		fi
+	done < <(yq -p=json -o=json -I=0 '.items | sort_by(.metadata.name) | .[]' <<<"$nodes")
+}
+
 dispatch_capabilities() {
-	local run_id job name
+	local run_id job name node suffix
+	local -a nodes=() created_names=()
 	require_confirmation ENCODE_BENCHMARK_CAPABILITIES_CONFIRM 'run:encode-benchmark:capabilities' || return
 	load_source || return
 	run_id="$(new_run_id capabilities)" || return
 	require_cluster_target || return
 	ensure_run_available "$run_id" || return
-	job="$temp_directory/capabilities.yaml"
-	name="encode-benchmark-capabilities-${run_id,,}"
-	render_job "$job" capabilities "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh capabilities
-	remove_mounts_and_volumes "$job" media out
-	# The probe writes only a five-second synthetic encode, so it keeps the scratch
-	# volume but must not reserve the benchmark scratch budget: that request exceeds
-	# node allocatable ephemeral storage and leaves the Job permanently Unschedulable.
-	yq -i '
-		del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |
-		del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage")
-	' "$job"
-	create_job "$job" >/dev/null
-	printf 'run_id=%s job=%s\n' "$run_id" "$name"
+	mapfile -t nodes < <(eligible_capability_nodes)
+	((${#nodes[@]} > 0)) || {
+		echo 'no eligible non-Plex node has a free i915 slot for capability proof' >&2
+		return 1
+	}
+	for node in "${nodes[@]}"; do
+		suffix="node-$node"
+		job="$temp_directory/capabilities-$node.yaml"
+		name="encode-benchmark-capabilities-${run_id,,}-$suffix"
+		render_job "$job" capabilities "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh capabilities
+		remove_mounts_and_volumes "$job" media out
+		NODE_NAME="$node" yq -i '
+			del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |
+			del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage") |
+			.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME)
+		' "$job"
+		if ! create_job "$job" >/dev/null; then
+			for name in "${created_names[@]}"; do
+				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
+					"job/$name" --wait=true >/dev/null 2>&1 || true
+			done
+			return 1
+		fi
+		created_names+=("$name")
+	done
+	printf 'run_id=%s nodes=%s jobs=%s\n' "$run_id" "${nodes[*]}" "${created_names[*]}"
 }
 
 dispatch_census() {
@@ -378,6 +463,7 @@ dispatch_run() {
 	if [[ -n "$supplied_run_id" && -z "$contention_case" ]]; then validate_run_id "$supplied_run_id" || return; fi
 	require_confirmation ENCODE_BENCHMARK_RUN_CONFIRM "run:encode-benchmark:$mode" || return
 	load_source || return
+	require_capability_evidence || return
 	if [[ -n "$contention_case" ]]; then
 		candidate_output="$(contention_samples "$contention_case")" || return
 		mapfile -t candidates <<<"$candidate_output"

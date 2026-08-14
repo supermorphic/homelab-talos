@@ -42,9 +42,22 @@ job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
 	exit 66
 }
 capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
-if ((capability_job_count > 0 && (capability_job_count != 1 || job_count != 1))); then
-	echo 'capability result provenance rejected: expected exactly one capability Job' >&2
+if ((capability_job_count > 0 && capability_job_count != job_count)); then
+	echo 'capability result provenance rejected: capability dispatch contains mixed Job modes' >&2
 	exit 1
+fi
+if ((capability_job_count > 0)); then
+	unique_job_names="$(yq -p=json -r '[.items[].metadata.name] | unique | length' <<<"$jobs")"
+	unique_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""] | unique | length' \
+		<<<"$jobs")"
+	all_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // "" | select(length > 0)] | length' \
+		<<<"$jobs")"
+	if ((unique_job_names != job_count || unique_target_nodes != job_count || all_target_nodes != job_count)); then
+		echo 'capability result provenance rejected: Job names and targeted nodes must be unique' >&2
+		exit 1
+	fi
 fi
 
 normalize_image_id() {
@@ -90,6 +103,53 @@ sanitize_summary() {
 	fi
 }
 
+sanitize_capability_evidence() {
+	local log_line="$1" node="$2" verified_at="$3" image_id="$4"
+	jq -e -c --arg node "$node" --arg verified_at "$verified_at" \
+		--arg image_id "$image_id" --arg digest "$configured_digest" '
+		def reason_list:
+			[]
+			+ (if .initialization == "passed" then [] else ["initialization"] end)
+			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
+			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
+			+ (if .decode == "passed" then [] else ["decode"] end)
+			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
+		def expected_status:
+			if .telemetryStatus != "available" then "harness-blocked"
+			elif (reason_list | length) == 0 then "passed"
+			else "failed" end;
+		select(
+			type == "object" and
+			.proofSchemaVersion == 2 and
+			.nodeName == $node and
+			(.initialization == "passed" or .initialization == "failed") and
+			(.selectedRateControl | type == "string") and
+			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
+			(.telemetryReason | type == "string") and
+			((.telemetryStatus == "available" and .telemetryReason == "") or
+				(.telemetryStatus == "harness-blocked" and (.telemetryReason | length) > 0)) and
+			(.videoBusyNanoseconds | type == "number" and . >= 0) and
+			(.videoBusyPercent | type == "number" and . >= 0) and
+			(.encodeFps | type == "number" and . >= 0) and
+			(.encodeSpeed | type == "number" and . >= 0) and
+			(.decode == "passed" or .decode == "failed") and
+			(.vmaf == "passed" or .vmaf == "failed") and
+			.configuredImageDigest == $digest and
+			.proofStatus == expected_status and .status == expected_status and
+			.proofReasons == (reason_list | join(";")) and
+			($verified_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+		) |
+		{
+			nodeName, proofSchemaVersion, initialization, selectedRateControl,
+			telemetryStatus, telemetryReason, videoBusyNanoseconds, videoBusyPercent,
+			encodeFps, encodeSpeed, decode, vmaf, proofStatus, proofReasons,
+			verifiedAt: $verified_at, configuredImageDigest,
+			imageId: $image_id
+		}
+	' <<<"$log_line"
+}
+
 evidence_status=0
 while IFS= read -r job_json; do
 	[[ -n "$job_json" ]] || continue
@@ -115,8 +175,8 @@ while IFS= read -r job_json; do
 		node="$(yq -p=json -r '.[0].spec.nodeName // ""' <<<"$matching_pods")"
 	fi
 	if [[ "$mode" == 'capabilities' ]]; then
-		[[ "$phase" == 'Complete' && "$succeeded" == '1' && "$failed" == '0' ]] || {
-			echo "capability result provenance rejected: Job $name is not Complete" >&2
+		[[ "$phase" == 'Complete' || "$phase" == 'Failed' ]] || {
+			echo "capability result provenance rejected: Job $name is not terminal" >&2
 			exit 1
 		}
 		[[ "$job_uid" =~ ^[a-zA-Z0-9._-]+$ && "$pod_count" == '1' ]] || {
@@ -130,13 +190,17 @@ while IFS= read -r job_json; do
 				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID)
 			)] | length
 		' <<<"$matching_pods")"
-		[[ "$pod_phase" == 'Succeeded' && "$controller_count" == '1' ]] || {
-			echo "capability result provenance rejected: pod is not Succeeded and controlled by Job $name" >&2
+		target_node="$(yq -p=json -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""' \
+			<<<"$job_json")"
+		[[ ("$pod_phase" == 'Succeeded' || "$pod_phase" == 'Failed') &&
+			"$controller_count" == '1' && "$target_node" == "$node" ]] || {
+			echo "capability result provenance rejected: pod is not terminal, controlled, and targeted for Job $name" >&2
 			exit 1
 		}
 	fi
 	printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
 		"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"
+	normalized_image_id=''
 	if [[ "$phase" == 'Complete' || "$phase" == 'Failed' ]]; then
 		actual_image_id=''
 		if ((pod_count == 1)); then
@@ -158,7 +222,24 @@ while IFS= read -r job_json; do
 	fi
 	log_line="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs \
 		"job/$name" --container benchmark --tail=1 2>/dev/null || true)"
-	printf 'summary=%s\n' "$(sanitize_summary "$mode" "$log_line")"
+	if [[ "$mode" == 'capabilities' ]]; then
+		[[ -n "$normalized_image_id" ]] || continue
+		capability_evidence="$(sanitize_capability_evidence "$log_line" "$node" "$completion" \
+			"$normalized_image_id")" || {
+			echo "capability result schema rejected: job=$name" >&2
+			exit 1
+		}
+		proof_status="$(jq -r '.proofStatus' <<<"$capability_evidence")"
+		if [[ ("$proof_status" == 'passed' && "$phase" == 'Complete' && "$pod_phase" == 'Succeeded') ||
+			("$proof_status" != 'passed' && "$phase" == 'Failed' && "$pod_phase" == 'Failed') ]]; then
+			printf 'capability_evidence=%s\n' "$capability_evidence"
+		else
+			echo "capability result provenance rejected: terminal phase contradicts proof for Job $name" >&2
+			exit 1
+		fi
+	else
+		printf 'summary=%s\n' "$(sanitize_summary "$mode" "$log_line")"
+	fi
 done < <(yq -p=json -o=json -I=0 '.items[]' <<<"$jobs")
 
 printf 'artifact_location=/out/runs/%s\n' "$run_id"
