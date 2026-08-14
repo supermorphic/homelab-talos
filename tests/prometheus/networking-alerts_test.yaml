@@ -217,6 +217,25 @@ tests:
         alertname: PlexWorkloadPolicyDenied
         exp_alerts: []
 
+  # --- PlexWorkloadPolicyDenied: exactly three events fire -------------------------
+  - interval: 1m
+    input_series:
+      # Stable zero prehistory keeps increase() at the hand-derived value of 3.
+      - series: 'hubble_drop_total{destination="media/plex", reason="POLICY_DENIED", source="k8s:io.kubernetes.pod.namespace=media,k8s:app.kubernetes.io/name=sonarr"}'
+        values: '0x330 1 2 3 3x40'
+    alert_rule_test:
+      - eval_time: 362m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts: []
+      - eval_time: 364m
+        alertname: PlexWorkloadPolicyDenied
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Kubernetes workload is denied while reaching Plex
+              description: >-
+                At least three Cilium POLICY_DENIED events from Kubernetes workloads to media/plex occurred in the last six hours and remained observable for 30 minutes. A Plex integration may be missing from the ingress allow-list. Group hubble_drop_total by source to identify it, then use `mise exec -- just kube plex-network-observe` if live flow attribution is needed.
+
   # --- PlexWorkloadPolicyDenied: fewer than three events stay silent ----------------
   - interval: 1m
     input_series:

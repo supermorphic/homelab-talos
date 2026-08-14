@@ -123,9 +123,9 @@ DaemonSet and ServiceMonitor are healthy.
 
 At least three Cilium `POLICY_DENIED` events from Kubernetes workloads to
 `media/plex` occurred in six hours and the condition remained observable for 30
-minutes. This is the signature of a Plex consumer missing from the allow-list. It is
-not a general network-policy alert and does not prove which endpoint enforced the
-denial.
+minutes. This means a workload was repeatedly denied while reaching Plex. It is not
+a general network-policy alert. Either Plex ingress or the source workload's egress
+policy can enforce the denial.
 
 Start by grouping the same bounded increase by source:
 
@@ -149,11 +149,13 @@ current Plex flows for attribution:
 mise exec -- just kube plex-network-observe 600
 ```
 
-If the source is an intended Plex consumer, update the ingress allow-list in
-`kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml`, the pinned consumer set in
-`scripts/validate/plex.sh`, and the mutation cases in
-`scripts/test/plex-validator-test.sh` together. If the source should not reach Plex,
-inspect its application configuration instead of widening policy.
+Before changing policy, inspect both boundaries: Plex ingress and any egress policy
+that selects the source workload. If Plex ingress admission is missing for an intended
+consumer, update `kubernetes/apps/media/plex/app/ciliumnetworkpolicy.yaml`, the pinned
+consumer set in `scripts/validate/plex.sh`, and the mutation cases in
+`scripts/test/plex-validator-test.sh` together. If source egress is the enforcing
+boundary, change only that application's policy and only when the traffic is intended.
+Otherwise, inspect the source application's configuration instead of widening policy.
 
 The alert aggregates all sources and can remain active until the last denial burst
 leaves the six-hour window. One or two denied events remain below the selected noise
