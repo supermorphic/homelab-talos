@@ -41,6 +41,7 @@ executions:
     - validation.tailscale-operator
     - validation.tailscale-subnet-router
     - validation.networking-alerts
+    - validation.alerts-coverage
     - validation.ntfy
     - validation.alertmanager-ntfy
 
@@ -392,6 +393,10 @@ suites:
   - metadata: {id: validation.networking-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: networking-alerts, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube alerts-validate networking", implementation: scripts/validate/alerts.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.alerts-coverage, source: validation, framework: bash, suite: ci, tier: offline, target: alerts-coverage, scenario: source, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube alerts-coverage-validate", implementation: scripts/validate/alerts-coverage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.ntfy, source: validation, framework: bash, suite: ci, tier: offline, target: ntfy, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

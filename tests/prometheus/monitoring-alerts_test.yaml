@@ -239,3 +239,46 @@ tests:
       - eval_time: 15m
         alertname: NtfyPersistentVolumeClaimNotBound
         exp_alerts: []
+
+  # --- test-reports ---
+
+  - name: test report archive claim leaves Bound
+    interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="test-reports", persistentvolumeclaim="test-reports", phase="Bound"}'
+        values: '1x8 0x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TestReportsPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TestReportsPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Test report archive claim is absent or unbound
+              description: >-
+                The test-reports/test-reports PVC has not reported Bound for more than five minutes. Published test evidence may be unavailable.
+
+  # Capacity: the first window sits at 20% free, above the 15% threshold, and must stay
+  # silent; it then drops to 10% and fires. That pair is the oracle — a rule with the
+  # comparison inverted fails the silent case.
+  - name: archive free space crosses the fifteen percent floor
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="test-reports", persistentvolumeclaim="test-reports"}'
+        values: '2000000000x8 1000000000x18'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="test-reports", persistentvolumeclaim="test-reports"}'
+        values: '10000000000x26'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TestReportsArchiveCapacityLow
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TestReportsArchiveCapacityLow
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: test-reports, persistentvolumeclaim: test-reports}
+            exp_annotations:
+              summary: Test report archive has less than 15% free space
+              description: >-
+                Retention could not keep the persistent report archive below its capacity threshold. Review report sizes and Longhorn capacity.
