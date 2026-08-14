@@ -598,6 +598,11 @@ tautulli-validate: require-bash
 alerts-validate domain: require-bash
     @scripts/validate/alerts.sh {{domain}}
 
+# Every alert in the tree must be asserted by name in a promtool fixture. Tracks alert
+# names, not files: a fixture covering one alert in a file must not vouch for the rest.
+alerts-coverage-validate: require-bash
+    @scripts/validate/alerts-coverage.sh
+
 # Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash

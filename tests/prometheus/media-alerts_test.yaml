@@ -273,3 +273,130 @@ tests:
       - eval_time: 22m
         alertname: PlexRemoteConnectionFlood
         exp_alerts: []
+
+  # --- qbittorrent VPN and Gluetun restart-loop coverage ---
+
+  # QbittorrentVpnDown: the Gatus control-server probe reporting 0 for >5m.
+  # Silent before the 5m hold, firing after it, silent again once the probe recovers.
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="qbittorrent-vpn", group="Media"}'
+        values: '1x3 0x8 1x5'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: QbittorrentVpnDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: QbittorrentVpnDown
+        exp_alerts:
+          - exp_labels: {severity: critical, name: qbittorrent-vpn, group: Media}
+            exp_annotations:
+              summary: qBittorrent ProtonVPN tunnel is down
+              description: >-
+                Gluetun reports the ProtonVPN tunnel is not running (Gatus health probe of the control server failing for >5m). qBittorrent egress is kill-switched (fail-closed) and downloads are paused. Check Gluetun logs and the ProtonVPN WireGuard credential (annual Extend / expiry — see docs/protonvpn-gluetun.md).
+      - eval_time: 16m
+        alertname: QbittorrentVpnDown
+        exp_alerts: []
+
+  # A healthy tunnel must never trip it, and the media-wide MediaEndpointDown rule
+  # explicitly excludes name="qbittorrent-vpn", so neither rule may fire here.
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="qbittorrent-vpn", group="Media"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: QbittorrentVpnDown
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: MediaEndpointDown
+        exp_alerts: []
+
+  # QbittorrentGluetunRestartLoop: one restart is healthy recovery; two inside the
+  # 15m window is a loop. The rule counts increase() over [15m] and holds for 1m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_init_container_status_restarts_total{namespace="media", pod="qbittorrent-abc123", container="gluetun"}'
+        values: '0x5 1x10 2x10'
+    alert_rule_test:
+      # A single restart inside the window is deliberate recovery, not a loop.
+      - eval_time: 12m
+        alertname: QbittorrentGluetunRestartLoop
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: QbittorrentGluetunRestartLoop
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: media, pod: qbittorrent-abc123, container: gluetun}
+            exp_annotations:
+              summary: qBittorrent Gluetun liveness recovery is looping
+              description: >-
+                The Gluetun container restarted at least twice in 15 minutes. Its deliberately slow liveness fallback is not restoring a nonzero ProtonVPN forwarded port. qBittorrent remains fail-closed; inspect Gluetun logs and recreate the qBittorrent pod if a fresh network namespace is required.
+
+  # QbittorrentVpnProbeMissing: the series vanishing entirely, which blinds VpnDown.
+  # An unrelated Media probe is present throughout, so this proves the label matchers
+  # INSIDE absent() are right rather than merely that absent() works.
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="plex", group="Media"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: QbittorrentVpnProbeMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: QbittorrentVpnProbeMissing
+        exp_alerts:
+          # absent() carries its equality matchers through as labels.
+          - exp_labels: {severity: warning, name: qbittorrent-vpn, group: Media}
+            exp_annotations:
+              summary: qBittorrent VPN health probe metric is missing
+              description: >-
+                gatus_results_endpoint_success for the qbittorrent-vpn probe is absent for >15m, so the QbittorrentVpnDown alert cannot fire. Check Gatus and the qbittorrent-gluetun-control Service.
+
+  # --- encode-benchmark Job outcome coverage ---
+
+  # EncodeBenchmarkJobFailed fires per failing Job and stays silent on a healthy one.
+  # Both annotations template {{ $labels.job_name }}, so the expected text is rendered.
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run1"}'
+        values: '0x3 1x10'
+      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run2"}'
+        values: '0x13'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EncodeBenchmarkJobFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EncodeBenchmarkJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: media, job_name: encode-benchmark-run1}
+            exp_annotations:
+              summary: Encoding benchmark Job encode-benchmark-run1 failed
+              description: >-
+                Job encode-benchmark-run1 failed. Inspect the run with `mise exec -- just kube encode-benchmark-results <run-id>`.
+
+  # EncodeBenchmarkJobCompleted watches the succeeded counter, so a failed Job must not
+  # trip it and a succeeded one must not trip EncodeBenchmarkJobFailed. Pairing the two
+  # catches the metric being swapped between them.
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_succeeded{namespace="media", job_name="encode-benchmark-run3"}'
+        values: '0x3 1x10'
+      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run3"}'
+        values: '0x13'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EncodeBenchmarkJobCompleted
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EncodeBenchmarkJobCompleted
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: media, job_name: encode-benchmark-run3}
+            exp_annotations:
+              summary: Encoding benchmark Job encode-benchmark-run3 completed
+              description: >-
+                Job encode-benchmark-run3 completed. Review the run with `mise exec -- just kube encode-benchmark-results <run-id>`.
+      - eval_time: 6m
+        alertname: EncodeBenchmarkJobFailed
+        exp_alerts: []

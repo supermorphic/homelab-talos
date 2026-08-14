@@ -100,3 +100,185 @@ tests:
                 Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
                 custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
                 the Flux APIs).
+
+  # --- ntfy and portainer ---
+  #
+  # ntfy and portainer carry structurally identical rule sets: a Gatus Down rule, an
+  # absent() ProbeMissing rule, and a PVC NotBound rule wrapped in absent(... == 1).
+  # Every case below drives one app into the failure state while the other stays healthy,
+  # so a label matcher copied between the two files without being edited fails here.
+
+  - name: ntfy down while portainer stays healthy
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="ntfy", group="Platform"}'
+        values: '1x3 0x8 1x5'
+      - series: 'gatus_results_endpoint_success{name="portainer", group="Platform"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: NtfyDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NtfyDown
+        exp_alerts:
+          - exp_labels: {severity: critical, name: ntfy, group: Platform}
+            exp_annotations:
+              summary: ntfy is unavailable
+              description: >-
+                The ntfy /v1/health Gatus probe has failed for more than five minutes. Alert and media notifications will not be delivered. Check the ntfy Deployment, its PVC/Longhorn volume, and its CiliumNetworkPolicy.
+      # Portainer is healthy throughout, proving the rules do not cross-fire.
+      - eval_time: 10m
+        alertname: PortainerDown
+        exp_alerts: []
+      # Recovery clears it.
+      - eval_time: 16m
+        alertname: NtfyDown
+        exp_alerts: []
+
+  - name: portainer down while ntfy stays healthy
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="portainer", group="Platform"}'
+        values: '1x3 0x8 1x5'
+      - series: 'gatus_results_endpoint_success{name="ntfy", group="Platform"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: PortainerDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PortainerDown
+        exp_alerts:
+          - exp_labels: {severity: critical, name: portainer, group: Platform}
+            exp_annotations:
+              summary: Portainer is unavailable through the internal gateway
+              description: >-
+                The Portainer Gatus probe has failed for more than five minutes. Check internal DNS, the Gateway route, the Portainer Deployment, and its CiliumNetworkPolicy.
+      - eval_time: 10m
+        alertname: NtfyDown
+        exp_alerts: []
+
+  # ProbeMissing on both: an unrelated Platform probe is present the whole time and the
+  # two targets are absent, so this proves the matchers INSIDE absent() are correct
+  # rather than merely that absent() works.
+  - name: both probe series absent while an unrelated Platform probe is present
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="echo", group="Platform"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: NtfyProbeMissing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: PortainerProbeMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: NtfyProbeMissing
+        exp_alerts:
+          # absent() carries its equality matchers through as labels.
+          - exp_labels: {severity: warning, name: ntfy, group: Platform}
+            exp_annotations:
+              summary: ntfy probe data is missing
+              description: >-
+                The ntfy Gatus metric has been absent for more than 15 minutes, so NtfyDown cannot fire. Check Gatus and its ServiceMonitor.
+      - eval_time: 16m
+        alertname: PortainerProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, name: portainer, group: Platform}
+            exp_annotations:
+              summary: Portainer probe data is missing
+              description: >-
+                The Portainer Gatus metric has been absent for more than 15 minutes, so PortainerDown cannot fire. Check Gatus and its ServiceMonitor.
+
+  # A present-and-Bound claim keeps the PVC rule silent; the phase series dropping out of
+  # Bound fires it. Portainer stays Bound throughout so the two do not cross-fire.
+  - name: ntfy claim leaves Bound while portainer stays Bound
+    interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="ntfy", persistentvolumeclaim="ntfy", phase="Bound"}'
+        values: '1x8 0x12'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="portainer", persistentvolumeclaim="portainer", phase="Bound"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NtfyPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NtfyPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: ntfy database claim is absent or unbound
+              description: >-
+                The ntfy/ntfy PVC has not reported Bound for more than five minutes. The message cache and auth database continuity is at risk; inspect the PVC, Longhorn volume, and the ntfy Deployment.
+      - eval_time: 15m
+        alertname: PortainerPersistentVolumeClaimNotBound
+        exp_alerts: []
+
+  - name: portainer claim leaves Bound while ntfy stays Bound
+    interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="portainer", persistentvolumeclaim="portainer", phase="Bound"}'
+        values: '1x8 0x12'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="ntfy", persistentvolumeclaim="ntfy", phase="Bound"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PortainerPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PortainerPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Portainer database claim is absent or unbound
+              description: >-
+                The portainer/portainer PVC has not reported Bound for more than five minutes. Portainer's database continuity is at risk; inspect the PVC, Longhorn volume, replicas, and backup state.
+      - eval_time: 15m
+        alertname: NtfyPersistentVolumeClaimNotBound
+        exp_alerts: []
+
+  # --- test-reports ---
+
+  - name: test report archive claim leaves Bound
+    interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="test-reports", persistentvolumeclaim="test-reports", phase="Bound"}'
+        values: '1x8 0x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TestReportsPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TestReportsPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Test report archive claim is absent or unbound
+              description: >-
+                The test-reports/test-reports PVC has not reported Bound for more than five minutes. Published test evidence may be unavailable.
+
+  # Capacity: the first window sits at 20% free, above the 15% threshold, and must stay
+  # silent; it then drops to 10% and fires. That pair is the oracle — a rule with the
+  # comparison inverted fails the silent case.
+  - name: archive free space crosses the fifteen percent floor
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="test-reports", persistentvolumeclaim="test-reports"}'
+        values: '2000000000x8 1000000000x18'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="test-reports", persistentvolumeclaim="test-reports"}'
+        values: '10000000000x26'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TestReportsArchiveCapacityLow
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TestReportsArchiveCapacityLow
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: test-reports, persistentvolumeclaim: test-reports}
+            exp_annotations:
+              summary: Test report archive has less than 15% free space
+              description: >-
+                Retention could not keep the persistent report archive below its capacity threshold. Review report sizes and Longhorn capacity.

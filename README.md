@@ -252,6 +252,7 @@ available for focused developer validation.
 | `just repo homepage-tautulli-secrets` | Write only the encrypted Tautulli API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `TAUTULLI_API_KEY`; `HOMEPAGE_TAUTULLI_SECRETS_CONFIRM=write:monitoring:homepage-tautulli:sops` | Tautulli activation; operator-only tracked ciphertext write |
 | `just kube tautulli-validate` | Validate suspended/active Tautulli source, storage, probes, route, integrations, and pinned render | — | Cluster-independent; included in `just ci` |
 | `just kube alerts-validate <domain>` | Validate one domain alerts application's placement and wiring, then run promtool syntax/unit tests | — | Cluster-independent; included in `just ci` |
+| `just kube alerts-coverage-validate` | Require every alert name in the tree to be asserted in a promtool fixture | — | Cluster-independent; included in `just ci` |
 | `just bootstrap media-app tautulli` | Guardedly resume staged Tautulli and run liveness acceptance | `MEDIA_APP_BOOTSTRAP_CONFIRM=bootstrap:media-app:tautulli` | Operator-only; mutating after confirmation |
 | `just kube tautulli-verify` | Verify live Tautulli resources, route, DNS, exact health status, Gatus series, and loaded rules | `.kube/config` | Operator-only and read-only |
 | `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Portainer Phase 1; mutating tracked ciphertext after confirmation |
