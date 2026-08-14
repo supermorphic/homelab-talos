@@ -35,7 +35,7 @@ SELECTOR = "tailscale.supermorphic.com/component=lab-subnet-router"
 CONNECTOR = "lab-subnet-router"
 STATE_NAME = "tailscale-subnet-router-replica-recovery-state.json"
 # HADegraded has `for: 15m`; a healthy reschedule recovers in well under a minute, so the
-# alert is expected NOT to fire. promtool (validation.tailscale-alerts) proves it WOULD fire
+# alert is expected NOT to fire. promtool (validation.networking-alerts) proves it WOULD fire
 # if degradation persisted; we record the expectation as evidence, never as a pass gate.
 HADEGRADED_FOR_SECONDS = 15 * 60
 

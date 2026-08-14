@@ -962,12 +962,6 @@ tailscale-subnet-router-validate: require-bash
 tailscale-subnet-router-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.tailscale-subnet-router -- scripts/verify/tailscale-subnet-router.sh {{quote(kubeconfig)}}
 
-# Validate the Tailscale alert rules offline: extract the PrometheusRule .spec (single source)
-# and run promtool check + unit tests — the 7 alerts across three temporal states (silent →
-# firing → silent) and the absent() matcher cases (unrelated object present, target absent).
-tailscale-alerts-validate: require-bash
-    @scripts/validate/tailscale-alerts.sh
-
 # Validate the ntfy source: files, wiring, staged suspend, dependency graph, SOPS
 # decryption, pinned image, hardened non-root pod, RWO PVC, server.yml (deny-all,
 # require-login, signup off, iOS upstream, metrics listener), the internal HTTPRoute,
