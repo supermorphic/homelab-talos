@@ -1,6 +1,6 @@
 # Plex workload policy denial alert — amendment
 
-- **Status: Draft.**
+- **Status: Accepted.** Approved by the operator on 2026-08-14.
 
 Date: 2026-08-14.
 Branch: `dispatch-policy-denied-alert`.
