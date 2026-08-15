@@ -29,6 +29,7 @@ executions:
     - validation.tautulli
     - validation.media-alerts
     - validation.monitoring-alerts
+    - validation.security-alerts
     - validation.flaresolverr
     - validation.media-policy
     - validation.monitoring
@@ -78,6 +79,7 @@ campaigns:
       - verification.flaresolverr
       - verification.qbit-manage
       - verification.monitoring
+      - verification.security-alerts
       - verification.gatus
       - verification.portainer
       - verification.test-reports
@@ -134,6 +136,7 @@ campaigns:
       - verification.flaresolverr
       - verification.qbit-manage
       - verification.monitoring
+      - verification.security-alerts
       - verification.gatus
       - verification.portainer
       - verification.test-reports
@@ -346,6 +349,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube alerts-validate monitoring", implementation: scripts/validate/alerts.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.security-alerts, source: validation, framework: bash, suite: ci, tier: offline, target: security-alerts, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube alerts-validate security", implementation: scripts/validate/alerts.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.flaresolverr, source: validation, framework: bash, suite: ci, tier: offline, target: flaresolverr, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flaresolverr-validate", implementation: scripts/validate/flaresolverr.sh}
@@ -507,6 +514,11 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube monitoring-verify", implementation: scripts/verify/monitoring.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.security-alerts, source: verification, framework: bash, suite: platform, tier: verification, target: security-alerts, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube security-alerts-verify", implementation: scripts/verify/security-alerts.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.gatus, source: verification, framework: bash, suite: platform, tier: verification, target: gatus, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

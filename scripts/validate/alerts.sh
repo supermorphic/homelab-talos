@@ -5,10 +5,11 @@ set -euo pipefail
 # (the single source of truth) into plain Prometheus rule files and runs promtool against
 # the tracked fixture, so alert PromQL is never duplicated in a test. Replaces the three
 # near-identical per-subject validators this repository accumulated.
-[[ "$#" -eq 1 ]] || { echo 'Usage: alerts.sh <media|monitoring|networking>' >&2; exit 2; }
+[[ "$#" -eq 1 ]] || { echo 'Usage: alerts.sh <media|monitoring|networking|security>' >&2; exit 2; }
 domain="$1"
 case "$domain" in
-  media|monitoring|networking) ;;
+  media|monitoring|networking) expected_dependencies='kube-prometheus-stack' ;;
+  security) expected_dependencies='cert-manager-monitoring,kube-prometheus-stack' ;;
   *) echo "Unknown alerts domain: $domain" >&2; exit 2 ;;
 esac
 
@@ -29,7 +30,7 @@ rg -qx "  - ./alerts/ks.yaml" "kubernetes/apps/$domain/kustomization.yaml" || {
 }
 [[ "$(yq -r '.metadata.name' "$ks")" == "$domain-alerts" ]]
 [[ "$(yq -r '.metadata.namespace' "$ks")" == 'flux-system' ]]
-[[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'kube-prometheus-stack' ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == "$expected_dependencies" ]]
 [[ "$(yq -r '.spec.suspend // false' "$ks")" == 'false' ]]
 [[ "$(yq -r '.spec.path' "$ks")" == "./kubernetes/apps/$domain/alerts/app" ]]
 

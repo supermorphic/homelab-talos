@@ -1,0 +1,73 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: certificates
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: cert-manager
+spec:
+  groups:
+    - name: certificate-expiry
+      rules:
+        - alert: WildcardCertificateExpiringSoon
+          expr: >-
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking",
+                  name="wildcard-lab-supermorphic-com"
+                }
+              ) - time()
+            ) < 14 * 24 * 60 * 60
+            and
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking",
+                  name="wildcard-lab-supermorphic-com"
+                }
+              ) - time()
+            ) > 3 * 24 * 60 * 60
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Production wildcard certificate expires within 14 days
+            description: >-
+              The networking/wildcard-lab-supermorphic-com certificate has not renewed
+              and expires in less than 14 days.
+        - alert: WildcardCertificateExpiryCritical
+          expr: >-
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking",
+                  name="wildcard-lab-supermorphic-com"
+                }
+              ) - time()
+            ) <= 3 * 24 * 60 * 60
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Production wildcard certificate expires within 3 days
+            description: >-
+              The networking/wildcard-lab-supermorphic-com certificate expires in 3
+              days or less. Internal HTTPS service continuity is at immediate risk.
+        - alert: WildcardCertificateExpiryMetricMissing
+          expr: >-
+            absent(
+              certmanager_certificate_expiration_timestamp_seconds{
+                namespace="networking",
+                name="wildcard-lab-supermorphic-com"
+              }
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Production wildcard certificate expiry metric is missing
+            description: >-
+              Prometheus has received no expiry timestamp for
+              networking/wildcard-lab-supermorphic-com for more than five minutes.

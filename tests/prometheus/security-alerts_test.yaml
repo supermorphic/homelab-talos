@@ -1,0 +1,151 @@
+rule_files:
+  - certificates.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: production wildcard remains silent outside the warning window
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '2592000x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts: []
+
+  - name: production wildcard warning is exclusive of critical
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '864000x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expires within 14 days
+              description: The networking/wildcard-lab-supermorphic-com certificate has not renewed and expires in less than 14 days.
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts: []
+
+  - name: production wildcard critical suppresses the warning range
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '172800x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expires within 3 days
+              description: The networking/wildcard-lab-supermorphic-com certificate expires in 3 days or less. Internal HTTPS service continuity is at immediate risk.
+
+  - name: exactly fourteen days remains outside the warning range
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '1209600+60x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts: []
+
+  - name: exactly three days remains in the critical range only
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '259200+60x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expires within 3 days
+              description: The networking/wildcard-lab-supermorphic-com certificate expires in 3 days or less. Internal HTTPS service continuity is at immediate risk.
+
+  - name: successful renewal updates the same identity and clears warning
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '864000x20 7777200x10'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expires within 14 days
+              description: The networking/wildcard-lab-supermorphic-com certificate has not renewed and expires in less than 14 days.
+      - eval_time: 21m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts: []
+
+  - name: exact production expiry metric is missing while unrelated certificates exist
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="other",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '7776000x10'
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="other-certificate",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '7776000x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: WildcardCertificateExpiryMetricMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WildcardCertificateExpiryMetricMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expiry metric is missing
+              description: Prometheus has received no expiry timestamp for networking/wildcard-lab-supermorphic-com for more than five minutes.
+
+  - name: exact production expiry metric is present
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '7776000x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WildcardCertificateExpiryMetricMissing
+        exp_alerts: []
+
+  - name: expired production wildcard is critical only
+    interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com",issuer_name="letsencrypt-production",issuer_kind="ClusterIssuer",issuer_group="cert-manager.io"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WildcardCertificateExpiryCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: networking, name: wildcard-lab-supermorphic-com}
+            exp_annotations:
+              summary: Production wildcard certificate expires within 3 days
+              description: The networking/wildcard-lab-supermorphic-com certificate expires in 3 days or less. Internal HTTPS service continuity is at immediate risk.

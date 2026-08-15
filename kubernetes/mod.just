@@ -824,6 +824,11 @@ monitoring-validate: require-bash
 monitoring-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(kubeconfig)}}
 
+# Verify the live cert-manager scrape target, production expiry metric identity,
+# security alert-rule health, and staging-resource pruning. Read-only; not in ci.
+security-alerts-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.security-alerts -- scripts/verify/security-alerts.sh {{quote(kubeconfig)}}
+
 # Diagnose the Flux resource-alert signal path stage by stage, preserving targeted,
 # sanitized evidence in a canonical test result. Read-only; never sends an alert.
 flux-alerts-diagnostics: require-bash
