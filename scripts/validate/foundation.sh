@@ -120,6 +120,10 @@ cert_monitor='kubernetes/apps/security/cert-manager/monitoring/servicemonitor.ya
 [[ "$(yq -r '.spec.namespaceSelector.matchNames | join(",")' "$cert_monitor")" == 'cert-manager' ]]
 [[ "$(yq -r '.spec.endpoints | length' "$cert_monitor")" == '1' ]]
 [[ "$(yq -r '.spec.endpoints[0] | [.port,.interval,.scrapeTimeout] | join(",")' "$cert_monitor")" == 'http-metrics,1m,30s' ]]
+[[ "$(yq -r '.spec.endpoints[0].honorLabels' "$cert_monitor")" == 'true' ]] || {
+  echo 'cert-manager ServiceMonitor endpoint must set honorLabels: true to preserve exporter labels.' >&2
+  exit 1
+}
 [[ "$(yq -r '.prometheus.servicemonitor.enabled // false' kubernetes/apps/security/cert-manager/app/values.yaml)" == 'false' ]]
 [[ "$(yq -r '.prometheus.podmonitor.enabled // false' kubernetes/apps/security/cert-manager/app/values.yaml)" == 'false' ]]
 
