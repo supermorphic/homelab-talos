@@ -1112,6 +1112,9 @@ PYTHON
 	prepare_execution_run
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export NODE_NAME='talos-03'
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
 
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
@@ -1122,8 +1125,8 @@ PYTHON
 		.[0] == "ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
 		([.[] | select(test("-c:v hevc_qsv"))] | length) == 8 and
 		([.[] | select(test("-c:v libx265"))] | length) == 13 and
-		any(.[]; contains("-global_quality 16 -look_ahead 1 -extbrc 1")) and
-		any(.[]; contains("-global_quality 30 -look_ahead 1 -extbrc 1")) and
+		any(.[]; contains("-global_quality 16 -look_ahead 0 -extbrc 0")) and
+		any(.[]; contains("-global_quality 30 -look_ahead 0 -extbrc 0")) and
 		any(.[]; contains("-crf 10")) and any(.[]; contains("-crf 34"))
 	' "$manifest"
 	[ "$status" -eq 0 ]
