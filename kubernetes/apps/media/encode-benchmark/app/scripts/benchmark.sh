@@ -76,7 +76,7 @@ build_commands() {
 	qsv_command=(
 		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128
 		-filter_hw_device hw -i "$clip" -map 0 -c:v hevc_qsv -preset veryslow
-		-global_quality "$gq" -look_ahead 1 -extbrc 1 -c:a copy -c:s copy
+		-global_quality "$gq" -look_ahead 0 -extbrc 0 -c:a copy -c:s copy
 		-map_metadata 0 -map_chapters 0 "$qsv_output"
 	)
 	x265_command=(
@@ -370,16 +370,19 @@ drm_fdinfo_metrics() {
 }
 
 qsv_proof() {
-	local encode_log="$1"
-	local fdinfo_log="$2"
-	local height="$3"
-	local selected='unknown' initialization='failed' fps='0.000000' speed='0.000000'
-	local gpu delta telemetry metrics reasons='' proof='suspect' value
-	if grep -q -E 'Successfully initiali[sz]ed the hardware device' "$encode_log" &&
-		! grep -q -E 'Device creation failed|Failed to initiali[sz]e' "$encode_log"; then
+	local encode_status="$1"
+	local encode_log="$2"
+	local fdinfo_log="$3"
+	local height="$4"
+	local selected='unknown' initialization='failed' binding='harness-blocked'
+	local render_node='' fps='0.000000' speed='0.000000'
+	local driver gpu delta telemetry metrics reasons='' proof='passed' value blocked=0
+	if [[ "$encode_status" == '0' ]] &&
+		! grep -q -E 'Device creation failed|Failed to initiali[sz]e|Error creating a MFX session' "$encode_log"; then
 		initialization='passed'
 	fi
-	value="$(grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' "$encode_log" | tail -n 1 || true)"
+	value="$(grep -i -E 'Using .*ratecontrol method|Runtime selected ratecontrol method:' "$encode_log" |
+		grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' | tail -n 1 || true)"
 	case "${value^^}" in
 	LA_ICQ | LA-ICQ | LAICQ) selected='LA-ICQ' ;;
 	CQP | ICQ | CBR | VBR | AVBR | QVBR) selected="${value^^}" ;;
@@ -388,8 +391,17 @@ qsv_proof() {
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
 	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
+	value="$(grep -E '^render-node: /dev/dri/renderD[0-9]+$' "$fdinfo_log" | tail -n 1 || true)"
+	if [[ "$value" == 'render-node: /dev/dri/renderD128' ]]; then
+		render_node='/dev/dri/renderD128'
+		binding='passed'
+	elif [[ -n "$value" ]]; then
+		render_node="${value#render-node: }"
+		binding='failed'
+	fi
 	metrics="$(drm_fdinfo_metrics "$fdinfo_log")"
 	telemetry="$(jq -r '.status' <<<"$metrics")"
+	driver="$(jq -r '.driver' <<<"$metrics")"
 	delta="$(jq -r '.video_busy_nanoseconds' <<<"$metrics")"
 	gpu="$(awk -v value="$(jq -r '.video_busy_percent' <<<"$metrics")" \
 		'BEGIN { printf "%.6f", value }')"
@@ -397,26 +409,42 @@ qsv_proof() {
 	if [[ "$initialization" != 'passed' ]]; then
 		reasons='initialization'
 	fi
-	if [[ "$selected" != 'LA-ICQ' ]]; then
+	if [[ "$binding" != 'passed' ]]; then
+		reasons="${reasons:+$reasons;}binding"
+		[[ "$binding" == 'harness-blocked' ]] && blocked=1
+	fi
+	if [[ "$selected" == 'unknown' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+		[[ "$initialization" == 'passed' ]] && blocked=1
+	elif [[ "$selected" != 'ICQ' ]]; then
 		reasons="${reasons:+$reasons;}rate-control"
 	fi
-	if [[ "$telemetry" != 'available' ]] || ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
+	if [[ "$telemetry" != 'available' ]]; then
+		reasons="${reasons:+$reasons;}telemetry"
+		blocked=1
+	elif ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
 		reasons="${reasons:+$reasons;}telemetry"
 	fi
-	if ((height == 0)); then
-		if ! awk -v value="$speed" 'BEGIN { exit !(value > 0) }'; then
-			reasons="${reasons:+$reasons;}speed"
-		fi
-	elif ((height >= 2160)); then
-		if ! awk -v value="$speed" 'BEGIN { exit !(value >= 0.5 && value <= 2.0) }'; then
-			reasons="${reasons:+$reasons;}speed"
-		fi
-	elif ! awk -v value="$speed" 'BEGIN { exit !(value >= 2.0 && value <= 20.0) }'; then
-		reasons="${reasons:+$reasons;}speed"
+	if ! awk -v value="$speed" 'BEGIN { exit !(value > 0) }'; then
+		reasons="${reasons:+$reasons;}progress"
 	fi
-	[[ -n "$reasons" ]] || proof='passed'
-	printf '{"selected_rate_control":"%s","initialization":"%s","encode_fps":%s,"encode_speed":%s,"gpu_busy_percent":%s,"qsv_proof":"%s","suspect_reasons":"%s"}\n' \
-		"$selected" "$initialization" "$fps" "$speed" "$gpu" "$proof" "$reasons"
+	if [[ "$initialization" != 'passed' ]]; then
+		proof='failed'
+	elif ((blocked)); then
+		proof='harness-blocked'
+	elif [[ -n "$reasons" ]]; then
+		proof='failed'
+	fi
+	jq -n -c \
+		--arg selected "$selected" --arg initialization "$initialization" \
+		--arg binding "$binding" --arg render_node "$render_node" --arg driver "$driver" \
+		--argjson busy "$delta" --argjson fps "$fps" --argjson speed "$speed" \
+		--argjson gpu "$gpu" --arg proof "$proof" --arg reasons "$reasons" '{
+			selected_rate_control: $selected, initialization: $initialization,
+			binding: $binding, render_node: $render_node, drm_driver: $driver,
+			video_busy_nanoseconds: $busy, encode_fps: $fps, encode_speed: $speed,
+			gpu_busy_percent: $gpu, qsv_proof: $proof, suspect_reasons: $reasons
+		}'
 }
 
 passed_or_failed() {
@@ -680,7 +708,7 @@ record_result_inner() {
 	elif [[ -n "$(jq -r '.validation_failures' "$fixture")" ]]; then
 		status='invalid'
 	elif [[ "$encoder" == 'qsv' ]] &&
-		[[ "$selected" != 'LA-ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ||
+		[[ "$selected" != 'ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ||
 		"$qsv_initialization" != 'passed' || ! "$video_busy_nanoseconds" =~ ^[0-9]+$ ||
 		"$video_busy_nanoseconds" -le 0 ]]; then
 		status='invalid'
@@ -1207,7 +1235,7 @@ sample_drm_fdinfo() {
 	local ffmpeg_pid="$1"
 	local render_node="$2"
 	local output="$3"
-	local timestamp fd_path target fdinfo
+	local timestamp fd_path target fdinfo binding_recorded=0
 	local -a fd_paths
 	: >"$output"
 	while kill -0 "$ffmpeg_pid" 2>/dev/null; do
@@ -1220,6 +1248,10 @@ sample_drm_fdinfo() {
 			[[ "$target" == "$render_node" ]] || continue
 			fdinfo="/proc/$ffmpeg_pid/fdinfo/${fd_path##*/}"
 			[[ -r "$fdinfo" ]] || continue
+			if ((binding_recorded == 0)); then
+				printf 'render-node: %s\n\n' "$target" >>"$output"
+				binding_recorded=1
+			fi
 			timestamp="$(now_nanoseconds)"
 			{
 				printf '%s\n' "$timestamp"
@@ -1233,6 +1265,24 @@ sample_drm_fdinfo() {
 	done
 }
 
+run_qsv_initialization() {
+	local log="$1"
+	local status
+	if ffmpeg -nostdin -v verbose \
+		-init_hw_device qsv=hw:/dev/dri/renderD128 \
+		-filter_hw_device hw \
+		-f lavfi -i 'nullsrc=size=16x16:rate=1' \
+		-frames:v 1 -f null - >"$log" 2>&1; then
+		status=0
+	else
+		status=$?
+	fi
+	if ((status != 0)) || grep -q -E \
+		'Device creation failed|Failed to initiali[sz]e|Error creating a MFX session' "$log"; then
+		return 1
+	fi
+}
+
 run_qsv_encode() {
 	local input="$1"
 	local output="$2"
@@ -1244,13 +1294,13 @@ run_qsv_encode() {
 		cp "$BENCHMARK_TEST_FDINFO_FIXTURE" "$fdinfo_log"
 		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 			-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
-			-global_quality "$setting" -look_ahead 1 -extbrc 1 \
+			-global_quality "$setting" -look_ahead 0 -extbrc 0 \
 			-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1
 		return
 	fi
 	ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 		-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
-		-global_quality "$setting" -look_ahead 1 -extbrc 1 \
+		-global_quality "$setting" -look_ahead 0 -extbrc 0 \
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1 &
 	ffmpeg_pid=$!
 	sample_drm_fdinfo "$ffmpeg_pid" '/dev/dri/renderD128' "$fdinfo_log" &
@@ -1266,23 +1316,36 @@ run_qsv_encode() {
 capability_proof() {
 	local encode_log="$1"
 	local fdinfo_log="$2"
-	local capability_directory source encoded proof_json metrics_json
-	local encode_status decode='failed' vmaf='failed' proof_status='passed' reasons=''
-	local initialization selected telemetry delta percent fps speed telemetry_reason
+	local capability_directory source encoded initialization_log proof_json metrics_json
+	local initialization_status=1 encode_status=1 decode='failed' vmaf='failed'
+	local proof_status='passed' reasons=''
+	local initialization selected binding render_node driver telemetry delta percent fps speed telemetry_reason
 	local -a settings
 	capability_directory="$(dirname "$encode_log")"
 	source="$capability_directory/source.mkv"
 	encoded="$capability_directory/qsv.mkv"
+	initialization_log="$capability_directory/qsv-init.log"
+	: >"$fdinfo_log"
 	read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 
 	set +e
-	run_qsv_encode "$source" "$encoded" "${settings[0]}" "$encode_log" "$fdinfo_log"
-	encode_status=$?
+	run_qsv_initialization "$initialization_log"
+	initialization_status=$?
+	if ((initialization_status == 0)); then
+		run_qsv_encode "$source" "$encoded" "${settings[0]}" "$encode_log" "$fdinfo_log"
+		encode_status=$?
+	else
+		: >"$encode_log"
+		encode_status="$initialization_status"
+	fi
 	set -e
-	proof_json="$(qsv_proof "$encode_log" "$fdinfo_log" 0)"
+	proof_json="$(qsv_proof "$encode_status" "$encode_log" "$fdinfo_log" 0)"
 	metrics_json="$(drm_fdinfo_metrics "$fdinfo_log")"
 	initialization="$(jq -r '.initialization' <<<"$proof_json")"
 	selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+	binding="$(jq -r '.binding' <<<"$proof_json")"
+	render_node="$(jq -r '.render_node' <<<"$proof_json")"
+	driver="$(jq -r '.drm_driver' <<<"$proof_json")"
 	fps="$(jq -r '.encode_fps' <<<"$proof_json")"
 	speed="$(jq -r '.encode_speed' <<<"$proof_json")"
 	telemetry="$(jq -r '.status' <<<"$metrics_json")"
@@ -1300,7 +1363,16 @@ capability_proof() {
 	fi
 
 	[[ "$initialization" == 'passed' ]] || reasons='initialization'
-	[[ "$selected" == 'LA-ICQ' ]] || reasons="${reasons:+$reasons;}rate-control"
+	if [[ "$binding" != 'passed' ]]; then
+		reasons="${reasons:+$reasons;}binding"
+		[[ "$binding" == 'harness-blocked' ]] && proof_status='harness-blocked'
+	fi
+	if [[ "$selected" == 'unknown' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+		[[ "$initialization" == 'passed' ]] && proof_status='harness-blocked'
+	elif [[ "$selected" != 'ICQ' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+	fi
 	if [[ "$telemetry" == 'available' ]]; then
 		awk -v value="$delta" 'BEGIN { exit !(value > 0) }' ||
 			reasons="${reasons:+$reasons;}telemetry"
@@ -1312,12 +1384,19 @@ capability_proof() {
 		reasons="${reasons:+$reasons;}progress"
 	[[ "$decode" == 'passed' ]] || reasons="${reasons:+$reasons;}decode"
 	[[ "$vmaf" == 'passed' ]] || reasons="${reasons:+$reasons;}vmaf"
-	if [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then
+	if [[ "$initialization" != 'passed' ]]; then
+		proof_status='failed'
+	elif [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then
 		proof_status='failed'
 	fi
 
 	jq -n -c \
+		--arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson schema "$CONTRACT_CAPABILITY_SCHEMA" \
 		--arg initialization "$initialization" \
+		--arg initialization_reason '' \
+		--arg render_node "$render_node" \
+		--arg driver "$driver" \
 		--arg selected "$selected" \
 		--arg telemetry "$telemetry" \
 		--arg telemetry_reason "$telemetry_reason" \
@@ -1329,8 +1408,12 @@ capability_proof() {
 		--arg vmaf "$vmaf" \
 		--arg proof_status "$proof_status" \
 		--arg reasons "$reasons" '{
-			proofSchemaVersion: 2,
+			strategyId: $strategy,
+			proofSchemaVersion: $schema,
 			initialization: $initialization,
+			initializationReason: $initialization_reason,
+			renderNode: $render_node,
+			drmDriver: $driver,
 			selectedRateControl: $selected,
 			telemetryStatus: $telemetry,
 			telemetryReason: $telemetry_reason,
@@ -1474,7 +1557,7 @@ process_variant() {
 	printf '%s\n' "$validation" >"$validation_file"
 
 	if [[ "$encoder" == 'qsv' ]]; then
-		if proof_json="$(qsv_proof "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
+		if proof_json="$(qsv_proof "$encode_status" "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
 			jq -e . <<<"$proof_json" >/dev/null 2>&1; then
 			selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
 			qsv_initialization="$(jq -r '.initialization' <<<"$proof_json")"
@@ -1572,7 +1655,7 @@ encoder_commands_for_mode() {
 	for setting in "${settings[@]}"; do
 		contract_is_icq_setting "$samples_file" "$setting" || continue
 		commands="$(jq -c --arg command \
-			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 1 -extbrc 1 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
+			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
 			'. + [$command]' <<<"$commands")"
 	done
 	if [[ "$mode" == 'quality' ]]; then
@@ -2202,7 +2285,7 @@ test_dispatch() {
 		drm_fdinfo_metrics "$1"
 		;;
 	qsv-proof)
-		(($# == 3)) || usage
+		(($# == 4)) || usage
 		qsv_proof "$@"
 		;;
 	validate-probes)

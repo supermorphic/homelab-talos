@@ -6,7 +6,7 @@
   "clip_id": "detail",
   "encoder": "qsv",
   "requested_setting": "22",
-  "selected_rate_control": "LA-ICQ",
+  "selected_rate_control": "ICQ",
   "strategy_id": "qsv-hevc-icq-v1",
   "input_bytes": "1000",
   "output_bytes": "600",

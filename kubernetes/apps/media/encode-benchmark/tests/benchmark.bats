@@ -51,7 +51,11 @@ case "$*" in
 	exit 0
 	;;
 esac
-if [[ "$*" == *'-c:v hevc_qsv'* ]]; then
+if [[ "$*" == *"nullsrc=size=16x16:rate=1"* ]]; then
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		printf '%s\n' "$line"
+	done <"${BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE:?}" >&2
+elif [[ "$*" == *'-c:v hevc_qsv'* ]]; then
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		printf '%s\n' "$line"
 	done <"${BENCHMARK_CAPABILITY_ENCODE_FIXTURE:?}" >&2
@@ -88,7 +92,8 @@ EOF
 	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id"
 	export PATH="$stub_bin:$PATH"
 	export BENCHMARK_COMMAND_LOG="$BATS_TEST_TMPDIR/capability-commands.log"
-	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-la-icq.log"
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-icq.log"
+	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$FIXTURES/logs/qsv-init-success-no-phrase.log"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
 	unset BENCHMARK_CAPABILITY_DECODE_FAILURE BENCHMARK_CAPABILITY_VMAF_FAILURE
 	: >"$BENCHMARK_COMMAND_LOG"
@@ -214,8 +219,7 @@ if [[ "${BENCHMARK_TEST_FAIL_X265_EXTENSION:-0}" == '1' && "$arguments" == *'-c:
 fi
 if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
 	printf '%s\n' \
-		'[AVHWDeviceContext @ 0x1000] Successfully initialized the hardware device qsv=hw:/dev/dri/renderD128.' \
-		'[hevc_qsv @ 0x2000] Using the intelligent constant quality (LA_ICQ) ratecontrol method' \
+		'[hevc_qsv @ 0x2000] Using the intelligent constant quality (ICQ) ratecontrol method' \
 		'frame= 2160 fps=72.0 q=-0.0 Lsize= 60123KiB time=00:01:30.00 bitrate=5473.0kbits/s speed=1.25x' >&2
 fi
 last="${!#}"
@@ -349,8 +353,9 @@ expand_execution_panels_to_three_samples() {
 }
 
 # Catches capability claims based only on encoder exit status: this public mode
-# must prove LA-ICQ, video-engine work, progress, decode, and vmaf_4k.
-@test "capabilities proves the real five-second QSV path and prints compact path-free JSON" {
+# must prove exact ICQ, render-node binding, video-engine work, progress, decode,
+# and vmaf_4k without relying on a version-specific success sentence.
+@test "capabilities proves the phrase-free ICQ path with schema-v3 evidence" {
 	create_capability_tools
 	write_capability_samples
 	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
@@ -361,8 +366,11 @@ expand_execution_panels_to_three_samples() {
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"$BENCHMARK_SCRATCH"* ]]
 	run jq -e -c '
-		.status == "passed" and .proofSchemaVersion == 2 and .uid == 568 and
-		.initialization == "passed" and .selectedRateControl == "LA-ICQ" and
+		.status == "passed" and .strategyId == "qsv-hevc-icq-v1" and
+		.proofSchemaVersion == 3 and .uid == 568 and
+		.initialization == "passed" and .initializationReason == "" and
+		.renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" and
+		.selectedRateControl == "ICQ" and
 		.telemetryStatus == "available" and .videoBusyNanoseconds == 800000000 and
 		.videoBusyPercent == 40 and .encodeFps == 72 and .encodeSpeed == 1.25 and
 		.decode == "passed" and .vmaf == "passed" and
@@ -380,7 +388,11 @@ expand_execution_panels_to_three_samples() {
 	[ "$status" -eq 0 ]
 	run rg -F -- '-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
+	run rg -F -- '-f lavfi -i nullsrc=size=16x16:rate=1 -frames:v 1 -f null -' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
 	run rg -F -- '-nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run rg -F -- '-c:v hevc_qsv -preset veryslow -global_quality 16 -look_ahead 0 -extbrc 0' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run rg -F -- '-f null -' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
@@ -401,12 +413,14 @@ expand_execution_panels_to_three_samples() {
 	[ "$status" -eq 1 ]
 	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:rate-control' ]
 
-	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-init-failed.log"
+	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$FIXTURES/logs/qsv-init-known-failure.log"
 	run "$SCRIPTS/benchmark.sh" capabilities
 	[ "$status" -eq 1 ]
-	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'failed:initialization;rate-control;progress' ]
+	[ "$(jq -r '.proofStatus + ":" + .initialization' <<<"$output")" = 'failed:failed' ]
+	[[ "$(jq -r '.proofReasons' <<<"$output")" == initialization* ]]
+	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$FIXTURES/logs/qsv-init-success-no-phrase.log"
 
-	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-la-icq.log"
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$FIXTURES/logs/qsv-icq.log"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-idle.log"
 	run "$SCRIPTS/benchmark.sh" capabilities
 	[ "$status" -eq 1 ]
@@ -477,7 +491,7 @@ expand_execution_panels_to_three_samples() {
 
 	run jq -e '
 		.clip == ["ffmpeg","-nostdin","-v","error","-ss","00:17:23.456","-i","/media/Movie.mkv","-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
-		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality","22","-look_ahead","1","-extbrc","1","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/qsv-22.mkv"] and
+		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality","22","-look_ahead","0","-extbrc","0","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/qsv-22.mkv"] and
 		.x265 == ["ffmpeg","-nostdin","-v","verbose","-i","/scratch/detail.mkv","-map","0","-c:v","libx265","-preset","slow","-crf","20","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/x265-20.mkv"] and
 		.vmaf == ["ffmpeg","-nostdin","-v","error","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
 		.ssim == ["ffmpeg","-nostdin","-v","info","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
@@ -592,36 +606,57 @@ expand_execution_panels_to_three_samples() {
 	[ "$(jq -r '.status + ":" + .reason' <<<"$output")" = 'harness-blocked:invalid-video-capacity' ]
 }
 
-@test "QSV proof requires initialization LA-ICQ video telemetry and expected speed" {
+@test "QSV proof requires phrase-free initialization exact ICQ binding telemetry and progress" {
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		0 "$FIXTURES/logs/qsv-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
+	run jq -e '.selected_rate_control == "ICQ" and .initialization == "passed" and
+		.render_node == "/dev/dri/renderD128" and .drm_driver == "i915" and
+		.video_busy_nanoseconds == 800000000 and .qsv_proof == "passed" and
+		.suspect_reasons == ""' <<<"$output"
+	[ "$status" -eq 0 ]
+
+	for mode in LA_ICQ CQP CBR VBR AVBR QVBR; do
+		mode_log="$BATS_TEST_TMPDIR/qsv-$mode.log"
+		printf '%s\n' "[hevc_qsv] Runtime selected ratecontrol method: $mode" \
+			'frame= 2160 fps=72.0 speed=1.25x' >"$mode_log"
+		run "$SCRIPTS/benchmark.sh" _test qsv-proof \
+			0 "$mode_log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		[ "$status" -eq 0 ]
+		[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = 'failed:rate-control' ]
+	done
+
+	for evidence in 'frame= 2160 fps=72.0 speed=1.25x' \
+		'[hevc_qsv] Runtime selected ratecontrol method: UNKNOWN' \
+		'[hevc_qsv] Requested ratecontrol method: ICQ
+frame= 2160 fps=72.0 speed=1.25x'; do
+		mode_log="$BATS_TEST_TMPDIR/qsv-unparseable.log"
+		printf '%s\n' "$evidence" >"$mode_log"
+		run "$SCRIPTS/benchmark.sh" _test qsv-proof \
+			0 "$mode_log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		[ "$status" -eq 0 ]
+		if [[ "$evidence" == frame=* || "$evidence" == *'Requested ratecontrol'* ]]; then
+			expected='harness-blocked:rate-control'
+		else
+			expected='harness-blocked:rate-control;progress'
+		fi
+		[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = "$expected" ]
+	done
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		1 "$FIXTURES/logs/qsv-init-known-failure.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
+	[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = 'failed:initialization;rate-control;progress' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-init-failed.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		0 "$FIXTURES/logs/qsv-icq.log" "$FIXTURES/logs/drm-fdinfo-idle.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"unknown","initialization":"failed","encode_fps":0.000000,"encode_speed":0.000000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"initialization;rate-control;speed"}' ]
+	[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = 'failed:telemetry' ]
 
 	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-idle.log" 2160
+		0 "$FIXTURES/logs/qsv-requested-la-fallback-cqp.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":0.000000,"qsv_proof":"suspect","suspect_reasons":"telemetry"}' ]
-
-	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 1080
-	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"speed"}' ]
-
-	run "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-requested-la-fallback-cqp.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
-	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"CQP","initialization":"passed","encode_fps":74.000000,"encode_speed":1.300000,"gpu_busy_percent":40.000000,"qsv_proof":"suspect","suspect_reasons":"rate-control"}' ]
+	[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = 'failed:rate-control' ]
 }
 
 # Catches validation short-circuiting after the first failure, wrong duration
@@ -887,7 +922,7 @@ PYTHON
 	run rg -F -- '-nostdin -v error -i ' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run awk '
-		/-f null -$/ && !/libvmaf=/ && !/\[0:v\]\[1:v\]ssim/ {
+		/-f null -$/ && !/nullsrc=size=16x16/ && !/libvmaf=/ && !/\[0:v\]\[1:v\]ssim/ {
 			seen = 1
 			if ($0 !~ /(^| )-map 0:v:0( |$)/) { bad = 1; exit }
 		}
@@ -1675,17 +1710,18 @@ PYTHON
 	sandbox="$output"
 
 	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-la-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		0 "$FIXTURES/logs/qsv-icq.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"selected_rate_control":"LA-ICQ","initialization":"passed","encode_fps":72.000000,"encode_speed":1.250000,"gpu_busy_percent":40.000000,"qsv_proof":"passed","suspect_reasons":""}' ]
+	[[ "$output" == *'"selected_rate_control":"ICQ"'* ]]
+	[[ "$output" == *'"qsv_proof":"passed"'* ]]
 
 	# The fallback case must stay detectable on the reduced command surface: a
 	# parser that silently returned "unknown" would mark a CPU encode as QSV.
 	run env PATH="$sandbox" BENCHMARK_TEST_MODE=1 "$SCRIPTS/benchmark.sh" _test qsv-proof \
-		"$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
+		0 "$FIXTURES/logs/qsv-fallback.log" "$FIXTURES/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"selected_rate_control":"CQP"'* ]]
-	[[ "$output" == *'"qsv_proof":"suspect"'* ]]
+	[[ "$output" == *'"qsv_proof":"failed"'* ]]
 }
 
 # Catches the capability probe depending on any tool the runtime image lacks. The
