@@ -3,6 +3,8 @@
 set -euo pipefail
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$script_directory/contract.sh"
 benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
@@ -33,7 +35,6 @@ if [[ "$test_mode" != '1' ]]; then
 		fi
 	done
 fi
-
 usage() {
 	echo 'usage: benchmark.sh capabilities | quality [run-id] | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
 	exit 64
@@ -1246,12 +1247,14 @@ capability_proof() {
 	local capability_directory source encoded proof_json metrics_json
 	local encode_status decode='failed' vmaf='failed' proof_status='passed' reasons=''
 	local initialization selected telemetry delta percent fps speed telemetry_reason
+	local -a settings
 	capability_directory="$(dirname "$encode_log")"
 	source="$capability_directory/source.mkv"
 	encoded="$capability_directory/qsv.mkv"
+	read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 
 	set +e
-	run_qsv_encode "$source" "$encoded" 22 "$encode_log" "$fdinfo_log"
+	run_qsv_encode "$source" "$encoded" "${settings[0]}" "$encode_log" "$fdinfo_log"
 	encode_status=$?
 	set -e
 	proof_json="$(qsv_proof "$encode_log" "$fdinfo_log" 0)"
@@ -1527,12 +1530,12 @@ encoder_commands_for_mode() {
 	local -a settings
 	if [[ "$mode" == 'quality' ]]; then
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
-		settings=(20 22 24 26 28)
+		read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 	else
 		mapfile -t settings < <(jq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
 	fi
 	for setting in "${settings[@]}"; do
-		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
+		contract_is_icq_setting "$samples_file" "$setting" || continue
 		commands="$(jq -c --arg command \
 			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 1 -extbrc 1 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
 			'. + [$command]' <<<"$commands")"
@@ -1612,7 +1615,9 @@ quality_mode() {
 	local x265_points qsv_points setting attempted_crfs
 	local comparison_fixture comparison decision target next_crf
 	local panel_samples
-	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
+	local -a qsv_settings x265_settings
+	read -r -a qsv_settings <<<"$CONTRACT_ICQ_SETTINGS"
+	mapfile -t x265_settings < <(jq -r '.strategy.x265.initialCrfs[]' "$samples_file")
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
@@ -1742,8 +1747,8 @@ savings_mode() {
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
-		setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
+		setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || continue
+		contract_is_icq_setting "$samples_file" "$setting" || continue
 		if row_is_complete "$run_id" savings "$sha" full qsv "$setting"; then continue; fi
 		prepared="$(encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
 			qsv "$setting" "$source" full '' defer)"
@@ -1810,8 +1815,11 @@ finalist_mode() {
 	}
 	source="$(jq -r '.path' <<<"$sample")"
 	sha="$(jq -r '.sha256' <<<"$sample")"
-	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
+	setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || {
+		echo "no committed setting for cohort: $cohort" >&2
+		return 65
+	}
+	contract_is_icq_setting "$samples_file" "$setting" || {
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65
 	}
@@ -1868,8 +1876,11 @@ contention_mode() (
 		echo "contention case $contention_case requires an eligible 1920x1080 non-DV quality sample" >&2
 		return 65
 	fi
-	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
+	setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || {
+		echo "no committed setting for cohort: $cohort" >&2
+		return 65
+	}
+	contract_is_icq_setting "$samples_file" "$setting" || {
 		echo "no committed setting for cohort: $cohort" >&2
 		return 65
 	}
@@ -1926,7 +1937,7 @@ findings_mode() {
 	local run_id="$1" run_directory inputs quality_run savings_run contention_file
 	local quality_results quality_comparisons comparisons_json comparison savings_results contention
 	local findings_temp cohort distribution stats comparison_status sample_id clip_id qsv_setting
-	local premium verdict contention_fragments='[]' fragment fragment_run fragment_file fragment_path
+	local premium verdict candidate_settings contention_fragments='[]' fragment fragment_run fragment_file fragment_path
 	local fragment_header fragment_row fragment_fields fragment_case fragment_worker fragment_attempt
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
@@ -1955,6 +1966,7 @@ findings_mode() {
 	validate_run_id "$quality_run" || return
 	validate_run_id "$savings_run" || return
 	[[ "$contention_file" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]json$ ]] || return 64
+	candidate_settings="$(jq -c '.strategy.globalQualityCandidates' "$samples_file")"
 	quality_results="$benchmark_out/runs/$quality_run/results.csv"
 	quality_comparisons="$benchmark_out/runs/$quality_run/x265-comparisons.jsonl"
 	savings_results="$benchmark_out/runs/$savings_run/results.csv"
@@ -1990,13 +2002,14 @@ findings_mode() {
 			echo 'invalid named contention fragment' >&2
 			return 65
 		}
-		jq -e --arg run "$fragment_run" '
+		jq -e --arg run "$fragment_run" --argjson candidates "$candidate_settings" '
+			.[5] as $setting |
 			.[0] == $run and
 			(.[1] | test("^[a-d]$")) and
 			(.[2] | test("^worker-[12]$")) and
 			(.[3] | test("^[a-z0-9][a-z0-9._-]*$")) and
 			(.[4] | test("^(avc|vc1|hdr10)$")) and
-			(.[5] | test("^(20|22|24|26|28)$")) and
+			($candidates | index($setting | tonumber) != null) and
 			(.[6] | test("^(passed|failed|invalid)$")) and
 			(.[7] | test("^[1-9][0-9]*$")) and
 			(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
@@ -2111,6 +2124,16 @@ test_dispatch() {
 	local action="$1"
 	shift
 	case "$action" in
+	icq-settings)
+		(($# == 0)) || usage
+		contract_load "$samples_file"
+		printf '%s\n' "$CONTRACT_ICQ_SETTINGS"
+		;;
+	icq-setting)
+		(($# == 1)) || usage
+		contract_load "$samples_file"
+		contract_is_icq_setting "$samples_file" "$1"
+		;;
 	results-header)
 		(($# == 0)) || usage
 		printf '%s\n' "$results_header"
@@ -2169,27 +2192,33 @@ shift
 case "$mode" in
 capabilities)
 	(($# == 0)) || usage
+	contract_load "$samples_file" || exit $?
 	capabilities
 	;;
 _test) test_dispatch "$@" ;;
 quality)
 	(($# == 0 || $# == 1)) || usage
+	contract_load "$samples_file" || exit $?
 	quality_mode "${1:-}"
 	;;
 savings)
 	(($# == 1)) || usage
+	contract_load "$samples_file" || exit $?
 	savings_mode "$1"
 	;;
 finalist)
 	(($# == 2)) || usage
+	contract_load "$samples_file" || exit $?
 	finalist_mode "$1" "$2"
 	;;
 contention)
 	(($# == 4)) || usage
+	contract_load "$samples_file" || exit $?
 	contention_mode "$1" "$2" "$3" "$4"
 	;;
 findings)
 	(($# == 1)) || usage
+	contract_load "$samples_file" || exit $?
 	findings_mode "$1"
 	;;
 *) usage ;;

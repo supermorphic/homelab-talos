@@ -538,13 +538,13 @@ print(json.dumps(row["torrent_tags"]))
 	[ "$status" -eq 0 ]
 }
 
-# Catches a production break where any of the five tested commands regresses to
+# Catches a production break where any of the six tested commands regresses to
 # a scaffold mapping after the encode and still-generation contracts land.
 @test "ConfigMap maps all tested scripts to real implementations" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
+	[ "$output" = 'contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
 

@@ -18,52 +18,24 @@ metadata:
 data:
   samples.json: |
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
+      "strategy": {
+        "id": "qsv-hevc-icq-v1",
+        "resultsSchemaVersion": 2,
+        "runManifestSchemaVersion": 2,
+        "capabilityProofSchemaVersion": 3,
+        "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30],
+        "x265": {
+          "initialCrfs": [18, 20, 22, 24],
+          "minimumCrf": 10,
+          "maximumCrf": 34,
+          "step": 2
+        }
+      },
       "runtime": {
         "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
-        "capabilityStatus": "verified",
-        "capabilityEvidence": {
-          "nodes": [
-            {
-              "nodeName": "nuc1",
-              "proofSchemaVersion": 2,
-              "initialization": "failed",
-              "selectedRateControl": "ICQ",
-              "telemetryStatus": "available",
-              "telemetryReason": "",
-              "videoBusyNanoseconds": 204094592,
-              "videoBusyPercent": 5.057068,
-              "encodeFps": 47.000000,
-              "encodeSpeed": 1.540000,
-              "decode": "passed",
-              "vmaf": "passed",
-              "proofStatus": "failed",
-              "proofReasons": "initialization;rate-control",
-              "verifiedAt": "2026-08-14T21:17:57Z",
-              "configuredImageDigest": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
-              "imageId": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
-            },
-            {
-              "nodeName": "nuc3",
-              "proofSchemaVersion": 2,
-              "initialization": "failed",
-              "selectedRateControl": "ICQ",
-              "telemetryStatus": "available",
-              "telemetryReason": "",
-              "videoBusyNanoseconds": 205238384,
-              "videoBusyPercent": 5.072069,
-              "encodeFps": 46.000000,
-              "encodeSpeed": 1.510000,
-              "decode": "passed",
-              "vmaf": "passed",
-              "proofStatus": "failed",
-              "proofReasons": "initialization;rate-control",
-              "verifiedAt": "2026-08-14T21:18:06Z",
-              "configuredImageDigest": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
-              "imageId": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
-            }
-          ]
-        },
+        "capabilityStatus": "pending",
+        "capabilityEvidence": {"nodes": []},
         "requiredCommands": [
           "awk",
           "base64",

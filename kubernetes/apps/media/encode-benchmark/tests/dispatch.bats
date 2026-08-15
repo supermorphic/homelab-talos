@@ -780,7 +780,20 @@ metadata:
 data:
   samples.json: |
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
+      "strategy": {
+        "id": "qsv-hevc-icq-v1",
+        "resultsSchemaVersion": 2,
+        "runManifestSchemaVersion": 2,
+        "capabilityProofSchemaVersion": 3,
+        "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30],
+        "x265": {
+          "initialCrfs": [18, 20, 22, 24],
+          "minimumCrf": 10,
+          "maximumCrf": 34,
+          "step": 2
+        }
+      },
       "runtime": {
         "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
       },

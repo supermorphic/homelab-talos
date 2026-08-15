@@ -24,6 +24,8 @@ if [[ -n "${ENCODE_BENCHMARK_APP_DIR:-}" ]]; then
 	}
 	app_directory="$ENCODE_BENCHMARK_APP_DIR"
 fi
+# shellcheck disable=SC1091
+source "$app_directory/scripts/contract.sh"
 
 temp_directory=''
 remote_cleanup_armed=0
@@ -97,6 +99,7 @@ load_source() {
 	scripts_configmap="$(yq -N -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$"))) | .metadata.name' "$render")"
 	samples_document="$temp_directory/samples.json"
 	yq -e -r '.data."samples.json"' "$app_directory/samples.yaml" >"$samples_document"
+	contract_load "$samples_document" || return
 	configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 	[[ -f "$template" ]] || {
 		echo 'benchmark Job template is missing' >&2
@@ -427,8 +430,11 @@ contention_samples() {
 	for candidate in "${candidates[@]}"; do
 		validate_sample_id "$(jq -r '.id' <<<"$candidate")" || return
 		cohort="$(jq -r '.cohort' <<<"$candidate")"
-		setting="$(COHORT="$cohort" yq -r '.chosenSettings[strenv(COHORT)].globalQuality // ""' "$samples_document")"
-		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
+		setting="$(contract_chosen_record "$samples_document" "$cohort" | jq -r '.globalQuality // ""')" || {
+			echo "no committed setting for contention sample cohort: $cohort" >&2
+			return 65
+		}
+		contract_is_icq_setting "$samples_document" "$setting" || {
 			echo "no committed setting for contention sample cohort: $cohort" >&2
 			return 65
 		}

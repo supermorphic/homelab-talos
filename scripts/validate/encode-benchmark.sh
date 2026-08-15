@@ -11,6 +11,7 @@ samples="$app/samples.yaml"
 # `just kube alerts-validate media`. The content contract stays here.
 alerts='kubernetes/apps/media/alerts/app/encode-benchmark.yaml'
 scaffold="$app/scripts/not-ready.sh"
+contract="$app/scripts/contract.sh"
 probe="$app/scripts/probe.sh"
 census="$app/scripts/census.sh"
 runmeta="$app/scripts/runmeta.sh"
@@ -57,6 +58,7 @@ for file in \
 	"$priority" \
 	"$samples" \
 	"$alerts" \
+	"$contract" \
 	"$probe" \
 	"$census" \
 	"$runmeta" \
@@ -81,6 +83,7 @@ for file in \
 	[[ -f "$file" ]] || fail "missing required source: $file"
 done
 [[ ! -e "$scaffold" ]] || fail "$scaffold must be removed once all five scripts are real"
+[[ -x "$contract" ]] || fail "$contract must be executable"
 [[ -x "$probe" ]] || fail "$probe must be executable"
 [[ -x "$census" ]] || fail "$census must be executable"
 [[ -x "$runmeta" ]] || fail "$runmeta must be executable"
@@ -131,7 +134,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
+expected_mappings='contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -156,7 +159,7 @@ scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^
 [[ "$scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
 	fail "rendered scripts ConfigMap is not hash-suffixed: $scripts_name"
 scripts_keys="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data | keys | sort | join(",")' "$render")"
-assert_eq "$scripts_keys" 'benchmark.sh,census.sh,probe.sh,runmeta.sh,stills.sh' \
+assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,probe.sh,runmeta.sh,stills.sh' \
 	'rendered scripts ConfigMap command keys'
 
 # Scheduling and alerting remain present even though execution is absent.
@@ -192,7 +195,18 @@ assert_eq "$completed_expr" \
 
 # Parse the embedded panel document and gate evidence before any source media is runnable.
 samples_doc="$(yq -r '.data."samples.json"' "$samples")"
-assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '1' 'samples schema version'
+assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
+jq -e '
+	.schemaVersion == 2 and
+	.strategy == {
+		id: "qsv-hevc-icq-v1",
+		resultsSchemaVersion: 2,
+		runManifestSchemaVersion: 2,
+		capabilityProofSchemaVersion: 3,
+		globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
+		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
+	}
+' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
 assert_eq "$(yq -r '.savingsSeed' <<<"$samples_doc")" '20260802' 'savings selection seed'
 runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
 [[ "$runtime_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] ||
@@ -460,4 +474,4 @@ mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort
 (("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
 bats "${bats_files[@]}"
 
-echo "encode-benchmark sources passed validation: Flux suspend=$suspend_state, no reconciled Job, five tested runtime scripts, guarded render/read helpers, actual image evidence, safe media mounts, and offline contracts."
+echo "encode-benchmark sources passed validation: Flux suspend=$suspend_state, no reconciled Job, six tested runtime scripts, guarded render/read helpers, actual image evidence, safe media mounts, and offline contracts."

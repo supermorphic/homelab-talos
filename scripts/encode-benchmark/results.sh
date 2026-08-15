@@ -13,6 +13,12 @@ expected_api='https://192.168.90.20:6443'
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "$script_directory/../.." && pwd)"
 samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samples.yaml"
+# shellcheck disable=SC1091
+source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
+samples_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-samples.XXXXXX")"
+trap 'rm -f -- "$samples_document"' EXIT
+yq -e -r '.data."samples.json"' "$samples_source" >"$samples_document"
+contract_load "$samples_document" || exit $?
 
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || {
 	echo "invalid run id: $run_id" >&2
@@ -29,7 +35,7 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 	exit 1
 }
 
-configured_image="$(yq -e -r '.data."samples.json" | from_yaml | .runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_source")"
+configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
 jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \

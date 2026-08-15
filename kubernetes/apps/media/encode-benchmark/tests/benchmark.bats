@@ -11,6 +11,23 @@ setup() {
 	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 }
 
+# Catches the runtime accepting its own stale setting range instead of the one
+# shared by the mounted source configuration and host-side benchmark helpers.
+@test "test interface publishes the canonical ICQ setting membership" {
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
+
+	run "$SCRIPTS/benchmark.sh" _test icq-settings
+	[ "$status" -eq 0 ]
+	[ "$output" = '16 18 20 22 24 26 28 30' ]
+
+	run "$SCRIPTS/benchmark.sh" _test icq-setting 30
+	[ "$status" -eq 0 ]
+
+	run "$SCRIPTS/benchmark.sh" _test icq-setting 32
+	[ "$status" -eq 1 ]
+}
+
 create_capability_tools() {
 	stub_bin="$BATS_TEST_TMPDIR/capability-bin"
 	mkdir -p "$stub_bin"
@@ -80,9 +97,10 @@ write_capability_samples() {
 	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/capability-samples.json"
 	jq -n \
 		--arg image "$image" \
+		--argjson strategy "$(strategy_contract)" \
 		--argjson required "$(capability_declared_list requiredCommands "${@:2}")" \
 		--argjson optional "$(capability_declared_list optionalCommands)" \
-		'{schemaVersion: 1, runtime: {image: $image, requiredCommands: $required, optionalCommands: $optional}}' \
+		'{schemaVersion: 2, strategy: $strategy, runtime: {image: $image, requiredCommands: $required, optionalCommands: $optional}}' \
 		>"$BENCHMARK_SAMPLES_FILE"
 }
 
@@ -94,6 +112,10 @@ capability_declared_list() {
 	# The file must arrive on stdin: with --args, jq treats a file argument as a
 	# positional string and then blocks reading stdin.
 	jq -c --args ".runtime.$key + [\$ARGS.positional[]]" -- "$@" <"$samples"
+}
+
+strategy_contract() {
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.strategy'
 }
 
 create_execution_tools() {
@@ -249,10 +271,12 @@ prepare_execution_run() {
 		--arg source_media "$source_media" \
 		--argjson source_size "$source_size" \
 		--arg source_sha "$source_sha" \
+		--argjson strategy "$(strategy_contract)" \
 		--argjson required "$(capability_declared_list requiredCommands)" \
 		--argjson optional "$(capability_declared_list optionalCommands)" \
 		'{
-			schemaVersion: 1,
+			schemaVersion: 2,
+			strategy: $strategy,
 			runtime: {
 				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
 				requiredCommands: $required, optionalCommands: $optional
@@ -769,8 +793,8 @@ print(json.dumps({
 }, separators=(",", ":")))
 PYTHON
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"count":9,"qsv":["20","22","24","26","28"],"x265":["18","20","22","24"],"statuses":["passed"],"dispositions":["discarded"]}' ]
-	[ "$(find "$run_dir/stills" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 18 ]
+	[ "$output" = '{"count":12,"qsv":["16","18","20","22","24","26","28","30"],"x265":["18","20","22","24"],"statuses":["passed"],"dispositions":["discarded"]}' ]
+	[ "$(find "$run_dir/stills" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 24 ]
 	[ -f "$run_dir/stills/sample-hdr-detail-qsv-20-source.png" ]
 	[ -f "$run_dir/stills/sample-hdr-detail-x265-24-encoded.png" ]
 	[ ! -d "$run_dir/encodes" ]
@@ -784,7 +808,7 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
 	results="$BENCHMARK_OUT/runs/$output/results.csv"
-	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 5 ]
+	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 8 ]
 	[ "$(awk -F, 'NR > 1 && $7 == "x265" {count += 1} END {print count + 0}' "$results")" -eq 0 ]
 	run yq -r '.data."samples.json" | from_yaml | [.qualityPanel[] | select(.x265Reference == true) | .id] | sort | join(",")' \
 		"$BATS_TEST_DIRNAME/../app/samples.yaml"
@@ -1238,16 +1262,19 @@ prepare_contention_samples() {
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
 	runtime="$(jq -c '.runtime' "$BENCHMARK_SAMPLES_FILE")"
+	strategy="$(strategy_contract)"
 	jq -n \
 		--arg path "$source_media" \
 		--argjson size "$source_size" \
 		--arg sha "$source_sha" \
 		--argjson runtime "$runtime" \
+		--argjson strategy "$strategy" \
 		'def title($id; $cohort; $w; $h):
 			{id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
 			 width: $w, height: $h, clips: {detail: "00:17:23.456"}};
 		{
-			schemaVersion: 1,
+			schemaVersion: 2,
+			strategy: $strategy,
 			runtime: $runtime,
 			savingsSeed: 20260802,
 			qualityPanel: [

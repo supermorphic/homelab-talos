@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$script_directory/contract.sh"
 benchmark_out="${BENCHMARK_OUT:-/out}"
 runs_root="$benchmark_out/runs"
 test_mode="${BENCHMARK_TEST_MODE:-0}"

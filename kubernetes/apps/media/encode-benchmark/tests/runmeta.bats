@@ -25,10 +25,12 @@ prepare_configmap_script_mount() {
 	configmap_root="$BATS_TEST_TMPDIR/scripts"
 	configmap_data="$configmap_root/..2026_08_02_12_00_00.000000000"
 	mkdir -p "$configmap_data"
+	cp "$SCRIPTS/contract.sh" "$configmap_data/contract.sh"
 	cp "$SCRIPTS/runmeta.sh" "$configmap_data/runmeta.sh"
 	printf '%s\n' '#!/usr/bin/env bash' 'exit 64' >"$configmap_data/benchmark.sh"
-	chmod +x "$configmap_data/runmeta.sh" "$configmap_data/benchmark.sh"
+	chmod +x "$configmap_data/contract.sh" "$configmap_data/runmeta.sh" "$configmap_data/benchmark.sh"
 	ln -s "${configmap_data##*/}" "$configmap_root/..data"
+	ln -s '..data/contract.sh' "$configmap_root/contract.sh"
 	ln -s '..data/runmeta.sh' "$configmap_root/runmeta.sh"
 	ln -s '..data/benchmark.sh' "$configmap_root/benchmark.sh"
 
@@ -427,11 +429,11 @@ EOF
 
 # Catches a production break where any tested command regresses to the shared
 # scaffold after all five behavior contracts have landed.
-@test "ConfigMap maps all five tested commands to real scripts" {
+@test "ConfigMap maps all six tested commands to real scripts" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
+	[ "$output" = 'contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
 
