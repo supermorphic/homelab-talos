@@ -1,0 +1,28 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: plex-workload-policy-denial-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: plex-network-policy
+      rules:
+        - alert: PlexWorkloadPolicyDenied
+          expr: |-
+            sum(
+              increase(
+                hubble_drop_total{
+                  destination="media/plex",
+                  reason="POLICY_DENIED",
+                  source=~".*k8s:io.kubernetes.pod.namespace=.*"
+                }[6h]
+              )
+            ) >= 3
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: Kubernetes workload is denied while reaching Plex
+            description: >-
+              At least three Cilium POLICY_DENIED events from Kubernetes workloads to media/plex occurred in the last six hours and remained observable for 30 minutes. A Plex integration may be missing from the ingress allow-list. Group hubble_drop_total by source to identify it, then use `mise exec -- just kube plex-network-observe` if live flow attribution is needed.
