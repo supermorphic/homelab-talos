@@ -845,7 +845,7 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
 	results="$BENCHMARK_OUT/runs/$output/results.csv"
-	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 15 ]
+	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 24 ]
 	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 }
@@ -882,7 +882,7 @@ PYTHON
 	run awk -F, '$7 == "x265" {print $8}' "$results"
 	[ "$status" -eq 0 ]
 	[ "$output" = $'18\n20\n22\n24\n16' ]
-	run jq -e -s 'length == 5 and all(.[]; .status == "bracketed")' \
+	run jq -e -s 'length == 8 and all(.[]; .status == "bracketed")' \
 		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
 	[ "$status" -eq 0 ]
 }
@@ -914,7 +914,7 @@ PYTHON
 		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count }' "$results"
 		[ "$status" -eq 0 ]
-		[ "$output" = '9' ]
+		[ "$output" = '12' ]
 		[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 	done
 }
@@ -986,7 +986,7 @@ PYTHON
 		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json'; do
 		[ "$(find "$BENCHMARK_OUT/runs/$run_id/logs" -type f -name "$evidence_pattern" | wc -l | tr -d ' ')" -eq 3 ]
 	done
-	[ "$(wc -l <"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl" | tr -d ' ')" -eq 5 ]
+	[ "$(wc -l <"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl" | tr -d ' ')" -eq 8 ]
 }
 
 @test "quality resume replaces stale unbracketed comparisons after x265 succeeds" {
@@ -996,14 +996,14 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
 	run_id="$output"
-	run jq -e -s 'length == 5 and all(.[]; .status == "unbracketed")' \
+	run jq -e -s 'length == 8 and all(.[]; .status == "unbracketed")' \
 		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
 	[ "$status" -eq 0 ]
 
 	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
 	run "$SCRIPTS/benchmark.sh" quality "$run_id"
 	[ "$status" -eq 0 ]
-	run jq -e -s 'length == 5 and all(.[]; .status == "bracketed")' \
+	run jq -e -s 'length == 8 and all(.[]; .status == "bracketed")' \
 		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
 	[ "$status" -eq 0 ]
 }
@@ -1020,12 +1020,12 @@ PYTHON
 	run_id="$output"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	run jq -e '
-		.encoderCommands | length == 19 and
+		.encoderCommands | length == 22 and
 		.[0] == "ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
-		([.[] | select(test("-c:v hevc_qsv"))] | length) == 5 and
+		([.[] | select(test("-c:v hevc_qsv"))] | length) == 8 and
 		([.[] | select(test("-c:v libx265"))] | length) == 13 and
-		any(.[]; contains("-global_quality 20 -look_ahead 1 -extbrc 1")) and
-		any(.[]; contains("-global_quality 28 -look_ahead 1 -extbrc 1")) and
+		any(.[]; contains("-global_quality 16 -look_ahead 1 -extbrc 1")) and
+		any(.[]; contains("-global_quality 30 -look_ahead 1 -extbrc 1")) and
 		any(.[]; contains("-crf 10")) and any(.[]; contains("-crf 34"))
 	' "$manifest"
 	[ "$status" -eq 0 ]
@@ -1435,6 +1435,8 @@ EOF
 # Catches findings silently mixing unnamed runs or copying raw credential and
 # path fields into the Markdown artifact instead of using an allowlisted summary.
 @test "findings combines explicitly named run inputs and excludes credentials" {
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/findings-samples.json"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
 	target='20260802T120000Z-cccccccc'
 	quality='20260802T120000Z-aaaaaaaa'
 	savings='20260802T120000Z-bbbbbbbb'
