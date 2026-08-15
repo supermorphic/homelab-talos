@@ -661,6 +661,11 @@ record_result_inner() {
 		echo 'result fixture strategy does not match contract' >&2
 		return 65
 	}
+	if [[ "$encoder" == 'x265' ]] &&
+		[[ "$qsv_initialization" != 'not-applicable' || "$video_busy_nanoseconds" != '0' ]]; then
+		echo 'x265 result must use not-applicable QSV evidence' >&2
+		return 65
+	fi
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
 	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then

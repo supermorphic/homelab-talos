@@ -2,7 +2,7 @@
   "clientDevice": null,
   "cpu": null,
   "encoderCommands": [],
-  "gpu": {"i915": "", "vpl": ""},
+  "gpu": {"i915": "fixture-i915", "vpl": "fixture-vpl"},
   "images": {
     "configured": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
     "dispatched": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",

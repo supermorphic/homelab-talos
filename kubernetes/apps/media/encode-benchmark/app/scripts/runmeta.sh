@@ -88,6 +88,9 @@ normalize_identity() {
 		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
 		def string_object($keys):
 			(type == "object" and keys == $keys and ([.[] | type == "string"] | all));
+		def nonempty_string_object($keys):
+			(type == "object" and keys == $keys and
+				([.[] | type == "string" and length > 0] | all));
 		if
 			(keys == [
 				"clientDevice", "cpu", "encoderCommands", "gpu", "images", "mode", "node",
@@ -97,8 +100,8 @@ normalize_identity() {
 			(.images | type == "object" and keys == ["configured", "dispatched", "running"]) and
 			(.node | string_object(["kernel", "name"])) and
 			(.vmaf | string_object(["model", "version"])) and
-			(.gpu == null or (.gpu | string_object(["i915", "vpl"]))) and
-			(.cpu == null or (.cpu | string_object(["ffmpeg", "libx265", "model"]))) and
+			(.gpu == null or (.gpu | nonempty_string_object(["i915", "vpl"]))) and
+			(.cpu == null or (.cpu | nonempty_string_object(["ffmpeg", "libx265", "model"]))) and
 			(.sources | (type == "array" and ([.[] | keys == ["path", "sha256", "size"]] | all)))
 		then . else error("invalid benchmark identity") end
 		| {
@@ -110,9 +113,9 @@ normalize_identity() {
 			strategyId, upstream, vmaf: {model: .vmaf.model, version: .vmaf.version}
 		}
 		| if
-			(.schemaVersion | type == "number" and floor == .) and
-			(.strategyId | type == "string") and
-			(.resultsSchemaVersion | type == "number" and floor == .) and
+			.schemaVersion == $manifest_schema and
+			.strategyId == $strategy and
+			.resultsSchemaVersion == $results_schema and
 			(.images | ([.configured, .dispatched, .running] as $digests |
 				($digests | all(digest)) and ($digests | unique | length == 1))) and
 			(.scriptDigests | (type == "object" and ([.[] | digest] | all))) and
@@ -235,6 +238,14 @@ discover_identity() {
 	cpu_model="${BENCHMARK_CPU_MODEL:-}"
 	ffmpeg_version="${BENCHMARK_FFMPEG_VERSION:-}"
 	libx265_version="${BENCHMARK_LIBX265_VERSION:-}"
+	if [[ "$execution_class" == 'gpu' && (-z "$i915" || -z "$vpl") ]]; then
+		echo 'GPU runtime identity is incomplete' >&2
+		return 65
+	fi
+	if [[ "$execution_class" == 'cpu' && (-z "$cpu_model" || -z "$ffmpeg_version" || -z "$libx265_version") ]]; then
+		echo 'CPU runtime identity is incomplete' >&2
+		return 65
+	fi
 	vmaf_model="${BENCHMARK_VMAF_MODEL:-vmaf_4k_v0.6.1}"
 	vmaf_version="${BENCHMARK_VMAF_VERSION:-}"
 	client_device="${BENCHMARK_CLIENT_DEVICE:-}"
@@ -491,22 +502,10 @@ completed_row() {
 	function process_record(   candidate, part, bad) {
 		record_no += 1
 		if (record_no == 1) {
-			if (nf == expected_columns) {
-				header_ok = 1
-				for (i = 1; i <= nf; i++)
-					if (field[i] != expected_header[i]) header_ok = 0
-				if (header_ok) { compact = 0; return }
-			}
-			if (test_mode != "1" || nf != 2) invalid("invalid results CSV header")
-			compact = 1
-			# The compact form carries data in its first record too.
-		}
-
-		if (compact) {
-			if (nf != 2) invalid("invalid compact results CSV row " record_no)
-			if (field[2] != "passed" && field[2] != "failed" && field[2] != "invalid")
-				invalid("invalid compact results CSV row " record_no)
-			if (field[1] == expected_key && field[2] == "passed") found = 1
+			header_ok = (nf == expected_columns)
+			for (i = 1; i <= nf; i++)
+				if (field[i] != expected_header[i]) header_ok = 0
+			if (!header_ok) invalid("invalid results CSV header")
 			return
 		}
 
@@ -555,7 +554,6 @@ completed_row() {
 		cur = ""
 		in_quotes = 0
 		found = 0
-		compact = 0
 		saw_record = 0
 	}
 

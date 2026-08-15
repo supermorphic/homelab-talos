@@ -781,6 +781,25 @@ expand_execution_panels_to_three_samples() {
 	[ "$output" = 'invalid,failed,0' ]
 }
 
+# Catches x265 rows carrying QSV proof values instead of the explicit
+# not-applicable zero pair, which would make CPU and GPU evidence ambiguous.
+@test "result recording rejects malformed x265 QSV evidence before append" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	fixture="$BATS_TEST_TMPDIR/malformed-x265-evidence.json"
+	jq '.encoder = "x265" | .selected_rate_control = "CRF" | .qsv_initialization = "passed" | .video_busy_nanoseconds = "800000000"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	scratch_output="$BENCHMARK_SCRATCH/malformed-x265-evidence.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'x265 result must use not-applicable QSV evidence' ]
+	[ ! -e "$scratch_output" ]
+	[ ! -e "$run_dir/results.csv" ]
+}
+
 # Catches copying an invalid/unconfirmed full encode to the shared output or
 # losing the run/sample binding in the operator's finalist confirmation.
 @test "finalist output is copied only after passed validation and exact confirmation" {
@@ -815,7 +834,7 @@ expand_execution_panels_to_three_samples() {
 	prepare_execution_run
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-d1098cf4' ]
+	[ "$output" = '20260802T120000Z-6cdfc9f3' ]
 	run_id="$output"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 
