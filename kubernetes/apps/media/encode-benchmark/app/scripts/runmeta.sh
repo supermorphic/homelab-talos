@@ -9,12 +9,13 @@ runs_root="$benchmark_out/runs"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 identity_fixture="${BENCHMARK_IDENTITY_FIXTURE:-}"
 clock_override="${BENCHMARK_NOW:-}"
+samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 new_run_directory=''
 manifest_temp=''
 # The resume check validates results.csv against this schema. benchmark.sh holds
 # the same list because it writes the file; an offline contract asserts the two
 # stay identical, since a silent drift would make every resume decision wrong.
-results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
+results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
 	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
@@ -24,6 +25,11 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_IDENTITY_FIXTURE+x}" ]]; then
+	echo 'BENCHMARK_IDENTITY_FIXTURE requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
+contract_load "$samples_file" || exit $?
 
 cleanup_unpublished_manifest() {
 	if [[ -n "$manifest_temp" ]]; then
@@ -61,67 +67,77 @@ sha256_file() {
 	printf 'sha256:%s\n' "$(sha256sum "$path" | awk 'NR == 1 { value = $1; sub(/^\\/, "", value); print value }')"
 }
 
+image_digest() {
+	local image="$1"
+	if [[ "$image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+		printf '%s\n' "${image##*@}"
+	elif [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		printf '%s\n' "$image"
+	else
+		return 65
+	fi
+}
+
 normalize_identity() {
 	local input_json="$1"
 	local mode="$2"
-	jq -e -S -c --arg mode "$mode" '
+	jq -e -S -c \
+		--arg mode "$mode" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson manifest_schema "$CONTRACT_MANIFEST_SCHEMA" \
+		--argjson results_schema "$CONTRACT_RESULTS_SCHEMA" '
+		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+		def string_object($keys):
+			(type == "object" and keys == $keys and ([.[] | type == "string"] | all));
 		if
 			(keys == [
-				"clientDevice", "encoderCommands", "imageDigest", "mode", "node",
-				"samplesDigest", "savingsSeed", "schemaVersion", "scriptDigests",
-				"sources", "vmaf"
+				"clientDevice", "cpu", "encoderCommands", "gpu", "images", "mode", "node",
+				"resultsSchemaVersion", "samplesDigest", "savingsSeed", "schemaVersion",
+				"scriptDigests", "selectedSettings", "sources", "strategyId", "upstream", "vmaf"
 			]) and
-			(.node | type == "object" and keys == ["i915", "kernel", "name", "vpl"]) and
-			(.vmaf | type == "object" and keys == ["model", "version"]) and
-			([.sources[] | keys == ["path", "sha256", "size"]] | all)
+			(.images | type == "object" and keys == ["configured", "dispatched", "running"]) and
+			(.node | string_object(["kernel", "name"])) and
+			(.vmaf | string_object(["model", "version"])) and
+			(.gpu == null or (.gpu | string_object(["i915", "vpl"]))) and
+			(.cpu == null or (.cpu | string_object(["ffmpeg", "libx265", "model"]))) and
+			(.sources | (type == "array" and ([.[] | keys == ["path", "sha256", "size"]] | all)))
 		then . else error("invalid benchmark identity") end
-		|
-		{
-			clientDevice: .clientDevice,
-			encoderCommands: .encoderCommands,
-			imageDigest: .imageDigest,
-			mode: $mode,
-			node: {
-				i915: .node.i915,
-				kernel: .node.kernel,
-				name: .node.name,
-				vpl: .node.vpl
-			},
-			samplesDigest: .samplesDigest,
-			savingsSeed: .savingsSeed,
-			schemaVersion: .schemaVersion,
-			scriptDigests: .scriptDigests,
+		| {
+			clientDevice, cpu, encoderCommands, gpu, images, mode: $mode,
+			node: {kernel: .node.kernel, name: .node.name},
+			resultsSchemaVersion, samplesDigest, savingsSeed, schemaVersion, scriptDigests,
+			selectedSettings,
 			sources: (.sources | map({path: .path, sha256: .sha256, size: .size}) | sort_by(.path)),
-			vmaf: {model: .vmaf.model, version: .vmaf.version}
+			strategyId, upstream, vmaf: {model: .vmaf.model, version: .vmaf.version}
 		}
 		| if
-			.schemaVersion == 1 and
-			(.imageDigest | type == "string") and
-			(.scriptDigests | type == "object") and
-			([.scriptDigests[] | type == "string"] | all) and
-			(.samplesDigest | type == "string") and
-			(.sources | type == "array") and
-			([.sources[] |
+			(.schemaVersion | type == "number" and floor == .) and
+			(.strategyId | type == "string") and
+			(.resultsSchemaVersion | type == "number" and floor == .) and
+			(.images | ([.configured, .dispatched, .running] as $digests |
+				($digests | all(digest)) and ($digests | unique | length == 1))) and
+			(.scriptDigests | (type == "object" and ([.[] | digest] | all))) and
+			(.samplesDigest | digest) and
+			(.sources | (type == "array" and ([.[] |
 				(.path | type == "string") and
 				(.size | type == "number" and . >= 0 and floor == .) and
-				(.sha256 | type == "string")
-			] | all) and
-			(.encoderCommands | type == "array") and
-			([.encoderCommands[] | type == "string"] | all) and
-			(.node | [.name, .kernel, .i915, .vpl] | all(type == "string")) and
-			(.vmaf | .model | type == "string") and
-			(.vmaf | .version | type == "string") and
+				(.sha256 | digest)
+			] | all))) and
+			(.encoderCommands | (type == "array" and ([.[] | type == "string"] | all))) and
+			(.selectedSettings | type == "array") and
+			(.upstream | type == "object") and
 			(.savingsSeed | type == "number" and floor == .) and
-			(.clientDevice == null or (.clientDevice | type == "string"))
+			(.clientDevice == null or (.clientDevice | type == "string")) and
+			((.gpu == null and (.cpu | type == "object")) or
+				((.gpu | type == "object") and .cpu == null))
 		then . else error("invalid benchmark identity") end
 	' <<<"$input_json"
 }
 
 discover_identity() {
 	local mode="$1"
-	local samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
-	local script_directory image_digest samples_digest savings_seed
-	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl
+	local script_directory configured_image dispatched_image running_image configured_digest dispatched_digest running_digest
+	local samples_digest savings_seed execution_class selected_settings upstream_identity
+	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha
 	local source_index=0
 
@@ -143,9 +159,42 @@ discover_identity() {
 		return 66
 	}
 	script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	image_digest="$(jq -r '.runtime.image | split("@") | .[1] // ""' "$samples_file")"
+	configured_image="$(jq -e -r '.runtime.image | strings' "$samples_file")" || return 65
+	configured_digest="$(image_digest "$configured_image")" || {
+		echo 'configured runtime image must use an immutable sha256 digest' >&2
+		return 65
+	}
+	dispatched_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	dispatched_digest="$(image_digest "$dispatched_image")" || {
+		echo 'dispatched runtime image evidence is missing or malformed' >&2
+		return 65
+	}
+	running_image="${BENCHMARK_RUNNING_IMAGE:-${BENCHMARK_RUNNING_IMAGE_DIGEST:-}}"
+	running_digest="$(image_digest "$running_image")" || {
+		echo 'running runtime image evidence is missing or malformed' >&2
+		return 65
+	}
+	[[ "$configured_digest" == "$dispatched_digest" && "$configured_digest" == "$running_digest" ]] || {
+		echo 'runtime image digests do not match' >&2
+		return 65
+	}
 	samples_digest="$(sha256_file "$samples_file")"
 	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
+	selected_settings="$(jq -e -c '
+		(.chosenSettings // {}) | to_entries |
+		map({cohort: .key, globalQuality: (.value.globalQuality // null), qualityRunId: (.value.qualityRunId // null)}) |
+		sort_by(.cohort)
+	' "$samples_file")" || return 65
+	upstream_identity="${BENCHMARK_UPSTREAM_IDENTITY_JSON:-{}}"
+	jq -e -c 'type == "object"' <<<"$upstream_identity" >/dev/null || {
+		echo 'upstream identity must be a JSON object' >&2
+		return 65
+	}
+	execution_class="${BENCHMARK_EXECUTION_CLASS:-gpu}"
+	[[ "$execution_class" == 'gpu' || "$execution_class" == 'cpu' ]] || {
+		echo 'benchmark execution class must be gpu or cpu' >&2
+		return 64
+	}
 
 	while IFS= read -r script_path; do
 		[[ -n "$script_path" ]] || continue
@@ -183,34 +232,48 @@ discover_identity() {
 	kernel="$(uname -r)"
 	i915="${BENCHMARK_I915_VERSION:-}"
 	vpl="${BENCHMARK_VPL_VERSION:-}"
+	cpu_model="${BENCHMARK_CPU_MODEL:-}"
+	ffmpeg_version="${BENCHMARK_FFMPEG_VERSION:-}"
+	libx265_version="${BENCHMARK_LIBX265_VERSION:-}"
 	vmaf_model="${BENCHMARK_VMAF_MODEL:-vmaf_4k_v0.6.1}"
 	vmaf_version="${BENCHMARK_VMAF_VERSION:-}"
 	client_device="${BENCHMARK_CLIENT_DEVICE:-}"
 
 	jq -n -c \
 		--arg mode "$mode" \
-		--arg image_digest "$image_digest" \
+		--arg configured_digest "$configured_digest" --arg dispatched_digest "$dispatched_digest" \
+		--arg running_digest "$running_digest" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson results_schema "$CONTRACT_RESULTS_SCHEMA" --argjson manifest_schema "$CONTRACT_MANIFEST_SCHEMA" \
 		--argjson script_digests "$script_digests" \
 		--arg samples_digest "$samples_digest" \
 		--argjson sources "$sources" \
 		--argjson encoder_commands "$encoder_commands" \
+		--argjson selected_settings "$selected_settings" --argjson upstream "$upstream_identity" \
 		--arg node_name "$node_name" \
 		--arg kernel "$kernel" \
 		--arg i915 "$i915" \
 		--arg vpl "$vpl" \
+		--arg execution_class "$execution_class" --arg cpu_model "$cpu_model" \
+		--arg ffmpeg_version "$ffmpeg_version" --arg libx265_version "$libx265_version" \
 		--arg vmaf_model "$vmaf_model" \
 		--arg vmaf_version "$vmaf_version" \
 		--argjson savings_seed "$savings_seed" \
 		--arg client_device "$client_device" '
 		{
-			schemaVersion: 1,
+			schemaVersion: $manifest_schema,
+			strategyId: $strategy,
+			resultsSchemaVersion: $results_schema,
 			mode: $mode,
-			imageDigest: $image_digest,
+			images: {configured: $configured_digest, dispatched: $dispatched_digest, running: $running_digest},
 			scriptDigests: $script_digests,
 			samplesDigest: $samples_digest,
 			sources: $sources,
 			encoderCommands: $encoder_commands,
-			node: {name: $node_name, kernel: $kernel, i915: $i915, vpl: $vpl},
+			selectedSettings: $selected_settings,
+			upstream: $upstream,
+			node: {name: $node_name, kernel: $kernel},
+			gpu: (if $execution_class == "gpu" then {i915: $i915, vpl: $vpl} else null end),
+			cpu: (if $execution_class == "cpu" then {model: $cpu_model, ffmpeg: $ffmpeg_version, libx265: $libx265_version} else null end),
 			vmaf: {model: $vmaf_model, version: $vmaf_version},
 			savingsSeed: $savings_seed,
 			clientDevice: (if $client_device == "" then null else $client_device end)
@@ -401,7 +464,7 @@ completed_row() {
 	results="$runs_root/$run_id/results.csv"
 	[[ -f "$results" && ! -L "$results" ]] || return 1
 	awk -v expected_run_id="$run_id" -v expected_key="$row_key" \
-		-v test_mode="$test_mode" -v header_spec="$results_header" \
+		-v expected_strategy="$CONTRACT_STRATEGY_ID" -v test_mode="$test_mode" -v header_spec="$results_header" \
 		'
 	# RFC4180 reader for the resume check. The runtime image has mawk, not gawk, so
 	# FPAT is unavailable and quoted fields must be parsed by hand. Two numbering
@@ -458,6 +521,16 @@ completed_row() {
 			invalid("invalid results CSV: row " record_no " has an invalid status")
 		if (field[11] !~ /^[0-9]+$/ || field[11] + 0 < 1)
 			invalid("invalid results CSV: row " record_no " has an invalid attempt")
+		if (field[37] != expected_strategy)
+			invalid("invalid results CSV: row " record_no " has a mismatched strategy")
+		if (field[7] == "qsv" && field[10] == "passed") {
+			if (field[38] != "passed")
+				invalid("invalid results CSV: row " record_no " has an invalid QSV initialization")
+			if (field[39] !~ /^[0-9]+$/ || field[39] + 0 <= 0)
+				invalid("invalid results CSV: row " record_no " has invalid QSV video busy time")
+		}
+		if (field[7] == "x265" && (field[38] != "not-applicable" || field[39] != "0"))
+			invalid("invalid results CSV: row " record_no " has invalid x265 QSV evidence")
 
 		bad = 0
 		candidate = ""

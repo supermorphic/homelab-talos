@@ -9,7 +9,7 @@ benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
-results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
+results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
 	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
@@ -584,8 +584,12 @@ ensure_results_file() {
 result_key_passed() {
 	local results="$1"
 	local panel="$2" sha="$3" clip="$4" encoder="$5" setting="$6"
-	awk -F, -v panel="$panel" -v sha="$sha" -v clip="$clip" -v encoder="$encoder" -v setting="$setting" '
-		NR > 1 && $2 == panel && $5 == sha && $6 == clip && $7 == encoder && $8 == setting && $10 == "passed" { found = 1 }
+	awk -F, -v panel="$panel" -v sha="$sha" -v clip="$clip" -v encoder="$encoder" -v setting="$setting" \
+		-v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 && $2 == panel && $5 == sha && $6 == clip && $7 == encoder && $8 == setting &&
+			$10 == "passed" && $37 == strategy &&
+			(($7 == "qsv" && $38 == "passed" && $39 ~ /^[0-9]+$/ && $39 + 0 > 0) ||
+			 ($7 == "x265" && $38 == "not-applicable" && $39 == "0")) { found = 1 }
 		END { exit !found }
 	' "$results"
 }
@@ -611,10 +615,13 @@ record_result_inner() {
 	local fixture="$2"
 	local scratch_output="$3"
 	local run_directory results panel sample_id cohort source_sha clip encoder setting
-	local selected status attempt disposition='discarded' confirmation destination
+	local selected strategy qsv_initialization video_busy_nanoseconds status attempt disposition='discarded' confirmation destination
 	local encodes_directory='' staged_destination='' backup_destination='' published=0 had_prior=0
 	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
 	local -a columns
+	if [[ ! -v CONTRACT_STRATEGY_ID ]]; then
+		contract_load "$samples_file" || return
+	fi
 	validate_run_id "$run_id" || return
 	[[ -f "$fixture" ]] || return 66
 	run_directory="$benchmark_out/runs/$run_id"
@@ -642,11 +649,18 @@ record_result_inner() {
 	encoder="$(jq -e -r '.encoder | strings' "$fixture")" || return 65
 	setting="$(jq -e -r '.requested_setting | strings' "$fixture")" || return 65
 	selected="$(jq -e -r '.selected_rate_control | strings' "$fixture")" || return 65
+	strategy="$(jq -e -r '.strategy_id | strings' "$fixture")" || return 65
+	qsv_initialization="$(jq -e -r '.qsv_initialization | strings' "$fixture")" || return 65
+	video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | strings' "$fixture")" || return 65
 	validate_sample_id "$sample_id" || return
 	[[ "$panel" == 'quality' || "$panel" == 'savings' || "$panel" == 'finalist' ]] || return 65
 	[[ "$encoder" == 'qsv' || "$encoder" == 'x265' ]] || return 65
 	[[ "$setting" =~ ^[0-9]+$ ]] || return 65
 	[[ "$source_sha" =~ ^[0-9a-f]{64}$ ]] || return 65
+	[[ "$strategy" == "$CONTRACT_STRATEGY_ID" ]] || {
+		echo 'result fixture strategy does not match contract' >&2
+		return 65
+	}
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
 	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
@@ -661,7 +675,9 @@ record_result_inner() {
 	elif [[ -n "$(jq -r '.validation_failures' "$fixture")" ]]; then
 		status='invalid'
 	elif [[ "$encoder" == 'qsv' ]] &&
-		[[ "$selected" != 'LA-ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ]]; then
+		[[ "$selected" != 'LA-ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ||
+		"$qsv_initialization" != 'passed' || ! "$video_busy_nanoseconds" =~ ^[0-9]+$ ||
+		"$video_busy_nanoseconds" -le 0 ]]; then
 		status='invalid'
 	fi
 
@@ -687,16 +703,17 @@ record_result_inner() {
 			.validation_duration, .validation_resolution,
 			.validation_frame_rate, .validation_bit_depth, .validation_hdr,
 			.validation_audio_tracks, .validation_subtitle_tracks,
-			.validation_chapters, .validation_failures, .log_path
-		] | if length == 32 and all(.[]; type == "string")
+			.validation_chapters, .validation_failures, .log_path,
+			.strategy_id, .qsv_initialization, .video_busy_nanoseconds
+		] | if length == 35 and all(.[]; type == "string")
 		then .[] else error("invalid result fixture") end
 	' "$fixture")" || return 65
 	mapfile -t columns <<<"$columns_text"
-	((${#columns[@]} == 32)) || return 65
+	((${#columns[@]} == 35)) || return 65
 	columns=(
 		"$run_id" "${columns[0]}" "${columns[1]}" "${columns[2]}" "${columns[3]}"
 		"${columns[4]}" "${columns[5]}" "${columns[6]}" "${columns[7]}" "$status"
-		"$attempt" "${columns[@]:8}" "$disposition"
+		"$attempt" "${columns[@]:8:24}" "$disposition" "${columns[@]:32:3}"
 	)
 	for value in "${columns[@]}"; do
 		safe_csv_field "$value" || {
@@ -1377,6 +1394,7 @@ process_variant() {
 	local input_bytes='0' output_bytes='0' duration='0' input_rate='0' output_rate='0'
 	local reduction='0.000000' fps='0.000000' speed='0.000000' vmaf_harmonic=''
 	local vmaf_low='' ssim='' gpu_busy='' qsv_status='not-applicable' selected='CRF'
+	local qsv_initialization='not-applicable' video_busy_nanoseconds='0' strategy_id="$CONTRACT_STRATEGY_ID"
 	local validation_failures validation_codec validation_duration validation_resolution
 	local validation_frame_rate validation_bit_depth validation_hdr validation_audio
 	local validation_subtitle validation_chapters decode_status=1 proof_json progress
@@ -1454,12 +1472,20 @@ process_variant() {
 		if proof_json="$(qsv_proof "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
 			jq -e . <<<"$proof_json" >/dev/null 2>&1; then
 			selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+			qsv_initialization="$(jq -r '.initialization' <<<"$proof_json")"
 			fps="$(jq -r '.encode_fps' <<<"$proof_json")"
 			speed="$(jq -r '.encode_speed' <<<"$proof_json")"
 			gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
 			qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
+			if metrics="$(drm_fdinfo_metrics "$busy_log" 2>/dev/null)" &&
+				video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | numbers | floor' <<<"$metrics" 2>/dev/null)"; then
+				:
+			else
+				video_busy_nanoseconds='0'
+			fi
 		else
 			selected='unknown'
+			qsv_initialization='failed'
 			qsv_status='suspect'
 			validation="$(add_validation_failure "$validation" qsv-proof)"
 			printf '%s\n' "$validation" >"$validation_file"
@@ -1494,7 +1520,9 @@ process_variant() {
 		--arg frame_rate "$validation_frame_rate" --arg bit_depth "$validation_bit_depth" \
 		--arg hdr "$validation_hdr" --arg audio "$validation_audio" \
 		--arg subtitle "$validation_subtitle" --arg chapters "$validation_chapters" \
-		--arg failures "$validation_failures" --arg log_path "logs/${encode_log##*/}" '{
+		--arg failures "$validation_failures" --arg log_path "logs/${encode_log##*/}" \
+		--arg strategy_id "$strategy_id" --arg qsv_initialization "$qsv_initialization" \
+		--arg video_busy_nanoseconds "$video_busy_nanoseconds" '{
 			panel: $panel, sample_id: $sample_id, cohort: $cohort, source_sha256: $source_sha,
 			clip_id: $clip_id, encoder: $encoder, requested_setting: $setting,
 			selected_rate_control: $selected, encode_status: $encode_status,
@@ -1508,7 +1536,9 @@ process_variant() {
 			validation_frame_rate: $frame_rate, validation_bit_depth: $bit_depth,
 			validation_hdr: $hdr, validation_audio_tracks: $audio,
 			validation_subtitle_tracks: $subtitle, validation_chapters: $chapters,
-			validation_failures: $failures, log_path: $log_path
+			validation_failures: $failures, log_path: $log_path,
+			strategy_id: $strategy_id, qsv_initialization: $qsv_initialization,
+			video_busy_nanoseconds: $video_busy_nanoseconds
 		}' >"$row_fixture"
 }
 

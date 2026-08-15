@@ -6,6 +6,10 @@ setup() {
 	export BENCHMARK_NOW=20260802T120000Z
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/out"
 	export BENCHMARK_IDENTITY_FIXTURE="$BATS_TEST_DIRNAME/fixtures/manifests/identity.json"
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export BENCHMARK_RUNNING_IMAGE='sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	mkdir -p "$BENCHMARK_OUT/runs"
 }
 
@@ -18,7 +22,19 @@ file_mode() {
 }
 
 results_header() {
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
+}
+
+results_row() {
+	local run_id="$1" encoder="${2:-qsv}" strategy="${3:-qsv-hevc-icq-v1}"
+	local initialization="${4:-passed}" busy="${5:-800000000}"
+	local selected='LA-ICQ'
+	if [[ "$encoder" == 'x265' ]]; then
+		selected='CRF'
+		initialization='not-applicable'
+		busy='0'
+	fi
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,$encoder,22,$selected,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,hdr10,1,2,3,none,logs/a.log,discarded,$strategy,$initialization,$busy"
 }
 
 prepare_configmap_script_mount() {
@@ -35,14 +51,13 @@ prepare_configmap_script_mount() {
 	ln -s '..data/benchmark.sh' "$configmap_root/benchmark.sh"
 
 	samples_file="$BATS_TEST_TMPDIR/samples.json"
-	jq -n '{
-		runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
-		savingsSeed: 20260802,
-		qualityPanel: [],
-		savingsPanel: []
-	}' >"$samples_file"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$samples_file"
+	jq '.qualityPanel = [] | .savingsPanel = []' "$samples_file" >"$samples_file.tmp"
+	mv -f -- "$samples_file.tmp" "$samples_file"
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_SAMPLES_FILE="$samples_file"
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export BENCHMARK_RUNNING_IMAGE='sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 }
 
 # Catches a production break where a bare create discovers and reuses an older
@@ -50,11 +65,11 @@ prepare_configmap_script_mount() {
 @test "no run id always creates a fresh timestamped immutable identity" {
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-037fa5c4' ]
+	[ "$output" = '20260802T120000Z-d1098cf4' ]
 	first="$output"
 	first_manifest="$BENCHMARK_OUT/runs/$first/manifest.json"
 	expected="$BATS_TEST_TMPDIR/expected-manifest.json"
-	printf '%s\n' '{"clientDevice":null,"createdAt":"20260802T120000Z","encoderCommands":[],"imageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","mode":"quality","node":{"i915":"","kernel":"","name":"","vpl":""},"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","savingsSeed":20260802,"schemaVersion":1,"scriptDigests":{},"sources":[],"vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
+	printf '%s\n' '{"clientDevice":null,"cpu":null,"createdAt":"20260802T120000Z","encoderCommands":[],"gpu":{"i915":"","vpl":""},"images":{"configured":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","dispatched":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","running":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},"mode":"quality","node":{"kernel":"","name":""},"resultsSchemaVersion":2,"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","savingsSeed":20260802,"schemaVersion":2,"scriptDigests":{},"selectedSettings":[],"sources":[],"strategyId":"qsv-hevc-icq-v1","upstream":{},"vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
 	cmp -s "$expected" "$first_manifest"
 	[ "$(file_mode "$first_manifest")" = '444' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$first/manifest.json.tmp" ]
@@ -62,7 +77,7 @@ prepare_configmap_script_mount() {
 	export BENCHMARK_NOW=20260802T120001Z
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120001Z-037fa5c4' ]
+	[ "$output" = '20260802T120001Z-d1098cf4' ]
 	[ "$output" != "$first" ]
 	[ "$(run_directory_count)" -eq 2 ]
 }
@@ -116,6 +131,57 @@ prepare_configmap_script_mount() {
 	cmp -s "$before" "$manifest"
 }
 
+# Catches resumed ICQ work being accepted after its schema, strategy, selected
+# setting, or upstream evidence changes. Values are deliberately redacted by
+# the public resume diagnostic; the stable field path is the observable API.
+@test "verify refuses changed ICQ schema strategy selected settings and upstream identity" {
+	base_identity="$BATS_TEST_TMPDIR/identity-with-upstream.json"
+	jq '.selectedSettings = [{cohort:"avc", globalQuality:22}] |
+		.upstream = {qualityRunId:"20260802T120000Z-deadbeef", resultsDigest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
+		"$BENCHMARK_IDENTITY_FIXTURE" >"$base_identity"
+	export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	for mutation in \
+		'.strategyId = "other-strategy"|strategyId' \
+		'.resultsSchemaVersion = 1|resultsSchemaVersion' \
+		'.selectedSettings[0].globalQuality = 24|selectedSettings.0.globalQuality' \
+		'.upstream.qualityRunId = "20260802T120000Z-cafef00d"|upstream.qualityRunId'; do
+		expression="${mutation%%|*}"
+		expected_path="${mutation#*|}"
+		changed="$BATS_TEST_TMPDIR/changed-$expected_path.json"
+		jq "$expression" "$base_identity" >"$changed"
+		export BENCHMARK_IDENTITY_FIXTURE="$changed"
+		run "$SCRIPTS/runmeta.sh" verify "$run_id"
+		[ "$status" -eq 1 ]
+		[[ "$output" == "identity mismatch: $expected_path "* ]]
+		export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
+	done
+}
+
+# Catches CPU-only x265 results being resumed across processors or runtime
+# builds, which would make matched-quality comparisons non-comparable.
+@test "verify refuses changed CPU model FFmpeg and libx265 identities" {
+	cpu_identity="$BATS_TEST_TMPDIR/cpu-identity.json"
+	jq '.gpu = null | .cpu = {model:"Intel(R) Core(TM) i5", ffmpeg:"8.1.2", libx265:"4.1"}' \
+		"$BENCHMARK_IDENTITY_FIXTURE" >"$cpu_identity"
+	export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	for mutation in \
+		'.cpu.model = "other cpu"|cpu.model' \
+		'.cpu.ffmpeg = "8.1.3"|cpu.ffmpeg' \
+		'.cpu.libx265 = "4.2"|cpu.libx265'; do
+		expression="${mutation%%|*}"
+		expected_path="${mutation#*|}"
+		changed="$BATS_TEST_TMPDIR/changed-$expected_path.json"
+		jq "$expression" "$cpu_identity" >"$changed"
+		export BENCHMARK_IDENTITY_FIXTURE="$changed"
+		run "$SCRIPTS/runmeta.sh" verify "$run_id"
+		[ "$status" -eq 1 ]
+		[[ "$output" == "identity mismatch: $expected_path "* ]]
+		export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
+	done
+}
+
 # Catches an explicit run handle following a pre-existing symlink out of the
 # confined runs tree and treating another directory's manifest as its own.
 @test "explicit create refuses a symlinked run directory" {
@@ -138,7 +204,7 @@ prepare_configmap_script_mount() {
 # Catches a production break where collision cleanup removes an empty run
 # directory that existed before this process attempted its atomic mkdir.
 @test "failed create preserves an existing empty run directory" {
-	run_id='20260802T120000Z-037fa5c4'
+	run_id='20260802T120000Z-d1098cf4'
 	collision="$BENCHMARK_OUT/runs/$run_id"
 	mkdir "$collision"
 
@@ -152,14 +218,14 @@ prepare_configmap_script_mount() {
 # Catches the race where a concurrent creator wins mkdir after this process has
 # selected the run ID and the losing process removes the winner's empty tree.
 @test "failed concurrent create preserves the winning run directory" {
-	run_id='20260802T120000Z-037fa5c4'
+	run_id='20260802T120000Z-d1098cf4'
 	collision="$BENCHMARK_OUT/runs/$run_id"
 	stub_bin="$BATS_TEST_TMPDIR/mkdir-bin"
 	mkdir -p "$stub_bin"
 	cat >"$stub_bin/mkdir" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if (($# == 1)) && [[ "$1" == */20260802T120000Z-037fa5c4 ]]; then
+if (($# == 1)) && [[ "$1" == */20260802T120000Z-d1098cf4 ]]; then
 	/bin/mkdir "$1"
 	exit 1
 fi
@@ -231,7 +297,7 @@ EOF
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 36' ]
+	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 39' ]
 }
 
 # Catches a production break where a header with only the first field correct is
@@ -253,7 +319,7 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded" >>"$results"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
@@ -262,6 +328,56 @@ EOF
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 65 ]
 	[ "$output" = 'invalid results CSV: malformed row 3' ]
+}
+
+# Catches a stale results schema or another strategy claiming a passed row and
+# suppressing an ICQ retry.
+@test "completed refuses passed rows without the ICQ strategy identity" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	results_header >"$results"
+	results_row "$run_id" | sed 's/,qsv-hevc-icq-v1,passed,800000000$//' >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has 36 columns; expected 39' ]
+
+	results_header >"$results"
+	results_row "$run_id" qsv la-hevc-icq-v1 >>"$results"
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has a mismatched strategy' ]
+}
+
+# Catches a passed QSV row relying on encode success alone instead of retaining
+# the required initialization and positive hardware-work evidence.
+@test "completed requires QSV initialization and positive video busy time" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	results_header >"$results"
+	results_row "$run_id" qsv qsv-hevc-icq-v1 failed 800000000 >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has an invalid QSV initialization' ]
+
+	results_header >"$results"
+	results_row "$run_id" qsv qsv-hevc-icq-v1 passed 0 >>"$results"
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has invalid QSV video busy time' ]
+}
+
+# Catches the CPU reference stage inheriting GPU proof values instead of the
+# explicit not-applicable zero pair required by the shared results schema.
+@test "completed accepts x265 only with the not-applicable QSV proof pair" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	results_header >"$results"
+	results_row "$run_id" x265 >>"$results"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|x265|22'
+	[ "$status" -eq 0 ]
 }
 
 # Catches a production break where changed executable bytes reuse stale result
@@ -357,7 +473,9 @@ EOF
 	source_path="$BATS_TEST_TMPDIR/Secret Movie Name.mkv"
 	printf '%s' 'media-bytes' >"$source_path"
 	samples_file="$BATS_TEST_TMPDIR/samples-with-source.json"
-	jq -n --arg path "$source_path" '{
+	jq -n --arg path "$source_path" \
+		--argjson strategy "$(yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.strategy')" '{
+		schemaVersion: 2, strategy: $strategy,
 		runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
 		savingsSeed: 20260802,
 		qualityPanel: [{
@@ -452,5 +570,5 @@ EOF
 	[ -n "$benchmark_header" ]
 	[ -n "$runmeta_header" ]
 	[ "$runmeta_header" = "$benchmark_header" ]
-	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 36 ]
+	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 39 ]
 }

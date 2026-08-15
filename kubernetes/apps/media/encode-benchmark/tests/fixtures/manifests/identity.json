@@ -1,21 +1,23 @@
 {
-  "schemaVersion": 1,
-  "mode": "quality",
-  "imageDigest": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
-  "scriptDigests": {},
-  "samplesDigest": "sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e",
-  "sources": [],
+  "clientDevice": null,
+  "cpu": null,
   "encoderCommands": [],
-  "node": {
-    "name": "",
-    "kernel": "",
-    "i915": "",
-    "vpl": ""
+  "gpu": {"i915": "", "vpl": ""},
+  "images": {
+    "configured": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+    "dispatched": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+    "running": "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
   },
-  "vmaf": {
-    "model": "vmaf_4k_v0.6.1",
-    "version": ""
-  },
+  "mode": "quality",
+  "node": {"kernel": "", "name": ""},
+  "resultsSchemaVersion": 2,
+  "samplesDigest": "sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e",
   "savingsSeed": 20260802,
-  "clientDevice": null
+  "schemaVersion": 2,
+  "scriptDigests": {},
+  "selectedSettings": [],
+  "sources": [],
+  "strategyId": "qsv-hevc-icq-v1",
+  "upstream": {},
+  "vmaf": {"model": "vmaf_4k_v0.6.1", "version": ""}
 }

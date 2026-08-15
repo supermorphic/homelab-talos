@@ -8,6 +8,8 @@ setup() {
 	export REAL_SHA256SUM="$(command -v sha256sum)"
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/scratch"
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
 	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 }
 
@@ -325,10 +327,10 @@ expand_execution_panels_to_three_samples() {
 
 # Catches a production break where the durable result contract drifts from the
 # exact schema that runmeta uses to decide whether a variant is resumable.
-@test "results header is the exact 36-column resume schema" {
+@test "results header is the exact 39-column ICQ resume schema" {
 	run "$SCRIPTS/benchmark.sh" _test results-header
 	[ "$status" -eq 0 ]
-	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition' ]
+	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' ]
 }
 
 @test "benchmark failure hooks are rejected outside test mode" {
@@ -739,6 +741,46 @@ expand_execution_panels_to_three_samples() {
 	[ "$status" -eq 0 ]
 }
 
+# Catches an artifact from another strategy entering an ICQ run before any row
+# is appended and becoming an apparently resumable result.
+@test "result recording rejects a fixture with a mismatched strategy before append" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	fixture="$BATS_TEST_TMPDIR/mismatched-strategy.json"
+	jq '.strategy_id = "la-hevc-icq-v1"' "$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	scratch_output="$BENCHMARK_SCRATCH/mismatched-strategy.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'result fixture strategy does not match contract' ]
+	[ ! -e "$scratch_output" ]
+	if [[ -e "$run_dir/results.csv" ]]; then
+		[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
+	fi
+}
+
+# Catches QSV encode success being recorded as passed without the initialization
+# and positive hardware-busy evidence carried in the ICQ result schema.
+@test "result recording marks incomplete QSV evidence invalid" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	fixture="$BATS_TEST_TMPDIR/missing-qsv-evidence.json"
+	jq '.qsv_initialization = "failed" | .video_busy_nanoseconds = "0"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	scratch_output="$BENCHMARK_SCRATCH/missing-qsv-evidence.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"status":"invalid","attempt":1,"output_disposition":"discarded"}' ]
+	run awk -F, 'NR == 2 {print $10 "," $38 "," $39}' "$run_dir/results.csv"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'invalid,failed,0' ]
+}
+
 # Catches copying an invalid/unconfirmed full encode to the shared output or
 # losing the run/sample binding in the operator's finalist confirmation.
 @test "finalist output is copied only after passed validation and exact confirmation" {
@@ -773,7 +815,7 @@ expand_execution_panels_to_three_samples() {
 	prepare_execution_run
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-037fa5c4' ]
+	[ "$output" = '20260802T120000Z-d1098cf4' ]
 	run_id="$output"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 
@@ -788,12 +830,14 @@ print(json.dumps({
     "count": len(rows),
     "qsv": [row["requested_setting"] for row in rows if row["encoder"] == "qsv"],
     "x265": [row["requested_setting"] for row in rows if row["encoder"] == "x265"],
-    "statuses": sorted(set(row["status"] for row in rows)),
-    "dispositions": sorted(set(row["output_disposition"] for row in rows)),
+	"statuses": sorted(set(row["status"] for row in rows)),
+	"dispositions": sorted(set(row["output_disposition"] for row in rows)),
+	"qsvProof": sorted(set((row["strategy_id"], row["qsv_initialization"], row["video_busy_nanoseconds"]) for row in rows if row["encoder"] == "qsv")),
+	"x265Proof": sorted(set((row["strategy_id"], row["qsv_initialization"], row["video_busy_nanoseconds"]) for row in rows if row["encoder"] == "x265")),
 }, separators=(",", ":")))
 PYTHON
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"count":12,"qsv":["16","18","20","22","24","26","28","30"],"x265":["18","20","22","24"],"statuses":["passed"],"dispositions":["discarded"]}' ]
+	[ "$output" = '{"count":12,"qsv":["16","18","20","22","24","26","28","30"],"x265":["18","20","22","24"],"statuses":["passed"],"dispositions":["discarded"],"qsvProof":[["qsv-hevc-icq-v1","passed","800000000"]],"x265Proof":[["qsv-hevc-icq-v1","not-applicable","0"]]}' ]
 	[ "$(find "$run_dir/stills" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 24 ]
 	[ -f "$run_dir/stills/sample-hdr-detail-qsv-20-source.png" ]
 	[ -f "$run_dir/stills/sample-hdr-detail-x265-24-encoded.png" ]
