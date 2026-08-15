@@ -21,8 +21,6 @@ for file in \
   'kubernetes/apps/security/cert-manager/app/ocirepository.yaml' \
   'kubernetes/apps/security/cert-manager/app/helmrelease.yaml' \
   'kubernetes/apps/security/cert-manager/app/values.yaml' \
-  'kubernetes/apps/security/cert-manager/config/clusterissuers.yaml' \
-  'kubernetes/apps/security/cert-manager/config/staging-certificate.yaml' \
   'kubernetes/apps/security/cert-manager/certificate/certificate.yaml' \
   'kubernetes/apps/networking/metallb/ks.yaml' \
   'kubernetes/apps/networking/metallb/app/helmrelease.yaml' \
@@ -51,6 +49,13 @@ for file in \
     exit 1
   }
 done
+
+assert_command_finds_nothing \
+  'Kubernetes source must not retain the retired letsencrypt-staging issuer.' \
+  rg -n 'letsencrypt-staging' kubernetes
+assert_command_finds_nothing \
+  'Kubernetes source must not retain the retired staging wildcard or Secret.' \
+  rg -n 'wildcard-lab-supermorphic-com-staging' kubernetes
 
 for secret in "$cloudflare_secret" "$pihole_secret"; do
   [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
