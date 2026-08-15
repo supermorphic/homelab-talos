@@ -1,0 +1,20 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/monitoring.coreos.com/servicemonitor_v1.json
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/component: controller
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: 1m
+      scrapeTimeout: 30s

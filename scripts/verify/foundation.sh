@@ -31,12 +31,10 @@ for deployment in cert-manager cert-manager-webhook cert-manager-cainjector; do
   replicas="$(kubectl --kubeconfig "$kubeconfig" --namespace cert-manager get deployment "$deployment" --output json | yq -r '[.spec.replicas, (.status.availableReplicas // 0)] | join(" ")')"
   [[ "$replicas" == '2 2' ]]
 done
-for issuer in letsencrypt-staging letsencrypt-production; do
-  kubectl --kubeconfig "$kubeconfig" wait --for=condition=Ready "clusterissuer/$issuer" --timeout=10m
-done
-for certificate in wildcard-lab-supermorphic-com-staging wildcard-lab-supermorphic-com; do
-  kubectl --kubeconfig "$kubeconfig" --namespace networking wait --for=condition=Ready "certificate/$certificate" --timeout=15m
-done
+kubectl --kubeconfig "$kubeconfig" wait \
+  --for=condition=Ready clusterissuer/letsencrypt-production --timeout=10m
+kubectl --kubeconfig "$kubeconfig" --namespace networking wait \
+  --for=condition=Ready certificate/wildcard-lab-supermorphic-com --timeout=15m
 
 controller="$(kubectl --kubeconfig "$kubeconfig" --namespace metallb-system get deployment metallb-controller --output json | yq -r '[.spec.replicas, (.status.availableReplicas // 0)] | join(" ")')"
 [[ "$controller" == '1 1' ]]

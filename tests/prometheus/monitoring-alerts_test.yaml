@@ -1,5 +1,6 @@
 rule_files:
   - flux.yaml
+  - gatus.yaml
   - ntfy.yaml
   - portainer.yaml
   - test-reports.yaml
@@ -282,3 +283,213 @@ tests:
               summary: Test report archive has less than 15% free space
               description: >-
                 Retention could not keep the persistent report archive below its capacity threshold. Review report sizes and Longhorn capacity.
+
+  - name: all ordinary unalerted Gatus endpoints fail while echo stays healthy
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Observability",name="grafana"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="prometheus"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="alertmanager"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="test-reports"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Storage",name="longhorn-ui"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="External",name="letsencrypt-acme"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
+        values: '1x26'
+      - series: 'gatus_results_endpoint_success{group="Media",name="plex"}'
+        values: '1x26'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: GatusEndpointDown
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: GatusEndpointDown
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Observability, name: grafana}
+            exp_annotations:
+              summary: Gatus endpoint Observability/grafana is down
+              description: The Observability/grafana Gatus probe has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: Observability, name: prometheus}
+            exp_annotations:
+              summary: Gatus endpoint Observability/prometheus is down
+              description: The Observability/prometheus Gatus probe has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: Observability, name: alertmanager}
+            exp_annotations:
+              summary: Gatus endpoint Observability/alertmanager is down
+              description: The Observability/alertmanager Gatus probe has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: Observability, name: test-reports}
+            exp_annotations:
+              summary: Gatus endpoint Observability/test-reports is down
+              description: The Observability/test-reports Gatus probe has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: Storage, name: longhorn-ui}
+            exp_annotations:
+              summary: Gatus endpoint Storage/longhorn-ui is down
+              description: The Storage/longhorn-ui Gatus probe has failed continuously for 15 minutes.
+          - exp_labels: {severity: warning, group: External, name: letsencrypt-acme}
+            exp_annotations:
+              summary: Gatus endpoint External/letsencrypt-acme is down
+              description: The External/letsencrypt-acme Gatus probe has failed continuously for 15 minutes.
+      - eval_time: 19m
+        alertname: GatewayDataPathDown
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: GatusEndpointDown
+        exp_alerts: []
+
+  - name: echo proves the shared gateway path with a five minute critical boundary
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
+        values: '1x3 0x8 1x5'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="ntfy"}'
+        values: '1x16'
+      - series: 'gatus_results_endpoint_success{group="Media",name="plex"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: GatewayDataPathDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: GatewayDataPathDown
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Platform, name: echo}
+            exp_annotations:
+              summary: Shared internal gateway data path is unavailable
+              description: The Platform/echo Gatus probe has failed for more than five minutes, so ordinary DNS, the production Gateway, wildcard TLS, routing, or the echo backend is unavailable.
+      - eval_time: 10m
+        alertname: GatusEndpointDown
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: GatewayDataPathDown
+        exp_alerts: []
+
+  - name: all seven gap probes publish metrics
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Observability",name="grafana"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="prometheus"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="alertmanager"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="test-reports"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Storage",name="longhorn-ui"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="External",name="letsencrypt-acme"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Media",name="plex"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="ntfy"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="portainer"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GatusProbeMissing
+        exp_alerts: []
+
+  - name: every absent gap probe retains its exact identity
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media",name="plex"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="ntfy"}'
+        values: '1x10'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="portainer"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GatusProbeMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GatusProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Observability, name: grafana}
+            exp_annotations:
+              summary: Gatus probe Observability/grafana metric is missing
+              description: The Observability/grafana Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: prometheus}
+            exp_annotations:
+              summary: Gatus probe Observability/prometheus metric is missing
+              description: The Observability/prometheus Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: alertmanager}
+            exp_annotations:
+              summary: Gatus probe Observability/alertmanager metric is missing
+              description: The Observability/alertmanager Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: test-reports}
+            exp_annotations:
+              summary: Gatus probe Observability/test-reports metric is missing
+              description: The Observability/test-reports Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Platform, name: echo}
+            exp_annotations:
+              summary: Gatus probe Platform/echo metric is missing
+              description: The Platform/echo Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Storage, name: longhorn-ui}
+            exp_annotations:
+              summary: Gatus probe Storage/longhorn-ui metric is missing
+              description: The Storage/longhorn-ui Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: External, name: letsencrypt-acme}
+            exp_annotations:
+              summary: Gatus probe External/letsencrypt-acme metric is missing
+              description: The External/letsencrypt-acme Gatus success series has been absent for more than five minutes.
+
+  - name: missing Gatus series recover when telemetry returns
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Observability",name="grafana"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="prometheus"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="alertmanager"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="Observability",name="test-reports"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="Storage",name="longhorn-ui"}'
+        values: '_x7 1x5'
+      - series: 'gatus_results_endpoint_success{group="External",name="letsencrypt-acme"}'
+        values: '_x7 1x5'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GatusProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Observability, name: grafana}
+            exp_annotations:
+              summary: Gatus probe Observability/grafana metric is missing
+              description: The Observability/grafana Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: prometheus}
+            exp_annotations:
+              summary: Gatus probe Observability/prometheus metric is missing
+              description: The Observability/prometheus Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: alertmanager}
+            exp_annotations:
+              summary: Gatus probe Observability/alertmanager metric is missing
+              description: The Observability/alertmanager Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Observability, name: test-reports}
+            exp_annotations:
+              summary: Gatus probe Observability/test-reports metric is missing
+              description: The Observability/test-reports Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Platform, name: echo}
+            exp_annotations:
+              summary: Gatus probe Platform/echo metric is missing
+              description: The Platform/echo Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: Storage, name: longhorn-ui}
+            exp_annotations:
+              summary: Gatus probe Storage/longhorn-ui metric is missing
+              description: The Storage/longhorn-ui Gatus success series has been absent for more than five minutes.
+          - exp_labels: {severity: warning, group: External, name: letsencrypt-acme}
+            exp_annotations:
+              summary: Gatus probe External/letsencrypt-acme metric is missing
+              description: The External/letsencrypt-acme Gatus success series has been absent for more than five minutes.
+      - eval_time: 8m
+        alertname: GatusProbeMissing
+        exp_alerts: []

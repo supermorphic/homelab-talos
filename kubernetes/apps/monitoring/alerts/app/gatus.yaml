@@ -1,0 +1,57 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gatus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: gatus
+spec:
+  groups:
+    - name: gatus-gap-closure
+      rules:
+        - alert: GatusEndpointDown
+          expr: >-
+            gatus_results_endpoint_success{
+              group=~"Observability|Storage|External"
+            } == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Gatus endpoint {{ $labels.group }}/{{ $labels.name }} is down'
+            description: >-
+              The {{ $labels.group }}/{{ $labels.name }} Gatus probe has failed
+              continuously for 15 minutes.
+        - alert: GatewayDataPathDown
+          expr: >-
+            gatus_results_endpoint_success{
+              group="Platform",
+              name="echo"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Shared internal gateway data path is unavailable
+            description: >-
+              The Platform/echo Gatus probe has failed for more than five minutes, so
+              ordinary DNS, the production Gateway, wildcard TLS, routing, or the echo
+              backend is unavailable.
+        - alert: GatusProbeMissing
+          expr: >-
+            absent(gatus_results_endpoint_success{group="Observability",name="grafana"})
+            or absent(gatus_results_endpoint_success{group="Observability",name="prometheus"})
+            or absent(gatus_results_endpoint_success{group="Observability",name="alertmanager"})
+            or absent(gatus_results_endpoint_success{group="Observability",name="test-reports"})
+            or absent(gatus_results_endpoint_success{group="Platform",name="echo"})
+            or absent(gatus_results_endpoint_success{group="Storage",name="longhorn-ui"})
+            or absent(gatus_results_endpoint_success{group="External",name="letsencrypt-acme"})
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Gatus probe {{ $labels.group }}/{{ $labels.name }} metric is missing'
+            description: >-
+              The {{ $labels.group }}/{{ $labels.name }} Gatus success series has been
+              absent for more than five minutes.

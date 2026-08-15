@@ -23,12 +23,12 @@ shared Gateway. Application namespaces attach `HTTPRoute` resources but do not
 receive or copy the TLS private key.
 
 ```text
-cert-manager -> staging issuer/certificate -> production issuer/certificate
-                                                   |
-MetalLB -> L2 pool ----------------------------> internal Gateway
-Envoy Gateway ------------------------------------/       |
-                                                           v
-                                            Pi-hole ExternalDNS -> echo route
+cert-manager -> production issuer/certificate
+                            |
+MetalLB -> L2 pool ------> internal Gateway
+Envoy Gateway -------------/       |
+                                  v
+                   Pi-hole ExternalDNS -> echo route
 ```
 
 Flux splits controllers from their custom resources so CRDs and webhooks become
@@ -36,7 +36,7 @@ Ready before consumers reconcile. The nine units are initially committed with
 `suspend: true` and resumed by `just bootstrap foundation` in this order:
 
 1. `cert-manager`
-2. `cert-manager-config` (staging ACME proof)
+2. `cert-manager-config` (Cloudflare credential and networking namespace prerequisites)
 3. `wildcard-certificate` (production issuer and wildcard certificate)
 4. `metallb`
 5. `metallb-config`
@@ -165,7 +165,6 @@ mise exec -- just kube foundation-verify
 The phase is complete only when the final verifier proves:
 
 - all nine Phase 7 Flux Kustomizations are Ready and unsuspended;
-- staging ACME completed before the production wildcard certificate became Ready;
 - cert-manager's controller, webhook, and cainjector each have two available replicas;
 - MetalLB has one controller, three speakers, the exact non-auto-assign pool,
   and no FRR workload;
@@ -190,7 +189,7 @@ Ready; the durable desired state is merged into `main`.
 | MetalLB | chart `metallb-0.16.1`; controller + three speakers; no FRR workload |
 | Envoy Gateway | chart `gateway-helm-1.8.2`; two data-plane replicas |
 | ExternalDNS | chart `external-dns-1.21.1` (app `v0.21.0`); Pi-hole v6, `registry=noop`, `policy=upsert-only`, internal audience filter |
-| Staging ACME | `wildcard-lab-supermorphic-com-staging` Ready before production issuance |
+| Staging ACME | `wildcard-lab-supermorphic-com-staging` Ready before production issuance; bootstrap proof retired by [`2026-08-15-cert-manager-staging-retirement.md`](decisions/2026-08-15-cert-manager-staging-retirement.md) |
 | Wildcard certificate | `wildcard-lab-supermorphic-com` Ready from `letsencrypt-production` |
 | Gateway | `internal` Programmed at `192.168.90.30` |
 | MetalLB announcement | L2 announced from `nuc2` (`servicel2status`) |

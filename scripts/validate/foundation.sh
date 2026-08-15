@@ -21,8 +21,8 @@ for file in \
   'kubernetes/apps/security/cert-manager/app/ocirepository.yaml' \
   'kubernetes/apps/security/cert-manager/app/helmrelease.yaml' \
   'kubernetes/apps/security/cert-manager/app/values.yaml' \
-  'kubernetes/apps/security/cert-manager/config/clusterissuers.yaml' \
-  'kubernetes/apps/security/cert-manager/config/staging-certificate.yaml' \
+  'kubernetes/apps/security/cert-manager/monitoring/kustomization.yaml' \
+  'kubernetes/apps/security/cert-manager/monitoring/servicemonitor.yaml' \
   'kubernetes/apps/security/cert-manager/certificate/certificate.yaml' \
   'kubernetes/apps/networking/metallb/ks.yaml' \
   'kubernetes/apps/networking/metallb/app/helmrelease.yaml' \
@@ -51,6 +51,13 @@ for file in \
     exit 1
   }
 done
+
+assert_command_finds_nothing \
+  'Kubernetes source must not retain the retired letsencrypt-staging issuer.' \
+  rg -n 'letsencrypt-staging' kubernetes
+assert_command_finds_nothing \
+  'Kubernetes source must not retain the retired staging wildcard or Secret.' \
+  rg -n 'wildcard-lab-supermorphic-com-staging' kubernetes
 
 for secret in "$cloudflare_secret" "$pihole_secret"; do
   [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == 'true' ]]
@@ -99,12 +106,22 @@ cert_ks='kubernetes/apps/security/cert-manager/ks.yaml'
 [[ "$(yq ea -r 'select(.metadata.name == "cert-manager") | .spec.dependsOn[].name' "$cert_ks")" == 'cilium' ]]
 [[ "$(yq ea -r 'select(.metadata.name == "cert-manager-config") | .spec.dependsOn[].name' "$cert_ks")" == 'cert-manager' ]]
 [[ "$(yq ea -r 'select(.metadata.name == "wildcard-certificate") | .spec.dependsOn[].name' "$cert_ks")" == 'cert-manager-config' ]]
+[[ "$(yq ea -r 'select(.metadata.name == "cert-manager-monitoring") | [.spec.dependsOn[].name] | sort | join(",")' "$cert_ks")" == 'cert-manager,kube-prometheus-stack' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/metallb/ks.yaml | head -n 1)" == 'cilium' ]]
 [[ "$(yq ea -r 'select(.metadata.name == "metallb-config") | .spec.dependsOn[].name' kubernetes/apps/networking/metallb/ks.yaml)" == 'metallb' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/envoy-gateway/ks.yaml)" == 'cilium' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/internal-gateway/ks.yaml | sort)" == $'envoy-gateway\nmetallb-config\nwildcard-certificate' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/networking/external-dns/ks.yaml)" == 'internal-gateway' ]]
 [[ "$(yq -r '.spec.dependsOn[].name' kubernetes/apps/testing/echo/ks.yaml)" == 'external-dns-internal' ]]
+
+cert_monitor='kubernetes/apps/security/cert-manager/monitoring/servicemonitor.yaml'
+[[ "$(yq -r '.metadata.name + "/" + .metadata.namespace' "$cert_monitor")" == 'cert-manager/cert-manager' ]]
+[[ "$(yq -r '.spec.selector.matchLabels | to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")' "$cert_monitor")" == 'app.kubernetes.io/component=controller,app.kubernetes.io/instance=cert-manager,app.kubernetes.io/name=cert-manager' ]]
+[[ "$(yq -r '.spec.namespaceSelector.matchNames | join(",")' "$cert_monitor")" == 'cert-manager' ]]
+[[ "$(yq -r '.spec.endpoints | length' "$cert_monitor")" == '1' ]]
+[[ "$(yq -r '.spec.endpoints[0] | [.port,.interval,.scrapeTimeout] | join(",")' "$cert_monitor")" == 'http-metrics,1m,30s' ]]
+[[ "$(yq -r '.prometheus.servicemonitor.enabled // false' kubernetes/apps/security/cert-manager/app/values.yaml)" == 'false' ]]
+[[ "$(yq -r '.prometheus.podmonitor.enabled // false' kubernetes/apps/security/cert-manager/app/values.yaml)" == 'false' ]]
 
 # The shared Envoy Gateway controller admits namespaces by access class. The
 # selector must stay a single `In` expression over the two known classes so a
@@ -156,6 +173,7 @@ for directory in \
   kubernetes/apps/security/cert-manager/app \
   kubernetes/apps/security/cert-manager/config \
   kubernetes/apps/security/cert-manager/certificate \
+  kubernetes/apps/security/cert-manager/monitoring \
   kubernetes/apps/networking/metallb/app \
   kubernetes/apps/networking/metallb/config \
   kubernetes/apps/networking/envoy-gateway/app \
@@ -172,6 +190,33 @@ helm template cert-manager "$cert_manager_chart" \
   --version "$cert_manager_version" \
   --namespace cert-manager \
   --values kubernetes/apps/security/cert-manager/app/values.yaml >"$temp_dir/cert-manager.yaml"
+[[ "$(yq ea -r '
+  select(.kind == "Service" and .metadata.name == "cert-manager")
+  | .metadata.namespace
+' "$temp_dir/cert-manager.yaml")" == 'cert-manager' ]]
+[[ "$(yq ea -r '
+  select(.kind == "Service" and .metadata.name == "cert-manager")
+  | .spec.selector
+  | to_entries
+  | sort_by(.key)
+  | map(.key + "=" + .value)
+  | join(",")
+' "$temp_dir/cert-manager.yaml")" == 'app.kubernetes.io/component=controller,app.kubernetes.io/instance=cert-manager,app.kubernetes.io/name=cert-manager' ]]
+[[ "$(yq ea -r '
+  select(.kind == "Service" and .metadata.name == "cert-manager")
+  | .spec.ports
+  | length
+' "$temp_dir/cert-manager.yaml")" == '1' ]]
+[[ "$(yq ea -r '
+  select(.kind == "Service" and .metadata.name == "cert-manager")
+  | .spec.ports[0]
+  | [.name, .port, .protocol]
+  | join(",")
+' "$temp_dir/cert-manager.yaml")" == 'http-metrics,9402,TCP' ]]
+[[ -z "$(yq ea -r '
+  select(.kind == "ServiceMonitor" or .kind == "PodMonitor")
+  | .kind
+' "$temp_dir/cert-manager.yaml")" ]]
 helm template metallb metallb \
   --repo "$metallb_repository" \
   --version "$metallb_version" \
