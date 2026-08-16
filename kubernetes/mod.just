@@ -691,6 +691,23 @@ encode-benchmark-run mode run_id="" sample_id="": require-bash
     fi
     scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
 
+# Create a metadata-only findings Job from a local, schema-v1 evidence map.
+# The dispatcher validates the JSON and waits for its owned inputs ConfigMap
+# before unsuspending the Job. This is operator-run and never part of ci.
+encode-benchmark-findings inputs_file run_id="": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    inputs_file={{quote(inputs_file)}}
+    run_id={{quote(run_id)}}
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark findings' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    args=(findings "$inputs_file")
+    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
+
 # Thin finalist convenience alias. The shared run recipe owns the single source
 # guard and dispatch path; finalist confirmation remains run/sample-bound.
 encode-benchmark-finalist run_id sample_id:

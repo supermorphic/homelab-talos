@@ -773,3 +773,24 @@ EOF
 	[ "$runmeta_header" = "$benchmark_header" ]
 	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 39 ]
 }
+
+@test "findings identity has no sources and resume binds the input digest" {
+	unset BENCHMARK_IDENTITY_FIXTURE
+	inputs_digest="sha256:$(printf findings-inputs | sha256sum | awk '{print $1}')"
+	export BENCHMARK_FINDINGS_INPUTS_SHA256="$inputs_digest"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n --arg digest "$inputs_digest" '{findingsInputsSha256:$digest,quality:{runId:"20260815T120000Z-aaaaaaaa"}}')"
+	export BENCHMARK_EXECUTION_CLASS=cpu BENCHMARK_CPU_MODEL=findings-metadata BENCHMARK_FFMPEG_VERSION=not-applicable BENCHMARK_LIBX265_VERSION=not-applicable
+	export BENCHMARK_DISPATCH_IMAGE="$(jq -r '.runtime.image' "$BENCHMARK_SAMPLES_FILE")"
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_NOW=20260815T160000Z
+	run "$SCRIPTS/runmeta.sh" create findings
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run jq -e '.mode == "findings" and .sources == [] and .upstream.findingsInputsSha256 == env.BENCHMARK_FINDINGS_INPUTS_SHA256' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	[ "$status" -eq 0 ]
+	run "$SCRIPTS/runmeta.sh" create findings "$run_id"
+	[ "$status" -eq 0 ]
+	export BENCHMARK_FINDINGS_INPUTS_SHA256="sha256:$(printf changed | sha256sum | awk '{print $1}')"
+	run "$SCRIPTS/runmeta.sh" create findings "$run_id"
+	[ "$status" -ne 0 ]
+}

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if (($# < 2)); then
-	echo 'usage: dispatch.sh <kubeconfig> <capabilities|census|run|clean> ...' >&2
+	echo 'usage: dispatch.sh <kubeconfig> <capabilities|census|findings|run|clean> ...' >&2
 	exit 64
 fi
 
@@ -307,6 +307,18 @@ delete_created_job() {
 	' <<<"$live_job" >/dev/null 2>&1 || return 0
 	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
 		"job/$name" --preconditions="uid=$uid" --wait=true >/dev/null 2>&1 || true
+}
+
+delete_created_findings_inputs() {
+	local configmap_json="$1" job_json="$2" name uid job_name job_uid persisted
+	name="$(yq -p=json -e -r '.metadata.name | select(test("^encode-benchmark-findings-inputs-[a-z0-9-]+$"))' <<<"$configmap_json")" || return 0
+	uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$configmap_json")" || return 0
+	job_name="$(yq -p=json -e -r '.metadata.name' <<<"$job_json")" || return 0
+	job_uid="$(yq -p=json -e -r '.metadata.uid' <<<"$job_json")" || return 0
+	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$name" --output json 2>/dev/null)" || return 0
+	[[ "$(yq -p=json -r '.metadata.uid // ""' <<<"$persisted")" == "$uid" ]] || return 0
+	has_exact_job_controller_owner "$persisted" "$job_name" "$job_uid" || return 0
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete "configmap/$name" --preconditions="uid=$uid" --wait=true >/dev/null 2>&1 || true
 }
 
 establish_running_image_handoff() {
@@ -1020,6 +1032,97 @@ dispatch_clean() {
 	printf 'run_id=%s cleanup_job=%s artifact_location=/out/runs/%s\n' "$run_id" "$name" "$run_id"
 }
 
+validate_findings_inputs_file() {
+	local path="$1"
+	[[ -f "$path" && ! -L "$path" ]] || return 66
+	jq -e '
+		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+		def run: type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$");
+		def base($suffix): type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9._-]*" + $suffix + "$");
+		def quality: type == "object" and keys == ["candidatesSha256","resultsSha256","runId"] and (.runId|run) and (.resultsSha256|digest) and (.candidatesSha256|digest);
+		def x265: type == "object" and keys == ["comparisonsSha256","runId","sampleId"] and (.runId|run) and (.sampleId == "avc-grain-memento" or .sampleId == "hdr10-grain-goodfellas") and (.comparisonsSha256|digest);
+		def savings: type == "object" and keys == ["cohortsSha256","resultsSha256","runId"] and (.runId|run) and (.resultsSha256|digest) and (.cohortsSha256|digest);
+		def fragment: type == "object" and keys == ["file","runId","sha256"] and (.runId|run) and (.file|base("[.]csv")) and (.sha256|digest);
+		def contention: type == "object" and keys == ["fragments","observationsFile","observationsSha256"] and (.observationsFile|base("[.]json")) and (.observationsSha256|digest) and (.fragments|type == "array" and length <= 16 and all(.[]; fragment));
+		type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and (.quality|quality) and (.x265|type == "array" and length <= 2 and all(.[];x265) and ([.[]|.sampleId]|unique|length)==length) and (.savings == null or (.savings|savings)) and (.contention == null or (.contention|contention))
+	' "$path" >/dev/null
+}
+
+dispatch_findings() {
+	local inputs_file="${1:-}" supplied_run_id="${2:-}" run_id job name job_json uid configmap configmap_name configmap_json persisted inputs_json input_mode
+	(($# == 1 || $# == 2)) || return 64
+	[[ -n "$inputs_file" ]] || return 64
+	validate_findings_inputs_file "$inputs_file" || {
+		echo 'invalid findings inputs' >&2
+		return 65
+	}
+	while IFS= read -r upstream_run; do
+		validate_run_id "$upstream_run" || return
+	done < <(jq -r '.quality.runId, (.x265[]?.runId), (.savings?.runId // empty), (.contention?.fragments[]?.runId // empty)' "$inputs_file")
+	require_confirmation ENCODE_BENCHMARK_FINDINGS_CONFIRM 'run:encode-benchmark:findings' || return
+	load_source || return
+	if [[ -n "$supplied_run_id" ]]; then
+		validate_run_id "$supplied_run_id" || return
+		run_id="$supplied_run_id"
+	else run_id="$(new_run_id findings)"; fi
+	require_cluster_target || return
+	ensure_run_available "$run_id" || return
+	inputs_json="$(jq -c . "$inputs_file")" || return 65
+	chmod 0600 "$inputs_file" || return
+	input_mode="$(stat -c '%a' "$inputs_file" 2>/dev/null || stat -f '%Lp' "$inputs_file")"
+	[[ "$input_mode" == 600 ]] || return 65
+	name="encode-benchmark-findings-${run_id,,}"
+	configmap_name="encode-benchmark-findings-inputs-${run_id,,}"
+	job="$temp_directory/findings.yaml"
+	render_job "$job" findings "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh findings "$run_id"
+	remove_mounts_and_volumes "$job" media scratch image-evidence
+	FINDINGS_CONFIGMAP="$configmap_name" yq -i '
+		.spec.suspend = true |
+		del(.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915") |
+		del(.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915") |
+		.spec.template.spec.containers[0].volumeMounts += [{"name":"findings-inputs","mountPath":"/inputs/findings-inputs.json","subPath":"findings-inputs.json","readOnly":true}] |
+		.spec.template.spec.volumes += [{"name":"findings-inputs","configMap":{"name":strenv(FINDINGS_CONFIGMAP),"defaultMode":384,"items":[{"key":"findings-inputs.json","path":"findings-inputs.json"}]}}]
+	' "$job"
+	yq -i '
+		.spec.template.spec.containers[0].env += [{"name":"BENCHMARK_FINDINGS_INPUTS_FILE","value":"/inputs/findings-inputs.json"}]
+	' "$job"
+	job_json="$(create_job "$job")" || return
+	uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || {
+		delete_created_job "$job_json" "$job"
+		return
+	}
+	configmap="$temp_directory/findings-inputs.yaml"
+	CONFIGMAP_NAME="$configmap_name" JOB_NAME="$name" JOB_UID="$uid" RUN_ID="$run_id" INPUTS_JSON="$inputs_json" yq -n '
+		.apiVersion="v1" | .kind="ConfigMap" | .metadata.name=strenv(CONFIGMAP_NAME) | .metadata.namespace="media" |
+		.metadata.labels."app.kubernetes.io/name"="encode-benchmark" | .metadata.labels."homelab-talos/benchmark-run"=strenv(RUN_ID) | .metadata.labels."homelab-talos/benchmark-mode"="findings" |
+		.metadata.ownerReferences=[{"apiVersion":"batch/v1","kind":"Job","name":strenv(JOB_NAME),"uid":strenv(JOB_UID),"controller":true,"blockOwnerDeletion":true}] |
+		.data."findings-inputs.json"=strenv(INPUTS_JSON)
+	' >"$configmap" || {
+		delete_created_job "$job_json" "$job"
+		return
+	}
+	if ! configmap_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" create --filename "$configmap" --output json)"; then
+		delete_created_job "$job_json" "$job"
+		return 1
+	fi
+	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || {
+		delete_created_findings_inputs "$configmap_json" "$job_json"
+		delete_created_job "$job_json" "$job"
+		return 1
+	}
+	if ! has_exact_job_controller_owner "$persisted" "$name" "$uid" || ! jq -e --argjson expected "$inputs_json" '.data."findings-inputs.json" | fromjson == $expected' <<<"$persisted" >/dev/null; then
+		delete_created_findings_inputs "$configmap_json" "$job_json"
+		delete_created_job "$job_json" "$job"
+		return 65
+	fi
+	if ! kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" patch "job/$name" --type merge --patch '{"spec":{"suspend":false}}' >/dev/null; then
+		delete_created_findings_inputs "$configmap_json" "$job_json"
+		delete_created_job "$job_json" "$job"
+		return 1
+	fi
+	printf 'run_id=%s job=%s inputs_configmap=%s\n' "$run_id" "$name" "$configmap_name"
+}
+
 case "$action" in
 capabilities)
 	(($# == 0)) || exit 64
@@ -1028,6 +1131,9 @@ capabilities)
 census)
 	(($# == 0)) || exit 64
 	dispatch_census
+	;;
+findings)
+	dispatch_findings "$@"
 	;;
 run)
 	dispatch_run "$@"

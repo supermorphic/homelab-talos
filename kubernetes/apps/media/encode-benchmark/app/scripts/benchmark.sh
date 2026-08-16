@@ -2870,215 +2870,347 @@ validate_contention_worker_manifest() {
 	jq -n -c --arg case "$contention_case" --arg node "$node_name" '{case:$case,node:$node}'
 }
 
+validate_findings_inputs() {
+	local inputs="$1"
+	[[ -f "$inputs" && ! -L "$inputs" ]] || return 66
+	jq -e -S -c '
+		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+		def compact_utc:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z$") and
+			. as $original |
+			(capture("^(?<year>[0-9]{4})(?<month>[0-9]{2})(?<day>[0-9]{2})T(?<hour>[0-9]{2})(?<minute>[0-9]{2})(?<second>[0-9]{2})Z$") |
+				"\(.year)-\(.month)-\(.day)T\(.hour):\(.minute):\(.second)Z") as $iso |
+			try (($iso | fromdateiso8601 | strftime("%Y%m%dT%H%M%SZ")) == $original) catch false;
+		def run_id:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$") and
+			(split("-")[0] | compact_utc);
+		def basename($suffix):
+			type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9._-]*" + $suffix + "$");
+		def quality:
+			type == "object" and keys == ["candidatesSha256","resultsSha256","runId"] and
+			(.runId | run_id) and (.resultsSha256 | digest) and (.candidatesSha256 | digest);
+		def x265:
+			type == "object" and keys == ["comparisonsSha256","runId","sampleId"] and
+			(.runId | run_id) and (.sampleId == "avc-grain-memento" or .sampleId == "hdr10-grain-goodfellas") and
+			(.comparisonsSha256 | digest);
+		def savings:
+			type == "object" and keys == ["cohortsSha256","resultsSha256","runId"] and
+			(.runId | run_id) and (.resultsSha256 | digest) and (.cohortsSha256 | digest);
+		def fragment:
+			type == "object" and keys == ["file","runId","sha256"] and (.runId | run_id) and
+			(.file | basename("[.]csv")) and (.sha256 | digest);
+		def contention:
+			type == "object" and keys == ["fragments","observationsFile","observationsSha256"] and
+			(.observationsFile | basename("[.]json")) and (.observationsSha256 | digest) and
+			(.fragments | type == "array" and length <= 16 and all(.[]; fragment) and
+				([.[] | (.runId + "|" + .file)] | unique | length) == length);
+		if type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and
+			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and (.quality | quality) and
+			(.x265 | type == "array" and length <= 2 and all(.[]; x265) and
+				([.[] | .sampleId] | unique | length) == length) and
+			(.savings == null or (.savings | savings)) and
+			(.contention == null or (.contention | contention))
+		then . else error("invalid findings inputs") end
+	' "$inputs"
+}
+
+findings_unsafe_artifact() {
+	local path="$1"
+	[[ -f "$path" && ! -L "$path" ]] || return 66
+}
+
+findings_sha256() {
+	local path="$1"
+	findings_unsafe_artifact "$path" || return
+	printf 'sha256:%s\n' "$(sha256sum "$path" | awk 'NR == 1 { print $1 }')"
+}
+
+findings_validate_manifest() {
+	local path="$1" run_id="$2" mode="$3" identity created_at suffix
+	findings_unsafe_artifact "$path" || return
+	identity="$(jq -e -S -c 'if type == "object" and has("createdAt") then del(.createdAt) else error("manifest") end' "$path")" || return 65
+	jq -e --arg mode "$mode" '.mode == $mode' <<<"$identity" >/dev/null || return 65
+	identity="$(contract_normalize_run_identity "$identity" "$mode")" || return 65
+	created_at="$(jq -e -r '.createdAt | strings' "$path")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || return 65
+	[[ "$created_at" == "${run_id%-*}" ]] || return 65
+	suffix="$(printf '%s\n' "$identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
+	[[ "$suffix" == "${run_id##*-}" ]] || return 65
+}
+
+findings_validate_results() {
+	local path="$1" run_id="$2" panel="$3"
+	findings_unsafe_artifact "$path" || return
+	[[ "$(head -n 1 "$path")" == "$results_header" ]] || return 65
+	awk -F, -v run="$run_id" -v panel="$panel" -v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 { rows += 1; if (NF != 39 || $1 != run || $2 != panel || $37 != strategy) exit 65 }
+		END { if (rows < 1) exit 65 }
+	' "$path"
+}
+
+# Findings accepts a failed contention *observation* as evidence, but not a
+# failed worker encode. Every named fragment must be a completed ICQ encode
+# whose output was discarded after successful validation.
+findings_validate_contention_fragment() {
+	local path="$1" run_id="$2" header row fields fragment_case fragment_worker fragment_attempt
+	findings_unsafe_artifact "$path" || return
+	header="$(head -n 1 "$path")"
+	[[ "$header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
+		"$(wc -l <"$path" | tr -d ' ')" == '2' ]] || return 65
+	row="$(tail -n 1 "$path")"
+	fields="$(jq -R -e -c '
+		split(",") | select(length == 13 and all(.[]; startswith("\"") and endswith("\""))) |
+		map(.[1:-1])
+	' <<<"$row")" || return 65
+	jq -e --arg run "$run_id" '
+		.[0] == $run and
+		(.[1] | test("^[a-d]$")) and
+		(.[2] | test("^worker-[12]$")) and
+		(.[3] | test("^(avc-grain-memento|vc1-fugitive|hdr10-grain-goodfellas)$")) and
+		(.[4] | test("^(avc|vc1|hdr10)$")) and
+		(.[5] | test("^[0-9]+$")) and
+		.[6] == "passed" and
+		(.[7] | test("^[1-9][0-9]*$")) and
+		(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
+		.[9] == "passed" and .[10] == "" and
+		.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
+	' <<<"$fields" >/dev/null || return 65
+	fragment_case="$(jq -r '.[1]' <<<"$fields")"
+	fragment_worker="$(jq -r '.[2]' <<<"$fields")"
+	fragment_attempt="$(jq -r '.[7]' <<<"$fields")"
+	[[ "$(basename "$path")" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]]
+}
+
+findings_validate_evidence() {
+	local run_id="$1" inputs="$2" quality_run quality_results quality_candidates quality_manifest
+	local savings_run savings_results savings_cohorts savings_manifest x265_entry x265_run x265_file x265_manifest
+	local contention_file contention_path fragment fragment_run fragment_file fragment_path fragment_manifest
+	local contention_client_device contention_playback_sample fragment_observation_case fragment_fields
+	local contention_node_bindings='[]' manifest_binding
+	local findings_cohort findings_setting
+	validate_findings_inputs "$inputs" >/dev/null || return 65
+	quality_run="$(jq -r '.quality.runId' "$inputs")"
+	quality_results="$benchmark_out/runs/$quality_run/results.csv"
+	quality_candidates="$benchmark_out/runs/$quality_run/quality-candidates.json"
+	quality_manifest="$benchmark_out/runs/$quality_run/manifest.json"
+	findings_validate_manifest "$quality_manifest" "$quality_run" quality || return 65
+	findings_validate_results "$quality_results" "$quality_run" quality || return 65
+	[[ "$(findings_sha256 "$quality_results")" == "$(jq -r '.quality.resultsSha256' "$inputs")" &&
+	"$(findings_sha256 "$quality_candidates")" == "$(jq -r '.quality.candidatesSha256' "$inputs")" ]] || return 65
+	jq -e --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" --arg digest "$(findings_sha256 "$quality_results")" \
+		--argjson schema "$CONTRACT_RESULTS_SCHEMA" '
+			type == "object" and .schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+			.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
+			(.cohorts | type == "object" and keys == ["avc","hdr10","vc1"] and
+			 all(.[]; type == "object" and (.status == "eligible" or .status == "no-go")))
+		' "$quality_candidates" >/dev/null || return 65
+	for findings_cohort in avc vc1 hdr10; do
+		if jq -e --arg cohort "$findings_cohort" '.chosenSettings[$cohort]?.state == "final"' "$samples_file" >/dev/null; then
+			prepare_chosen_upstream "$findings_cohort" final || return 65
+			jq -e --arg run "$quality_run" --arg results "$(jq -r '.quality.resultsSha256' "$inputs")" \
+				--arg candidates "$(jq -r '.quality.candidatesSha256' "$inputs")" '
+					.qualityRunId == $run and .qualityResultsSha256 == $results and .candidateEvidenceSha256 == $candidates
+				' <<<"$(contract_chosen_record "$samples_file" "$findings_cohort" final)" >/dev/null || return 65
+		fi
+	done
+	while IFS= read -r x265_entry; do
+		x265_run="$(jq -r '.runId' <<<"$x265_entry")"
+		x265_file="$benchmark_out/runs/$x265_run/x265-comparisons.jsonl"
+		x265_manifest="$benchmark_out/runs/$x265_run/manifest.json"
+		findings_validate_manifest "$x265_manifest" "$x265_run" x265 || return 65
+		[[ "$(findings_sha256 "$x265_file")" == "$(jq -r '.comparisonsSha256' <<<"$x265_entry")" ]] || return 65
+		findings_cohort="$(if [[ "$(jq -r '.sampleId' <<<"$x265_entry")" == avc-grain-memento ]]; then printf avc; else printf hdr10; fi)"
+		findings_setting="$(contract_chosen_record "$samples_file" "$findings_cohort" final | jq -r '.globalQuality')" || return 65
+		jq -s -e --arg run "$x265_run" --arg quality "$quality_run" --arg sample "$(jq -r '.sampleId' <<<"$x265_entry")" \
+			--arg strategy "$CONTRACT_STRATEGY_ID" --argjson setting "$findings_setting" '
+				length == 3 and all(.[]; type == "object" and
+					keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting","qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+					.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $run and .sampleId == $sample and .qsvSetting == $setting and
+					((.status == "unbracketed" and .lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null) or
+					 (.status == "bracketed" and (.lowerCrf | type == "number") and (.upperCrf | type == "number") and (.matchedBitRate | type == "number" and . > 0) and (.premiumPercent | type == "number"))))
+			' "$x265_file" >/dev/null || return 65
+	done < <(jq -c '.x265[]' "$inputs")
+	if [[ "$(jq -r '.savings == null' "$inputs")" == 'false' ]]; then
+		savings_run="$(jq -r '.savings.runId' "$inputs")"
+		savings_results="$benchmark_out/runs/$savings_run/results.csv"
+		savings_cohorts="$benchmark_out/runs/$savings_run/savings-cohorts.json"
+		savings_manifest="$benchmark_out/runs/$savings_run/manifest.json"
+		findings_validate_manifest "$savings_manifest" "$savings_run" savings || return 65
+		findings_validate_results "$savings_results" "$savings_run" savings || return 65
+		[[ "$(findings_sha256 "$savings_results")" == "$(jq -r '.savings.resultsSha256' "$inputs")" &&
+		"$(findings_sha256 "$savings_cohorts")" == "$(jq -r '.savings.cohortsSha256' "$inputs")" ]] || return 65
+		jq -e --arg run "$savings_run" --arg strategy "$CONTRACT_STRATEGY_ID" '
+			type == "object" and keys == ["cohorts","runId","schemaVersion","strategyId"] and .schemaVersion == 1 and
+			.strategyId == $strategy and .runId == $run and (.cohorts | type == "object" and keys == ["avc","hdr10","vc1"])
+		' "$savings_cohorts" >/dev/null || return 65
+	fi
+	if [[ "$(jq -r '.contention == null' "$inputs")" == 'false' ]]; then
+		contention_file="$(jq -r '.contention.observationsFile' "$inputs")"
+		contention_path="$benchmark_out/runs/$run_id/$contention_file"
+		[[ "$(findings_sha256 "$contention_path")" == "$(jq -r '.contention.observationsSha256' "$inputs")" ]] || return 65
+		validate_contention_observations "$contention_path" >/dev/null || return 65
+		contention_client_device="$(jq -r '.clientDevice' "$contention_path")"
+		contention_playback_sample="$(jq -r '.playbackSampleId' "$contention_path")"
+		jq -e --argjson fragments "$(jq -c '[.contention.fragments[] | {runId,file}]' "$inputs")" '
+			([.cases[] | .workerFragments[]] | sort_by(.runId, .file)) == ($fragments | sort_by(.runId, .file))
+		' "$contention_path" >/dev/null || return 65
+		while IFS= read -r fragment; do
+			fragment_run="$(jq -r '.runId' <<<"$fragment")"
+			fragment_file="$(jq -r '.file' <<<"$fragment")"
+			fragment_path="$benchmark_out/runs/$fragment_run/$fragment_file"
+			[[ "$(findings_sha256 "$fragment_path")" == "$(jq -r '.sha256' <<<"$fragment")" ]] || return 65
+			findings_validate_contention_fragment "$fragment_path" "$fragment_run" || return 65
+			fragment_observation_case="$(jq -e -r --arg run "$fragment_run" --arg file "$fragment_file" '
+				[.cases[] | select(any(.workerFragments[]?; .runId == $run and .file == $file)) | .case] |
+				if length == 1 then .[0] else error("ambiguous contention fragment") end
+			' "$contention_path")" || return 65
+			fragment_fields="$(tail -n 1 "$fragment_path" | jq -R -e -c 'split(",") | map(.[1:-1])')" || return 65
+			[[ "$(jq -r '.[1]' <<<"$fragment_fields")" == "$fragment_observation_case" ]] || return 65
+			fragment_manifest="$benchmark_out/runs/$fragment_run/manifest.json"
+			findings_validate_manifest "$fragment_manifest" "$fragment_run" "contention-$fragment_observation_case" || return 65
+			manifest_binding="$(validate_contention_worker_manifest "$fragment_manifest" "$fragment_observation_case" "$fragment_fields" \
+				"$contention_client_device" "$contention_playback_sample")" || return 65
+			contention_node_bindings="$(jq -c --argjson binding "$manifest_binding" '. + [$binding]' <<<"$contention_node_bindings")"
+		done < <(jq -c '.contention.fragments[]' "$inputs")
+		jq -e 'group_by(.case) | all(.[]; if .[0].case == "a" then length == 1 else length == 2 and ([.[].node] | unique | length) == 2 end)' \
+			<<<"$contention_node_bindings" >/dev/null || return 65
+	fi
+}
+
+findings_conclusion() {
+	local cohort="$1" objective="$2" state="$3" savings_verdict="$4" x265_verdict="$5"
+	if [[ "$objective" == no-go || "$state" == rejected || "$savings_verdict" == NO-GO ]]; then
+		printf '%s\n' 'NO-GO'
+	elif [[ "$x265_verdict" == no-verdict ]]; then
+		printf '%s\n' 'no-verdict'
+	elif [[ "$savings_verdict" == MARGINAL ]]; then
+		printf '%s\n' 'MARGINAL'
+	elif [[ "$state" == final && "$savings_verdict" == GO && ("$cohort" == vc1 || "$x265_verdict" == admissible || "$x265_verdict" == not-applicable) ]]; then
+		printf '%s\n' 'GO'
+	else
+		printf '%s\n' 'no-verdict'
+	fi
+}
+
+findings_render_v1() {
+	local run_id="$1" inputs="$2" quality_run savings_run='' savings_results='' savings_cohorts=''
+	local final_cohorts contention_status='not applicable' findings_temp cohort
+	local state objective setting quality_summary savings_summary='' savings_verdict='not applicable' x265_verdict='not applicable' conclusion
+	local distribution stats contentions_present expected_x265 actual_x265
+	contract_validate_chosen_settings "$samples_file" || return 65
+	findings_validate_evidence "$run_id" "$inputs" || {
+		echo 'findings upstream evidence is invalid or stale' >&2
+		return 65
+	}
+	quality_run="$(jq -r '.quality.runId' "$inputs")"
+	final_cohorts="$(jq -c '[.chosenSettings as $chosen | ["avc","vc1","hdr10"][] | select($chosen[.]?.state == "final")]' "$samples_file")"
+	expected_x265="$(jq -c '[.[] | select(. == "avc" or . == "hdr10")]' <<<"$final_cohorts")"
+	actual_x265="$(jq -c '[.x265[] | if .sampleId == "avc-grain-memento" then "avc" else "hdr10" end] | sort' "$inputs")"
+	[[ "$actual_x265" == "$(jq -c 'sort' <<<"$expected_x265")" ]] || {
+		echo 'x265 evidence does not match final cohort applicability' >&2
+		return 65
+	}
+	if [[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]]; then
+		[[ "$(jq -r '.savings != null' "$inputs")" == true ]] || {
+			echo 'final cohort is missing required savings evidence' >&2
+			return 65
+		}
+		savings_run="$(jq -r '.savings.runId' "$inputs")"
+		savings_results="$benchmark_out/runs/$savings_run/results.csv"
+		savings_cohorts="$benchmark_out/runs/$savings_run/savings-cohorts.json"
+		jq -e --argjson final "$final_cohorts" '
+			$final | all(. as $cohort; . != null and input.cohorts[$cohort].status == "measured")
+		' "$savings_cohorts" >/dev/null || {
+			echo 'savings cohort applicability does not match final cohort state' >&2
+			return 65
+		}
+	else
+		[[ "$(jq -r '.savings == null' "$inputs")" == true ]] || return 65
+	fi
+	contentions_present="$(jq -r '.contention != null' "$inputs")"
+	if [[ "$contentions_present" == true ]]; then
+		contention_status="$(validate_contention_observations "$benchmark_out/runs/$run_id/$(jq -r '.contention.observationsFile' "$inputs")" | jq -r '.status')"
+	fi
+	findings_temp="$benchmark_out/runs/$run_id/findings.md.tmp"
+	{
+		printf '# Encode benchmark findings\n\n'
+		printf 'Evidence strategy: `qsv-hevc-icq-v1`  \nQuality run: `%s`\n\n' "$quality_run"
+		for cohort in avc vc1 hdr10; do
+			state="$(jq -r --arg cohort "$cohort" '.chosenSettings[$cohort].state // "no-setting"' "$samples_file")"
+			objective="$(jq -r --arg cohort "$cohort" '.cohorts[$cohort].status' "$benchmark_out/runs/$quality_run/quality-candidates.json")"
+			setting="$(jq -r --arg cohort "$cohort" '.chosenSettings[$cohort].globalQuality // "no setting"' "$samples_file")"
+			quality_summary="$(awk -F, -v cohort="$cohort" '
+			NR > 1 && $2 == "quality" && $4 == cohort && $10 == "passed" && $37 == "qsv-hevc-icq-v1" {
+				vmaf = $20; ssim = $22; validation = ($24 == "passed" && $25 == "passed" && $26 == "passed" && $27 == "passed" && $28 == "passed" && $29 == "passed" && $30 == "passed" && $31 == "passed" && $32 == "passed" && $34 == "") ? "passed" : "failed"; speed = $19; size = $13; found = 1
+			} END { if (found) printf "VMAF %s; SSIM %s; output validation %s; speed %s; output bytes %s", vmaf, ssim, validation, speed, size; else printf "not applicable" }
+		' "$benchmark_out/runs/$quality_run/results.csv")"
+			x265_verdict='not applicable'
+			if [[ "$cohort" == avc || "$cohort" == hdr10 ]]; then
+				if [[ "$state" == final ]]; then
+					x265_verdict="$(jq -r --arg cohort "$cohort" '
+						[.x265[] | select((if .sampleId == "avc-grain-memento" then "avc" else "hdr10" end) == $cohort)] | .[0].runId
+					' "$inputs" | while IFS= read -r xrun; do
+						jq -s -r 'if any(.[]; .status == "unbracketed" or (.status == "bracketed" and .premiumPercent > 30)) then "no-verdict"
+						elif all(.[]; .status == "bracketed" and .premiumPercent <= 30) then "admissible" else "no-verdict" end' \
+							"$benchmark_out/runs/$xrun/x265-comparisons.jsonl"
+					done)"
+				fi
+			fi
+			savings_verdict='not applicable'
+			if [[ -n "$savings_results" ]]; then
+				distribution="$(awk -F, -v cohort="$cohort" 'NR > 1 && $2 == "savings" && $4 == cohort && $10 == "passed" && $37 == "qsv-hevc-icq-v1" { print $14 }' "$savings_results" | jq -R -s -c --arg cohort "$cohort" '{cohort:$cohort,reductionPercent:(split("\\n") | map(select(length > 0) | tonumber))}')"
+				if [[ "$(jq -r '.reductionPercent | length' <<<"$distribution")" -gt 0 ]]; then
+					stats="$(savings_stats /dev/stdin <<<"$distribution")" || return
+					savings_verdict="$(jq -r '.verdict' <<<"$stats")"
+					savings_summary="$(jq -r '"median " + (.median|tostring) + "; Q1 " + (.q1|tostring) + "; Q3 " + (.q3|tostring) + "; IQR " + (.iqr|tostring)' <<<"$stats")"
+				fi
+			fi
+			[[ -n "$savings_summary" ]] || savings_summary='not applicable'
+			conclusion="$(findings_conclusion "$cohort" "$objective" "$state" "$savings_verdict" "$x265_verdict")"
+			printf '## %s\n\n' "$cohort"
+			printf -- '- Capability node basis: committed ICQ proof\n- Objective quality verdict: %s\n- Crop/finalist visual verdict: %s\n- Final global_quality: %s\n- Quality evidence: %s\n- x265 premium verdict: %s\n- Savings: %s; verdict %s\n- Contention: %s\n- Conclusion: **%s**\n\n' \
+				"$objective" "$state" "$setting" "$quality_summary" "$x265_verdict" "$savings_summary" "$savings_verdict" "$contention_status" "$conclusion"
+		done
+		if [[ "$contention_status" == failed ]]; then
+			printf 'Processing window: required before benchmark encoding.\n'
+		fi
+	} >"$findings_temp"
+	# The input and upstream artifacts can change while rendering. Recheck the
+	# same exact evidence before the atomic publication point.
+	findings_validate_evidence "$run_id" "$inputs" || {
+		rm -f -- "$findings_temp"
+		return 65
+	}
+	mv -f -- "$findings_temp" "$benchmark_out/runs/$run_id/findings.md"
+	printf '%s\n' "$run_id"
+}
+
 findings_mode() {
-	local run_id="$1" run_directory inputs quality_run savings_run contention_file
-	local quality_results quality_comparisons comparisons_json comparison savings_results contention contention_summary
-	local findings_temp cohort distribution stats comparison_status sample_id clip_id qsv_setting
-	local premium verdict candidate_settings contention_fragments='[]' fragment fragment_run fragment_file fragment_path fragment_manifest
-	local fragment_header fragment_row fragment_fields fragment_case fragment_worker fragment_attempt
-	local contention_client_device contention_playback_sample
-	local fragment_observation_case contention_node_bindings='[]' manifest_binding
+	local run_id="$1" run_directory inputs
+	local mounted_inputs inputs_digest upstream_identity created_run
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
-	inputs="$run_directory/findings-inputs.json"
+	mounted_inputs="${BENCHMARK_FINDINGS_INPUTS_FILE:-$run_directory/findings-inputs.json}"
+	inputs="$mounted_inputs"
 	[[ -f "$inputs" && ! -L "$inputs" ]] || {
 		echo 'findings inputs not found' >&2
 		return 66
 	}
-	quality_run="$(jq -e -r '.qualityRunId | strings' "$inputs")"
-	savings_run="$(jq -e -r '.savingsRunId | strings' "$inputs")"
-	contention_file="$(jq -e -r '.contentionFile | strings' "$inputs")"
-	contention_fragments="$(jq -e -c '
-		.contentionFragments |
-		select(type == "array" and length >= 1 and length <= 16) |
-		if
-			all(.[];
-				(type == "object") and (keys == ["file", "runId"]) and
-				(.runId | type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
-				(.file | type == "string" and test("^contention-[a-d]-worker-[12]-attempt-[1-9][0-9]*[.]csv$"))) and
-			([.[] | (.runId + "|" + .file)] | unique | length) == length
-		then . else error("invalid contention fragments") end
-	' "$inputs")" || {
-		echo 'invalid contention fragment inputs' >&2
-		return 65
-	}
-	validate_run_id "$quality_run" || return
-	validate_run_id "$savings_run" || return
-	[[ "$contention_file" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]json$ ]] || return 64
-	candidate_settings="$(jq -c '.strategy.globalQualityCandidates' "$samples_file")"
-	quality_results="$benchmark_out/runs/$quality_run/results.csv"
-	quality_comparisons="$benchmark_out/runs/$quality_run/x265-comparisons.jsonl"
-	savings_results="$benchmark_out/runs/$savings_run/results.csv"
-	contention="$run_directory/$contention_file"
-	ensure_results_file "$quality_results" || return
-	ensure_results_file "$savings_results" || return
-	[[ -f "$quality_comparisons" && ! -L "$quality_comparisons" ]] || {
-		echo 'quality x265 comparisons not found' >&2
-		return 66
-	}
-	[[ -f "$contention" && ! -L "$contention" ]] || return 66
-	contention_summary="$(validate_contention_observations "$contention")" || return
-	contention_client_device="$(jq -r '.clientDevice' "$contention")"
-	contention_playback_sample="$(jq -r '.playbackSampleId' "$contention")"
-	jq -e --argjson fragments "$contention_fragments" '
-		([.cases[] | .workerFragments[]] | sort_by(.runId, .file)) ==
-		($fragments | sort_by(.runId, .file))
-	' "$contention" >/dev/null || {
-		echo 'contention observations do not match named worker fragments' >&2
-		return 65
-	}
-	contention_rows='[]'
-	while IFS= read -r fragment; do
-		fragment_run="$(jq -r '.runId' <<<"$fragment")"
-		fragment_file="$(jq -r '.file' <<<"$fragment")"
-		fragment_path="$benchmark_out/runs/$fragment_run/$fragment_file"
-		[[ -f "$fragment_path" && ! -L "$fragment_path" ]] || {
-			echo 'named contention fragment not found' >&2
-			return 66
-		}
-		fragment_manifest="$benchmark_out/runs/$fragment_run/manifest.json"
-		[[ -f "$fragment_manifest" && ! -L "$fragment_manifest" ]] || {
-			echo 'contention worker manifest not found' >&2
-			return 66
-		}
-		fragment_observation_case="$(jq -e -r --arg run "$fragment_run" --arg file "$fragment_file" '
-			[.cases[] | select(any(.workerFragments[]?; .runId == $run and .file == $file)) | .case] |
-			if length == 1 then .[0] else error("ambiguous contention fragment") end
-		' "$contention")" || {
-			echo 'contention observations do not bind named worker fragment' >&2
-			return 65
-		}
-		fragment_header="$(head -n 1 "$fragment_path")"
-		[[ "$fragment_header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
-			"$(wc -l <"$fragment_path" | tr -d ' ')" == '2' ]] || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		fragment_row="$(tail -n 1 "$fragment_path")"
-		fragment_fields="$(jq -R -e -c '
-			split(",") |
-			select(length == 13 and all(.[]; startswith("\"") and endswith("\""))) |
-			map(.[1:-1])
-		' <<<"$fragment_row")" || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		jq -e --arg run "$fragment_run" --argjson candidates "$candidate_settings" '
-			.[5] as $setting |
-			.[0] == $run and
-			(.[1] | test("^[a-d]$")) and
-			(.[2] | test("^worker-[12]$")) and
-			(.[3] | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.[4] | test("^(avc|vc1|hdr10)$")) and
-			($candidates | index($setting | tonumber) != null) and
-			(.[6] | test("^(passed|failed|invalid)$")) and
-			(.[7] | test("^[1-9][0-9]*$")) and
-			(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
-			(.[9] | test("^(passed|suspect)$")) and
-			(.[10] | test("^[a-z0-9;-]*$")) and
-			.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
-		' <<<"$fragment_fields" >/dev/null || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		fragment_case="$(jq -r '.[1]' <<<"$fragment_fields")"
-		fragment_worker="$(jq -r '.[2]' <<<"$fragment_fields")"
-		fragment_attempt="$(jq -r '.[7]' <<<"$fragment_fields")"
-		[[ "$fragment_case" == "$fragment_observation_case" &&
-			"$fragment_file" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
-			echo 'named contention fragment identity mismatch' >&2
-			return 65
-		}
-		manifest_binding="$(validate_contention_worker_manifest "$fragment_manifest" "$fragment_case" "$fragment_fields" \
-			"$contention_client_device" "$contention_playback_sample")" || {
-			echo 'invalid named contention worker manifest' >&2
-			return 65
-		}
-		contention_node_bindings="$(jq -c --argjson binding "$manifest_binding" '. + [$binding]' <<<"$contention_node_bindings")"
-		contention_rows="$(jq -c --argjson row "$fragment_fields" '. + [$row]' <<<"$contention_rows")"
-	done < <(jq -c '.[]' <<<"$contention_fragments")
-	jq -e '
-		group_by(.case) | all(.[];
-			if .[0].case == "a" then length == 1
-			else length == 2 and ([.[].node] | unique | length) == 2 end)
-	' <<<"$contention_node_bindings" >/dev/null || {
-		echo 'contention worker nodes do not prove required distinct-node placement' >&2
-		return 65
-	}
-	comparisons_json="$(jq -e -s '
-		if all(.[];
-			(type == "object") and
-			(.sample_id | type) == "string" and (.sample_id | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.clip_id | type) == "string" and (.clip_id | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.qsv_setting | type) == "string" and (.qsv_setting | test("^[0-9]+$")) and
-			((.status == "unbracketed") or
-			 (.status == "bracketed" and (.lower_crf | type) == "number" and
-			  (.upper_crf | type) == "number" and (.matched_bit_rate | type) == "number" and
-			  .matched_bit_rate > 0 and (.premium_percent | type) == "number")))
-		then . else error("invalid x265 comparison evidence") end
-	' "$quality_comparisons")" || return 65
-	findings_temp="$run_directory/findings.md.tmp"
-	{
-		printf '# Encode benchmark findings\n\n'
-		printf 'Quality run: `%s`  \n' "$quality_run"
-		printf 'Savings run: `%s`\n\n' "$savings_run"
-		printf '## Savings by cohort\n\n'
-		printf '| Cohort | Median %% | Q1 %% | Q3 %% | IQR %% | Verdict |\n'
-		printf '|---|---:|---:|---:|---:|---|\n'
-		while IFS= read -r cohort; do
-			[[ -n "$cohort" ]] || continue
-			distribution="$(awk -F, -v cohort="$cohort" '
-				NR > 1 && $2 == "savings" && $4 == cohort && $10 == "passed" { print $14 }
-			' "$savings_results" | jq -R -s -c --arg cohort "$cohort" \
-				'{cohort: $cohort, reductionPercent: (split("\n") | map(select(length > 0) | tonumber))}')"
-			stats="$(savings_stats /dev/stdin <<<"$distribution")"
-			printf '| %s | %s | %s | %s | %s | %s |\n' "$cohort" \
-				"$(jq -r '.median' <<<"$stats")" "$(jq -r '.q1' <<<"$stats")" \
-				"$(jq -r '.q3' <<<"$stats")" "$(jq -r '.iqr' <<<"$stats")" \
-				"$(jq -r '.verdict' <<<"$stats")"
-		done < <(awk -F, 'NR > 1 && $2 == "savings" && $10 == "passed" { print $4 }' "$savings_results" | sort -u)
-		printf '\n## Quality summary\n\n'
-		printf 'Passed variants: %s\n\n' "$(awk -F, 'NR > 1 && $2 == "quality" && $10 == "passed" { count += 1 } END { print count + 0 }' "$quality_results")"
-		printf '## x265 matched-VMAF comparison\n\n'
-		printf '| Sample | Clip | QSV setting | Status | Premium %% | Verdict |\n'
-		printf '|---|---|---:|---|---:|---|\n'
-		while IFS= read -r comparison; do
-			sample_id="$(jq -r '.sample_id' <<<"$comparison")"
-			clip_id="$(jq -r '.clip_id' <<<"$comparison")"
-			qsv_setting="$(jq -r '.qsv_setting' <<<"$comparison")"
-			comparison_status="$(jq -r '.status' <<<"$comparison")"
-			premium=''
-			verdict='No verdict'
-			if [[ "$comparison_status" == 'bracketed' ]]; then
-				premium="$(awk -v value="$(jq -r '.premium_percent' <<<"$comparison")" 'BEGIN { printf "%.6f", value }')"
-				verdict="$(awk -v value="$premium" 'BEGIN {
-					if (value <= 15) print "QSV preferred"
-					else if (value <= 30) print "QSV acceptable"
-					else print "Escalate"
-				}')"
-			fi
-			printf '| %s | %s | %s | %s | %s | %s |\n' "$sample_id" "$clip_id" \
-				"$qsv_setting" "$comparison_status" "$premium" "$verdict"
-		done < <(jq -c '.[]' <<<"$comparisons_json")
-		printf '\n'
-		printf '## Contention encode workers\n\n'
-		printf '| Run | Case | Worker | Sample | Cohort | Setting | Status | Wall seconds |\n'
-		printf '|---|---|---|---|---|---:|---|---:|\n'
-		jq -r '.[] | "| \(.[0]) | \(.[1]) | \(.[2]) | \(.[3]) | \(.[4]) | \(.[5]) | \(.[6]) | \(.[8]) |"' \
-			<<<"$contention_rows"
-		printf '\n## Contention summary\n\n'
-		jq -r '
-			"- Retained baseline runs: \(.baselinesRetained)\n" +
-			"- Worst baseline start latency: \(.baselineMaxStartLatencySeconds) seconds\n" +
-			"- Worst baseline seek-to-resume latency: \(.baselineMaxSeekToResumeSeconds) seconds\n" +
-			"- Contention verdict: \(.status | ascii_upcase)" +
-			(if (.failedEvents | length) == 0 then "" else
-				"\n- Failed contention events:\n" + ([.failedEvents[] | "  - " + .] | join("\n"))
-			 end)
-		' <<<"$contention_summary"
-	} >"$findings_temp"
-	mv -f -- "$findings_temp" "$run_directory/findings.md"
-	printf '%s\n' "$run_id"
+	validate_findings_inputs "$inputs" >/dev/null || return 65
+	inputs_digest="$(findings_sha256 "$inputs")"
+	upstream_identity="$(jq -c --arg digest "$inputs_digest" '{findingsInputsSha256:$digest,quality:.quality,x265:.x265,savings:.savings,contention:.contention}' "$inputs")" || return 65
+	BENCHMARK_FINDINGS_INPUTS_SHA256="$inputs_digest"
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$upstream_identity"
+	export BENCHMARK_FINDINGS_INPUTS_SHA256 BENCHMARK_UPSTREAM_IDENTITY_JSON
+	created_run="$("$script_directory/runmeta.sh" create findings "$run_id")" || return
+	[[ "$created_run" == "$run_id" ]] || return 65
+	if [[ "$mounted_inputs" != "$run_directory/findings-inputs.json" ]]; then
+		cp -- "$mounted_inputs" "$run_directory/findings-inputs.json" || return
+		chmod 0600 "$run_directory/findings-inputs.json" || return
+	fi
+	inputs="$run_directory/findings-inputs.json"
+	findings_render_v1 "$run_id" "$inputs"
+	return
 }
 
 test_dispatch() {
@@ -3169,6 +3301,18 @@ test_dispatch() {
 	validate-contention-observations)
 		(($# == 1)) || usage
 		validate_contention_observations "$1"
+		;;
+	validate-findings-inputs)
+		(($# == 1)) || usage
+		validate_findings_inputs "$1"
+		;;
+	findings-fragment)
+		(($# == 2)) || usage
+		findings_validate_contention_fragment "$1" "$2"
+		;;
+	findings-conclusion)
+		(($# == 5)) || usage
+		findings_conclusion "$@"
 		;;
 	*) usage ;;
 	esac

@@ -93,7 +93,7 @@ normalize_identity() {
 discover_identity() {
 	local mode="$1"
 	local script_directory configured_image dispatched_image running_image configured_digest dispatched_digest running_digest
-	local samples_digest savings_seed execution_class selected_settings upstream_identity
+	local samples_digest savings_seed execution_class selected_settings upstream_identity findings_inputs_sha256=''
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha probe_log=''
 	local savings_cohorts=''
@@ -123,11 +123,13 @@ discover_identity() {
 		return 65
 	}
 	dispatched_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	if [[ "$mode" == 'findings' && -z "$dispatched_image" ]]; then dispatched_image="$configured_image"; fi
 	dispatched_digest="$(image_digest "$dispatched_image")" || {
 		echo 'dispatched runtime image evidence is missing or malformed' >&2
 		return 65
 	}
 	running_image="${BENCHMARK_RUNNING_IMAGE:-${BENCHMARK_RUNNING_IMAGE_DIGEST:-}}"
+	if [[ "$mode" == 'findings' && -z "$running_image" ]]; then running_image="$configured_image"; fi
 	running_digest="$(image_digest "$running_image")" || {
 		echo 'running runtime image evidence is missing or malformed' >&2
 		return 65
@@ -151,6 +153,13 @@ discover_identity() {
 		echo 'selected settings identity is malformed' >&2
 		return 65
 	}
+	if [[ "$mode" == 'findings' ]]; then
+		findings_inputs_sha256="${BENCHMARK_FINDINGS_INPUTS_SHA256:-}"
+		[[ "$findings_inputs_sha256" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+			echo 'findings input digest is missing or malformed' >&2
+			return 65
+		}
+	fi
 	if [[ -v BENCHMARK_UPSTREAM_IDENTITY_JSON ]]; then
 		upstream_identity="$BENCHMARK_UPSTREAM_IDENTITY_JSON"
 	else
@@ -160,7 +169,14 @@ discover_identity() {
 		echo 'upstream identity must be a JSON object' >&2
 		return 65
 	}
+	if [[ "$mode" == 'findings' ]]; then
+		jq -e --arg digest "$findings_inputs_sha256" '.findingsInputsSha256 == $digest' <<<"$upstream_identity" >/dev/null || {
+			echo 'findings upstream identity does not bind the input digest' >&2
+			return 65
+		}
+	fi
 	execution_class="${BENCHMARK_EXECUTION_CLASS:-gpu}"
+	if [[ "$mode" == 'findings' ]]; then execution_class='cpu'; fi
 	[[ "$execution_class" == 'gpu' || "$execution_class" == 'cpu' ]] || {
 		echo 'benchmark execution class must be gpu or cpu' >&2
 		return 64
@@ -175,6 +191,10 @@ discover_identity() {
 	done < <(find "$script_directory" -maxdepth 1 \( -type f -o -type l \) -name '*.sh' -print | LC_ALL=C sort)
 
 	case "$mode" in
+	findings)
+		panel='empty'
+		sources='[]'
+		;;
 	quality) panel='.qualityPanel[]?' ;;
 	x265)
 		[[ "${BENCHMARK_X265_SAMPLE_ID:-}" =~ ^(avc-grain-memento|hdr10-grain-goodfellas)$ ]] || {
@@ -219,7 +239,9 @@ discover_identity() {
 			'. + [{path: $path, size: $size, sha256: $sha256}]' <<<"$sources")"
 		((source_index += 1))
 	done < <(
-		if [[ -n "$savings_cohorts" ]]; then
+		if [[ "$mode" == 'findings' ]]; then
+			:
+		elif [[ -n "$savings_cohorts" ]]; then
 			jq -c --argjson cohorts "$savings_cohorts" "$panel" "$samples_file"
 		else
 			jq -c "$panel" "$samples_file"
@@ -234,6 +256,11 @@ discover_identity() {
 	cpu_model="${BENCHMARK_CPU_MODEL:-}"
 	ffmpeg_version="${BENCHMARK_FFMPEG_VERSION:-}"
 	libx265_version="${BENCHMARK_LIBX265_VERSION:-}"
+	if [[ "$mode" == 'findings' ]]; then
+		cpu_model='findings-metadata'
+		ffmpeg_version='not-applicable'
+		libx265_version='not-applicable'
+	fi
 	if [[ "$execution_class" == 'cpu' && "$mode" == 'x265' ]]; then
 		cpu_model="$(awk -F ':' '$1 ~ /^[[:space:]]*model name[[:space:]]*$/ {
 			sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2; exit

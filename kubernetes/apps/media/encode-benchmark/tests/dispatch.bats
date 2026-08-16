@@ -382,6 +382,25 @@ assert_guard_refuses() {
 	assert_no_mutations
 }
 
+# Catches a findings dispatch that starts a Job before the exact validated input
+# object is owned and mounted read-only, or that retains a GPU/media mount.
+@test "findings dispatch suspends a metadata-only Job until owned inputs persist" {
+	inputs="$BATS_TEST_TMPDIR/findings-inputs.json"
+	jq -n '{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",quality:{runId:"20260815T120000Z-aaaaaaaa",resultsSha256:("sha256:" + ("a" * 64)),candidatesSha256:("sha256:" + ("b" * 64))},x265:[],savings:null,contention:null}' >"$inputs"
+	export ENCODE_BENCHMARK_FINDINGS_CONFIRM='run:encode-benchmark:findings'
+	run_dispatch findings "$inputs"
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	configmap="$(configmap_capture)"
+	[ "$(yq -r '.spec.suspend' "$job")" = true ]
+	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" // ""' "$job")" = '' ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "media") | .name' "$job")" = '' ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "findings-inputs") | .configMap.defaultMode' "$job")" = 384 ]
+	[ "$(yq -r '.metadata.ownerReferences[0].kind' "$configmap")" = Job ]
+	[ "$(yq -r '.data."findings-inputs.json" | from_json | .schemaVersion' "$configmap")" = 1 ]
+	awk -F '\t' '$1 == "kubectl" && $2 ~ / patch job\/encode-benchmark-findings-/ { found = 1 } END { exit !found }' "$STUB_CALLS"
+}
+
 job_capture() {
 	find "$STUB_CAPTURE_DIR" -maxdepth 1 -type f -name 'Job-*.yaml' -print | sort | tail -n 1
 }
