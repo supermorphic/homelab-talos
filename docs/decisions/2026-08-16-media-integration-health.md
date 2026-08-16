@@ -1,6 +1,6 @@
 # Media integration health — decision
 
-- **Status: Accepted.**
+- **Status: Superseded by 2026-08-16-media-integration-health-active-probes.md.**
 
 Date: 2026-08-16.
 Branch: `dispatch-media-integration-health-decision`.
