@@ -1044,6 +1044,56 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
+# Catches accepting a well-shaped row that the durable results contract rejects
+# and replacing the prior candidate artifact before that violation is found.
+@test "quality candidate publication rejects semantic result rows without replacing the prior artifact" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-bbbbbbbb'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	artifact="$run_dir/quality-candidates.json"
+	cp "$artifact" "$BATS_TEST_TMPDIR/prior-semantic-quality-candidates.json"
+
+	# This stays a 39-column QSV passed row, but cannot be resumed because
+	# QSV initialization evidence is incomplete.
+	awk -F, 'BEGIN { OFS = FS } NR == 2 { $38 = "not-applicable" } { print }' "$results" \
+		>"$BATS_TEST_TMPDIR/semantic-invalid-results.csv"
+	mv -f -- "$BATS_TEST_TMPDIR/semantic-invalid-results.csv" "$results"
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -ne 0 ]
+	run cmp -s "$BATS_TEST_TMPDIR/prior-semantic-quality-candidates.json" "$artifact"
+	[ "$status" -eq 0 ]
+}
+
+# Catches a partial per-setting group being promoted from its remaining rows.
+@test "quality candidates exclude a setting with one expected title clip missing" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-cccccccc'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	awk -F, 'NR == 1 || !($3 == "quality-1" && $6 == "detail" && $8 == "16")' "$results" \
+		>"$BATS_TEST_TMPDIR/partial-quality-results.csv"
+	mv -f -- "$BATS_TEST_TMPDIR/partial-quality-results.csv" "$results"
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.cohorts.avc.candidates == [
+			{globalQuality: 24, medianReductionPercent: 35},
+			{globalQuality: 18, medianReductionPercent: 25}
+		]
+	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+}
+
 @test "quality records probe metric and parser failures cleans scratch and continues the panel" {
 	invalid_json="$BATS_TEST_TMPDIR/invalid-probe.json"
 	printf '%s\n' '{' >"$invalid_json"

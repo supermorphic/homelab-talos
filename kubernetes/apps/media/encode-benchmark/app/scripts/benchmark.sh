@@ -1808,7 +1808,8 @@ append_comparison_once() {
 
 rank_quality_candidates() {
 	local results="$1" candidate_samples="$2" run_id="$3"
-	local run_directory artifact staged rows expected settings digest candidates
+	local run_directory artifact staged rows expected settings expected_keys digest candidates
+	local probe_source probe_clip durable_status
 	if [[ ! -v CONTRACT_ICQ_SETTINGS ]]; then
 		contract_load "$candidate_samples" || return
 	fi
@@ -1817,6 +1818,7 @@ rank_quality_candidates() {
 	[[ -f "$candidate_samples" && ! -L "$candidate_samples" ]] || return 66
 	run_directory="$(dirname "$results")"
 	[[ -d "$run_directory" && ! -L "$run_directory" ]] || return 66
+	[[ "$results" == "$benchmark_out/runs/$run_id/results.csv" ]] || return 65
 	artifact="$run_directory/quality-candidates.json"
 	[[ ! -e "$artifact" || (-f "$artifact" && ! -L "$artifact") ]] || return 65
 	rows="$(jq -R -s --arg header "$results_header" '
@@ -1831,6 +1833,7 @@ rank_quality_candidates() {
 				run_id: $columns[0], panel: $columns[1], sample_id: $columns[2], cohort: $columns[3],
 				source_sha256: $columns[4], clip_id: $columns[5], encoder: $columns[6],
 				requested_setting: $columns[7], selected_rate_control: $columns[8], status: $columns[9],
+				attempt: $columns[10],
 				reduction_percent: $columns[13], vmaf_harmonic_mean: $columns[19],
 				vmaf_1pct_low: $columns[20], ssim: $columns[21], qsv_proof: $columns[23],
 				validation_codec: $columns[24], validation_duration: $columns[25],
@@ -1849,10 +1852,33 @@ rank_quality_candidates() {
 			select((.cohort == "avc" or .cohort == "vc1" or .cohort == "hdr10") and
 				(.id | type == "string" and length > 0) and (.clips | type == "object")) |
 			. as $sample | $sample.clips | keys[] |
-			{cohort: $sample.cohort, sample_id: $sample.id, clip_id: .}
+			{cohort: $sample.cohort, sample_id: $sample.id, source_sha256: $sample.sha256, clip_id: .}
 		]
 	' "$candidate_samples")" || return 65
 	settings="$(jq -n -c --arg settings "$CONTRACT_ICQ_SETTINGS" '$settings | split(" ") | map(tonumber)')" || return
+	probe_source="$(jq -e -r '.[0].source_sha256 | strings' <<<"$expected")" || return 65
+	probe_clip="$(jq -e -r '.[0].clip_id | strings' <<<"$expected")" || return 65
+	set +e
+	"$script_directory/runmeta.sh" completed "$run_id" "quality|$probe_source|$probe_clip|qsv|16" >/dev/null
+	durable_status=$?
+	set -e
+	[[ "$durable_status" == '0' || "$durable_status" == '1' ]] || return "$durable_status"
+	expected_keys="$(jq -r '[.[] | [.cohort, .sample_id, .source_sha256, .clip_id] | join("|")] | join("\u001c")' <<<"$expected")"
+	awk -F, -v run_id="$run_id" -v settings="$CONTRACT_ICQ_SETTINGS" -v expected="$expected_keys" '
+		BEGIN {
+			count = split(expected, values, "\034")
+			for (item = 1; item <= count; item++) known[values[item]] = 1
+		}
+		NR > 1 {
+			key = $4 "|" $3 "|" $5 "|" $6
+			if ($1 != run_id || $2 != "quality" || $7 != "qsv" || $8 !~ /^[0-9]+$/ ||
+				index(" " settings " ", " " $8 " ") == 0 ||
+				!(key in known)) exit 65
+		}
+	' "$results" || {
+		echo 'invalid quality results row' >&2
+		return 65
+	}
 	digest="$(sha256sum "$results" | awk '{print $1}')"
 	[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 65
 	candidates="$(jq -n -c \
