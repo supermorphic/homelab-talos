@@ -2478,7 +2478,8 @@ EOF
 				.clientDevice = $client | .mode = ("contention-" + $case) | .node.name = $node |
 				.upstream = {contention:{clientDevice:$client,playbackSampleId:$playback}} |
 				.selectedSettings = [{cohort:$cohort,globalQuality:$setting,qualityRunId:$run}] |
-				.sources = [($samples[0].qualityPanel[] | select(.id == $sample) | {path,sha256:("sha256:" + .sha256),size:.sizeBytes})]
+				.sources = [($samples[0].qualityPanel[] | select(.id == $sample) | {path,sha256:("sha256:" + .sha256),size:.sizeBytes})] |
+				.createdAt = "20260802T120000Z"
 			' "$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$worker/manifest.json"
 	done
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
@@ -2577,6 +2578,22 @@ EOF
 	jq '.node.name = "nuc3"' "$BENCHMARK_OUT/runs/$worker_2/manifest.json" \
 		>"$BENCHMARK_OUT/runs/$worker_2/manifest.json.current"
 	mv -f -- "$BENCHMARK_OUT/runs/$worker_2/manifest.json.current" "$BENCHMARK_OUT/runs/$worker_2/manifest.json"
+	jq '.createdAt = "20261302T120000Z"' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.bad-created-at"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.bad-created-at" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	jq '.createdAt = "20260802T120000Z"' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.current"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.current" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	jq '.unexpected = true' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.unknown"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.unknown" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	jq 'del(.unexpected)' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.current"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.current" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
 
 	# A syntactically complete stale-strategy fragment must not become findings
 	# input merely because its run, worker, and CSV shape still match.

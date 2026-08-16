@@ -2839,7 +2839,7 @@ validate_contention_observations() {
 
 validate_contention_worker_manifest() {
 	local manifest="$1" contention_case="$2" fragment_fields="$3" client_device="$4" playback_sample="$5"
-	local sample_id cohort setting expected_source normalized node_name
+	local sample_id cohort setting expected_source manifest_identity created_at normalized node_name
 	sample_id="$(jq -r '.[3]' <<<"$fragment_fields")"
 	cohort="$(jq -r '.[4]' <<<"$fragment_fields")"
 	setting="$(jq -r '.[5]' <<<"$fragment_fields")"
@@ -2848,7 +2848,13 @@ validate_contention_worker_manifest() {
 		if length == 1 then .[0] | {path,sha256:("sha256:" + .sha256),size:.sizeBytes} else error("missing contention source") end
 	' "$samples_file")" || return 65
 	jq -e --arg mode "contention-$contention_case" '.mode == $mode' "$manifest" >/dev/null || return 65
-	normalized="$(contract_normalize_run_identity "$(jq -c . "$manifest")" "contention-$contention_case")" || return 65
+	manifest_identity="$(jq -e -c '
+		if type == "object" and has("createdAt") then del(.createdAt)
+		else error("invalid contention worker manifest") end
+	' "$manifest")" || return 65
+	created_at="$(jq -e -r '.createdAt | strings' "$manifest")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || return 65
+	normalized="$(contract_normalize_run_identity "$manifest_identity" "contention-$contention_case")" || return 65
 	jq -e --arg client "$client_device" --arg playback "$playback_sample" --arg cohort "$cohort" \
 		--argjson setting "$setting" --argjson source "$expected_source" '
 		.clientDevice == $client and
