@@ -24,3 +24,6 @@ Task 9: fix round 1/5 result (6 addressed, 1 open — genuine runmeta manifests 
 Task 9: fix round 2/5 (1 addressed, 0 open; commits 3a90a39..4d019ac).
 Task 9: complete (commits 6b39d87..4d019ac, review clean).
 Task 10: complete (`feat(media): generate ICQ cohort findings`; focused findings/cross-strategy/cross-schema 8/8, offline validator 227/227, and canonical `mise exec -- just ci` passed; external SDD review deferred by operator).
+Task 11: fix round 1/5 (0 addressed, 1 open — required single table-driven boundary regression does not carry 16/18/30 through every named cross-path consumer; commit 20e3a60).
+Task 11: fix round 1/5 result (1 addressed, 0 open; commits 20e3a60..f10506c).
+Task 11: complete (commits d9d870e..f10506c, review clean).
