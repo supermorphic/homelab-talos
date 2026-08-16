@@ -670,7 +670,7 @@ record_result_inner() {
 	local selected strategy qsv_initialization video_busy_nanoseconds status attempt disposition='discarded' confirmation destination
 	local expected_finalist chosen
 	local encodes_directory='' staged_destination='' backup_destination='' prior_digest='' published=0 had_prior=0
-	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
+	local append_status=0 completed_status=0 columns_text out_physical runs_physical run_physical encodes_physical
 	local promotion_status=0 rollback_status=0
 	local -a columns
 	if [[ ! -v CONTRACT_STRATEGY_ID ]]; then
@@ -740,7 +740,15 @@ record_result_inner() {
 	fi
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
-	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
+	if [[ "$encoder" == 'x265' ]]; then
+		row_is_complete "$run_id" "$panel" "$source_sha" "$clip" "$encoder" "$setting" || completed_status=$?
+		if ((completed_status != 0 && completed_status != 1)); then return "$completed_status"; fi
+	elif result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
+		completed_status=0
+	else
+		completed_status=1
+	fi
+	if ((completed_status == 0)); then
 		attempt=$(("$(result_attempt "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting")" - 1))
 		printf '{"status":"skipped","attempt":%s,"output_disposition":"not-created"}\n' "$attempt"
 		return
@@ -1885,12 +1893,57 @@ encode_one_variant() {
 }
 
 append_comparison_once() {
-	local output="$1" comparison="$2" sample_id="$3" clip_id="$4" setting="$5" staged
+	local output="$1" comparison="$2" quality_run="$3" x265_run="$4" sample_id="$5"
+	local clip_id="$6" setting="$7" allowed_clips="$8" staged
 	staged="$output.$$.tmp"
 	rm -f -- "$staged"
+	jq -e -n --argjson row "$comparison" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg quality "$quality_run" --arg x265 "$x265_run" --arg sample "$sample_id" \
+		--arg clip "$clip_id" --argjson setting "$setting" --argjson clips "$allowed_clips" '
+		def bounded_crf:
+			type == "number" and floor == . and . >= 10 and . <= 34 and . % 2 == 0;
+		def valid_row:
+			type == "object" and
+			keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting",
+				"qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+			.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $x265 and
+			.sampleId == $sample and (.clipId as $value | $clips | index($value) != null) and
+			.qsvSetting == $setting and
+			if .status == "bracketed" then
+				(.lowerCrf | bounded_crf) and (.upperCrf | bounded_crf) and
+				(.matchedBitRate | type == "number" and . > 0) and
+				(.premiumPercent | type == "number")
+			elif .status == "unbracketed" then
+				.lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null
+			else false end;
+		($clips | type == "array" and length == 3 and all(.[]; type == "string")) and
+		($row | valid_row) and $row.clipId == $clip
+	' >/dev/null || return 65
 	if [[ -e "$output" || -L "$output" ]]; then
 		[[ -f "$output" && ! -L "$output" ]] || return 65
-		jq -e -s 'all(.[]; type == "object")' "$output" >/dev/null || return 65
+		jq -e -s --arg strategy "$CONTRACT_STRATEGY_ID" --arg quality "$quality_run" \
+			--arg x265 "$x265_run" --arg sample "$sample_id" --argjson setting "$setting" \
+			--argjson clips "$allowed_clips" '
+			def bounded_crf:
+				type == "number" and floor == . and . >= 10 and . <= 34 and . % 2 == 0;
+			def valid_row:
+				type == "object" and
+				keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting",
+					"qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+				.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $x265 and
+				.sampleId == $sample and (.clipId as $value | $clips | index($value) != null) and
+				.qsvSetting == $setting and
+				if .status == "bracketed" then
+					(.lowerCrf | bounded_crf) and (.upperCrf | bounded_crf) and
+					(.matchedBitRate | type == "number" and . > 0) and
+					(.premiumPercent | type == "number")
+				elif .status == "unbracketed" then
+					.lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null
+				else false end;
+			length as $count |
+			all(.[]; valid_row) and
+			([.[] | [.sampleId,.clipId,.qsvSetting] | @json] | unique | length) == $count
+		' "$output" >/dev/null || return 65
 		jq -c --arg sample "$sample_id" --arg clip "$clip_id" --argjson setting "$setting" '
 			select(.sampleId != $sample or .clipId != $clip or .qsvSetting != $setting)
 		' "$output" >"$staged" || {
@@ -2269,7 +2322,7 @@ x265_curve_fixture() {
 x265_mode() (
 	local requested_run_id="$1" requested_sample_id="$2" sample sample_count cohort source sha setting
 	local quality_run panel_samples run_id run_directory run_scratch results comparisons title_probe_file
-	local clip_id timestamp clip crf next_json action target curve curve_file match comparison
+	local clip_id timestamp clip crf next_json action target curve curve_file match comparison completed_status allowed_clips
 	local -a initial_crfs
 	trap 'if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
 	validate_run_id "$requested_run_id" || return
@@ -2309,6 +2362,7 @@ x265_mode() (
 	ensure_results_file "$results"
 	source="$(jq -r '.path' <<<"$sample")"
 	sha="$(jq -r '.sha256' <<<"$sample")"
+	allowed_clips="$(jq -c '.clips | keys' <<<"$sample")" || return
 	title_probe_file="$run_directory/logs/$requested_sample_id-title-source-probe.json"
 	if ! probe_media title "$source" >"$title_probe_file" 2>/dev/null; then
 		printf '%s\n' '{}' >"$title_probe_file"
@@ -2320,9 +2374,16 @@ x265_mode() (
 		curve_file="$run_scratch/$requested_sample_id-$clip_id-curve.json"
 		ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip"
 		for crf in "${initial_crfs[@]}"; do
-			if row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf"; then continue; fi
-			encode_one_variant "$run_id" x265 "$requested_sample_id" "$cohort" "$sha" "$clip_id" \
-				x265 "$crf" "$clip" clip '' record "$title_probe_file" >/dev/null
+			completed_status=0
+			row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf" || completed_status=$?
+			case "$completed_status" in
+			0) continue ;;
+			1)
+				encode_one_variant "$run_id" x265 "$requested_sample_id" "$cohort" "$sha" "$clip_id" \
+					x265 "$crf" "$clip" clip '' record "$title_probe_file" >/dev/null
+				;;
+			*) return "$completed_status" ;;
+			esac
 		done
 		while :; do
 			curve="$(x265_curve_fixture "$results" "$run_id" "$requested_sample_id" "$sha" "$clip_id" "$target")" || return
@@ -2331,10 +2392,12 @@ x265_mode() (
 			action="$(jq -r '.status' <<<"$next_json")"
 			[[ "$action" == 'extend' ]] || break
 			crf="$(jq -r '.next_crf' <<<"$next_json")"
-			if ! row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf"; then
+			completed_status=0
+			row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf" || completed_status=$?
+			if ((completed_status == 1)); then
 				encode_one_variant "$run_id" x265 "$requested_sample_id" "$cohort" "$sha" "$clip_id" \
 					x265 "$crf" "$clip" clip '' record "$title_probe_file" >/dev/null
-			fi
+			elif ((completed_status != 0)); then return "$completed_status"; fi
 		done
 		curve="$(x265_curve_fixture "$results" "$run_id" "$requested_sample_id" "$sha" "$clip_id" "$target")" || return
 		printf '%s\n' "$curve" >"$curve_file"
@@ -2347,7 +2410,8 @@ x265_mode() (
 				lowerCrf:($matched.lower_crf // null),upperCrf:($matched.upper_crf // null),
 				matchedBitRate:($matched.matched_bit_rate // null),premiumPercent:($matched.premium_percent // null)
 			}')" || return
-		append_comparison_once "$comparisons" "$comparison" "$requested_sample_id" "$clip_id" "$setting" || return
+		append_comparison_once "$comparisons" "$comparison" "$quality_run" "$run_id" \
+			"$requested_sample_id" "$clip_id" "$setting" "$allowed_clips" || return
 		rm -f -- "$clip" "$curve_file"
 	done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
 	printf '%s\n' "$run_id"

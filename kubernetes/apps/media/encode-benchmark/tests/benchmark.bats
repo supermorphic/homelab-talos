@@ -975,6 +975,83 @@ write_quality_ranking_results() {
 	[ "$status" -eq 0 ]
 }
 
+# Catches a malformed durable passed row being treated as merely absent, which
+# would start another CPU encode instead of propagating the resume-contract error.
+@test "x265 resume propagates malformed completed-row status before encoding" {
+	prepare_x265_execution_run avc-grain-memento avc
+	run_id='20260815T130000Z-bbbbbbbb'
+	run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	awk -F, 'BEGIN {OFS=","} NR == 2 {$25="failed"} {print}' "$results" >"$results.tmp"
+	mv -f -- "$results.tmp" "$results"
+	before="$BATS_TEST_TMPDIR/malformed-resume-before.csv"
+	cp "$results" "$before"
+	encode_count="$(rg -c -- '-c:v libx265' "$BENCHMARK_COMMAND_LOG")"
+
+	run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+	[ "$status" -eq 65 ]
+	cmp -s "$before" "$results"
+	[ "$(rg -c -- '-c:v libx265' "$BENCHMARK_COMMAND_LOG")" -eq "$encode_count" ]
+}
+
+# Catches record_result_inner using its shallow legacy duplicate detector after
+# completed-row validation would reject the existing x265 evidence.
+@test "x265 record-time duplicate check propagates malformed passed evidence" {
+	prepare_x265_execution_run avc-grain-memento avc
+	run_id='20260815T130000Z-bbbbbbbb'
+	run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	awk -F, 'BEGIN {OFS=","} NR == 2 {$25="failed"} {print}' "$results" >"$results.tmp"
+	mv -f -- "$results.tmp" "$results"
+	before="$BATS_TEST_TMPDIR/malformed-record-before.csv"
+	cp "$results" "$before"
+	fixture="$BATS_TEST_TMPDIR/valid-x265-result.json"
+	jq '
+		.panel = "x265" | .sample_id = "avc-grain-memento" | .encoder = "x265" |
+		.requested_setting = "18" | .selected_rate_control = "CRF" |
+		.ssim = "" | .gpu_busy_percent = "" | .qsv_proof = "not-applicable" |
+		.qsv_initialization = "not-applicable" | .video_busy_nanoseconds = "0"
+	' "$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	scratch_output="$BENCHMARK_SCRATCH/valid-x265-result.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	[ "$status" -eq 65 ]
+	[[ "$output" != *'"status":"skipped"'* ]]
+	cmp -s "$before" "$results"
+	[ ! -e "$scratch_output" ]
+}
+
+# Catches atomic replacement silently repairing an existing comparison file
+# whose row schema, immutable run identity, or key uniqueness is already bad.
+@test "x265 resume rejects malformed wrong-identity and duplicate comparison rows" {
+	prepare_x265_execution_run avc-grain-memento avc
+	run_id='20260815T130000Z-bbbbbbbb'
+	run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+	[ "$status" -eq 0 ]
+	comparisons="$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+	original="$BATS_TEST_TMPDIR/comparisons-original.jsonl"
+	cp "$comparisons" "$original"
+
+	for mutation in malformed wrong duplicate; do
+		case "$mutation" in
+		malformed) jq -c 'del(.strategyId)' "$original" >"$comparisons" ;;
+		wrong) jq -c '.qualityRunId = "20260815T120000Z-deadbeef"' "$original" >"$comparisons" ;;
+		duplicate) { cat "$original"; head -n 1 "$original"; } >"$comparisons" ;;
+		esac
+		before="$BATS_TEST_TMPDIR/comparisons-$mutation-before.jsonl"
+		cp "$comparisons" "$before"
+
+		run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+		[ "$status" -eq 65 ]
+		cmp -s "$before" "$comparisons"
+		[ "$(find "$(dirname "$comparisons")" -maxdepth 1 -type f \
+			-name 'x265-comparisons.jsonl.*.tmp' | wc -l | tr -d ' ')" -eq 0 ]
+	done
+}
+
 # Catches trusting the requested QSV mode instead of verbose runtime evidence or
 # accepting initialization without a non-zero video-engine busy delta.
 @test "fdinfo metrics require valid i915 video nanosecond counters" {
