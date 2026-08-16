@@ -1741,11 +1741,16 @@ PYTHON
 	export BENCHMARK_VPL_VERSION='fixture-vpl'
 	run_id='20260802T121500Z-deadbeef'
 	: >"$BENCHMARK_COMMAND_LOG"
+	savings_library="$BATS_TEST_TMPDIR/savings-functions.sh"
+	cp "$SCRIPTS/contract.sh" "$BATS_TEST_TMPDIR/contract.sh"
+	awk '$0 == "(($# >= 1)) || usage" { exit } { print }' \
+		"$SCRIPTS/benchmark.sh" >"$savings_library"
 
-	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	run bash -c 'source "$1"; contract_load "$2"; savings_mode "$3"' \
+		_ "$savings_library" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
-	run rg -F 'source.mkv' "$BENCHMARK_COMMAND_LOG"
+	run rg -e '^sha256sum ' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 1 ]
 }
 

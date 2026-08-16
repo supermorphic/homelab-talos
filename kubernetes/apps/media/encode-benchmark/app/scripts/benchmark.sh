@@ -2422,7 +2422,7 @@ savings_mode() {
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
 	local panel_samples final_cohorts panel_cohorts cohort_name selected_record selected_state
-	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' artifact_staged
+	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' final_records='{}' artifact_staged
 	final_cohorts='[]'
 	panel_cohorts="$(jq -e -c '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique' "$samples_file")" || return 65
 	for cohort_name in avc vc1 hdr10; do
@@ -2451,12 +2451,9 @@ savings_mode() {
 		[[ "${selected_state:-}" == 'final' ]] || selected_state="$(jq -r '.state' <<<"$selected_record")"
 		case "$selected_state" in
 		final)
-			prepare_chosen_upstream "$cohort_name" final || return
-			upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
-				'. + {($cohort):$identity}' <<<"$upstream_map")"
-			selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
-				<<<"$selected_settings")"
 			final_cohorts="$(jq -c --arg cohort "$cohort_name" '. + [$cohort]' <<<"$final_cohorts")"
+			final_records="$(jq -c --arg cohort "$cohort_name" --argjson record "$selected_record" \
+				'. + {($cohort):$record}' <<<"$final_records")"
 			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
 				--argjson quality "$(jq '.globalQuality' <<<"$selected_record")" \
 				'. + {($cohort):{status:"measured",globalQuality:$quality}}' \
@@ -2482,6 +2479,14 @@ savings_mode() {
 		echo 'no final chosen setting authorizes savings' >&2
 		return 65
 	}
+	while IFS= read -r cohort_name; do
+		selected_record="$(jq -e -c --arg cohort "$cohort_name" '.[$cohort]' <<<"$final_records")" || return 65
+		prepare_chosen_upstream "$cohort_name" final || return
+		upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+			'. + {($cohort):$identity}' <<<"$upstream_map")"
+		selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
+			<<<"$selected_settings")"
+	done < <(jq -r '.[]' <<<"$final_cohorts")
 	BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n -c --argjson chosen "$upstream_map" '{chosenSettings:$chosen}')"
 	BENCHMARK_SELECTED_SETTINGS_JSON="$selected_settings"
 	BENCHMARK_SAVINGS_COHORTS_JSON="$final_cohorts"
