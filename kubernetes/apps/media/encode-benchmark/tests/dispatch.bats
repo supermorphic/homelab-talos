@@ -422,6 +422,10 @@ valid_capability_evidence() {
 	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
 }
 
+two_passing_capability_nodes() {
+	jq -c '.nodes += [(.nodes[0] | .nodeName = "nuc3")]' <<<"$(valid_capability_evidence)"
+}
+
 valid_chosen_record() {
 	local cohort="$1" state="$2" setting="${3:-22}" sample hdr
 	case "$cohort" in
@@ -604,7 +608,7 @@ set_dispatch_chosen_record() {
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
 	export STUB_HANDOFF_LOG_READY=0
 	export STUB_JOB_REPLACEMENT=1
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 }
@@ -787,7 +791,7 @@ set_dispatch_chosen_record() {
 	[[ "$output" == *'capability evidence'* ]]
 
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
-	run_dispatch run contention-a
+	run_dispatch run contention-a living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'capability evidence'* ]]
 	assert_no_mutations
@@ -1017,14 +1021,14 @@ EOF
 	set_dispatch_chosen_record avc provisional 24
 	set_dispatch_chosen_record vc1 final 26
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	assert_no_mutations
 
 	CHOSEN_RECORD="$(valid_chosen_record avc final 24 | jq -c 'del(.cropReview)')" yq -i '
 		.data."samples.json" |= (from_yaml | .chosenSettings.avc = (strenv(CHOSEN_RECORD) | from_json) | to_json)
 	' "$evidence_app/samples.yaml"
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	assert_no_mutations
 }
@@ -1459,7 +1463,7 @@ EOF
 	set_dispatch_chosen_record avc final 24
 	set_dispatch_chosen_record vc1 final 26
 	set_dispatch_chosen_record hdr10 final 22
-	set_capability_evidence verified "$(valid_capability_evidence)"
+	set_capability_evidence verified "$(two_passing_capability_nodes)"
 }
 
 # Catches contention case selection drifting with panel row order, rendering
@@ -1467,7 +1471,7 @@ EOF
 @test "contention cases render deterministic worker runs under one dispatch group" {
 	prepare_contention_source
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
-	run_dispatch run contention-a
+	run_dispatch run contention-a living-room-player a-4k-hdr
 	[ "$status" -eq 0 ]
 	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 1 ]
 	job="$(job_capture)"
@@ -1481,7 +1485,7 @@ EOF
 	rm -f "$STUB_CAPTURE_DIR"/*.yaml "$STUB_CAPTURE_DIR/.count"
 	: >"$STUB_CALLS"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -eq 0 ]
 	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 2 ]
 	mapfile -t jobs < <(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' -print | sort)
@@ -1518,19 +1522,19 @@ EOF
 	worker_1_run='20260802T121500Z-11111111'
 	worker_2_run='20260802T121500Z-22222222'
 
-	run_dispatch run contention-b "$worker_1_run"
+	run_dispatch run contention-b living-room-player a-4k-hdr "$worker_1_run"
 	[ "$status" -eq 64 ]
 	assert_no_mutations
 
-	run_dispatch run contention-b "$worker_1_run,$worker_1_run"
+	run_dispatch run contention-b living-room-player a-4k-hdr "$worker_1_run,$worker_1_run"
 	[ "$status" -eq 64 ]
 	assert_no_mutations
 
-	run_dispatch run contention-b "$worker_1_run,../bad"
+	run_dispatch run contention-b living-room-player a-4k-hdr "$worker_1_run,../bad"
 	[ "$status" -eq 64 ]
 	assert_no_mutations
 
-	run_dispatch run contention-b "$worker_1_run,$worker_2_run"
+	run_dispatch run contention-b living-room-player a-4k-hdr "$worker_1_run,$worker_2_run"
 	[ "$status" -eq 0 ]
 	[ "$(mutation_count)" -eq 4 ]
 	mapfile -t jobs < <(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' -print | sort)
@@ -1548,7 +1552,7 @@ EOF
 	prepare_contention_source
 	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel = [] | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
-	run_dispatch run contention-a
+	run_dispatch run contention-a living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[ "$output" = 'no eligible 3840x2160 HDR10 quality sample for contention case a' ]
 	assert_no_mutations
@@ -1556,7 +1560,7 @@ EOF
 	prepare_contention_source
 	yq -i '.data."samples.json" |= (from_yaml | del(.chosenSettings.avc) | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[ "$output" = 'no final setting for contention sample cohort: avc' ]
 	assert_no_mutations
@@ -1568,16 +1572,54 @@ EOF
 	prepare_contention_source
 	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel[0].width = 1920 | .qualityPanel[1].width = 1920 | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
-	run_dispatch run contention-a
+	run_dispatch run contention-a living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[ "$output" = 'no eligible 3840x2160 HDR10 quality sample for contention case a' ]
 	assert_no_mutations
 
 	yq -i '.data."samples.json" |= (from_yaml | .qualityPanel[0].width = 3840 | .qualityPanel[1].width = 3840 | del(.qualityPanel[2].height) | to_json)' "$contention_app/samples.yaml"
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
-	run_dispatch run contention-b
+	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	[ "$output" = 'fewer than two eligible 1920x1080 non-DV quality samples for contention case b' ]
+	assert_no_mutations
+}
+
+# Catches contention dispatch creating work before it binds the operator's
+# playback identity and pins each two-worker Job to a separate committed,
+# still-eligible capability node.
+@test "contention dispatch binds playback identity and distinct passing nodes before Job creation" {
+	prepare_contention_source
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
+
+	run_dispatch run contention-b living-room-player a-4k-hdr
+	[ "$status" -eq 0 ]
+	mapfile -t jobs < <(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' -print | sort)
+	[ "${#jobs[@]}" -eq 2 ]
+	[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[0]}")" != \
+		"$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[1]}")" ]
+	for job in "${jobs[@]}"; do
+		[ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "BENCHMARK_PLEX_CLIENT_DEVICE") | .value' "$job")" = 'living-room-player' ]
+		[ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "BENCHMARK_PLAYBACK_SAMPLE_ID") | .value' "$job")" = 'a-4k-hdr' ]
+	done
+}
+
+# Catches a malformed operator label, non-UHD playback identity, or one-node
+# contention evidence being accepted far enough to create a Job.
+@test "contention dispatch fails closed for invalid playback identity or insufficient nodes" {
+	prepare_contention_source
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
+	run_dispatch run contention-b 'Living Room' a-4k-hdr
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	run_dispatch run contention-b living-room-player b-1080-avc
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	set_capability_evidence verified "$(valid_capability_evidence)"
+	run_dispatch run contention-b living-room-player a-4k-hdr
+	[ "$status" -ne 0 ]
 	assert_no_mutations
 }
 

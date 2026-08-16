@@ -26,6 +26,7 @@ benchmark_test="$tests_dir/benchmark.bats"
 stills_test="$tests_dir/stills.bats"
 dispatch_test="$tests_dir/dispatch.bats"
 selection_test="$tests_dir/selection.bats"
+contention_observations_fixture="$tests_dir/fixtures/metrics/contention-observations.json"
 inventory='scripts/encode-benchmark/torrent-inventory.py'
 preflight_helper='scripts/encode-benchmark/preflight.sh'
 dispatch_helper='scripts/encode-benchmark/dispatch.sh'
@@ -72,6 +73,7 @@ for file in \
 	"$stills_test" \
 	"$dispatch_test" \
 	"$selection_test" \
+	"$contention_observations_fixture" \
 	"$inventory" \
 	"$preflight_helper" \
 	"$dispatch_helper" \
@@ -362,6 +364,25 @@ if ((savings_count != 0)); then
 			fail "savingsPanel must contain about eight $cohort samples (accepted range 6-10; got $cohort_count)"
 	done
 fi
+
+# This fixture is an independent fixed-cadence oracle for the runtime evidence
+# parser.  It proves three retained 15-minute baselines, seven seeks, and all
+# 180 five-second NAS observations without mirroring the runtime jq helper.
+jq -e '
+	.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+	(.baselines | type == "array" and length == 3 and
+		all(.[];
+			.durationSeconds == 900 and .playbackMode == "direct-play" and
+			(.seekToResumeSeconds | type == "array" and length == 7) and
+			(.nasThroughputMbps | type == "array" and length == 180 and
+				[.[].offsetSeconds] == [range(0; 900; 5)]))) and
+	(.cases | type == "array" and length == 1 and .[0].case == "d" and
+		.[0].playbackMode == "direct-play" and
+		(.[0].seekToResumeSeconds | type == "array" and length == 7) and
+		(.[0].nasThroughputMbps | type == "array" and length == 180 and
+			[.[].offsetSeconds] == [range(0; 900; 5)]))
+' "$contention_observations_fixture" >/dev/null ||
+	fail 'contention observations fixture must retain complete baseline, seek, and NAS evidence'
 
 # The template is valid, tightly scoped, non-root, non-preempting, and bounded.
 assert_eq "$(yq -r '.apiVersion' "$template")" 'batch/v1' 'Job API version'

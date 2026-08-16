@@ -696,6 +696,24 @@ encode-benchmark-run mode run_id="" sample_id="": require-bash
 encode-benchmark-finalist run_id sample_id:
     @just kube encode-benchmark-run finalist {{quote(run_id)}} {{quote(sample_id)}}
 
+# Create the applicable Plex-contention worker Job or worker pair. The device
+# label and fixed UHD HDR10 playback sample bind the operator observation record.
+encode-benchmark-contention contention_case client_device_label playback_sample_id run_id_or_pair="": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    contention_case={{quote(contention_case)}}
+    client_device_label={{quote(client_device_label)}}
+    playback_sample_id={{quote(playback_sample_id)}}
+    run_id_or_pair={{quote(run_id_or_pair)}}
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark contention' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    args=(contention "$contention_case" "$client_device_label" "$playback_sample_id")
+    if [[ -n "$run_id_or_pair" ]]; then args+=("$run_id_or_pair"); fi
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
+
 # Create one CPU-only, 60-hour x265 reference Job pinned to the confirmed
 # Ready non-Plex node. An optional run ID resumes only that exact identity.
 encode-benchmark-x265 sample_id node_name run_id="": require-bash

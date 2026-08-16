@@ -194,6 +194,7 @@ discover_identity() {
 				echo 'savings cohort identity is malformed' >&2
 				return 65
 			}
+			# shellcheck disable=SC2016 # jq variables are evaluated by jq, not this shell.
 			panel='.savingsPanel[]? | select(.cohort as $cohort | ($cohorts | index($cohort)) != null)'
 		else
 			panel='.savingsPanel[]?'

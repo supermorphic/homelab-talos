@@ -1942,7 +1942,9 @@ PYTHON
 	[ "$output" = "$run_id" ]
 	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/hdr10-grain-goodfellas-qsv-gq22.mkv" ]
 	run jq -e --arg run "$QUALITY_RUN_ID" '
-		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}]
+		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}] and
+		.clientDevice == "living-room-player" and
+		.upstream.contention == {clientDevice:"living-room-player",playbackSampleId:"a-4k-hdr"}
 	' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id/encodes" -type f | wc -l | tr -d ' ')" -eq 1 ]
@@ -2018,6 +2020,9 @@ PYTHON
 
 prepare_contention_samples() {
 	prepare_execution_run
+	export BENCHMARK_CLIENT_DEVICE='living-room-player'
+	export BENCHMARK_PLEX_CLIENT_DEVICE='living-room-player'
+	export BENCHMARK_PLAYBACK_SAMPLE_ID='a-4k-hdr'
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
 	runtime="$(jq -c '.runtime' "$BENCHMARK_SAMPLES_FILE")"
@@ -2162,6 +2167,53 @@ EOF
 	[ "$status" -eq 65 ]
 	[ "$output" = 'contention case b requires an eligible 1920x1080 non-DV quality sample' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+}
+
+# Catches scalar/averaged Plex observations that lose a baseline, a seek, or a
+# five-second NAS sample, and catches a slow individual event hidden by a mean.
+@test "contention evidence retains every event and compares each against the worst baseline" {
+	evidence="$BATS_TEST_TMPDIR/contention-observations.json"
+	jq -n '
+		def nas: [range(0; 180) as $i | {offsetSeconds: ($i * 5), value: 10.0}];
+		def baseline($id; $start; $seek): {
+			runId: $id, durationSeconds: 900, playbackMode: "direct-play",
+			startLatencySeconds: $start, bufferingCount: 0, bufferingDurationSeconds: 0,
+			seekToResumeSeconds: $seek, nasThroughputMbps: nas
+		};
+		{
+			schemaVersion: 1, strategyId: "qsv-hevc-icq-v1",
+			clientDevice: "living-room-player", playbackSampleId: "a-4k-hdr",
+			baselines: [
+				baseline("baseline-1"; 1.0; [1,1,1,1,1,1,1]),
+				baseline("baseline-2"; 1.1; [1,1,1,1,1,1,1]),
+				baseline("baseline-3"; 1.2; [1,1,1,1,1,1,1])
+			],
+			cases: [{case:"d", playbackMode:"direct-play", startLatencySeconds:3.2,
+				bufferingCount:0, bufferingDurationSeconds:0,
+				seekToResumeSeconds:[4,4,4,4,4,4,4], nasThroughputMbps:nas,
+				workerFragments:[{runId:"20260815T150000Z-dddddddd",file:"contention-d-worker-1-attempt-1.csv"}]}]
+		}' >"$evidence"
+
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.baselinesRetained' <<<"$output")" = '3' ]
+
+	jq '.cases[0].seekToResumeSeconds[3] = 4.7' "$evidence" >"$evidence.slow"
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.slow"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'case d seek 4'* ]]
+
+	jq 'del(.baselines[2].nasThroughputMbps[179])' "$evidence" >"$evidence.incomplete"
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.incomplete"
+	[ "$status" -ne 0 ]
+
+	jq '.cases += [{case:"a", playbackMode:"direct-play", startLatencySeconds:1.2,
+		bufferingCount:1, bufferingDurationSeconds:1, seekToResumeSeconds:[], nasThroughputMbps:.baselines[0].nasThroughputMbps,
+		workerFragments:[{runId:"20260815T150000Z-aaaaaaaa",file:"contention-a-worker-1-attempt-1.csv"}]}]' \
+		"$evidence" >"$evidence.buffering"
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.buffering"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'case a buffering'* ]]
 }
 
 @test "finalist publication rejects symlink escape and rolls back when durable append fails" {
@@ -2331,6 +2383,11 @@ EOF
 	worker_2='20260802T120000Z-22222222'
 	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings" \
 		"$BENCHMARK_OUT/runs/$worker_1" "$BENCHMARK_OUT/runs/$worker_2"
+	for worker in "$worker_1" "$worker_2"; do
+		jq -S --arg client 'living-room-player' --arg playback 'a-4k-hdr' \
+			'.clientDevice = $client | .upstream = {contention:{clientDevice:$client,playbackSampleId:$playback}}' \
+			"$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$worker/manifest.json"
+	done
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
 	cat >"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl" <<'EOF'
 {"status":"bracketed","lower_crf":24,"upper_crf":22,"matched_bit_rate":6000,"premium_percent":12.5,"sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}
@@ -2341,19 +2398,28 @@ EOF
 	for reduction in 10 20 30 40 50 60 70 80; do
 		printf '%s\n' "$savings,savings,sample-$reduction,avc,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,full,qsv,22,ICQ,passed,1,1000,600,$reduction,8000,4800,10,30,1,,,,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/sample.log,discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
 	done
-	contention_header='run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition'
+	contention_header='run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id'
 	printf '%s\n' "$contention_header" \
-		'"20260802T120000Z-11111111","b","worker-1","sample-avc","avc","24","passed","1","120.500000","passed","","discarded"' \
+		'"20260802T120000Z-11111111","b","worker-1","sample-avc","avc","24","passed","1","120.500000","passed","","discarded","qsv-hevc-icq-v1"' \
 		>"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv"
 	printf '%s\n' "$contention_header" \
-		'"20260802T120000Z-22222222","b","worker-2","sample-vc1","vc1","26","passed","1","130.250000","passed","","discarded"' \
+		'"20260802T120000Z-22222222","b","worker-2","sample-vc1","vc1","26","passed","1","130.250000","passed","","discarded","qsv-hevc-icq-v1"' \
 		>"$BENCHMARK_OUT/runs/$worker_2/contention-b-worker-2-attempt-1.csv"
 	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
 {"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker_1","file":"contention-b-worker-1-attempt-1.csv"},{"runId":"$worker_2","file":"contention-b-worker-2-attempt-1.csv"}],"plexToken":"must-not-leak"}
 EOF
-	cat >"$BENCHMARK_OUT/runs/$target/contention.json" <<'EOF'
-{"baselineStartLatencySeconds":1.2,"bufferingCount":0,"startLatencySeconds":2.1,"seekToResumeSeconds":3.2,"nasUplinkMbps":10000,"measuredThroughputMbps":812,"plexToken":"also-must-not-leak","sourcePath":"/media/Secret Movie.mkv"}
-EOF
+	jq -n --arg first "$worker_1" --arg second "$worker_2" '
+		def nas: [range(0; 180) as $i | {offsetSeconds: ($i * 5), value: 10.0}];
+		def baseline($id; $start): {runId:$id,durationSeconds:900,playbackMode:"direct-play",
+			startLatencySeconds:$start,bufferingCount:0,bufferingDurationSeconds:0,
+			seekToResumeSeconds:[1,1,1,1,1,1,1],nasThroughputMbps:nas};
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",clientDevice:"living-room-player",playbackSampleId:"a-4k-hdr",
+			baselines:[baseline("baseline-1";1.0),baseline("baseline-2";1.1),baseline("baseline-3";1.2)],
+			cases:[{case:"b",playbackMode:"direct-play",startLatencySeconds:1.2,bufferingCount:0,bufferingDurationSeconds:0,
+				seekToResumeSeconds:[],nasThroughputMbps:nas,workerFragments:[
+					{runId:$first,file:"contention-b-worker-1-attempt-1.csv"},
+					{runId:$second,file:"contention-b-worker-2-attempt-1.csv"}]}]}
+	' >"$BENCHMARK_OUT/runs/$target/contention.json"
 
 	run "$SCRIPTS/benchmark.sh" findings "$target"
 	[ "$status" -eq 0 ]
@@ -2376,6 +2442,28 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -n 'must-not-leak|Secret Movie|plexToken|sourcePath' "$findings"
 	[ "$status" -eq 1 ]
+
+	# A syntactically complete stale-strategy fragment must not become findings
+	# input merely because its run, worker, and CSV shape still match.
+	sed 's/qsv-hevc-icq-v1/qsv-hevc-la-icq-v1/' \
+		"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv" \
+		>"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv.stale"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv.stale" \
+		"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+
+	sed 's/qsv-hevc-la-icq-v1/qsv-hevc-icq-v1/' \
+		"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv" \
+		>"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv.current"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv.current" \
+		"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv"
+	jq '.clientDevice = "other-player"' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.mismatch"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.mismatch" \
+		"$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
 }
 
 @test "findings rejects malicious values in allowed contention fields" {
@@ -2389,8 +2477,8 @@ EOF
 	printf '%s\n' '{"status":"unbracketed","sample_id":"sample-avc","clip_id":"detail","qsv_setting":"22"}' \
 		>"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl"
 	printf '%s\n' \
-		'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition' \
-		'"20260802T120000Z-11111111","a","worker-1","sample-hdr","hdr10","22","passed","1","120.500000","passed","","discarded"' \
+		'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' \
+		'"20260802T120000Z-11111111","a","worker-1","sample-hdr","hdr10","22","passed","1","120.500000","passed","","discarded","qsv-hevc-icq-v1"' \
 		>"$BENCHMARK_OUT/runs/$worker/contention-a-worker-1-attempt-1.csv"
 	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
 {"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker","file":"contention-a-worker-1-attempt-1.csv"}]}

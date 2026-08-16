@@ -76,6 +76,13 @@ validate_sample_id() {
 	}
 }
 
+validate_client_device_label() {
+	[[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || {
+		echo "invalid contention client device label: $1" >&2
+		return 64
+	}
+}
+
 validate_node_name() {
 	[[ "$1" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ && ${#1} -le 253 ]] || {
 		echo "invalid node name: $1" >&2
@@ -168,6 +175,41 @@ require_capability_evidence() {
 	fi
 	echo 'Refusing benchmark dispatch: committed schema-v3 ICQ capability evidence has no current passing node.' >&2
 	return 1
+}
+
+contention_passing_nodes() {
+	local required="$1" configured_digest="${configured_image##*@}"
+	mapfile -t contention_nodes < <(jq -r --arg digest "$configured_digest" '
+		def valid:
+			type == "object" and .strategyId == "qsv-hevc-icq-v1" and
+			.proofSchemaVersion == 3 and .initialization == "passed" and
+			.initializationReason == "" and .renderNode == "/dev/dri/renderD128" and
+			.drmDriver == "i915" and .selectedRateControl == "ICQ" and
+			.telemetryStatus == "available" and .telemetryReason == "" and
+			(.videoBusyNanoseconds | type == "number" and . > 0) and
+			(.encodeSpeed | type == "number" and . > 0) and .decode == "passed" and
+			.vmaf == "passed" and .proofStatus == "passed" and .proofReasons == "" and
+			.configuredImageDigest == $digest and
+			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest)) and
+			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"));
+		.runtime.capabilityEvidence.nodes[]? | select(valid) | .nodeName
+	' "$samples_document" | sort -u)
+	((${#contention_nodes[@]} >= required)) || {
+		echo "contention requires $required distinct committed passing capability nodes" >&2
+		return 65
+	}
+}
+
+require_contention_playback_sample() {
+	local sample_id="$1" count
+	count="$(PLAYBACK_SAMPLE_ID="$sample_id" jq -r '[.qualityPanel[]? | select(
+		.id == env.PLAYBACK_SAMPLE_ID and .cohort == "hdr10" and .width == 3840 and .height == 2160 and
+		(.detectionOnly // false) == false
+	)] | length' "$samples_document")"
+	[[ "$count" == '1' ]] || {
+		echo "contention playback sample must be one committed 3840x2160 HDR10 non-DV quality title: $sample_id" >&2
+		return 65
+	}
 }
 
 new_run_id() {
@@ -770,8 +812,8 @@ require_cpu_node() {
 
 dispatch_run() {
 	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' node_name='' run_id dispatch_id job name contention_case=''
-	local candidate_output job_json image_configmap='' cleanup_index
-	local -a candidates=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
+	local client_device='' playback_sample='' candidate_output job_json image_configmap='' cleanup_index required_nodes=0
+	local -a candidates=() contention_nodes=() eligible_nodes=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
 	case "$mode" in
 	quality | savings)
 		(($# == 1 || $# == 2)) || return 64
@@ -805,13 +847,18 @@ dispatch_run() {
 			"copy:encode-benchmark:$supplied_run_id:$sample_id" || return
 		;;
 	contention-[a-d])
-		(($# == 1 || $# == 2)) || return 64
+		(($# == 3 || $# == 4)) || return 64
 		contention_case="${mode#contention-}"
+		client_device="$2"
+		playback_sample="$3"
+		validate_client_device_label "$client_device" || return
+		validate_sample_id "$playback_sample" || return
 		if [[ "$contention_case" == 'a' ]]; then
-			supplied_run_id="${2:-}"
+			supplied_run_id="${4:-}"
 			if [[ -n "$supplied_run_id" ]]; then validate_run_id "$supplied_run_id" || return; fi
+			required_nodes=1
 		else
-			supplied_run_pair="${2:-}"
+			supplied_run_pair="${4:-}"
 			if [[ -n "$supplied_run_pair" ]]; then
 				IFS=, read -r -a run_ids <<<"$supplied_run_pair"
 				((${#run_ids[@]} == 2)) && [[ -n "${run_ids[0]}" && -n "${run_ids[1]}" ]] || {
@@ -825,6 +872,7 @@ dispatch_run() {
 					return 64
 				}
 			fi
+			required_nodes=2
 		fi
 		;;
 	*)
@@ -848,6 +896,8 @@ dispatch_run() {
 	if [[ -n "$contention_case" ]]; then
 		candidate_output="$(contention_samples "$contention_case")" || return
 		mapfile -t candidates <<<"$candidate_output"
+		require_contention_playback_sample "$playback_sample" || return
+		contention_passing_nodes "$required_nodes" || return
 	fi
 	if [[ -n "$contention_case" ]]; then
 		if [[ "$contention_case" == 'a' ]]; then
@@ -873,6 +923,12 @@ dispatch_run() {
 	require_cluster_target || return
 	if [[ "$mode" == 'x265' ]]; then require_cpu_node "$node_name" || return; fi
 	if [[ -n "$contention_case" ]]; then
+		mapfile -t eligible_nodes < <(eligible_capability_nodes)
+		mapfile -t contention_nodes < <(printf '%s\n' "${contention_nodes[@]}" "${eligible_nodes[@]}" | sort | uniq -d)
+		((${#contention_nodes[@]} >= required_nodes)) || {
+			echo "contention requires $required_nodes distinct still-eligible passing capability nodes" >&2
+			return 65
+		}
 		local index worker candidate candidate_id suffix
 		for run_id in "${run_ids[@]}"; do
 			ensure_run_available "$run_id" || return
@@ -887,6 +943,14 @@ dispatch_run() {
 			job="$temp_directory/$mode-$worker.yaml"
 			render_job "$job" "$mode" "$run_id" "$dispatch_id" "$worker" "$name" \
 				/scripts/benchmark.sh contention "$run_id" "$contention_case" "$worker" "$candidate_id"
+			NODE_NAME="${contention_nodes[$index]}" CLIENT_DEVICE="$client_device" PLAYBACK_SAMPLE="$playback_sample" yq -i '
+				.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME) |
+				.spec.template.spec.containers[0].env += [
+					{"name":"BENCHMARK_CLIENT_DEVICE","value":strenv(CLIENT_DEVICE)},
+					{"name":"BENCHMARK_PLEX_CLIENT_DEVICE","value":strenv(CLIENT_DEVICE)},
+					{"name":"BENCHMARK_PLAYBACK_SAMPLE_ID","value":strenv(PLAYBACK_SAMPLE)}
+				]
+			' "$job"
 			if ! job_json="$(create_job "$job")"; then
 				for cleanup_index in "${!created_job_jsons[@]}"; do
 					delete_created_job "${created_job_jsons[$cleanup_index]}" "${created_jobs[$cleanup_index]}"
@@ -958,6 +1022,20 @@ dispatch_run() {
 	printf 'run_id=%s job=%s\n' "$run_id" "$name"
 }
 
+dispatch_contention() {
+	local contention_case="${1:-}" client_device="${2:-}" playback_sample="${3:-}" run_id_or_pair="${4:-}"
+	(($# == 3 || $# == 4)) || return 64
+	[[ "$contention_case" =~ ^[a-d]$ ]] || {
+		echo "invalid contention case: $contention_case" >&2
+		return 64
+	}
+	if [[ -n "$run_id_or_pair" ]]; then
+		dispatch_run "contention-$contention_case" "$client_device" "$playback_sample" "$run_id_or_pair"
+	else
+		dispatch_run "contention-$contention_case" "$client_device" "$playback_sample"
+	fi
+}
+
 dispatch_clean() {
 	local run_id="${1:-}" expected run_id_lower job name cleanup_command
 	(($# == 1)) || return 64
@@ -997,6 +1075,9 @@ census)
 	;;
 run)
 	dispatch_run "$@"
+	;;
+contention)
+	dispatch_contention "$@"
 	;;
 clean)
 	dispatch_clean "$@"
