@@ -1470,6 +1470,9 @@ EOF
 # the wrong worker cardinality, or sharing a node-bound immutable run identity.
 @test "contention cases render deterministic worker runs under one dispatch group" {
 	prepare_contention_source
+	set_dispatch_chosen_record avc final 16
+	set_dispatch_chosen_record vc1 final 18
+	set_dispatch_chosen_record hdr10 final 30
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-a'
 	run_dispatch run contention-a living-room-player a-4k-hdr
 	[ "$status" -eq 0 ]
@@ -1618,6 +1621,13 @@ EOF
 	assert_no_mutations
 
 	set_capability_evidence verified "$(valid_capability_evidence)"
+	run_dispatch run contention-b living-room-player a-4k-hdr
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	prepare_contention_source
+	set_capability_evidence verified "$(two_passing_capability_nodes | jq 'del(.nodes[1].videoBusyPercent)')"
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
 	run_dispatch run contention-b living-room-player a-4k-hdr
 	[ "$status" -ne 0 ]
 	assert_no_mutations

@@ -1942,9 +1942,7 @@ PYTHON
 	[ "$output" = "$run_id" ]
 	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/hdr10-grain-goodfellas-qsv-gq22.mkv" ]
 	run jq -e --arg run "$QUALITY_RUN_ID" '
-		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}] and
-		.clientDevice == "living-room-player" and
-		.upstream.contention == {clientDevice:"living-room-player",playbackSampleId:"a-4k-hdr"}
+		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}]
 	' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id/encodes" -type f | wc -l | tr -d ' ')" -eq 1 ]
@@ -2191,7 +2189,10 @@ EOF
 			cases: [{case:"d", playbackMode:"direct-play", startLatencySeconds:3.2,
 				bufferingCount:0, bufferingDurationSeconds:0,
 				seekToResumeSeconds:[4,4,4,4,4,4,4], nasThroughputMbps:nas,
-				workerFragments:[{runId:"20260815T150000Z-dddddddd",file:"contention-d-worker-1-attempt-1.csv"}]}]
+				workerFragments:[
+					{runId:"20260815T150000Z-dddddddd",file:"contention-d-worker-1-attempt-1.csv"},
+					{runId:"20260815T150000Z-eeeeeeee",file:"contention-d-worker-2-attempt-1.csv"}
+				]}]
 		}' >"$evidence"
 
 	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence"
@@ -2200,8 +2201,14 @@ EOF
 
 	jq '.cases[0].seekToResumeSeconds[3] = 4.7' "$evidence" >"$evidence.slow"
 	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.slow"
+	[ "$status" -eq 0 ]
+	run jq -e '.status == "failed" and
+		(.failedEvents | length) == 1 and .failedEvents[0] == "case d seek 4 latency 4.7 exceeds baseline maximum plus 3 seconds 4"' <<<"$output"
+	[ "$status" -eq 0 ]
+
+	jq '.cases[0].workerFragments = [.cases[0].workerFragments[0]]' "$evidence" >"$evidence.one-worker"
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.one-worker"
 	[ "$status" -ne 0 ]
-	[[ "$output" == *'case d seek 4'* ]]
 
 	jq 'del(.baselines[2].nasThroughputMbps[179])' "$evidence" >"$evidence.incomplete"
 	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.incomplete"
@@ -2212,8 +2219,67 @@ EOF
 		workerFragments:[{runId:"20260815T150000Z-aaaaaaaa",file:"contention-a-worker-1-attempt-1.csv"}]}]' \
 		"$evidence" >"$evidence.buffering"
 	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.buffering"
+	[ "$status" -eq 0 ]
+	run jq -e '.status == "failed" and
+		(.failedEvents | index("case a buffering count 1 must be zero")) != null' <<<"$output"
+	[ "$status" -eq 0 ]
+	jq '.cases[-1].bufferingCount = 0 | .cases[-1].bufferingDurationSeconds = 1' "$evidence.buffering" >"$evidence.duration"
+	run "$SCRIPTS/benchmark.sh" _test validate-contention-observations "$evidence.duration"
+	[ "$status" -eq 0 ]
+	run jq -e '.status == "failed" and
+		(.failedEvents | index("case a buffering duration 1 must be zero")) != null' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
+# Catches a resumed worker trusting a malformed or stale fragment and silently
+# beginning another encode attempt.
+@test "contention resume validates every prior exact worker fragment before encoding" {
+	prepare_contention_samples
+	prepare_quality_upstream avc final 16 '[16]'
+	prepare_quality_upstream vc1 final 18 '[18]'
+	prepare_quality_upstream hdr10 final 30 '[30]'
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
+	[ "$status" -eq 0 ]
+	fragment="$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-1.csv"
+	run python3 - "$fragment" <<'PYTHON'
+import csv
+import sys
+
+with open(sys.argv[1], newline='', encoding='utf-8') as stream:
+    row = next(csv.DictReader(stream))
+assert row['setting'] == '30', row
+PYTHON
+	[ "$status" -eq 0 ]
+
+	run "$SCRIPTS/benchmark.sh" contention '20260802T121501Z-deadbeef' b worker-1 b-1080-avc
+	[ "$status" -eq 0 ]
+	run "$SCRIPTS/benchmark.sh" contention '20260802T121502Z-deadbeef' b worker-2 c-1080-vc1
+	[ "$status" -eq 0 ]
+	run python3 - \
+		"$BENCHMARK_OUT/runs/20260802T121501Z-deadbeef/contention-b-worker-1-attempt-1.csv" \
+		"$BENCHMARK_OUT/runs/20260802T121502Z-deadbeef/contention-b-worker-2-attempt-1.csv" <<'PYTHON'
+import csv
+import sys
+
+expected = ['16', '18']
+for path, setting in zip(sys.argv[1:], expected, strict=True):
+    with open(path, newline='', encoding='utf-8') as stream:
+        row = next(csv.DictReader(stream))
+    assert row['setting'] == setting, row
+PYTHON
+	[ "$status" -eq 0 ]
+
+	sed 's/qsv-hevc-icq-v1/qsv-hevc-la-icq-v1/' "$fragment" >"$fragment.stale"
+	mv -f -- "$fragment.stale" "$fragment"
+	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
 	[ "$status" -ne 0 ]
-	[[ "$output" == *'case a buffering'* ]]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-2.csv" ]
 }
 
 @test "finalist publication rejects symlink escape and rolls back when durable append fails" {
@@ -2376,17 +2442,44 @@ EOF
 @test "findings combines explicitly named run inputs and excludes credentials" {
 	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/findings-samples.json"
 	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
+	jq '
+		def node($name): {nodeName:$name,strategyId:"qsv-hevc-icq-v1",proofSchemaVersion:3,
+			initialization:"passed",initializationReason:"",renderNode:"/dev/dri/renderD128",drmDriver:"i915",
+			selectedRateControl:"ICQ",telemetryStatus:"available",telemetryReason:"",videoBusyNanoseconds:800000000,
+			videoBusyPercent:40,encodeFps:72,encodeSpeed:1.25,decode:"passed",vmaf:"passed",proofStatus:"passed",
+			proofReasons:"",verifiedAt:"2026-08-14T18:00:00Z",
+			configuredImageDigest:"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+			imageId:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"};
+		.runtime.capabilityStatus = "verified" |
+		.runtime.capabilityEvidence = {nodes:[node("nuc1"),node("nuc3")]}
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.current"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.current" "$BENCHMARK_SAMPLES_FILE"
 	target='20260802T120000Z-cccccccc'
 	quality='20260802T120000Z-aaaaaaaa'
 	savings='20260802T120000Z-bbbbbbbb'
+	worker_a='20260802T120000Z-33333333'
 	worker_1='20260802T120000Z-11111111'
 	worker_2='20260802T120000Z-22222222'
 	mkdir -p "$BENCHMARK_OUT/runs/$target" "$BENCHMARK_OUT/runs/$quality" "$BENCHMARK_OUT/runs/$savings" \
-		"$BENCHMARK_OUT/runs/$worker_1" "$BENCHMARK_OUT/runs/$worker_2"
-	for worker in "$worker_1" "$worker_2"; do
-		jq -S --arg client 'living-room-player' --arg playback 'a-4k-hdr' \
-			'.clientDevice = $client | .upstream = {contention:{clientDevice:$client,playbackSampleId:$playback}}' \
-			"$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$worker/manifest.json"
+		"$BENCHMARK_OUT/runs/$worker_a" "$BENCHMARK_OUT/runs/$worker_1" "$BENCHMARK_OUT/runs/$worker_2"
+	for worker in "$worker_a" "$worker_1" "$worker_2"; do
+		if [[ "$worker" == "$worker_a" ]]; then
+			node='nuc1'; sample='hdr10-grain-goodfellas'; cohort='hdr10'; setting=30; contention_case='a'
+		elif [[ "$worker" == "$worker_1" ]]; then
+			contention_case='b'
+			node='nuc1'; sample='avc-grain-memento'; cohort='avc'; setting=16
+		else
+			contention_case='b'
+			node='nuc3'; sample='vc1-fugitive'; cohort='vc1'; setting=18
+		fi
+		jq -S --slurpfile samples "$BENCHMARK_SAMPLES_FILE" --arg client 'living-room-player' \
+			--arg playback 'a-4k-hdr' --arg node "$node" --arg sample "$sample" --arg cohort "$cohort" \
+			--arg run "$quality" --arg case "$contention_case" --argjson setting "$setting" '
+				.clientDevice = $client | .mode = ("contention-" + $case) | .node.name = $node |
+				.upstream = {contention:{clientDevice:$client,playbackSampleId:$playback}} |
+				.selectedSettings = [{cohort:$cohort,globalQuality:$setting,qualityRunId:$run}] |
+				.sources = [($samples[0].qualityPanel[] | select(.id == $sample) | {path,sha256:("sha256:" + .sha256),size:.sizeBytes})]
+			' "$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$worker/manifest.json"
 	done
 	cp "$GOLDEN/results.csv" "$BENCHMARK_OUT/runs/$quality/results.csv"
 	cat >"$BENCHMARK_OUT/runs/$quality/x265-comparisons.jsonl" <<'EOF'
@@ -2400,15 +2493,18 @@ EOF
 	done
 	contention_header='run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id'
 	printf '%s\n' "$contention_header" \
-		'"20260802T120000Z-11111111","b","worker-1","sample-avc","avc","24","passed","1","120.500000","passed","","discarded","qsv-hevc-icq-v1"' \
+		'"20260802T120000Z-33333333","a","worker-1","hdr10-grain-goodfellas","hdr10","30","passed","1","110.125000","passed","","discarded","qsv-hevc-icq-v1"' \
+		>"$BENCHMARK_OUT/runs/$worker_a/contention-a-worker-1-attempt-1.csv"
+	printf '%s\n' "$contention_header" \
+		'"20260802T120000Z-11111111","b","worker-1","avc-grain-memento","avc","16","passed","1","120.500000","passed","","discarded","qsv-hevc-icq-v1"' \
 		>"$BENCHMARK_OUT/runs/$worker_1/contention-b-worker-1-attempt-1.csv"
 	printf '%s\n' "$contention_header" \
-		'"20260802T120000Z-22222222","b","worker-2","sample-vc1","vc1","26","passed","1","130.250000","passed","","discarded","qsv-hevc-icq-v1"' \
+		'"20260802T120000Z-22222222","b","worker-2","vc1-fugitive","vc1","18","passed","1","130.250000","passed","","discarded","qsv-hevc-icq-v1"' \
 		>"$BENCHMARK_OUT/runs/$worker_2/contention-b-worker-2-attempt-1.csv"
 	cat >"$BENCHMARK_OUT/runs/$target/findings-inputs.json" <<EOF
-{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker_1","file":"contention-b-worker-1-attempt-1.csv"},{"runId":"$worker_2","file":"contention-b-worker-2-attempt-1.csv"}],"plexToken":"must-not-leak"}
+{"qualityRunId":"$quality","savingsRunId":"$savings","contentionFile":"contention.json","contentionFragments":[{"runId":"$worker_a","file":"contention-a-worker-1-attempt-1.csv"},{"runId":"$worker_1","file":"contention-b-worker-1-attempt-1.csv"},{"runId":"$worker_2","file":"contention-b-worker-2-attempt-1.csv"}],"plexToken":"must-not-leak"}
 EOF
-	jq -n --arg first "$worker_1" --arg second "$worker_2" '
+	jq -n --arg single "$worker_a" --arg first "$worker_1" --arg second "$worker_2" '
 		def nas: [range(0; 180) as $i | {offsetSeconds: ($i * 5), value: 10.0}];
 		def baseline($id; $start): {runId:$id,durationSeconds:900,playbackMode:"direct-play",
 			startLatencySeconds:$start,bufferingCount:0,bufferingDurationSeconds:0,
@@ -2418,7 +2514,10 @@ EOF
 			cases:[{case:"b",playbackMode:"direct-play",startLatencySeconds:1.2,bufferingCount:0,bufferingDurationSeconds:0,
 				seekToResumeSeconds:[],nasThroughputMbps:nas,workerFragments:[
 					{runId:$first,file:"contention-b-worker-1-attempt-1.csv"},
-					{runId:$second,file:"contention-b-worker-2-attempt-1.csv"}]}]}
+					{runId:$second,file:"contention-b-worker-2-attempt-1.csv"}]},
+				{case:"a",playbackMode:"direct-play",startLatencySeconds:1.1,bufferingCount:0,bufferingDurationSeconds:0,
+					seekToResumeSeconds:[],nasThroughputMbps:nas,workerFragments:[
+						{runId:$single,file:"contention-a-worker-1-attempt-1.csv"}]}]}
 	' >"$BENCHMARK_OUT/runs/$target/contention.json"
 
 	run "$SCRIPTS/benchmark.sh" findings "$target"
@@ -2436,12 +2535,48 @@ EOF
 	[ "$status" -eq 0 ]
 	run rg -F '| sample-hdr | grain | 24 | unbracketed |  | No verdict |' "$findings"
 	[ "$status" -eq 0 ]
-	run rg -F "| $worker_1 | b | worker-1 | sample-avc | avc | 24 | passed | 120.500000 |" "$findings"
+	run rg -F "| $worker_a | a | worker-1 | hdr10-grain-goodfellas | hdr10 | 30 | passed | 110.125000 |" "$findings"
 	[ "$status" -eq 0 ]
-	run rg -F "| $worker_2 | b | worker-2 | sample-vc1 | vc1 | 26 | passed | 130.250000 |" "$findings"
+	run rg -F "| $worker_1 | b | worker-1 | avc-grain-memento | avc | 16 | passed | 120.500000 |" "$findings"
+	[ "$status" -eq 0 ]
+	run rg -F "| $worker_2 | b | worker-2 | vc1-fugitive | vc1 | 18 | passed | 130.250000 |" "$findings"
 	[ "$status" -eq 0 ]
 	run rg -n 'must-not-leak|Secret Movie|plexToken|sourcePath' "$findings"
 	[ "$status" -eq 1 ]
+
+	# Threshold failures are verdict evidence, not malformed input. Findings must
+	# retain the failed verdict and each individual failed event.
+	jq '.cases[0].startLatencySeconds = 3.3' "$BENCHMARK_OUT/runs/$target/contention.json" \
+		>"$BENCHMARK_OUT/runs/$target/contention.failed.json"
+	mv -f -- "$BENCHMARK_OUT/runs/$target/contention.failed.json" "$BENCHMARK_OUT/runs/$target/contention.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -eq 0 ]
+	run rg -F 'Contention verdict: FAILED' "$findings"
+	[ "$status" -eq 0 ]
+	run rg -F 'case b start latency 3.3 exceeds baseline maximum plus 2 seconds 3.2' "$findings"
+	[ "$status" -eq 0 ]
+	jq '.cases[0].startLatencySeconds = 1.2' "$BENCHMARK_OUT/runs/$target/contention.json" \
+		>"$BENCHMARK_OUT/runs/$target/contention.passed.json"
+	mv -f -- "$BENCHMARK_OUT/runs/$target/contention.passed.json" "$BENCHMARK_OUT/runs/$target/contention.json"
+
+	# A structurally valid schema-v2 identity is insufficient unless it binds the
+	# contention mode, matching source and setting, and the assigned ICQ node.
+	jq '.mode = "quality"' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.wrong-mode"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.wrong-mode" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	jq '.mode = "contention-b"' "$BENCHMARK_OUT/runs/$worker_1/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_1/manifest.json.current"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_1/manifest.json.current" "$BENCHMARK_OUT/runs/$worker_1/manifest.json"
+	jq '.node.name = "nuc1"' "$BENCHMARK_OUT/runs/$worker_2/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_2/manifest.json.same-node"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_2/manifest.json.same-node" "$BENCHMARK_OUT/runs/$worker_2/manifest.json"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	jq '.node.name = "nuc3"' "$BENCHMARK_OUT/runs/$worker_2/manifest.json" \
+		>"$BENCHMARK_OUT/runs/$worker_2/manifest.json.current"
+	mv -f -- "$BENCHMARK_OUT/runs/$worker_2/manifest.json.current" "$BENCHMARK_OUT/runs/$worker_2/manifest.json"
 
 	# A syntactically complete stale-strategy fragment must not become findings
 	# input merely because its run, worker, and CSV shape still match.

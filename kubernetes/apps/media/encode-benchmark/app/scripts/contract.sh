@@ -159,6 +159,38 @@ contract_is_icq_setting() {
 		'.strategy.globalQualityCandidates | index($value) != null' "$file" >/dev/null
 }
 
+# Print each node that has a complete, passing schema-v3 ICQ capability record.
+# Dispatch and findings use the same proof contract so a weaker contention-only
+# check cannot admit an otherwise incomplete node.
+contract_passing_icq_nodes() {
+	local file="$1"
+	jq -r '
+		def immutable_image_id($digest):
+			type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and
+			(sub("^.*@"; "") == $digest);
+		def passing_node($digest):
+			type == "object" and
+			.strategyId == "qsv-hevc-icq-v1" and .proofSchemaVersion == 3 and
+			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
+			.initialization == "passed" and .initializationReason == "" and
+			.renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" and
+			.selectedRateControl == "ICQ" and .telemetryStatus == "available" and
+			.telemetryReason == "" and
+			(.videoBusyNanoseconds | type == "number" and . > 0) and
+			(.videoBusyPercent | type == "number" and . >= 0) and
+			(.encodeFps | type == "number" and . >= 0) and
+			(.encodeSpeed | type == "number" and . > 0) and
+			.decode == "passed" and .vmaf == "passed" and
+			.proofStatus == "passed" and .proofReasons == "" and
+			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+			.configuredImageDigest == $digest and (.imageId | immutable_image_id($digest));
+		.runtime.image as $image |
+		($image | capture("@(?<digest>sha256:[0-9a-f]{64})$").digest) as $digest |
+		select(.runtime.capabilityStatus == "verified") |
+		.runtime.capabilityEvidence.nodes[]? | select(passing_node($digest)) | .nodeName
+	' "$file" | sort -u
+}
+
 contract_chosen_record() {
 	local file="$1" cohort="$2" required_state="${3:-}"
 	jq -e -c --arg cohort "$cohort" --arg required_state "$required_state" '

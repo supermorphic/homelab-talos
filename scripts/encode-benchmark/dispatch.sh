@@ -138,39 +138,9 @@ load_source() {
 }
 
 require_capability_evidence() {
-	local configured_digest="${configured_image##*@}"
-	if jq -e --arg digest "$configured_digest" '
-		def immutable_image_id:
-			type == "string" and
-			test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and
-			(sub("^.*@"; "") == $digest);
-		def valid_node:
-			type == "object" and
-			.strategyId == "qsv-hevc-icq-v1" and
-			.proofSchemaVersion == 3 and
-			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
-			.initialization == "passed" and
-			.initializationReason == "" and
-			.renderNode == "/dev/dri/renderD128" and
-			.drmDriver == "i915" and
-			.selectedRateControl == "ICQ" and
-			.telemetryStatus == "available" and
-			.telemetryReason == "" and
-			(.videoBusyNanoseconds | type == "number" and . > 0) and
-			(.videoBusyPercent | type == "number" and . >= 0) and
-			(.encodeFps | type == "number" and . >= 0) and
-			(.encodeSpeed | type == "number" and . > 0) and
-			.decode == "passed" and
-			.vmaf == "passed" and
-			.proofStatus == "passed" and
-			.proofReasons == "" and
-			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
-			.configuredImageDigest == $digest and
-			(.imageId | immutable_image_id);
-		.runtime.capabilityStatus == "verified" and
-		(.runtime.capabilityEvidence.nodes | type == "array") and
-		any(.runtime.capabilityEvidence.nodes[]; valid_node)
-	' "$samples_document" >/dev/null; then
+	local -a capability_nodes
+	mapfile -t capability_nodes < <(contract_passing_icq_nodes "$samples_document")
+	if ((${#capability_nodes[@]} > 0)); then
 		return 0
 	fi
 	echo 'Refusing benchmark dispatch: committed schema-v3 ICQ capability evidence has no current passing node.' >&2
@@ -178,22 +148,8 @@ require_capability_evidence() {
 }
 
 contention_passing_nodes() {
-	local required="$1" configured_digest="${configured_image##*@}"
-	mapfile -t contention_nodes < <(jq -r --arg digest "$configured_digest" '
-		def valid:
-			type == "object" and .strategyId == "qsv-hevc-icq-v1" and
-			.proofSchemaVersion == 3 and .initialization == "passed" and
-			.initializationReason == "" and .renderNode == "/dev/dri/renderD128" and
-			.drmDriver == "i915" and .selectedRateControl == "ICQ" and
-			.telemetryStatus == "available" and .telemetryReason == "" and
-			(.videoBusyNanoseconds | type == "number" and . > 0) and
-			(.encodeSpeed | type == "number" and . > 0) and .decode == "passed" and
-			.vmaf == "passed" and .proofStatus == "passed" and .proofReasons == "" and
-			.configuredImageDigest == $digest and
-			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest)) and
-			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"));
-		.runtime.capabilityEvidence.nodes[]? | select(valid) | .nodeName
-	' "$samples_document" | sort -u)
+	local required="$1"
+	mapfile -t contention_nodes < <(contract_passing_icq_nodes "$samples_document")
 	((${#contention_nodes[@]} >= required)) || {
 		echo "contention requires $required distinct committed passing capability nodes" >&2
 		return 65

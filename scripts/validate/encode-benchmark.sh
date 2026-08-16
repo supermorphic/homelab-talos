@@ -378,6 +378,11 @@ jq -e '
 				[.[].offsetSeconds] == [range(0; 900; 5)]))) and
 	(.cases | type == "array" and length == 1 and .[0].case == "d" and
 		.[0].playbackMode == "direct-play" and
+		(.[0].workerFragments | (type == "array" and
+			([.[] | (.runId + "|" + .file)] | sort) == [
+				"20260815T150000Z-dddddddd|contention-d-worker-1-attempt-1.csv",
+				"20260815T150000Z-eeeeeeee|contention-d-worker-2-attempt-1.csv"
+			])) and
 		(.[0].seekToResumeSeconds | type == "array" and length == 7) and
 		(.[0].nasThroughputMbps | type == "array" and length == 180 and
 			[.[].offsetSeconds] == [range(0; 900; 5)]))

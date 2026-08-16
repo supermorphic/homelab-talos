@@ -2609,6 +2609,51 @@ finalist_mode() {
 	printf '%s\n' "$run_id"
 }
 
+validate_contention_resume_fragments() {
+	local run_directory="$1" run_id="$2" expected_case="$3" expected_worker="$4"
+	local expected_sample="$5" expected_cohort="$6" expected_setting="$7"
+	local fragment header row fields fragment_case fragment_worker fragment_attempt
+	for fragment in "$run_directory"/contention-*.csv; do
+		[[ -e "$fragment" || -L "$fragment" ]] || continue
+		[[ -f "$fragment" && ! -L "$fragment" ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		header="$(head -n 1 "$fragment")"
+		[[ "$header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
+			"$(wc -l <"$fragment" | tr -d ' ')" == '2' ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		row="$(tail -n 1 "$fragment")"
+		fields="$(jq -R -e -c '
+			split(",") | select(length == 13 and all(.[]; startswith("\"") and endswith("\""))) |
+			map(.[1:-1])
+		' <<<"$row")" || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		jq -e --arg run "$run_id" --arg case "$expected_case" --arg worker "$expected_worker" \
+			--arg sample "$expected_sample" --arg cohort "$expected_cohort" --arg setting "$expected_setting" '
+			.[0] == $run and .[1] == $case and .[2] == $worker and .[3] == $sample and
+			.[4] == $cohort and .[5] == $setting and (.[6] | test("^(passed|failed|invalid)$")) and
+			(.[7] | test("^[1-9][0-9]*$")) and (.[8] | test("^[0-9]+([.][0-9]+)?$")) and
+			(.[9] | test("^(passed|suspect)$")) and (.[10] | test("^[a-z0-9;-]*$")) and
+			.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
+		' <<<"$fields" >/dev/null || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		fragment_case="$(jq -r '.[1]' <<<"$fields")"
+		fragment_worker="$(jq -r '.[2]' <<<"$fields")"
+		fragment_attempt="$(jq -r '.[7]' <<<"$fields")"
+		[[ "$(basename "$fragment")" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+	done
+}
+
 contention_mode() (
 	local requested_run_id="$1" contention_case="$2" worker_id="$3" requested_sample_id="$4"
 	local sample sample_id cohort setting run_id run_directory run_scratch attempt fragment staged playback_count
@@ -2692,6 +2737,8 @@ contention_mode() (
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create "contention-$contention_case" "$requested_run_id")"
 	run_directory="$benchmark_out/runs/$run_id"
+	validate_contention_resume_fragments "$run_directory" "$run_id" "$contention_case" "$worker_id" \
+		"$sample_id" "$cohort" "$setting" || return
 	run_scratch="$scratch_root/$run_id/$worker_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	attempt=1
@@ -2737,7 +2784,7 @@ contention_mode() (
 )
 
 validate_contention_observations() {
-	local evidence="$1" result errors
+	local evidence="$1" result
 	[[ -f "$evidence" && ! -L "$evidence" ]] || return 66
 	result="$(jq -e -c '
 		def nas: . as $items | type == "array" and length == 180 and
@@ -2750,17 +2797,21 @@ validate_contention_observations() {
 			(.bufferingDurationSeconds | type == "number" and . >= 0) and
 			(.seekToResumeSeconds | type == "array" and length == 7 and all(.[]; type == "number" and . >= 0)) and
 			(.nasThroughputMbps | nas);
-		def case_ok: type == "object" and
+		def expected_workers($case): if $case == "a" then ["worker-1"] else ["worker-1","worker-2"] end;
+		def case_ok: . as $item | type == "object" and
 			(.case | type == "string" and test("^[a-d]$")) and
 			(.playbackMode == (if .case == "c" then "forced-transcode" else "direct-play" end)) and
 			(.startLatencySeconds | type == "number" and . >= 0) and
 			(.bufferingCount | type == "number" and floor == . and . >= 0) and
 			(.bufferingDurationSeconds | type == "number" and . >= 0) and (.nasThroughputMbps | nas) and
-			(.workerFragments | type == "array" and length > 0 and
+			(.workerFragments | type == "array" and length == (expected_workers($item.case) | length) and
 				all(.[]; type == "object" and keys == ["file","runId"] and
 					(.runId | type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
 					(.file | type == "string" and test("^contention-[a-d]-worker-[12]-attempt-[1-9][0-9]*[.]csv$"))) and
-				([.[] | (.runId + "|" + .file)] | unique | length) == length) and
+				([.[] | (.runId + "|" + .file)] | unique | length) == length and
+				([.[].runId] | unique | length) == length and
+				all(.[]; .file | test("^contention-" + $item.case + "-worker-[12]-attempt-[1-9][0-9]*[.]csv$")) and
+				([.[] | .file | capture("^contention-[a-d]-(?<worker>worker-[12])-attempt-[1-9][0-9]*[.]csv$").worker] | sort) == expected_workers($item.case)) and
 			(if .case == "d" then (.seekToResumeSeconds | type == "array" and length == 7 and all(.[]; type == "number" and . >= 0))
 			 else (.seekToResumeSeconds | type == "array") end);
 		if type != "object" or keys != ["baselines","cases","clientDevice","playbackSampleId","schemaVersion","strategyId"] or
@@ -2775,17 +2826,42 @@ validate_contention_observations() {
 			([$root.baselines[].startLatencySeconds] | max) as $max_start |
 			([$root.baselines[].seekToResumeSeconds[]] | max) as $max_seek |
 			([ $root.cases[] | select(.case != "d" and .bufferingCount != 0) | "case \(.case) buffering count \(.bufferingCount) must be zero" ] +
+			 [ $root.cases[] | select(.case != "d" and .bufferingDurationSeconds != 0) | "case \(.case) buffering duration \(.bufferingDurationSeconds) must be zero" ] +
 			 [ $root.cases[] | select(.startLatencySeconds > ($max_start + 2)) | "case \(.case) start latency \(.startLatencySeconds) exceeds baseline maximum plus 2 seconds \($max_start + 2)" ] +
 			 [ $root.cases[] | select(.case == "d") | .seekToResumeSeconds | to_entries[] | select(.value > ($max_seek + 3)) | "case d seek \(.key + 1) latency \(.value) exceeds baseline maximum plus 3 seconds \($max_seek + 3)" ]) as $errors |
-			{baselinesRetained: 3, baselineMaxStartLatencySeconds: $max_start, baselineMaxSeekToResumeSeconds: $max_seek, errors: $errors}
+			{status: (if ($errors | length) == 0 then "passed" else "failed" end),
+			 baselinesRetained: 3, baselineMaxStartLatencySeconds: $max_start,
+			 baselineMaxSeekToResumeSeconds: $max_seek, failedEvents: $errors}
 		end
 	' "$evidence")" || return 65
-	errors="$(jq -r '.errors[]' <<<"$result")"
-	if [[ -n "$errors" ]]; then
-		while IFS= read -r error; do echo "contention evidence failed: $error" >&2; done <<<"$errors"
+	jq -c . <<<"$result"
+}
+
+validate_contention_worker_manifest() {
+	local manifest="$1" contention_case="$2" fragment_fields="$3" client_device="$4" playback_sample="$5"
+	local sample_id cohort setting expected_source normalized node_name
+	sample_id="$(jq -r '.[3]' <<<"$fragment_fields")"
+	cohort="$(jq -r '.[4]' <<<"$fragment_fields")"
+	setting="$(jq -r '.[5]' <<<"$fragment_fields")"
+	expected_source="$(SAMPLE_ID="$sample_id" COHORT="$cohort" jq -e -c '
+		[.qualityPanel[]? | select(.id == env.SAMPLE_ID and .cohort == env.COHORT)] |
+		if length == 1 then .[0] | {path,sha256:("sha256:" + .sha256),size:.sizeBytes} else error("missing contention source") end
+	' "$samples_file")" || return 65
+	jq -e --arg mode "contention-$contention_case" '.mode == $mode' "$manifest" >/dev/null || return 65
+	normalized="$(contract_normalize_run_identity "$(jq -c . "$manifest")" "contention-$contention_case")" || return 65
+	jq -e --arg client "$client_device" --arg playback "$playback_sample" --arg cohort "$cohort" \
+		--argjson setting "$setting" --argjson source "$expected_source" '
+		.clientDevice == $client and
+		.upstream.contention == {clientDevice: $client, playbackSampleId: $playback} and
+		(.selectedSettings | (length == 1 and .[0] == {cohort:$cohort,globalQuality:$setting,qualityRunId:.[0].qualityRunId})) and
+		.sources == [$source] and
+		(.node.name | type == "string" and length > 0)
+	' <<<"$normalized" >/dev/null || return 65
+	node_name="$(jq -r '.node.name' <<<"$normalized")"
+	if ! contract_passing_icq_nodes "$samples_file" | rg -qx -- "$node_name"; then
 		return 65
 	fi
-	jq -c 'del(.errors)' <<<"$result"
+	jq -n -c --arg case "$contention_case" --arg node "$node_name" '{case:$case,node:$node}'
 }
 
 findings_mode() {
@@ -2795,6 +2871,7 @@ findings_mode() {
 	local premium verdict candidate_settings contention_fragments='[]' fragment fragment_run fragment_file fragment_path fragment_manifest
 	local fragment_header fragment_row fragment_fields fragment_case fragment_worker fragment_attempt
 	local contention_client_device contention_playback_sample
+	local fragment_observation_case contention_node_bindings='[]' manifest_binding
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
 	inputs="$run_directory/findings-inputs.json"
@@ -2858,11 +2935,11 @@ findings_mode() {
 			echo 'contention worker manifest not found' >&2
 			return 66
 		}
-		jq -e --arg client "$contention_client_device" --arg playback "$contention_playback_sample" '
-			.clientDevice == $client and
-			.upstream.contention == {clientDevice: $client, playbackSampleId: $playback}
-		' "$fragment_manifest" >/dev/null || {
-			echo 'contention worker manifest playback identity mismatch' >&2
+		fragment_observation_case="$(jq -e -r --arg run "$fragment_run" --arg file "$fragment_file" '
+			[.cases[] | select(any(.workerFragments[]?; .runId == $run and .file == $file)) | .case] |
+			if length == 1 then .[0] else error("ambiguous contention fragment") end
+		' "$contention")" || {
+			echo 'contention observations do not bind named worker fragment' >&2
 			return 65
 		}
 		fragment_header="$(head -n 1 "$fragment_path")"
@@ -2901,12 +2978,27 @@ findings_mode() {
 		fragment_case="$(jq -r '.[1]' <<<"$fragment_fields")"
 		fragment_worker="$(jq -r '.[2]' <<<"$fragment_fields")"
 		fragment_attempt="$(jq -r '.[7]' <<<"$fragment_fields")"
-		[[ "$fragment_file" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
+		[[ "$fragment_case" == "$fragment_observation_case" &&
+			"$fragment_file" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
 			echo 'named contention fragment identity mismatch' >&2
 			return 65
 		}
+		manifest_binding="$(validate_contention_worker_manifest "$fragment_manifest" "$fragment_case" "$fragment_fields" \
+			"$contention_client_device" "$contention_playback_sample")" || {
+			echo 'invalid named contention worker manifest' >&2
+			return 65
+		}
+		contention_node_bindings="$(jq -c --argjson binding "$manifest_binding" '. + [$binding]' <<<"$contention_node_bindings")"
 		contention_rows="$(jq -c --argjson row "$fragment_fields" '. + [$row]' <<<"$contention_rows")"
 	done < <(jq -c '.[]' <<<"$contention_fragments")
+	jq -e '
+		group_by(.case) | all(.[];
+			if .[0].case == "a" then length == 1
+			else length == 2 and ([.[].node] | unique | length) == 2 end)
+	' <<<"$contention_node_bindings" >/dev/null || {
+		echo 'contention worker nodes do not prove required distinct-node placement' >&2
+		return 65
+	}
 	comparisons_json="$(jq -e -s '
 		if all(.[];
 			(type == "object") and
@@ -2972,7 +3064,11 @@ findings_mode() {
 		jq -r '
 			"- Retained baseline runs: \(.baselinesRetained)\n" +
 			"- Worst baseline start latency: \(.baselineMaxStartLatencySeconds) seconds\n" +
-			"- Worst baseline seek-to-resume latency: \(.baselineMaxSeekToResumeSeconds) seconds"
+			"- Worst baseline seek-to-resume latency: \(.baselineMaxSeekToResumeSeconds) seconds\n" +
+			"- Contention verdict: \(.status | ascii_upcase)" +
+			(if (.failedEvents | length) == 0 then "" else
+				"\n- Failed contention events:\n" + ([.failedEvents[] | "  - " + .] | join("\n"))
+			 end)
 		' <<<"$contention_summary"
 	} >"$findings_temp"
 	mv -f -- "$findings_temp" "$run_directory/findings.md"
