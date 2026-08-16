@@ -59,7 +59,7 @@ usage() {
 
 validate_run_id() {
 	local run_id="$1"
-	[[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || {
+	contract_is_run_id "$run_id" || {
 		echo "invalid run id: $run_id" >&2
 		return 64
 	}
@@ -662,8 +662,9 @@ record_result_inner() {
 	local run_directory results panel sample_id cohort source_sha clip encoder setting
 	local selected strategy qsv_initialization video_busy_nanoseconds status attempt disposition='discarded' confirmation destination
 	local expected_finalist chosen
-	local encodes_directory='' staged_destination='' backup_destination='' published=0 had_prior=0
+	local encodes_directory='' staged_destination='' backup_destination='' prior_digest='' published=0 had_prior=0
 	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
+	local promotion_status=0 rollback_status=0
 	local -a columns
 	if [[ ! -v CONTRACT_STRATEGY_ID ]]; then
 		contract_load "$samples_file" || return
@@ -814,15 +815,20 @@ record_result_inner() {
 		rm -f -- "$staged_destination" "$backup_destination"
 		cp -- "$scratch_output" "$staged_destination" || return
 		if [[ -e "$destination" ]]; then
+			prior_digest="sha256:$(sha256sum "$destination" | awk '{print $1}')"
 			mv -- "$destination" "$backup_destination" || {
 				rm -f -- "$staged_destination"
 				return 74
 			}
 			had_prior=1
 		fi
-		if ! mv -- "$staged_destination" "$destination"; then
-			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
-			return 74
+		mv -- "$staged_destination" "$destination" || promotion_status=$?
+		if ((promotion_status != 0)); then
+			rm -f -- "$staged_destination" || true
+			if ((had_prior)) && ! restore_finalist_backup "$backup_destination" "$destination" "$prior_digest"; then
+				return 74
+			fi
+			return "$promotion_status"
 		fi
 		published=1
 	fi
@@ -836,16 +842,56 @@ record_result_inner() {
 	fi
 	if ((append_status != 0)); then
 		if ((published)); then
-			rm -f -- "$destination"
-			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
+			if ! rm -f -- "$destination"; then
+				echo "finalist rollback could not remove replacement; retained backup: $backup_destination" >&2
+				rollback_status=74
+			elif ((had_prior)) &&
+				! restore_finalist_backup "$backup_destination" "$destination" "$prior_digest"; then
+				rollback_status=74
+			fi
 		fi
 		if [[ -n "$staged_destination" ]]; then rm -f -- "$staged_destination"; fi
-		if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
+		if [[ -n "$backup_destination" && "$rollback_status" == '0' ]]; then
+			rm -f -- "$backup_destination"
+		fi
+		if ((rollback_status != 0)); then return "$rollback_status"; fi
 		return "$append_status"
 	fi
 	if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
 	printf '{"status":"%s","attempt":%s,"output_disposition":"%s"}\n' \
 		"$status" "$attempt" "$disposition"
+}
+
+restore_finalist_backup() {
+	local backup="$1" destination="$2" expected_digest="$3" restored_digest
+	local restore_staged="$destination.restore-$$.mkv"
+	[[ -f "$backup" && ! -L "$backup" ]] || {
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	}
+	rm -f -- "$restore_staged"
+	if ! cp -- "$backup" "$restore_staged"; then
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	restored_digest="sha256:$(sha256sum "$restore_staged" | awk '{print $1}')"
+	if [[ "$restored_digest" != "$expected_digest" ]]; then
+		rm -f -- "$restore_staged"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	if ! mv -- "$restore_staged" "$destination"; then
+		rm -f -- "$restore_staged"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	restored_digest="sha256:$(sha256sum "$destination" | awk '{print $1}')"
+	if [[ "$restored_digest" != "$expected_digest" ]]; then
+		rm -f -- "$destination"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	rm -f -- "$backup"
 }
 
 record_result() {
@@ -1962,6 +2008,7 @@ rank_quality_candidates() {
 prepare_chosen_upstream() {
 	local cohort="$1" required_state="$2" record quality_run quality_directory manifest results candidates
 	local actual_results_digest actual_candidates_digest actual_manifest_digest expected_header upstream selected
+	local manifest_identity created_at identity_suffix
 	local out_physical runs_physical quality_physical
 	record="$(contract_chosen_record "$samples_file" "$cohort" "$required_state")" || {
 		echo "chosen setting for $cohort is not authorized for state: $required_state" >&2
@@ -1987,13 +2034,31 @@ prepare_chosen_upstream() {
 		echo "chosen setting upstream evidence escapes the output hierarchy for cohort: $cohort" >&2
 		return 65
 	}
-	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" \
-		--argjson manifest_schema "$CONTRACT_MANIFEST_SCHEMA" --argjson results_schema "$CONTRACT_RESULTS_SCHEMA" '
-		.schemaVersion == $manifest_schema and .resultsSchemaVersion == $results_schema and
-		.strategyId == $strategy and .mode == "quality" and
-		(.createdAt | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$"))
-	' "$manifest" >/dev/null || {
+	manifest_identity="$(jq -e -c 'if type == "object" and has("createdAt") then del(.createdAt)
+		else error("invalid quality manifest") end' "$manifest")" || {
 		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	jq -e '.mode == "quality"' <<<"$manifest_identity" >/dev/null || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	manifest_identity="$(contract_normalize_run_identity "$manifest_identity" quality)" || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	created_at="$(jq -e -r '.createdAt | strings' "$manifest")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || {
+		echo "chosen setting quality manifest timestamp is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	[[ "$created_at" == "${quality_run%-*}" ]] || {
+		echo "chosen setting quality manifest timestamp does not match run for cohort: $cohort" >&2
+		return 65
+	}
+	identity_suffix="$(printf '%s\n' "$manifest_identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
+	[[ "$identity_suffix" == "${quality_run##*-}" ]] || {
+		echo "chosen setting quality manifest identity does not match run for cohort: $cohort" >&2
 		return 65
 	}
 	IFS= read -r expected_header <"$results" || true

@@ -48,7 +48,7 @@ usage() {
 
 validate_run_id() {
 	local run_id="$1"
-	if [[ ! "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]]; then
+	if ! contract_is_run_id "$run_id"; then
 		echo "invalid run id: $run_id" >&2
 		return 64
 	fi
@@ -81,59 +81,7 @@ image_digest() {
 normalize_identity() {
 	local input_json="$1"
 	local mode="$2"
-	jq -e -S -c \
-		--arg mode "$mode" --arg strategy "$CONTRACT_STRATEGY_ID" \
-		--argjson manifest_schema "$CONTRACT_MANIFEST_SCHEMA" \
-		--argjson results_schema "$CONTRACT_RESULTS_SCHEMA" '
-		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
-		def string_object($keys):
-			(type == "object" and keys == $keys and ([.[] | type == "string"] | all));
-		def nonempty_string_object($keys):
-			(type == "object" and keys == $keys and
-				([.[] | type == "string" and length > 0] | all));
-		if
-			(keys == [
-				"clientDevice", "cpu", "encoderCommands", "gpu", "images", "mode", "node",
-				"resultsSchemaVersion", "samplesDigest", "savingsSeed", "schemaVersion",
-				"scriptDigests", "selectedSettings", "sources", "strategyId", "upstream", "vmaf"
-			]) and
-			(.images | type == "object" and keys == ["configured", "dispatched", "running"]) and
-			(.node | string_object(["kernel", "name"])) and
-			(.vmaf | string_object(["model", "version"])) and
-			(.gpu == null or (.gpu | nonempty_string_object(["i915", "vpl"]))) and
-			(.cpu == null or (.cpu | nonempty_string_object(["ffmpeg", "libx265", "model"]))) and
-			(.sources | (type == "array" and ([.[] | keys == ["path", "sha256", "size"]] | all)))
-		then . else error("invalid benchmark identity") end
-		| {
-			clientDevice, cpu, encoderCommands, gpu, images, mode: $mode,
-			node: {kernel: .node.kernel, name: .node.name},
-			resultsSchemaVersion, samplesDigest, savingsSeed, schemaVersion, scriptDigests,
-			selectedSettings,
-			sources: (.sources | map({path: .path, sha256: .sha256, size: .size}) | sort_by(.path)),
-			strategyId, upstream, vmaf: {model: .vmaf.model, version: .vmaf.version}
-		}
-		| if
-			.schemaVersion == $manifest_schema and
-			.strategyId == $strategy and
-			.resultsSchemaVersion == $results_schema and
-			(.images | ([.configured, .dispatched, .running] as $digests |
-				($digests | all(digest)) and ($digests | unique | length == 1))) and
-			(.scriptDigests | (type == "object" and ([.[] | digest] | all))) and
-			(.samplesDigest | digest) and
-			(.sources | (type == "array" and ([.[] |
-				(.path | type == "string") and
-				(.size | type == "number" and . >= 0 and floor == .) and
-				(.sha256 | digest)
-			] | all))) and
-			(.encoderCommands | (type == "array" and ([.[] | type == "string"] | all))) and
-			(.selectedSettings | type == "array") and
-			(.upstream | type == "object") and
-			(.savingsSeed | type == "number" and floor == .) and
-			(.clientDevice == null or (.clientDevice | type == "string")) and
-			((.gpu == null and (.cpu | type == "object")) or
-				((.gpu | type == "object") and .cpu == null))
-		then . else error("invalid benchmark identity") end
-	' <<<"$input_json"
+	contract_normalize_run_identity "$input_json" "$mode"
 }
 
 discover_identity() {
@@ -183,12 +131,24 @@ discover_identity() {
 	}
 	samples_digest="$(sha256_file "$samples_file")"
 	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
-	selected_settings="$(jq -e -c '
-		(.chosenSettings // {}) | to_entries |
-		map({cohort: .key, globalQuality: (.value.globalQuality // null), qualityRunId: (.value.qualityRunId // null)}) |
-		sort_by(.cohort)
-	' "$samples_file")" || return 65
-	upstream_identity="${BENCHMARK_UPSTREAM_IDENTITY_JSON:-{}}"
+	if [[ -v BENCHMARK_SELECTED_SETTINGS_JSON ]]; then
+		selected_settings="$BENCHMARK_SELECTED_SETTINGS_JSON"
+	else
+		selected_settings="$(jq -e -c '
+			(.chosenSettings // {}) | to_entries |
+			map({cohort: .key, globalQuality: (.value.globalQuality // null), qualityRunId: (.value.qualityRunId // null)}) |
+			sort_by(.cohort)
+		' "$samples_file")" || return 65
+	fi
+	selected_settings="$(contract_normalize_selected_settings "$selected_settings")" || {
+		echo 'selected settings identity is malformed' >&2
+		return 65
+	}
+	if [[ -v BENCHMARK_UPSTREAM_IDENTITY_JSON ]]; then
+		upstream_identity="$BENCHMARK_UPSTREAM_IDENTITY_JSON"
+	else
+		upstream_identity='{}'
+	fi
 	jq -e -c 'type == "object"' <<<"$upstream_identity" >/dev/null || {
 		echo 'upstream identity must be a JSON object' >&2
 		return 65
@@ -358,15 +318,13 @@ print_identity_diff() {
 
 stored_identity() {
 	local manifest="$1"
-	local stored_mode identity
+	local stored_mode identity created_at
 	if ! identity="$(jq -e -S -c 'del(.createdAt)' "$manifest" 2>/dev/null)"; then
 		echo 'identity mismatch: manifest (stored=<malformed>, current=<redacted>)' >&2
 		return 1
 	fi
-	if ! jq -e '
-		has("createdAt") and
-		(.createdAt | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$"))
-	' "$manifest" >/dev/null 2>&1; then
+	created_at="$(jq -e -r '.createdAt | strings' "$manifest" 2>/dev/null)" || true
+	if ! contract_is_compact_utc_timestamp "$created_at"; then
 		echo 'identity mismatch: createdAt (stored=<redacted>, current=<ignored>)' >&2
 		return 1
 	fi
@@ -439,7 +397,7 @@ create_run() {
 		else
 			now="$(date -u '+%Y%m%dT%H%M%SZ')"
 		fi
-		[[ "$now" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
+		contract_is_compact_utc_timestamp "$now" || {
 			echo "invalid benchmark timestamp: $now" >&2
 			return 64
 		}

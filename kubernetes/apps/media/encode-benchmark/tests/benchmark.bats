@@ -6,6 +6,7 @@ setup() {
 	GOLDEN="$BATS_TEST_DIRNAME/golden"
 	export BENCHMARK_TEST_MODE=1
 	export REAL_SHA256SUM="$(command -v sha256sum)"
+	QUALITY_RUN_ID='20260815T120000Z-6cdfc9f3'
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/scratch"
 	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
@@ -133,11 +134,12 @@ chosen_record() {
 	hdr10) finalist_sample='hdr10-grain-goodfellas'; hdr='passed' ;;
 	esac
 	jq -n -c \
-		--arg cohort "$cohort" --arg state "$state" --argjson setting "$setting" \
+		--arg cohort "$cohort" --arg state "$state" --arg quality_run "$QUALITY_RUN_ID" \
+		--argjson setting "$setting" \
 		--argjson rejected "$rejected" --arg finalist_sample "$finalist_sample" --arg hdr "$hdr" '
 		{
 			strategyId: "qsv-hevc-icq-v1",
-			qualityRunId: "20260815T120000Z-aaaaaaaa",
+			qualityRunId: $quality_run,
 			qualityResultsSha256: ("sha256:" + ("a" * 64)),
 			candidateEvidenceSha256: ("sha256:" + ("b" * 64)),
 			globalQuality: $setting,
@@ -169,7 +171,7 @@ set_chosen_record() {
 
 prepare_quality_upstream() {
 	local cohort="$1" state="$2" setting="$3" candidates="$4" rejected="${5:-[]}"
-	local quality_run='20260815T120000Z-aaaaaaaa' quality_dir results results_digest candidate_digest
+	local quality_run="$QUALITY_RUN_ID" quality_dir results results_digest candidate_digest
 	quality_dir="$BENCHMARK_OUT/runs/$quality_run"
 	mkdir -p "$quality_dir"
 	results="$quality_dir/results.csv"
@@ -177,8 +179,8 @@ prepare_quality_upstream() {
 		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
 		"$quality_run,quality,fixture-$cohort,$cohort,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,$setting,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
 		>"$results"
-	jq -n -c '{schemaVersion:2,strategyId:"qsv-hevc-icq-v1",resultsSchemaVersion:2,mode:"quality",createdAt:"20260815T120000Z"}' \
-		>"$quality_dir/manifest.json"
+	jq -S -c --arg created_at "${quality_run%-*}" '. + {createdAt:$created_at}' \
+		"$FIXTURES/manifests/identity.json" >"$quality_dir/manifest.json"
 	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
 	if [[ -f "$quality_dir/quality-candidates.json" ]]; then
 		cp "$quality_dir/quality-candidates.json" "$quality_dir/quality-candidates.base.json"
@@ -201,9 +203,9 @@ prepare_quality_upstream() {
 	rm -f -- "$quality_dir/quality-candidates.base.json"
 	candidate_digest="sha256:$(sha256sum "$quality_dir/quality-candidates.json" | awk '{print $1}')"
 	set_chosen_record "$cohort" "$state" "$setting" "$rejected"
-	jq --arg results "$results_digest" --arg candidates "$candidate_digest" '
+	jq --arg run "$quality_run" --arg results "$results_digest" --arg candidates "$candidate_digest" '
 		.chosenSettings |= with_entries(
-			.value |= if .qualityRunId == "20260815T120000Z-aaaaaaaa" then
+			.value |= if .qualityRunId == $run then
 				.qualityResultsSha256 = $results | .candidateEvidenceSha256 = $candidates
 			else . end)
 	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
@@ -220,7 +222,13 @@ prepare_quality_upstream() {
 		'.globalQuality = 23' \
 		'.strategyId = "qsv-hevc-la-icq-v1"' \
 		'.qualityRunId = "wrong-run"' \
+		'.qualityRunId = "20261315T120000Z-aaaaaaaa"' \
+		'.qualityRunId = "20260230T120000Z-aaaaaaaa"' \
+		'.qualityRunId = "20260815T250000Z-aaaaaaaa"' \
 		'.qualityResultsSha256 = "sha256:ABC"' \
+		'.cropReview.reviewedAt = "2026-13-15T12:00:00Z"' \
+		'.cropReview.reviewedAt = "2026-02-30T12:00:00Z"' \
+		'.cropReview.reviewedAt = "2026-08-15T25:00:00Z"' \
 		'.rejectedSettings = [{globalQuality:24,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"},{globalQuality:24,stage:"plex",runId:"20260815T140000Z-bbbbbbbb",result:"failed",reviewedAt:"2026-08-15T14:00:00Z"}]' \
 		'.rejectedSettings = [range(0;9) | {globalQuality:16,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"}]' \
 		'.rejectedSettings = [{globalQuality:22,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"}]'; do
@@ -273,11 +281,11 @@ prepare_quality_upstream() {
 	prepare_quality_upstream hdr10 provisional 24 '[22,24,26]' '[{"globalQuality":22,"stage":"crop","runId":"20260815T120000Z-aaaaaaaa","result":"failed","reviewedAt":"2026-08-15T12:00:00Z"}]'
 	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
 	[ "$status" -eq 0 ]
-	run jq -e '
+	run jq -e --arg run "$QUALITY_RUN_ID" '
 		.upstream.chosenSetting.state == "provisional" and
 		.upstream.qualityResultsSha256 == .upstream.chosenSetting.qualityResultsSha256 and
 		.upstream.candidateEvidenceSha256 == .upstream.chosenSetting.candidateEvidenceSha256 and
-		.selectedSettings == [{cohort:"hdr10",globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"}]
+		.selectedSettings == [{cohort:"hdr10",globalQuality:24,qualityRunId:$run}]
 	' <<<"$output"
 	[ "$status" -eq 0 ]
 
@@ -292,19 +300,31 @@ prepare_quality_upstream() {
 		mv -f -- "$BENCHMARK_SAMPLES_FILE.good" "$BENCHMARK_SAMPLES_FILE"
 	done
 
-	jq '.strategyId = "qsv-hevc-la-icq-v1"' \
-		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json" \
-		>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp"
-	mv -f -- "$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp" \
-		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json"
+	quality_manifest="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/manifest.json"
+	cp "$quality_manifest" "$quality_manifest.good"
+
+	# A complete manifest for a different identity must not be reusable under
+	# this quality run directory even when results and candidates are unchanged.
+	jq -S -c '.node.name = "swapped-node"' "$quality_manifest.good" >"$quality_manifest"
 	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
 	[ "$status" -ne 0 ]
+	cp "$quality_manifest.good" "$quality_manifest"
 
-	jq '.strategyId = "qsv-hevc-icq-v1"' \
-		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json" \
-		>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp"
-	mv -f -- "$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp" \
-		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json"
+	# Missing canonical identity fields must fail complete schema validation.
+	jq -S -c 'del(.clientDevice)' "$quality_manifest.good" >"$quality_manifest"
+	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+	[ "$status" -ne 0 ]
+	cp "$quality_manifest.good" "$quality_manifest"
+
+	# Manifest instants retain their compact UTC format and must also be real.
+	for invalid_created_at in 20261315T120000Z 20260230T120000Z 20260815T250000Z; do
+		jq -S -c --arg value "$invalid_created_at" '.createdAt = $value' \
+			"$quality_manifest.good" >"$quality_manifest"
+		run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+		[ "$status" -ne 0 ]
+	done
+	cp "$quality_manifest.good" "$quality_manifest"
+	rm "$quality_manifest.good"
 	mv "$BENCHMARK_OUT/runs" "$BATS_TEST_TMPDIR/outside-runs"
 	ln -s "$BATS_TEST_TMPDIR/outside-runs" "$BENCHMARK_OUT/runs"
 	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
@@ -1378,9 +1398,12 @@ PYTHON
 # the scratch encode, or omits packet-counted audio inventory evidence.
 @test "savings mode uses committed settings inventories packets and discards full output" {
 	prepare_savings_execution_run
-	run "$SCRIPTS/runmeta.sh" create savings
-	[ "$status" -eq 0 ]
-	run_id="$output"
+	set_chosen_record avc final 24
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
 
 	run "$SCRIPTS/benchmark.sh" savings "$run_id"
 	[ "$status" -eq 0 ]
@@ -1403,6 +1426,10 @@ PYTHON
 	' <<<"$output"
 	[ "$status" -eq 0 ]
 	run rg -F '"packet-counted"' "$run_dir/audio-inventory.csv"
+	[ "$status" -eq 0 ]
+	run jq -e --arg run "$QUALITY_RUN_ID" '
+		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}]
+	' "$run_dir/manifest.json"
 	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
@@ -1550,15 +1577,22 @@ PYTHON
 	prepare_execution_run
 	yq -i -o=json '.qualityPanel[0].id = "hdr10-grain-goodfellas"' "$BENCHMARK_SAMPLES_FILE"
 	prepare_quality_upstream hdr10 provisional 22 '[22,24,26]'
-	run "$SCRIPTS/runmeta.sh" create finalist
-	[ "$status" -eq 0 ]
-	run_id="$output"
+	set_chosen_record avc final 24
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
 	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:hdr10-grain-goodfellas"
 
 	run "$SCRIPTS/benchmark.sh" finalist "$run_id" hdr10-grain-goodfellas
 	[ "$status" -eq 0 ]
 	[ "$output" = "$run_id" ]
 	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/hdr10-grain-goodfellas-qsv-gq22.mkv" ]
+	run jq -e --arg run "$QUALITY_RUN_ID" '
+		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}]
+	' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id/encodes" -type f | wc -l | tr -d ' ')" -eq 1 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
@@ -1669,12 +1703,20 @@ prepare_contention_samples() {
 # output, or omitting worker/attempt-scoped wall-time evidence.
 @test "contention worker discards output and publishes a separate attempt CSV fragment" {
 	prepare_contention_samples
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
 	run_id='20260802T121500Z-deadbeef'
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" a worker-1 a-4k-hdr
 	[ "$status" -eq 0 ]
 	[ "$output" = "$run_id" ]
 	fragment="$BENCHMARK_OUT/runs/$run_id/contention-a-worker-1-attempt-1.csv"
 	[ -f "$fragment" ]
+	run jq -e --arg run "$QUALITY_RUN_ID" '
+		.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:$run}]
+	' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	[ "$status" -eq 0 ]
 	[ "$(wc -l <"$fragment" | tr -d ' ')" -eq 2 ]
 	run python3 - "$fragment" <<'PYTHON'
 import csv
@@ -1808,6 +1850,64 @@ EOF
 	[ ! -e "$scratch_output" ]
 }
 
+# Catches a failed staged-to-final rename leaving the new staged bytes behind,
+# losing the prior finalist, or discarding the only recoverable backup when the
+# restoration itself cannot complete.
+@test "finalist promotion failure removes staging and verifies prior restoration" {
+	prepare_execution_run
+	prepare_quality_upstream avc provisional 22 '[22,24,26]'
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir/encodes"
+	finalist_row="$BATS_TEST_TMPDIR/finalist-promotion.json"
+	jq '.panel = "finalist" | .clip_id = "full" | .sample_id = "avc-grain-memento"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$finalist_row"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
+
+	mv_stub="$BATS_TEST_TMPDIR/promotion-bin"
+	mkdir -p "$mv_stub"
+	cat >"$mv_stub/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=''
+destination=''
+for argument in "$@"; do
+	[[ "$argument" == '--' ]] && continue
+	source_path="$destination"
+	destination="$argument"
+done
+if [[ "$source_path" == *.tmp.mkv && "$destination" == *.mkv ]]; then
+	exit 74
+fi
+if [[ "${FAIL_FINALIST_RESTORE:-0}" == '1' && "$source_path" == *.restore-*.mkv ]]; then
+	exit 74
+fi
+exec /bin/mv "$@"
+EOF
+	chmod +x "$mv_stub/mv"
+	export PATH="$mv_stub:$PATH"
+
+	destination="$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv"
+	scratch_output="$BENCHMARK_SCRATCH/finalist-promotion.mkv"
+	printf '%s' 'prior finalist' >"$destination"
+	printf '%s' 'replacement finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ "$(<"$destination")" = 'prior finalist' ]
+	[ ! -e "$scratch_output" ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.tmp.mkv' | wc -l | tr -d ' ')" -eq 0 ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.backup.mkv' | wc -l | tr -d ' ')" -eq 0 ]
+
+	export FAIL_FINALIST_RESTORE=1
+	printf '%s' 'replacement finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'finalist backup restoration failed; retained:'* ]]
+	[ ! -e "$destination" ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.backup.mkv' | wc -l | tr -d ' ')" -eq 1 ]
+	[ "$(<"$(find "$run_dir/encodes" -type f -name '*.backup.mkv')")" = 'prior finalist' ]
+}
+
 # Catches a result fixture with valid local metrics publishing after its
 # committed quality evidence has changed since finalist run preparation.
 @test "finalist publication rechecks strategy and upstream identity before copy" {
@@ -1822,7 +1922,7 @@ EOF
 	scratch_output="$BENCHMARK_SCRATCH/finalist-stale-upstream.mkv"
 	printf '%s' 'must not publish' >"$scratch_output"
 	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
-	printf '%s\n' 'changed quality evidence' >>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/results.csv"
+	printf '%s\n' 'changed quality evidence' >>"$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/results.csv"
 
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -ne 0 ]

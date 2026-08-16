@@ -156,7 +156,7 @@ prepare_configmap_script_mount() {
 # diagnostic; the stable field path is the observable API.
 @test "verify refuses changed selected settings and upstream identity" {
 	base_identity="$BATS_TEST_TMPDIR/identity-with-upstream.json"
-	jq '.selectedSettings = [{cohort:"avc", globalQuality:22}] |
+	jq '.selectedSettings = [{cohort:"avc", globalQuality:22, qualityRunId:"20260815T120000Z-deadbeef"}] |
 		.upstream = {qualityRunId:"20260802T120000Z-deadbeef", resultsDigest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
 		"$BENCHMARK_IDENTITY_FIXTURE" >"$base_identity"
 	export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
@@ -174,6 +174,45 @@ prepare_configmap_script_mount() {
 		[[ "$output" == "identity mismatch: $expected_path "* ]]
 		export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
 	done
+}
+
+# Catches a scoped downstream selection being ignored in favor of every chosen
+# record, or a malformed scoped override becoming durable run identity.
+@test "selected settings override is scoped strict and falls back only when absent" {
+	prepare_configmap_script_mount
+	jq '.chosenSettings = {
+		avc:{globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"},
+		hdr10:{globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}
+	}' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	export BENCHMARK_SELECTED_SETTINGS_JSON='[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb"}]'
+
+	run "$configmap_root/runmeta.sh" create finalist '20260815T150000Z-deadbeef'
+	[ "$status" -eq 0 ]
+	run jq -e '.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}]' \
+		"$BENCHMARK_OUT/runs/20260815T150000Z-deadbeef/manifest.json"
+	[ "$status" -eq 0 ]
+
+	for invalid in \
+		'{"cohort":"hdr10"}' \
+		'[{"cohort":"hdr10","globalQuality":23,"qualityRunId":"20260815T120000Z-bbbbbbbb"}]' \
+		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20261315T120000Z-bbbbbbbb"}]' \
+		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb","extra":true}]' \
+		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb"},{"cohort":"hdr10","globalQuality":24,"qualityRunId":"20260815T120000Z-aaaaaaaa"}]'; do
+		export BENCHMARK_SELECTED_SETTINGS_JSON="$invalid"
+		run "$configmap_root/runmeta.sh" create savings '20260815T150001Z-cafef00d'
+		[ "$status" -ne 0 ]
+		[ ! -e "$BENCHMARK_OUT/runs/20260815T150001Z-cafef00d" ]
+	done
+
+	unset BENCHMARK_SELECTED_SETTINGS_JSON
+	run "$configmap_root/runmeta.sh" create savings '20260815T150002Z-cafef00d'
+	[ "$status" -eq 0 ]
+	run jq -e '.selectedSettings == [
+		{cohort:"avc",globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"},
+		{cohort:"hdr10",globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}
+	]' "$BENCHMARK_OUT/runs/20260815T150002Z-cafef00d/manifest.json"
+	[ "$status" -eq 0 ]
 }
 
 # Catches CPU-only x265 results being resumed across processors or runtime
@@ -559,6 +598,32 @@ EOF
 	[ "$status" -eq 64 ]
 	[ "$output" = 'invalid run id: ../escape' ]
 	[ ! -e "$BENCHMARK_OUT/escape" ]
+}
+
+# Catches regex-only timestamp checks accepting calendar-invalid run handles or
+# stored manifest instants that cannot be exact UTC evidence.
+@test "run ids and manifest createdAt require real UTC instants" {
+	for invalid_run in \
+		'20261302T120000Z-deadbeef' \
+		'20260230T120000Z-deadbeef' \
+		'20260802T250000Z-deadbeef'; do
+		run "$SCRIPTS/runmeta.sh" create quality "$invalid_run"
+		[ "$status" -eq 64 ]
+		[ "$output" = "invalid run id: $invalid_run" ]
+	done
+
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	cp "$manifest" "$manifest.good"
+	for invalid_created_at in 20261302T120000Z 20260230T120000Z 20260802T250000Z; do
+		jq -S -c --arg value "$invalid_created_at" '.createdAt = $value' \
+			"$manifest.good" >"$manifest.tmp"
+		chmod 0444 "$manifest.tmp"
+		mv -f "$manifest.tmp" "$manifest"
+		run "$SCRIPTS/runmeta.sh" verify "$run_id"
+		[ "$status" -eq 1 ]
+		[ "$output" = 'identity mismatch: createdAt (stored=<redacted>, current=<ignored>)' ]
+	done
 }
 
 # Catches a production break where the fixture override becomes reachable in a
