@@ -2421,18 +2421,34 @@ savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
-	local panel_samples final_cohorts cohort_name selected_record selected_state
+	local panel_samples final_cohorts panel_cohorts cohort_name selected_record selected_state
 	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' artifact_staged
 	final_cohorts='[]'
-	while IFS= read -r cohort_name; do
-		selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" 2>/dev/null || true)"
+	panel_cohorts="$(jq -e -c '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique' "$samples_file")" || return 65
+	for cohort_name in avc vc1 hdr10; do
+		selected_state=''
+		if jq -e --arg cohort "$cohort_name" '
+			.chosenSettings[$cohort] | type == "object" and .state == "final"
+		' "$samples_file" >/dev/null; then
+			selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" final)" || {
+				echo "claimed final chosen setting is malformed for cohort: $cohort_name" >&2
+				return 65
+			}
+			[[ "$(jq -r --arg cohort "$cohort_name" 'index($cohort) != null' <<<"$panel_cohorts")" == 'true' ]] || {
+				echo "savings panel omits final cohort: $cohort_name" >&2
+				return 65
+			}
+			selected_state='final'
+		else
+			selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" 2>/dev/null || true)"
+		fi
 		if [[ -z "$selected_record" ]]; then
 			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
 				'. + {($cohort):{status:"not-applicable",reason:"no-final-setting"}}' \
 				<<<"$cohort_applicability")"
 			continue
 		fi
-		selected_state="$(jq -r '.state' <<<"$selected_record")"
+		[[ "${selected_state:-}" == 'final' ]] || selected_state="$(jq -r '.state' <<<"$selected_record")"
 		case "$selected_state" in
 		final)
 			prepare_chosen_upstream "$cohort_name" final || return
@@ -2461,7 +2477,7 @@ savings_mode() {
 			return 65
 			;;
 		esac
-	done < <(jq -e -r '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique[]' "$samples_file") || return 65
+	done
 	[[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]] || {
 		echo 'no final chosen setting authorizes savings' >&2
 		return 65

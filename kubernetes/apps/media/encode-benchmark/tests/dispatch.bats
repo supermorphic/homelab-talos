@@ -1050,6 +1050,21 @@ EOF
 	assert_no_mutations
 }
 
+# Catches authorizing a valid AVC final before rejecting a malformed final
+# claim for another canonical cohort.
+@test "savings dispatch rejects mixed valid and malformed claimed-final cohorts" {
+	run_id='20260802T120000Z-1234abcd'
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:savings'
+	set_dispatch_chosen_record avc final 22
+	CHOSEN_RECORD="$(valid_chosen_record hdr10 final 22 | jq -c 'del(.finalistReview.checklist)')" yq -i '
+		.data."samples.json" |= (from_yaml | .chosenSettings.hdr10 = (strenv(CHOSEN_RECORD) | from_json) | to_json)
+	' "$evidence_app/samples.yaml"
+
+	run_dispatch run savings "$run_id"
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+}
+
 # Catches cleanup accepting a generic delete token rather than one exact run
 # handle, which would broaden a destructive operation beyond one run tree.
 @test "cleanup requires the exact run-scoped confirmation before creating a Job" {

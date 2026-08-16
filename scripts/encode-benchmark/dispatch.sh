@@ -708,13 +708,19 @@ require_finalist_authorization() {
 }
 
 require_savings_authorization() {
-	local cohort
-	while IFS= read -r cohort; do
-		[[ -n "$cohort" ]] || continue
-		if contract_chosen_record "$samples_document" "$cohort" final >/dev/null; then
-			return 0
+	local cohort final_found=0
+	for cohort in avc vc1 hdr10; do
+		if jq -e --arg cohort "$cohort" '
+			.chosenSettings[$cohort] | type == "object" and .state == "final"
+		' "$samples_document" >/dev/null; then
+			contract_chosen_record "$samples_document" "$cohort" final >/dev/null || {
+				echo "claimed final chosen setting is malformed for cohort: $cohort" >&2
+				return 65
+			}
+			final_found=1
 		fi
-	done < <(jq -r '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique[]' "$samples_document")
+	done
+	((final_found)) && return 0
 	echo 'no final chosen setting authorizes savings' >&2
 	return 65
 }

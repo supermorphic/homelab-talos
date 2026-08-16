@@ -1649,7 +1649,6 @@ PYTHON
 # the scratch encode, or omits packet-counted audio inventory evidence.
 @test "savings mode uses committed settings inventories packets and discards full output" {
 	prepare_savings_execution_run
-	set_chosen_record avc final 24
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
 	export BENCHMARK_I915_VERSION='fixture-i915'
@@ -1726,6 +1725,28 @@ PYTHON
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'sample hash mismatch: savings-avc'* ]]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+}
+
+# Catches treating malformed final evidence for an omitted canonical cohort as
+# absent after another cohort has already authorized the savings run.
+@test "savings refuses mixed valid and malformed claimed-final cohort evidence before hashing" {
+	prepare_partial_savings_execution_run
+	malformed="$(chosen_record hdr10 final 22 | jq -c 'del(.finalistReview.checklist)')"
+	jq --argjson record "$malformed" '.chosenSettings.hdr10 = $record' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
+	: >"$BENCHMARK_COMMAND_LOG"
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+	run rg -F 'source.mkv' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 1 ]
 }
 
 # Catches filtering that accepts the middle of the ICQ range but drops either
