@@ -96,6 +96,7 @@ discover_identity() {
 	local samples_digest savings_seed execution_class selected_settings upstream_identity
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha probe_log=''
+	local savings_cohorts=''
 	local source_index=0
 
 	if [[ -n "$identity_fixture" ]]; then
@@ -182,7 +183,22 @@ discover_identity() {
 		}
 		panel='.qualityPanel[]? | select(.id == env.BENCHMARK_X265_SAMPLE_ID)'
 		;;
-	savings) panel='.savingsPanel[]?' ;;
+	savings)
+		if [[ -v BENCHMARK_SAVINGS_COHORTS_JSON ]]; then
+			savings_cohorts="$BENCHMARK_SAVINGS_COHORTS_JSON"
+			jq -e '
+				type == "array" and length > 0 and length <= 3 and
+				all(.[]; . == "avc" or . == "vc1" or . == "hdr10") and
+				(unique | length) == length
+			' <<<"$savings_cohorts" >/dev/null || {
+				echo 'savings cohort identity is malformed' >&2
+				return 65
+			}
+			panel='.savingsPanel[]? | select(.cohort as $cohort | ($cohorts | index($cohort)) != null)'
+		else
+			panel='.savingsPanel[]?'
+		fi
+		;;
 	*) panel='(.qualityPanel[]?, .savingsPanel[]?)' ;;
 	esac
 	while IFS= read -r source_json; do
@@ -201,7 +217,13 @@ discover_identity() {
 			--arg sha256 "$source_sha" \
 			'. + [{path: $path, size: $size, sha256: $sha256}]' <<<"$sources")"
 		((source_index += 1))
-	done < <(jq -c "$panel" "$samples_file")
+	done < <(
+		if [[ -n "$savings_cohorts" ]]; then
+			jq -c --argjson cohorts "$savings_cohorts" "$panel" "$samples_file"
+		else
+			jq -c "$panel" "$samples_file"
+		fi
+	)
 
 	encoder_commands="${BENCHMARK_ENCODER_COMMANDS_JSON:-[]}"
 	node_name="${NODE_NAME:-}"

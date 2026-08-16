@@ -1029,6 +1029,27 @@ EOF
 	assert_no_mutations
 }
 
+# Catches savings authorization that accepts a claimed final decision without
+# validating its full review evidence, or starts a Job when no cohort is final.
+@test "savings dispatch fails closed for malformed and absent final cohorts" {
+	run_id='20260802T120000Z-1234abcd'
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:savings'
+	CHOSEN_RECORD="$(valid_chosen_record hdr10 final 22 | jq -c 'del(.finalistReview.checklist)')" yq -i '
+		.data."samples.json" |= (from_yaml | .chosenSettings.hdr10 = (strenv(CHOSEN_RECORD) | from_json) | to_json)
+	' "$evidence_app/samples.yaml"
+	run_dispatch run savings "$run_id"
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	CHOSEN_RECORD="$(valid_chosen_record hdr10 provisional 22)" yq -i '
+		.data."samples.json" |= (from_yaml | .chosenSettings = {"hdr10":(strenv(CHOSEN_RECORD) | from_json)} | to_json)
+	' "$evidence_app/samples.yaml"
+	run_dispatch run savings "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'no final chosen setting authorizes savings'* ]]
+	assert_no_mutations
+}
+
 # Catches cleanup accepting a generic delete token rather than one exact run
 # handle, which would broaden a destructive operation beyond one run tree.
 @test "cleanup requires the exact run-scoped confirmation before creating a Job" {

@@ -708,14 +708,15 @@ require_finalist_authorization() {
 }
 
 require_savings_authorization() {
-	jq -e '
-		. as $root | ([.savingsPanel[]?.cohort] | unique) as $cohorts |
-		any($root.chosenSettings | to_entries[];
-			.value.state == "final" and (.key as $cohort | ($cohorts | index($cohort)) != null))
-	' "$samples_document" >/dev/null || {
-		echo 'no final chosen setting authorizes savings' >&2
-		return 65
-	}
+	local cohort
+	while IFS= read -r cohort; do
+		[[ -n "$cohort" ]] || continue
+		if contract_chosen_record "$samples_document" "$cohort" final >/dev/null; then
+			return 0
+		fi
+	done < <(jq -r '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique[]' "$samples_document")
+	echo 'no final chosen setting authorizes savings' >&2
+	return 65
 }
 
 require_x265_authorization() {

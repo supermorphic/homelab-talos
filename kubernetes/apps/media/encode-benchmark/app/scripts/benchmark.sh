@@ -2421,27 +2421,55 @@ savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
-	local panel_samples final_cohorts cohort_name upstream_map='{}' selected_settings='[]'
-	final_cohorts="$(jq -e -c '
-		. as $root | ([.savingsPanel[]?.cohort] | unique) as $panel_cohorts |
-		[$root.chosenSettings | to_entries[] |
-			select(.key as $cohort | ($panel_cohorts | index($cohort)) != null) |
-			select(.value.state == "final") | .key]
-	' "$samples_file")" || return 65
+	local panel_samples final_cohorts cohort_name selected_record selected_state
+	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' artifact_staged
+	final_cohorts='[]'
+	while IFS= read -r cohort_name; do
+		selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" 2>/dev/null || true)"
+		if [[ -z "$selected_record" ]]; then
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"no-final-setting"}}' \
+				<<<"$cohort_applicability")"
+			continue
+		fi
+		selected_state="$(jq -r '.state' <<<"$selected_record")"
+		case "$selected_state" in
+		final)
+			prepare_chosen_upstream "$cohort_name" final || return
+			upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+				'. + {($cohort):$identity}' <<<"$upstream_map")"
+			selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
+				<<<"$selected_settings")"
+			final_cohorts="$(jq -c --arg cohort "$cohort_name" '. + [$cohort]' <<<"$final_cohorts")"
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				--argjson quality "$(jq '.globalQuality' <<<"$selected_record")" \
+				'. + {($cohort):{status:"measured",globalQuality:$quality}}' \
+				<<<"$cohort_applicability")"
+			;;
+		rejected)
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"visual-no-go"}}' \
+				<<<"$cohort_applicability")"
+			;;
+		provisional)
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"visual-pending"}}' \
+				<<<"$cohort_applicability")"
+			;;
+		*)
+			echo "chosen setting has an invalid state for cohort: $cohort_name" >&2
+			return 65
+			;;
+		esac
+	done < <(jq -e -r '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique[]' "$samples_file") || return 65
 	[[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]] || {
 		echo 'no final chosen setting authorizes savings' >&2
 		return 65
 	}
-	while IFS= read -r cohort_name; do
-		prepare_chosen_upstream "$cohort_name" final || return
-		upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
-			'. + {($cohort):$identity}' <<<"$upstream_map")"
-		selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
-			<<<"$selected_settings")"
-	done < <(jq -r '.[]' <<<"$final_cohorts")
 	BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n -c --argjson chosen "$upstream_map" '{chosenSettings:$chosen}')"
 	BENCHMARK_SELECTED_SETTINGS_JSON="$selected_settings"
-	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON
+	BENCHMARK_SAVINGS_COHORTS_JSON="$final_cohorts"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON BENCHMARK_SAVINGS_COHORTS_JSON
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c --argjson cohorts "$final_cohorts" '[.savingsPanel[]? | select(.cohort as $cohort | ($cohorts | index($cohort)) != null)]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
@@ -2450,6 +2478,14 @@ savings_mode() {
 	run_id="$("$script_directory/runmeta.sh" create savings "$requested_run_id")"
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
+	artifact_staged="$(mktemp "$run_directory/.savings-cohorts.XXXXXX")" || return
+	if ! jq -n -S -c --arg run_id "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson cohorts "$cohort_applicability" \
+		'{schemaVersion:1,strategyId:$strategy,runId:$run_id,cohorts:$cohorts}' >"$artifact_staged"; then
+		rm -f -- "$artifact_staged"
+		return 65
+	fi
+	mv -f -- "$artifact_staged" "$run_directory/savings-cohorts.json"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	while IFS= read -r sample; do
 		sample_id="$(jq -r '.id' <<<"$sample")"

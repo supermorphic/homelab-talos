@@ -516,6 +516,28 @@ prepare_savings_execution_run() {
 	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
 }
 
+prepare_partial_savings_execution_run() {
+	local rejected
+	prepare_execution_run
+	jq '
+		.savingsPanel = [
+			(.savingsPanel[0] | .id = "savings-avc" | .cohort = "avc"),
+			{id:"savings-vc1-excluded",cohort:"vc1",path:"/missing/excluded-vc1.mkv",
+			 sizeBytes:1,sha256:("f" * 64)}
+		] |
+		.chosenSettings = {}
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream avc final 16 '[16,18,20]'
+	rejected='[{"globalQuality":30,"stage":"crop","runId":"20260815T120000Z-aaaaaaaa","result":"failed","reviewedAt":"2026-08-15T12:00:00Z"}]'
+	set_chosen_record vc1 rejected 30 "$rejected"
+	jq '
+		.chosenSettings.vc1.cropReview.status = "failed" |
+		.chosenSettings.vc1.cropReview.clips[0].result = "failed"
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
 prepare_x265_execution_run() {
 	local sample_id="$1" cohort="$2" qsv_vmaf="${3:-97}" quality_dir results results_digest candidate_digest
 	local chosen upstream selected cpu_identity
@@ -1661,6 +1683,81 @@ PYTHON
 	' "$run_dir/manifest.json"
 	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches a final-cohort filter that still hashes or encodes a rejected cohort,
+# or that fails to publish the complete applicability decision atomically.
+@test "savings measures only final cohorts and records rejected cohorts as not applicable" {
+	prepare_partial_savings_execution_run
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$(awk -F, 'NR > 1 { count += 1 } END { print count + 0 }' "$results")" -eq 1 ]
+	[ "$(awk -F, 'NR > 1 { print $4 ":" $8 }' "$results")" = 'avc:16' ]
+	run jq -S -c . "$FIXTURES/metrics/savings-cohorts.json"
+	[ "$status" -eq 0 ]
+	expected_cohorts="$output"
+	run jq -S -c . "$BENCHMARK_OUT/runs/$run_id/savings-cohorts.json"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$expected_cohorts" ]
+	run rg -F 'excluded-vc1' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 1 ]
+}
+
+# Catches a preflight that permits drift in a measured title or that creates a
+# manifest before it verifies the scoped source identity.
+@test "savings refuses source drift in an included final cohort before run creation" {
+	prepare_partial_savings_execution_run
+	jq '.savingsPanel[0].sha256 = ("0" * 64)' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'sample hash mismatch: savings-avc'* ]]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+}
+
+# Catches filtering that accepts the middle of the ICQ range but drops either
+# valid endpoint while collecting independently scoped full-title evidence.
+@test "savings accepts final cohort settings at ICQ boundaries 16 and 30" {
+	prepare_execution_run
+	jq '
+		.savingsPanel = [
+			(.savingsPanel[0] | .id = "savings-avc" | .cohort = "avc"),
+			(.savingsPanel[0] | .id = "savings-hdr" | .cohort = "hdr10")
+		] |
+		.chosenSettings = {}
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream avc final 16 '[16,18,20]'
+	prepare_quality_upstream hdr10 final 30 '[30]'
+	unset BENCHMARK_IDENTITY_FIXTURE
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	export BENCHMARK_I915_VERSION='fixture-i915'
+	export BENCHMARK_VPL_VERSION='fixture-vpl'
+	run_id='20260802T121500Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" savings "$run_id"
+	[ "$status" -eq 0 ]
+	run awk -F, 'NR > 1 { print $4 ":" $8 }' "$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'avc:16\nhdr10:30' ]
+	run jq -e '
+		.cohorts.avc == {status:"measured",globalQuality:16} and
+		.cohorts.hdr10 == {status:"measured",globalQuality:30}
+	' "$BENCHMARK_OUT/runs/$run_id/savings-cohorts.json"
+	[ "$status" -eq 0 ]
 }
 
 @test "savings rejects detection-only and Dolby Vision and records packet inventory failure before resume" {
