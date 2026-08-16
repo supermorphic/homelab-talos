@@ -27,7 +27,7 @@ metric_response="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometh
 [[ "$(yq -r '.data.result | length' <<<"$metric_response")" == '1' ]]
 [[ "$(yq -r '.data.result[0].metric.namespace' <<<"$metric_response")" == 'networking' ]]
 [[ "$(yq -r '.data.result[0].metric.name' <<<"$metric_response")" == 'wildcard-lab-supermorphic-com' ]]
-[[ "$(yq -r '.data.result[0].value[1] | tonumber > now' <<<"$metric_response")" == 'true' ]]
+[[ "$(yq -r '.data.result[0].value[1] | tonumber > (now | to_unix)' <<<"$metric_response")" == 'true' ]]
 
 [[ -z "$(
   kubectl --kubeconfig "$kubeconfig" --namespace networking get \
@@ -56,9 +56,9 @@ security_rule_rows="$(yq -r '
         or .name == "WildcardCertificateExpiryMetricMissing"
       )
     | {
-        name: .name,
-        health: (.health // ""),
-        last_error: (.lastError // "")
+        "name": .name,
+        "health": (.health // ""),
+        "last_error": (.lastError // "")
       }
   ]
   | sort_by(.name)
