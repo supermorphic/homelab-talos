@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "strategyId": "qsv-hevc-icq-v1",
+  "qualityRunId": "20260815T120000Z-aaaaaaaa",
+  "resultsSchemaVersion": 2,
+  "resultsSha256": "sha256:REPLACED-IN-TEST",
+  "cohorts": {
+    "avc": {
+      "status": "eligible",
+      "expectedClipCount": 6,
+      "candidates": [
+        {"globalQuality": 16, "medianReductionPercent": 35},
+        {"globalQuality": 24, "medianReductionPercent": 35},
+        {"globalQuality": 18, "medianReductionPercent": 25}
+      ]
+    },
+    "vc1": {
+      "status": "no-go",
+      "expectedClipCount": 6,
+      "candidates": [],
+      "reason": "no-objective-candidate"
+    },
+    "hdr10": {
+      "status": "eligible",
+      "expectedClipCount": 6,
+      "candidates": [
+        {"globalQuality": 16, "medianReductionPercent": 35},
+        {"globalQuality": 24, "medianReductionPercent": 35},
+        {"globalQuality": 18, "medianReductionPercent": 25}
+      ]
+    }
+  }
+}

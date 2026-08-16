@@ -329,6 +329,63 @@ expand_execution_panels_to_three_samples() {
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 }
 
+prepare_quality_panel_with_six_titles_three_clips() {
+	local quality='[]' index source size sha cohort item
+	for index in 1 2 3 4 5 6; do
+		source="$BATS_TEST_TMPDIR/quality-source-$index.mkv"
+		printf 'quality source fixture bytes %s' "$index" >"$source"
+		size="$(wc -c <"$source" | tr -d ' ')"
+		sha="$(sha256sum "$source" | awk '{print $1}')"
+		case "$index" in
+		1|2) cohort='avc' ;;
+		3|4) cohort='vc1' ;;
+		5|6) cohort='hdr10' ;;
+		esac
+		item="$(jq -n --arg id "quality-$index" --arg cohort "$cohort" --arg path "$source" \
+			--arg sha "$sha" --argjson size "$size" '{
+				id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
+				clips: {detail: "00:17:23.456", motion: "00:27:23.456", grain: "00:37:23.456"}
+			}')"
+		quality="$(jq -c --argjson item "$item" '. + [$item]' <<<"$quality")"
+	done
+	jq --argjson quality "$quality" '.qualityPanel = $quality | .savingsPanel = [] | .chosenSettings = {}' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+write_quality_ranking_results() {
+	local results="$1" run_id="$2" sample sample_id cohort sha clip setting reduction vmaf status failures
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' >"$results"
+	while IFS= read -r sample; do
+		sample_id="$(jq -r '.id' <<<"$sample")"
+		cohort="$(jq -r '.cohort' <<<"$sample")"
+		sha="$(jq -r '.sha256' <<<"$sample")"
+		for clip in detail motion grain; do
+			for setting in 16 18 20 22 24; do
+				case "$setting:$clip" in
+				16:detail|24:detail) reduction='20' ;;
+				16:motion|24:motion) reduction='35' ;;
+				16:grain|24:grain) reduction='50' ;;
+				18:detail) reduction='15' ;;
+				18:motion) reduction='25' ;;
+				18:grain) reduction='35' ;;
+				*) reduction='30' ;;
+				esac
+				vmaf='96'
+				status='passed'
+				failures=''
+				if [[ "$setting" == '20' && "$clip" == 'detail' ]]; then vmaf='89'; fi
+				if [[ "$setting" == '22' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '24' && "$clip" == 'detail' ]]; then vmaf='89'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '16' && "$clip" == 'detail' ]]; then vmaf='89'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '18' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
+				printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,%s,1,1000,650,%s,1000,650,1.000000,72.0,1.25,%s,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,%s,logs/%s-%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
+					"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$status" "$reduction" "$vmaf" "$failures" "$sample_id" "$clip" "$setting" >>"$results"
+			done
+		done
+	done < <(jq -c '.qualityPanel[]' "$BENCHMARK_SAMPLES_FILE")
+}
+
 # Catches a production break where the durable result contract drifts from the
 # exact schema that runmeta uses to decide whether a variant is resumable.
 @test "results header is the exact 39-column ICQ resume schema" {
@@ -862,14 +919,13 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$(<"$run_dir/encodes/sample-avc-qsv-gq22.mkv")" = 'finalist bytes' ]
 }
 
-# Catches an orchestration break where the public quality mode omits one of the
-# five approved QSV settings, loses the initial four-point x265 sweep, persists
-# clip video, or stops producing one exact still pair per measured variant.
-@test "quality mode runs the approved sweeps and preserves only rows logs and still pairs" {
+# Catches omissions from the shared eight-setting sweep, x265 work leaking into
+# quality, coupled metrics, FFmpeg consuming the sample loop, and lost stills.
+@test "quality runs all six titles three clips and eight ICQ settings without x265" {
 	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-6cdfc9f3' ]
 	run_id="$output"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 
@@ -880,38 +936,34 @@ import sys
 
 with open(sys.argv[1], newline="", encoding="utf-8") as stream:
     rows = list(csv.DictReader(stream))
+keys = {(row["sample_id"], row["clip_id"], row["requested_setting"]) for row in rows}
+expected = {
+    (f"quality-{title}", clip, str(setting))
+    for title in range(1, 7)
+    for clip in ("detail", "motion", "grain")
+    for setting in (16, 18, 20, 22, 24, 26, 28, 30)
+}
 print(json.dumps({
-    "count": len(rows),
-    "qsv": [row["requested_setting"] for row in rows if row["encoder"] == "qsv"],
-    "x265": [row["requested_setting"] for row in rows if row["encoder"] == "x265"],
-	"statuses": sorted(set(row["status"] for row in rows)),
-	"dispositions": sorted(set(row["output_disposition"] for row in rows)),
-	"qsvProof": sorted(set((row["strategy_id"], row["qsv_initialization"], row["video_busy_nanoseconds"]) for row in rows if row["encoder"] == "qsv")),
-	"x265Proof": sorted(set((row["strategy_id"], row["qsv_initialization"], row["video_busy_nanoseconds"]) for row in rows if row["encoder"] == "x265")),
+    "rowCount": len(rows),
+    "allQsv": all(row["encoder"] == "qsv" for row in rows),
+    "uniqueKeys": len(keys),
+    "allExpected": keys == expected,
+    "allPassed": all(row["status"] == "passed" for row in rows),
 }, separators=(",", ":")))
 PYTHON
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"count":12,"qsv":["16","18","20","22","24","26","28","30"],"x265":["18","20","22","24"],"statuses":["passed"],"dispositions":["discarded"],"qsvProof":[["qsv-hevc-icq-v1","passed","800000000"]],"x265Proof":[["qsv-hevc-icq-v1","not-applicable","0"]]}' ]
-	[ "$(find "$run_dir/stills" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 24 ]
-	[ -f "$run_dir/stills/sample-hdr-detail-qsv-20-source.png" ]
-	[ -f "$run_dir/stills/sample-hdr-detail-x265-24-encoded.png" ]
+	[ "$output" = '{"rowCount":144,"allQsv":true,"uniqueKeys":144,"allExpected":true,"allPassed":true}' ]
+	[ "$(find "$run_dir/stills" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 288 ]
 	[ ! -d "$run_dir/encodes" ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
-}
+	[ -f "$run_dir/quality-candidates.json" ]
 
-@test "quality runs x265 reference encodes only for marked samples" {
-	prepare_execution_run
-	jq '.qualityPanel[0].x265Reference = false' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	run "$SCRIPTS/benchmark.sh" quality
+	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
-	results="$BENCHMARK_OUT/runs/$output/results.csv"
-	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 8 ]
-	[ "$(awk -F, 'NR > 1 && $7 == "x265" {count += 1} END {print count + 0}' "$results")" -eq 0 ]
-	run yq -r '.data."samples.json" | from_yaml | [.qualityPanel[] | select(.x265Reference == true) | .id] | sort | join(",")' \
-		"$BATS_TEST_DIRNAME/../app/samples.yaml"
-	[ "$status" -eq 0 ]
-	[ "$output" = 'avc-grain-memento,hdr10-grain-goodfellas' ]
+	run rg -q -- '-c:v libx265' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 1 ]
+	[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
 }
 
 @test "PGS decode maps video only while probe validation still detects subtitle loss" {
@@ -963,25 +1015,32 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
-# Catches the public quality loop ignoring its x265-next decision and reporting
-# unbracketed even though the next allowed CRF 16 measurement would bracket QSV.
-@test "quality mode extends only the lower CRF side until QSV is bracketed" {
+@test "quality candidates require complete objective evidence and rank median reductions" {
 	prepare_execution_run
-	export BENCHMARK_X265_18_SCORE=96
-	export BENCHMARK_X265_20_SCORE=94
-	export BENCHMARK_X265_22_SCORE=92
-	export BENCHMARK_X265_24_SCORE=90
-	export BENCHMARK_X265_16_SCORE=98
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
 
-	run "$SCRIPTS/benchmark.sh" quality
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -eq 0 ]
-	run_id="$output"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	run awk -F, '$7 == "x265" {print $8}' "$results"
+	artifact="$run_dir/quality-candidates.json"
+	actual_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	run jq --arg digest "$actual_digest" '.resultsSha256 = $digest' "$FIXTURES/metrics/quality-candidates.json"
 	[ "$status" -eq 0 ]
-	[ "$output" = $'18\n20\n22\n24\n16' ]
-	run jq -e -s 'length == 8 and all(.[]; .status == "bracketed")' \
-		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+	printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/expected-quality-candidates.json"
+	run diff -u "$BATS_TEST_TMPDIR/expected-quality-candidates.json" "$artifact"
+	[ "$status" -eq 0 ]
+
+	# A malformed results file must fail before publication and leave the prior
+	# artifact intact; a ranker that truncates first loses completed-run evidence.
+	cp "$artifact" "$BATS_TEST_TMPDIR/prior-quality-candidates.json"
+	printf '%s\n' 'malformed,row' >"$results"
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -ne 0 ]
+	run cmp -s "$BATS_TEST_TMPDIR/prior-quality-candidates.json" "$artifact"
 	[ "$status" -eq 0 ]
 }
 
@@ -1012,52 +1071,12 @@ PYTHON
 		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count }' "$results"
 		[ "$status" -eq 0 ]
-		[ "$output" = '12' ]
+		[ "$output" = '8' ]
 		[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 	done
 }
 
-@test "quality advances past failed and invalid x265 extensions and terminates at CRF 10" {
-	for disposition in failed invalid; do
-		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
-		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
-		prepare_execution_run
-		export BENCHMARK_X265_18_SCORE=96 BENCHMARK_X265_20_SCORE=94
-		export BENCHMARK_X265_22_SCORE=92 BENCHMARK_X265_24_SCORE=90
-		if [[ "$disposition" == 'failed' ]]; then
-			export BENCHMARK_TEST_FAIL_X265_EXTENSION=1
-			unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
-		else
-			unset BENCHMARK_TEST_FAIL_X265_EXTENSION
-			export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='x265-1[0246]-attempt'
-			export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
-		fi
-		run "$SCRIPTS/benchmark.sh" quality
-		[ "$status" -eq 0 ]
-		run_id="$output"
-		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-		run awk -F, '$7 == "x265" {print $8}' "$results"
-		[ "$status" -eq 0 ]
-		[ "$output" = $'18\n20\n22\n24\n16\n14\n12\n10' ]
-		run awk -F, '$7 == "x265" && $8 <= 16 {print $10}' "$results"
-		[ "$status" -eq 0 ]
-		[ "$output" = "$(printf '%s\n%s\n%s\n%s' "$disposition" "$disposition" "$disposition" "$disposition")" ]
-	done
-}
-
-@test "quality terminates without extending when no passed x265 point exists" {
-	prepare_execution_run
-	export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	run awk -F, '$7 == "x265" {print $8}' "$results"
-	[ "$status" -eq 0 ]
-	[ "$output" = $'18\n20\n22\n24' ]
-}
-
-@test "quality attempt evidence is immutable and a passed resume does not duplicate comparisons" {
+@test "quality attempt evidence is immutable and a passed resume does not duplicate ICQ rows" {
 	prepare_execution_run
 	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-20-attempt'
 	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
@@ -1084,26 +1103,6 @@ PYTHON
 		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json'; do
 		[ "$(find "$BENCHMARK_OUT/runs/$run_id/logs" -type f -name "$evidence_pattern" | wc -l | tr -d ' ')" -eq 3 ]
 	done
-	[ "$(wc -l <"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl" | tr -d ' ')" -eq 8 ]
-}
-
-@test "quality resume replaces stale unbracketed comparisons after x265 succeeds" {
-	prepare_execution_run
-	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='x265-'
-	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run jq -e -s 'length == 8 and all(.[]; .status == "unbracketed")' \
-		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
-	[ "$status" -eq 0 ]
-
-	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
-	run "$SCRIPTS/benchmark.sh" quality "$run_id"
-	[ "$status" -eq 0 ]
-	run jq -e -s 'length == 8 and all(.[]; .status == "bracketed")' \
-		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
-	[ "$status" -eq 0 ]
 }
 
 # Catches resume identity omitting the production commands whose bytes and
@@ -1121,13 +1120,12 @@ PYTHON
 	run_id="$output"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	run jq -e '
-		.encoderCommands | length == 22 and
+		.encoderCommands | length == 9 and
 		.[0] == "ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
 		([.[] | select(test("-c:v hevc_qsv"))] | length) == 8 and
-		([.[] | select(test("-c:v libx265"))] | length) == 13 and
 		any(.[]; contains("-global_quality 16 -look_ahead 0 -extbrc 0")) and
 		any(.[]; contains("-global_quality 30 -look_ahead 0 -extbrc 0")) and
-		any(.[]; contains("-crf 10")) and any(.[]; contains("-crf 34"))
+		all(.[]; contains("-c:v libx265") | not)
 	' "$manifest"
 	[ "$status" -eq 0 ]
 }
