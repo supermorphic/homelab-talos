@@ -822,6 +822,65 @@ set_dispatch_chosen_record() {
 	[[ "$output" == *"run_id=$run_id"* ]]
 }
 
+# Catches a generated host correlation being persisted as the quality run ID.
+# The runtime is the first component with the complete immutable identity, so it
+# must turn the dispatched correlation into the manifest-bound run ID before
+# that run can authorize a chosen setting.
+@test "generated quality dispatch becomes a runtime identity bound chosen upstream" {
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	run_dispatch run quality
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	dispatch_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-dispatch"' "$job")"
+	command_run_id="$(yq -r '.spec.template.spec.containers[0].command[2]' "$job")"
+	correlation_env="$(yq -r '.spec.template.spec.containers[0].env[]? |
+		select(.name == "BENCHMARK_DISPATCH_CORRELATION_ID") | .value' "$job")"
+	[ "$command_run_id" = "$dispatch_id" ]
+	[ "$correlation_env" = "$dispatch_id" ]
+
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/runtime-out"
+	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/runtime-samples.json"
+	export BENCHMARK_IDENTITY_FIXTURE="$BATS_TEST_DIRNAME/fixtures/manifests/identity.json"
+	export BENCHMARK_DISPATCH_CORRELATION_ID="$correlation_env"
+	mkdir -p "$BENCHMARK_OUT/runs"
+	yq -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
+
+	run "$evidence_app/scripts/runmeta.sh" create quality "$command_run_id"
+	[ "$status" -eq 0 ]
+	runtime_run_id="$output"
+	[ "${runtime_run_id%-*}" = "${dispatch_id%-*}" ]
+	manifest="$BENCHMARK_OUT/runs/$runtime_run_id/manifest.json"
+	[ -f "$manifest" ]
+	identity_suffix="$(jq -S -c 'del(.createdAt)' "$manifest" | sha256sum | awk '{print substr($1, 1, 8)}')"
+	[ "${runtime_run_id##*-}" = "$identity_suffix" ]
+
+	results="$BENCHMARK_OUT/runs/$runtime_run_id/results.csv"
+	printf '%s\n' \
+		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
+		"$runtime_run_id,quality,avc-grain-memento,avc,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,22,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		>"$results"
+	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	candidates="$BENCHMARK_OUT/runs/$runtime_run_id/quality-candidates.json"
+	jq -n -c --arg run "$runtime_run_id" --arg digest "$results_digest" '{
+		schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
+		resultsSchemaVersion:2,resultsSha256:$digest,
+		cohorts:{avc:{status:"eligible",expectedClipCount:1,
+			candidates:[{globalQuality:22,medianReductionPercent:40}]}}
+	}' >"$candidates"
+	candidate_digest="sha256:$(sha256sum "$candidates" | awk '{print $1}')"
+	record="$(valid_chosen_record avc provisional 22 | jq -c \
+		--arg run "$runtime_run_id" --arg results "$results_digest" --arg candidates "$candidate_digest" \
+		'.qualityRunId = $run | .qualityResultsSha256 = $results | .candidateEvidenceSha256 = $candidates')"
+	jq --argjson record "$record" '.chosenSettings.avc = $record' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+
+	run "$evidence_app/scripts/benchmark.sh" _test chosen-upstream avc provisional
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.selectedSettings[0].qualityRunId' <<<"$output")" = "$runtime_run_id" ]
+}
+
 # Catches a finalist dispatch that forwards an unbound copy approval into the
 # pod, where a successful full-title encode could otherwise persist output.
 @test "finalist requires exact run and sample copy confirmation" {
@@ -919,6 +978,29 @@ set_dispatch_chosen_record() {
 	run_dispatch clean all
 	[ "$status" -ne 0 ]
 	assert_no_mutations
+}
+
+# Catches regex-only UTC checks accepting impossible supplied and generated
+# dates before cluster calls or resource creation.
+@test "dispatch rejects impossible UTC run timestamps before every mutation" {
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	for invalid in \
+		20261302T120000Z-1234abcd \
+		20260230T120000Z-1234abcd \
+		20260802T250000Z-1234abcd; do
+		run_dispatch run quality "$invalid"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"invalid run id: $invalid"* ]]
+		assert_no_mutations
+	done
+
+	for invalid in 20261302T120000Z 20260230T120000Z 20260802T250000Z; do
+		export ENCODE_BENCHMARK_NOW="$invalid"
+		run_dispatch run quality
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"invalid benchmark timestamp: $invalid"* ]]
+		assert_no_mutations
+	done
 }
 
 # Catches recipes that consult deployed-source drift only after dispatch. The

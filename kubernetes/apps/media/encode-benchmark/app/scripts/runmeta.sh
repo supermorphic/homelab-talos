@@ -9,6 +9,7 @@ runs_root="$benchmark_out/runs"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 identity_fixture="${BENCHMARK_IDENTITY_FIXTURE:-}"
 clock_override="${BENCHMARK_NOW:-}"
+dispatch_correlation_id="${BENCHMARK_DISPATCH_CORRELATION_ID:-}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 new_run_directory=''
 manifest_temp=''
@@ -364,27 +365,40 @@ verify_run() {
 create_run() {
 	local mode="$1"
 	local explicit_run_id="${2:-}"
-	local identity identity_digest now run_id run_directory manifest
+	local identity='' identity_digest now run_id run_directory manifest
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
 		validate_run_id "$explicit_run_id" || return
-		run_directory="$runs_root/$explicit_run_id"
+		now="${explicit_run_id%-*}"
+		if [[ -n "$dispatch_correlation_id" ]]; then
+			[[ "$mode" == 'quality' && "$explicit_run_id" == "$dispatch_correlation_id" ]] || {
+				echo 'dispatch correlation is valid only for its generated quality run' >&2
+				return 64
+			}
+			validate_run_id "$dispatch_correlation_id" || return
+			identity="$(discover_identity "$mode")" || return
+			identity_digest="$(printf '%s\n' "$identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
+			run_id="$now-$identity_digest"
+		else
+			run_id="$explicit_run_id"
+		fi
+		run_directory="$runs_root/$run_id"
 		if [[ -L "$run_directory" || (-e "$run_directory" && ! -d "$run_directory") ]]; then
-			echo "run path is not a confined directory: $explicit_run_id" >&2
+			echo "run path is not a confined directory: $run_id" >&2
 			return 73
 		fi
 		if [[ -d "$run_directory" ]]; then
 			if [[ ! -f "$run_directory/manifest.json" || -L "$run_directory/manifest.json" ]]; then
-				echo "run already exists without a manifest: $explicit_run_id" >&2
+				echo "run already exists without a manifest: $run_id" >&2
 				return 73
 			fi
-			verify_run "$explicit_run_id" "$mode" || return
-			printf '%s\n' "$explicit_run_id"
+			verify_run "$run_id" "$mode" || return
+			printf '%s\n' "$run_id"
 			return
 		fi
-		identity="$(discover_identity "$mode")" || return
-		now="${explicit_run_id%-*}"
-		run_id="$explicit_run_id"
+		if [[ -z "$identity" ]]; then
+			identity="$(discover_identity "$mode")" || return
+		fi
 	else
 		identity="$(discover_identity "$mode")" || return
 		identity_digest="$(printf '%s\n' "$identity" | sha256sum | awk '{print substr($1, 1, 8)}')"

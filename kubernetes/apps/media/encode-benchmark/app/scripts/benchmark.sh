@@ -812,7 +812,19 @@ record_result_inner() {
 		}
 		staged_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.tmp.mkv"
 		backup_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.backup.mkv"
-		rm -f -- "$staged_destination" "$backup_destination"
+		rm -f -- "$staged_destination"
+		if [[ -e "$backup_destination" || -L "$backup_destination" ]]; then
+			[[ -f "$backup_destination" && ! -L "$backup_destination" ]] || {
+				echo "finalist retained backup is not a regular file: $backup_destination" >&2
+				return 74
+			}
+			[[ ! -e "$destination" ]] || {
+				echo "finalist recovery is ambiguous; retained backup: $backup_destination" >&2
+				return 74
+			}
+			prior_digest="sha256:$(sha256sum "$backup_destination" | awk '{print $1}')"
+			restore_finalist_backup "$backup_destination" "$destination" "$prior_digest" || return
+		fi
 		cp -- "$scratch_output" "$staged_destination" || return
 		if [[ -e "$destination" ]]; then
 			prior_digest="sha256:$(sha256sum "$destination" | awk '{print $1}')"
@@ -864,13 +876,14 @@ record_result_inner() {
 
 restore_finalist_backup() {
 	local backup="$1" destination="$2" expected_digest="$3" restored_digest
-	local restore_staged="$destination.restore-$$.mkv"
+	local restore_staged="${backup%.backup.mkv}.restore-stage.mkv"
 	[[ -f "$backup" && ! -L "$backup" ]] || {
 		echo "finalist backup restoration failed; retained: $backup" >&2
 		return 74
 	}
 	rm -f -- "$restore_staged"
 	if ! cp -- "$backup" "$restore_staged"; then
+		rm -f -- "$restore_staged" || true
 		echo "finalist backup restoration failed; retained: $backup" >&2
 		return 74
 	fi
@@ -891,7 +904,10 @@ restore_finalist_backup() {
 		echo "finalist backup restoration failed; retained: $backup" >&2
 		return 74
 	fi
-	rm -f -- "$backup"
+	if ! rm -f -- "$backup"; then
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
 }
 
 record_result() {

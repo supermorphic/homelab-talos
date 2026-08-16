@@ -63,7 +63,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 validate_run_id() {
-	[[ "$1" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || {
+	contract_is_run_id "$1" || {
 		echo "invalid run id: $1" >&2
 		return 64
 	}
@@ -174,7 +174,7 @@ new_run_id() {
 	else
 		now="$(date -u '+%Y%m%dT%H%M%SZ')"
 	fi
-	[[ "$now" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || {
+	contract_is_compact_utc_timestamp "$now" || {
 		echo "invalid benchmark timestamp: $now" >&2
 		return 64
 	}
@@ -849,6 +849,14 @@ dispatch_run() {
 		' "$job"
 	else
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh "$mode" "$run_id"
+		if [[ "$mode" == 'quality' && -z "$supplied_run_id" ]]; then
+			DISPATCH_CORRELATION_ID="$dispatch_id" yq -i '
+				.spec.template.spec.containers[0].env += [{
+					"name":"BENCHMARK_DISPATCH_CORRELATION_ID",
+					"value":strenv(DISPATCH_CORRELATION_ID)
+				}]
+			' "$job"
+		fi
 	fi
 	job_json="$(create_job "$job")" || return
 	if ! establish_running_image_handoff "$job_json" "$job" image_configmap; then

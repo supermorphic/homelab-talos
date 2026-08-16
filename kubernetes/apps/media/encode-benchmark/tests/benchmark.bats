@@ -1884,7 +1884,24 @@ if [[ "${FAIL_FINALIST_RESTORE:-0}" == '1' && "$source_path" == *.restore-*.mkv 
 fi
 exec /bin/mv "$@"
 EOF
-	chmod +x "$mv_stub/mv"
+	cat >"$mv_stub/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=''
+destination=''
+for argument in "$@"; do
+	[[ "$argument" == '--' ]] && continue
+	source_path="$destination"
+	destination="$argument"
+done
+if [[ "${FAIL_FINALIST_RESTORE_COPY:-0}" == '1' && "$source_path" == *.backup.mkv &&
+	"$destination" == *.restore*.mkv ]]; then
+	printf '%s' 'partial restore bytes' >"$destination"
+	exit 74
+fi
+exec /bin/cp "$@"
+EOF
+	chmod +x "$mv_stub/mv" "$mv_stub/cp"
 	export PATH="$mv_stub:$PATH"
 
 	destination="$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv"
@@ -1906,6 +1923,26 @@ EOF
 	[ ! -e "$destination" ]
 	[ "$(find "$run_dir/encodes" -type f -name '*.backup.mkv' | wc -l | tr -d ' ')" -eq 1 ]
 	[ "$(<"$(find "$run_dir/encodes" -type f -name '*.backup.mkv')")" = 'prior finalist' ]
+
+	# A retry must recover the retained prior finalist before it attempts another
+	# promotion. Otherwise the retry can delete the only recoverable copy.
+	unset FAIL_FINALIST_RESTORE
+	printf '%s' 'second replacement finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ "$(<"$destination")" = 'prior finalist' ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.backup.mkv' | wc -l | tr -d ' ')" -eq 0 ]
+
+	# A failed backup copy may write a partial restore stage. That stage must be
+	# removed while the complete backup remains available for recovery.
+	export FAIL_FINALIST_RESTORE_COPY=1
+	printf '%s' 'third replacement finalist' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ ! -e "$destination" ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.backup.mkv' | wc -l | tr -d ' ')" -eq 1 ]
+	[ "$(<"$(find "$run_dir/encodes" -type f -name '*.backup.mkv')")" = 'prior finalist' ]
+	[ "$(find "$run_dir/encodes" -type f -name '*.restore*.mkv' | wc -l | tr -d ' ')" -eq 0 ]
 }
 
 # Catches a result fixture with valid local metrics publishing after its
