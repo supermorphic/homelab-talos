@@ -93,6 +93,31 @@ solely to satisfy these style rules.
 - GitHub protection checks and plans are read-only. The operator performs any authorized
   protection mutation through the guarded workflow documented in the relevant runbook.
 
+## Agent orchestration
+
+- Use an economical model appropriate for each delegated role. Do not inherit the
+  coordinator's high-capability model by default when a lower-cost model can
+  reliably perform the task.
+- Freshly spawned delegated agents must use isolated task context when the runtime
+  supports it. Resuming an existing task-local agent for a scoped fix or clarification
+  is allowed when retaining that agent's task context is useful. Provide requirements,
+  reports, diffs, and other substantial handoffs through files rather than inherited
+  conversation history.
+- Use a capable model for architecture, cross-cutting judgment, difficult debugging,
+  and reviews that genuinely require that level of reasoning. Use a standard model for
+  normal implementation, integration, and task review. Use a fast model for mechanical,
+  tightly scoped work. Do not escalate a review model solely because it is a review.
+- If the same implementation approach fails twice, stop repeating it. Diagnose the
+  failure and change the approach, provide missing context, split the task, or escalate
+  to a more capable model.
+- Delegation must provide useful context isolation, independent judgment,
+  specialization, or safe parallelism. Do not spawn additional agents merely to obtain
+  more opinions or repeat completed analysis.
+- Prefer focused tests, diffs, queries, and bounded logs over broad command output when
+  they provide the required evidence.
+- Treat repeated context compaction, excessive retries, or rapidly growing delegated
+  work as signals to reassess the task rather than continuing mechanically.
+
 ## Secrets and credentials
 
 - Secret values committed to Git are SOPS-encrypted, and the age private key remains
