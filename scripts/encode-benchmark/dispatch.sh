@@ -256,11 +256,55 @@ normalize_image_id() {
 	printf '%s\n' "$stripped"
 }
 
+has_exact_job_controller_owner() {
+	local resource_json="$1" job_name="$2" job_uid="$3"
+	jq -e --arg name "$job_name" --arg uid "$job_uid" '
+		.metadata.ownerReferences as $owners |
+		($owners | type == "array" and length == 1) and
+		$owners[0].apiVersion == "batch/v1" and
+		$owners[0].kind == "Job" and
+		$owners[0].name == $name and
+		$owners[0].uid == $uid and
+		$owners[0].controller == true and
+		$owners[0].blockOwnerDeletion == true
+	' <<<"$resource_json" >/dev/null 2>&1
+}
+
+delete_created_job() {
+	local job_json="$1" job="$2" name uid dispatch_id run_id mode expected_name expected_dispatch expected_run expected_mode live_job
+	name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$job_json")" || return 0
+	uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || return 0
+	dispatch_id="$(yq -p=json -e -r '.metadata.labels."homelab-talos/benchmark-dispatch" | select(test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"))' <<<"$job_json")" || return 0
+	run_id="$(yq -p=json -e -r '.metadata.labels."homelab-talos/benchmark-run" | select(test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"))' <<<"$job_json")" || return 0
+	mode="$(yq -p=json -e -r '.metadata.labels."homelab-talos/benchmark-mode" | select(test("^[a-z][a-z0-9-]*$"))' <<<"$job_json")" || return 0
+	[[ "$(yq -p=json -r '.metadata.labels."app.kubernetes.io/name" // ""' <<<"$job_json")" == 'encode-benchmark' &&
+	"$(yq -p=json -r '.metadata.annotations."homelab-talos/benchmark-owned" // ""' <<<"$job_json")" == 'true' ]] || return 0
+	expected_name="$(yq -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' "$job")" || return 0
+	expected_dispatch="$(yq -e -r '.metadata.labels."homelab-talos/benchmark-dispatch" | select(test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"))' "$job")" || return 0
+	expected_run="$(yq -e -r '.metadata.labels."homelab-talos/benchmark-run" | select(test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"))' "$job")" || return 0
+	expected_mode="$(yq -e -r '.metadata.labels."homelab-talos/benchmark-mode" | select(test("^[a-z][a-z0-9-]*$"))' "$job")" || return 0
+	[[ "$name" == "$expected_name" && "$dispatch_id" == "$expected_dispatch" &&
+		"$run_id" == "$expected_run" && "$mode" == "$expected_mode" ]] || return 0
+	live_job="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get \
+		"job/$name" --output json 2>/dev/null)" || return 0
+	jq -e --arg name "$name" --arg uid "$uid" --arg dispatch "$dispatch_id" \
+		--arg run "$run_id" --arg mode "$mode" '
+		.metadata.name == $name and .metadata.uid == $uid and
+		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+		.metadata.labels."homelab-talos/benchmark-dispatch" == $dispatch and
+		.metadata.labels."homelab-talos/benchmark-run" == $run and
+		.metadata.labels."homelab-talos/benchmark-mode" == $mode and
+		.metadata.annotations."homelab-talos/benchmark-owned" == "true"
+	' <<<"$live_job" >/dev/null 2>&1 || return 0
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
+		"job/$name" --preconditions="uid=$uid" --wait=true >/dev/null 2>&1 || true
+}
+
 establish_running_image_handoff() {
 	local job_json="$1" job="$2" output_variable="$3"
 	local name uid dispatched_image configured_digest dispatched_digest deadline pods pod_count
-	local pod_name owner_count pod_phase actual_image_id normalized_image_id running_digest
-	local configmap_name evidence_json configmap configmap_json persisted persisted_owner_count persisted_evidence log_line
+	local pod_name='' observed_pod_name pod_json pod_phase statuses_type status_count actual_image_id normalized_image_id running_digest
+	local configmap_name evidence_json configmap configmap_json persisted persisted_evidence log_line
 	printf -v "$output_variable" '%s' ''
 	name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$job_json")" || return 65
 	uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || return 65
@@ -277,36 +321,73 @@ establish_running_image_handoff() {
 		pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
 			--selector "job-name=$name" --output json)" || return
 		pod_count="$(yq -p=json -r '.items | length' <<<"$pods")"
-		if [[ "$pod_count" == '1' ]]; then
-			break
-		fi
-		if [[ "$pod_count" != '0' ]]; then
+		if [[ "$pod_count" == '0' ]]; then
+			if [[ -n "$pod_name" ]]; then
+				echo "running image evidence handoff rejected: job=$name controlled-pod-disappeared" >&2
+				return 65
+			fi
+			if ((SECONDS >= deadline)); then
+				echo "running image evidence handoff timed out: job=$name waiting-for-pod" >&2
+				return 70
+			fi
+			sleep 1
+			continue
+		elif [[ "$pod_count" != '1' ]]; then
 			echo "running image evidence handoff rejected: job=$name expected-one-pod" >&2
 			return 65
 		fi
+		pod_json="$(jq -c '.items[0]' <<<"$pods")"
+		observed_pod_name="$(jq -e -r '.metadata.name | strings | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$pod_json")" || return 65
+		if [[ -z "$pod_name" ]]; then
+			pod_name="$observed_pod_name"
+		elif [[ "$pod_name" != "$observed_pod_name" ]]; then
+			echo "running image evidence handoff rejected: job=$name controlled-pod-changed" >&2
+			return 65
+		fi
+		has_exact_job_controller_owner "$pod_json" "$name" "$uid" || {
+			echo "running image evidence handoff rejected: job=$name ownership-or-phase" >&2
+			return 65
+		}
+		pod_phase="$(jq -r '.status.phase // ""' <<<"$pod_json")"
+		[[ "$pod_phase" == 'Pending' || "$pod_phase" == 'Running' ]] || {
+			echo "running image evidence handoff rejected: job=$name ownership-or-phase" >&2
+			return 65
+		}
+		statuses_type="$(jq -r '.status.containerStatuses | if . == null then "missing" else type end' <<<"$pod_json")"
+		if [[ "$statuses_type" == 'missing' ]]; then
+			status_count=0
+		elif [[ "$statuses_type" == 'array' ]]; then
+			status_count="$(jq -r '[.status.containerStatuses[] | select(.name == "benchmark")] | length' <<<"$pod_json")"
+			[[ "$status_count" == '0' || "$status_count" == '1' ]] || {
+				echo "running image evidence handoff rejected: job=$name malformed-container-status" >&2
+				return 65
+			}
+		else
+			echo "running image evidence handoff rejected: job=$name malformed-container-status" >&2
+			return 65
+		fi
+		actual_image_id=''
+		if [[ "$status_count" == '1' ]]; then
+			actual_image_id="$(jq -r '.status.containerStatuses[] | select(.name == "benchmark") | .imageID // ""' <<<"$pod_json")"
+		fi
+		if [[ -n "$actual_image_id" ]]; then
+			normalized_image_id="$(normalize_image_id "$actual_image_id")" || {
+				echo "running image evidence handoff rejected: job=$name malformed-imageID" >&2
+				return 65
+			}
+			running_digest="${normalized_image_id##*@}"
+			[[ "$running_digest" == "$configured_digest" && "$running_digest" == "$dispatched_digest" ]] || {
+				echo "running image evidence handoff rejected: job=$name digest-mismatch" >&2
+				return 65
+			}
+			break
+		fi
 		if ((SECONDS >= deadline)); then
-			echo "running image evidence handoff timed out: job=$name waiting-for-pod" >&2
+			echo "running image evidence handoff timed out: job=$name waiting-for-imageID" >&2
 			return 70
 		fi
 		sleep 1
 	done
-	pod_name="$(yq -p=json -e -r '.items[0].metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$pods")" || return 65
-	owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.items[0].metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$pods")"
-	pod_phase="$(yq -p=json -r '.items[0].status.phase // ""' <<<"$pods")"
-	[[ "$owner_count" == '1' && ("$pod_phase" == 'Pending' || "$pod_phase" == 'Running') ]] || {
-		echo "running image evidence handoff rejected: job=$name ownership-or-phase" >&2
-		return 65
-	}
-	actual_image_id="$(yq -p=json -e -r '[.items[0].status.containerStatuses[]? | select(.name == "benchmark") | .imageID // ""] | select(length == 1) | .[0]' <<<"$pods")" || actual_image_id=''
-	normalized_image_id="$(normalize_image_id "$actual_image_id")" || {
-		echo "running image evidence handoff rejected: job=$name missing-or-malformed-imageID" >&2
-		return 65
-	}
-	running_digest="${normalized_image_id##*@}"
-	[[ "$running_digest" == "$configured_digest" && "$running_digest" == "$dispatched_digest" ]] || {
-		echo "running image evidence handoff rejected: job=$name digest-mismatch" >&2
-		return 65
-	}
 	configmap_name="$(yq -e -r '.metadata.annotations."homelab-talos/image-evidence-configmap" | select(test("^encode-benchmark-image-[0-9a-f]{12}$"))' "$job")" || return 65
 	[[ "$configmap_name" == "$(image_evidence_configmap_name "$name")" ]] || return 65
 	evidence_json="$(jq -n -c --arg configured "$configured_image" --arg dispatched "$dispatched_image" \
@@ -328,12 +409,12 @@ establish_running_image_handoff() {
 	configmap_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" create --filename "$configmap" --output json)" || return
 	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap_json")" == "$configmap_name" ]] || return 65
 	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || return
-	persisted_owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$persisted")"
 	persisted_evidence="$(yq -p=json -e -r '.data."image.json"' <<<"$persisted")" || return 65
-	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" == "$configmap_name" && "$persisted_owner_count" == '1' ]] || {
+	if [[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" != "$configmap_name" ]] ||
+		! has_exact_job_controller_owner "$persisted" "$name" "$uid"; then
 		echo "running image evidence handoff rejected: job=$name persisted-ownership" >&2
 		return 65
-	}
+	fi
 	jq -e --argjson expected "$evidence_json" '. == $expected' <<<"$persisted_evidence" >/dev/null 2>&1 || {
 		echo "running image evidence handoff rejected: job=$name persisted-evidence" >&2
 		return 65
@@ -352,16 +433,17 @@ establish_running_image_handoff() {
 }
 
 delete_owned_image_evidence() {
-	local configmap_name="$1" job_json="$2" job_name job_uid persisted owner_count
+	local configmap_name="$1" job_json="$2" job_name job_uid persisted configmap_uid
 	[[ "$configmap_name" =~ ^encode-benchmark-image-[0-9a-f]{12}$ ]] || return 0
 	job_name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$job_json")" || return 0
 	job_uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || return 0
 	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get \
 		"configmap/$configmap_name" --output json 2>/dev/null)" || return 0
-	owner_count="$(JOB_NAME="$job_name" JOB_UID="$job_uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$persisted")"
-	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" == "$configmap_name" && "$owner_count" == '1' ]] || return 0
+	configmap_uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$persisted")" || return 0
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" == "$configmap_name" ]] || return 0
+	has_exact_job_controller_owner "$persisted" "$job_name" "$job_uid" || return 0
 	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-		"configmap/$configmap_name" --wait=true >/dev/null 2>&1 || true
+		"configmap/$configmap_name" --preconditions="uid=$configmap_uid" --wait=true >/dev/null 2>&1 || true
 }
 
 eligible_capability_nodes() {
@@ -447,9 +529,8 @@ dispatch_capabilities() {
 		job="${jobs[$index]}"
 		name="${names[$index]}"
 		if ! job_json="$(create_job "$job")"; then
-			for name in "${created_names[@]}"; do
-				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-					"job/$name" --wait=true >/dev/null 2>&1 || true
+			for cleanup_index in "${!created_job_jsons[@]}"; do
+				delete_created_job "${created_job_jsons[$cleanup_index]}" "${jobs[$cleanup_index]}"
 			done
 			return 1
 		fi
@@ -464,9 +545,8 @@ dispatch_capabilities() {
 				delete_owned_image_evidence "${created_configmaps[$cleanup_index]}" \
 					"${created_job_jsons[$cleanup_index]}"
 			done
-			for name in "${created_names[@]}"; do
-				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-					"job/$name" --wait=true >/dev/null 2>&1 || true
+			for cleanup_index in "${!created_job_jsons[@]}"; do
+				delete_created_job "${created_job_jsons[$cleanup_index]}" "${jobs[$cleanup_index]}"
 			done
 			return 1
 		fi
@@ -477,7 +557,7 @@ dispatch_capabilities() {
 
 dispatch_census() {
 	local run_id job name job_json uid inventory inventory_mode configmap configmap_name
-	local configmap_json persisted_configmap persisted_owner_count
+	local configmap_json persisted_configmap
 	require_confirmation ENCODE_BENCHMARK_CENSUS_CONFIRM 'run:encode-benchmark:census' || return
 	load_source || return
 	run_id="$(new_run_id census)" || return
@@ -537,18 +617,11 @@ dispatch_census() {
 	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap_json")" == "$configmap_name" ]] || return 65
 	persisted_configmap="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get \
 		"configmap/$configmap_name" --output json)" || return
-	persisted_owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '
-		[.metadata.ownerReferences[]? | select(
-			.apiVersion == "batch/v1" and .kind == "Job" and
-			.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and
-			.controller == true and .blockOwnerDeletion == true
-		)] | length
-	' <<<"$persisted_configmap")"
-	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted_configmap")" == "$configmap_name" &&
-	"$persisted_owner_count" == '1' ]] || {
+	if [[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted_configmap")" != "$configmap_name" ]] ||
+		! has_exact_job_controller_owner "$persisted_configmap" "$name" "$uid"; then
 		echo 'persisted census inventory ownership could not be proven' >&2
 		return 65
-	}
+	fi
 	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" patch "job/$name" \
 		--type merge --patch '{"spec":{"suspend":false}}' >/dev/null || return
 	remote_cleanup_armed=0
@@ -693,8 +766,8 @@ dispatch_run() {
 			render_job "$job" "$mode" "$run_id" "$dispatch_id" "$worker" "$name" \
 				/scripts/benchmark.sh contention "$run_id" "$contention_case" "$worker" "$candidate_id"
 			if ! job_json="$(create_job "$job")"; then
-				for name in "${created_names[@]}"; do
-					kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete "job/$name" --wait=true >/dev/null 2>&1 || true
+				for cleanup_index in "${!created_job_jsons[@]}"; do
+					delete_created_job "${created_job_jsons[$cleanup_index]}" "${created_jobs[$cleanup_index]}"
 				done
 				return 1
 			fi
@@ -710,8 +783,8 @@ dispatch_run() {
 					delete_owned_image_evidence "${created_configmaps[$cleanup_index]}" \
 						"${created_job_jsons[$cleanup_index]}"
 				done
-				for name in "${created_names[@]}"; do
-					kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete "job/$name" --wait=true >/dev/null 2>&1 || true
+				for cleanup_index in "${!created_job_jsons[@]}"; do
+					delete_created_job "${created_job_jsons[$cleanup_index]}" "${created_jobs[$cleanup_index]}"
 				done
 				return 1
 			fi
@@ -740,8 +813,7 @@ dispatch_run() {
 		if [[ -n "$image_configmap" ]]; then
 			delete_owned_image_evidence "$image_configmap" "$job_json"
 		fi
-		kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-			"job/$name" --wait=true >/dev/null 2>&1 || true
+		delete_created_job "$job_json" "$job"
 		return 1
 	fi
 	printf 'run_id=%s job=%s\n' "$run_id" "$name"

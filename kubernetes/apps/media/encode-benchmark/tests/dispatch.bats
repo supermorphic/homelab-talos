@@ -101,10 +101,13 @@ if contains create "$@"; then
 		"${STUB_JOB_CREATE_FAIL_AT:-0}" == "$count") ]]; then
 		exit 25
 	fi
-	jq -n -c \
-		--arg kind "$kind" \
-		--arg name "$name" \
-		'{apiVersion:"v1",kind:$kind,metadata:{name:$name,uid:"fixture-job-uid"}}'
+	uid='fixture-job-uid'
+	[[ "$kind" != 'ConfigMap' ]] || uid='fixture-configmap-uid'
+	created="$(RESOURCE_UID="$uid" yq -o=json -I=0 '.metadata.uid = strenv(RESOURCE_UID)' "$capture")"
+	if [[ "${STUB_JOB_CREATE_RESPONSE_METADATA_BAD:-0}" == '1' && "$kind" == 'Job' ]]; then
+		created="$(yq -p=json -o=json -I=0 '.metadata.labels."homelab-talos/benchmark-dispatch" = "20260802T120000Z-deadbeef"' <<<"$created")"
+	fi
+	printf '%s\n' "$created"
 	exit 0
 fi
 
@@ -117,6 +120,10 @@ if contains patch "$@"; then
 fi
 
 if contains delete "$@"; then
+	if [[ "${STUB_CONFIGMAP_REPLACE_BEFORE_DELETE:-0}" == '1' && "$*" == *' configmap/'* &&
+		"$*" != *' --preconditions=uid=fixture-configmap-uid'* ]]; then
+		: >"$STUB_CAPTURE_DIR/unsafe-configmap-delete"
+	fi
 	printf '%s\n' 'job.batch/fixture deleted'
 	exit 0
 fi
@@ -149,12 +156,34 @@ if contains get "$@" && contains jobs "$@"; then
 	exit 0
 fi
 
+if contains get "$@" && [[ "$*" == *' job/'* ]]; then
+	resource=''
+	for argument in "$@"; do
+		if [[ "$argument" == job/* ]]; then resource="$argument"; fi
+	done
+	name="${resource#job/}"
+	capture="$STUB_CAPTURE_DIR/Job-$name.yaml"
+	live_job="$(yq -o=json -I=0 '.metadata.uid = "fixture-job-uid"' "$capture")"
+	if [[ "${STUB_JOB_REPLACEMENT:-0}" == '1' ]]; then
+		live_job="$(yq -p=json -o=json -I=0 '.metadata.uid = "replacement-job-uid"' <<<"$live_job")"
+	fi
+	printf '%s\n' "$live_job"
+	exit 0
+fi
+
 if contains get "$@" && contains pods "$@"; then
 	if [[ "$*" == *'job-name='* ]]; then
 		selector="$(argument_after --selector "$@")"
 		job_name="${selector#job-name=}"
 		job="$STUB_CAPTURE_DIR/Job-$job_name.yaml"
-		if [[ "${STUB_HANDOFF_POD_COUNT:-1}" == '0' ]]; then
+		sequence_step=0
+		if [[ "${STUB_HANDOFF_POD_SEQUENCE:-0}" == '1' ]]; then
+			sequence_file="$STUB_CAPTURE_DIR/.pod-sequence-$job_name"
+			[[ ! -f "$sequence_file" ]] || read -r sequence_step <"$sequence_file"
+			sequence_step=$((sequence_step + 1))
+			printf '%s\n' "$sequence_step" >"$sequence_file"
+		fi
+		if [[ "${STUB_HANDOFF_POD_COUNT:-1}" == '0' || "$sequence_step" == '1' ]]; then
 			printf '%s\n' '{"apiVersion":"v1","items":[]}'
 		else
 			image="$(yq -r '.spec.template.spec.containers[] | select(.name == "benchmark") | .image' "$job")"
@@ -165,7 +194,16 @@ if contains get "$@" && contains pods "$@"; then
 			fi
 			owner_uid='fixture-job-uid'
 			[[ "${STUB_HANDOFF_BAD_OWNER:-0}" != '1' ]] || owner_uid='spoofed-owner-uid'
-			jq -n -c --arg job "$job_name" --arg uid "$owner_uid" --arg image "$image_id" '{apiVersion:"v1",items:[{metadata:{name:($job + "-pod"),labels:{"job-name":$job},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:$uid,controller:true,blockOwnerDeletion:true}]},status:{phase:"Running",containerStatuses:[{name:"benchmark",imageID:$image}]}}]}'
+			jq -n -c --arg job "$job_name" --arg uid "$owner_uid" --arg image "$image_id" \
+				--argjson pending "$( [[ "$sequence_step" == '2' ]] && printf true || printf false )" \
+				--argjson extra "$( [[ "${STUB_HANDOFF_EXTRA_OWNER:-0}" == '1' ]] && printf true || printf false )" '
+				{apiVersion:"v1",items:[{
+					metadata:{name:($job + "-pod"),labels:{"job-name":$job},ownerReferences:
+						([{apiVersion:"batch/v1",kind:"Job",name:$job,uid:$uid,controller:true,blockOwnerDeletion:true}] +
+						(if $extra then [{apiVersion:"v1",kind:"ConfigMap",name:"foreign-owner",uid:"foreign-owner-uid",controller:false,blockOwnerDeletion:false}] else [] end))},
+					status:({phase:(if $pending then "Pending" else "Running" end)} +
+						(if $pending then {} else {containerStatuses:[{name:"benchmark",imageID:$image}]} end))
+				}]}'
 		fi
 	elif [[ "$*" == *'app.kubernetes.io/name=encode-benchmark'* && -n "${STUB_BENCHMARK_PODS_JSON:-}" ]]; then
 		sed -n '1,$p' "$STUB_BENCHMARK_PODS_JSON"
@@ -202,11 +240,14 @@ if contains get "$@" && [[ "$*" == *' configmap/'* ]]; then
 	if [[ ! -f "$capture" && -n "${STUB_IMAGE_EVIDENCE_DIR:-}" ]]; then
 		capture="$STUB_IMAGE_EVIDENCE_DIR/$name.json"
 	fi
+	persisted="$(yq -o=json -I=0 '.metadata.uid = "fixture-configmap-uid"' "$capture")"
 	if [[ "${STUB_PERSISTED_OWNER_BAD:-0}" == '1' ]]; then
-		yq -o=json -I=0 '.metadata.ownerReferences[0].uid = "spoofed-owner-uid"' "$capture"
-	else
-		yq -o=json -I=0 '.' "$capture"
+		persisted="$(yq -p=json -o=json -I=0 '.metadata.ownerReferences[0].uid = "spoofed-owner-uid"' <<<"$persisted")"
 	fi
+	if [[ "${STUB_PERSISTED_EXTRA_OWNER:-0}" == '1' ]]; then
+		persisted="$(yq -p=json -o=json -I=0 '.metadata.ownerReferences += [{"apiVersion":"v1","kind":"ConfigMap","name":"foreign-owner","uid":"foreign-owner-uid","controller":false,"blockOwnerDeletion":false}]' <<<"$persisted")"
+	fi
+	printf '%s\n' "$persisted"
 	exit 0
 fi
 
@@ -505,6 +546,100 @@ valid_capability_evidence() {
 	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete / && $2 !~ /encode-benchmark-(cap|image)-/ {found=1} END {exit found}' "$STUB_CALLS"
 }
 
+# Catches the capability rollback path deleting a foreign Job that replaced a
+# successfully created same-name object before a later create failed.
+@test "capability rollback never deletes a replacement Job" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_JOB_CREATE_FAIL_AT=2
+	export STUB_JOB_REPLACEMENT=1
+	run_dispatch capabilities
+	[ "$status" -ne 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+}
+
+# Catches rollback deriving dispatch/run ownership only from the local manifest
+# instead of the API server's captured create response.
+@test "rollback requires exact captured create-response metadata" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_JOB_CREATE_FAIL_AT=2
+	export STUB_JOB_CREATE_RESPONSE_METADATA_BAD=1
+	run_dispatch capabilities
+	[ "$status" -ne 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+}
+
+# Catches multi-worker rollback deleting foreign same-name replacement Jobs.
+@test "contention rollback never deletes replacement Jobs" {
+	prepare_contention_source
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
+	export STUB_HANDOFF_LOG_READY=0
+	export STUB_JOB_REPLACEMENT=1
+	run_dispatch run contention-b
+	[ "$status" -ne 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+}
+
+# Catches single-Job rollback deleting a same-name replacement after handoff
+# failure.
+@test "single Job rollback never deletes a replacement Job" {
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	export STUB_HANDOFF_LOG_READY=0
+	export STUB_JOB_REPLACEMENT=1
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+}
+
+# Catches a read/delete replacement race by requiring the API server to apply
+# the captured UID as an atomic delete precondition for both resource kinds.
+@test "rollback deletes Jobs and ConfigMaps with atomic UID preconditions" {
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_HANDOFF_LOG_READY=0
+	export STUB_CONFIGMAP_REPLACE_BEFORE_DELETE=1
+	run_dispatch capabilities
+	[ "$status" -ne 0 ]
+	awk -F '\t' '
+		$1 == "kubectl" && $2 ~ / delete job\// {jobs += 1; if ($2 !~ / --preconditions=uid=fixture-job-uid( |$)/) bad=1}
+		$1 == "kubectl" && $2 ~ / delete configmap\// {configmaps += 1; if ($2 !~ / --preconditions=uid=fixture-configmap-uid( |$)/) bad=1}
+		END {exit !(jobs == 2 && configmaps == 1 && !bad)}
+	' "$STUB_CALLS"
+	[ ! -e "$STUB_CAPTURE_DIR/unsafe-configmap-delete" ]
+}
+
+# Catches stopping at the first controlled Pending pod before kubelet has
+# populated its benchmark container status and immutable imageID.
+@test "handoff polls zero pods then Pending status until imageID is populated" {
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	export ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS=4
+	export STUB_HANDOFF_POD_SEQUENCE=1
+	run_dispatch run quality
+	[ "$status" -eq 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / && $2 ~ /job-name=/ {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 3 ]
+	awk -F '\t' '
+		$1 == "kubectl" && $2 ~ / get pods / && $2 ~ /job-name=/ {pod_gets += 1; next}
+		$1 == "kubectl" && $2 ~ / create / && $2 ~ /encode-benchmark-image-/ {created=1; if (pod_gets == 3) ordered=1}
+		END {exit !(created && ordered)}
+	' "$STUB_CALLS"
+}
+
+# Catches accepting one matching controller reference while ignoring a second
+# foreign owner on the controlled pod or persisted handoff ConfigMap.
+@test "handoff requires exactly one complete owner reference" {
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	export STUB_HANDOFF_EXTRA_OWNER=1
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'ConfigMap-*.yaml' | wc -l | tr -d ' ')" -eq 0 ]
+
+	rm -f "$STUB_CAPTURE_DIR"/Job-*.yaml "$STUB_CAPTURE_DIR"/ConfigMap-*.yaml "$STUB_CAPTURE_DIR"/create-*.yaml "$STUB_CAPTURE_DIR"/.count
+	: >"$STUB_CALLS"
+	unset STUB_HANDOFF_EXTRA_OWNER
+	export STUB_PERSISTED_EXTRA_OWNER=1
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'persisted-ownership'* ]]
+}
+
 # Catches losing the deterministic ConfigMap name when create reports failure
 # after the API server might already have persisted the submitted object.
 @test "ConfigMap create failure rolls back every possibly persisted handoff resource" {
@@ -546,7 +681,11 @@ valid_capability_evidence() {
 		esac
 		run_dispatch capabilities
 		[ "$status" -ne 0 ]
-		[[ "$output" == *'running image evidence handoff rejected'* ]]
+		if [[ "$failure" == 'missing' ]]; then
+			[[ "$output" == *'running image evidence handoff timed out'* ]]
+		else
+			[[ "$output" == *'running image evidence handoff rejected'* ]]
+		fi
 		[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'ConfigMap-*.yaml' | wc -l | tr -d ' ')" -eq 0 ]
 		rm -f "$STUB_CAPTURE_DIR"/Job-*.yaml "$STUB_CAPTURE_DIR"/create-*.yaml "$STUB_CAPTURE_DIR"/.count
 		: >"$STUB_CALLS"
@@ -1293,6 +1432,31 @@ write_multi_node_results_fixtures() {
 
 	write_results_fixtures "$run_id" "$image_id"
 	jq '.data."image.json" |= (fromjson | .imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | tojson)' "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'pre-work image identity evidence rejected'* ]]
+	assert_no_mutations
+}
+
+# Catches result collection accepting one matching controller owner while a
+# second owner entry leaves the pod or evidence ConfigMap provenance ambiguous.
+@test "results require exactly one complete owner reference" {
+	run_id='20260802T120000Z-1234abcd'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	extra_owner='{"apiVersion":"v1","kind":"ConfigMap","name":"foreign-owner","uid":"foreign-owner-uid","controller":false,"blockOwnerDeletion":false}'
+
+	write_results_fixtures "$run_id" "$image_id"
+	jq --argjson owner "$extra_owner" '.items[0].metadata.ownerReferences += [$owner]' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability result provenance rejected'* ]]
+
+	write_results_fixtures "$run_id" "$image_id"
+	jq --argjson owner "$extra_owner" '.metadata.ownerReferences += [$owner]' \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
 	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]

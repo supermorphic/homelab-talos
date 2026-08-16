@@ -165,15 +165,29 @@ sanitize_capability_evidence() {
 	' <<<"$log_line"
 }
 
+has_exact_job_controller_owner() {
+	local resource_json="$1" job_name="$2" job_uid="$3"
+	jq -e --arg name "$job_name" --arg uid "$job_uid" '
+		.metadata.ownerReferences as $owners |
+		($owners | type == "array" and length == 1) and
+		$owners[0].apiVersion == "batch/v1" and
+		$owners[0].kind == "Job" and
+		$owners[0].name == $name and
+		$owners[0].uid == $uid and
+		$owners[0].controller == true and
+		$owners[0].blockOwnerDeletion == true
+	' <<<"$resource_json" >/dev/null 2>&1
+}
+
 validate_prework_image_evidence() {
 	local job_json="$1" name="$2" uid="$3" live_image_id="$4"
-	local dispatched_image configmap_name configmap owner_count evidence normalized_evidence_id
+	local dispatched_image configmap_name configmap evidence normalized_evidence_id
 	dispatched_image="$(yq -p=json -e -r '.spec.template.spec.containers[] | select(.name == "benchmark") | .image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' <<<"$job_json")" || return 65
 	[[ "$dispatched_image" == "$configured_image" ]] || return 65
 	configmap_name="$(yq -p=json -e -r '.metadata.annotations."homelab-talos/image-evidence-configmap" | select(test("^encode-benchmark-image-[a-z0-9-]+$"))' <<<"$job_json")" || return 65
 	configmap="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || return
-	owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$configmap")"
-	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap")" == "$configmap_name" && "$owner_count" == '1' ]] || return 65
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap")" == "$configmap_name" ]] || return 65
+	has_exact_job_controller_owner "$configmap" "$name" "$uid" || return 65
 	evidence="$(yq -p=json -e -r '.data."image.json"' <<<"$configmap")" || return 65
 	jq -e --arg configured "$configured_image" --arg dispatched "$dispatched_image" '
 		type == "object" and keys == ["configuredImage","dispatchedImage","imageId"] and
@@ -222,19 +236,13 @@ while IFS= read -r job_json; do
 			exit 1
 		}
 		pod_phase="$(yq -p=json -r '.[0].status.phase // ""' <<<"$matching_pods")"
-		controller_count="$(JOB_NAME="$name" JOB_UID="$job_uid" yq -p=json -r '
-			[.[0].metadata.ownerReferences[]? | select(
-				.controller == true and .apiVersion == "batch/v1" and .kind == "Job" and
-				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .blockOwnerDeletion == true
-			)] | length
-		' <<<"$matching_pods")"
 		target_node="$(yq -p=json -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""' \
 			<<<"$job_json")"
-		[[ ("$pod_phase" == 'Succeeded' || "$pod_phase" == 'Failed') &&
-			"$controller_count" == '1' && "$target_node" == "$node" ]] || {
+		if [[ ("$pod_phase" != 'Succeeded' && "$pod_phase" != 'Failed') || "$target_node" != "$node" ]] ||
+			! has_exact_job_controller_owner "$(jq -c '.[0]' <<<"$matching_pods")" "$name" "$job_uid"; then
 			echo "capability result provenance rejected: pod is not terminal, controlled, and targeted for Job $name" >&2
 			exit 1
-		}
+		fi
 		if [[ "$phase" == 'Complete' ]]; then
 			[[ "$succeeded" == '1' && "$failed" == '0' && "$pod_phase" == 'Succeeded' ]] || {
 				echo "capability result provenance rejected: terminal counts contradict Job $name" >&2
