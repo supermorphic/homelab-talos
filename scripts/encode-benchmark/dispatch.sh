@@ -16,6 +16,7 @@ repository_root="$(cd "$script_directory/../.." && pwd)"
 app_directory="$repository_root/kubernetes/apps/media/encode-benchmark/app"
 template="$repository_root/kubernetes/apps/media/encode-benchmark/templates/job.yaml"
 test_mode="${ENCODE_BENCHMARK_TEST_MODE:-0}"
+handoff_wait_seconds=600
 
 if [[ -n "${ENCODE_BENCHMARK_APP_DIR:-}" ]]; then
 	[[ "$test_mode" == '1' ]] || {
@@ -24,6 +25,17 @@ if [[ -n "${ENCODE_BENCHMARK_APP_DIR:-}" ]]; then
 	}
 	app_directory="$ENCODE_BENCHMARK_APP_DIR"
 fi
+if [[ -n "${ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS:-}" ]]; then
+	[[ "$test_mode" == '1' ]] || {
+		echo 'ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS requires ENCODE_BENCHMARK_TEST_MODE=1' >&2
+		exit 64
+	}
+	handoff_wait_seconds="$ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS"
+fi
+[[ "$handoff_wait_seconds" =~ ^[0-9]+$ ]] || {
+	echo 'invalid running image handoff wait' >&2
+	exit 64
+}
 # shellcheck disable=SC1091
 source "$app_directory/scripts/contract.sh"
 
@@ -116,10 +128,14 @@ require_capability_evidence() {
 			(sub("^.*@"; "") == $digest);
 		def valid_node:
 			type == "object" and
-			.proofSchemaVersion == 2 and
+			.strategyId == "qsv-hevc-icq-v1" and
+			.proofSchemaVersion == 3 and
 			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
 			.initialization == "passed" and
-			.selectedRateControl == "LA-ICQ" and
+			.initializationReason == "" and
+			.renderNode == "/dev/dri/renderD128" and
+			.drmDriver == "i915" and
+			.selectedRateControl == "ICQ" and
 			.telemetryStatus == "available" and
 			.telemetryReason == "" and
 			(.videoBusyNanoseconds | type == "number" and . > 0) and
@@ -139,7 +155,7 @@ require_capability_evidence() {
 	' "$samples_document" >/dev/null; then
 		return 0
 	fi
-	echo 'Refusing benchmark dispatch: committed schema-v2 capability evidence has no current passing node.' >&2
+	echo 'Refusing benchmark dispatch: committed schema-v3 ICQ capability evidence has no current passing node.' >&2
 	return 1
 }
 
@@ -176,11 +192,12 @@ ensure_run_available() {
 render_job() {
 	local output="$1" mode="$2" run_id="$3" dispatch_id="$4" worker="$5" name="$6"
 	shift 6
-	local command_json
+	local command_json image_configmap
 	command_json="$(jq -n -c '$ARGS.positional' --args -- "$@")"
+	image_configmap="$(image_evidence_configmap_name "$name")"
 	cp "$template" "$output"
 	JOB_NAME="$name" RUN_ID="$run_id" DISPATCH_ID="$dispatch_id" MODE="$mode" IMAGE="$configured_image" \
-		SCRIPTS_CONFIGMAP="$scripts_configmap" COMMAND_JSON="$command_json" yq -i '
+		SCRIPTS_CONFIGMAP="$scripts_configmap" IMAGE_CONFIGMAP="$image_configmap" COMMAND_JSON="$command_json" yq -i '
 		.metadata.name = strenv(JOB_NAME) |
 		.metadata.labels."app.kubernetes.io/name" = "encode-benchmark" |
 		.metadata.labels."homelab-talos/benchmark-dispatch" = strenv(DISPATCH_ID) |
@@ -188,6 +205,7 @@ render_job() {
 		.metadata.labels."homelab-talos/benchmark-mode" = strenv(MODE) |
 		.metadata.annotations."homelab-talos/benchmark-owned" = "true" |
 		.metadata.annotations."homelab-talos/scripts-configmap" = strenv(SCRIPTS_CONFIGMAP) |
+		.metadata.annotations."homelab-talos/image-evidence-configmap" = strenv(IMAGE_CONFIGMAP) |
 		.spec.template.metadata.labels."app.kubernetes.io/name" = "encode-benchmark" |
 		.spec.template.metadata.labels."homelab-talos/benchmark-dispatch" = strenv(DISPATCH_ID) |
 		.spec.template.metadata.labels."homelab-talos/benchmark-run" = strenv(RUN_ID) |
@@ -195,7 +213,8 @@ render_job() {
 		.spec.template.spec.containers[0].image = strenv(IMAGE) |
 		.spec.template.spec.containers[0].command = (strenv(COMMAND_JSON) | from_json) |
 		.spec.template.spec.containers[0].env += [{"name":"BENCHMARK_DISPATCH_IMAGE","value":strenv(IMAGE)}] |
-		(.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name) = strenv(SCRIPTS_CONFIGMAP)
+		(.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name) = strenv(SCRIPTS_CONFIGMAP) |
+		(.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.name) = strenv(IMAGE_CONFIGMAP)
 	' "$output"
 	if [[ -n "$worker" ]]; then
 		WORKER="$worker" yq -i '
@@ -221,6 +240,128 @@ create_job() {
 	local job="$1"
 	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" create \
 		--filename "$job" --output json
+}
+
+image_evidence_configmap_name() {
+	local name_hash
+	name_hash="$(printf '%s\n' "$1" | sha256sum | awk '{print substr($1, 1, 12)}')"
+	printf 'encode-benchmark-image-%s\n' "$name_hash"
+}
+
+normalize_image_id() {
+	local image_id="$1" stripped
+	stripped="${image_id#docker-pullable://}"
+	stripped="${stripped#containerd://}"
+	[[ "$stripped" =~ ^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$ ]] || return 65
+	printf '%s\n' "$stripped"
+}
+
+establish_running_image_handoff() {
+	local job_json="$1" job="$2" output_variable="$3"
+	local name uid dispatched_image configured_digest dispatched_digest deadline pods pod_count
+	local pod_name owner_count pod_phase actual_image_id normalized_image_id running_digest
+	local configmap_name evidence_json configmap configmap_json persisted persisted_owner_count persisted_evidence log_line
+	printf -v "$output_variable" '%s' ''
+	name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$job_json")" || return 65
+	uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || return 65
+	[[ "$name" == "$(yq -r '.metadata.name' "$job")" ]] || return 65
+	dispatched_image="$(yq -e -r '.spec.template.spec.containers[] | select(.name == "benchmark") | .image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$job")" || return 65
+	configured_digest="${configured_image##*@}"
+	dispatched_digest="${dispatched_image##*@}"
+	[[ "$configured_image" == "$dispatched_image" && "$configured_digest" == "$dispatched_digest" ]] || {
+		echo "running image evidence handoff rejected: job=$name configured-dispatched-mismatch" >&2
+		return 65
+	}
+	deadline=$((SECONDS + handoff_wait_seconds))
+	while :; do
+		pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
+			--selector "job-name=$name" --output json)" || return
+		pod_count="$(yq -p=json -r '.items | length' <<<"$pods")"
+		if [[ "$pod_count" == '1' ]]; then
+			break
+		fi
+		if [[ "$pod_count" != '0' ]]; then
+			echo "running image evidence handoff rejected: job=$name expected-one-pod" >&2
+			return 65
+		fi
+		if ((SECONDS >= deadline)); then
+			echo "running image evidence handoff timed out: job=$name waiting-for-pod" >&2
+			return 70
+		fi
+		sleep 1
+	done
+	pod_name="$(yq -p=json -e -r '.items[0].metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$pods")" || return 65
+	owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.items[0].metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$pods")"
+	pod_phase="$(yq -p=json -r '.items[0].status.phase // ""' <<<"$pods")"
+	[[ "$owner_count" == '1' && ("$pod_phase" == 'Pending' || "$pod_phase" == 'Running') ]] || {
+		echo "running image evidence handoff rejected: job=$name ownership-or-phase" >&2
+		return 65
+	}
+	actual_image_id="$(yq -p=json -e -r '[.items[0].status.containerStatuses[]? | select(.name == "benchmark") | .imageID // ""] | select(length == 1) | .[0]' <<<"$pods")" || actual_image_id=''
+	normalized_image_id="$(normalize_image_id "$actual_image_id")" || {
+		echo "running image evidence handoff rejected: job=$name missing-or-malformed-imageID" >&2
+		return 65
+	}
+	running_digest="${normalized_image_id##*@}"
+	[[ "$running_digest" == "$configured_digest" && "$running_digest" == "$dispatched_digest" ]] || {
+		echo "running image evidence handoff rejected: job=$name digest-mismatch" >&2
+		return 65
+	}
+	configmap_name="$(yq -e -r '.metadata.annotations."homelab-talos/image-evidence-configmap" | select(test("^encode-benchmark-image-[0-9a-f]{12}$"))' "$job")" || return 65
+	[[ "$configmap_name" == "$(image_evidence_configmap_name "$name")" ]] || return 65
+	evidence_json="$(jq -n -c --arg configured "$configured_image" --arg dispatched "$dispatched_image" \
+		--arg image_id "$normalized_image_id" '{configuredImage:$configured,dispatchedImage:$dispatched,imageId:$image_id}')"
+	configmap="$temp_directory/$configmap_name.yaml"
+	CONFIGMAP_NAME="$configmap_name" JOB_NAME="$name" JOB_UID="$uid" RUN_ID="$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" \
+	MODE="$(yq -r '.metadata.labels."homelab-talos/benchmark-mode"' "$job")" EVIDENCE_JSON="$evidence_json" yq -n '
+		.apiVersion = "v1" | .kind = "ConfigMap" |
+		.metadata.name = strenv(CONFIGMAP_NAME) | .metadata.namespace = "media" |
+		.metadata.labels."app.kubernetes.io/name" = "encode-benchmark" |
+		.metadata.labels."homelab-talos/benchmark-run" = strenv(RUN_ID) |
+		.metadata.labels."homelab-talos/benchmark-mode" = strenv(MODE) |
+		.metadata.ownerReferences = [{"apiVersion":"batch/v1","kind":"Job","name":strenv(JOB_NAME),"uid":strenv(JOB_UID),"controller":true,"blockOwnerDeletion":true}] |
+		.data."image.json" = strenv(EVIDENCE_JSON)
+	' >"$configmap" || return
+	# The API server can persist this deterministic object before the client sees
+	# a failed response. Record its name first so rollback always attempts it.
+	printf -v "$output_variable" '%s' "$configmap_name"
+	configmap_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" create --filename "$configmap" --output json)" || return
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap_json")" == "$configmap_name" ]] || return 65
+	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || return
+	persisted_owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$persisted")"
+	persisted_evidence="$(yq -p=json -e -r '.data."image.json"' <<<"$persisted")" || return 65
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" == "$configmap_name" && "$persisted_owner_count" == '1' ]] || {
+		echo "running image evidence handoff rejected: job=$name persisted-ownership" >&2
+		return 65
+	}
+	jq -e --argjson expected "$evidence_json" '. == $expected' <<<"$persisted_evidence" >/dev/null 2>&1 || {
+		echo "running image evidence handoff rejected: job=$name persisted-evidence" >&2
+		return 65
+	}
+	while :; do
+		log_line="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "pod/$pod_name" --container benchmark --tail=20 2>/dev/null || true)"
+		if grep -q -F 'running_image_evidence=accepted' <<<"$log_line"; then
+			return 0
+		fi
+		if ((SECONDS >= deadline)); then
+			echo "running image evidence handoff timed out: job=$name waiting-for-runtime" >&2
+			return 70
+		fi
+		sleep 1
+	done
+}
+
+delete_owned_image_evidence() {
+	local configmap_name="$1" job_json="$2" job_name job_uid persisted owner_count
+	[[ "$configmap_name" =~ ^encode-benchmark-image-[0-9a-f]{12}$ ]] || return 0
+	job_name="$(yq -p=json -e -r '.metadata.name | select(test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"))' <<<"$job_json")" || return 0
+	job_uid="$(yq -p=json -e -r '.metadata.uid | select(test("^[a-zA-Z0-9._-]+$"))' <<<"$job_json")" || return 0
+	persisted="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get \
+		"configmap/$configmap_name" --output json 2>/dev/null)" || return 0
+	owner_count="$(JOB_NAME="$job_name" JOB_UID="$job_uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$persisted")"
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$persisted")" == "$configmap_name" && "$owner_count" == '1' ]] || return 0
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
+		"configmap/$configmap_name" --wait=true >/dev/null 2>&1 || true
 }
 
 eligible_capability_nodes() {
@@ -276,8 +417,8 @@ capability_job_name() {
 }
 
 dispatch_capabilities() {
-	local run_id job name node index
-	local -a nodes=() jobs=() names=() created_names=()
+	local run_id job name node index cleanup_index job_json image_configmap=''
+	local -a nodes=() jobs=() names=() created_names=() created_job_jsons=() created_configmaps=()
 	require_confirmation ENCODE_BENCHMARK_CAPABILITIES_CONFIRM 'run:encode-benchmark:capabilities' || return
 	load_source || return
 	run_id="$(new_run_id capabilities)" || return
@@ -294,6 +435,7 @@ dispatch_capabilities() {
 		render_job "$job" capabilities "$run_id" "$run_id" '' "$name" /scripts/benchmark.sh capabilities
 		remove_mounts_and_volumes "$job" media out
 		NODE_NAME="$node" yq -i '
+			.spec.activeDeadlineSeconds = 900 |
 			del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |
 			del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage") |
 			.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME)
@@ -304,7 +446,7 @@ dispatch_capabilities() {
 	for index in "${!jobs[@]}"; do
 		job="${jobs[$index]}"
 		name="${names[$index]}"
-		if ! create_job "$job" >/dev/null; then
+		if ! job_json="$(create_job "$job")"; then
 			for name in "${created_names[@]}"; do
 				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
 					"job/$name" --wait=true >/dev/null 2>&1 || true
@@ -312,6 +454,23 @@ dispatch_capabilities() {
 			return 1
 		fi
 		created_names+=("$name")
+		created_job_jsons+=("$job_json")
+	done
+	for index in "${!jobs[@]}"; do
+		image_configmap=''
+		if ! establish_running_image_handoff "${created_job_jsons[$index]}" "${jobs[$index]}" image_configmap; then
+			[[ -z "$image_configmap" ]] || created_configmaps+=("$image_configmap")
+			for cleanup_index in "${!created_configmaps[@]}"; do
+				delete_owned_image_evidence "${created_configmaps[$cleanup_index]}" \
+					"${created_job_jsons[$cleanup_index]}"
+			done
+			for name in "${created_names[@]}"; do
+				kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
+					"job/$name" --wait=true >/dev/null 2>&1 || true
+			done
+			return 1
+		fi
+		created_configmaps+=("$image_configmap")
 	done
 	printf 'run_id=%s nodes=%s jobs=%s\n' "$run_id" "${nodes[*]}" "${created_names[*]}"
 }
@@ -341,7 +500,7 @@ dispatch_census() {
 	configmap_name="encode-benchmark-inodes-${run_id,,}"
 	render_job "$job" census "$run_id" "$run_id" '' "$name" \
 		/scripts/census.sh /inventory/inodes.jsonl "/out/runs/$run_id"
-	remove_mounts_and_volumes "$job" scratch
+	remove_mounts_and_volumes "$job" scratch image-evidence
 	INVENTORY_CONFIGMAP="$configmap_name" yq -i '
 		.spec.suspend = true |
 		del(.spec.template.spec.affinity) |
@@ -444,8 +603,8 @@ contention_samples() {
 
 dispatch_run() {
 	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' run_id dispatch_id job name contention_case=''
-	local candidate_output
-	local -a candidates=() created_names=() run_ids=()
+	local candidate_output job_json image_configmap='' cleanup_index
+	local -a candidates=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
 	case "$mode" in
 	quality | savings)
 		(($# == 1 || $# == 2)) || return 64
@@ -533,13 +692,30 @@ dispatch_run() {
 			job="$temp_directory/$mode-$worker.yaml"
 			render_job "$job" "$mode" "$run_id" "$dispatch_id" "$worker" "$name" \
 				/scripts/benchmark.sh contention "$run_id" "$contention_case" "$worker" "$candidate_id"
-			if ! create_job "$job" >/dev/null; then
+			if ! job_json="$(create_job "$job")"; then
 				for name in "${created_names[@]}"; do
 					kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete "job/$name" --wait=true >/dev/null 2>&1 || true
 				done
 				return 1
 			fi
 			created_names+=("$name")
+			created_jobs+=("$job")
+			created_job_jsons+=("$job_json")
+		done
+		for index in "${!created_jobs[@]}"; do
+			image_configmap=''
+			if ! establish_running_image_handoff "${created_job_jsons[$index]}" "${created_jobs[$index]}" image_configmap; then
+				[[ -z "$image_configmap" ]] || created_configmaps+=("$image_configmap")
+				for cleanup_index in "${!created_configmaps[@]}"; do
+					delete_owned_image_evidence "${created_configmaps[$cleanup_index]}" \
+						"${created_job_jsons[$cleanup_index]}"
+				done
+				for name in "${created_names[@]}"; do
+					kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete "job/$name" --wait=true >/dev/null 2>&1 || true
+				done
+				return 1
+			fi
+			created_configmaps+=("$image_configmap")
 		done
 		printf 'dispatch_id=%s' "$dispatch_id"
 		for index in "${!run_ids[@]}"; do
@@ -559,7 +735,15 @@ dispatch_run() {
 	else
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh "$mode" "$run_id"
 	fi
-	create_job "$job" >/dev/null
+	job_json="$(create_job "$job")" || return
+	if ! establish_running_image_handoff "$job_json" "$job" image_configmap; then
+		if [[ -n "$image_configmap" ]]; then
+			delete_owned_image_evidence "$image_configmap" "$job_json"
+		fi
+		kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
+			"job/$name" --wait=true >/dev/null 2>&1 || true
+		return 1
+	fi
 	printf 'run_id=%s job=%s\n' "$run_id" "$name"
 }
 
@@ -578,7 +762,7 @@ dispatch_clean() {
 	cleanup_command='run_id="$1"; confirmation="$2"; runs_root="$3"; out_root="$4"; [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || exit 64; [[ "$confirmation" == "delete:encode-benchmark:$run_id" ]] || exit 64; [[ "$out_root" == /* && -d "$out_root" && "$runs_root" == "$out_root/runs" && -d "$runs_root" && ! -L "$runs_root" ]] || exit 65; resolved_out_root="$(realpath "$out_root")" || exit 65; resolved_runs_root="$(realpath "$runs_root")" || exit 65; [[ "$resolved_runs_root" == "$resolved_out_root/runs" ]] || exit 65; run_directory="$runs_root/$run_id"; if [[ -e "$run_directory" || -L "$run_directory" ]]; then [[ -d "$run_directory" && ! -L "$run_directory" ]] || exit 65; fi; rm -rf -- "$run_directory"'
 	render_job "$job" clean "$run_id" "$run_id" '' "$name" /bin/bash -euo pipefail -c \
 		"$cleanup_command" cleanup "$run_id" "$expected" /out/runs /out
-	remove_mounts_and_volumes "$job" media scratch scripts samples
+	remove_mounts_and_volumes "$job" media scratch scripts samples image-evidence
 	yq -i '
 		del(.spec.template.spec.affinity) |
 		del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |

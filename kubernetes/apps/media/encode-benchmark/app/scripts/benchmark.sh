@@ -9,6 +9,8 @@ benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
+running_image_file='/provenance/image.json'
+running_image_wait_seconds=600
 results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
@@ -23,6 +25,21 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" == '1' ]]; then
+	running_image_file="${BENCHMARK_RUNNING_IMAGE_FILE:-$running_image_file}"
+	running_image_wait_seconds="${BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS:-$running_image_wait_seconds}"
+else
+	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE; do
+		if [[ -v "$override" ]]; then
+			echo "$override requires BENCHMARK_TEST_MODE=1" >&2
+			exit 64
+		fi
+	done
+fi
+[[ "$running_image_wait_seconds" =~ ^[0-9]+$ ]] || {
+	echo 'running image evidence wait must be a non-negative integer' >&2
+	exit 64
+}
 if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
@@ -1024,6 +1041,75 @@ read_declared_commands() {
 			break
 		fi
 	done <"$file"
+}
+
+normalize_running_image_id() {
+	local image_id="$1" stripped
+	stripped="${image_id#docker-pullable://}"
+	stripped="${stripped#containerd://}"
+	[[ "$stripped" =~ ^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$ ]] || return 65
+	printf '%s\n' "$stripped"
+}
+
+require_running_image_evidence() {
+	local configured_image dispatched_image configured_digest dispatched_digest
+	local evidence normalized_image_id running_digest deadline
+	if [[ "$test_mode" == '1' && ! -v BENCHMARK_RUNNING_IMAGE_FILE && -z "${BENCHMARK_RUNNING_IMAGE:-}" ]]; then
+		return 0
+	fi
+	configured_image="$(jq -e -r '.runtime.image | strings | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' \
+		"$samples_file")" || {
+		echo 'configured runtime image is missing or mutable' >&2
+		return 65
+	}
+	dispatched_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	[[ "$dispatched_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+		echo 'dispatched runtime image is missing or mutable' >&2
+		return 65
+	}
+	configured_digest="${configured_image##*@}"
+	dispatched_digest="${dispatched_image##*@}"
+	[[ "$configured_image" == "$dispatched_image" && "$configured_digest" == "$dispatched_digest" ]] || {
+		echo 'configured and dispatched runtime images do not match' >&2
+		return 65
+	}
+	if [[ "$test_mode" == '1' && -n "${BENCHMARK_RUNNING_IMAGE:-}" && ! -f "$running_image_file" ]]; then
+		normalized_image_id="$(normalize_running_image_id "$BENCHMARK_RUNNING_IMAGE")" || return 65
+		running_digest="${normalized_image_id##*@}"
+		[[ "$running_digest" == "$configured_digest" ]] || return 65
+		BENCHMARK_RUNNING_IMAGE="$normalized_image_id"
+		export BENCHMARK_RUNNING_IMAGE
+		return
+	fi
+	deadline=$((SECONDS + running_image_wait_seconds))
+	while [[ ! -f "$running_image_file" ]]; do
+		if ((SECONDS >= deadline)); then
+			echo 'timed out waiting for running image evidence' >&2
+			return 70
+		fi
+		sleep 1
+	done
+	evidence="$(jq -e -c \
+		--arg configured "$configured_image" --arg dispatched "$dispatched_image" '
+		select(type == "object" and keys == ["configuredImage","dispatchedImage","imageId"] and
+			.configuredImage == $configured and .dispatchedImage == $dispatched and
+			(.imageId | type == "string"))
+	' "$running_image_file")" || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	normalized_image_id="$(normalize_running_image_id "$(jq -r '.imageId' <<<"$evidence")")" || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	running_digest="${normalized_image_id##*@}"
+	[[ "$running_digest" == "$configured_digest" && "$running_digest" == "$dispatched_digest" ]] || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	BENCHMARK_RUNNING_IMAGE="$normalized_image_id"
+	export BENCHMARK_RUNNING_IMAGE
+	printf 'running_image_evidence=accepted image_id=%s\n' "$normalized_image_id" >&2
 }
 
 capabilities() (
@@ -2242,6 +2328,11 @@ test_dispatch() {
 	local action="$1"
 	shift
 	case "$action" in
+	running-image-evidence)
+		(($# == 0)) || usage
+		contract_load "$samples_file"
+		require_running_image_evidence
+		;;
 	icq-settings)
 		(($# == 0)) || usage
 		contract_load "$samples_file"
@@ -2311,27 +2402,32 @@ case "$mode" in
 capabilities)
 	(($# == 0)) || usage
 	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	capabilities
 	;;
 _test) test_dispatch "$@" ;;
 quality)
 	(($# == 0 || $# == 1)) || usage
 	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	quality_mode "${1:-}"
 	;;
 savings)
 	(($# == 1)) || usage
 	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	savings_mode "$1"
 	;;
 finalist)
 	(($# == 2)) || usage
 	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	finalist_mode "$1" "$2"
 	;;
 contention)
 	(($# == 4)) || usage
 	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	contention_mode "$1" "$2" "$3" "$4"
 	;;
 findings)

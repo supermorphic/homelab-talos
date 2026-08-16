@@ -1551,9 +1551,9 @@ EOF
 {"status":"unbracketed","sample_id":"sample-hdr","clip_id":"grain","qsv_setting":"24"}
 EOF
 	results="$BENCHMARK_OUT/runs/$savings/results.csv"
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition' >"$results"
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' >"$results"
 	for reduction in 10 20 30 40 50 60 70 80; do
-		printf '%s\n' "$savings,savings,sample-$reduction,avc,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,full,qsv,22,LA-ICQ,passed,1,1000,600,$reduction,8000,4800,10,30,1,,,,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/sample.log,discarded" >>"$results"
+		printf '%s\n' "$savings,savings,sample-$reduction,avc,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,full,qsv,22,ICQ,passed,1,1000,600,$reduction,8000,4800,10,30,1,,,,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/sample.log,discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
 	done
 	contention_header='run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition'
 	printf '%s\n' "$contention_header" \

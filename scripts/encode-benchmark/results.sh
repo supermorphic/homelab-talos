@@ -116,20 +116,28 @@ sanitize_capability_evidence() {
 		def reason_list:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
-			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" then [] else ["binding"] end)
+			+ (if .selectedRateControl == "ICQ" then [] else ["rate-control"] end)
 			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
 			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
 			+ (if .decode == "passed" then [] else ["decode"] end)
 			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
 		def expected_status:
-			if .telemetryStatus != "available" then "harness-blocked"
+			if .initialization != "passed" then "failed"
+			elif .renderNode == "" or .drmDriver == "" or .selectedRateControl == "unknown" or
+				.telemetryStatus != "available" then "harness-blocked"
 			elif (reason_list | length) == 0 then "passed"
 			else "failed" end;
 		select(
 			type == "object" and
-			.proofSchemaVersion == 2 and
-			.nodeName == $node and
-			(.initialization == "passed" or .initialization == "failed") and
+				.strategyId == "qsv-hevc-icq-v1" and
+				.proofSchemaVersion == 3 and
+				.nodeName == $node and
+				(.initialization == "passed" or .initialization == "failed") and
+				(.initializationReason | type == "string") and
+				((.initialization == "passed" and .initializationReason == "") or .initialization == "failed") and
+				(.renderNode | type == "string") and
+				(.drmDriver | type == "string") and
 			(.selectedRateControl | type == "string") and
 			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
 			(.telemetryReason | type == "string") and
@@ -147,13 +155,33 @@ sanitize_capability_evidence() {
 			($verified_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 		) |
 		{
-			nodeName, proofSchemaVersion, initialization, selectedRateControl,
+				nodeName, strategyId, proofSchemaVersion, initialization, initializationReason,
+				renderNode, drmDriver, selectedRateControl,
 			telemetryStatus, telemetryReason, videoBusyNanoseconds, videoBusyPercent,
 			encodeFps, encodeSpeed, decode, vmaf, proofStatus, proofReasons,
 			verifiedAt: $verified_at, configuredImageDigest,
 			imageId: $image_id
 		}
 	' <<<"$log_line"
+}
+
+validate_prework_image_evidence() {
+	local job_json="$1" name="$2" uid="$3" live_image_id="$4"
+	local dispatched_image configmap_name configmap owner_count evidence normalized_evidence_id
+	dispatched_image="$(yq -p=json -e -r '.spec.template.spec.containers[] | select(.name == "benchmark") | .image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' <<<"$job_json")" || return 65
+	[[ "$dispatched_image" == "$configured_image" ]] || return 65
+	configmap_name="$(yq -p=json -e -r '.metadata.annotations."homelab-talos/image-evidence-configmap" | select(test("^encode-benchmark-image-[a-z0-9-]+$"))' <<<"$job_json")" || return 65
+	configmap="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || return
+	owner_count="$(JOB_NAME="$name" JOB_UID="$uid" yq -p=json -r '[.metadata.ownerReferences[]? | select(.apiVersion == "batch/v1" and .kind == "Job" and .name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .controller == true and .blockOwnerDeletion == true)] | length' <<<"$configmap")"
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap")" == "$configmap_name" && "$owner_count" == '1' ]] || return 65
+	evidence="$(yq -p=json -e -r '.data."image.json"' <<<"$configmap")" || return 65
+	jq -e --arg configured "$configured_image" --arg dispatched "$dispatched_image" '
+		type == "object" and keys == ["configuredImage","dispatchedImage","imageId"] and
+		.configuredImage == $configured and .dispatchedImage == $dispatched and
+		(.imageId | type == "string")
+	' <<<"$evidence" >/dev/null || return 65
+	normalized_evidence_id="$(normalize_image_id "$(jq -r '.imageId' <<<"$evidence")")" || return 65
+	[[ "$normalized_evidence_id" == "$live_image_id" && "${normalized_evidence_id##*@}" == "$configured_digest" ]] || return 65
 }
 
 evidence_status=0
@@ -197,7 +225,7 @@ while IFS= read -r job_json; do
 		controller_count="$(JOB_NAME="$name" JOB_UID="$job_uid" yq -p=json -r '
 			[.[0].metadata.ownerReferences[]? | select(
 				.controller == true and .apiVersion == "batch/v1" and .kind == "Job" and
-				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID)
+				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID) and .blockOwnerDeletion == true
 			)] | length
 		' <<<"$matching_pods")"
 		target_node="$(yq -p=json -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""' \
@@ -207,6 +235,17 @@ while IFS= read -r job_json; do
 			echo "capability result provenance rejected: pod is not terminal, controlled, and targeted for Job $name" >&2
 			exit 1
 		}
+		if [[ "$phase" == 'Complete' ]]; then
+			[[ "$succeeded" == '1' && "$failed" == '0' && "$pod_phase" == 'Succeeded' ]] || {
+				echo "capability result provenance rejected: terminal counts contradict Job $name" >&2
+				exit 1
+			}
+		else
+			[[ "$succeeded" == '0' && "$failed" == '1' && "$pod_phase" == 'Failed' ]] || {
+				echo "capability result provenance rejected: terminal counts contradict Job $name" >&2
+				exit 1
+			}
+		fi
 	fi
 	printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
 		"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"
@@ -225,8 +264,22 @@ while IFS= read -r job_json; do
 				echo "actual image identity evidence rejected: job=$name digest-mismatch" >&2
 				evidence_status=1
 			else
-				printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
-					"$configured_digest" "$normalized_image_id"
+				case "$mode" in
+				capabilities | quality | savings | finalist | contention-*)
+					if ! validate_prework_image_evidence "$job_json" "$name" "$job_uid" "$normalized_image_id"; then
+						echo "pre-work image identity evidence rejected: job=$name" >&2
+						evidence_status=1
+						normalized_image_id=''
+						continue
+					fi
+					printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
+						"$configured_digest" "$normalized_image_id"
+					;;
+				*)
+					printf 'configured_image_digest=%s actual_image_id=%s\n' \
+						"$configured_digest" "$normalized_image_id"
+					;;
+				esac
 			fi
 		fi
 	fi

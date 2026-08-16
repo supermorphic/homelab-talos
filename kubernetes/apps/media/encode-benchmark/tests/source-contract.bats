@@ -86,6 +86,155 @@ setup() {
 	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$template")" = false ]
 }
 
+# Catches a dispatcher-only image check that gives the benchmark process no
+# immutable, read-only pre-work evidence to parse before GPU work starts.
+@test "template projects optional running-image evidence read-only" {
+	template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | .mountPath' "$template")" = /provenance ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | .readOnly' "$template")" = true ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.optional' "$template")" = true ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.items[0] | [.key,.path] | @tsv' "$template")" = $'image.json\timage.json' ]
+}
+
+# Catches a pre-work handoff that trusts one of the three image identities or
+# waits forever for a missing projected ConfigMap.
+@test "runtime requires configured dispatched and running image equality within its deadline" {
+	benchmark="$app/scripts/benchmark.sh"
+	digest='sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	image="docker.io/linuxserver/ffmpeg@$digest"
+	evidence="$BATS_TEST_TMPDIR/image.json"
+	jq -n --arg image "$image" '{configuredImage:$image,dispatchedImage:$image,imageId:$image}' >"$evidence"
+
+	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
+		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
+	[ "$status" -eq 0 ]
+	[ "$output" = "running_image_evidence=accepted image_id=$image" ]
+
+	jq --arg bad 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+		'.imageId = $bad' "$evidence" >"$evidence.tmp"
+	mv "$evidence.tmp" "$evidence"
+	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
+		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'running image evidence is malformed or inconsistent'* ]]
+
+	rm -f "$evidence"
+	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
+		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'timed out waiting for running image evidence'* ]]
+}
+
+# Catches any expensive mode moving the repeated node proof after source
+# hashing or run-directory creation, and catches an accidental standalone x265
+# path invoking the GPU proof.
+@test "every GPU mode completes its assigned-node proof before source or run work" {
+	benchmark="$app/scripts/benchmark.sh"
+	fixture_root="$BATS_TEST_DIRNAME/fixtures/logs"
+	stub_bin="$BATS_TEST_TMPDIR/order-bin"
+	order_log="$BATS_TEST_TMPDIR/order.log"
+	mode_samples="$BATS_TEST_TMPDIR/order-samples.json"
+	media="$BATS_TEST_TMPDIR/source.mkv"
+	out="$BATS_TEST_TMPDIR/out"
+	scratch="$BATS_TEST_TMPDIR/scratch"
+	mkdir -p "$stub_bin" "$out/runs" "$scratch"
+	printf 'fixture' >"$media"
+	jq --arg path "$media" '
+		(.qualityPanel[] | .path) = $path |
+		(.qualityPanel[] | .sizeBytes) = 7 |
+		(.qualityPanel[] | .sha256) = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" |
+		(.savingsPanel[] | .path) = $path |
+		(.savingsPanel[] | .sizeBytes) = 7 |
+		(.savingsPanel[] | .sha256) = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" |
+		.chosenSettings = {
+			avc:{globalQuality:24,qualityRunId:"20260802T120000Z-aaaaaaaa"},
+			vc1:{globalQuality:26,qualityRunId:"20260802T120000Z-aaaaaaaa"},
+			hdr10:{globalQuality:22,qualityRunId:"20260802T120000Z-aaaaaaaa"}
+		}
+	' "$samples_json" >"$mode_samples"
+
+	cat >"$stub_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ffmpeg\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
+case "$*" in
+*'-hide_banner -encoders'*) printf '%s\n' ' V..... hevc_qsv' ' V....D libx265'; exit 0 ;;
+*'-hide_banner -filters'*) printf '%s\n' ' ... libvmaf'; exit 0 ;;
+*'-version'*) printf '%s\n' 'ffmpeg version 8.1.2 fixture'; exit 0 ;;
+esac
+if [[ "$*" == *'nullsrc=size=16x16:rate=1'* ]]; then
+	sed -n '1,$p' "$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" >&2
+elif [[ "$*" == *'-c:v hevc_qsv'* ]]; then
+	sed -n '1,$p' "$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" >&2
+fi
+last="${!#}"
+if [[ "$last" != '-' && "$last" != '/dev/null' ]]; then
+	mkdir -p "$(dirname "$last")"
+	printf fixture >"$last"
+fi
+EOF
+	cat >"$stub_bin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ffprobe\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
+[[ "${1:-}" == '-version' ]] || exit 97
+printf '%s\n' 'ffprobe version 8.1.2 fixture'
+EOF
+	cat >"$stub_bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == '-u' ]] || exit 97
+printf '%s\n' 568
+EOF
+	cat >"$stub_bin/sha256sum" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sha256sum\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
+printf '%064d  %s\n' 0 "${1:-stdin}"
+EOF
+	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
+	image="$(jq -r '.runtime.image' "$mode_samples")"
+	export BENCHMARK_ORDER_LOG="$order_log"
+	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$fixture_root/qsv-icq.log"
+	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$fixture_root/qsv-init-success-no-phrase.log"
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$fixture_root/drm-fdinfo-active.log"
+
+	for invocation in \
+		'quality' \
+		'savings 20260802T120000Z-1234abcd' \
+		'finalist 20260802T120000Z-1234abcd avc-grain-memento' \
+		'contention 20260802T120000Z-1234abcd a worker-1 hdr10-clean-ministry'; do
+		: >"$order_log"
+		read -r -a arguments <<<"$invocation"
+		run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$out" \
+			BENCHMARK_SCRATCH="$scratch" BENCHMARK_SAMPLES_FILE="$mode_samples" \
+			BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE="$image" \
+			BENCHMARK_ORDER_LOG="$order_log" NODE_NAME=nuc1 \
+			BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" \
+			BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" \
+			BENCHMARK_TEST_FDINFO_FIXTURE="$BENCHMARK_TEST_FDINFO_FIXTURE" \
+			ENCODE_BENCHMARK_FINALIST_CONFIRM='copy:encode-benchmark:20260802T120000Z-1234abcd:avc-grain-memento' \
+			"$benchmark" "${arguments[@]}"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *'sample hash mismatch'* ]]
+		awk -F '\t' '
+			$1 == "ffmpeg" {proof = NR}
+			$1 == "sha256sum" && !hash {hash = NR}
+			END {exit !(proof > 0 && hash > proof)}
+		' "$order_log"
+		[ "$(find "$out/runs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+	done
+
+	: >"$order_log"
+	run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$mode_samples" \
+		BENCHMARK_ORDER_LOG="$order_log" "$benchmark" x265
+	[ "$status" -eq 64 ]
+	[ ! -s "$order_log" ]
+}
+
 # Catches malformed or misplaced x265 reference markers widening the expensive
 # comparison sweep beyond the accepted grain-heavy AVC and HDR10 samples.
 @test "quality panel has exactly one Boolean x265 reference per accepted cohort" {

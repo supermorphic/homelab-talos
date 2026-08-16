@@ -223,21 +223,29 @@ if [[ "$capability_status" == 'verified' ]]; then
 		def reasons:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
-			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" then [] else ["binding"] end)
+			+ (if .selectedRateControl == "ICQ" then [] else ["rate-control"] end)
 			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
 			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
 			+ (if .decode == "passed" then [] else ["decode"] end)
 			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
 		def expected_status:
-			if .telemetryStatus != "available" then "harness-blocked"
+			if .initialization != "passed" then "failed"
+			elif .renderNode == "" or .drmDriver == "" or .selectedRateControl == "unknown" or
+				.telemetryStatus != "available" then "harness-blocked"
 			elif (reasons | length) == 0 then "passed"
 			else "failed" end;
 		def valid_node:
 			type == "object" and
-			(keys == ["configuredImageDigest","decode","encodeFps","encodeSpeed","imageId","initialization","nodeName","proofReasons","proofSchemaVersion","proofStatus","selectedRateControl","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
-			.proofSchemaVersion == 2 and
+			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
+			.strategyId == "qsv-hevc-icq-v1" and
+			.proofSchemaVersion == 3 and
 			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
 			(.initialization == "passed" or .initialization == "failed") and
+			(.initializationReason | type == "string") and
+			((.initialization == "passed" and .initializationReason == "") or .initialization == "failed") and
+			(.renderNode | type == "string") and
+			(.drmDriver | type == "string") and
 			(.selectedRateControl | type == "string") and
 			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
 			(.telemetryReason | type == "string") and
@@ -259,13 +267,13 @@ if [[ "$capability_status" == 'verified' ]]; then
 		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
 			([.[].nodeName] | unique | length) == length)
 	' <<<"$samples_doc" >/dev/null ||
-		fail 'verified capability evidence must contain unique valid schema-v2 node records'
+		fail 'verified capability evidence must contain unique valid schema-v3 node records'
 else
 	jq -e '
 		.runtime.capabilityEvidence |
 		((has("nodes") | not) or (.nodes | type == "array" and length == 0))
 	' <<<"$samples_doc" >/dev/null ||
-		fail 'pending capability evidence must not claim schema-v2 node proof'
+		fail 'pending capability evidence must not claim schema-v3 node proof'
 fi
 
 declare -A seen_sample_ids=()
@@ -435,6 +443,12 @@ assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.n
 	'encode-benchmark-samples' 'samples ConfigMap name'
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.items[0].key" "$template")" \
 	'samples.json' 'samples ConfigMap key'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.name" "$template")" \
+	'encode-benchmark-image-template' 'image evidence ConfigMap placeholder'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.optional" "$template")" \
+	'true' 'image evidence ConfigMap optional projection'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.items[0] | [.key,.path] | @tsv" "$template")" \
+	$'image.json\timage.json' 'image evidence item mapping'
 
 assert_mount() {
 	local name="$1"
@@ -453,6 +467,7 @@ assert_mount out /out benchmark false
 assert_mount scratch /scratch '' false
 assert_mount scripts /scripts '' true
 assert_mount samples /config/samples.json samples.json true
+assert_mount image-evidence /provenance '' true
 
 if rg -n '/data|media/tv|downloads' "$app/scripts" "$template"; then
 	fail 'benchmark scripts or Job template can access forbidden TV/download paths'
