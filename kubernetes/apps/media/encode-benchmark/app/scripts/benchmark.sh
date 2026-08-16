@@ -710,6 +710,12 @@ record_result_inner() {
 	[[ "$panel" == 'quality' || "$panel" == 'x265' || "$panel" == 'savings' || "$panel" == 'finalist' ]] || return 65
 	[[ "$encoder" == 'qsv' || "$encoder" == 'x265' ]] || return 65
 	[[ "$setting" =~ ^[0-9]+$ ]] || return 65
+	if [[ "$encoder" == 'qsv' ]]; then
+		contract_is_icq_setting "$samples_file" "$setting" || {
+			echo 'QSV result setting is not an ICQ candidate' >&2
+			return 65
+		}
+	fi
 	[[ "$source_sha" =~ ^[0-9a-f]{64}$ ]] || return 65
 	[[ "$strategy" == "$CONTRACT_STRATEGY_ID" ]] || {
 		echo 'result fixture strategy does not match contract' >&2

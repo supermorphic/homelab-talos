@@ -588,7 +588,7 @@ prepare_partial_savings_execution_run() {
 }
 
 prepare_x265_execution_run() {
-	local sample_id="$1" cohort="$2" qsv_vmaf="${3:-97}" quality_dir results results_digest candidate_digest
+	local sample_id="$1" cohort="$2" qsv_vmaf="${3:-97}" setting="${4:-22}" quality_dir results results_digest candidate_digest
 	local chosen upstream selected cpu_identity
 	prepare_execution_run
 	jq --arg sample "$sample_id" --arg cohort "$cohort" '
@@ -600,14 +600,14 @@ prepare_x265_execution_run() {
 		.chosenSettings = {}
 	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	prepare_quality_upstream "$cohort" final 22 '[22,24,26]'
+	prepare_quality_upstream "$cohort" final "$setting" "[$setting]"
 	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
 	results="$quality_dir/results.csv"
 	printf '%s\n' \
 		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,detail,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/detail.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,dark,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/dark.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,motion,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/motion.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,detail,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/detail.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,dark,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/dark.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,motion,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/motion.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
 		>"$results"
 	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
 	jq --arg digest "$results_digest" '.resultsSha256 = $digest | .cohorts |= with_entries(
@@ -638,6 +638,25 @@ prepare_x265_execution_run() {
 	' "$FIXTURES/manifests/identity.json" >"$cpu_identity"
 	export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
 	export NODE_NAME='nuc3'
+}
+
+reset_cross_path_workspace() {
+	rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+}
+
+write_cross_path_quality_results() {
+	local results="$1" run_id="$2" setting="$3" sample sample_id cohort sha clip
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' >"$results"
+	while IFS= read -r sample; do
+		sample_id="$(jq -r '.id' <<<"$sample")"
+		cohort="$(jq -r '.cohort' <<<"$sample")"
+		sha="$(jq -r '.sha256' <<<"$sample")"
+		for clip in detail motion grain; do
+			printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,35,1000,650,1.000000,72.0,1.25,96,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
+				"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$sample_id" "$clip" >>"$results"
+		done
+	done < <(jq -c '.qualityPanel[]' "$BENCHMARK_SAMPLES_FILE")
 }
 
 expand_execution_panels_to_three_samples() {
@@ -891,6 +910,171 @@ write_quality_ranking_results() {
 		.ssim == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
 	' <<<"$commands"
 		[ "$status" -eq 0 ]
+	done
+}
+
+# One table must carry each admissible boundary through the independent runtime
+# consumers. This catches a consumer widening the candidate set while the
+# others still retain the ICQ contract.
+@test "table-driven ICQ settings cross commands durable evidence decisions and reports" {
+	for setting in 16 18 30; do
+		reset_cross_path_workspace
+		prepare_execution_run
+
+		# Quality command construction.
+		run "$SCRIPTS/benchmark.sh" _test commands \
+			'/media/Movie.mkv' '00:17:23.456' '/scratch/detail.mkv' \
+			"/scratch/qsv-$setting.mkv" '/scratch/x265-20.mkv' '/scratch/vmaf.json' "$setting" 20
+		[ "$status" -eq 0 ]
+		run jq -e --arg setting "$setting" '.qsv | index($setting) != null' <<<"$output"
+		[ "$status" -eq 0 ]
+
+		# Durable append, completed-row resume, and results collection.
+		result_run="20260815T1200${setting}Z-aaaaaaaa"
+		mkdir -p "$BENCHMARK_OUT/runs/$result_run"
+		result_fixture="$BATS_TEST_TMPDIR/result-$setting.json"
+		jq --arg setting "$setting" '.requested_setting = $setting' \
+			"$FIXTURES/metrics/variant-passed.json" >"$result_fixture"
+		scratch_output="$BENCHMARK_SCRATCH/result-$setting.mkv"
+		printf '%s' 'encoded fixture' >"$scratch_output"
+		run "$SCRIPTS/benchmark.sh" _test record-result "$result_run" "$result_fixture" "$scratch_output"
+		[ "$status" -eq 0 ]
+		[ ! -e "$scratch_output" ]
+		run "$SCRIPTS/runmeta.sh" completed "$result_run" \
+			"quality|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|detail|qsv|$setting"
+		[ "$status" -eq 0 ]
+		run awk -F, -v setting="$setting" 'NR == 2 { exit !($8 == setting && $9 == "ICQ" && $10 == "passed") }' \
+			"$BENCHMARK_OUT/runs/$result_run/results.csv"
+		[ "$status" -eq 0 ]
+
+		# Candidate ranking uses complete objective evidence for this exact setting.
+		reset_cross_path_workspace
+		prepare_execution_run
+		prepare_quality_panel_with_six_titles_three_clips
+		rank_run="20260815T1300${setting}Z-bbbbbbbb"
+		mkdir -p "$BENCHMARK_OUT/runs/$rank_run"
+		write_cross_path_quality_results "$BENCHMARK_OUT/runs/$rank_run/results.csv" "$rank_run" "$setting"
+		run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates \
+			"$BENCHMARK_OUT/runs/$rank_run/results.csv" "$BENCHMARK_SAMPLES_FILE" "$rank_run"
+		[ "$status" -eq 0 ]
+		run jq -e --argjson setting "$setting" \
+			'all(.cohorts[]; .status == "eligible" and .candidates == [{globalQuality:$setting,medianReductionPercent:35}])' \
+			"$BENCHMARK_OUT/runs/$rank_run/quality-candidates.json"
+		[ "$status" -eq 0 ]
+
+		# The same setting is acceptable at each decision state.
+		reset_cross_path_workspace
+		prepare_execution_run
+		prepare_quality_upstream avc provisional "$setting" "[$setting]"
+		run "$SCRIPTS/benchmark.sh" _test chosen-upstream avc provisional
+		[ "$status" -eq 0 ]
+		run jq -e --argjson setting "$setting" \
+			'.selectedSettings == [{cohort:"avc",globalQuality:$setting,qualityRunId:"20260815T120000Z-6cdfc9f3"}]' <<<"$output"
+		[ "$status" -eq 0 ]
+		prepare_quality_upstream avc final "$setting" "[$setting]"
+		run "$SCRIPTS/benchmark.sh" _test chosen-upstream avc final
+		[ "$status" -eq 0 ]
+		run jq -e --argjson setting "$setting" \
+			'.upstream.chosenSetting.state == "final" and .selectedSettings[0].globalQuality == $setting' <<<"$output"
+		[ "$status" -eq 0 ]
+
+		# Finalist consumes the provisional setting, and x265 consumes the final one.
+		reset_cross_path_workspace
+		prepare_execution_run
+		yq -i -o=json '.qualityPanel[0].id = "avc-grain-memento" | .qualityPanel[0].cohort = "avc"' "$BENCHMARK_SAMPLES_FILE"
+		prepare_quality_upstream avc provisional "$setting" "[$setting]"
+		unset BENCHMARK_IDENTITY_FIXTURE
+		export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+		export BENCHMARK_I915_VERSION='fixture-i915'
+		export BENCHMARK_VPL_VERSION='fixture-vpl'
+		finalist_run="20260815T1400${setting}Z-cccccccc"
+		export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$finalist_run:avc-grain-memento"
+		run "$SCRIPTS/benchmark.sh" finalist "$finalist_run" avc-grain-memento
+		[ "$status" -eq 0 ]
+		[ -f "$BENCHMARK_OUT/runs/$finalist_run/encodes/avc-grain-memento-qsv-gq$setting.mkv" ]
+
+		reset_cross_path_workspace
+		prepare_x265_execution_run avc-grain-memento avc 97 "$setting"
+		x265_run="20260815T1500${setting}Z-dddddddd"
+		run "$SCRIPTS/benchmark.sh" x265 "$x265_run" avc-grain-memento
+		[ "$status" -eq 0 ]
+		run jq -e -s --argjson setting "$setting" 'all(.[]; .qsvSetting == $setting)' \
+			"$BENCHMARK_OUT/runs/$x265_run/x265-comparisons.jsonl"
+		[ "$status" -eq 0 ]
+
+		# Savings and a contention fragment independently consume final settings.
+		reset_cross_path_workspace
+		prepare_execution_run
+		jq '.savingsPanel[0].id = "savings-avc" | .savingsPanel[0].cohort = "avc" | .chosenSettings = {}' \
+			"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+		mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+		prepare_quality_upstream avc final "$setting" "[$setting]"
+		unset BENCHMARK_IDENTITY_FIXTURE
+		export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+		export BENCHMARK_I915_VERSION='fixture-i915'
+		export BENCHMARK_VPL_VERSION='fixture-vpl'
+		savings_run="20260815T1600${setting}Z-eeeeeeee"
+		run "$SCRIPTS/benchmark.sh" savings "$savings_run"
+		[ "$status" -eq 0 ]
+		run awk -F, -v setting="$setting" 'NR == 2 { exit !($4 == "avc" && $8 == setting) }' \
+			"$BENCHMARK_OUT/runs/$savings_run/results.csv"
+		[ "$status" -eq 0 ]
+
+		reset_cross_path_workspace
+		prepare_contention_samples
+		yq -i -o=json '(.qualityPanel[] | select(.id == "b-1080-avc")).id = "avc-grain-memento"' "$BENCHMARK_SAMPLES_FILE"
+		prepare_quality_upstream avc final "$setting" "[$setting]"
+		unset BENCHMARK_IDENTITY_FIXTURE
+		export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+		export BENCHMARK_I915_VERSION='fixture-i915'
+		export BENCHMARK_VPL_VERSION='fixture-vpl'
+		contention_run="20260815T1700${setting}Z-ffffffff"
+		run "$SCRIPTS/benchmark.sh" contention "$contention_run" b worker-1 avc-grain-memento
+		[ "$status" -eq 0 ]
+		fragment="$BENCHMARK_OUT/runs/$contention_run/contention-b-worker-1-attempt-1.csv"
+		run "$SCRIPTS/benchmark.sh" _test findings-fragment "$fragment" "$contention_run"
+		[ "$status" -eq 0 ]
+		run python3 -c 'import csv, sys; row = next(csv.DictReader(open(sys.argv[1], newline="", encoding="utf-8"))); assert row["setting"] == sys.argv[2] and row["status"] == "passed"' \
+			"$fragment" "$setting"
+		[ "$status" -eq 0 ]
+
+		# Findings renders the selected setting from the validated quality evidence.
+		reset_cross_path_workspace
+		prepare_execution_run
+		jq '.chosenSettings = {}' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+		mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+		prepare_quality_upstream avc provisional "$setting" "[$setting]"
+		quality_results="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/results.csv"
+		quality_candidates="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/quality-candidates.json"
+		inputs="$BATS_TEST_TMPDIR/findings-$setting.json"
+		jq -n --arg run "$QUALITY_RUN_ID" \
+			--arg results "sha256:$(sha256sum "$quality_results" | awk '{print $1}')" \
+			--arg candidates "sha256:$(sha256sum "$quality_candidates" | awk '{print $1}')" \
+			'{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",quality:{runId:$run,resultsSha256:$results,candidatesSha256:$candidates},x265:[],savings:null,contention:null}' >"$inputs"
+		export BENCHMARK_FINDINGS_INPUTS_FILE="$inputs"
+		findings_run="20260815T1800${setting}Z-11111111"
+		run "$SCRIPTS/benchmark.sh" findings "$findings_run"
+		[ "$status" -eq 0 ]
+		run rg -F -- "## avc" "$BENCHMARK_OUT/runs/$findings_run/findings.md"
+		[ "$status" -eq 0 ]
+		run rg -F -- "Final global_quality: $setting" "$BENCHMARK_OUT/runs/$findings_run/findings.md"
+		[ "$status" -eq 0 ]
+	done
+
+	# Invalid QSV fixtures must be rejected before the durable append mutation.
+	for setting in 14 17 32; do
+		reset_cross_path_workspace
+		prepare_execution_run
+		run_id="20260815T1900${setting}Z-22222222"
+		mkdir -p "$BENCHMARK_OUT/runs/$run_id"
+		fixture="$BATS_TEST_TMPDIR/rejected-result-$setting.json"
+		jq --arg setting "$setting" '.requested_setting = $setting' \
+			"$FIXTURES/metrics/variant-passed.json" >"$fixture"
+		scratch_output="$BENCHMARK_SCRATCH/rejected-$setting.mkv"
+		printf '%s' 'must remain untouched' >"$scratch_output"
+		run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+		[ "$status" -eq 65 ]
+		[ ! -e "$BENCHMARK_OUT/runs/$run_id/results.csv" ]
 	done
 }
 
