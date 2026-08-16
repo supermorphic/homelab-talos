@@ -125,6 +125,192 @@ strategy_contract() {
 	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.strategy'
 }
 
+chosen_record() {
+	local cohort="$1" state="$2" setting="${3:-22}" rejected="${4:-[]}" finalist_sample hdr
+	case "$cohort" in
+	avc) finalist_sample='avc-grain-memento'; hdr='not-applicable' ;;
+	vc1) finalist_sample='vc1-fugitive'; hdr='not-applicable' ;;
+	hdr10) finalist_sample='hdr10-grain-goodfellas'; hdr='passed' ;;
+	esac
+	jq -n -c \
+		--arg cohort "$cohort" --arg state "$state" --argjson setting "$setting" \
+		--argjson rejected "$rejected" --arg finalist_sample "$finalist_sample" --arg hdr "$hdr" '
+		{
+			strategyId: "qsv-hevc-icq-v1",
+			qualityRunId: "20260815T120000Z-aaaaaaaa",
+			qualityResultsSha256: ("sha256:" + ("a" * 64)),
+			candidateEvidenceSha256: ("sha256:" + ("b" * 64)),
+			globalQuality: $setting,
+			state: $state,
+			cropReview: {
+				status: "passed", reviewedAt: "2026-08-15T12:00:00Z",
+				clips: [{sampleId: $finalist_sample, clipId: "detail", result: "passed"}]
+			},
+			finalistReview: (if $state == "final" then {
+				status: "passed", finalistRunId: "20260815T140000Z-bbbbbbbb",
+				sampleId: $finalist_sample, resultsSha256: ("sha256:" + ("c" * 64)),
+				reviewedAt: "2026-08-15T14:00:00Z",
+				checklist: {
+					directPlay: "passed", hdrHandling: $hdr, motionArtifacts: "passed",
+					grainRetention: "passed", banding: "passed", blocking: "passed"
+				}
+			} else null end),
+			rejectedSettings: $rejected
+		}'
+}
+
+set_chosen_record() {
+	local cohort="$1" state="$2" setting="${3:-22}" rejected="${4:-[]}" record
+	record="$(chosen_record "$cohort" "$state" "$setting" "$rejected")"
+	jq --arg cohort "$cohort" --argjson record "$record" '.chosenSettings[$cohort] = $record' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+prepare_quality_upstream() {
+	local cohort="$1" state="$2" setting="$3" candidates="$4" rejected="${5:-[]}"
+	local quality_run='20260815T120000Z-aaaaaaaa' quality_dir results results_digest candidate_digest
+	quality_dir="$BENCHMARK_OUT/runs/$quality_run"
+	mkdir -p "$quality_dir"
+	results="$quality_dir/results.csv"
+	printf '%s\n' \
+		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
+		"$quality_run,quality,fixture-$cohort,$cohort,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,$setting,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		>"$results"
+	jq -n -c '{schemaVersion:2,strategyId:"qsv-hevc-icq-v1",resultsSchemaVersion:2,mode:"quality",createdAt:"20260815T120000Z"}' \
+		>"$quality_dir/manifest.json"
+	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	if [[ -f "$quality_dir/quality-candidates.json" ]]; then
+		cp "$quality_dir/quality-candidates.json" "$quality_dir/quality-candidates.base.json"
+	else
+		jq -n -c --arg run "$quality_run" --arg digest "$results_digest" '
+		{
+			schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
+			resultsSchemaVersion:2,resultsSha256:$digest,
+			cohorts:{avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
+				vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
+				hdr10:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"}}
+		}' >"$quality_dir/quality-candidates.base.json"
+	fi
+	jq -c --arg cohort "$cohort" --arg run "$quality_run" --arg digest "$results_digest" \
+		--argjson candidates "$candidates" '
+		.qualityRunId = $run | .resultsSha256 = $digest |
+		.cohorts[$cohort] = {status:"eligible",expectedClipCount:1,
+			candidates:($candidates | map({globalQuality:.,medianReductionPercent:(50 - .)}))}
+	' "$quality_dir/quality-candidates.base.json" >"$quality_dir/quality-candidates.json"
+	rm -f -- "$quality_dir/quality-candidates.base.json"
+	candidate_digest="sha256:$(sha256sum "$quality_dir/quality-candidates.json" | awk '{print $1}')"
+	set_chosen_record "$cohort" "$state" "$setting" "$rejected"
+	jq --arg results "$results_digest" --arg candidates "$candidate_digest" '
+		.chosenSettings |= with_entries(
+			.value |= if .qualityRunId == "20260815T120000Z-aaaaaaaa" then
+				.qualityResultsSha256 = $results | .candidateEvidenceSha256 = $candidates
+			else . end)
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+# Each mutation names a state-machine break that would authorize work from an
+# ambiguous or contradictory one-record visual decision.
+@test "chosen setting contract rejects malformed states reviews and rejected history" {
+	base="$(chosen_record hdr10 provisional 22)"
+	for mutation in \
+		'.state = "unknown"' \
+		'del(.cropReview)' \
+		'.globalQuality = 23' \
+		'.strategyId = "qsv-hevc-la-icq-v1"' \
+		'.qualityRunId = "wrong-run"' \
+		'.qualityResultsSha256 = "sha256:ABC"' \
+		'.rejectedSettings = [{globalQuality:24,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"},{globalQuality:24,stage:"plex",runId:"20260815T140000Z-bbbbbbbb",result:"failed",reviewedAt:"2026-08-15T14:00:00Z"}]' \
+		'.rejectedSettings = [range(0;9) | {globalQuality:16,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"}]' \
+		'.rejectedSettings = [{globalQuality:22,stage:"crop",runId:"20260815T120000Z-aaaaaaaa",result:"failed",reviewedAt:"2026-08-15T12:00:00Z"}]'; do
+		candidate="$BATS_TEST_TMPDIR/chosen-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq --argjson record "$(jq -c "$mutation" <<<"$base")" \
+			'.chosenSettings.hdr10 = $record' "$BENCHMARK_SAMPLES_FILE" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"; contract_chosen_record "$2" hdr10 provisional' \
+			_ "$SCRIPTS/contract.sh" "$candidate"
+		[ "$status" -ne 0 ]
+	done
+
+	final="$(chosen_record hdr10 final 22)"
+	for mutation in \
+		'.finalistReview = null' \
+		'.finalistReview.sampleId = "hdr10-clean-ministry"' \
+		'.finalistReview.checklist.hdrHandling = "not-applicable"' \
+		'del(.finalistReview.checklist.blocking)'; do
+		candidate="$BATS_TEST_TMPDIR/final-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq --argjson record "$(jq -c "$mutation" <<<"$final")" \
+			'.chosenSettings.hdr10 = $record' "$BENCHMARK_SAMPLES_FILE" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"; contract_chosen_record "$2" hdr10 final' \
+			_ "$SCRIPTS/contract.sh" "$candidate"
+		[ "$status" -ne 0 ]
+	done
+}
+
+@test "chosen setting contract admits provisional final and exhausted rejected states" {
+	for state in provisional final; do
+		candidate="$BATS_TEST_TMPDIR/$state.json"
+		jq --argjson record "$(chosen_record avc "$state" 22)" \
+			'.chosenSettings.avc = $record' "$BENCHMARK_SAMPLES_FILE" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"; contract_chosen_record "$2" avc "$3"' \
+			_ "$SCRIPTS/contract.sh" "$candidate" "$state"
+		[ "$status" -eq 0 ]
+	done
+
+	rejected='[{"globalQuality":16,"stage":"crop","runId":"20260815T120000Z-aaaaaaaa","result":"failed","reviewedAt":"2026-08-15T12:00:00Z"}]'
+	record="$(chosen_record avc rejected 16 "$rejected" | jq -c '.cropReview.status="failed" | .cropReview.clips[0].result="failed"')"
+	candidate="$BATS_TEST_TMPDIR/rejected.json"
+	jq --argjson record "$record" '.chosenSettings.avc = $record' "$BENCHMARK_SAMPLES_FILE" >"$candidate"
+	run bash -c 'source "$1"; contract_load "$2"; contract_chosen_record "$2" avc rejected' \
+		_ "$SCRIPTS/contract.sh" "$candidate"
+	[ "$status" -eq 0 ]
+}
+
+# Catches a stale or cross-run quality identity, and catches fallback being
+# reconstructed from record order instead of the committed ranked artifact.
+@test "chosen upstream verification binds digests run identity and ranked rejection prefix" {
+	prepare_execution_run
+	prepare_quality_upstream hdr10 provisional 24 '[22,24,26]' '[{"globalQuality":22,"stage":"crop","runId":"20260815T120000Z-aaaaaaaa","result":"failed","reviewedAt":"2026-08-15T12:00:00Z"}]'
+	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.upstream.chosenSetting.state == "provisional" and
+		.upstream.qualityResultsSha256 == .upstream.chosenSetting.qualityResultsSha256 and
+		.upstream.candidateEvidenceSha256 == .upstream.chosenSetting.candidateEvidenceSha256 and
+		.selectedSettings == [{cohort:"hdr10",globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"}]
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+
+	for mutation in \
+		'.chosenSettings.hdr10.qualityResultsSha256 = ("sha256:" + ("d" * 64))' \
+		'.chosenSettings.hdr10.qualityRunId = "20260815T120000Z-bbbbbbbb"' \
+		'.chosenSettings.hdr10.rejectedSettings[0].globalQuality = 26'; do
+		cp "$BENCHMARK_SAMPLES_FILE" "$BENCHMARK_SAMPLES_FILE.good"
+		jq "$mutation" "$BENCHMARK_SAMPLES_FILE.good" >"$BENCHMARK_SAMPLES_FILE"
+		run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+		[ "$status" -ne 0 ]
+		mv -f -- "$BENCHMARK_SAMPLES_FILE.good" "$BENCHMARK_SAMPLES_FILE"
+	done
+
+	jq '.strategyId = "qsv-hevc-la-icq-v1"' \
+		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json" \
+		>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp"
+	mv -f -- "$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp" \
+		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json"
+	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+	[ "$status" -ne 0 ]
+
+	jq '.strategyId = "qsv-hevc-icq-v1"' \
+		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json" \
+		>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp"
+	mv -f -- "$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json.tmp" \
+		"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/manifest.json"
+	mv "$BENCHMARK_OUT/runs" "$BATS_TEST_TMPDIR/outside-runs"
+	ln -s "$BATS_TEST_TMPDIR/outside-runs" "$BENCHMARK_OUT/runs"
+	run "$SCRIPTS/benchmark.sh" _test chosen-upstream hdr10 provisional
+	[ "$status" -ne 0 ]
+}
+
 create_execution_tools() {
 	stub_bin="$BATS_TEST_TMPDIR/execution-bin"
 	mkdir -p "$stub_bin"
@@ -280,6 +466,7 @@ prepare_execution_run() {
 		--argjson strategy "$(strategy_contract)" \
 		--argjson required "$(capability_declared_list requiredCommands)" \
 		--argjson optional "$(capability_declared_list optionalCommands)" \
+		--argjson chosen "$(chosen_record hdr10 final 22)" \
 		'{
 			schemaVersion: 2,
 			strategy: $strategy,
@@ -298,10 +485,15 @@ prepare_execution_run() {
 				id: "savings-hdr", cohort: "hdr10", path: $source_media,
 				sizeBytes: $source_size, sha256: $source_sha
 			}],
-			chosenSettings: {hdr10: {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}}
+			chosenSettings: {hdr10: $chosen}
 		}' >"$BENCHMARK_SAMPLES_FILE"
 	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export NODE_NAME='nuc1'
+}
+
+prepare_savings_execution_run() {
+	prepare_execution_run
+	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
 }
 
 expand_execution_panels_to_three_samples() {
@@ -895,28 +1087,30 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 # Catches copying an invalid/unconfirmed full encode to the shared output or
 # losing the run/sample binding in the operator's finalist confirmation.
 @test "finalist output is copied only after passed validation and exact confirmation" {
+	prepare_execution_run
+	prepare_quality_upstream avc provisional 22 '[22,24,26]'
 	run_id='20260802T120000Z-aaaaaaaa'
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 	finalist_row="$BATS_TEST_TMPDIR/finalist.json"
-	jq '.panel = "finalist" | .clip_id = "full"' \
+	jq '.panel = "finalist" | .clip_id = "full" | .sample_id = "avc-grain-memento"' \
 		"$FIXTURES/metrics/variant-passed.json" >"$finalist_row"
 	scratch_output="$BENCHMARK_SCRATCH/finalist.mkv"
 	printf '%s' 'finalist bytes' >"$scratch_output"
 
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -eq 64 ]
-	[ "$output" = "missing finalist confirmation for $run_id/sample-avc" ]
+	[ "$output" = "missing finalist confirmation for $run_id/avc-grain-memento" ]
 	[ ! -e "$scratch_output" ]
-	[ ! -e "$run_dir/encodes/sample-avc-qsv-gq22.mkv" ]
+	[ ! -e "$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv" ]
 
 	printf '%s' 'finalist bytes' >"$scratch_output"
-	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:sample-avc"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -eq 0 ]
 	[ "$output" = '{"status":"passed","attempt":1,"output_disposition":"copied"}' ]
 	[ ! -e "$scratch_output" ]
-	[ "$(<"$run_dir/encodes/sample-avc-qsv-gq22.mkv")" = 'finalist bytes' ]
+	[ "$(<"$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv")" = 'finalist bytes' ]
 }
 
 # Catches omissions from the shared eight-setting sweep, x265 work leaking into
@@ -1001,7 +1195,7 @@ PYTHON
 }
 
 @test "savings processes every sample when FFmpeg would otherwise consume loop stdin" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	expand_execution_panels_to_three_samples
 	export BENCHMARK_TEST_FFMPEG_CONSUME_STDIN=1
 	run "$SCRIPTS/runmeta.sh" create savings
@@ -1183,7 +1377,7 @@ PYTHON
 # Catches a full-title pass that ignores the committed cohort setting, retains
 # the scratch encode, or omits packet-counted audio inventory evidence.
 @test "savings mode uses committed settings inventories packets and discards full output" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	run "$SCRIPTS/runmeta.sh" create savings
 	[ "$status" -eq 0 ]
 	run_id="$output"
@@ -1214,15 +1408,14 @@ PYTHON
 }
 
 @test "savings rejects detection-only and Dolby Vision and records packet inventory failure before resume" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	# jq edit rather than YAML text surgery: the samples artifact is JSON so the
 	# runtime image can read it with jq instead of yq.
 	source_media="$(jq -r '.savingsPanel[0].path' "$BENCHMARK_SAMPLES_FILE")"
 	source_size="$(wc -c <"$source_media" | tr -d ' ')"
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
 	jq --arg path "$source_media" --argjson size "$source_size" --arg sha "$source_sha" '
-		.chosenSettings["dolby-vision"] = {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}
-		| .savingsPanel += [
+		.savingsPanel += [
 			{id: "savings-dv", cohort: "dolby-vision", path: $path,
 			 sizeBytes: $size, sha256: $sha, detectionOnly: false},
 			{id: "savings-detection", cohort: "hdr10", path: $path,
@@ -1243,7 +1436,7 @@ PYTHON
 
 	rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
-	prepare_execution_run
+	prepare_savings_execution_run
 	export BENCHMARK_TEST_PACKET_FAILURE=1
 	run "$SCRIPTS/runmeta.sh" create savings
 	[ "$status" -eq 0 ]
@@ -1259,7 +1452,7 @@ PYTHON
 }
 
 @test "savings retry upserts packet inventory instead of duplicating source tracks" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-22-attempt'
 	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
 	run "$SCRIPTS/runmeta.sh" create savings
@@ -1275,7 +1468,7 @@ PYTHON
 }
 
 @test "savings staged inventory write failure records non-passed and preserves no partial inventory" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	export BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE=1
 	run "$SCRIPTS/runmeta.sh" create savings
 	[ "$status" -eq 0 ]
@@ -1294,7 +1487,7 @@ PYTHON
 }
 
 @test "savings retry strictly upserts multiline CSV source paths by source and track" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	newline_source="$BATS_TEST_TMPDIR/"$'movie\nname.mkv'
 	cp "$source_media" "$newline_source"
 	export NEWLINE_SOURCE="$newline_source"
@@ -1328,7 +1521,7 @@ PYTHON
 }
 
 @test "savings accepts a zero-audio title with durable header-only inventory" {
-	prepare_execution_run
+	prepare_savings_execution_run
 	zero_source_probe="$BATS_TEST_TMPDIR/zero-audio-source.json"
 	zero_output_probe="$BATS_TEST_TMPDIR/zero-audio-output.json"
 	empty_packets="$BATS_TEST_TMPDIR/zero-audio-packets.csv"
@@ -1355,17 +1548,48 @@ PYTHON
 # scratch file under an ambiguous name, or losing exact run/sample confirmation.
 @test "finalist mode re-encodes one named sample and copies the validated full title" {
 	prepare_execution_run
+	yq -i -o=json '.qualityPanel[0].id = "hdr10-grain-goodfellas"' "$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream hdr10 provisional 22 '[22,24,26]'
 	run "$SCRIPTS/runmeta.sh" create finalist
 	[ "$status" -eq 0 ]
 	run_id="$output"
-	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:sample-hdr"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:hdr10-grain-goodfellas"
 
-	run "$SCRIPTS/benchmark.sh" finalist "$run_id" sample-hdr
+	run "$SCRIPTS/benchmark.sh" finalist "$run_id" hdr10-grain-goodfellas
 	[ "$status" -eq 0 ]
 	[ "$output" = "$run_id" ]
-	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/sample-hdr-qsv-gq22.mkv" ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/encodes/hdr10-grain-goodfellas-qsv-gq22.mkv" ]
 	[ "$(find "$BENCHMARK_OUT/runs/$run_id/encodes" -type f | wc -l | tr -d ' ')" -eq 1 ]
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches finalist execution reaching source hashing or run creation from a
+# stale upstream record, a non-provisional state, or the wrong cohort title.
+@test "finalist runtime verifies provisional state title and upstream before measured work" {
+	prepare_execution_run
+	yq -i -o=json '.qualityPanel[0].id = "hdr10-grain-goodfellas"' "$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream hdr10 provisional 22 '[22,24,26]'
+	run_id='20260815T150000Z-cccccccc'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:hdr10-grain-goodfellas"
+	: >"$BENCHMARK_COMMAND_LOG"
+
+	yq -i -o=json '.chosenSettings.hdr10.qualityResultsSha256 = ("sha256:" + ("d" * 64))' "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/benchmark.sh" finalist "$run_id" hdr10-grain-goodfellas
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+	! rg -q '^sha256sum .*source' "$BENCHMARK_COMMAND_LOG"
+
+	prepare_quality_upstream hdr10 provisional 22 '[22,24,26]'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:sample-hdr"
+	run "$SCRIPTS/benchmark.sh" finalist "$run_id" sample-hdr
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
+
+	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:hdr10-grain-goodfellas"
+	run "$SCRIPTS/benchmark.sh" finalist "$run_id" hdr10-grain-goodfellas
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 }
 
 # Catches a Job entering its first production encode with stale source bytes.
@@ -1433,11 +1657,12 @@ prepare_contention_samples() {
 			],
 			savingsPanel: [],
 			chosenSettings: {
-				avc: {globalQuality: 24, qualityRunId: "20260802T120000Z-aaaaaaaa"},
-				vc1: {globalQuality: 26, qualityRunId: "20260802T120000Z-aaaaaaaa"},
-				hdr10: {globalQuality: 22, qualityRunId: "20260802T120000Z-aaaaaaaa"}
+				avc: {}, vc1: {}, hdr10: {}
 			}
 		}' >"$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream avc final 24 '[24,26,28]'
+	prepare_quality_upstream vc1 final 26 '[26,28,30]'
+	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
 }
 
 # Catches contention workers sharing one results file, persisting full-title
@@ -1517,7 +1742,7 @@ EOF
 	yq -i -o=json 'del(.chosenSettings.avc)' "$BENCHMARK_SAMPLES_FILE"
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" b worker-1 b-1080-avc
 	[ "$status" -ne 0 ]
-	[ "$output" = 'no committed setting for cohort: avc' ]
+	[ "$output" = 'no final setting for cohort: avc' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$run_id" ]
 
 	run "$SCRIPTS/benchmark.sh" contention "$run_id" b '../worker' b-1080-avc
@@ -1546,13 +1771,15 @@ EOF
 }
 
 @test "finalist publication rejects symlink escape and rolls back when durable append fails" {
+	prepare_execution_run
+	prepare_quality_upstream avc provisional 22 '[22,24,26]'
 	run_id='20260802T120000Z-aaaaaaaa'
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 	finalist_row="$BATS_TEST_TMPDIR/finalist-safe.json"
-	jq '.panel = "finalist" | .clip_id = "full"' \
+	jq '.panel = "finalist" | .clip_id = "full" | .sample_id = "avc-grain-memento"' \
 		"$FIXTURES/metrics/variant-passed.json" >"$finalist_row"
-	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:sample-avc"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
 
 	outside="$BATS_TEST_TMPDIR/outside"
 	mkdir -p "$outside"
@@ -1561,7 +1788,7 @@ EOF
 	printf '%s' 'must stay confined' >"$scratch_output"
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -ne 0 ]
-	[ ! -e "$outside/sample-avc-qsv-gq22.mkv" ]
+	[ ! -e "$outside/avc-grain-memento-qsv-gq22.mkv" ]
 	[ ! -e "$scratch_output" ]
 	rm "$run_dir/encodes"
 
@@ -1569,16 +1796,38 @@ EOF
 	printf '%s' 'new finalist' >"$scratch_output"
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -ne 0 ]
-	[ ! -e "$run_dir/encodes/sample-avc-qsv-gq22.mkv" ]
+	[ ! -e "$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv" ]
 	[ ! -e "$scratch_output" ]
 	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
 
-	printf '%s' 'prior finalist' >"$run_dir/encodes/sample-avc-qsv-gq22.mkv"
+	printf '%s' 'prior finalist' >"$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv"
 	printf '%s' 'replacement finalist' >"$scratch_output"
 	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
 	[ "$status" -ne 0 ]
-	[ "$(<"$run_dir/encodes/sample-avc-qsv-gq22.mkv")" = 'prior finalist' ]
+	[ "$(<"$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv")" = 'prior finalist' ]
 	[ ! -e "$scratch_output" ]
+}
+
+# Catches a result fixture with valid local metrics publishing after its
+# committed quality evidence has changed since finalist run preparation.
+@test "finalist publication rechecks strategy and upstream identity before copy" {
+	prepare_execution_run
+	prepare_quality_upstream avc provisional 22 '[22,24,26]'
+	run_id='20260815T150000Z-cccccccc'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	finalist_row="$BATS_TEST_TMPDIR/finalist-stale-upstream.json"
+	jq '.panel = "finalist" | .clip_id = "full" | .sample_id = "avc-grain-memento" | .cohort = "avc"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$finalist_row"
+	scratch_output="$BENCHMARK_SCRATCH/finalist-stale-upstream.mkv"
+	printf '%s' 'must not publish' >"$scratch_output"
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
+	printf '%s\n' 'changed quality evidence' >>"$BENCHMARK_OUT/runs/20260815T120000Z-aaaaaaaa/results.csv"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$finalist_row" "$scratch_output"
+	[ "$status" -ne 0 ]
+	[ ! -e "$run_dir/encodes/avc-grain-memento-qsv-gq22.mkv" ]
+	[ ! -e "$run_dir/results.csv" ]
 }
 
 # Catches findings silently mixing unnamed runs or copying raw credential and

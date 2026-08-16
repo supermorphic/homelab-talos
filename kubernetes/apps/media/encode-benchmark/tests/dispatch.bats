@@ -422,6 +422,36 @@ valid_capability_evidence() {
 	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
 }
 
+valid_chosen_record() {
+	local cohort="$1" state="$2" setting="${3:-22}" sample hdr
+	case "$cohort" in
+	avc) sample='avc-grain-memento'; hdr='not-applicable' ;;
+	vc1) sample='vc1-fugitive'; hdr='not-applicable' ;;
+	hdr10) sample='hdr10-grain-goodfellas'; hdr='passed' ;;
+	esac
+	jq -n -c --arg state "$state" --arg sample "$sample" --arg hdr "$hdr" --argjson setting "$setting" '
+		{
+			strategyId:"qsv-hevc-icq-v1", qualityRunId:"20260815T120000Z-aaaaaaaa",
+			qualityResultsSha256:("sha256:" + ("a" * 64)),
+			candidateEvidenceSha256:("sha256:" + ("b" * 64)), globalQuality:$setting,
+			state:$state,
+			cropReview:{status:"passed",reviewedAt:"2026-08-15T12:00:00Z",clips:[{sampleId:$sample,clipId:"detail",result:"passed"}]},
+			finalistReview:(if $state == "final" then {
+				status:"passed",finalistRunId:"20260815T140000Z-bbbbbbbb",sampleId:$sample,
+				resultsSha256:("sha256:" + ("c" * 64)),reviewedAt:"2026-08-15T14:00:00Z",
+				checklist:{directPlay:"passed",hdrHandling:$hdr,motionArtifacts:"passed",grainRetention:"passed",banding:"passed",blocking:"passed"}
+			} else null end), rejectedSettings:[]
+		}'
+}
+
+set_dispatch_chosen_record() {
+	local cohort="$1" state="$2" setting="${3:-22}" record
+	record="$(valid_chosen_record "$cohort" "$state" "$setting")"
+	CHOSEN_COHORT="$cohort" CHOSEN_RECORD="$record" yq -i '
+		.data."samples.json" |= (from_yaml | .chosenSettings[strenv(CHOSEN_COHORT)] = (strenv(CHOSEN_RECORD) | from_json) | to_json)
+	' "$evidence_app/samples.yaml"
+}
+
 # Catches any confirmation branch that treats an absent, empty, or merely
 # similar capability token as authority to create a cluster resource.
 @test "capabilities requires the exact confirmation before creating a Job" {
@@ -735,6 +765,9 @@ valid_capability_evidence() {
 @test "all expensive modes refuse pending capability evidence before create" {
 	prepare_evidence_source
 	set_capability_evidence pending '{"nodes":[]}'
+	set_dispatch_chosen_record avc provisional 22
+	set_dispatch_chosen_record vc1 final 26
+	set_dispatch_chosen_record hdr10 final 22
 	run_id='20260802T120000Z-1234abcd'
 
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
@@ -793,7 +826,8 @@ valid_capability_evidence() {
 # pod, where a successful full-title encode could otherwise persist output.
 @test "finalist requires exact run and sample copy confirmation" {
 	run_id='20260802T120000Z-1234abcd'
-	sample_id='sample-avc'
+	sample_id='avc-grain-memento'
+	set_dispatch_chosen_record avc provisional 22
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:finalist'
 	assert_guard_refuses ENCODE_BENCHMARK_FINALIST_CONFIRM wrong:finalist \
 		run finalist "$run_id" "$sample_id"
@@ -802,6 +836,52 @@ valid_capability_evidence() {
 	run_dispatch run finalist "$run_id" "$sample_id"
 	[ "$status" -eq 0 ]
 	[ "$(mutation_count)" -eq 2 ]
+}
+
+# Catches state or title checks that happen after Job creation, and catches a
+# finalized or exhausted cohort being treated as permission to create another finalist.
+@test "finalist dispatch accepts only the provisional cohort finalist before mutation" {
+	run_id='20260802T120000Z-1234abcd'
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:finalist'
+
+	for state in final rejected; do
+		set_dispatch_chosen_record avc "$state" 22
+		export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
+		run_dispatch run finalist "$run_id" avc-grain-memento
+		[ "$status" -ne 0 ]
+		assert_no_mutations
+	done
+
+	set_dispatch_chosen_record avc provisional 22
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-clean-coco"
+	run_dispatch run finalist "$run_id" avc-clean-coco
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+}
+
+# Catches provisional visual evidence authorizing downstream work before Plex
+# review, or malformed chosen records reaching any mocked cluster mutation.
+@test "downstream dispatch requires final chosen settings before mutation" {
+	run_id='20260802T120000Z-1234abcd'
+	set_dispatch_chosen_record hdr10 provisional 22
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:savings'
+	run_dispatch run savings "$run_id"
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	set_dispatch_chosen_record avc provisional 24
+	set_dispatch_chosen_record vc1 final 26
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
+	run_dispatch run contention-b
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	CHOSEN_RECORD="$(valid_chosen_record avc final 24 | jq -c 'del(.cropReview)')" yq -i '
+		.data."samples.json" |= (from_yaml | .chosenSettings.avc = (strenv(CHOSEN_RECORD) | from_json) | to_json)
+	' "$evidence_app/samples.yaml"
+	run_dispatch run contention-b
+	[ "$status" -ne 0 ]
+	assert_no_mutations
 }
 
 # Catches cleanup accepting a generic delete token rather than one exact run
@@ -1145,6 +1225,9 @@ EOF
 	export ENCODE_BENCHMARK_TEST_MODE=1
 	export ENCODE_BENCHMARK_APP_DIR="$contention_app"
 	evidence_app="$contention_app"
+	set_dispatch_chosen_record avc final 24
+	set_dispatch_chosen_record vc1 final 26
+	set_dispatch_chosen_record hdr10 final 22
 	set_capability_evidence verified "$(valid_capability_evidence)"
 }
 
@@ -1244,7 +1327,7 @@ EOF
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:contention-b'
 	run_dispatch run contention-b
 	[ "$status" -ne 0 ]
-	[ "$output" = 'no committed setting for contention sample cohort: avc' ]
+	[ "$output" = 'no final setting for contention sample cohort: avc' ]
 	assert_no_mutations
 }
 

@@ -198,6 +198,7 @@ samples_doc="$(yq -r '.data."samples.json"' "$samples")"
 assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
 jq -e '
 	.schemaVersion == 2 and
+	.chosenSettings == {} and
 	.strategy == {
 		id: "qsv-hevc-icq-v1",
 		resultsSchemaVersion: 2,
@@ -207,6 +208,14 @@ jq -e '
 		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
 	}
 ' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
+jq -e '
+	def finalist($cohort; $id):
+		[.qualityPanel[] | select(.cohort == $cohort and .id == $id and
+			(.detectionOnly // false) == false)] | length == 1;
+	finalist("vc1"; "vc1-fugitive") and
+	finalist("avc"; "avc-grain-memento") and
+	finalist("hdr10"; "hdr10-grain-goodfellas")
+' <<<"$samples_doc" >/dev/null || fail 'quality panel must contain each exact cohort finalist title'
 assert_eq "$(yq -r '.savingsSeed' <<<"$samples_doc")" '20260802' 'savings selection seed'
 runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
 [[ "$runtime_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] ||

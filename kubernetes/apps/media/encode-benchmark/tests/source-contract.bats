@@ -128,10 +128,10 @@ setup() {
 	[[ "$output" == *'timed out waiting for running image evidence'* ]]
 }
 
-# Catches any expensive mode moving the repeated node proof after source
-# hashing or run-directory creation, and catches an accidental standalone x265
-# path invoking the GPU proof.
-@test "every GPU mode completes its assigned-node proof before source or run work" {
+# Catches quality moving the repeated node proof after source hashing, catches
+# downstream modes accepting the legacy two-field chosen record before source
+# work, and catches an accidental standalone x265 path invoking the GPU proof.
+@test "GPU proof and downstream chosen authorization precede source or run work" {
 	benchmark="$app/scripts/benchmark.sh"
 	fixture_root="$BATS_TEST_DIRNAME/fixtures/logs"
 	stub_bin="$BATS_TEST_TMPDIR/order-bin"
@@ -202,8 +202,28 @@ EOF
 	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$fixture_root/qsv-init-success-no-phrase.log"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$fixture_root/drm-fdinfo-active.log"
 
+	for invocation in 'quality'; do
+		: >"$order_log"
+		read -r -a arguments <<<"$invocation"
+		run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$out" \
+			BENCHMARK_SCRATCH="$scratch" BENCHMARK_SAMPLES_FILE="$mode_samples" \
+			BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE="$image" \
+			BENCHMARK_ORDER_LOG="$order_log" NODE_NAME=nuc1 \
+			BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" \
+			BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" \
+			BENCHMARK_TEST_FDINFO_FIXTURE="$BENCHMARK_TEST_FDINFO_FIXTURE" \
+			"$benchmark" "${arguments[@]}"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *'sample hash mismatch'* ]]
+		awk -F '\t' '
+			$1 == "ffmpeg" {proof = NR}
+			$1 == "sha256sum" && !hash {hash = NR}
+			END {exit !(proof > 0 && hash > proof)}
+		' "$order_log"
+		[ "$(find "$out/runs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+	done
+
 	for invocation in \
-		'quality' \
 		'savings 20260802T120000Z-1234abcd' \
 		'finalist 20260802T120000Z-1234abcd avc-grain-memento' \
 		'contention 20260802T120000Z-1234abcd a worker-1 hdr10-clean-ministry'; do
@@ -219,12 +239,7 @@ EOF
 			ENCODE_BENCHMARK_FINALIST_CONFIRM='copy:encode-benchmark:20260802T120000Z-1234abcd:avc-grain-memento' \
 			"$benchmark" "${arguments[@]}"
 		[ "$status" -ne 0 ]
-		[[ "$output" == *'sample hash mismatch'* ]]
-		awk -F '\t' '
-			$1 == "ffmpeg" {proof = NR}
-			$1 == "sha256sum" && !hash {hash = NR}
-			END {exit !(proof > 0 && hash > proof)}
-		' "$order_log"
+		[ ! -s "$order_log" ]
 		[ "$(find "$out/runs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 0 ]
 	done
 

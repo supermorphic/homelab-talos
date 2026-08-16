@@ -112,6 +112,10 @@ load_source() {
 	samples_document="$temp_directory/samples.json"
 	yq -e -r '.data."samples.json"' "$app_directory/samples.yaml" >"$samples_document"
 	contract_load "$samples_document" || return
+	contract_validate_chosen_settings "$samples_document" || {
+		echo 'committed chosen settings are malformed' >&2
+		return 65
+	}
 	configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 	[[ -f "$template" ]] || {
 		echo 'benchmark Job template is missing' >&2
@@ -662,16 +666,49 @@ contention_samples() {
 	for candidate in "${candidates[@]}"; do
 		validate_sample_id "$(jq -r '.id' <<<"$candidate")" || return
 		cohort="$(jq -r '.cohort' <<<"$candidate")"
-		setting="$(contract_chosen_record "$samples_document" "$cohort" | jq -r '.globalQuality // ""')" || {
-			echo "no committed setting for contention sample cohort: $cohort" >&2
+		setting="$(contract_chosen_record "$samples_document" "$cohort" final | jq -r '.globalQuality // ""')" || {
+			echo "no final setting for contention sample cohort: $cohort" >&2
 			return 65
 		}
 		contract_is_icq_setting "$samples_document" "$setting" || {
-			echo "no committed setting for contention sample cohort: $cohort" >&2
+			echo "no final setting for contention sample cohort: $cohort" >&2
 			return 65
 		}
 	done
 	printf '%s\n' "${candidates[@]}"
+}
+
+require_finalist_authorization() {
+	local sample_id="$1" sample cohort expected
+	sample="$(SAMPLE_ID="$sample_id" jq -c '.qualityPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_document")"
+	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
+		echo "finalist sample not found or duplicated: $sample_id" >&2
+		return 66
+	}
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	expected="$(contract_expected_finalist "$cohort")" || {
+		echo "no finalist title for cohort: $cohort" >&2
+		return 65
+	}
+	[[ "$sample_id" == "$expected" ]] || {
+		echo "finalist sample does not match cohort: $cohort" >&2
+		return 65
+	}
+	contract_chosen_record "$samples_document" "$cohort" provisional >/dev/null || {
+		echo "chosen setting for $cohort is not provisional" >&2
+		return 65
+	}
+}
+
+require_savings_authorization() {
+	jq -e '
+		. as $root | ([.savingsPanel[]?.cohort] | unique) as $cohorts |
+		any($root.chosenSettings | to_entries[];
+			.value.state == "final" and (.key as $cohort | ($cohorts | index($cohort)) != null))
+	' "$samples_document" >/dev/null || {
+		echo 'no final chosen setting authorizes savings' >&2
+		return 65
+	}
 }
 
 dispatch_run() {
@@ -723,6 +760,11 @@ dispatch_run() {
 	if [[ -n "$supplied_run_id" && -z "$contention_case" ]]; then validate_run_id "$supplied_run_id" || return; fi
 	require_confirmation ENCODE_BENCHMARK_RUN_CONFIRM "run:encode-benchmark:$mode" || return
 	load_source || return
+	if [[ "$mode" == 'finalist' ]]; then
+		require_finalist_authorization "$sample_id" || return
+	elif [[ "$mode" == 'savings' ]]; then
+		require_savings_authorization || return
+	fi
 	require_capability_evidence || return
 	if [[ -n "$contention_case" ]]; then
 		candidate_output="$(contention_samples "$contention_case")" || return

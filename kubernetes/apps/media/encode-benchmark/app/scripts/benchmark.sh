@@ -661,6 +661,7 @@ record_result_inner() {
 	local scratch_output="$3"
 	local run_directory results panel sample_id cohort source_sha clip encoder setting
 	local selected strategy qsv_initialization video_busy_nanoseconds status attempt disposition='discarded' confirmation destination
+	local expected_finalist chosen
 	local encodes_directory='' staged_destination='' backup_destination='' published=0 had_prior=0
 	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
 	local -a columns
@@ -711,6 +712,24 @@ record_result_inner() {
 		echo 'x265 result must use not-applicable QSV evidence' >&2
 		return 65
 	fi
+	if [[ "$panel" == 'finalist' ]]; then
+		confirmation="copy:encode-benchmark:$run_id:$sample_id"
+		if [[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" != "$confirmation" ]]; then
+			echo "missing finalist confirmation for $run_id/$sample_id" >&2
+			return 64
+		fi
+		expected_finalist="$(contract_expected_finalist "$cohort")" || return
+		[[ "$sample_id" == "$expected_finalist" ]] || {
+			echo "finalist sample does not match cohort: $cohort" >&2
+			return 65
+		}
+		prepare_chosen_upstream "$cohort" provisional || return
+		chosen="$(contract_chosen_record "$samples_file" "$cohort" provisional)" || return 65
+		[[ "$setting" == "$(jq -r '.globalQuality' <<<"$chosen")" ]] || {
+			echo "finalist result setting does not match chosen setting for cohort: $cohort" >&2
+			return 65
+		}
+	fi
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
 	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
@@ -732,11 +751,6 @@ record_result_inner() {
 	fi
 
 	if [[ "$panel" == 'finalist' ]]; then
-		confirmation="copy:encode-benchmark:$run_id:$sample_id"
-		if [[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" != "$confirmation" ]]; then
-			echo "missing finalist confirmation for $run_id/$sample_id" >&2
-			return 64
-		fi
 		if [[ "$status" == 'passed' ]]; then
 			disposition='copied'
 		fi
@@ -1736,7 +1750,11 @@ encoder_commands_for_mode() {
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 	else
-		mapfile -t settings < <(jq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
+		if [[ "$mode" == 'finalist' ]]; then
+			mapfile -t settings < <(jq -r '.chosenSettings[]? | select(.state == "provisional") | .globalQuality' "$samples_file" | sort -nu)
+		else
+			mapfile -t settings < <(jq -r '.chosenSettings[]? | select(.state == "final") | .globalQuality' "$samples_file" | sort -nu)
+		fi
 	fi
 	for setting in "${settings[@]}"; do
 		contract_is_icq_setting "$samples_file" "$setting" || continue
@@ -1941,6 +1959,106 @@ rank_quality_candidates() {
 	mv -f -- "$staged" "$artifact"
 }
 
+prepare_chosen_upstream() {
+	local cohort="$1" required_state="$2" record quality_run quality_directory manifest results candidates
+	local actual_results_digest actual_candidates_digest actual_manifest_digest expected_header upstream selected
+	local out_physical runs_physical quality_physical
+	record="$(contract_chosen_record "$samples_file" "$cohort" "$required_state")" || {
+		echo "chosen setting for $cohort is not authorized for state: $required_state" >&2
+		return 65
+	}
+	quality_run="$(jq -r '.qualityRunId' <<<"$record")"
+	quality_directory="$benchmark_out/runs/$quality_run"
+	manifest="$quality_directory/manifest.json"
+	results="$quality_directory/results.csv"
+	candidates="$quality_directory/quality-candidates.json"
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" &&
+		-d "$benchmark_out/runs" && ! -L "$benchmark_out/runs" &&
+		-d "$quality_directory" && ! -L "$quality_directory" &&
+		-f "$manifest" && ! -L "$manifest" && -f "$results" && ! -L "$results" &&
+		-f "$candidates" && ! -L "$candidates" ]] || {
+		echo "chosen setting upstream evidence is unavailable for cohort: $cohort" >&2
+		return 66
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	runs_physical="$(cd -P "$benchmark_out/runs" && pwd)"
+	quality_physical="$(cd -P "$quality_directory" && pwd)"
+	[[ "$runs_physical" == "$out_physical/runs" && "$quality_physical" == "$runs_physical/$quality_run" ]] || {
+		echo "chosen setting upstream evidence escapes the output hierarchy for cohort: $cohort" >&2
+		return 65
+	}
+	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson manifest_schema "$CONTRACT_MANIFEST_SCHEMA" --argjson results_schema "$CONTRACT_RESULTS_SCHEMA" '
+		.schemaVersion == $manifest_schema and .resultsSchemaVersion == $results_schema and
+		.strategyId == $strategy and .mode == "quality" and
+		(.createdAt | type == "string" and test("^[0-9]{8}T[0-9]{6}Z$"))
+	' "$manifest" >/dev/null || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	IFS= read -r expected_header <"$results" || true
+	[[ "$expected_header" == "$results_header" ]] || {
+		echo "chosen setting quality results schema is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	awk -F, -v run="$quality_run" -v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 {
+			rows += 1
+			if (NF != 39 || $1 != run || $2 != "quality" || $37 != strategy) exit 65
+		}
+		END {if (rows < 1) exit 65}
+	' "$results" || {
+		echo "chosen setting quality results identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	actual_results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	actual_candidates_digest="sha256:$(sha256sum "$candidates" | awk '{print $1}')"
+	actual_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
+	[[ "$actual_results_digest" == "$(jq -r '.qualityResultsSha256' <<<"$record")" &&
+	"$actual_candidates_digest" == "$(jq -r '.candidateEvidenceSha256' <<<"$record")" ]] || {
+		echo "chosen setting upstream digest is stale for cohort: $cohort" >&2
+		return 65
+	}
+	jq -e --arg cohort "$cohort" --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg digest "$actual_results_digest" --argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--argjson record "$record" '
+		.schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+		.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
+		(.cohorts | type == "object") and
+		(.cohorts[$cohort] | type == "object" and .status == "eligible" and
+			(.candidates | type == "array" and length >= 1 and length <= 8 and
+				all(.[];
+					(type == "object" and keys == ["globalQuality","medianReductionPercent"] and
+					 (.globalQuality | type == "number" and floor == .) and
+					 (.globalQuality as $value | [16,18,20,22,24,26,28,30] | index($value) != null) and
+					 (.medianReductionPercent | type == "number"))) and
+				([.[].globalQuality] | unique | length) == length)) and
+		(.cohorts[$cohort].candidates | map(.globalQuality)) as $ranked |
+		($record.rejectedSettings | map(.globalQuality)) as $rejected |
+		$rejected == $ranked[0:($rejected | length)] and
+		if $record.state == "rejected" then
+			($rejected | length) == ($ranked | length) and $record.globalQuality == $ranked[-1]
+		else
+			($rejected | length) < ($ranked | length) and
+			$record.globalQuality == $ranked[($rejected | length)]
+		end
+	' "$candidates" >/dev/null || {
+		echo "chosen setting rejected history is not the ranked candidate prefix for cohort: $cohort" >&2
+		return 65
+	}
+	upstream="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$record" \
+		--arg manifest "$actual_manifest_digest" --arg results "$actual_results_digest" \
+		--arg candidates "$actual_candidates_digest" '{
+			cohort:$cohort, chosenSetting:$chosen, qualityManifestSha256:$manifest,
+			qualityResultsSha256:$results, candidateEvidenceSha256:$candidates
+		}')"
+	selected="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$record" \
+		'[{cohort:$cohort,globalQuality:$chosen.globalQuality,qualityRunId:$chosen.qualityRunId}]')"
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$upstream"
+	BENCHMARK_SELECTED_SETTINGS_JSON="$selected"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON
+}
+
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
 	local source sha detection title_probe_file clip_id timestamp clip
@@ -1997,9 +2115,29 @@ savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
-	local panel_samples
+	local panel_samples final_cohorts cohort_name upstream_map='{}' selected_settings='[]'
+	final_cohorts="$(jq -e -c '
+		. as $root | ([.savingsPanel[]?.cohort] | unique) as $panel_cohorts |
+		[$root.chosenSettings | to_entries[] |
+			select(.key as $cohort | ($panel_cohorts | index($cohort)) != null) |
+			select(.value.state == "final") | .key]
+	' "$samples_file")" || return 65
+	[[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]] || {
+		echo 'no final chosen setting authorizes savings' >&2
+		return 65
+	}
+	while IFS= read -r cohort_name; do
+		prepare_chosen_upstream "$cohort_name" final || return
+		upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+			'. + {($cohort):$identity}' <<<"$upstream_map")"
+		selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
+			<<<"$selected_settings")"
+	done < <(jq -r '.[]' <<<"$final_cohorts")
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n -c --argjson chosen "$upstream_map" '{chosenSettings:$chosen}')"
+	BENCHMARK_SELECTED_SETTINGS_JSON="$selected_settings"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON
 	assigned_node_capability_gate || return
-	panel_samples="$(jq -c '[.savingsPanel[]?]' "$samples_file")"
+	panel_samples="$(jq -c --argjson cohorts "$final_cohorts" '[.savingsPanel[]? | select(.cohort as $cohort | ($cohorts | index($cohort)) != null)]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
@@ -2017,7 +2155,7 @@ savings_mode() {
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
-		setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || continue
+		setting="$(contract_chosen_record "$samples_file" "$cohort" final | jq -r '.globalQuality // ""')" || continue
 		contract_is_icq_setting "$samples_file" "$setting" || continue
 		if row_is_complete "$run_id" savings "$sha" full qsv "$setting"; then continue; fi
 		prepared="$(encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
@@ -2056,7 +2194,8 @@ savings_mode() {
 
 finalist_mode() {
 	local requested_run_id="$1" requested_sample_id="$2" run_id run_directory run_scratch
-	local sample sample_id cohort source sha setting expected_confirmation
+	local sample sample_id cohort source sha setting expected_confirmation expected_finalist chosen
+	validate_run_id "$requested_run_id" || return
 	validate_sample_id "$requested_sample_id" || return
 	expected_confirmation="copy:encode-benchmark:$requested_run_id:$requested_sample_id"
 	[[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -2064,11 +2203,26 @@ finalist_mode() {
 		return 64
 	}
 	sample="$(SAMPLE_ID="$requested_sample_id" jq -c \
-		'.qualityPanel[]?, .savingsPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file" | head -n 1)"
-	[[ -n "$sample" ]] || {
-		echo "sample not found: $requested_sample_id" >&2
+		'.qualityPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file")"
+	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
+		echo "finalist sample not found or duplicated: $requested_sample_id" >&2
 		return 66
 	}
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	expected_finalist="$(contract_expected_finalist "$cohort")" || {
+		echo "no finalist title for cohort: $cohort" >&2
+		return 65
+	}
+	[[ "$requested_sample_id" == "$expected_finalist" ]] || {
+		echo "finalist sample does not match cohort: $cohort" >&2
+		return 65
+	}
+	chosen="$(contract_chosen_record "$samples_file" "$cohort" provisional)" || {
+		echo "chosen setting for $cohort is not provisional" >&2
+		return 65
+	}
+	prepare_chosen_upstream "$cohort" provisional || return
+	setting="$(jq -r '.globalQuality' <<<"$chosen")"
 	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode finalist)"
@@ -2078,21 +2232,12 @@ finalist_mode() {
 	run_scratch="$scratch_root/$run_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	sample_id="$(jq -r '.id' <<<"$sample")"
-	cohort="$(jq -r '.cohort' <<<"$sample")"
 	[[ "$cohort" != 'dolby-vision' && "$(jq -r '.detectionOnly // false' <<<"$sample")" != 'true' ]] || {
 		echo 'Dolby Vision samples cannot be encoded' >&2
 		return 65
 	}
 	source="$(jq -r '.path' <<<"$sample")"
 	sha="$(jq -r '.sha256' <<<"$sample")"
-	setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || {
-		echo "no committed setting for cohort: $cohort" >&2
-		return 65
-	}
-	contract_is_icq_setting "$samples_file" "$setting" || {
-		echo "no committed setting for cohort: $cohort" >&2
-		return 65
-	}
 	if ! row_is_complete "$run_id" finalist "$sha" full qsv "$setting"; then
 		encode_one_variant "$run_id" finalist "$sample_id" "$cohort" "$sha" full \
 			qsv "$setting" "$source" full '' >/dev/null
@@ -2146,14 +2291,15 @@ contention_mode() (
 		echo "contention case $contention_case requires an eligible 1920x1080 non-DV quality sample" >&2
 		return 65
 	fi
-	setting="$(contract_chosen_record "$samples_file" "$cohort" | jq -r '.globalQuality // ""')" || {
-		echo "no committed setting for cohort: $cohort" >&2
+	setting="$(contract_chosen_record "$samples_file" "$cohort" final | jq -r '.globalQuality // ""')" || {
+		echo "no final setting for cohort: $cohort" >&2
 		return 65
 	}
 	contract_is_icq_setting "$samples_file" "$setting" || {
-		echo "no committed setting for cohort: $cohort" >&2
+		echo "no final setting for cohort: $cohort" >&2
 		return 65
 	}
+	prepare_chosen_upstream "$cohort" final || return
 	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode contention)"
@@ -2394,6 +2540,14 @@ test_dispatch() {
 	local action="$1"
 	shift
 	case "$action" in
+	chosen-upstream)
+		(($# == 2)) || usage
+		contract_load "$samples_file"
+		prepare_chosen_upstream "$1" "$2"
+		jq -n -c --argjson upstream "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+			--argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" \
+			'{upstream:$upstream,selectedSettings:$selected}'
+		;;
 	running-image-evidence)
 		(($# == 0)) || usage
 		contract_load "$samples_file"
@@ -2485,18 +2639,21 @@ quality)
 savings)
 	(($# == 1)) || usage
 	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
 	require_running_image_evidence || exit $?
 	savings_mode "$1"
 	;;
 finalist)
 	(($# == 2)) || usage
 	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
 	require_running_image_evidence || exit $?
 	finalist_mode "$1" "$2"
 	;;
 contention)
 	(($# == 4)) || usage
 	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
 	require_running_image_evidence || exit $?
 	contention_mode "$1" "$2" "$3" "$4"
 	;;
