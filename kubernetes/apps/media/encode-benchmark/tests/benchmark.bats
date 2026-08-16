@@ -50,6 +50,7 @@ setup() {
 	for mutation in \
 		'.unexpected = true' \
 		'.schemaVersion = 0' \
+		'.schemaVersion = 2' \
 		'.strategyId = "qsv-hevc-la-icq-v1"' \
 		'.quality.runId = "wrong-run"' \
 		'.quality.resultsSha256 = "sha256:ABC"' \
@@ -872,23 +873,25 @@ write_quality_ranking_results() {
 	[[ "$output" != *'"status":"passed"'* ]]
 }
 
-# Catches a production break where the requested LA-ICQ controls, lossless clip
+# Catches a production break where the requested ICQ controls, lossless clip
 # extraction, stream preservation, or reference/distorted ordering drifts.
 @test "quality command construction preserves exact clip QSV x265 VMAF and SSIM contracts" {
-	run "$SCRIPTS/benchmark.sh" _test commands \
-		'/media/Movie.mkv' '00:17:23.456' '/scratch/detail.mkv' \
-		'/scratch/qsv-22.mkv' '/scratch/x265-20.mkv' '/scratch/vmaf.json' 22 20
-	[ "$status" -eq 0 ]
-	commands="$output"
+	for setting in 16 18 30; do
+		run "$SCRIPTS/benchmark.sh" _test commands \
+			'/media/Movie.mkv' '00:17:23.456' '/scratch/detail.mkv' \
+			"/scratch/qsv-$setting.mkv" '/scratch/x265-20.mkv' '/scratch/vmaf.json' "$setting" 20
+		[ "$status" -eq 0 ]
+		commands="$output"
 
-	run jq -e '
+		run jq -e --arg setting "$setting" '
 		.clip == ["ffmpeg","-nostdin","-v","error","-ss","00:17:23.456","-i","/media/Movie.mkv","-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
-		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality","22","-look_ahead","0","-extbrc","0","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/qsv-22.mkv"] and
+		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality",$setting,"-look_ahead","0","-extbrc","0","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0",("/scratch/qsv-" + $setting + ".mkv")] and
 		.x265 == ["ffmpeg","-nostdin","-v","verbose","-i","/scratch/detail.mkv","-map","0","-c:v","libx265","-preset","slow","-crf","20","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/x265-20.mkv"] and
-		.vmaf == ["ffmpeg","-nostdin","-v","error","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
-		.ssim == ["ffmpeg","-nostdin","-v","info","-i","/scratch/qsv-22.mkv","-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
+		.vmaf == ["ffmpeg","-nostdin","-v","error","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
+		.ssim == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
 	' <<<"$commands"
-	[ "$status" -eq 0 ]
+		[ "$status" -eq 0 ]
+	done
 }
 
 # Catches a production break where arithmetic mean replaces the mandated VMAF
@@ -2571,6 +2574,29 @@ EOF
 			'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' \
 			'"20260815T150000Z-aaaaaaaa","b","worker-1","avc-grain-memento","avc","22","passed","1","120.5","passed","","discarded","qsv-hevc-icq-v1"' \
 			>"$fragment"
+	done
+}
+
+# Catches findings accepting a contention row that cannot be a valid selected
+# ICQ setting, even though its structural CSV fields otherwise look complete.
+@test "findings contention fragments admit only canonical ICQ settings" {
+	fragment="$BATS_TEST_TMPDIR/contention-a-worker-1-attempt-1.csv"
+	for setting in 16 18 30; do
+		printf '%s\n' \
+			'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' \
+			"\"20260815T150000Z-aaaaaaaa\",\"a\",\"worker-1\",\"avc-grain-memento\",\"avc\",\"$setting\",\"passed\",\"1\",\"120.5\",\"passed\",\"\",\"discarded\",\"qsv-hevc-icq-v1\"" \
+			>"$fragment"
+		run "$SCRIPTS/benchmark.sh" _test findings-fragment "$fragment" '20260815T150000Z-aaaaaaaa'
+		[ "$status" -eq 0 ]
+	done
+
+	for setting in 14 17 32; do
+		printf '%s\n' \
+			'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' \
+			"\"20260815T150000Z-aaaaaaaa\",\"a\",\"worker-1\",\"avc-grain-memento\",\"avc\",\"$setting\",\"passed\",\"1\",\"120.5\",\"passed\",\"\",\"discarded\",\"qsv-hevc-icq-v1\"" \
+			>"$fragment"
+		run "$SCRIPTS/benchmark.sh" _test findings-fragment "$fragment" '20260815T150000Z-aaaaaaaa'
+		[ "$status" -ne 0 ]
 	done
 }
 

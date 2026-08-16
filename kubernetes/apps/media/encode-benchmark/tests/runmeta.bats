@@ -30,7 +30,7 @@ results_header() {
 results_row() {
 	local run_id="$1" encoder="${2:-qsv}" strategy="${3:-qsv-hevc-icq-v1}"
 	local initialization="${4:-passed}" busy="${5:-800000000}"
-	local selected='LA-ICQ'
+	local selected='ICQ'
 	if [[ "$encoder" == 'x265' ]]; then
 		selected='CRF'
 		initialization='not-applicable'
@@ -141,7 +141,7 @@ prepare_configmap_script_mount() {
 	for mutation in \
 		'.schemaVersion = 1' \
 		'.resultsSchemaVersion = 1' \
-		'.strategyId = "la-hevc-icq-v1"'; do
+		'.strategyId = "qsv-hevc-la-icq-v1"'; do
 		changed="$BATS_TEST_TMPDIR/non-contract-identity.json"
 		jq "$mutation" "$BATS_TEST_DIRNAME/fixtures/manifests/identity.json" >"$changed"
 		export BENCHMARK_IDENTITY_FIXTURE="$changed"
@@ -333,9 +333,9 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	results_row "$run_id" | sed 's/,qsv,22,LA-ICQ,passed,1,/,qsv,22-extra,LA-ICQ,passed,1,/' >>"$results"
-	results_row "$run_id" | sed 's/,LA-ICQ,passed,1,/,LA-ICQ,failed,1,/' >>"$results"
-	results_row "$run_id" | sed 's/,qsv,22,LA-ICQ,passed,1,/,qsv,23,LA-ICQ,invalid,1,/' >>"$results"
+	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,24,ICQ,passed,1,/' >>"$results"
+	results_row "$run_id" | sed 's/,ICQ,passed,1,/,ICQ,failed,1,/' >>"$results"
+	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,24,ICQ,invalid,1,/' >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 1 ]
@@ -392,7 +392,7 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,ICQ,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
@@ -420,6 +420,26 @@ EOF
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 65 ]
 	[ "$output" = 'invalid results CSV: row 2 has a mismatched strategy' ]
+}
+
+# Catches a stale QSV completed-row reader accepting LA-ICQ or a setting that
+# cannot reach every later ICQ stage, thereby skipping the required retry.
+@test "completed rejects stale mode and out-of-range QSV settings" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	for setting in 14 17 32; do
+		results_header >"$results"
+		results_row "$run_id" | sed "s/,qsv,22,ICQ,passed,1,/,qsv,$setting,ICQ,passed,1,/" >>"$results"
+		run "$SCRIPTS/runmeta.sh" completed "$run_id" "quality|abc123|detail|qsv|$setting"
+		[ "$status" -eq 65 ]
+		[ "$output" = 'invalid results CSV: row 2 has an invalid ICQ setting' ]
+	done
+
+	results_header >"$results"
+	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,22,LA-ICQ,passed,1,/' >>"$results"
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 65 ]
+	[ "$output" = 'invalid results CSV: row 2 has an invalid QSV rate control' ]
 }
 
 # Catches a passed QSV row relying on encode success alone instead of retaining

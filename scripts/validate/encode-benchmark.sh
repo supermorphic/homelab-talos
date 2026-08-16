@@ -508,6 +508,11 @@ if rg -n '/data|media/tv|downloads' "$app/scripts" "$template"; then
 	fail 'benchmark scripts or Job template can access forbidden TV/download paths'
 fi
 
+if rg -n '20260813T221312Z-5a22cde6' \
+	kubernetes/apps/media/encode-benchmark/tests; then
+	fail 'inadmissible deleted-run evidence appears in benchmark tests'
+fi
+
 # Use only the pinned toolchain for all executable source checks and run every Bats contract.
 mapfile -t shell_sources < <(find "$app/scripts" -type f -name '*.sh' -print | sort)
 shell_sources+=(

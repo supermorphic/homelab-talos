@@ -1052,6 +1052,20 @@ EOF
 	assert_no_mutations
 }
 
+# Catches any downstream dispatcher accepting a setting that the shared ICQ
+# candidate source excludes, after it has reached a mocked cluster mutation.
+@test "finalist dispatch rejects every out-of-range ICQ setting before mutation" {
+	run_id='20260802T120000Z-1234abcd'
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:finalist'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$run_id:avc-grain-memento"
+	for setting in 14 17 32; do
+		set_dispatch_chosen_record avc provisional "$setting"
+		run_dispatch run finalist "$run_id" avc-grain-memento
+		[ "$status" -ne 0 ]
+		assert_no_mutations
+	done
+}
+
 # Catches savings authorization that accepts a claimed final decision without
 # validating its full review evidence, or starts a Job when no cohort is final.
 @test "savings dispatch fails closed for malformed and absent final cohorts" {

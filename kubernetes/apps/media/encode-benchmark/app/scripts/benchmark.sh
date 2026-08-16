@@ -408,7 +408,7 @@ qsv_proof() {
 	value="$(grep -i -E 'Using .*ratecontrol method|Runtime selected ratecontrol method:' "$encode_log" |
 		grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' | tail -n 1 || true)"
 	case "${value^^}" in
-	LA_ICQ | LA-ICQ | LAICQ) selected='LA-ICQ' ;;
+	LA_ICQ | LA-ICQ | LAICQ) selected='rejected' ;;
 	CQP | ICQ | CBR | VBR | AVBR | QVBR) selected="${value^^}" ;;
 	esac
 	value="$(grep -o -E 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
@@ -2952,7 +2952,7 @@ findings_validate_results() {
 # failed worker encode. Every named fragment must be a completed ICQ encode
 # whose output was discarded after successful validation.
 findings_validate_contention_fragment() {
-	local path="$1" run_id="$2" header row fields fragment_case fragment_worker fragment_attempt
+	local path="$1" run_id="$2" header row fields fragment_case fragment_worker fragment_attempt fragment_setting
 	findings_unsafe_artifact "$path" || return
 	header="$(head -n 1 "$path")"
 	[[ "$header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
@@ -2975,6 +2975,8 @@ findings_validate_contention_fragment() {
 		.[9] == "passed" and .[10] == "" and
 		.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
 	' <<<"$fields" >/dev/null || return 65
+	fragment_setting="$(jq -r '.[5]' <<<"$fields")"
+	contract_is_icq_setting "$samples_file" "$fragment_setting" || return 65
 	fragment_case="$(jq -r '.[1]' <<<"$fields")"
 	fragment_worker="$(jq -r '.[2]' <<<"$fields")"
 	fragment_attempt="$(jq -r '.[7]' <<<"$fields")"

@@ -45,7 +45,7 @@ setup() {
 }
 
 # Catches producers drifting from the shared candidate membership check used by
-# the runtime, dispatch, and result helpers.
+# quality commands, result resume, selection, dispatch, and findings helpers.
 @test "shared contract admits only the canonical ICQ settings" {
 	for setting in 16 18 30; do
 		run bash -c 'source "$1"; contract_load "$2"; contract_is_icq_setting "$2" "$3"' \

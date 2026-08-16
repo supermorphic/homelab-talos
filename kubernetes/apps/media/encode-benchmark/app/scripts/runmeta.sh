@@ -526,7 +526,8 @@ completed_row() {
 	results="$runs_root/$run_id/results.csv"
 	[[ -f "$results" && ! -L "$results" ]] || return 1
 	awk -v expected_run_id="$run_id" -v expected_key="$row_key" \
-		-v expected_strategy="$CONTRACT_STRATEGY_ID" -v test_mode="$test_mode" -v header_spec="$results_header" \
+		-v expected_strategy="$CONTRACT_STRATEGY_ID" -v expected_icq_settings="$CONTRACT_ICQ_SETTINGS" \
+		-v test_mode="$test_mode" -v header_spec="$results_header" \
 		'
 	# RFC4180 reader for the resume check. The runtime image has mawk, not gawk, so
 	# FPAT is unavailable and quoted fields must be parsed by hand. Two numbering
@@ -548,6 +549,13 @@ completed_row() {
 		for (i = 1; i <= nf; i++) delete field[i]
 		nf = 0
 		cur = ""
+	}
+
+	function is_icq_setting(value,   settings, count, position) {
+		count = split(expected_icq_settings, settings, " ")
+		for (position = 1; position <= count; position++)
+			if (value == settings[position]) return 1
+		return 0
 	}
 
 	function process_record(   candidate, part, bad) {
@@ -574,6 +582,10 @@ completed_row() {
 		if (field[37] != expected_strategy)
 			invalid("invalid results CSV: row " record_no " has a mismatched strategy")
 		if (field[7] == "qsv" && field[10] == "passed") {
+			if (!is_icq_setting(field[8]))
+				invalid("invalid results CSV: row " record_no " has an invalid ICQ setting")
+			if (field[9] != "ICQ")
+				invalid("invalid results CSV: row " record_no " has an invalid QSV rate control")
 			if (field[38] != "passed")
 				invalid("invalid results CSV: row " record_no " has an invalid QSV initialization")
 			if (field[39] !~ /^[0-9]+$/ || field[39] + 0 <= 0)
