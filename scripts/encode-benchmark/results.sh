@@ -109,6 +109,27 @@ sanitize_summary() {
 	fi
 }
 
+sanitize_quality_completion() {
+	local log_line="$1" dispatch_id="$2" record runtime_id artifact_location
+	record="$(jq -e -c --arg dispatch "$dispatch_id" '
+		select(
+			type == "object" and
+			keys == ["artifactLocation","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
+			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
+			.dispatchId == $dispatch and
+			(.runtimeRunId | type == "string") and
+			.artifactLocation == ("/out/runs/" + .runtimeRunId)
+		) |
+		{dispatchId,runtimeRunId,artifactLocation}
+	' <<<"$log_line")" || return 65
+	runtime_id="$(jq -r '.runtimeRunId' <<<"$record")"
+	contract_is_run_id "$runtime_id" || return 65
+	[[ "${runtime_id%-*}" == "${dispatch_id%-*}" ]] || return 65
+	artifact_location="$(jq -r '.artifactLocation' <<<"$record")"
+	printf 'dispatch_id=%s runtime_run_id=%s artifact_location=%s\n' \
+		"$dispatch_id" "$runtime_id" "$artifact_location"
+}
+
 sanitize_capability_evidence() {
 	local log_line="$1" node="$2" verified_at="$3" image_id="$4"
 	jq -e -c --arg node "$node" --arg verified_at "$verified_at" \
@@ -199,6 +220,8 @@ validate_prework_image_evidence() {
 }
 
 evidence_status=0
+quality_completion_count=0
+runtime_artifact_location=''
 while IFS= read -r job_json; do
 	[[ -n "$job_json" ]] || continue
 	name="$(yq -p=json -e -r '.metadata.name | select(test("^encode-benchmark-[a-z0-9.-]+$"))' <<<"$job_json")" || exit 65
@@ -308,10 +331,32 @@ while IFS= read -r job_json; do
 			echo "capability result provenance rejected: terminal phase contradicts proof for Job $name" >&2
 			exit 1
 		fi
+	elif [[ "$mode" == 'quality' && "$phase" == 'Complete' ]]; then
+		if ! [[ "$succeeded" == '1' && "$failed" == '0' && "$job_uid" =~ ^[a-zA-Z0-9._-]+$ &&
+			"$pod_count" == '1' && "$(yq -p=json -r '.[0].status.phase // ""' <<<"$matching_pods")" == 'Succeeded' ]] ||
+			! has_exact_job_controller_owner "$(jq -c '.[0]' <<<"$matching_pods")" "$name" "$job_uid"; then
+			echo "quality completion provenance rejected: job=$name" >&2
+			exit 1
+		fi
+		quality_completion="$(sanitize_quality_completion "$log_line" "$run_id")" || {
+			echo "quality completion record rejected: job=$name" >&2
+			exit 1
+		}
+		printf '%s\n' "$quality_completion"
+		runtime_artifact_location="${quality_completion##* artifact_location=}"
+		((quality_completion_count += 1))
 	else
 		printf 'summary=%s\n' "$(sanitize_summary "$mode" "$log_line")"
 	fi
 done < <(yq -p=json -o=json -I=0 '.items[]' <<<"$jobs")
 
-printf 'artifact_location=/out/runs/%s\n' "$run_id"
+if ((quality_completion_count > 0)); then
+	((quality_completion_count == 1 && job_count == 1)) || {
+		echo 'quality completion provenance rejected: expected one exact Job' >&2
+		exit 1
+	}
+	printf 'artifact_location=%s\n' "$runtime_artifact_location"
+else
+	printf 'artifact_location=/out/runs/%s\n' "$run_id"
+fi
 exit "$evidence_status"

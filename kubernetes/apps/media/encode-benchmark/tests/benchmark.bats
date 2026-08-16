@@ -26,7 +26,7 @@ setup() {
 		 x265:[{runId:"20260815T130000Z-bbbbbbbb",sampleId:"avc-grain-memento",comparisonsSha256:("sha256:" + ("c" * 64))},
 		       {runId:"20260815T140000Z-cccccccc",sampleId:"hdr10-grain-goodfellas",comparisonsSha256:("sha256:" + ("d" * 64))}],
 		 savings:{runId:"20260815T150000Z-dddddddd",resultsSha256:("sha256:" + ("e" * 64)),cohortsSha256:("sha256:" + ("f" * 64))},
-		 contention:{observationsFile:"contention-observations.json",observationsSha256:("sha256:" + ("0" * 64)),fragments:[]}}' >"$complete"
+		 contention:{runId:"20260815T155000Z-99999999",observationsFile:"contention-observations.json",observationsSha256:("sha256:" + ("0" * 64)),fragments:[]}}' >"$complete"
 	jq '.x265 = [] | .savings = null | .contention = null' "$complete" >"$partial"
 
 	for inputs in "$complete" "$partial"; do
@@ -46,7 +46,7 @@ setup() {
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",
 		 quality:{runId:"20260815T120000Z-aaaaaaaa",resultsSha256:("sha256:" + ("a" * 64)),candidatesSha256:("sha256:" + ("b" * 64))},
 		 x265:[],savings:null,
-		 contention:{observationsFile:"contention-observations.json",observationsSha256:("sha256:" + ("c" * 64)),fragments:[]}}' >"$base"
+		 contention:{runId:"20260815T155000Z-99999999",observationsFile:"contention-observations.json",observationsSha256:("sha256:" + ("c" * 64)),fragments:[]}}' >"$base"
 	for mutation in \
 		'.unexpected = true' \
 		'.schemaVersion = 0' \
@@ -54,6 +54,8 @@ setup() {
 		'.strategyId = "qsv-hevc-la-icq-v1"' \
 		'.quality.runId = "wrong-run"' \
 		'.quality.resultsSha256 = "sha256:ABC"' \
+		'del(.contention.runId)' \
+		'.contention.runId = "wrong-run"' \
 		'.contention.observationsFile = "../contention.json"' \
 		'.contention.fragments = [{runId:"20260815T160000Z-eeeeeeee",file:"../../secret.csv"}]'; do
 		candidate="$BATS_TEST_TMPDIR/findings-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
@@ -918,6 +920,7 @@ write_quality_ranking_results() {
 # others still retain the ICQ contract.
 @test "table-driven ICQ settings cross commands durable evidence decisions and reports" {
 	for setting in 16 18 30; do
+		QUALITY_RUN_ID='20260815T120000Z-6cdfc9f3'
 		reset_cross_path_workspace
 		prepare_execution_run
 
@@ -1043,7 +1046,9 @@ write_quality_ranking_results() {
 		prepare_execution_run
 		jq '.chosenSettings = {}' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
 		mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-		prepare_quality_upstream avc provisional "$setting" "[$setting]"
+		yq -i -o=json '.qualityPanel[0].id = "avc-grain-memento" | .qualityPanel[0].cohort = "avc"' \
+			"$BENCHMARK_SAMPLES_FILE"
+		prepare_findings_quality avc provisional "$setting"
 		quality_results="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/results.csv"
 		quality_candidates="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/quality-candidates.json"
 		inputs="$BATS_TEST_TMPDIR/findings-$setting.json"
@@ -1664,6 +1669,26 @@ PYTHON
 	[ "$status" -eq 1 ]
 	[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
 	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
+}
+
+# Catches a generated quality Job publishing only its runtime run ID as an
+# unstructured log tail. The completion record is the durable dispatch-to-
+# runtime mapping consumed by the guarded results route.
+@test "generated quality publishes an exact dispatch runtime completion record" {
+	prepare_execution_run
+	dispatch_id='20260815T121500Z-deadbeef'
+	export BENCHMARK_DISPATCH_CORRELATION_ID="$dispatch_id"
+
+	run "$SCRIPTS/benchmark.sh" quality "$dispatch_id"
+	[ "$status" -eq 0 ]
+	run jq -e --arg dispatch "$dispatch_id" '
+		type == "object" and keys == ["artifactLocation","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
+		.dispatchId == $dispatch and
+		(.runtimeRunId | test("^20260815T121500Z-[0-9a-f]{8}$")) and
+		.artifactLocation == ("/out/runs/" + .runtimeRunId)
+	' <<<"$output"
+	[ "$status" -eq 0 ]
 }
 
 @test "PGS decode maps video only while probe validation still detects subtitle loss" {
@@ -2415,6 +2440,7 @@ EOF
 		};
 		{
 			schemaVersion: 1, strategyId: "qsv-hevc-icq-v1",
+			runId: "20260815T155000Z-99999999",
 			clientDevice: "living-room-player", playbackSampleId: "a-4k-hdr",
 			baselines: [
 				baseline("baseline-1"; 1.0; [1,1,1,1,1,1,1]),
@@ -2672,8 +2698,392 @@ EOF
 	[ ! -e "$run_dir/results.csv" ]
 }
 
+findings_sources() {
+	local panel="$1" cohort="${2:-}"
+	case "$panel" in
+	quality)
+		jq -c '[.qualityPanel[]? | {path,sha256:("sha256:" + .sha256),size:.sizeBytes}] | sort_by(.path)' "$BENCHMARK_SAMPLES_FILE"
+		;;
+	x265)
+		jq -c --arg cohort "$cohort" '[.qualityPanel[]? | select(.cohort == $cohort and .x265Reference == true) |
+			{path,sha256:("sha256:" + .sha256),size:.sizeBytes}] | sort_by(.path)' "$BENCHMARK_SAMPLES_FILE"
+		;;
+	savings)
+		jq -c --arg cohort "$cohort" '[.savingsPanel[]? | select(.cohort == $cohort and
+			(.detectionOnly // false) != true) | {path,sha256:("sha256:" + .sha256),size:.sizeBytes}] | sort_by(.path)' "$BENCHMARK_SAMPLES_FILE"
+		;;
+	*) return 64 ;;
+	esac
+}
+
+write_findings_manifest() {
+	local run_id="$1" mode="$2" selected="$3" sources="$4" upstream="$5" output="$6"
+	local samples_digest
+	samples_digest="sha256:$(sha256sum "$BENCHMARK_SAMPLES_FILE" | awk '{print $1}')"
+	jq -S -c --arg mode "$mode" --arg created "${run_id%-*}" --arg samples "$samples_digest" \
+		--argjson selected "$selected" --argjson sources "$sources" --argjson upstream "$upstream" '
+		.mode = $mode | .samplesDigest = $samples | .selectedSettings = $selected |
+		.sources = $sources | .upstream = $upstream | .createdAt = $created |
+		if $mode == "x265" then
+			.gpu = null | .cpu = {model:"fixture CPU",ffmpeg:"8.1.2 fixture-build",libx265:"4.1+1"} |
+			.node = {name:"nuc3",kernel:"6.12.0-fixture"}
+		else . end
+	' "$FIXTURES/manifests/identity.json" >"$output"
+}
+
+append_findings_result() {
+	local results="$1" run_id="$2" panel="$3" sample="$4" cohort="$5" sha="$6" clip="$7" setting="$8"
+	local reduction="${9:-35}" vmaf="${10:-96}" low="${11:-91}" ssim="${12:-0.991}" speed="${13:-1.25}"
+	printf '%s,%s,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,%s,1000,650,1.000000,72.0,%s,%s,%s,%s,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
+		"$run_id" "$panel" "$sample" "$cohort" "$sha" "$clip" "$setting" "$reduction" "$speed" \
+		"$vmaf" "$low" "$ssim" "$sample" "$clip" >>"$results"
+}
+
+prepare_findings_quality() {
+	local cohort="$1" state="$2" setting="$3" include_other="${4:-false}" quality_vmaf="${5:-96}"
+	local identity normalized suffix quality_dir results candidates other_setting
+	local expected_count results_digest candidate_digest selected='[]' sources upstream='{}' sample sample_id sha clip
+	sources="$(findings_sources quality)"
+	identity="$BATS_TEST_TMPDIR/findings-quality-identity.json"
+	write_findings_manifest '20260815T120000Z-00000000' quality "$selected" "$sources" "$upstream" "$identity"
+	jq -S -c 'del(.createdAt)' "$identity" >"$identity.normalized-input"
+	normalized="$(bash -c 'source "$1"; contract_load "$3"; contract_normalize_run_identity "$(cat "$2")" quality' \
+		_ "$SCRIPTS/contract.sh" "$identity.normalized-input" "$BENCHMARK_SAMPLES_FILE")"
+	suffix="$(printf '%s\n' "$normalized" | sha256sum | awk '{print substr($1,1,8)}')"
+	QUALITY_RUN_ID="20260815T120000Z-$suffix"
+	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
+	mkdir -p "$quality_dir"
+	jq -S -c --arg created "${QUALITY_RUN_ID%-*}" '.createdAt = $created' <<<"$normalized" >"$quality_dir/manifest.json"
+	results="$quality_dir/results.csv"
+	"$SCRIPTS/benchmark.sh" _test results-header >"$results"
+	while IFS= read -r sample; do
+		sample_id="$(jq -r '.id' <<<"$sample")"
+		sha="$(jq -r '.sha256' <<<"$sample")"
+		while IFS= read -r clip; do
+			append_findings_result "$results" "$QUALITY_RUN_ID" quality "$sample_id" "$cohort" "$sha" "$clip" "$setting" 35 "$quality_vmaf"
+			if [[ "$include_other" == true ]]; then
+				other_setting="$(if [[ "$setting" == 24 ]]; then printf 22; else printf 24; fi)"
+				append_findings_result "$results" "$QUALITY_RUN_ID" quality "$sample_id" "$cohort" "$sha" "$clip" \
+					"$other_setting" 10 77 70 0.95 0.50
+			fi
+		done < <(jq -r '.clips | keys[]' <<<"$sample")
+	done < <(jq -c --arg cohort "$cohort" '.qualityPanel[]? | select(.cohort == $cohort and (.detectionOnly // false) != true)' "$BENCHMARK_SAMPLES_FILE")
+	expected_count="$(jq -r --arg cohort "$cohort" '
+		[.qualityPanel[]? | select(.cohort == $cohort and (.detectionOnly // false) != true) | .clips | length] | add
+	' "$BENCHMARK_SAMPLES_FILE")"
+	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	candidates="$quality_dir/quality-candidates.json"
+	jq -n -c --arg run "$QUALITY_RUN_ID" --arg digest "$results_digest" --arg cohort "$cohort" \
+		--argjson setting "$setting" --argjson count "$expected_count" '
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,resultsSchemaVersion:2,
+		 resultsSha256:$digest,cohorts:{
+			avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
+			vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
+			hdr10:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"}}} |
+		.cohorts[$cohort] = {status:"eligible",expectedClipCount:$count,
+			candidates:[{globalQuality:$setting,medianReductionPercent:35}]}
+	' >"$candidates"
+	candidate_digest="sha256:$(sha256sum "$candidates" | awk '{print $1}')"
+	set_chosen_record "$cohort" "$state" "$setting"
+	jq --arg cohort "$cohort" --arg results "$results_digest" --arg candidates "$candidate_digest" '
+		.chosenSettings[$cohort].qualityResultsSha256 = $results |
+		.chosenSettings[$cohort].candidateEvidenceSha256 = $candidates
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+findings_chosen_upstream() {
+	local cohort="$1" record quality_dir
+	record="$(jq -c --arg cohort "$cohort" '.chosenSettings[$cohort]' "$BENCHMARK_SAMPLES_FILE")"
+	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
+	jq -n -c --arg cohort "$cohort" --argjson chosen "$record" \
+		--arg manifest "sha256:$(sha256sum "$quality_dir/manifest.json" | awk '{print $1}')" \
+		--arg results "sha256:$(sha256sum "$quality_dir/results.csv" | awk '{print $1}')" \
+		--arg candidates "sha256:$(sha256sum "$quality_dir/quality-candidates.json" | awk '{print $1}')" '{
+			cohort:$cohort,chosenSetting:$chosen,qualityManifestSha256:$manifest,
+			qualityResultsSha256:$results,candidateEvidenceSha256:$candidates
+		}'
+}
+
+prepare_findings_x265() {
+	local cohort="$1" setting="$2" run_id='20260815T130000Z-bbbbbbbb' sample_id sample clips selected upstream sources dir
+	sample_id="$(if [[ "$cohort" == avc ]]; then printf avc-grain-memento; else printf hdr10-grain-goodfellas; fi)"
+	sample="$(jq -c --arg sample "$sample_id" '.qualityPanel[] | select(.id == $sample)' "$BENCHMARK_SAMPLES_FILE")"
+	clips="$(jq -c '.clips | keys' <<<"$sample")"
+	dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$dir"
+	jq -n -c --arg run "$run_id" --arg quality "$QUALITY_RUN_ID" --arg sample "$sample_id" \
+		--argjson setting "$setting" --argjson clips "$clips" '
+		$clips[] | {clipId:.,lowerCrf:20,matchedBitRate:600,premiumPercent:8,qsvSetting:$setting,
+		 qualityRunId:$quality,sampleId:$sample,status:"bracketed",strategyId:"qsv-hevc-icq-v1",
+		 upperCrf:22,x265RunId:$run}
+	' >"$dir/x265-comparisons.jsonl"
+	selected="$(jq -n -c --arg cohort "$cohort" --arg quality "$QUALITY_RUN_ID" --argjson setting "$setting" \
+		'[{cohort:$cohort,globalQuality:$setting,qualityRunId:$quality}]')"
+	upstream="$(findings_chosen_upstream "$cohort")"
+	sources="$(findings_sources x265 "$cohort")"
+	write_findings_manifest "$run_id" x265 "$selected" "$sources" "$upstream" "$dir/manifest.json"
+	X265_RUN_ID="$run_id"
+}
+
+prepare_findings_savings() {
+	local cohort="$1" setting="$2" run_id='20260815T150000Z-dddddddd' dir results sample sample_id sha
+	local selected chosen upstream sources
+	dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$dir"
+	results="$dir/results.csv"
+	"$SCRIPTS/benchmark.sh" _test results-header >"$results"
+	while IFS= read -r sample; do
+		sample_id="$(jq -r '.id' <<<"$sample")"
+		sha="$(jq -r '.sha256' <<<"$sample")"
+		append_findings_result "$results" "$run_id" savings "$sample_id" "$cohort" "$sha" full "$setting" 30
+	done < <(jq -c --arg cohort "$cohort" '.savingsPanel[]? | select(.cohort == $cohort and (.detectionOnly // false) != true)' "$BENCHMARK_SAMPLES_FILE")
+	jq -n -c --arg run "$run_id" --arg cohort "$cohort" --argjson setting "$setting" '
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",runId:$run,
+		 cohorts:{avc:{status:"not-applicable",reason:"no-final-setting"},
+			vc1:{status:"not-applicable",reason:"no-final-setting"},
+			hdr10:{status:"not-applicable",reason:"no-final-setting"}}} |
+		.cohorts[$cohort] = {status:"measured",globalQuality:$setting}
+	' >"$dir/savings-cohorts.json"
+	selected="$(jq -n -c --arg cohort "$cohort" --arg quality "$QUALITY_RUN_ID" --argjson setting "$setting" \
+		'[{cohort:$cohort,globalQuality:$setting,qualityRunId:$quality}]')"
+	chosen="$(findings_chosen_upstream "$cohort")"
+	upstream="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$chosen" '{chosenSettings:{($cohort):$chosen}}')"
+	sources="$(findings_sources savings "$cohort")"
+	write_findings_manifest "$run_id" savings "$selected" "$sources" "$upstream" "$dir/manifest.json"
+	SAVINGS_RUN_ID="$run_id"
+}
+
+prepare_complete_findings() {
+	local cohort="$1" state="${2:-final}" setting="${3:-22}" include_other="${4:-false}" quality_vmaf="${5:-96}"
+	local quality_dir x265_dir savings_dir x265_sample
+	prepare_findings_quality "$cohort" "$state" "$setting" "$include_other" "$quality_vmaf"
+	prepare_findings_x265 "$cohort" "$setting"
+	prepare_findings_savings "$cohort" "$setting"
+	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
+	x265_dir="$BENCHMARK_OUT/runs/$X265_RUN_ID"
+	savings_dir="$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID"
+	x265_sample="$(if [[ "$cohort" == avc ]]; then printf avc-grain-memento; else printf hdr10-grain-goodfellas; fi)"
+	FINDINGS_INPUTS="$BATS_TEST_TMPDIR/findings-complete-$cohort.json"
+	jq -n --arg quality "$QUALITY_RUN_ID" --arg x265 "$X265_RUN_ID" --arg savings "$SAVINGS_RUN_ID" \
+		--arg x265Sample "$x265_sample" \
+		--arg qualityResults "sha256:$(sha256sum "$quality_dir/results.csv" | awk '{print $1}')" \
+		--arg candidates "sha256:$(sha256sum "$quality_dir/quality-candidates.json" | awk '{print $1}')" \
+		--arg comparisons "sha256:$(sha256sum "$x265_dir/x265-comparisons.jsonl" | awk '{print $1}')" \
+		--arg savingsResults "sha256:$(sha256sum "$savings_dir/results.csv" | awk '{print $1}')" \
+		--arg cohorts "sha256:$(sha256sum "$savings_dir/savings-cohorts.json" | awk '{print $1}')" '{
+			schemaVersion:1,strategyId:"qsv-hevc-icq-v1",
+			quality:{runId:$quality,resultsSha256:$qualityResults,candidatesSha256:$candidates},
+			x265:[{runId:$x265,sampleId:$x265Sample,comparisonsSha256:$comparisons}],
+			savings:{runId:$savings,resultsSha256:$savingsResults,cohortsSha256:$cohorts},contention:null
+		}' >"$FINDINGS_INPUTS"
+}
+
+prepare_complete_avc_findings() {
+	prepare_complete_findings avc "$@"
+}
+
+set_findings_capability_node() {
+	local node="${1:-nuc1}"
+	jq --arg node "$node" '
+		.runtime.capabilityStatus = "verified" |
+		.runtime.capabilityEvidence.nodes = [{
+			strategyId:"qsv-hevc-icq-v1",proofSchemaVersion:3,nodeName:$node,
+			initialization:"passed",initializationReason:"",renderNode:"/dev/dri/renderD128",
+			drmDriver:"i915",selectedRateControl:"ICQ",telemetryStatus:"available",
+			telemetryReason:"",videoBusyNanoseconds:800000000,videoBusyPercent:50,
+			encodeFps:72,encodeSpeed:1.25,decode:"passed",vmaf:"passed",
+			proofStatus:"passed",proofReasons:"",verifiedAt:"2026-08-15T12:00:00Z",
+			configuredImageDigest:(.runtime.image | split("@")[1]),imageId:.runtime.image
+		}]
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+prepare_hdr_contention_findings() {
+	local observation_run='20260815T155000Z-99999999' fragment_run='20260815T154500Z-eeeeeeee'
+	local observation_dir fragment_dir observation fragment selected chosen upstream sources
+	set_findings_capability_node nuc1
+	prepare_complete_findings hdr10 final 22
+	observation_dir="$BENCHMARK_OUT/runs/$observation_run"
+	fragment_dir="$BENCHMARK_OUT/runs/$fragment_run"
+	mkdir -p "$observation_dir" "$fragment_dir"
+	observation="$observation_dir/contention-observations.json"
+	fragment="$fragment_dir/contention-a-worker-1-attempt-1.csv"
+	jq --arg run "$observation_run" --arg workerRun "$fragment_run" '
+		.runId = $run |
+		.cases = [(.cases[0] | .case = "a" | .playbackMode = "direct-play" |
+			.seekToResumeSeconds = [] |
+			.workerFragments = [{runId:$workerRun,file:"contention-a-worker-1-attempt-1.csv"}])]
+	' "$FIXTURES/metrics/contention-observations.json" >"$observation"
+	printf '%s\n' \
+		'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' \
+		'"20260815T154500Z-eeeeeeee","a","worker-1","hdr10-grain-goodfellas","hdr10","22","passed","1","120.5","passed","","discarded","qsv-hevc-icq-v1"' \
+		>"$fragment"
+	selected="$(jq -n -c --arg quality "$QUALITY_RUN_ID" \
+		'[{cohort:"hdr10",globalQuality:22,qualityRunId:$quality}]')"
+	chosen="$(findings_chosen_upstream hdr10)"
+	upstream="$(jq -n -c --argjson chosen "$chosen" \
+		'$chosen + {contention:{clientDevice:"living-room-player",playbackSampleId:"hdr10-grain-goodfellas"}}')"
+	sources="$(findings_sources x265 hdr10)"
+	write_findings_manifest "$fragment_run" contention-a "$selected" "$sources" "$upstream" \
+		"$fragment_dir/manifest.json"
+	jq '.clientDevice = "living-room-player" | .node = {name:"nuc1",kernel:"6.12.0-fixture"}' \
+		"$fragment_dir/manifest.json" >"$fragment_dir/manifest.json.tmp"
+	mv -f -- "$fragment_dir/manifest.json.tmp" "$fragment_dir/manifest.json"
+	jq --arg run "$observation_run" \
+		--arg observations "sha256:$(sha256sum "$observation" | awk '{print $1}')" \
+		--arg workerRun "$fragment_run" \
+		--arg fragment "sha256:$(sha256sum "$fragment" | awk '{print $1}')" '
+		.contention = {runId:$run,observationsFile:"contention-observations.json",
+			observationsSha256:$observations,
+			fragments:[{runId:$workerRun,file:"contention-a-worker-1-attempt-1.csv",sha256:$fragment}]}
+	' "$FINDINGS_INPUTS" >"$FINDINGS_INPUTS.tmp"
+	mv -f -- "$FINDINGS_INPUTS.tmp" "$FINDINGS_INPUTS"
+	CONTENTION_OBSERVATION_RUN="$observation_run"
+	CONTENTION_OBSERVATION_FILE="$observation"
+}
+
+# Catches findings imposing generated-quality hash suffixes on normal explicit
+# x265 and savings dispatch IDs instead of validating their exact manifests,
+# sources, settings, and upstream digests.
+@test "findings accepts normal runtime manifests with correlation-suffixed explicit runs" {
+	prepare_complete_avc_findings
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	target='20260815T160000Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -eq 0 ]
+	[ -f "$BENCHMARK_OUT/runs/$target/findings.md" ]
+
+	for artifact_mutation in \
+		"$BENCHMARK_OUT/runs/$X265_RUN_ID/manifest.json|.selectedSettings[0].globalQuality = 24" \
+		"$BENCHMARK_OUT/runs/$X265_RUN_ID/manifest.json|.sources[0].sha256 = (\"sha256:\" + (\"e\" * 64))" \
+		"$BENCHMARK_OUT/runs/$X265_RUN_ID/manifest.json|.upstream.qualityResultsSha256 = (\"sha256:\" + (\"e\" * 64))" \
+		"$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID/manifest.json|.selectedSettings[0].globalQuality = 24" \
+		"$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID/manifest.json|.sources[0].size += 1" \
+		"$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID/manifest.json|.upstream.chosenSettings.avc.candidateEvidenceSha256 = (\"sha256:\" + (\"e\" * 64))"; do
+		artifact="${artifact_mutation%%|*}"
+		mutation="${artifact_mutation#*|}"
+		cp "$artifact" "$artifact.good"
+		jq -S -c "$mutation" "$artifact.good" >"$artifact"
+		rm -rf -- "$BENCHMARK_OUT/runs/$target"
+		run "$SCRIPTS/benchmark.sh" findings "$target"
+		[ "$status" -ne 0 ]
+		mv -f -- "$artifact.good" "$artifact"
+	done
+}
+
+refresh_findings_savings_digest() {
+	local results="$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID/results.csv"
+	jq --arg digest "sha256:$(sha256sum "$results" | awk '{print $1}')" \
+		'.savings.resultsSha256 = $digest' "$FINDINGS_INPUTS" >"$FINDINGS_INPUTS.tmp"
+	mv -f -- "$FINDINGS_INPUTS.tmp" "$FINDINGS_INPUTS"
+}
+
+mutate_findings_csv_field() {
+	local path="$1" row="$2" column="$3" value="$4"
+	awk -F, -v OFS=, -v row="$row" -v column="$column" -v value="$value" '
+		NR == row {$column = value} {print}
+	' "$path" >"$path.tmp"
+	mv -f -- "$path.tmp" "$path"
+}
+
+# A matching digest is not sufficient savings evidence. The artifact must be
+# the complete committed panel at the committed setting, with successful ICQ,
+# QSV, and output-validation proof for every row.
+@test "findings rejects incomplete or semantically invalid savings evidence" {
+	prepare_complete_avc_findings
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	target='20260815T160000Z-deadbeef'
+	results="$BENCHMARK_OUT/runs/$SAVINGS_RUN_ID/results.csv"
+	cp "$results" "$results.good"
+
+	sed '$d' "$results.good" >"$results"
+	refresh_findings_savings_digest
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$target/findings.md" ]
+
+	for mutation in '2|8|24' '2|9|LA-ICQ' '2|24|failed' '2|25|failed' '2|34|codec-mismatch' '2|14|30oops'; do
+		cp "$results.good" "$results"
+		IFS='|' read -r row column value <<<"$mutation"
+		mutate_findings_csv_field "$results" "$row" "$column" "$value"
+		refresh_findings_savings_digest
+		rm -rf -- "$BENCHMARK_OUT/runs/$target"
+		run "$SCRIPTS/benchmark.sh" findings "$target"
+		[ "$status" -ne 0 ]
+		[ ! -e "$BENCHMARK_OUT/runs/$target/findings.md" ]
+	done
+}
+
+# Findings must summarize the complete chosen-setting rows, reset per-cohort
+# state, and report only nodes with complete schema-v3 ICQ capability proof.
+@test "findings scopes summaries to the chosen setting and current cohort" {
+	set_findings_capability_node nuc1
+	prepare_complete_avc_findings final 22 true
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	target='20260815T160000Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -eq 0 ]
+	findings="$BENCHMARK_OUT/runs/$target/findings.md"
+	run rg -F -- 'Capability node basis: nuc1' "$findings"
+	[ "$status" -eq 0 ]
+	avc_section="$(sed -n '/^## avc$/,/^## vc1$/p' "$findings")"
+	[[ "$avc_section" == *'VMAF 96'* ]]
+	[[ "$avc_section" != *'VMAF 77'* ]]
+	vc1_section="$(sed -n '/^## vc1$/,/^## hdr10$/p' "$findings")"
+	[[ "$vc1_section" == *'Savings: not applicable; verdict not applicable'* ]]
+}
+
+# Artifact digests authenticate bytes, not meaning. A hostile value in a field
+# that findings would render must fail canonical typing before publication.
+@test "findings rejects hostile nonnumeric rendered quality evidence" {
+	prepare_complete_avc_findings final 22 false '96**INJECT**'
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	target='20260815T160000Z-deadbeef'
+
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	[ ! -e "$BENCHMARK_OUT/runs/$target/findings.md" ]
+}
+
+# Contention observations belong to their own immutable run. Findings must
+# require exactly the cases implied by committed final cohorts and must never
+# load the mutable target findings directory as the upstream observation.
+@test "findings validates immutable contention run identity and applicability" {
+	prepare_hdr_contention_findings
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	target='20260815T160000Z-deadbeef'
+	jq '.contention = null' "$FINDINGS_INPUTS" >"$FINDINGS_INPUTS.null"
+
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS.null"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -ne 0 ]
+	rm -rf -- "$BENCHMARK_OUT/runs/$target"
+
+	export BENCHMARK_FINDINGS_INPUTS_FILE="$FINDINGS_INPUTS"
+	run "$SCRIPTS/benchmark.sh" findings "$target"
+	[ "$status" -eq 0 ]
+	run rg -F -- 'Contention: passed' "$BENCHMARK_OUT/runs/$target/findings.md"
+	[ "$status" -eq 0 ]
+
+	for mutation in '.runId = "20260815T155000Z-88888888"' '.cases = []'; do
+		cp "$CONTENTION_OBSERVATION_FILE" "$CONTENTION_OBSERVATION_FILE.good"
+		jq "$mutation" "$CONTENTION_OBSERVATION_FILE.good" >"$CONTENTION_OBSERVATION_FILE"
+		jq --arg digest "sha256:$(sha256sum "$CONTENTION_OBSERVATION_FILE" | awk '{print $1}')" \
+			'.contention.observationsSha256 = $digest' "$FINDINGS_INPUTS" >"$FINDINGS_INPUTS.tmp"
+		mv -f -- "$FINDINGS_INPUTS.tmp" "$FINDINGS_INPUTS"
+		rm -rf -- "$BENCHMARK_OUT/runs/$target"
+		run "$SCRIPTS/benchmark.sh" findings "$target"
+		[ "$status" -ne 0 ]
+		mv -f -- "$CONTENTION_OBSERVATION_FILE.good" "$CONTENTION_OBSERVATION_FILE"
+	done
+}
+
 @test "findings renders schema-v1 runtime evidence without source metadata" {
-	prepare_quality_upstream avc provisional 22 '[22]'
+	prepare_findings_quality avc provisional 22
 	quality_results="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/results.csv"
 	quality_candidates="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID/quality-candidates.json"
 	inputs="$BATS_TEST_TMPDIR/findings-inputs.json"

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "strategyId": "qsv-hevc-icq-v1",
+  "runId": "20260815T155000Z-99999999",
   "clientDevice": "living-room-player",
   "playbackSampleId": "hdr10-grain-goodfellas",
   "baselines": [

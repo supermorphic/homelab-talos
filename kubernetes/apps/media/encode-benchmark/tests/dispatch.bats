@@ -387,9 +387,14 @@ assert_guard_refuses() {
 @test "findings dispatch suspends a metadata-only Job until owned inputs persist" {
 	inputs="$BATS_TEST_TMPDIR/findings-inputs.json"
 	jq -n '{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",quality:{runId:"20260815T120000Z-aaaaaaaa",resultsSha256:("sha256:" + ("a" * 64)),candidatesSha256:("sha256:" + ("b" * 64))},x265:[],savings:null,contention:null}' >"$inputs"
+	chmod 0644 "$inputs"
+	input_mode_before="$(stat -f '%Lp' "$inputs" 2>/dev/null || stat -c '%a' "$inputs")"
 	export ENCODE_BENCHMARK_FINDINGS_CONFIRM='run:encode-benchmark:findings'
 	run_dispatch findings "$inputs"
 	[ "$status" -eq 0 ]
+	input_mode_after="$(stat -f '%Lp' "$inputs" 2>/dev/null || stat -c '%a' "$inputs")"
+	[ "$input_mode_after" = "$input_mode_before" ]
+	! awk -F '\t' -v path="$inputs" '$1 == "chmod" && index($2, path) { found = 1 } END { exit found }' "$STUB_CALLS"
 	job="$(job_capture)"
 	configmap="$(configmap_capture)"
 	[ "$(yq -r '.spec.suspend' "$job")" = true ]
@@ -1886,6 +1891,40 @@ write_multi_node_results_fixtures() {
 	[[ "$output" == *'summary=run-complete'* ]]
 	! awk -F '\t' '$1 == "kubectl" && $2 ~ / get configmap\// {found=1} END {exit !found}' "$STUB_CALLS"
 	assert_no_mutations
+}
+
+# Catches results selecting a generated quality Job by dispatch correlation
+# and then reporting that correlation as the NAS artifact directory. The
+# exact Job-owned completion record is the independent mapping to the runtime
+# manifest-bound run ID.
+@test "results verifies generated quality completion mapping and returns runtime artifact" {
+	dispatch_id='20260802T120000Z-1234abcd'
+	runtime_run_id='20260802T120000Z-feedface'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	write_results_fixtures "$dispatch_id" "$image_id"
+	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
+		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch' \
+		--arg dispatch "$dispatch_id" "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
+		schemaVersion:1,strategyId:"qsv-hevc-icq-v1",status:"complete",
+		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime)
+	}' >"$STUB_LOGS_FILE"
+
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id"* ]]
+	[[ "$output" == *"artifact_location=/out/runs/$runtime_run_id"* ]]
+	[[ "$output" != *'no-sanitized-summary'* ]]
+	[[ "$output" != *"artifact_location=/out/runs/$dispatch_id"* ]]
 }
 
 # Catches accepting missing, malformed, or digest-mismatched kubelet imageID

@@ -370,6 +370,7 @@ fi
 # 180 five-second NAS observations without mirroring the runtime jq helper.
 jq -e '
 	.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+	.runId == "20260815T155000Z-99999999" and
 	(.baselines | type == "array" and length == 3 and
 		all(.[];
 			.durationSeconds == 900 and .playbackMode == "direct-play" and

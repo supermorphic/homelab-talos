@@ -1043,13 +1043,13 @@ validate_findings_inputs_file() {
 		def x265: type == "object" and keys == ["comparisonsSha256","runId","sampleId"] and (.runId|run) and (.sampleId == "avc-grain-memento" or .sampleId == "hdr10-grain-goodfellas") and (.comparisonsSha256|digest);
 		def savings: type == "object" and keys == ["cohortsSha256","resultsSha256","runId"] and (.runId|run) and (.resultsSha256|digest) and (.cohortsSha256|digest);
 		def fragment: type == "object" and keys == ["file","runId","sha256"] and (.runId|run) and (.file|base("[.]csv")) and (.sha256|digest);
-		def contention: type == "object" and keys == ["fragments","observationsFile","observationsSha256"] and (.observationsFile|base("[.]json")) and (.observationsSha256|digest) and (.fragments|type == "array" and length <= 16 and all(.[]; fragment));
+		def contention: type == "object" and keys == ["fragments","observationsFile","observationsSha256","runId"] and (.runId|run) and (.observationsFile|base("[.]json")) and (.observationsSha256|digest) and (.fragments|type == "array" and length <= 16 and all(.[]; fragment));
 		type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and (.quality|quality) and (.x265|type == "array" and length <= 2 and all(.[];x265) and ([.[]|.sampleId]|unique|length)==length) and (.savings == null or (.savings|savings)) and (.contention == null or (.contention|contention))
 	' "$path" >/dev/null
 }
 
 dispatch_findings() {
-	local inputs_file="${1:-}" supplied_run_id="${2:-}" run_id job name job_json uid configmap configmap_name configmap_json persisted inputs_json input_mode
+	local inputs_file="${1:-}" supplied_run_id="${2:-}" run_id job name job_json uid configmap configmap_name configmap_json persisted inputs_json input_mode private_inputs
 	(($# == 1 || $# == 2)) || return 64
 	[[ -n "$inputs_file" ]] || return 64
 	validate_findings_inputs_file "$inputs_file" || {
@@ -1058,7 +1058,7 @@ dispatch_findings() {
 	}
 	while IFS= read -r upstream_run; do
 		validate_run_id "$upstream_run" || return
-	done < <(jq -r '.quality.runId, (.x265[]?.runId), (.savings?.runId // empty), (.contention?.fragments[]?.runId // empty)' "$inputs_file")
+	done < <(jq -r '.quality.runId, (.x265[]?.runId), (.savings?.runId // empty), (.contention?.runId // empty), (.contention?.fragments[]?.runId // empty)' "$inputs_file")
 	require_confirmation ENCODE_BENCHMARK_FINDINGS_CONFIRM 'run:encode-benchmark:findings' || return
 	load_source || return
 	if [[ -n "$supplied_run_id" ]]; then
@@ -1067,10 +1067,15 @@ dispatch_findings() {
 	else run_id="$(new_run_id findings)"; fi
 	require_cluster_target || return
 	ensure_run_available "$run_id" || return
-	inputs_json="$(jq -c . "$inputs_file")" || return 65
-	chmod 0600 "$inputs_file" || return
-	input_mode="$(stat -c '%a' "$inputs_file" 2>/dev/null || stat -f '%Lp' "$inputs_file")"
+	private_inputs="$temp_directory/findings-inputs.json"
+	(
+		umask 077
+		cp -- "$inputs_file" "$private_inputs"
+	) || return
+	chmod 0600 "$private_inputs" || return
+	input_mode="$(stat -c '%a' "$private_inputs" 2>/dev/null || stat -f '%Lp' "$private_inputs")"
 	[[ "$input_mode" == 600 ]] || return 65
+	inputs_json="$(jq -c . "$private_inputs")" || return 65
 	name="encode-benchmark-findings-${run_id,,}"
 	configmap_name="encode-benchmark-findings-inputs-${run_id,,}"
 	job="$temp_directory/findings.yaml"
