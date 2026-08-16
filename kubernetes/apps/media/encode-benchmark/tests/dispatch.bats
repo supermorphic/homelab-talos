@@ -822,6 +822,92 @@ set_dispatch_chosen_record() {
 	[[ "$output" == *"run_id=$run_id"* ]]
 }
 
+# Catches the CPU reference path inheriting GPU resources or the QSV capability
+# gate, losing its exact sample/node confirmation, or dropping established Job
+# mounts, security, and Plex separation while pinning the selected node.
+@test "x265 dispatch renders both reference titles as confirmed node-bound CPU-only Jobs" {
+	set_dispatch_chosen_record avc final 22
+	set_dispatch_chosen_record hdr10 final 22
+	set_capability_evidence pending '{"nodes":[]}'
+	cat >"$STUB_NODES_JSON" <<'EOF'
+{"items":[{"metadata":{"name":"nuc1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
+	printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
+	run_id='20260815T130000Z-bbbbbbbb'
+	for sample_id in avc-grain-memento hdr10-grain-goodfellas; do
+		rm -f -- "$STUB_CAPTURE_DIR"/*
+		: >"$STUB_CALLS"
+		export ENCODE_BENCHMARK_X265_CONFIRM="run:encode-benchmark:x265:$sample_id:nuc3"
+		run_dispatch run x265 "$sample_id" nuc3 "$run_id"
+		[ "$status" -eq 0 ]
+		dispatch_output="$output"
+		[ "$(mutation_count)" -eq 2 ]
+		job="$(job_capture)"
+		[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '216000' ]
+		[ "$(yq -o=json -I=0 '.spec.template.spec.nodeSelector' "$job")" = '{"kubernetes.io/hostname":"nuc3"}' ]
+		[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" // "absent"' "$job")" = 'absent' ]
+		[ "$(yq -r '.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915" // "absent"' "$job")" = 'absent' ]
+		[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts | map(.name) | sort | join(" ")' "$job")" = 'image-evidence media out samples scratch scripts' ]
+		[ "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(" ")' "$job")" = 'image-evidence media out samples scratch scripts' ]
+		run yq -e '
+			.spec.template.spec.automountServiceAccountToken == false and
+			.spec.template.spec.securityContext.runAsNonRoot == true and
+			.spec.template.spec.securityContext.runAsUser == 568 and
+			.spec.template.spec.securityContext.runAsGroup == 568 and
+			.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false and
+			(.spec.template.spec.containers[0].securityContext.capabilities.drop | length) == 1 and
+			.spec.template.spec.containers[0].securityContext.capabilities.drop[0] == "ALL" and
+			.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].key == "app.kubernetes.io/name" and
+			.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].operator == "In" and
+			(.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].values | length) == 1 and
+			.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].values[0] == "plex"
+		' "$job"
+		[ "$status" -eq 0 ]
+		[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh x265 $run_id $sample_id" ]
+		[[ "$dispatch_output" == *"run_id=$run_id"* ]]
+	done
+}
+
+# Catches unsafe, absent, unready, or Plex-hosting nodes reaching collision
+# checks or resource creation, and catches a merely mode-bound confirmation.
+@test "x265 node and exact confirmation are validated before mutation" {
+	set_dispatch_chosen_record avc final 22
+	for node_case in unsafe absent unready plex; do
+		: >"$STUB_CALLS"
+		printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
+		case "$node_case" in
+		unsafe)
+			node='../nuc3'
+			printf '%s\n' '{"items":[]}' >"$STUB_NODES_JSON"
+			;;
+		absent)
+			node='nuc3'
+			printf '%s\n' '{"items":[{"metadata":{"name":"nuc1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' >"$STUB_NODES_JSON"
+			;;
+		unready)
+			node='nuc3'
+			printf '%s\n' '{"items":[{"metadata":{"name":"nuc3"},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}' >"$STUB_NODES_JSON"
+			;;
+		plex)
+			node='nuc3'
+			printf '%s\n' '{"items":[{"metadata":{"name":"nuc3"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' >"$STUB_NODES_JSON"
+			printf '%s\n' '{"items":[{"metadata":{"namespace":"media","labels":{"app.kubernetes.io/name":"plex"}},"spec":{"nodeName":"nuc3"},"status":{"phase":"Running"}}]}' >"$STUB_PODS_JSON"
+			;;
+		esac
+		export ENCODE_BENCHMARK_X265_CONFIRM="run:encode-benchmark:x265:avc-grain-memento:$node"
+		run_dispatch run x265 avc-grain-memento "$node"
+		[ "$status" -ne 0 ]
+		assert_no_mutations
+	done
+
+	printf '%s\n' '{"items":[{"metadata":{"name":"nuc3"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' >"$STUB_NODES_JSON"
+	printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
+	export ENCODE_BENCHMARK_X265_CONFIRM='run:encode-benchmark:x265'
+	run_dispatch run x265 avc-grain-memento nuc3
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+}
+
 # Catches a generated host correlation being persisted as the quality run ID.
 # The runtime is the first component with the complete immutable identity, so it
 # must turn the dispatched correlation into the manifest-bound run ID before
@@ -1020,6 +1106,33 @@ set_dispatch_chosen_record() {
 		[ "$status" -ne 0 ]
 		assert_no_mutations
 	done
+}
+
+# Catches the operator interface swapping the sample/node/run ordering or
+# bypassing the single deployed-source guard before entering dispatch.
+@test "x265 Just interface preserves sample node and optional exact run identity" {
+	set_dispatch_chosen_record avc final 22
+	printf '%s\n' '{"items":[{"metadata":{"name":"nuc3"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' >"$STUB_NODES_JSON"
+	printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
+	run_id='20260815T130000Z-bbbbbbbb'
+	export ENCODE_BENCHMARK_X265_CONFIRM='run:encode-benchmark:x265:avc-grain-memento:nuc3'
+
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-x265 \
+		avc-grain-memento nuc3 "$run_id"
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" = "$run_id" ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh x265 $run_id avc-grain-memento" ]
+
+	rm -f -- "$STUB_CAPTURE_DIR"/*
+	: >"$STUB_CALLS"
+	export STUB_GIT_STALE=1
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-x265 \
+		avc-grain-memento nuc3 "$run_id"
+	[ "$status" -ne 0 ]
+	assert_no_mutations
 }
 
 # Catches dispatching through an arbitrary kubeconfig target; confirmation is

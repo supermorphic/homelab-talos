@@ -420,7 +420,7 @@ fi
 if [[ "${BENCHMARK_TEST_FAIL_X265_EXTENSION:-0}" == '1' && "$arguments" == *'-c:v libx265'* ]]; then
 	last="${!#}"
 	case "$last" in
-	*x265-10-*|*x265-12-*|*x265-14-*|*x265-16-*) exit 90 ;;
+	*x265-16-*) exit 90 ;;
 	esac
 fi
 if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
@@ -514,6 +514,59 @@ prepare_execution_run() {
 prepare_savings_execution_run() {
 	prepare_execution_run
 	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
+}
+
+prepare_x265_execution_run() {
+	local sample_id="$1" cohort="$2" qsv_vmaf="${3:-97}" quality_dir results results_digest candidate_digest
+	local chosen upstream selected cpu_identity
+	prepare_execution_run
+	jq --arg sample "$sample_id" --arg cohort "$cohort" '
+		.qualityPanel[0].id = $sample |
+		.qualityPanel[0].cohort = $cohort |
+		.qualityPanel[0].clips = {
+			detail:"00:17:23.456", dark:"00:27:23.456", motion:"00:37:23.456"
+		} |
+		.chosenSettings = {}
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	prepare_quality_upstream "$cohort" final 22 '[22,24,26]'
+	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
+	results="$quality_dir/results.csv"
+	printf '%s\n' \
+		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,detail,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/detail.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,dark,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/dark.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,motion,qsv,22,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/motion.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		>"$results"
+	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	jq --arg digest "$results_digest" '.resultsSha256 = $digest | .cohorts |= with_entries(
+		.value.expectedClipCount = 3)' "$quality_dir/quality-candidates.json" \
+		>"$quality_dir/quality-candidates.tmp"
+	mv -f -- "$quality_dir/quality-candidates.tmp" "$quality_dir/quality-candidates.json"
+	candidate_digest="sha256:$(sha256sum "$quality_dir/quality-candidates.json" | awk '{print $1}')"
+	jq --arg cohort "$cohort" --arg results "$results_digest" --arg candidates "$candidate_digest" '
+		.chosenSettings[$cohort].qualityResultsSha256 = $results |
+		.chosenSettings[$cohort].candidateEvidenceSha256 = $candidates
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	chosen="$(jq -c --arg cohort "$cohort" '.chosenSettings[$cohort]' "$BENCHMARK_SAMPLES_FILE")"
+	selected="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$chosen" \
+		'[{cohort:$cohort,globalQuality:$chosen.globalQuality,qualityRunId:$chosen.qualityRunId}]')"
+	upstream="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$chosen" \
+		--arg manifest "sha256:$(sha256sum "$quality_dir/manifest.json" | awk '{print $1}')" \
+		--arg results "$results_digest" --arg candidates "$candidate_digest" '{
+			cohort:$cohort, chosenSetting:$chosen, qualityManifestSha256:$manifest,
+			qualityResultsSha256:$results, candidateEvidenceSha256:$candidates
+		}')"
+	cpu_identity="$BATS_TEST_TMPDIR/cpu-identity-$sample_id.json"
+	jq --argjson selected "$selected" --argjson upstream "$upstream" '
+		.gpu = null |
+		.cpu = {model:"fixture CPU",ffmpeg:"8.1.2 fixture-build",libx265:"4.1+1"} |
+		.node = {name:"nuc3",kernel:"6.12.0-fixture"} |
+		.selectedSettings = $selected | .upstream = $upstream
+	' "$FIXTURES/manifests/identity.json" >"$cpu_identity"
+	export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
+	export NODE_NAME='nuc3'
 }
 
 expand_execution_panels_to_three_samples() {
@@ -799,6 +852,18 @@ write_quality_ranking_results() {
 	[ "$output" = '{"status":"bracketed","lower_crf":24,"upper_crf":22,"matched_bit_rate":6000.000000,"premium_percent":33.333333}' ]
 }
 
+# Catches VMAF sorting selecting CRFs that are not adjacent passed points when
+# a measured curve is locally non-monotonic.
+@test "x265 comparison brackets only adjacent passed CRFs" {
+	non_monotonic="$BATS_TEST_TMPDIR/x265-non-monotonic.json"
+	printf '%s\n' '{"points":[{"crf":18,"vmaf":96,"bitRate":8000},{"crf":20,"vmaf":91,"bitRate":5000},{"crf":22,"vmaf":94,"bitRate":6500},{"crf":24,"vmaf":90,"bitRate":4000}],"qsvVmaf":95,"qsvBitRate":9000}' >"$non_monotonic"
+
+	run "$SCRIPTS/benchmark.sh" _test x265-match "$non_monotonic"
+	[ "$status" -eq 0 ]
+	run jq -e '.status == "bracketed" and .lower_crf == 20 and .upper_crf == 18' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
 # Catches accidental extrapolation after the lower-CRF extension has reached
 # the hard CRF 10 boundary without bracketing the QSV quality point.
 @test "x265 comparison emits unbracketed at the CRF boundary" {
@@ -821,6 +886,93 @@ write_quality_ranking_results() {
 	run "$SCRIPTS/benchmark.sh" _test x265-next "$high_side"
 	[ "$status" -eq 0 ]
 	[ "$output" = '{"status":"extend","next_crf":26}' ]
+}
+
+# Catches accepting an arbitrary quality title, a renamed reference, or a
+# non-reference sample before x265 creates a durable run directory.
+@test "x265 mode accepts only the two exact reference sample identities" {
+	prepare_execution_run
+	for sample_id in sample-hdr avc-clean-coco hdr10-motion-john-wick-2 ../escape; do
+		run "$SCRIPTS/benchmark.sh" x265 '20260815T130000Z-bbbbbbbb' "$sample_id"
+		[ "$status" -ne 0 ]
+		[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	done
+}
+
+# Catches x265 falling back into the GPU quality path, omitting one clip or
+# initial CRF, coupling SSIM to the matched-quality decision, or publishing a
+# comparison that is not tied to both immutable run identities.
+@test "x265 runs both reference-title shapes as independent CPU-only curves" {
+	for fixture in 'avc-grain-memento avc' 'hdr10-grain-goodfellas hdr10'; do
+		read -r sample_id cohort <<<"$fixture"
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+		prepare_x265_execution_run "$sample_id" "$cohort"
+		run_id="20260815T130000Z-bbbbbbbb"
+
+		run "$SCRIPTS/benchmark.sh" x265 "$run_id" "$sample_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "$run_id" ]
+		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+		comparisons="$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+		manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+		[ "$(awk -F, 'NR > 1 {count += 1} END {print count + 0}' "$results")" -eq 12 ]
+		run awk -F, '
+			NR > 1 {
+				if ($2 != "x265" || $3 != sample || $7 != "x265" ||
+					$8 !~ /^(18|20|22|24)$/ || $9 != "CRF" || $10 != "passed" ||
+					$20 == "" || $22 != "" || $38 != "not-applicable" || $39 != "0") exit 1
+				keys[$6 "|" $8] = 1
+			}
+			END { if (length(keys) != 12) exit 1 }
+		' sample="$sample_id" "$results"
+		[ "$status" -eq 0 ]
+		[ "$(wc -l <"$comparisons" | tr -d ' ')" -eq 3 ]
+		run jq -e -s --arg quality "$QUALITY_RUN_ID" --arg x265 "$run_id" --arg sample "$sample_id" '
+			length == 3 and
+			all(.[];
+				keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting",
+					"qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+				.strategyId == "qsv-hevc-icq-v1" and .qualityRunId == $quality and
+				.x265RunId == $x265 and .sampleId == $sample and .qsvSetting == 22 and
+				.status == "bracketed" and .lowerCrf == 20 and .upperCrf == 18 and
+				(.matchedBitRate | type == "number") and (.premiumPercent | type == "number")) and
+			([.[].clipId] | sort) == ["dark","detail","motion"]
+		' "$comparisons"
+		[ "$status" -eq 0 ]
+		run jq -e --arg quality "$QUALITY_RUN_ID" --arg sample "$sample_id" '
+			.gpu == null and .cpu == {ffmpeg:"8.1.2 fixture-build",libx265:"4.1+1",model:"fixture CPU"} and
+			.node == {kernel:"6.12.0-fixture",name:"nuc3"} and
+			.selectedSettings == [{cohort:(if $sample == "avc-grain-memento" then "avc" else "hdr10" end),globalQuality:22,qualityRunId:$quality}] and
+			.upstream.qualityResultsSha256 == .upstream.chosenSetting.qualityResultsSha256
+		' "$manifest"
+		[ "$status" -eq 0 ]
+		run rg -q -- '-init_hw_device|-c:v hevc_qsv' "$BENCHMARK_COMMAND_LOG"
+		[ "$status" -eq 1 ]
+		[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 12 ]
+		run rg -q -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG"
+		[ "$status" -eq 1 ]
+	done
+}
+
+# Catches an invalid extension attempt disappearing on resume, a failed point
+# becoming interpolation input, or the bounded curve moving by anything other
+# than two without staying inside CRF 10 through 34.
+@test "x265 retains failed attempts and extends the bounded curve by two" {
+	prepare_x265_execution_run avc-grain-memento avc 99
+	export BENCHMARK_TEST_FAIL_X265_EXTENSION=1
+	run_id='20260815T130000Z-bbbbbbbb'
+
+	run "$SCRIPTS/benchmark.sh" x265 "$run_id" avc-grain-memento
+	[ "$status" -eq 0 ]
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	[ "$(awk -F, 'NR > 1 && $8 == 16 && $10 == "failed" {count += 1} END {print count + 0}' "$results")" -eq 3 ]
+	[ "$(awk -F, 'NR > 1 && $8 == 14 && $10 == "passed" {count += 1} END {print count + 0}' "$results")" -eq 3 ]
+	run awk -F, 'NR > 1 && ($8 < 10 || $8 > 34 || $8 % 2 != 0) {exit 1}' "$results"
+	[ "$status" -eq 0 ]
+	run jq -e -s 'all(.[]; .status == "bracketed" and .lowerCrf == 14 and .upperCrf == 14)' \
+		"$BENCHMARK_OUT/runs/$run_id/x265-comparisons.jsonl"
+	[ "$status" -eq 0 ]
 }
 
 # Catches trusting the requested QSV mode instead of verbose runtime evidence or

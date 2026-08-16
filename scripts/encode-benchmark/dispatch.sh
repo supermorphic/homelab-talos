@@ -76,6 +76,13 @@ validate_sample_id() {
 	}
 }
 
+validate_node_name() {
+	[[ "$1" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ && ${#1} -le 253 ]] || {
+		echo "invalid node name: $1" >&2
+		return 64
+	}
+}
+
 require_confirmation() {
 	local variable="$1" expected="$2"
 	[[ "${!variable:-}" == "$expected" ]] || {
@@ -711,14 +718,75 @@ require_savings_authorization() {
 	}
 }
 
+require_x265_authorization() {
+	local sample_id="$1" sample cohort
+	sample="$(SAMPLE_ID="$sample_id" jq -c '
+		.qualityPanel[]? | select(.id == env.SAMPLE_ID and .x265Reference == true and
+			(.detectionOnly // false) == false and (.cohort == "avc" or .cohort == "hdr10"))
+	' "$samples_document")"
+	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
+		echo "sample is not an x265 reference: $sample_id" >&2
+		return 65
+	}
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	contract_chosen_record "$samples_document" "$cohort" final >/dev/null || {
+		echo "x265 requires a final chosen setting for cohort: $cohort" >&2
+		return 65
+	}
+}
+
+require_cpu_node() {
+	local requested_node="$1" nodes pods match_count ready plex
+	nodes="$(kubectl --kubeconfig "$kubeconfig" get nodes --output json)" || return
+	pods="$(kubectl --kubeconfig "$kubeconfig" get pods --all-namespaces --output json)" || return
+	match_count="$(NODE_NAME="$requested_node" jq -r '[.items[] | select(.metadata.name == env.NODE_NAME)] | length' <<<"$nodes")"
+	[[ "$match_count" == '1' ]] || {
+		echo "requested x265 node does not exist: $requested_node" >&2
+		return 66
+	}
+	ready="$(NODE_NAME="$requested_node" jq -r '
+		[.items[] | select(.metadata.name == env.NODE_NAME) |
+			.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length
+	' <<<"$nodes")"
+	[[ "$ready" == '1' ]] || {
+		echo "requested x265 node is not Ready: $requested_node" >&2
+		return 65
+	}
+	plex="$(NODE_NAME="$requested_node" jq -r '[.items[] | select(
+		.metadata.namespace == "media" and .metadata.labels."app.kubernetes.io/name" == "plex" and
+		.status.phase == "Running" and .spec.nodeName == env.NODE_NAME)] | length' <<<"$pods")"
+	[[ "$plex" == '0' ]] || {
+		echo "requested x265 node runs Plex: $requested_node" >&2
+		return 65
+	}
+}
+
 dispatch_run() {
-	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' run_id dispatch_id job name contention_case=''
+	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' node_name='' run_id dispatch_id job name contention_case=''
 	local candidate_output job_json image_configmap='' cleanup_index
 	local -a candidates=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
 	case "$mode" in
 	quality | savings)
 		(($# == 1 || $# == 2)) || return 64
 		supplied_run_id="${2:-}"
+		;;
+	x265)
+		(($# == 3 || $# == 4)) || return 64
+		sample_id="$2"
+		node_name="$3"
+		supplied_run_id="${4:-}"
+		validate_sample_id "$sample_id" || return
+		validate_node_name "$node_name" || return
+		case "$sample_id" in
+		avc-grain-memento | hdr10-grain-goodfellas) ;;
+		*)
+			echo "sample is not an x265 reference: $sample_id" >&2
+			return 65
+			;;
+		esac
+		if [[ -n "$supplied_run_id" ]]; then validate_run_id "$supplied_run_id" || return; fi
+		require_confirmation ENCODE_BENCHMARK_X265_CONFIRM \
+			"run:encode-benchmark:x265:$sample_id:$node_name" || return
 		;;
 	finalist)
 		(($# == 3)) || return 64
@@ -758,14 +826,18 @@ dispatch_run() {
 		;;
 	esac
 	if [[ -n "$supplied_run_id" && -z "$contention_case" ]]; then validate_run_id "$supplied_run_id" || return; fi
-	require_confirmation ENCODE_BENCHMARK_RUN_CONFIRM "run:encode-benchmark:$mode" || return
+	if [[ "$mode" != 'x265' ]]; then
+		require_confirmation ENCODE_BENCHMARK_RUN_CONFIRM "run:encode-benchmark:$mode" || return
+	fi
 	load_source || return
 	if [[ "$mode" == 'finalist' ]]; then
 		require_finalist_authorization "$sample_id" || return
+	elif [[ "$mode" == 'x265' ]]; then
+		require_x265_authorization "$sample_id" || return
 	elif [[ "$mode" == 'savings' ]]; then
 		require_savings_authorization || return
 	fi
-	require_capability_evidence || return
+	if [[ "$mode" != 'x265' ]]; then require_capability_evidence || return; fi
 	if [[ -n "$contention_case" ]]; then
 		candidate_output="$(contention_samples "$contention_case")" || return
 		mapfile -t candidates <<<"$candidate_output"
@@ -792,6 +864,7 @@ dispatch_run() {
 		dispatch_id="$run_id"
 	fi
 	require_cluster_target || return
+	if [[ "$mode" == 'x265' ]]; then require_cpu_node "$node_name" || return; fi
 	if [[ -n "$contention_case" ]]; then
 		local index worker candidate candidate_id suffix
 		for run_id in "${run_ids[@]}"; do
@@ -846,6 +919,15 @@ dispatch_run() {
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh finalist "$run_id" "$sample_id"
 		FINALIST_CONFIRM="$ENCODE_BENCHMARK_FINALIST_CONFIRM" yq -i '
 			.spec.template.spec.containers[0].env += [{"name":"ENCODE_BENCHMARK_FINALIST_CONFIRM","value":strenv(FINALIST_CONFIRM)}]
+		' "$job"
+	elif [[ "$mode" == 'x265' ]]; then
+		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" \
+			/scripts/benchmark.sh x265 "$run_id" "$sample_id"
+		NODE_NAME="$node_name" yq -i '
+			.spec.activeDeadlineSeconds = 216000 |
+			.spec.template.spec.nodeSelector = {"kubernetes.io/hostname":strenv(NODE_NAME)} |
+			del(.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915") |
+			del(.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915")
 		' "$job"
 	else
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh "$mode" "$run_id"

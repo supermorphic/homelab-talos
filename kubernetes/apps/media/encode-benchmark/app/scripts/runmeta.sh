@@ -8,6 +8,7 @@ benchmark_out="${BENCHMARK_OUT:-/out}"
 runs_root="$benchmark_out/runs"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 identity_fixture="${BENCHMARK_IDENTITY_FIXTURE:-}"
+cpuinfo_file="${BENCHMARK_CPUINFO_FILE:-/proc/cpuinfo}"
 clock_override="${BENCHMARK_NOW:-}"
 dispatch_correlation_id="${BENCHMARK_DISPATCH_CORRELATION_ID:-}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
@@ -28,6 +29,10 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 fi
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_IDENTITY_FIXTURE+x}" ]]; then
 	echo 'BENCHMARK_IDENTITY_FIXTURE requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_CPUINFO_FILE+x}" ]]; then
+	echo 'BENCHMARK_CPUINFO_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
 contract_load "$samples_file" || exit $?
@@ -90,7 +95,7 @@ discover_identity() {
 	local script_directory configured_image dispatched_image running_image configured_digest dispatched_digest running_digest
 	local samples_digest savings_seed execution_class selected_settings upstream_identity
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
-	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha
+	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha probe_log=''
 	local source_index=0
 
 	if [[ -n "$identity_fixture" ]]; then
@@ -170,6 +175,13 @@ discover_identity() {
 
 	case "$mode" in
 	quality) panel='.qualityPanel[]?' ;;
+	x265)
+		[[ "${BENCHMARK_X265_SAMPLE_ID:-}" =~ ^(avc-grain-memento|hdr10-grain-goodfellas)$ ]] || {
+			echo 'x265 sample identity is missing or invalid' >&2
+			return 65
+		}
+		panel='.qualityPanel[]? | select(.id == env.BENCHMARK_X265_SAMPLE_ID)'
+		;;
 	savings) panel='.savingsPanel[]?' ;;
 	*) panel='(.qualityPanel[]?, .savingsPanel[]?)' ;;
 	esac
@@ -199,11 +211,28 @@ discover_identity() {
 	cpu_model="${BENCHMARK_CPU_MODEL:-}"
 	ffmpeg_version="${BENCHMARK_FFMPEG_VERSION:-}"
 	libx265_version="${BENCHMARK_LIBX265_VERSION:-}"
+	if [[ "$execution_class" == 'cpu' && "$mode" == 'x265' ]]; then
+		cpu_model="$(awk -F ':' '$1 ~ /^[[:space:]]*model name[[:space:]]*$/ {
+			sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2; exit
+		}' "$cpuinfo_file" 2>/dev/null || true)"
+		ffmpeg_version="$(ffmpeg -nostdin -version 2>/dev/null | awk 'NR == 1 {print; exit}' || true)"
+		probe_log="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-x265-probe.XXXXXX")" || return
+		if ! ffmpeg -nostdin -v info -f lavfi -i 'color=size=16x16:rate=1' \
+			-frames:v 1 -c:v libx265 -f null - >"$probe_log" 2>&1; then
+			libx265_version=''
+		else
+			libx265_version="$(sed -n -E 's/^.*HEVC encoder version[[:space:]]+//p' "$probe_log" | head -n 1)"
+		fi
+		rm -f -- "$probe_log"
+		probe_log=''
+	fi
 	if [[ "$execution_class" == 'gpu' && (-z "$i915" || -z "$vpl") ]]; then
 		echo 'GPU runtime identity is incomplete' >&2
 		return 65
 	fi
-	if [[ "$execution_class" == 'cpu' && (-z "$cpu_model" || -z "$ffmpeg_version" || -z "$libx265_version") ]]; then
+	if [[ "$execution_class" == 'cpu' &&
+		(-z "$cpu_model" || -z "$ffmpeg_version" || -z "$libx265_version" ||
+		("$mode" == 'x265' && (-z "$node_name" || -z "$kernel"))) ]]; then
 		echo 'CPU runtime identity is incomplete' >&2
 		return 65
 	fi
@@ -502,6 +531,24 @@ completed_row() {
 		}
 		if (field[7] == "x265" && (field[38] != "not-applicable" || field[39] != "0"))
 			invalid("invalid results CSV: row " record_no " has invalid x265 QSV evidence")
+		if (field[7] == "x265") {
+			if (field[2] != "x265" || field[9] != "CRF" ||
+				field[8] !~ /^[0-9]+$/ || field[8] + 0 < 10 || field[8] + 0 > 34 || field[8] % 2 != 0)
+				invalid("invalid results CSV: row " record_no " has an invalid x265 identity")
+			if (field[24] != "not-applicable")
+				invalid("invalid results CSV: row " record_no " has invalid x265 proof status")
+			if (field[10] == "passed") {
+				if (field[16] !~ /^[0-9]+([.][0-9]+)?$/ || field[16] + 0 <= 0 ||
+					field[20] !~ /^[0-9]+([.][0-9]+)?$/ ||
+					field[21] !~ /^[0-9]+([.][0-9]+)?$/ || field[22] != "" || field[23] != "")
+					invalid("invalid results CSV: row " record_no " has invalid x265 metrics")
+				for (validation_field = 25; validation_field <= 33; validation_field++)
+					if (field[validation_field] != "passed")
+						invalid("invalid results CSV: row " record_no " has incomplete x265 validation")
+				if (field[34] != "" || field[36] != "discarded")
+					invalid("invalid results CSV: row " record_no " has invalid x265 disposition")
+			}
+		}
 
 		bad = 0
 		candidate = ""

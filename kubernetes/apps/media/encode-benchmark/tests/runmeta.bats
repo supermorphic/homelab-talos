@@ -217,13 +217,16 @@ prepare_configmap_script_mount() {
 
 # Catches CPU-only x265 results being resumed across processors or runtime
 # builds, which would make matched-quality comparisons non-comparable.
-@test "verify refuses changed CPU model FFmpeg and libx265 identities" {
+@test "node-bound x265 resume refuses changed node kernel CPU FFmpeg and libx265 identities" {
 	cpu_identity="$BATS_TEST_TMPDIR/cpu-identity.json"
-	jq '.gpu = null | .cpu = {model:"Intel(R) Core(TM) i5", ffmpeg:"8.1.2", libx265:"4.1"}' \
+	jq '.gpu = null | .cpu = {model:"Intel(R) Core(TM) i5", ffmpeg:"8.1.2", libx265:"4.1"} |
+		.node = {name:"nuc3",kernel:"6.12.0-fixture"}' \
 		"$BENCHMARK_IDENTITY_FIXTURE" >"$cpu_identity"
 	export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	run_id="$($SCRIPTS/runmeta.sh create x265)"
 	for mutation in \
+		'.node.name = "nuc1"|node.name' \
+		'.node.kernel = "6.12.1-fixture"|node.kernel' \
 		'.cpu.model = "other cpu"|cpu.model' \
 		'.cpu.ffmpeg = "8.1.3"|cpu.ffmpeg' \
 		'.cpu.libx265 = "4.2"|cpu.libx265'; do
@@ -438,16 +441,30 @@ EOF
 	[ "$output" = 'invalid results CSV: row 2 has invalid QSV video busy time' ]
 }
 
-# Catches the CPU reference stage inheriting GPU proof values instead of the
-# explicit not-applicable zero pair required by the shared results schema.
-@test "completed accepts x265 only with the not-applicable QSV proof pair" {
+# Catches the CPU reference stage resuming from a row with GPU proof values,
+# the old quality panel, a non-CRF setting, or incomplete output evidence.
+@test "completed accepts only a complete x265 CPU result row" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	valid="$BATS_TEST_TMPDIR/valid-x265-row"
 	results_header >"$results"
-	results_row "$run_id" x265 >>"$results"
+	printf '%s\n' "$run_id,x265,sample-avc,avc,abc123,detail,x265,22,CRF,passed,1,100,50,50,1000,500,10,30,1.0,95,90,,,not-applicable,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/a.log,discarded,qsv-hevc-icq-v1,not-applicable,0" >"$valid"
+	cat "$valid" >>"$results"
 
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|x265|22'
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'x265|abc123|detail|x265|22'
 	[ "$status" -eq 0 ]
+
+	for mutation in \
+		's/,x265,sample-avc,/,quality,sample-avc,/' \
+		's/,x265,22,CRF,/,x265,22,LA-ICQ,/' \
+		's/,x265,22,CRF,/,x265,35,CRF,/' \
+		's/,,,not-applicable,passed/,,,passed,passed/' \
+		's/,not-applicable,passed,passed,/,not-applicable,failed,passed,/'; do
+		results_header >"$results"
+		sed "$mutation" "$valid" >>"$results"
+		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'x265|abc123|detail|x265|22'
+		[ "$status" -eq 65 ]
+	done
 }
 
 # Catches a production break where changed executable bytes reuse stale result
@@ -524,6 +541,75 @@ EOF
 	run "$configmap_root/runmeta.sh" create quality
 	[ "$status" -eq 65 ]
 	[ "$output" = 'CPU runtime identity is incomplete' ]
+}
+
+# Catches CPU identity being collected after directory creation, accepting a
+# missing oracle, or recording caller-provided GPU identity for an x265 run.
+@test "CPU discovery reads model FFmpeg and libx265 before x265 manifest creation" {
+	prepare_configmap_script_mount
+	cpuinfo="$BATS_TEST_TMPDIR/cpuinfo"
+	printf '%s\n' 'processor : 0' 'model name : Fixture CPU Model' >"$cpuinfo"
+	stub_bin="$BATS_TEST_TMPDIR/cpu-bin"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$RUNMETA_CPU_COMMAND_LOG"
+if [[ "$*" == *'-version'* ]]; then
+	[[ "${RUNMETA_MISSING_FFMPEG_VERSION:-0}" != '1' ]] && printf '%s\n' 'ffmpeg version 8.1.2 fixture-build'
+	exit 0
+fi
+if [[ "$*" == *'-c:v libx265 -f null -'* ]]; then
+	[[ "${RUNMETA_MISSING_X265_VERSION:-0}" != '1' ]] && printf '%s\n' 'x265 [info]: HEVC encoder version 4.1+1' >&2
+	exit 0
+fi
+exit 97
+EOF
+	cat >"$stub_bin/uname" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == '-r' ]] || exit 97
+printf '%s\n' '6.12.0-fixture'
+EOF
+	chmod +x "$stub_bin/ffmpeg" "$stub_bin/uname"
+	export PATH="$stub_bin:$PATH"
+	export RUNMETA_CPU_COMMAND_LOG="$BATS_TEST_TMPDIR/cpu-commands.log"
+	: >"$RUNMETA_CPU_COMMAND_LOG"
+	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_CPU_MODEL BENCHMARK_FFMPEG_VERSION BENCHMARK_LIBX265_VERSION
+	unset BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
+	export BENCHMARK_EXECUTION_CLASS=cpu
+	export BENCHMARK_CPUINFO_FILE="$cpuinfo"
+	export BENCHMARK_X265_SAMPLE_ID='avc-grain-memento'
+	export NODE_NAME='nuc3'
+
+	run "$configmap_root/runmeta.sh" create x265 '20260815T130000Z-bbbbbbbb'
+	[ "$status" -eq 0 ]
+	manifest="$BENCHMARK_OUT/runs/20260815T130000Z-bbbbbbbb/manifest.json"
+	run jq -e '
+		.mode == "x265" and .gpu == null and
+		.cpu == {ffmpeg:"ffmpeg version 8.1.2 fixture-build",libx265:"4.1+1",model:"Fixture CPU Model"} and
+		.node == {kernel:"6.12.0-fixture",name:"nuc3"}
+	' "$manifest"
+	[ "$status" -eq 0 ]
+	run rg -F -- '-nostdin -v info -f lavfi -i color=size=16x16:rate=1 -frames:v 1 -c:v libx265 -f null -' \
+		"$RUNMETA_CPU_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+
+	for missing in cpu ffmpeg x265; do
+		rm -rf -- "$BENCHMARK_OUT/runs"
+		mkdir -p "$BENCHMARK_OUT/runs"
+		unset RUNMETA_MISSING_FFMPEG_VERSION RUNMETA_MISSING_X265_VERSION
+		printf '%s\n' 'processor : 0' 'model name : Fixture CPU Model' >"$cpuinfo"
+		case "$missing" in
+		cpu) printf '%s\n' 'processor : 0' >"$cpuinfo" ;;
+		ffmpeg) export RUNMETA_MISSING_FFMPEG_VERSION=1 ;;
+		x265) export RUNMETA_MISSING_X265_VERSION=1 ;;
+		esac
+		run "$configmap_root/runmeta.sh" create x265 '20260815T130000Z-bbbbbbbb'
+		[ "$status" -eq 65 ]
+		[ "$output" = 'CPU runtime identity is incomplete' ]
+		[ "$(run_directory_count)" -eq 0 ]
+	done
 }
 
 # Catches a production break where unrecognized stored fields are discarded by
