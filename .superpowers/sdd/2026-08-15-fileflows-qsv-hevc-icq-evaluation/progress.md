@@ -27,3 +27,10 @@ Task 10: complete (`feat(media): generate ICQ cohort findings`; focused findings
 Task 11: fix round 1/5 (0 addressed, 1 open — required single table-driven boundary regression does not carry 16/18/30 through every named cross-path consumer; commit 20e3a60).
 Task 11: fix round 1/5 result (1 addressed, 0 open; commits 20e3a60..f10506c).
 Task 11: complete (commits d9d870e..f10506c, review clean).
+Final review: changes requested (1 Critical, 4 Important, 4 Minor — upstream run identity compatibility; contention artifact transport/applicability; quality dispatch/runtime result mapping; complete savings evidence; Markdown safety and cohort summary traceability).
+Final review ruling: operator authorized the Task 10 plan deviation to add `contention.runId` and load the digest-bound observations artifact from that immutable upstream run; `AGENTS.md` remains operator-owned, untouched, and uncommitted.
+Final review fix wave: original 1 Critical, 4 Important, and 4 Minor findings addressed in commit 0154310; focused four-file Bats 198/198, offline validator 238/238, stale scan empty, canonical `mise exec -- just ci` passed.
+Final re-review: BLOCKED — fix wave introduced a load-bearing Important regression: `results.sh` requires generated-quality completion JSON for explicit operator-supplied quality run IDs, while explicit quality runtime still emits the plain run ID. Superpowers permits no second automatic final-review fix wave; operator direction required.
+Final re-review ruling: operator authorized one additional narrowly scoped fix and re-review for explicit quality completion/result compatibility.
+Additional scoped fix: explicit quality results compatibility addressed in commit d919325; focused 2/2, four-file Bats 198/198, offline validator 238/238, stale scan empty, canonical `mise exec -- just ci` passed.
+Final review: complete — all original findings and the authorized residual regression addressed; final scoped re-review found no new Critical or Important breakage.
