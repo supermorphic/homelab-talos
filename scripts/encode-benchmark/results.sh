@@ -338,10 +338,34 @@ while IFS= read -r job_json; do
 			echo "quality completion provenance rejected: job=$name" >&2
 			exit 1
 		fi
-		quality_completion="$(sanitize_quality_completion "$log_line" "$run_id")" || {
-			echo "quality completion record rejected: job=$name" >&2
+		quality_dispatch_id="$(jq -e -r '
+			[.spec.template.spec.containers[]? | select(.name == "benchmark") | .env[]? |
+			 select(.name == "BENCHMARK_DISPATCH_CORRELATION_ID") | .value] |
+			if length == 0 then ""
+			elif length == 1 and (.[0] | type == "string" and length > 0) then .[0]
+			else error("invalid quality dispatch correlation marker")
+			end
+		' <<<"$job_json")" || {
+			echo "quality completion provenance rejected: job=$name" >&2
 			exit 1
 		}
+		if [[ -n "$quality_dispatch_id" ]]; then
+			[[ "$quality_dispatch_id" == "$run_id" ]] || {
+				echo "quality completion provenance rejected: job=$name" >&2
+				exit 1
+			}
+			quality_completion="$(sanitize_quality_completion "$log_line" "$run_id")" || {
+				echo "quality completion record rejected: job=$name" >&2
+				exit 1
+			}
+		else
+			[[ "$log_line" == "$run_id" ]] || {
+				echo "quality completion record rejected: job=$name" >&2
+				exit 1
+			}
+			printf -v quality_completion 'dispatch_id=%s runtime_run_id=%s artifact_location=/out/runs/%s' \
+				"$run_id" "$run_id" "$run_id"
+		fi
 		printf '%s\n' "$quality_completion"
 		runtime_artifact_location="${quality_completion##* artifact_location=}"
 		((quality_completion_count += 1))

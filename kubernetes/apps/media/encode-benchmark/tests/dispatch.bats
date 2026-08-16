@@ -1893,18 +1893,20 @@ write_multi_node_results_fixtures() {
 	assert_no_mutations
 }
 
-# Catches results selecting a generated quality Job by dispatch correlation
-# and then reporting that correlation as the NAS artifact directory. The
-# exact Job-owned completion record is the independent mapping to the runtime
-# manifest-bound run ID.
-@test "results verifies generated quality completion mapping and returns runtime artifact" {
+# Catches treating an explicit quality run's plain exact runtime ID as if it
+# were a generated dispatch mapping. Generated Jobs must still require their
+# strict JSON mapping, while explicit Jobs report their selected run directly.
+@test "results verifies generated and explicit quality completion paths" {
 	dispatch_id='20260802T120000Z-1234abcd'
 	runtime_run_id='20260802T120000Z-feedface'
 	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	write_results_fixtures "$dispatch_id" "$image_id"
 	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
 		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
-		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch' \
+		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch |
+		.items[0].spec.template.spec.containers[0].env = [{
+			name:"BENCHMARK_DISPATCH_CORRELATION_ID",value:$dispatch
+		}]' \
 		--arg dispatch "$dispatch_id" "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
 	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
 	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
@@ -1925,6 +1927,32 @@ write_multi_node_results_fixtures() {
 	[[ "$output" == *"artifact_location=/out/runs/$runtime_run_id"* ]]
 	[[ "$output" != *'no-sanitized-summary'* ]]
 	[[ "$output" != *"artifact_location=/out/runs/$dispatch_id"* ]]
+
+	# The generated marker must never admit the explicit plain-ID form.
+	printf '%s\n' "$dispatch_id" >"$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'quality completion record rejected'* ]]
+
+	explicit_run_id='20260802T120000Z-abcdef12'
+	write_results_fixtures "$explicit_run_id" "$image_id"
+	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality"' \
+		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	printf '%s\n' "$explicit_run_id" >"$STUB_LOGS_FILE"
+
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$explicit_run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dispatch_id=$explicit_run_id runtime_run_id=$explicit_run_id"* ]]
+	[[ "$output" == *"artifact_location=/out/runs/$explicit_run_id"* ]]
 }
 
 # Catches accepting missing, malformed, or digest-mismatched kubelet imageID
