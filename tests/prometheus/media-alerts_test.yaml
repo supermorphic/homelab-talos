@@ -4,6 +4,353 @@ rule_files:
   - qbittorrent.yaml
 evaluation_interval: 1m
 tests:
+  # --- Media Integration health alert coverage ---
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: prowlarr-native-health}
+            exp_annotations:
+              summary: Prowlarr authenticated health API is unavailable
+              description: The authenticated Prowlarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: sonarr-native-health}
+            exp_annotations:
+              summary: Sonarr authenticated health API is unavailable
+              description: The authenticated Sonarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: radarr-native-health}
+            exp_annotations:
+              summary: Radarr authenticated health API is unavailable
+              description: The authenticated Radarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: lidarr-native-health}
+            exp_annotations:
+              summary: Lidarr authenticated health API is unavailable
+              description: The authenticated Lidarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x3 0x16 1x5'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: seerr-sonarr-service-read}
+            exp_annotations:
+              summary: Seerr cannot read its selected Sonarr service
+              description: The authenticated Gatus read-through through Seerr has failed for 15 minutes. Seerr cannot read its selected Sonarr service. This does not prove that a Seerr request, download, or import failed.
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x3 0x16 1x5'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: seerr-radarr-service-read}
+            exp_annotations:
+              summary: Seerr cannot read its selected Radarr service
+              description: The authenticated Gatus read-through through Seerr has failed for 15 minutes. Seerr cannot read its selected Radarr service. This does not prove that a Seerr request, download, or import failed.
+      - eval_time: 19m
+        alertname: ProwlarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SonarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: RadarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LidarrNativeHealthApiUnavailable
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: SeerrSonarrServiceReadFailed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: SeerrRadarrServiceReadFailed
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MediaIntegrationProbeMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"}'
+        values: '_x8 1x4'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"}'
+        values: '1x12'
+      - series: 'gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MediaIntegrationProbeMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MediaIntegrationProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: prowlarr-native-health}
+            exp_annotations:
+              summary: Media integration probe prowlarr-native-health is missing
+              description: The Media Integration/prowlarr-native-health Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+      - eval_time: 10m
+        alertname: MediaIntegrationProbeMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MediaIntegrationProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Media Integration, name: prowlarr-native-health}
+            exp_annotations:
+              summary: Media integration probe prowlarr-native-health is missing
+              description: The Media Integration/prowlarr-native-health Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+          - exp_labels: {severity: warning, group: Media Integration, name: sonarr-native-health}
+            exp_annotations:
+              summary: Media integration probe sonarr-native-health is missing
+              description: The Media Integration/sonarr-native-health Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+          - exp_labels: {severity: warning, group: Media Integration, name: radarr-native-health}
+            exp_annotations:
+              summary: Media integration probe radarr-native-health is missing
+              description: The Media Integration/radarr-native-health Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+          - exp_labels: {severity: warning, group: Media Integration, name: lidarr-native-health}
+            exp_annotations:
+              summary: Media integration probe lidarr-native-health is missing
+              description: The Media Integration/lidarr-native-health Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+          - exp_labels: {severity: warning, group: Media Integration, name: seerr-sonarr-service-read}
+            exp_annotations:
+              summary: Media integration probe seerr-sonarr-service-read is missing
+              description: The Media Integration/seerr-sonarr-service-read Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+          - exp_labels: {severity: warning, group: Media Integration, name: seerr-radarr-service-read}
+            exp_annotations:
+              summary: Media integration probe seerr-radarr-service-read is missing
+              description: The Media Integration/seerr-radarr-service-read Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.
+
   - interval: 1m
     input_series:
       - series: 'gatus_results_endpoint_success{group="Media", name="plex"}'
