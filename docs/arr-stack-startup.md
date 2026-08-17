@@ -1382,6 +1382,125 @@ The video automation setup is not accepted until both direct *arr flows and thei
 Plex refresh validations pass. The request workflow is not accepted until the
 Seerr request flow passes.
 
+## Stage 5 integration-health operations
+
+Stage 5 adds bounded continuous evidence to the existing availability checks. It
+does not replace the operator acceptance gates in this runbook.
+
+- **Level 1** remains the existing unauthenticated `/ping` or status availability
+  checks.
+- **Level 2** is the four `Media Integration` native-health endpoints. A failure is
+  generic application health; it does not identify Prowlarr, qBittorrent, Plex, or
+  another target as the cause.
+- **Level 3** is the two selected Seerr service reads. They prove only that Seerr can
+  use stored downstream settings to read the selected service.
+- **Level 4** remains operator-run and can mutate durable state. Never schedule it.
+
+The purpose-specific Gatus Secret has exactly five API keys, and only Gatus consumes
+it. The operator creates or rotates it with the guarded recipe below. Enter values
+only from a secure prompt; do not record them in the terminal history, this runbook,
+or Git.
+
+```bash
+printf 'Prowlarr API key: '
+IFS= read -r -s PROWLARR_API_KEY
+printf '\nSonarr API key: '
+IFS= read -r -s SONARR_API_KEY
+printf '\nRadarr API key: '
+IFS= read -r -s RADARR_API_KEY
+printf '\nLidarr API key: '
+IFS= read -r -s LIDARR_API_KEY
+printf '\nSeerr API key: '
+IFS= read -r -s SEERR_API_KEY
+printf '\n'
+export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY
+export GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM='write:monitoring:gatus-media-integration:sops'
+mise exec -- just repo gatus-media-integration-secrets
+unset PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY \
+  GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM
+```
+
+Commit only the resulting encrypted Secret. For rotation, update that encrypted Secret,
+allow Flux to apply it, then restart the Gatus Pod so its environment values reload.
+Do not add a reloader.
+
+The probes use the existing internal DNS, trusted HTTPS Gateway, HTTPRoutes, and
+Services. If the Gateway does not forward `X-Api-Key`, stop and reassess; do not add
+Service-DNS access or a NetworkPolicy. The accepted residuals are Seerr-to-Plex,
+passive or event-driven Servarr latency, no generic provider attribution, and no
+continuous end-to-end workflow proof.
+
+### Operator-managed rollout gate
+
+Do not treat source validation as rollout evidence. After Flux applies the change,
+wait for three distinct successful one-minute cycles for each probe. Use this bounded
+Gatus-history check:
+
+```bash
+gatus_statuses="$(
+  mise exec -- curl --fail --silent --show-error --max-time 15 \
+    https://gatus.lab.supermorphic.com/api/v1/endpoints/statuses
+)"
+integration_probe_names=(
+  prowlarr-native-health
+  sonarr-native-health
+  radarr-native-health
+  lidarr-native-health
+  seerr-sonarr-service-read
+  seerr-radarr-service-read
+)
+for probe_name in "${integration_probe_names[@]}"; do
+  evidence="$(
+    printf '%s' "$gatus_statuses" \
+      | PROBE_NAME="$probe_name" mise exec -- yq -r '
+          .[]
+          | select(.group == "Media Integration" and .name == strenv(PROBE_NAME))
+          | [
+              (.results[-3:] | length),
+              ([.results[-3:][] | select(.success != true)] | length),
+              ([.results[-3:][].timestamp] | unique | length)
+            ]
+          | @tsv
+        '
+  )"
+  [[ "$evidence" == $'3\t0\t3' ]] || {
+    echo "Media Integration/$probe_name does not have three distinct successful cycles." >&2
+    exit 1
+  }
+done
+```
+
+Confirm separately that Prometheus has one green success series for each probe; Gatus
+history cannot substitute for scrape evidence:
+
+```bash
+prometheus_results="$(
+  mise exec -- curl --fail --silent --show-error --max-time 15 --get \
+    --data-urlencode 'query=gatus_results_endpoint_success{group="Media Integration"}' \
+    https://prometheus.lab.supermorphic.com/api/v1/query
+)"
+[[ "$(printf '%s' "$prometheus_results" | mise exec -- yq -r '.data.result | length')" == 6 ]]
+for probe_name in "${integration_probe_names[@]}"; do
+  series_count="$(
+    printf '%s' "$prometheus_results" \
+      | PROBE_NAME="$probe_name" mise exec -- yq -r '
+          [.data.result[]
+            | select(.metric.name == strenv(PROBE_NAME) and .value[1] == "1")]
+          | length
+        '
+  )"
+  [[ "$series_count" == 1 ]] || {
+    echo "Prometheus does not have one green Media Integration/$probe_name series." >&2
+    exit 1
+  }
+done
+```
+
+For a later alert rollout, keep the new rules silent until this gate passes. Compare the
+four native-health results with the application health pages and the selected Seerr
+service settings. Do not create a request or run a native Test action as part of this
+verification.
+
 ## Recovery and repeat setup
 
 Pod replacement, image upgrades, and node rescheduling reuse the existing PVCs
