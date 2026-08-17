@@ -81,6 +81,9 @@ spec:
               mountPath: /config/samples.json
               subPath: samples.json
               readOnly: true
+            - name: image-evidence
+              mountPath: /provenance
+              readOnly: true
       volumes:
         - name: media
           persistentVolumeClaim:
@@ -101,3 +104,10 @@ spec:
             items:
               - key: samples.json
                 path: samples.json
+        - name: image-evidence
+          configMap:
+            name: encode-benchmark-image-template
+            optional: true
+            items:
+              - key: image.json
+                path: image.json

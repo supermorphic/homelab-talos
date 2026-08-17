@@ -11,6 +11,7 @@ samples="$app/samples.yaml"
 # `just kube alerts-validate media`. The content contract stays here.
 alerts='kubernetes/apps/media/alerts/app/encode-benchmark.yaml'
 scaffold="$app/scripts/not-ready.sh"
+contract="$app/scripts/contract.sh"
 probe="$app/scripts/probe.sh"
 census="$app/scripts/census.sh"
 runmeta="$app/scripts/runmeta.sh"
@@ -25,6 +26,7 @@ benchmark_test="$tests_dir/benchmark.bats"
 stills_test="$tests_dir/stills.bats"
 dispatch_test="$tests_dir/dispatch.bats"
 selection_test="$tests_dir/selection.bats"
+contention_observations_fixture="$tests_dir/fixtures/metrics/contention-observations.json"
 inventory='scripts/encode-benchmark/torrent-inventory.py'
 preflight_helper='scripts/encode-benchmark/preflight.sh'
 dispatch_helper='scripts/encode-benchmark/dispatch.sh'
@@ -57,6 +59,7 @@ for file in \
 	"$priority" \
 	"$samples" \
 	"$alerts" \
+	"$contract" \
 	"$probe" \
 	"$census" \
 	"$runmeta" \
@@ -70,6 +73,7 @@ for file in \
 	"$stills_test" \
 	"$dispatch_test" \
 	"$selection_test" \
+	"$contention_observations_fixture" \
 	"$inventory" \
 	"$preflight_helper" \
 	"$dispatch_helper" \
@@ -81,6 +85,7 @@ for file in \
 	[[ -f "$file" ]] || fail "missing required source: $file"
 done
 [[ ! -e "$scaffold" ]] || fail "$scaffold must be removed once all five scripts are real"
+[[ -x "$contract" ]] || fail "$contract must be executable"
 [[ -x "$probe" ]] || fail "$probe must be executable"
 [[ -x "$census" ]] || fail "$census must be executable"
 [[ -x "$runmeta" ]] || fail "$runmeta must be executable"
@@ -131,7 +136,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
+expected_mappings='contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -156,7 +161,7 @@ scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^
 [[ "$scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
 	fail "rendered scripts ConfigMap is not hash-suffixed: $scripts_name"
 scripts_keys="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data | keys | sort | join(",")' "$render")"
-assert_eq "$scripts_keys" 'benchmark.sh,census.sh,probe.sh,runmeta.sh,stills.sh' \
+assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,probe.sh,runmeta.sh,stills.sh' \
 	'rendered scripts ConfigMap command keys'
 
 # Scheduling and alerting remain present even though execution is absent.
@@ -192,7 +197,27 @@ assert_eq "$completed_expr" \
 
 # Parse the embedded panel document and gate evidence before any source media is runnable.
 samples_doc="$(yq -r '.data."samples.json"' "$samples")"
-assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '1' 'samples schema version'
+assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
+jq -e '
+	.schemaVersion == 2 and
+	.chosenSettings == {} and
+	.strategy == {
+		id: "qsv-hevc-icq-v1",
+		resultsSchemaVersion: 2,
+		runManifestSchemaVersion: 2,
+		capabilityProofSchemaVersion: 3,
+		globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
+		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
+	}
+' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
+jq -e '
+	def finalist($cohort; $id):
+		[.qualityPanel[] | select(.cohort == $cohort and .id == $id and
+			(.detectionOnly // false) == false)] | length == 1;
+	finalist("vc1"; "vc1-fugitive") and
+	finalist("avc"; "avc-grain-memento") and
+	finalist("hdr10"; "hdr10-grain-goodfellas")
+' <<<"$samples_doc" >/dev/null || fail 'quality panel must contain each exact cohort finalist title'
 assert_eq "$(yq -r '.savingsSeed' <<<"$samples_doc")" '20260802' 'savings selection seed'
 runtime_image="$(yq -r '.runtime.image' <<<"$samples_doc")"
 [[ "$runtime_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] ||
@@ -209,21 +234,29 @@ if [[ "$capability_status" == 'verified' ]]; then
 		def reasons:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
-			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" then [] else ["binding"] end)
+			+ (if .selectedRateControl == "ICQ" then [] else ["rate-control"] end)
 			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
 			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
 			+ (if .decode == "passed" then [] else ["decode"] end)
 			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
 		def expected_status:
-			if .telemetryStatus != "available" then "harness-blocked"
+			if .initialization != "passed" then "failed"
+			elif .renderNode == "" or .drmDriver == "" or .selectedRateControl == "unknown" or
+				.telemetryStatus != "available" then "harness-blocked"
 			elif (reasons | length) == 0 then "passed"
 			else "failed" end;
 		def valid_node:
 			type == "object" and
-			(keys == ["configuredImageDigest","decode","encodeFps","encodeSpeed","imageId","initialization","nodeName","proofReasons","proofSchemaVersion","proofStatus","selectedRateControl","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
-			.proofSchemaVersion == 2 and
+			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
+			.strategyId == "qsv-hevc-icq-v1" and
+			.proofSchemaVersion == 3 and
 			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
 			(.initialization == "passed" or .initialization == "failed") and
+			(.initializationReason | type == "string") and
+			((.initialization == "passed" and .initializationReason == "") or .initialization == "failed") and
+			(.renderNode | type == "string") and
+			(.drmDriver | type == "string") and
 			(.selectedRateControl | type == "string") and
 			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
 			(.telemetryReason | type == "string") and
@@ -245,13 +278,13 @@ if [[ "$capability_status" == 'verified' ]]; then
 		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
 			([.[].nodeName] | unique | length) == length)
 	' <<<"$samples_doc" >/dev/null ||
-		fail 'verified capability evidence must contain unique valid schema-v2 node records'
+		fail 'verified capability evidence must contain unique valid schema-v3 node records'
 else
 	jq -e '
 		.runtime.capabilityEvidence |
 		((has("nodes") | not) or (.nodes | type == "array" and length == 0))
 	' <<<"$samples_doc" >/dev/null ||
-		fail 'pending capability evidence must not claim schema-v2 node proof'
+		fail 'pending capability evidence must not claim schema-v3 node proof'
 fi
 
 declare -A seen_sample_ids=()
@@ -331,6 +364,31 @@ if ((savings_count != 0)); then
 			fail "savingsPanel must contain about eight $cohort samples (accepted range 6-10; got $cohort_count)"
 	done
 fi
+
+# This fixture is an independent fixed-cadence oracle for the runtime evidence
+# parser.  It proves three retained 15-minute baselines, seven seeks, and all
+# 180 five-second NAS observations without mirroring the runtime jq helper.
+jq -e '
+	.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+	.runId == "20260815T155000Z-99999999" and
+	(.baselines | type == "array" and length == 3 and
+		all(.[];
+			.durationSeconds == 900 and .playbackMode == "direct-play" and
+			(.seekToResumeSeconds | type == "array" and length == 7) and
+			(.nasThroughputMbps | type == "array" and length == 180 and
+				[.[].offsetSeconds] == [range(0; 900; 5)]))) and
+	(.cases | type == "array" and length == 1 and .[0].case == "d" and
+		.[0].playbackMode == "direct-play" and
+		(.[0].workerFragments | (type == "array" and
+			([.[] | (.runId + "|" + .file)] | sort) == [
+				"20260815T150000Z-dddddddd|contention-d-worker-1-attempt-1.csv",
+				"20260815T150000Z-eeeeeeee|contention-d-worker-2-attempt-1.csv"
+			])) and
+		(.[0].seekToResumeSeconds | type == "array" and length == 7) and
+		(.[0].nasThroughputMbps | type == "array" and length == 180 and
+			[.[].offsetSeconds] == [range(0; 900; 5)]))
+' "$contention_observations_fixture" >/dev/null ||
+	fail 'contention observations fixture must retain complete baseline, seek, and NAS evidence'
 
 # The template is valid, tightly scoped, non-root, non-preempting, and bounded.
 assert_eq "$(yq -r '.apiVersion' "$template")" 'batch/v1' 'Job API version'
@@ -421,6 +479,12 @@ assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.n
 	'encode-benchmark-samples' 'samples ConfigMap name'
 assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"samples\") | .configMap.items[0].key" "$template")" \
 	'samples.json' 'samples ConfigMap key'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.name" "$template")" \
+	'encode-benchmark-image-template' 'image evidence ConfigMap placeholder'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.optional" "$template")" \
+	'true' 'image evidence ConfigMap optional projection'
+assert_eq "$(yq -r "$pod.volumes[] | select(.name == \"image-evidence\") | .configMap.items[0] | [.key,.path] | @tsv" "$template")" \
+	$'image.json\timage.json' 'image evidence item mapping'
 
 assert_mount() {
 	local name="$1"
@@ -439,9 +503,15 @@ assert_mount out /out benchmark false
 assert_mount scratch /scratch '' false
 assert_mount scripts /scripts '' true
 assert_mount samples /config/samples.json samples.json true
+assert_mount image-evidence /provenance '' true
 
 if rg -n '/data|media/tv|downloads' "$app/scripts" "$template"; then
 	fail 'benchmark scripts or Job template can access forbidden TV/download paths'
+fi
+
+if rg -n '20260813T221312Z-5a22cde6' \
+	kubernetes/apps/media/encode-benchmark/tests; then
+	fail 'inadmissible deleted-run evidence appears in benchmark tests'
 fi
 
 # Use only the pinned toolchain for all executable source checks and run every Bats contract.
@@ -460,4 +530,4 @@ mapfile -t bats_files < <(find "$tests_dir" -type f -name '*.bats' -print | sort
 (("${#bats_files[@]}" > 0)) || fail 'no encode-benchmark Bats contracts found'
 bats "${bats_files[@]}"
 
-echo "encode-benchmark sources passed validation: Flux suspend=$suspend_state, no reconciled Job, five tested runtime scripts, guarded render/read helpers, actual image evidence, safe media mounts, and offline contracts."
+echo "encode-benchmark sources passed validation: Flux suspend=$suspend_state, no reconciled Job, six tested runtime scripts, guarded render/read helpers, actual image evidence, safe media mounts, and offline contracts."

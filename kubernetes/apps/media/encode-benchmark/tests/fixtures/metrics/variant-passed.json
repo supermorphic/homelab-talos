@@ -6,7 +6,8 @@
   "clip_id": "detail",
   "encoder": "qsv",
   "requested_setting": "22",
-  "selected_rate_control": "LA-ICQ",
+  "selected_rate_control": "ICQ",
+  "strategy_id": "qsv-hevc-icq-v1",
   "input_bytes": "1000",
   "output_bytes": "600",
   "reduction_percent": "40.000000",
@@ -20,6 +21,7 @@
   "ssim": "0.990000",
   "gpu_busy_percent": "50.000000",
   "qsv_proof": "passed",
+  "qsv_initialization": "passed",
   "validation_codec": "passed",
   "validation_duration": "passed",
   "validation_resolution": "passed",
@@ -30,5 +32,6 @@
   "validation_subtitle_tracks": "passed",
   "validation_chapters": "passed",
   "validation_failures": "",
-  "log_path": "logs/sample-avc-detail-qsv-22-attempt-3.log"
+  "log_path": "logs/sample-avc-detail-qsv-22-attempt-3.log",
+  "video_busy_nanoseconds": "800000000"
 }

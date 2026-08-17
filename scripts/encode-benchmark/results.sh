@@ -13,6 +13,12 @@ expected_api='https://192.168.90.20:6443'
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "$script_directory/../.." && pwd)"
 samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samples.yaml"
+# shellcheck disable=SC1091
+source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
+samples_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-samples.XXXXXX")"
+trap 'rm -f -- "$samples_document"' EXIT
+yq -e -r '.data."samples.json"' "$samples_source" >"$samples_document"
+contract_load "$samples_document" || exit $?
 
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || {
 	echo "invalid run id: $run_id" >&2
@@ -29,7 +35,7 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 	exit 1
 }
 
-configured_image="$(yq -e -r '.data."samples.json" | from_yaml | .runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_source")"
+configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
 jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
@@ -103,6 +109,27 @@ sanitize_summary() {
 	fi
 }
 
+sanitize_quality_completion() {
+	local log_line="$1" dispatch_id="$2" record runtime_id artifact_location
+	record="$(jq -e -c --arg dispatch "$dispatch_id" '
+		select(
+			type == "object" and
+			keys == ["artifactLocation","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
+			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
+			.dispatchId == $dispatch and
+			(.runtimeRunId | type == "string") and
+			.artifactLocation == ("/out/runs/" + .runtimeRunId)
+		) |
+		{dispatchId,runtimeRunId,artifactLocation}
+	' <<<"$log_line")" || return 65
+	runtime_id="$(jq -r '.runtimeRunId' <<<"$record")"
+	contract_is_run_id "$runtime_id" || return 65
+	[[ "${runtime_id%-*}" == "${dispatch_id%-*}" ]] || return 65
+	artifact_location="$(jq -r '.artifactLocation' <<<"$record")"
+	printf 'dispatch_id=%s runtime_run_id=%s artifact_location=%s\n' \
+		"$dispatch_id" "$runtime_id" "$artifact_location"
+}
+
 sanitize_capability_evidence() {
 	local log_line="$1" node="$2" verified_at="$3" image_id="$4"
 	jq -e -c --arg node "$node" --arg verified_at "$verified_at" \
@@ -110,20 +137,28 @@ sanitize_capability_evidence() {
 		def reason_list:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
-			+ (if .selectedRateControl == "LA-ICQ" then [] else ["rate-control"] end)
+			+ (if .renderNode == "/dev/dri/renderD128" and .drmDriver == "i915" then [] else ["binding"] end)
+			+ (if .selectedRateControl == "ICQ" then [] else ["rate-control"] end)
 			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
 			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
 			+ (if .decode == "passed" then [] else ["decode"] end)
 			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
 		def expected_status:
-			if .telemetryStatus != "available" then "harness-blocked"
+			if .initialization != "passed" then "failed"
+			elif .renderNode == "" or .drmDriver == "" or .selectedRateControl == "unknown" or
+				.telemetryStatus != "available" then "harness-blocked"
 			elif (reason_list | length) == 0 then "passed"
 			else "failed" end;
 		select(
 			type == "object" and
-			.proofSchemaVersion == 2 and
-			.nodeName == $node and
-			(.initialization == "passed" or .initialization == "failed") and
+				.strategyId == "qsv-hevc-icq-v1" and
+				.proofSchemaVersion == 3 and
+				.nodeName == $node and
+				(.initialization == "passed" or .initialization == "failed") and
+				(.initializationReason | type == "string") and
+				((.initialization == "passed" and .initializationReason == "") or .initialization == "failed") and
+				(.renderNode | type == "string") and
+				(.drmDriver | type == "string") and
 			(.selectedRateControl | type == "string") and
 			(.telemetryStatus == "available" or .telemetryStatus == "harness-blocked") and
 			(.telemetryReason | type == "string") and
@@ -141,7 +176,8 @@ sanitize_capability_evidence() {
 			($verified_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 		) |
 		{
-			nodeName, proofSchemaVersion, initialization, selectedRateControl,
+				nodeName, strategyId, proofSchemaVersion, initialization, initializationReason,
+				renderNode, drmDriver, selectedRateControl,
 			telemetryStatus, telemetryReason, videoBusyNanoseconds, videoBusyPercent,
 			encodeFps, encodeSpeed, decode, vmaf, proofStatus, proofReasons,
 			verifiedAt: $verified_at, configuredImageDigest,
@@ -150,7 +186,42 @@ sanitize_capability_evidence() {
 	' <<<"$log_line"
 }
 
+has_exact_job_controller_owner() {
+	local resource_json="$1" job_name="$2" job_uid="$3"
+	jq -e --arg name "$job_name" --arg uid "$job_uid" '
+		.metadata.ownerReferences as $owners |
+		($owners | type == "array" and length == 1) and
+		$owners[0].apiVersion == "batch/v1" and
+		$owners[0].kind == "Job" and
+		$owners[0].name == $name and
+		$owners[0].uid == $uid and
+		$owners[0].controller == true and
+		$owners[0].blockOwnerDeletion == true
+	' <<<"$resource_json" >/dev/null 2>&1
+}
+
+validate_prework_image_evidence() {
+	local job_json="$1" name="$2" uid="$3" live_image_id="$4"
+	local dispatched_image configmap_name configmap evidence normalized_evidence_id
+	dispatched_image="$(yq -p=json -e -r '.spec.template.spec.containers[] | select(.name == "benchmark") | .image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' <<<"$job_json")" || return 65
+	[[ "$dispatched_image" == "$configured_image" ]] || return 65
+	configmap_name="$(yq -p=json -e -r '.metadata.annotations."homelab-talos/image-evidence-configmap" | select(test("^encode-benchmark-image-[a-z0-9-]+$"))' <<<"$job_json")" || return 65
+	configmap="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "configmap/$configmap_name" --output json)" || return
+	[[ "$(yq -p=json -r '.metadata.name // ""' <<<"$configmap")" == "$configmap_name" ]] || return 65
+	has_exact_job_controller_owner "$configmap" "$name" "$uid" || return 65
+	evidence="$(yq -p=json -e -r '.data."image.json"' <<<"$configmap")" || return 65
+	jq -e --arg configured "$configured_image" --arg dispatched "$dispatched_image" '
+		type == "object" and keys == ["configuredImage","dispatchedImage","imageId"] and
+		.configuredImage == $configured and .dispatchedImage == $dispatched and
+		(.imageId | type == "string")
+	' <<<"$evidence" >/dev/null || return 65
+	normalized_evidence_id="$(normalize_image_id "$(jq -r '.imageId' <<<"$evidence")")" || return 65
+	[[ "$normalized_evidence_id" == "$live_image_id" && "${normalized_evidence_id##*@}" == "$configured_digest" ]] || return 65
+}
+
 evidence_status=0
+quality_completion_count=0
+runtime_artifact_location=''
 while IFS= read -r job_json; do
 	[[ -n "$job_json" ]] || continue
 	name="$(yq -p=json -e -r '.metadata.name | select(test("^encode-benchmark-[a-z0-9.-]+$"))' <<<"$job_json")" || exit 65
@@ -188,19 +259,24 @@ while IFS= read -r job_json; do
 			exit 1
 		}
 		pod_phase="$(yq -p=json -r '.[0].status.phase // ""' <<<"$matching_pods")"
-		controller_count="$(JOB_NAME="$name" JOB_UID="$job_uid" yq -p=json -r '
-			[.[0].metadata.ownerReferences[]? | select(
-				.controller == true and .apiVersion == "batch/v1" and .kind == "Job" and
-				.name == strenv(JOB_NAME) and .uid == strenv(JOB_UID)
-			)] | length
-		' <<<"$matching_pods")"
 		target_node="$(yq -p=json -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""' \
 			<<<"$job_json")"
-		[[ ("$pod_phase" == 'Succeeded' || "$pod_phase" == 'Failed') &&
-			"$controller_count" == '1' && "$target_node" == "$node" ]] || {
+		if [[ ("$pod_phase" != 'Succeeded' && "$pod_phase" != 'Failed') || "$target_node" != "$node" ]] ||
+			! has_exact_job_controller_owner "$(jq -c '.[0]' <<<"$matching_pods")" "$name" "$job_uid"; then
 			echo "capability result provenance rejected: pod is not terminal, controlled, and targeted for Job $name" >&2
 			exit 1
-		}
+		fi
+		if [[ "$phase" == 'Complete' ]]; then
+			[[ "$succeeded" == '1' && "$failed" == '0' && "$pod_phase" == 'Succeeded' ]] || {
+				echo "capability result provenance rejected: terminal counts contradict Job $name" >&2
+				exit 1
+			}
+		else
+			[[ "$succeeded" == '0' && "$failed" == '1' && "$pod_phase" == 'Failed' ]] || {
+				echo "capability result provenance rejected: terminal counts contradict Job $name" >&2
+				exit 1
+			}
+		fi
 	fi
 	printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
 		"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"
@@ -219,8 +295,22 @@ while IFS= read -r job_json; do
 				echo "actual image identity evidence rejected: job=$name digest-mismatch" >&2
 				evidence_status=1
 			else
-				printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
-					"$configured_digest" "$normalized_image_id"
+				case "$mode" in
+				capabilities | quality | savings | finalist | contention-*)
+					if ! validate_prework_image_evidence "$job_json" "$name" "$job_uid" "$normalized_image_id"; then
+						echo "pre-work image identity evidence rejected: job=$name" >&2
+						evidence_status=1
+						normalized_image_id=''
+						continue
+					fi
+					printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
+						"$configured_digest" "$normalized_image_id"
+					;;
+				*)
+					printf 'configured_image_digest=%s actual_image_id=%s\n' \
+						"$configured_digest" "$normalized_image_id"
+					;;
+				esac
 			fi
 		fi
 	fi
@@ -241,10 +331,56 @@ while IFS= read -r job_json; do
 			echo "capability result provenance rejected: terminal phase contradicts proof for Job $name" >&2
 			exit 1
 		fi
+	elif [[ "$mode" == 'quality' && "$phase" == 'Complete' ]]; then
+		if ! [[ "$succeeded" == '1' && "$failed" == '0' && "$job_uid" =~ ^[a-zA-Z0-9._-]+$ &&
+			"$pod_count" == '1' && "$(yq -p=json -r '.[0].status.phase // ""' <<<"$matching_pods")" == 'Succeeded' ]] ||
+			! has_exact_job_controller_owner "$(jq -c '.[0]' <<<"$matching_pods")" "$name" "$job_uid"; then
+			echo "quality completion provenance rejected: job=$name" >&2
+			exit 1
+		fi
+		quality_dispatch_id="$(jq -e -r '
+			[.spec.template.spec.containers[]? | select(.name == "benchmark") | .env[]? |
+			 select(.name == "BENCHMARK_DISPATCH_CORRELATION_ID") | .value] |
+			if length == 0 then ""
+			elif length == 1 and (.[0] | type == "string" and length > 0) then .[0]
+			else error("invalid quality dispatch correlation marker")
+			end
+		' <<<"$job_json")" || {
+			echo "quality completion provenance rejected: job=$name" >&2
+			exit 1
+		}
+		if [[ -n "$quality_dispatch_id" ]]; then
+			[[ "$quality_dispatch_id" == "$run_id" ]] || {
+				echo "quality completion provenance rejected: job=$name" >&2
+				exit 1
+			}
+			quality_completion="$(sanitize_quality_completion "$log_line" "$run_id")" || {
+				echo "quality completion record rejected: job=$name" >&2
+				exit 1
+			}
+		else
+			[[ "$log_line" == "$run_id" ]] || {
+				echo "quality completion record rejected: job=$name" >&2
+				exit 1
+			}
+			printf -v quality_completion 'dispatch_id=%s runtime_run_id=%s artifact_location=/out/runs/%s' \
+				"$run_id" "$run_id" "$run_id"
+		fi
+		printf '%s\n' "$quality_completion"
+		runtime_artifact_location="${quality_completion##* artifact_location=}"
+		((quality_completion_count += 1))
 	else
 		printf 'summary=%s\n' "$(sanitize_summary "$mode" "$log_line")"
 	fi
 done < <(yq -p=json -o=json -I=0 '.items[]' <<<"$jobs")
 
-printf 'artifact_location=/out/runs/%s\n' "$run_id"
+if ((quality_completion_count > 0)); then
+	((quality_completion_count == 1 && job_count == 1)) || {
+		echo 'quality completion provenance rejected: expected one exact Job' >&2
+		exit 1
+	}
+	printf 'artifact_location=%s\n' "$runtime_artifact_location"
+else
+	printf 'artifact_location=/out/runs/%s\n' "$run_id"
+fi
 exit "$evidence_status"

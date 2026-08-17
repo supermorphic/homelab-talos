@@ -3,11 +3,15 @@
 set -euo pipefail
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$script_directory/contract.sh"
 benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
-results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition'
+running_image_file='/provenance/image.json'
+running_image_wait_seconds=600
+results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
 	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
@@ -21,6 +25,21 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" == '1' ]]; then
+	running_image_file="${BENCHMARK_RUNNING_IMAGE_FILE:-$running_image_file}"
+	running_image_wait_seconds="${BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS:-$running_image_wait_seconds}"
+else
+	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE; do
+		if [[ -v "$override" ]]; then
+			echo "$override requires BENCHMARK_TEST_MODE=1" >&2
+			exit 64
+		fi
+	done
+fi
+[[ "$running_image_wait_seconds" =~ ^[0-9]+$ ]] || {
+	echo 'running image evidence wait must be a non-negative integer' >&2
+	exit 64
+}
 if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
@@ -33,15 +52,14 @@ if [[ "$test_mode" != '1' ]]; then
 		fi
 	done
 fi
-
 usage() {
-	echo 'usage: benchmark.sh capabilities | quality [run-id] | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
+	echo 'usage: benchmark.sh capabilities | quality [run-id] | x265 <run-id> <sample-id> | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
 	exit 64
 }
 
 validate_run_id() {
 	local run_id="$1"
-	[[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || {
+	contract_is_run_id "$run_id" || {
 		echo "invalid run id: $run_id" >&2
 		return 64
 	}
@@ -75,7 +93,7 @@ build_commands() {
 	qsv_command=(
 		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128
 		-filter_hw_device hw -i "$clip" -map 0 -c:v hevc_qsv -preset veryslow
-		-global_quality "$gq" -look_ahead 1 -extbrc 1 -c:a copy -c:s copy
+		-global_quality "$gq" -look_ahead 0 -extbrc 0 -c:a copy -c:s copy
 		-map_metadata 0 -map_chapters 0 "$qsv_output"
 	)
 	x265_command=(
@@ -198,7 +216,7 @@ savings_stats() {
 x265_match() {
 	local fixture="$1"
 	local qsv_vmaf qsv_bit_rate point_count index v1 b1 crf1 v2 b2 crf2
-	local matched premium
+	local matched premium lower_crf upper_crf
 	local -a points
 	qsv_vmaf="$(jq -e -r '.qsvVmaf | numbers' "$fixture")"
 	qsv_bit_rate="$(jq -e -r '.qsvBitRate | numbers | select(. > 0)' "$fixture")"
@@ -209,7 +227,7 @@ x265_match() {
 				(.bitRate | type) == "number" and .bitRate > 0
 			)] | length) != (.points | length)
 		then error("invalid x265 measurements")
-		else .points | sort_by(.vmaf, .crf)[] | [.vmaf, .bitRate, .crf] | @tsv
+		else .points | sort_by(.crf)[] | [.vmaf, .bitRate, .crf] | @tsv
 		end
 	' "$fixture")
 	point_count="${#points[@]}"
@@ -229,8 +247,8 @@ x265_match() {
 		fi
 		((index + 1 < point_count)) || continue
 		IFS=$'\t' read -r v2 b2 crf2 <<<"${points[$((index + 1))]}"
-		if awk -v q="$qsv_vmaf" -v lower="$v1" -v upper="$v2" \
-			'BEGIN { exit !(lower <= q && q <= upper) }'; then
+		if awk -v q="$qsv_vmaf" -v first="$v1" -v second="$v2" \
+			'BEGIN { exit !((first <= q && q <= second) || (second <= q && q <= first)) }'; then
 			matched="$(awk -v q="$qsv_vmaf" -v v1="$v1" -v b1="$b1" -v v2="$v2" -v b2="$b2" '
 				BEGIN {
 					if (v1 == v2) printf "%.6f", b1
@@ -239,8 +257,15 @@ x265_match() {
 			')"
 			premium="$(awk -v q="$qsv_bit_rate" -v matched="$matched" \
 				'BEGIN { printf "%.6f", (q - matched) * 100 / matched }')"
+			if awk -v first="$v1" -v second="$v2" 'BEGIN { exit !(first <= second) }'; then
+				lower_crf="$crf1"
+				upper_crf="$crf2"
+			else
+				lower_crf="$crf2"
+				upper_crf="$crf1"
+			fi
 			printf '{"status":"bracketed","lower_crf":%s,"upper_crf":%s,"matched_bit_rate":%s,"premium_percent":%s}\n' \
-				"$crf1" "$crf2" "$matched" "$premium"
+				"$lower_crf" "$upper_crf" "$matched" "$premium"
 			return
 		fi
 	done
@@ -369,26 +394,38 @@ drm_fdinfo_metrics() {
 }
 
 qsv_proof() {
-	local encode_log="$1"
-	local fdinfo_log="$2"
-	local height="$3"
-	local selected='unknown' initialization='failed' fps='0.000000' speed='0.000000'
-	local gpu delta telemetry metrics reasons='' proof='suspect' value
-	if grep -q -E 'Successfully initiali[sz]ed the hardware device' "$encode_log" &&
-		! grep -q -E 'Device creation failed|Failed to initiali[sz]e' "$encode_log"; then
+	local encode_status="$1"
+	local encode_log="$2"
+	local fdinfo_log="$3"
+	local height="$4"
+	local selected='unknown' initialization='failed' binding='harness-blocked'
+	local render_node='' fps='0.000000' speed='0.000000'
+	local driver gpu delta telemetry metrics reasons='' proof='passed' value blocked=0
+	if [[ "$encode_status" == '0' ]] &&
+		! grep -q -E 'Device creation failed|Failed to initiali[sz]e|Error creating a MFX session' "$encode_log"; then
 		initialization='passed'
 	fi
-	value="$(grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' "$encode_log" | tail -n 1 || true)"
+	value="$(grep -i -E 'Using .*ratecontrol method|Runtime selected ratecontrol method:' "$encode_log" |
+		grep -o -i -E 'LA[_-]?ICQ|CQP|ICQ|CBR|VBR|AVBR|QVBR' | tail -n 1 || true)"
 	case "${value^^}" in
-	LA_ICQ | LA-ICQ | LAICQ) selected='LA-ICQ' ;;
+	LA_ICQ | LA-ICQ | LAICQ) selected='rejected' ;;
 	CQP | ICQ | CBR | VBR | AVBR | QVBR) selected="${value^^}" ;;
 	esac
 	value="$(grep -o -E 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
 	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
 	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
 	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
+	value="$(grep -E '^render-node: /dev/dri/renderD[0-9]+$' "$fdinfo_log" | tail -n 1 || true)"
+	if [[ "$value" == 'render-node: /dev/dri/renderD128' ]]; then
+		render_node='/dev/dri/renderD128'
+		binding='passed'
+	elif [[ -n "$value" ]]; then
+		render_node="${value#render-node: }"
+		binding='failed'
+	fi
 	metrics="$(drm_fdinfo_metrics "$fdinfo_log")"
 	telemetry="$(jq -r '.status' <<<"$metrics")"
+	driver="$(jq -r '.driver' <<<"$metrics")"
 	delta="$(jq -r '.video_busy_nanoseconds' <<<"$metrics")"
 	gpu="$(awk -v value="$(jq -r '.video_busy_percent' <<<"$metrics")" \
 		'BEGIN { printf "%.6f", value }')"
@@ -396,26 +433,42 @@ qsv_proof() {
 	if [[ "$initialization" != 'passed' ]]; then
 		reasons='initialization'
 	fi
-	if [[ "$selected" != 'LA-ICQ' ]]; then
+	if [[ "$binding" != 'passed' ]]; then
+		reasons="${reasons:+$reasons;}binding"
+		[[ "$binding" == 'harness-blocked' ]] && blocked=1
+	fi
+	if [[ "$selected" == 'unknown' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+		[[ "$initialization" == 'passed' ]] && blocked=1
+	elif [[ "$selected" != 'ICQ' ]]; then
 		reasons="${reasons:+$reasons;}rate-control"
 	fi
-	if [[ "$telemetry" != 'available' ]] || ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
+	if [[ "$telemetry" != 'available' ]]; then
+		reasons="${reasons:+$reasons;}telemetry"
+		blocked=1
+	elif ! awk -v delta="$delta" 'BEGIN { exit !(delta > 0) }'; then
 		reasons="${reasons:+$reasons;}telemetry"
 	fi
-	if ((height == 0)); then
-		if ! awk -v value="$speed" 'BEGIN { exit !(value > 0) }'; then
-			reasons="${reasons:+$reasons;}speed"
-		fi
-	elif ((height >= 2160)); then
-		if ! awk -v value="$speed" 'BEGIN { exit !(value >= 0.5 && value <= 2.0) }'; then
-			reasons="${reasons:+$reasons;}speed"
-		fi
-	elif ! awk -v value="$speed" 'BEGIN { exit !(value >= 2.0 && value <= 20.0) }'; then
-		reasons="${reasons:+$reasons;}speed"
+	if ! awk -v value="$speed" 'BEGIN { exit !(value > 0) }'; then
+		reasons="${reasons:+$reasons;}progress"
 	fi
-	[[ -n "$reasons" ]] || proof='passed'
-	printf '{"selected_rate_control":"%s","initialization":"%s","encode_fps":%s,"encode_speed":%s,"gpu_busy_percent":%s,"qsv_proof":"%s","suspect_reasons":"%s"}\n' \
-		"$selected" "$initialization" "$fps" "$speed" "$gpu" "$proof" "$reasons"
+	if [[ "$initialization" != 'passed' ]]; then
+		proof='failed'
+	elif ((blocked)); then
+		proof='harness-blocked'
+	elif [[ -n "$reasons" ]]; then
+		proof='failed'
+	fi
+	jq -n -c \
+		--arg selected "$selected" --arg initialization "$initialization" \
+		--arg binding "$binding" --arg render_node "$render_node" --arg driver "$driver" \
+		--argjson busy "$delta" --argjson fps "$fps" --argjson speed "$speed" \
+		--argjson gpu "$gpu" --arg proof "$proof" --arg reasons "$reasons" '{
+			selected_rate_control: $selected, initialization: $initialization,
+			binding: $binding, render_node: $render_node, drm_driver: $driver,
+			video_busy_nanoseconds: $busy, encode_fps: $fps, encode_speed: $speed,
+			gpu_busy_percent: $gpu, qsv_proof: $proof, suspect_reasons: $reasons
+		}'
 }
 
 passed_or_failed() {
@@ -583,8 +636,12 @@ ensure_results_file() {
 result_key_passed() {
 	local results="$1"
 	local panel="$2" sha="$3" clip="$4" encoder="$5" setting="$6"
-	awk -F, -v panel="$panel" -v sha="$sha" -v clip="$clip" -v encoder="$encoder" -v setting="$setting" '
-		NR > 1 && $2 == panel && $5 == sha && $6 == clip && $7 == encoder && $8 == setting && $10 == "passed" { found = 1 }
+	awk -F, -v panel="$panel" -v sha="$sha" -v clip="$clip" -v encoder="$encoder" -v setting="$setting" \
+		-v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 && $2 == panel && $5 == sha && $6 == clip && $7 == encoder && $8 == setting &&
+			$10 == "passed" && $37 == strategy &&
+			(($7 == "qsv" && $38 == "passed" && $39 ~ /^[0-9]+$/ && $39 + 0 > 0) ||
+			 ($7 == "x265" && $38 == "not-applicable" && $39 == "0")) { found = 1 }
 		END { exit !found }
 	' "$results"
 }
@@ -610,10 +667,15 @@ record_result_inner() {
 	local fixture="$2"
 	local scratch_output="$3"
 	local run_directory results panel sample_id cohort source_sha clip encoder setting
-	local selected status attempt disposition='discarded' confirmation destination
-	local encodes_directory='' staged_destination='' backup_destination='' published=0 had_prior=0
-	local append_status=0 columns_text out_physical runs_physical run_physical encodes_physical
+	local selected strategy qsv_initialization video_busy_nanoseconds status attempt disposition='discarded' confirmation destination
+	local expected_finalist chosen
+	local encodes_directory='' staged_destination='' backup_destination='' prior_digest='' published=0 had_prior=0
+	local append_status=0 completed_status=0 columns_text out_physical runs_physical run_physical encodes_physical
+	local promotion_status=0 rollback_status=0
 	local -a columns
+	if [[ ! -v CONTRACT_STRATEGY_ID ]]; then
+		contract_load "$samples_file" || return
+	fi
 	validate_run_id "$run_id" || return
 	[[ -f "$fixture" ]] || return 66
 	run_directory="$benchmark_out/runs/$run_id"
@@ -641,14 +703,58 @@ record_result_inner() {
 	encoder="$(jq -e -r '.encoder | strings' "$fixture")" || return 65
 	setting="$(jq -e -r '.requested_setting | strings' "$fixture")" || return 65
 	selected="$(jq -e -r '.selected_rate_control | strings' "$fixture")" || return 65
+	strategy="$(jq -e -r '.strategy_id | strings' "$fixture")" || return 65
+	qsv_initialization="$(jq -e -r '.qsv_initialization | strings' "$fixture")" || return 65
+	video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | strings' "$fixture")" || return 65
 	validate_sample_id "$sample_id" || return
-	[[ "$panel" == 'quality' || "$panel" == 'savings' || "$panel" == 'finalist' ]] || return 65
+	[[ "$panel" == 'quality' || "$panel" == 'x265' || "$panel" == 'savings' || "$panel" == 'finalist' ]] || return 65
 	[[ "$encoder" == 'qsv' || "$encoder" == 'x265' ]] || return 65
 	[[ "$setting" =~ ^[0-9]+$ ]] || return 65
+	if [[ "$encoder" == 'qsv' ]]; then
+		contract_is_icq_setting "$samples_file" "$setting" || {
+			echo 'QSV result setting is not an ICQ candidate' >&2
+			return 65
+		}
+	fi
 	[[ "$source_sha" =~ ^[0-9a-f]{64}$ ]] || return 65
+	[[ "$strategy" == "$CONTRACT_STRATEGY_ID" ]] || {
+		echo 'result fixture strategy does not match contract' >&2
+		return 65
+	}
+	if [[ "$encoder" == 'x265' ]] &&
+		[[ "$qsv_initialization" != 'not-applicable' || "$video_busy_nanoseconds" != '0' ]]; then
+		echo 'x265 result must use not-applicable QSV evidence' >&2
+		return 65
+	fi
+	if [[ "$panel" == 'finalist' ]]; then
+		confirmation="copy:encode-benchmark:$run_id:$sample_id"
+		if [[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" != "$confirmation" ]]; then
+			echo "missing finalist confirmation for $run_id/$sample_id" >&2
+			return 64
+		fi
+		expected_finalist="$(contract_expected_finalist "$cohort")" || return
+		[[ "$sample_id" == "$expected_finalist" ]] || {
+			echo "finalist sample does not match cohort: $cohort" >&2
+			return 65
+		}
+		prepare_chosen_upstream "$cohort" provisional || return
+		chosen="$(contract_chosen_record "$samples_file" "$cohort" provisional)" || return 65
+		[[ "$setting" == "$(jq -r '.globalQuality' <<<"$chosen")" ]] || {
+			echo "finalist result setting does not match chosen setting for cohort: $cohort" >&2
+			return 65
+		}
+	fi
 	results="$run_directory/results.csv"
 	ensure_results_file "$results" || return
-	if result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
+	if [[ "$encoder" == 'x265' ]]; then
+		row_is_complete "$run_id" "$panel" "$source_sha" "$clip" "$encoder" "$setting" || completed_status=$?
+		if ((completed_status != 0 && completed_status != 1)); then return "$completed_status"; fi
+	elif result_key_passed "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting"; then
+		completed_status=0
+	else
+		completed_status=1
+	fi
+	if ((completed_status == 0)); then
 		attempt=$(("$(result_attempt "$results" "$panel" "$source_sha" "$clip" "$encoder" "$setting")" - 1))
 		printf '{"status":"skipped","attempt":%s,"output_disposition":"not-created"}\n' "$attempt"
 		return
@@ -660,16 +766,13 @@ record_result_inner() {
 	elif [[ -n "$(jq -r '.validation_failures' "$fixture")" ]]; then
 		status='invalid'
 	elif [[ "$encoder" == 'qsv' ]] &&
-		[[ "$selected" != 'LA-ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ]]; then
+		[[ "$selected" != 'ICQ' || "$(jq -r '.qsv_proof' "$fixture")" != 'passed' ||
+		"$qsv_initialization" != 'passed' || ! "$video_busy_nanoseconds" =~ ^[0-9]+$ ||
+		"$video_busy_nanoseconds" -le 0 ]]; then
 		status='invalid'
 	fi
 
 	if [[ "$panel" == 'finalist' ]]; then
-		confirmation="copy:encode-benchmark:$run_id:$sample_id"
-		if [[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" != "$confirmation" ]]; then
-			echo "missing finalist confirmation for $run_id/$sample_id" >&2
-			return 64
-		fi
 		if [[ "$status" == 'passed' ]]; then
 			disposition='copied'
 		fi
@@ -686,16 +789,17 @@ record_result_inner() {
 			.validation_duration, .validation_resolution,
 			.validation_frame_rate, .validation_bit_depth, .validation_hdr,
 			.validation_audio_tracks, .validation_subtitle_tracks,
-			.validation_chapters, .validation_failures, .log_path
-		] | if length == 32 and all(.[]; type == "string")
+			.validation_chapters, .validation_failures, .log_path,
+			.strategy_id, .qsv_initialization, .video_busy_nanoseconds
+		] | if length == 35 and all(.[]; type == "string")
 		then .[] else error("invalid result fixture") end
 	' "$fixture")" || return 65
 	mapfile -t columns <<<"$columns_text"
-	((${#columns[@]} == 32)) || return 65
+	((${#columns[@]} == 35)) || return 65
 	columns=(
 		"$run_id" "${columns[0]}" "${columns[1]}" "${columns[2]}" "${columns[3]}"
 		"${columns[4]}" "${columns[5]}" "${columns[6]}" "${columns[7]}" "$status"
-		"$attempt" "${columns[@]:8}" "$disposition"
+		"$attempt" "${columns[@]:8:24}" "$disposition" "${columns[@]:32:3}"
 	)
 	for value in "${columns[@]}"; do
 		safe_csv_field "$value" || {
@@ -729,18 +833,35 @@ record_result_inner() {
 		}
 		staged_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.tmp.mkv"
 		backup_destination="$encodes_directory/.$sample_id-$encoder-gq$setting-attempt-$attempt.backup.mkv"
-		rm -f -- "$staged_destination" "$backup_destination"
+		rm -f -- "$staged_destination"
+		if [[ -e "$backup_destination" || -L "$backup_destination" ]]; then
+			[[ -f "$backup_destination" && ! -L "$backup_destination" ]] || {
+				echo "finalist retained backup is not a regular file: $backup_destination" >&2
+				return 74
+			}
+			[[ ! -e "$destination" ]] || {
+				echo "finalist recovery is ambiguous; retained backup: $backup_destination" >&2
+				return 74
+			}
+			prior_digest="sha256:$(sha256sum "$backup_destination" | awk '{print $1}')"
+			restore_finalist_backup "$backup_destination" "$destination" "$prior_digest" || return
+		fi
 		cp -- "$scratch_output" "$staged_destination" || return
 		if [[ -e "$destination" ]]; then
+			prior_digest="sha256:$(sha256sum "$destination" | awk '{print $1}')"
 			mv -- "$destination" "$backup_destination" || {
 				rm -f -- "$staged_destination"
 				return 74
 			}
 			had_prior=1
 		fi
-		if ! mv -- "$staged_destination" "$destination"; then
-			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
-			return 74
+		mv -- "$staged_destination" "$destination" || promotion_status=$?
+		if ((promotion_status != 0)); then
+			rm -f -- "$staged_destination" || true
+			if ((had_prior)) && ! restore_finalist_backup "$backup_destination" "$destination" "$prior_digest"; then
+				return 74
+			fi
+			return "$promotion_status"
 		fi
 		published=1
 	fi
@@ -754,16 +875,60 @@ record_result_inner() {
 	fi
 	if ((append_status != 0)); then
 		if ((published)); then
-			rm -f -- "$destination"
-			if ((had_prior)); then mv -- "$backup_destination" "$destination"; fi
+			if ! rm -f -- "$destination"; then
+				echo "finalist rollback could not remove replacement; retained backup: $backup_destination" >&2
+				rollback_status=74
+			elif ((had_prior)) &&
+				! restore_finalist_backup "$backup_destination" "$destination" "$prior_digest"; then
+				rollback_status=74
+			fi
 		fi
 		if [[ -n "$staged_destination" ]]; then rm -f -- "$staged_destination"; fi
-		if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
+		if [[ -n "$backup_destination" && "$rollback_status" == '0' ]]; then
+			rm -f -- "$backup_destination"
+		fi
+		if ((rollback_status != 0)); then return "$rollback_status"; fi
 		return "$append_status"
 	fi
 	if [[ -n "$backup_destination" ]]; then rm -f -- "$backup_destination"; fi
 	printf '{"status":"%s","attempt":%s,"output_disposition":"%s"}\n' \
 		"$status" "$attempt" "$disposition"
+}
+
+restore_finalist_backup() {
+	local backup="$1" destination="$2" expected_digest="$3" restored_digest
+	local restore_staged="${backup%.backup.mkv}.restore-stage.mkv"
+	[[ -f "$backup" && ! -L "$backup" ]] || {
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	}
+	rm -f -- "$restore_staged"
+	if ! cp -- "$backup" "$restore_staged"; then
+		rm -f -- "$restore_staged" || true
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	restored_digest="sha256:$(sha256sum "$restore_staged" | awk '{print $1}')"
+	if [[ "$restored_digest" != "$expected_digest" ]]; then
+		rm -f -- "$restore_staged"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	if ! mv -- "$restore_staged" "$destination"; then
+		rm -f -- "$restore_staged"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	restored_digest="sha256:$(sha256sum "$destination" | awk '{print $1}')"
+	if [[ "$restored_digest" != "$expected_digest" ]]; then
+		rm -f -- "$destination"
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
+	if ! rm -f -- "$backup"; then
+		echo "finalist backup restoration failed; retained: $backup" >&2
+		return 74
+	fi
 }
 
 record_result() {
@@ -975,6 +1140,75 @@ read_declared_commands() {
 	done <"$file"
 }
 
+normalize_running_image_id() {
+	local image_id="$1" stripped
+	stripped="${image_id#docker-pullable://}"
+	stripped="${stripped#containerd://}"
+	[[ "$stripped" =~ ^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$ ]] || return 65
+	printf '%s\n' "$stripped"
+}
+
+require_running_image_evidence() {
+	local configured_image dispatched_image configured_digest dispatched_digest
+	local evidence normalized_image_id running_digest deadline
+	if [[ "$test_mode" == '1' && ! -v BENCHMARK_RUNNING_IMAGE_FILE && -z "${BENCHMARK_RUNNING_IMAGE:-}" ]]; then
+		return 0
+	fi
+	configured_image="$(jq -e -r '.runtime.image | strings | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' \
+		"$samples_file")" || {
+		echo 'configured runtime image is missing or mutable' >&2
+		return 65
+	}
+	dispatched_image="${BENCHMARK_DISPATCH_IMAGE:-}"
+	[[ "$dispatched_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+		echo 'dispatched runtime image is missing or mutable' >&2
+		return 65
+	}
+	configured_digest="${configured_image##*@}"
+	dispatched_digest="${dispatched_image##*@}"
+	[[ "$configured_image" == "$dispatched_image" && "$configured_digest" == "$dispatched_digest" ]] || {
+		echo 'configured and dispatched runtime images do not match' >&2
+		return 65
+	}
+	if [[ "$test_mode" == '1' && -n "${BENCHMARK_RUNNING_IMAGE:-}" && ! -f "$running_image_file" ]]; then
+		normalized_image_id="$(normalize_running_image_id "$BENCHMARK_RUNNING_IMAGE")" || return 65
+		running_digest="${normalized_image_id##*@}"
+		[[ "$running_digest" == "$configured_digest" ]] || return 65
+		BENCHMARK_RUNNING_IMAGE="$normalized_image_id"
+		export BENCHMARK_RUNNING_IMAGE
+		return
+	fi
+	deadline=$((SECONDS + running_image_wait_seconds))
+	while [[ ! -f "$running_image_file" ]]; do
+		if ((SECONDS >= deadline)); then
+			echo 'timed out waiting for running image evidence' >&2
+			return 70
+		fi
+		sleep 1
+	done
+	evidence="$(jq -e -c \
+		--arg configured "$configured_image" --arg dispatched "$dispatched_image" '
+		select(type == "object" and keys == ["configuredImage","dispatchedImage","imageId"] and
+			.configuredImage == $configured and .dispatchedImage == $dispatched and
+			(.imageId | type == "string"))
+	' "$running_image_file")" || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	normalized_image_id="$(normalize_running_image_id "$(jq -r '.imageId' <<<"$evidence")")" || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	running_digest="${normalized_image_id##*@}"
+	[[ "$running_digest" == "$configured_digest" && "$running_digest" == "$dispatched_digest" ]] || {
+		echo 'running image evidence is malformed or inconsistent' >&2
+		return 65
+	}
+	BENCHMARK_RUNNING_IMAGE="$normalized_image_id"
+	export BENCHMARK_RUNNING_IMAGE
+	printf 'running_image_evidence=accepted image_id=%s\n' "$normalized_image_id" >&2
+}
+
 capabilities() (
 	local capability_directory source encode_log fdinfo_log ffmpeg_version ffprobe_version
 	local encoders filters uid configured_image configured_digest dispatch_image node_name
@@ -1102,6 +1336,7 @@ file_size() {
 
 runtime_pre_encode_gate() {
 	local samples_json="$1"
+	local execution_class="${2:-gpu}"
 	local configured_image dispatch_image sample sample_id source expected_size actual_size
 	local expected_sha actual_sha encoders filters write_probe
 	configured_image="$(jq -e -r '.runtime.image' "$samples_file")" || {
@@ -1156,14 +1391,18 @@ runtime_pre_encode_gate() {
 	done < <(jq -c '.[]' <<<"$samples_json")
 	encoders="$(ffmpeg -nostdin -hide_banner -encoders)" || return
 	filters="$(ffmpeg -nostdin -hide_banner -filters)" || return
-	grep -q -F 'hevc_qsv' <<<"$encoders" || {
-		echo 'hevc_qsv encoder is unavailable' >&2
-		return 1
-	}
-	grep -q -F 'libx265' <<<"$encoders" || {
-		echo 'libx265 encoder is unavailable' >&2
-		return 1
-	}
+	if [[ "$execution_class" == 'gpu' ]]; then
+		grep -q -F 'hevc_qsv' <<<"$encoders" || {
+			echo 'hevc_qsv encoder is unavailable' >&2
+			return 1
+		}
+	else
+		[[ "$execution_class" == 'cpu' ]] || return 64
+		grep -q -F 'libx265' <<<"$encoders" || {
+			echo 'libx265 encoder is unavailable' >&2
+			return 1
+		}
+	fi
 	grep -q -F 'libvmaf' <<<"$filters" || {
 		echo 'libvmaf filter is unavailable' >&2
 		return 1
@@ -1184,7 +1423,7 @@ sample_drm_fdinfo() {
 	local ffmpeg_pid="$1"
 	local render_node="$2"
 	local output="$3"
-	local timestamp fd_path target fdinfo
+	local timestamp fd_path target fdinfo binding_recorded=0
 	local -a fd_paths
 	: >"$output"
 	while kill -0 "$ffmpeg_pid" 2>/dev/null; do
@@ -1197,6 +1436,10 @@ sample_drm_fdinfo() {
 			[[ "$target" == "$render_node" ]] || continue
 			fdinfo="/proc/$ffmpeg_pid/fdinfo/${fd_path##*/}"
 			[[ -r "$fdinfo" ]] || continue
+			if ((binding_recorded == 0)); then
+				printf 'render-node: %s\n\n' "$target" >>"$output"
+				binding_recorded=1
+			fi
 			timestamp="$(now_nanoseconds)"
 			{
 				printf '%s\n' "$timestamp"
@@ -1210,6 +1453,24 @@ sample_drm_fdinfo() {
 	done
 }
 
+run_qsv_initialization() {
+	local log="$1"
+	local status
+	if ffmpeg -nostdin -v verbose \
+		-init_hw_device qsv=hw:/dev/dri/renderD128 \
+		-filter_hw_device hw \
+		-f lavfi -i 'nullsrc=size=16x16:rate=1' \
+		-frames:v 1 -f null - >"$log" 2>&1; then
+		status=0
+	else
+		status=$?
+	fi
+	if ((status != 0)) || grep -q -E \
+		'Device creation failed|Failed to initiali[sz]e|Error creating a MFX session' "$log"; then
+		return 1
+	fi
+}
+
 run_qsv_encode() {
 	local input="$1"
 	local output="$2"
@@ -1221,13 +1482,13 @@ run_qsv_encode() {
 		cp "$BENCHMARK_TEST_FDINFO_FIXTURE" "$fdinfo_log"
 		ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 			-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
-			-global_quality "$setting" -look_ahead 1 -extbrc 1 \
+			-global_quality "$setting" -look_ahead 0 -extbrc 0 \
 			-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1
 		return
 	fi
 	ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
 		-filter_hw_device hw -i "$input" -map 0 -c:v hevc_qsv -preset veryslow \
-		-global_quality "$setting" -look_ahead 1 -extbrc 1 \
+		-global_quality "$setting" -look_ahead 0 -extbrc 0 \
 		-c:a copy -c:s copy -map_metadata 0 -map_chapters 0 "$output" >"$encode_log" 2>&1 &
 	ffmpeg_pid=$!
 	sample_drm_fdinfo "$ffmpeg_pid" '/dev/dri/renderD128' "$fdinfo_log" &
@@ -1243,21 +1504,36 @@ run_qsv_encode() {
 capability_proof() {
 	local encode_log="$1"
 	local fdinfo_log="$2"
-	local capability_directory source encoded proof_json metrics_json
-	local encode_status decode='failed' vmaf='failed' proof_status='passed' reasons=''
-	local initialization selected telemetry delta percent fps speed telemetry_reason
+	local capability_directory source encoded initialization_log proof_json metrics_json
+	local initialization_status=1 encode_status=1 decode='failed' vmaf='failed'
+	local proof_status='passed' reasons=''
+	local initialization selected binding render_node driver telemetry delta percent fps speed telemetry_reason
+	local -a settings
 	capability_directory="$(dirname "$encode_log")"
 	source="$capability_directory/source.mkv"
 	encoded="$capability_directory/qsv.mkv"
+	initialization_log="$capability_directory/qsv-init.log"
+	: >"$fdinfo_log"
+	read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 
 	set +e
-	run_qsv_encode "$source" "$encoded" 22 "$encode_log" "$fdinfo_log"
-	encode_status=$?
+	run_qsv_initialization "$initialization_log"
+	initialization_status=$?
+	if ((initialization_status == 0)); then
+		run_qsv_encode "$source" "$encoded" "${settings[0]}" "$encode_log" "$fdinfo_log"
+		encode_status=$?
+	else
+		: >"$encode_log"
+		encode_status="$initialization_status"
+	fi
 	set -e
-	proof_json="$(qsv_proof "$encode_log" "$fdinfo_log" 0)"
+	proof_json="$(qsv_proof "$encode_status" "$encode_log" "$fdinfo_log" 0)"
 	metrics_json="$(drm_fdinfo_metrics "$fdinfo_log")"
 	initialization="$(jq -r '.initialization' <<<"$proof_json")"
 	selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+	binding="$(jq -r '.binding' <<<"$proof_json")"
+	render_node="$(jq -r '.render_node' <<<"$proof_json")"
+	driver="$(jq -r '.drm_driver' <<<"$proof_json")"
 	fps="$(jq -r '.encode_fps' <<<"$proof_json")"
 	speed="$(jq -r '.encode_speed' <<<"$proof_json")"
 	telemetry="$(jq -r '.status' <<<"$metrics_json")"
@@ -1275,7 +1551,16 @@ capability_proof() {
 	fi
 
 	[[ "$initialization" == 'passed' ]] || reasons='initialization'
-	[[ "$selected" == 'LA-ICQ' ]] || reasons="${reasons:+$reasons;}rate-control"
+	if [[ "$binding" != 'passed' ]]; then
+		reasons="${reasons:+$reasons;}binding"
+		[[ "$binding" == 'harness-blocked' ]] && proof_status='harness-blocked'
+	fi
+	if [[ "$selected" == 'unknown' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+		[[ "$initialization" == 'passed' ]] && proof_status='harness-blocked'
+	elif [[ "$selected" != 'ICQ' ]]; then
+		reasons="${reasons:+$reasons;}rate-control"
+	fi
 	if [[ "$telemetry" == 'available' ]]; then
 		awk -v value="$delta" 'BEGIN { exit !(value > 0) }' ||
 			reasons="${reasons:+$reasons;}telemetry"
@@ -1287,12 +1572,19 @@ capability_proof() {
 		reasons="${reasons:+$reasons;}progress"
 	[[ "$decode" == 'passed' ]] || reasons="${reasons:+$reasons;}decode"
 	[[ "$vmaf" == 'passed' ]] || reasons="${reasons:+$reasons;}vmaf"
-	if [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then
+	if [[ "$initialization" != 'passed' ]]; then
+		proof_status='failed'
+	elif [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then
 		proof_status='failed'
 	fi
 
 	jq -n -c \
+		--arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson schema "$CONTRACT_CAPABILITY_SCHEMA" \
 		--arg initialization "$initialization" \
+		--arg initialization_reason '' \
+		--arg render_node "$render_node" \
+		--arg driver "$driver" \
 		--arg selected "$selected" \
 		--arg telemetry "$telemetry" \
 		--arg telemetry_reason "$telemetry_reason" \
@@ -1304,8 +1596,12 @@ capability_proof() {
 		--arg vmaf "$vmaf" \
 		--arg proof_status "$proof_status" \
 		--arg reasons "$reasons" '{
-			proofSchemaVersion: 2,
+			strategyId: $strategy,
+			proofSchemaVersion: $schema,
 			initialization: $initialization,
+			initializationReason: $initialization_reason,
+			renderNode: $render_node,
+			drmDriver: $driver,
 			selectedRateControl: $selected,
 			telemetryStatus: $telemetry,
 			telemetryReason: $telemetry_reason,
@@ -1374,6 +1670,7 @@ process_variant() {
 	local input_bytes='0' output_bytes='0' duration='0' input_rate='0' output_rate='0'
 	local reduction='0.000000' fps='0.000000' speed='0.000000' vmaf_harmonic=''
 	local vmaf_low='' ssim='' gpu_busy='' qsv_status='not-applicable' selected='CRF'
+	local qsv_initialization='not-applicable' video_busy_nanoseconds='0' strategy_id="$CONTRACT_STRATEGY_ID"
 	local validation_failures validation_codec validation_duration validation_resolution
 	local validation_frame_rate validation_bit_depth validation_hdr validation_audio
 	local validation_subtitle validation_chapters decode_status=1 proof_json progress
@@ -1418,7 +1715,7 @@ process_variant() {
 		else
 			validation="$(failed_validation output-probe)"
 		fi
-		if [[ "$panel" == 'quality' ]]; then
+		if [[ "$panel" == 'quality' || "$panel" == 'x265' ]]; then
 			if ffmpeg -nostdin -v error -i "$output" -i "$reference" -lavfi \
 				"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
 				-f null - && metrics="$(vmaf_stats "$vmaf_file" 2>/dev/null)" &&
@@ -1430,14 +1727,16 @@ process_variant() {
 				vmaf_low=''
 				validation="$(add_validation_failure "$validation" vmaf)"
 			fi
-			if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
-				-f null - >"$ssim_file" 2>&1 &&
-				value="$(grep -o -E 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
-				[[ -n "$value" ]]; then
-				ssim="$value"
-			else
-				ssim=''
-				validation="$(add_validation_failure "$validation" ssim)"
+			if [[ "$panel" == 'quality' ]]; then
+				if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
+					-f null - >"$ssim_file" 2>&1 &&
+					value="$(grep -o -E 'All:[0-9]+([.][0-9]+)?' "$ssim_file" | tail -n 1 | cut -d: -f2)" &&
+					[[ -n "$value" ]]; then
+					ssim="$value"
+				else
+					ssim=''
+					validation="$(add_validation_failure "$validation" ssim)"
+				fi
 			fi
 		fi
 		if [[ -n "$still_prefix" ]] &&
@@ -1448,15 +1747,23 @@ process_variant() {
 	printf '%s\n' "$validation" >"$validation_file"
 
 	if [[ "$encoder" == 'qsv' ]]; then
-		if proof_json="$(qsv_proof "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
+		if proof_json="$(qsv_proof "$encode_status" "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
 			jq -e . <<<"$proof_json" >/dev/null 2>&1; then
 			selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+			qsv_initialization="$(jq -r '.initialization' <<<"$proof_json")"
 			fps="$(jq -r '.encode_fps' <<<"$proof_json")"
 			speed="$(jq -r '.encode_speed' <<<"$proof_json")"
 			gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
 			qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
+			if metrics="$(drm_fdinfo_metrics "$busy_log" 2>/dev/null)" &&
+				video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | numbers | floor' <<<"$metrics" 2>/dev/null)"; then
+				:
+			else
+				video_busy_nanoseconds='0'
+			fi
 		else
 			selected='unknown'
+			qsv_initialization='failed'
 			qsv_status='suspect'
 			validation="$(add_validation_failure "$validation" qsv-proof)"
 			printf '%s\n' "$validation" >"$validation_file"
@@ -1491,7 +1798,9 @@ process_variant() {
 		--arg frame_rate "$validation_frame_rate" --arg bit_depth "$validation_bit_depth" \
 		--arg hdr "$validation_hdr" --arg audio "$validation_audio" \
 		--arg subtitle "$validation_subtitle" --arg chapters "$validation_chapters" \
-		--arg failures "$validation_failures" --arg log_path "logs/${encode_log##*/}" '{
+		--arg failures "$validation_failures" --arg log_path "logs/${encode_log##*/}" \
+		--arg strategy_id "$strategy_id" --arg qsv_initialization "$qsv_initialization" \
+		--arg video_busy_nanoseconds "$video_busy_nanoseconds" '{
 			panel: $panel, sample_id: $sample_id, cohort: $cohort, source_sha256: $source_sha,
 			clip_id: $clip_id, encoder: $encoder, requested_setting: $setting,
 			selected_rate_control: $selected, encode_status: $encode_status,
@@ -1505,7 +1814,9 @@ process_variant() {
 			validation_frame_rate: $frame_rate, validation_bit_depth: $bit_depth,
 			validation_hdr: $hdr, validation_audio_tracks: $audio,
 			validation_subtitle_tracks: $subtitle, validation_chapters: $chapters,
-			validation_failures: $failures, log_path: $log_path
+			validation_failures: $failures, log_path: $log_path,
+			strategy_id: $strategy_id, qsv_initialization: $qsv_initialization,
+			video_busy_nanoseconds: $video_busy_nanoseconds
 		}' >"$row_fixture"
 }
 
@@ -1527,23 +1838,27 @@ encoder_commands_for_mode() {
 	local -a settings
 	if [[ "$mode" == 'quality' ]]; then
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
-		settings=(20 22 24 26 28)
-	else
-		mapfile -t settings < <(jq -r '.chosenSettings[]?.globalQuality' "$samples_file" | sort -nu)
-	fi
-	for setting in "${settings[@]}"; do
-		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
-		commands="$(jq -c --arg command \
-			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 1 -extbrc 1 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
-			'. + [$command]' <<<"$commands")"
-	done
-	if [[ "$mode" == 'quality' ]]; then
+		read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
+	elif [[ "$mode" == 'x265' ]]; then
+		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		for ((setting = 10; setting <= 34; setting += 2)); do
 			commands="$(jq -c --arg command \
 				"ffmpeg -nostdin -v verbose -i <input> -map 0 -c:v libx265 -preset slow -crf $setting -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
 				'. + [$command]' <<<"$commands")"
 		done
+	else
+		if [[ "$mode" == 'finalist' ]]; then
+			mapfile -t settings < <(jq -r '.chosenSettings[]? | select(.state == "provisional") | .globalQuality' "$samples_file" | sort -nu)
+		else
+			mapfile -t settings < <(jq -r '.chosenSettings[]? | select(.state == "final") | .globalQuality' "$samples_file" | sort -nu)
+		fi
 	fi
+	for setting in "${settings[@]}"; do
+		contract_is_icq_setting "$samples_file" "$setting" || continue
+		commands="$(jq -c --arg command \
+			"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality $setting -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>" \
+			'. + [$command]' <<<"$commands")"
+	done
 	printf '%s\n' "$commands"
 }
 
@@ -1584,14 +1899,59 @@ encode_one_variant() {
 }
 
 append_comparison_once() {
-	local output="$1" comparison="$2" sample_id="$3" clip_id="$4" setting="$5" staged
+	local output="$1" comparison="$2" quality_run="$3" x265_run="$4" sample_id="$5"
+	local clip_id="$6" setting="$7" allowed_clips="$8" staged
 	staged="$output.$$.tmp"
 	rm -f -- "$staged"
+	jq -e -n --argjson row "$comparison" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg quality "$quality_run" --arg x265 "$x265_run" --arg sample "$sample_id" \
+		--arg clip "$clip_id" --argjson setting "$setting" --argjson clips "$allowed_clips" '
+		def bounded_crf:
+			type == "number" and floor == . and . >= 10 and . <= 34 and . % 2 == 0;
+		def valid_row:
+			type == "object" and
+			keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting",
+				"qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+			.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $x265 and
+			.sampleId == $sample and (.clipId as $value | $clips | index($value) != null) and
+			.qsvSetting == $setting and
+			if .status == "bracketed" then
+				(.lowerCrf | bounded_crf) and (.upperCrf | bounded_crf) and
+				(.matchedBitRate | type == "number" and . > 0) and
+				(.premiumPercent | type == "number")
+			elif .status == "unbracketed" then
+				.lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null
+			else false end;
+		($clips | type == "array" and length == 3 and all(.[]; type == "string")) and
+		($row | valid_row) and $row.clipId == $clip
+	' >/dev/null || return 65
 	if [[ -e "$output" || -L "$output" ]]; then
 		[[ -f "$output" && ! -L "$output" ]] || return 65
-		jq -e -s 'all(.[]; type == "object")' "$output" >/dev/null || return 65
-		jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" '
-			select(.sample_id != $sample or .clip_id != $clip or .qsv_setting != $setting)
+		jq -e -s --arg strategy "$CONTRACT_STRATEGY_ID" --arg quality "$quality_run" \
+			--arg x265 "$x265_run" --arg sample "$sample_id" --argjson setting "$setting" \
+			--argjson clips "$allowed_clips" '
+			def bounded_crf:
+				type == "number" and floor == . and . >= 10 and . <= 34 and . % 2 == 0;
+			def valid_row:
+				type == "object" and
+				keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting",
+					"qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+				.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $x265 and
+				.sampleId == $sample and (.clipId as $value | $clips | index($value) != null) and
+				.qsvSetting == $setting and
+				if .status == "bracketed" then
+					(.lowerCrf | bounded_crf) and (.upperCrf | bounded_crf) and
+					(.matchedBitRate | type == "number" and . > 0) and
+					(.premiumPercent | type == "number")
+				elif .status == "unbracketed" then
+					.lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null
+				else false end;
+			length as $count |
+			all(.[]; valid_row) and
+			([.[] | [.sampleId,.clipId,.qsvSetting] | @json] | unique | length) == $count
+		' "$output" >/dev/null || return 65
+		jq -c --arg sample "$sample_id" --arg clip "$clip_id" --argjson setting "$setting" '
+			select(.sampleId != $sample or .clipId != $clip or .qsvSetting != $setting)
 		' "$output" >"$staged" || {
 			rm -f -- "$staged"
 			return 65
@@ -1606,13 +1966,272 @@ append_comparison_once() {
 	mv -f -- "$staged" "$output"
 }
 
+rank_quality_candidates() {
+	local results="$1" candidate_samples="$2" run_id="$3"
+	local run_directory artifact staged rows expected settings expected_keys digest candidates
+	local probe_source probe_clip durable_status
+	if [[ ! -v CONTRACT_ICQ_SETTINGS ]]; then
+		contract_load "$candidate_samples" || return
+	fi
+	validate_run_id "$run_id" || return
+	ensure_results_file "$results" || return
+	[[ -f "$candidate_samples" && ! -L "$candidate_samples" ]] || return 66
+	run_directory="$(dirname "$results")"
+	[[ -d "$run_directory" && ! -L "$run_directory" ]] || return 66
+	[[ "$results" == "$benchmark_out/runs/$run_id/results.csv" ]] || return 65
+	artifact="$run_directory/quality-candidates.json"
+	[[ ! -e "$artifact" || (-f "$artifact" && ! -L "$artifact") ]] || return 65
+	rows="$(jq -R -s --arg header "$results_header" '
+		def lines_without_terminal_newline:
+			if length > 0 and .[-1] == "" then .[:-1] else . end;
+		(split("\n") | lines_without_terminal_newline) as $lines |
+		if ($lines | length) < 1 or $lines[0] != $header then error("invalid results CSV header")
+		elif any($lines[1:][]?; length == 0) then error("invalid empty results CSV row")
+		else [
+			$lines[1:][] | split(",") as $columns |
+			if ($columns | length) != 39 then error("invalid results CSV row") else {
+				run_id: $columns[0], panel: $columns[1], sample_id: $columns[2], cohort: $columns[3],
+				source_sha256: $columns[4], clip_id: $columns[5], encoder: $columns[6],
+				requested_setting: $columns[7], selected_rate_control: $columns[8], status: $columns[9],
+				attempt: $columns[10],
+				reduction_percent: $columns[13], vmaf_harmonic_mean: $columns[19],
+				vmaf_1pct_low: $columns[20], ssim: $columns[21], qsv_proof: $columns[23],
+				validation_codec: $columns[24], validation_duration: $columns[25],
+				validation_resolution: $columns[26], validation_frame_rate: $columns[27],
+				validation_bit_depth: $columns[28], validation_hdr: $columns[29],
+				validation_audio_tracks: $columns[30], validation_subtitle_tracks: $columns[31],
+				validation_chapters: $columns[32], validation_failures: $columns[33],
+				strategy_id: $columns[36], qsv_initialization: $columns[37],
+				video_busy_nanoseconds: $columns[38]
+			} end
+		] end
+	' "$results")" || return 65
+	expected="$(jq -e -c '
+		[.qualityPanel[]? |
+			select((.detectionOnly // false) != true and .cohort != "dolby-vision") |
+			select((.cohort == "avc" or .cohort == "vc1" or .cohort == "hdr10") and
+				(.id | type == "string" and length > 0) and (.clips | type == "object")) |
+			. as $sample | $sample.clips | keys[] |
+			{cohort: $sample.cohort, sample_id: $sample.id, source_sha256: $sample.sha256, clip_id: .}
+		]
+	' "$candidate_samples")" || return 65
+	settings="$(jq -n -c --arg settings "$CONTRACT_ICQ_SETTINGS" '$settings | split(" ") | map(tonumber)')" || return
+	probe_source="$(jq -e -r '.[0].source_sha256 | strings' <<<"$expected")" || return 65
+	probe_clip="$(jq -e -r '.[0].clip_id | strings' <<<"$expected")" || return 65
+	set +e
+	"$script_directory/runmeta.sh" completed "$run_id" "quality|$probe_source|$probe_clip|qsv|16" >/dev/null
+	durable_status=$?
+	set -e
+	[[ "$durable_status" == '0' || "$durable_status" == '1' ]] || return "$durable_status"
+	expected_keys="$(jq -r '[.[] | [.cohort, .sample_id, .source_sha256, .clip_id] | join("|")] | join("\u001c")' <<<"$expected")"
+	awk -F, -v run_id="$run_id" -v settings="$CONTRACT_ICQ_SETTINGS" -v expected="$expected_keys" '
+		BEGIN {
+			count = split(expected, values, "\034")
+			for (item = 1; item <= count; item++) known[values[item]] = 1
+		}
+		NR > 1 {
+			key = $4 "|" $3 "|" $5 "|" $6
+			if ($1 != run_id || $2 != "quality" || $7 != "qsv" || $8 !~ /^[0-9]+$/ ||
+				index(" " settings " ", " " $8 " ") == 0 ||
+				!(key in known)) exit 65
+		}
+	' "$results" || {
+		echo 'invalid quality results row' >&2
+		return 65
+	}
+	digest="$(sha256sum "$results" | awk '{print $1}')"
+	[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 65
+	candidates="$(jq -n -c \
+		--arg run_id "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg digest "sha256:$digest" \
+		--argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--slurpfile rows_input <(printf '%s\n' "$rows") \
+		--slurpfile expected_input <(printf '%s\n' "$expected") \
+		--slurpfile settings_input <(printf '%s\n' "$settings") '
+		($rows_input[0]) as $rows |
+		($expected_input[0]) as $expected |
+		($settings_input[0]) as $settings |
+		def numeric_at_least($minimum):
+			(tonumber?) as $number |
+			$number != null and ($number == $number) and ($number != infinite) and $number >= $minimum;
+		def numeric: numeric_at_least(-infinite);
+		def median:
+			sort as $values | ($values | length) as $count |
+			if ($count % 2) == 1 then $values[($count / 2 | floor)]
+			else (($values[($count / 2 - 1 | floor)] + $values[($count / 2 | floor)]) / 2)
+			end;
+		def objective_passes:
+			.status == "passed" and .selected_rate_control == "ICQ" and
+			.qsv_proof == "passed" and .qsv_initialization == "passed" and
+			(.video_busy_nanoseconds | test("^[0-9]+$") and tonumber > 0) and
+			(.validation_codec == "passed" and .validation_duration == "passed" and
+			 .validation_resolution == "passed" and .validation_frame_rate == "passed" and
+			 .validation_bit_depth == "passed" and .validation_hdr == "passed" and
+			 .validation_audio_tracks == "passed" and .validation_subtitle_tracks == "passed" and
+			 .validation_chapters == "passed") and .validation_failures == "" and
+			(.vmaf_harmonic_mean | numeric_at_least(95)) and
+			(.vmaf_1pct_low | numeric_at_least(90)) and
+			(.reduction_percent | numeric) and .strategy_id == $strategy;
+		def expected_keys: map([.sample_id, .clip_id]) | sort;
+		{
+			schemaVersion: 1, strategyId: $strategy, qualityRunId: $run_id,
+			resultsSchemaVersion: $schema, resultsSha256: $digest,
+			cohorts: (reduce ["avc", "vc1", "hdr10"][] as $cohort ({};
+				($expected | map(select(.cohort == $cohort))) as $cohort_expected |
+				([ $settings[] as $setting |
+					([ $rows[] | select(
+						.run_id == $run_id and .panel == "quality" and .cohort == $cohort and
+						.encoder == "qsv" and .requested_setting == ($setting | tostring)
+					)] ) as $group |
+					select(($cohort_expected | length) > 0 and
+						($group | length) == ($cohort_expected | length) and
+						($group | map([.sample_id, .clip_id]) | sort) == ($cohort_expected | expected_keys) and
+						($group | all(objective_passes))) |
+					{globalQuality: $setting, medianReductionPercent: ($group | map(.reduction_percent | tonumber) | median)}
+				] | sort_by(-.medianReductionPercent, .globalQuality)) as $eligible |
+				.[$cohort] = if ($eligible | length) > 0 then {
+					status: "eligible", expectedClipCount: ($cohort_expected | length), candidates: $eligible
+				} else {
+					status: "no-go", expectedClipCount: ($cohort_expected | length), candidates: [],
+					reason: "no-objective-candidate"
+				} end
+			))
+		}
+	')" || return 65
+	staged="$(mktemp "$run_directory/.quality-candidates.XXXXXX")" || return
+	if ! jq -e . <<<"$candidates" >"$staged"; then
+		rm -f -- "$staged"
+		return 65
+	fi
+	mv -f -- "$staged" "$artifact"
+}
+
+prepare_chosen_upstream() {
+	local cohort="$1" required_state="$2" record quality_run quality_directory manifest results candidates
+	local actual_results_digest actual_candidates_digest actual_manifest_digest expected_header upstream selected
+	local manifest_identity created_at identity_suffix
+	local out_physical runs_physical quality_physical
+	record="$(contract_chosen_record "$samples_file" "$cohort" "$required_state")" || {
+		echo "chosen setting for $cohort is not authorized for state: $required_state" >&2
+		return 65
+	}
+	quality_run="$(jq -r '.qualityRunId' <<<"$record")"
+	quality_directory="$benchmark_out/runs/$quality_run"
+	manifest="$quality_directory/manifest.json"
+	results="$quality_directory/results.csv"
+	candidates="$quality_directory/quality-candidates.json"
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" &&
+		-d "$benchmark_out/runs" && ! -L "$benchmark_out/runs" &&
+		-d "$quality_directory" && ! -L "$quality_directory" &&
+		-f "$manifest" && ! -L "$manifest" && -f "$results" && ! -L "$results" &&
+		-f "$candidates" && ! -L "$candidates" ]] || {
+		echo "chosen setting upstream evidence is unavailable for cohort: $cohort" >&2
+		return 66
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	runs_physical="$(cd -P "$benchmark_out/runs" && pwd)"
+	quality_physical="$(cd -P "$quality_directory" && pwd)"
+	[[ "$runs_physical" == "$out_physical/runs" && "$quality_physical" == "$runs_physical/$quality_run" ]] || {
+		echo "chosen setting upstream evidence escapes the output hierarchy for cohort: $cohort" >&2
+		return 65
+	}
+	manifest_identity="$(jq -e -c 'if type == "object" and has("createdAt") then del(.createdAt)
+		else error("invalid quality manifest") end' "$manifest")" || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	jq -e '.mode == "quality"' <<<"$manifest_identity" >/dev/null || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	manifest_identity="$(contract_normalize_run_identity "$manifest_identity" quality)" || {
+		echo "chosen setting quality manifest identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	created_at="$(jq -e -r '.createdAt | strings' "$manifest")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || {
+		echo "chosen setting quality manifest timestamp is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	[[ "$created_at" == "${quality_run%-*}" ]] || {
+		echo "chosen setting quality manifest timestamp does not match run for cohort: $cohort" >&2
+		return 65
+	}
+	identity_suffix="$(printf '%s\n' "$manifest_identity" | sha256sum | awk '{print substr($1, 1, 8)}')"
+	[[ "$identity_suffix" == "${quality_run##*-}" ]] || {
+		echo "chosen setting quality manifest identity does not match run for cohort: $cohort" >&2
+		return 65
+	}
+	IFS= read -r expected_header <"$results" || true
+	[[ "$expected_header" == "$results_header" ]] || {
+		echo "chosen setting quality results schema is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	awk -F, -v run="$quality_run" -v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 {
+			rows += 1
+			if (NF != 39 || $1 != run || $2 != "quality" || $37 != strategy) exit 65
+		}
+		END {if (rows < 1) exit 65}
+	' "$results" || {
+		echo "chosen setting quality results identity is invalid for cohort: $cohort" >&2
+		return 65
+	}
+	actual_results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
+	actual_candidates_digest="sha256:$(sha256sum "$candidates" | awk '{print $1}')"
+	actual_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
+	[[ "$actual_results_digest" == "$(jq -r '.qualityResultsSha256' <<<"$record")" &&
+	"$actual_candidates_digest" == "$(jq -r '.candidateEvidenceSha256' <<<"$record")" ]] || {
+		echo "chosen setting upstream digest is stale for cohort: $cohort" >&2
+		return 65
+	}
+	jq -e --arg cohort "$cohort" --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg digest "$actual_results_digest" --argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--argjson record "$record" '
+		.schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+		.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
+		(.cohorts | type == "object") and
+		(.cohorts[$cohort] | type == "object" and .status == "eligible" and
+			(.candidates | type == "array" and length >= 1 and length <= 8 and
+				all(.[];
+					(type == "object" and keys == ["globalQuality","medianReductionPercent"] and
+					 (.globalQuality | type == "number" and floor == .) and
+					 (.globalQuality as $value | [16,18,20,22,24,26,28,30] | index($value) != null) and
+					 (.medianReductionPercent | type == "number"))) and
+				([.[].globalQuality] | unique | length) == length)) and
+		(.cohorts[$cohort].candidates | map(.globalQuality)) as $ranked |
+		($record.rejectedSettings | map(.globalQuality)) as $rejected |
+		$rejected == $ranked[0:($rejected | length)] and
+		if $record.state == "rejected" then
+			($rejected | length) == ($ranked | length) and $record.globalQuality == $ranked[-1]
+		else
+			($rejected | length) < ($ranked | length) and
+			$record.globalQuality == $ranked[($rejected | length)]
+		end
+	' "$candidates" >/dev/null || {
+		echo "chosen setting rejected history is not the ranked candidate prefix for cohort: $cohort" >&2
+		return 65
+	}
+	upstream="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$record" \
+		--arg manifest "$actual_manifest_digest" --arg results "$actual_results_digest" \
+		--arg candidates "$actual_candidates_digest" '{
+			cohort:$cohort, chosenSetting:$chosen, qualityManifestSha256:$manifest,
+			qualityResultsSha256:$results, candidateEvidenceSha256:$candidates
+		}')"
+	selected="$(jq -n -c --arg cohort "$cohort" --argjson chosen "$record" \
+		'[{cohort:$cohort,globalQuality:$chosen.globalQuality,qualityRunId:$chosen.qualityRunId}]')"
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$upstream"
+	BENCHMARK_SELECTED_SETTINGS_JSON="$selected"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON
+}
+
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
-	local source sha detection x265_reference title_probe_file clip_id timestamp clip
-	local x265_points qsv_points setting attempted_crfs
-	local comparison_fixture comparison decision target next_crf
+	local source sha detection title_probe_file clip_id timestamp clip
+	local setting rank_status
 	local panel_samples
-	local -a qsv_settings=(20 22 24 26 28) x265_settings=(18 20 22 24)
+	local -a qsv_settings
+	read -r -a qsv_settings <<<"$CONTRACT_ICQ_SETTINGS"
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
@@ -1632,7 +2251,6 @@ quality_mode() {
 		source="$(jq -r '.path' <<<"$sample")"
 		sha="$(jq -r '.sha256' <<<"$sample")"
 		detection="$(jq -r '.detectionOnly // false' <<<"$sample")"
-		x265_reference="$(jq -r '.x265Reference // false' <<<"$sample")"
 		if [[ "$detection" == 'true' || "$cohort" == 'dolby-vision' ]]; then
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
@@ -1650,87 +2268,265 @@ quality_mode() {
 					qsv "$setting" "$clip" clip \
 					"$run_directory/stills/$sample_id-$clip_id-qsv-$setting" record "$title_probe_file" >/dev/null
 			done
-			if [[ "$x265_reference" == 'true' ]]; then
-				for setting in "${x265_settings[@]}"; do
-					if row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$setting"; then continue; fi
-					encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-						x265 "$setting" "$clip" clip \
-						"$run_directory/stills/$sample_id-$clip_id-x265-$setting" record "$title_probe_file" >/dev/null
-				done
-				qsv_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
-				NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "qsv" && $10 == "passed" {
-					printf "%s\t%s\t%s\n", $8, $20, $16
-				}
-			' "$run_directory/results.csv")"
-				for target in \
-					"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 > value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")" \
-					"$(awk -F$'\t' 'NF == 3 { if (!seen || $2 < value) value = $2; seen = 1 } END { if (seen) print value }' <<<"$qsv_points")"; do
-					[[ -n "$target" ]] || continue
-					while :; do
-						x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
-						NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" && $10 == "passed" {
-							printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
-						}
-					' "$run_directory/results.csv")"
-						attempted_crfs="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
-						NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" { print $8 }
-					' "$run_directory/results.csv" | sort -nu | jq -R -s -c 'split("\n") | map(select(length > 0) | tonumber)')"
-						comparison_fixture="$run_scratch/next-comparison.json"
-						jq -n -c \
-							--argjson points "$(jq -s . <<<"$x265_points")" \
-							--argjson attempted "$attempted_crfs" \
-							--argjson qsv_vmaf "$target" \
-							'{points: $points, attemptedCrfs: $attempted, qsvVmaf: $qsv_vmaf, qsvBitRate: 1}' >"$comparison_fixture"
-						decision="$(x265_next "$comparison_fixture")"
-						[[ "$(jq -r '.status' <<<"$decision")" == 'extend' ]] || break
-						next_crf="$(jq -r '.next_crf' <<<"$decision")"
-						if ! row_is_complete "$run_id" quality "$sha" "$clip_id" x265 "$next_crf"; then
-							encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-								x265 "$next_crf" "$clip" clip \
-								"$run_directory/stills/$sample_id-$clip_id-x265-$next_crf" record "$title_probe_file" >/dev/null
-						fi
-					done
-				done
-				x265_points="$(awk -F, -v sha="$sha" -v clip="$clip_id" '
-				NR > 1 && $2 == "quality" && $5 == sha && $6 == clip && $7 == "x265" && $10 == "passed" {
-					printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
-				}
-			' "$run_directory/results.csv")"
-				while IFS=$'\t' read -r setting qsv_vmaf qsv_rate; do
-					[[ -n "$setting" ]] || continue
-					comparison_fixture="$run_scratch/comparison.json"
-					jq -n -c \
-						--argjson points "$(jq -s . <<<"$x265_points")" \
-						--argjson qsv_vmaf "$qsv_vmaf" --argjson qsv_rate "$qsv_rate" \
-						'{points: $points, qsvVmaf: $qsv_vmaf, qsvBitRate: $qsv_rate}' >"$comparison_fixture"
-					comparison="$(x265_match "$comparison_fixture")"
-					comparison="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg setting "$setting" \
-						'. + {sample_id: $sample, clip_id: $clip, qsv_setting: $setting}' \
-						<<<"$comparison")"
-					append_comparison_once "$run_directory/x265-comparisons.jsonl" "$comparison" \
-						"$sample_id" "$clip_id" "$setting"
-				done <<<"$qsv_points"
-			fi
 			rm -f -- "$clip"
 		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
 	done < <(jq -c '.qualityPanel[]?' "$samples_file")
+	rank_quality_candidates "$run_directory/results.csv" "$samples_file" "$run_id" || rank_status=$?
 	rm -rf -- "$run_scratch"
-	printf '%s\n' "$run_id"
+	((${rank_status:-0} == 0)) || return "$rank_status"
+	if [[ -n "${BENCHMARK_DISPATCH_CORRELATION_ID:-}" ]]; then
+		jq -n -c --arg dispatch "$BENCHMARK_DISPATCH_CORRELATION_ID" --arg runtime "$run_id" \
+			--arg strategy "$CONTRACT_STRATEGY_ID" '{
+				schemaVersion:1, strategyId:$strategy, status:"complete",
+				dispatchId:$dispatch, runtimeRunId:$runtime,
+				artifactLocation:("/out/runs/" + $runtime)
+			}'
+	else
+		printf '%s\n' "$run_id"
+	fi
 }
+
+quality_target_for_clip() {
+	local quality_run="$1" sample_id="$2" cohort="$3" source_sha="$4" clip_id="$5" setting="$6"
+	local results="$benchmark_out/runs/$quality_run/results.csv"
+	awk -F, -v run="$quality_run" -v sample="$sample_id" -v cohort="$cohort" -v sha="$source_sha" \
+		-v clip="$clip_id" -v setting="$setting" -v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 && NF == 39 && $1 == run && $2 == "quality" && $3 == sample &&
+			$4 == cohort && $5 == sha && $6 == clip && $7 == "qsv" && $8 == setting &&
+			$9 == "ICQ" && $10 == "passed" && $16 ~ /^[0-9]+([.][0-9]+)?$/ && $16 + 0 > 0 &&
+			$20 ~ /^[0-9]+([.][0-9]+)?$/ && $24 == "passed" &&
+			$25 == "passed" && $26 == "passed" && $27 == "passed" && $28 == "passed" &&
+			$29 == "passed" && $30 == "passed" && $31 == "passed" && $32 == "passed" &&
+			$33 == "passed" && $34 == "" && $37 == strategy && $38 == "passed" &&
+			$39 ~ /^[0-9]+$/ && $39 + 0 > 0 {
+			count += 1
+			vmaf = $20
+			bit_rate = $16
+		}
+		END {
+			if (count != 1) exit 65
+			printf "{\"qsvVmaf\":%s,\"qsvBitRate\":%s}\n", vmaf, bit_rate
+		}
+	' "$results" || {
+		echo "selected ICQ quality result is missing or invalid: $sample_id/$clip_id" >&2
+		return 65
+	}
+}
+
+x265_curve_fixture() {
+	local results="$1" run_id="$2" sample_id="$3" source_sha="$4" clip_id="$5" target="$6"
+	local points attempted
+	points="$(awk -F, -v run="$run_id" -v sample="$sample_id" -v sha="$source_sha" -v clip="$clip_id" \
+		-v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 && NF == 39 && $1 == run && $2 == "x265" && $3 == sample && $5 == sha && $6 == clip &&
+			$7 == "x265" && $8 ~ /^[0-9]+$/ && $8 >= 10 && $8 <= 34 && $8 % 2 == 0 &&
+			$9 == "CRF" && $10 == "passed" && $16 ~ /^[0-9]+([.][0-9]+)?$/ && $16 + 0 > 0 &&
+			$20 ~ /^[0-9]+([.][0-9]+)?$/ && $21 ~ /^[0-9]+([.][0-9]+)?$/ && $22 == "" && $23 == "" &&
+			$24 == "not-applicable" && $25 == "passed" && $26 == "passed" && $27 == "passed" &&
+			$28 == "passed" && $29 == "passed" && $30 == "passed" && $31 == "passed" &&
+			$32 == "passed" && $33 == "passed" && $34 == "" && $36 == "discarded" && $37 == strategy &&
+			$38 == "not-applicable" && $39 == "0" {
+			printf "{\"crf\":%s,\"vmaf\":%s,\"bitRate\":%s}\n", $8, $20, $16
+		}
+	' "$results" | jq -s -c '.')" || return
+	attempted="$(awk -F, -v run="$run_id" -v sample="$sample_id" -v sha="$source_sha" -v clip="$clip_id" \
+		-v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 && NF == 39 && $1 == run && $2 == "x265" && $3 == sample && $5 == sha && $6 == clip &&
+			$7 == "x265" && $8 ~ /^[0-9]+$/ && $8 >= 10 && $8 <= 34 && $8 % 2 == 0 &&
+			$9 == "CRF" && $37 == strategy && $38 == "not-applicable" && $39 == "0" {print $8}
+	' "$results" | sort -nu | jq -R -s -c 'split("\n") | map(select(length > 0) | tonumber)')" || return
+	jq -n -c --argjson target "$target" --argjson points "$points" --argjson attempted "$attempted" \
+		'$target + {points:$points,attemptedCrfs:$attempted}'
+}
+
+x265_mode() (
+	local requested_run_id="$1" requested_sample_id="$2" sample sample_count cohort source sha setting
+	local quality_run panel_samples run_id run_directory run_scratch results comparisons title_probe_file
+	local clip_id timestamp clip crf next_json action target curve curve_file match comparison completed_status allowed_clips
+	local -a initial_crfs
+	trap 'if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
+	validate_run_id "$requested_run_id" || return
+	validate_sample_id "$requested_sample_id" || return
+	case "$requested_sample_id" in
+	avc-grain-memento | hdr10-grain-goodfellas) ;;
+	*)
+		echo "sample is not an x265 reference: $requested_sample_id" >&2
+		return 65
+		;;
+	esac
+	sample="$(SAMPLE_ID="$requested_sample_id" jq -c \
+		'.qualityPanel[]? | select(.id == env.SAMPLE_ID and .x265Reference == true and
+			(.detectionOnly // false) == false and (.cohort == "avc" or .cohort == "hdr10"))' \
+		"$samples_file")"
+	sample_count="$(wc -l <<<"$sample" | tr -d ' ')"
+	[[ -n "$sample" && "$sample_count" == '1' ]] || {
+		echo "sample is not an x265 reference: $requested_sample_id" >&2
+		return 65
+	}
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	prepare_chosen_upstream "$cohort" final || return
+	setting="$(jq -r '.chosenSetting.globalQuality' <<<"$BENCHMARK_UPSTREAM_IDENTITY_JSON")"
+	quality_run="$(jq -r '.chosenSetting.qualityRunId' <<<"$BENCHMARK_UPSTREAM_IDENTITY_JSON")"
+	panel_samples="$(jq -n -c --argjson sample "$sample" '[$sample]')"
+	runtime_pre_encode_gate "$panel_samples" cpu || return
+	BENCHMARK_EXECUTION_CLASS=cpu
+	BENCHMARK_X265_SAMPLE_ID="$requested_sample_id"
+	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode x265)"
+	export BENCHMARK_EXECUTION_CLASS BENCHMARK_X265_SAMPLE_ID BENCHMARK_ENCODER_COMMANDS_JSON
+	run_id="$("$script_directory/runmeta.sh" create x265 "$requested_run_id")" || return
+	run_directory="$benchmark_out/runs/$run_id"
+	run_scratch="$scratch_root/$run_id"
+	results="$run_directory/results.csv"
+	comparisons="$run_directory/x265-comparisons.jsonl"
+	mkdir -p "$run_directory/logs" "$run_scratch"
+	ensure_results_file "$results"
+	source="$(jq -r '.path' <<<"$sample")"
+	sha="$(jq -r '.sha256' <<<"$sample")"
+	allowed_clips="$(jq -c '.clips | keys' <<<"$sample")" || return
+	title_probe_file="$run_directory/logs/$requested_sample_id-title-source-probe.json"
+	if ! probe_media title "$source" >"$title_probe_file" 2>/dev/null; then
+		printf '%s\n' '{}' >"$title_probe_file"
+	fi
+	mapfile -t initial_crfs < <(jq -r '.strategy.x265.initialCrfs[]' "$samples_file")
+	while IFS=$'\t' read -r clip_id timestamp; do
+		target="$(quality_target_for_clip "$quality_run" "$requested_sample_id" "$cohort" "$sha" "$clip_id" "$setting")" || return
+		clip="$run_scratch/$requested_sample_id-$clip_id-source.mkv"
+		curve_file="$run_scratch/$requested_sample_id-$clip_id-curve.json"
+		ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip"
+		for crf in "${initial_crfs[@]}"; do
+			completed_status=0
+			row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf" || completed_status=$?
+			case "$completed_status" in
+			0) continue ;;
+			1)
+				encode_one_variant "$run_id" x265 "$requested_sample_id" "$cohort" "$sha" "$clip_id" \
+					x265 "$crf" "$clip" clip '' record "$title_probe_file" >/dev/null
+				;;
+			*) return "$completed_status" ;;
+			esac
+		done
+		while :; do
+			curve="$(x265_curve_fixture "$results" "$run_id" "$requested_sample_id" "$sha" "$clip_id" "$target")" || return
+			printf '%s\n' "$curve" >"$curve_file"
+			next_json="$(x265_next "$curve_file")" || return
+			action="$(jq -r '.status' <<<"$next_json")"
+			[[ "$action" == 'extend' ]] || break
+			crf="$(jq -r '.next_crf' <<<"$next_json")"
+			completed_status=0
+			row_is_complete "$run_id" x265 "$sha" "$clip_id" x265 "$crf" || completed_status=$?
+			if ((completed_status == 1)); then
+				encode_one_variant "$run_id" x265 "$requested_sample_id" "$cohort" "$sha" "$clip_id" \
+					x265 "$crf" "$clip" clip '' record "$title_probe_file" >/dev/null
+			elif ((completed_status != 0)); then return "$completed_status"; fi
+		done
+		curve="$(x265_curve_fixture "$results" "$run_id" "$requested_sample_id" "$sha" "$clip_id" "$target")" || return
+		printf '%s\n' "$curve" >"$curve_file"
+		match="$(x265_match "$curve_file")" || return
+		comparison="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg quality "$quality_run" \
+			--arg x265 "$run_id" --arg sample "$requested_sample_id" --arg clip "$clip_id" \
+			--argjson setting "$setting" --argjson matched "$match" '{
+				strategyId:$strategy,qualityRunId:$quality,x265RunId:$x265,sampleId:$sample,
+				clipId:$clip,qsvSetting:$setting,status:$matched.status,
+				lowerCrf:($matched.lower_crf // null),upperCrf:($matched.upper_crf // null),
+				matchedBitRate:($matched.matched_bit_rate // null),premiumPercent:($matched.premium_percent // null)
+			}')" || return
+		append_comparison_once "$comparisons" "$comparison" "$quality_run" "$run_id" \
+			"$requested_sample_id" "$clip_id" "$setting" "$allowed_clips" || return
+		rm -f -- "$clip" "$curve_file"
+	done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
+	printf '%s\n' "$run_id"
+)
 
 savings_mode() {
 	local requested_run_id="$1" run_id run_directory run_scratch sample sample_id cohort
 	local source sha setting packets probe_file detection prepared row_fixture output
 	local failed_row inventory_status
-	local panel_samples
+	local panel_samples final_cohorts panel_cohorts cohort_name selected_record selected_state
+	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' final_records='{}' artifact_staged
+	final_cohorts='[]'
+	panel_cohorts="$(jq -e -c '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique' "$samples_file")" || return 65
+	for cohort_name in avc vc1 hdr10; do
+		selected_state=''
+		if jq -e --arg cohort "$cohort_name" '
+			.chosenSettings[$cohort] | type == "object" and .state == "final"
+		' "$samples_file" >/dev/null; then
+			selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" final)" || {
+				echo "claimed final chosen setting is malformed for cohort: $cohort_name" >&2
+				return 65
+			}
+			[[ "$(jq -r --arg cohort "$cohort_name" 'index($cohort) != null' <<<"$panel_cohorts")" == 'true' ]] || {
+				echo "savings panel omits final cohort: $cohort_name" >&2
+				return 65
+			}
+			selected_state='final'
+		else
+			selected_record="$(contract_chosen_record "$samples_file" "$cohort_name" 2>/dev/null || true)"
+		fi
+		if [[ -z "$selected_record" ]]; then
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"no-final-setting"}}' \
+				<<<"$cohort_applicability")"
+			continue
+		fi
+		[[ "${selected_state:-}" == 'final' ]] || selected_state="$(jq -r '.state' <<<"$selected_record")"
+		case "$selected_state" in
+		final)
+			final_cohorts="$(jq -c --arg cohort "$cohort_name" '. + [$cohort]' <<<"$final_cohorts")"
+			final_records="$(jq -c --arg cohort "$cohort_name" --argjson record "$selected_record" \
+				'. + {($cohort):$record}' <<<"$final_records")"
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				--argjson quality "$(jq '.globalQuality' <<<"$selected_record")" \
+				'. + {($cohort):{status:"measured",globalQuality:$quality}}' \
+				<<<"$cohort_applicability")"
+			;;
+		rejected)
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"visual-no-go"}}' \
+				<<<"$cohort_applicability")"
+			;;
+		provisional)
+			cohort_applicability="$(jq -c --arg cohort "$cohort_name" \
+				'. + {($cohort):{status:"not-applicable",reason:"visual-pending"}}' \
+				<<<"$cohort_applicability")"
+			;;
+		*)
+			echo "chosen setting has an invalid state for cohort: $cohort_name" >&2
+			return 65
+			;;
+		esac
+	done
+	[[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]] || {
+		echo 'no final chosen setting authorizes savings' >&2
+		return 65
+	}
+	while IFS= read -r cohort_name; do
+		selected_record="$(jq -e -c --arg cohort "$cohort_name" '.[$cohort]' <<<"$final_records")" || return 65
+		prepare_chosen_upstream "$cohort_name" final || return
+		upstream_map="$(jq -c --arg cohort "$cohort_name" --argjson identity "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+			'. + {($cohort):$identity}' <<<"$upstream_map")"
+		selected_settings="$(jq -c --argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" '. + $selected' \
+			<<<"$selected_settings")"
+	done < <(jq -r '.[]' <<<"$final_cohorts")
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n -c --argjson chosen "$upstream_map" '{chosenSettings:$chosen}')"
+	BENCHMARK_SELECTED_SETTINGS_JSON="$selected_settings"
+	BENCHMARK_SAVINGS_COHORTS_JSON="$final_cohorts"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON BENCHMARK_SELECTED_SETTINGS_JSON BENCHMARK_SAVINGS_COHORTS_JSON
 	assigned_node_capability_gate || return
-	panel_samples="$(jq -c '[.savingsPanel[]?]' "$samples_file")"
+	panel_samples="$(jq -c --argjson cohorts "$final_cohorts" '[.savingsPanel[]? | select(.cohort as $cohort | ($cohorts | index($cohort)) != null)]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode savings)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create savings "$requested_run_id")"
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
+	artifact_staged="$(mktemp "$run_directory/.savings-cohorts.XXXXXX")" || return
+	if ! jq -n -S -c --arg run_id "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson cohorts "$cohort_applicability" \
+		'{schemaVersion:1,strategyId:$strategy,runId:$run_id,cohorts:$cohorts}' >"$artifact_staged"; then
+		rm -f -- "$artifact_staged"
+		return 65
+	fi
+	mv -f -- "$artifact_staged" "$run_directory/savings-cohorts.json"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	while IFS= read -r sample; do
 		sample_id="$(jq -r '.id' <<<"$sample")"
@@ -1742,8 +2538,8 @@ savings_mode() {
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
-		setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-		[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || continue
+		setting="$(contract_chosen_record "$samples_file" "$cohort" final | jq -r '.globalQuality // ""')" || continue
+		contract_is_icq_setting "$samples_file" "$setting" || continue
 		if row_is_complete "$run_id" savings "$sha" full qsv "$setting"; then continue; fi
 		prepared="$(encode_one_variant "$run_id" savings "$sample_id" "$cohort" "$sha" full \
 			qsv "$setting" "$source" full '' defer)"
@@ -1781,7 +2577,8 @@ savings_mode() {
 
 finalist_mode() {
 	local requested_run_id="$1" requested_sample_id="$2" run_id run_directory run_scratch
-	local sample sample_id cohort source sha setting expected_confirmation
+	local sample sample_id cohort source sha setting expected_confirmation expected_finalist chosen
+	validate_run_id "$requested_run_id" || return
 	validate_sample_id "$requested_sample_id" || return
 	expected_confirmation="copy:encode-benchmark:$requested_run_id:$requested_sample_id"
 	[[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -1789,11 +2586,26 @@ finalist_mode() {
 		return 64
 	}
 	sample="$(SAMPLE_ID="$requested_sample_id" jq -c \
-		'.qualityPanel[]?, .savingsPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file" | head -n 1)"
-	[[ -n "$sample" ]] || {
-		echo "sample not found: $requested_sample_id" >&2
+		'.qualityPanel[]? | select(.id == env.SAMPLE_ID)' "$samples_file")"
+	[[ -n "$sample" && "$(wc -l <<<"$sample" | tr -d ' ')" == '1' ]] || {
+		echo "finalist sample not found or duplicated: $requested_sample_id" >&2
 		return 66
 	}
+	cohort="$(jq -r '.cohort' <<<"$sample")"
+	expected_finalist="$(contract_expected_finalist "$cohort")" || {
+		echo "no finalist title for cohort: $cohort" >&2
+		return 65
+	}
+	[[ "$requested_sample_id" == "$expected_finalist" ]] || {
+		echo "finalist sample does not match cohort: $cohort" >&2
+		return 65
+	}
+	chosen="$(contract_chosen_record "$samples_file" "$cohort" provisional)" || {
+		echo "chosen setting for $cohort is not provisional" >&2
+		return 65
+	}
+	prepare_chosen_upstream "$cohort" provisional || return
+	setting="$(jq -r '.globalQuality' <<<"$chosen")"
 	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode finalist)"
@@ -1803,18 +2615,12 @@ finalist_mode() {
 	run_scratch="$scratch_root/$run_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	sample_id="$(jq -r '.id' <<<"$sample")"
-	cohort="$(jq -r '.cohort' <<<"$sample")"
 	[[ "$cohort" != 'dolby-vision' && "$(jq -r '.detectionOnly // false' <<<"$sample")" != 'true' ]] || {
 		echo 'Dolby Vision samples cannot be encoded' >&2
 		return 65
 	}
 	source="$(jq -r '.path' <<<"$sample")"
 	sha="$(jq -r '.sha256' <<<"$sample")"
-	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
-		echo "no committed setting for cohort: $cohort" >&2
-		return 65
-	}
 	if ! row_is_complete "$run_id" finalist "$sha" full qsv "$setting"; then
 		encode_one_variant "$run_id" finalist "$sample_id" "$cohort" "$sha" full \
 			qsv "$setting" "$source" full '' >/dev/null
@@ -1823,9 +2629,54 @@ finalist_mode() {
 	printf '%s\n' "$run_id"
 }
 
+validate_contention_resume_fragments() {
+	local run_directory="$1" run_id="$2" expected_case="$3" expected_worker="$4"
+	local expected_sample="$5" expected_cohort="$6" expected_setting="$7"
+	local fragment header row fields fragment_case fragment_worker fragment_attempt
+	for fragment in "$run_directory"/contention-*.csv; do
+		[[ -e "$fragment" || -L "$fragment" ]] || continue
+		[[ -f "$fragment" && ! -L "$fragment" ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		header="$(head -n 1 "$fragment")"
+		[[ "$header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
+			"$(wc -l <"$fragment" | tr -d ' ')" == '2' ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		row="$(tail -n 1 "$fragment")"
+		fields="$(jq -R -e -c '
+			split(",") | select(length == 13 and all(.[]; startswith("\"") and endswith("\""))) |
+			map(.[1:-1])
+		' <<<"$row")" || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		jq -e --arg run "$run_id" --arg case "$expected_case" --arg worker "$expected_worker" \
+			--arg sample "$expected_sample" --arg cohort "$expected_cohort" --arg setting "$expected_setting" '
+			.[0] == $run and .[1] == $case and .[2] == $worker and .[3] == $sample and
+			.[4] == $cohort and .[5] == $setting and (.[6] | test("^(passed|failed|invalid)$")) and
+			(.[7] | test("^[1-9][0-9]*$")) and (.[8] | test("^[0-9]+([.][0-9]+)?$")) and
+			(.[9] | test("^(passed|suspect)$")) and (.[10] | test("^[a-z0-9;-]*$")) and
+			.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
+		' <<<"$fields" >/dev/null || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+		fragment_case="$(jq -r '.[1]' <<<"$fields")"
+		fragment_worker="$(jq -r '.[2]' <<<"$fields")"
+		fragment_attempt="$(jq -r '.[7]' <<<"$fields")"
+		[[ "$(basename "$fragment")" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
+			echo 'invalid prior contention fragment' >&2
+			return 65
+		}
+	done
+}
+
 contention_mode() (
 	local requested_run_id="$1" contention_case="$2" worker_id="$3" requested_sample_id="$4"
-	local sample sample_id cohort setting run_id run_directory run_scratch attempt fragment staged
+	local sample sample_id cohort setting run_id run_directory run_scratch attempt fragment staged playback_count
 	local output encode_log busy_log row_fixture start end wall encode_status=0 status qsv failures resolution
 	trap 'rm -f -- "${output:-}" "${row_fixture:-}" "${staged:-}" 2>/dev/null || true
 		if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
@@ -1868,17 +2719,46 @@ contention_mode() (
 		echo "contention case $contention_case requires an eligible 1920x1080 non-DV quality sample" >&2
 		return 65
 	fi
-	setting="$(jq -r ".chosenSettings.\"$cohort\".globalQuality // \"\"" "$samples_file")"
-	[[ "$setting" =~ ^(20|22|24|26|28)$ ]] || {
-		echo "no committed setting for cohort: $cohort" >&2
+	[[ "${BENCHMARK_PLEX_CLIENT_DEVICE:-}" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || {
+		echo 'contention client device label is missing or invalid' >&2
 		return 65
 	}
+	[[ "${BENCHMARK_PLAYBACK_SAMPLE_ID:-}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || {
+		echo 'contention playback sample identity is missing or invalid' >&2
+		return 65
+	}
+	playback_count="$(PLAYBACK_SAMPLE_ID="$BENCHMARK_PLAYBACK_SAMPLE_ID" jq -r '[.qualityPanel[]? | select(
+		.id == env.PLAYBACK_SAMPLE_ID and .cohort == "hdr10" and .width == 3840 and .height == 2160 and
+		(.detectionOnly // false) == false
+	)] | length' "$samples_file")"
+	[[ "$playback_count" == '1' ]] || {
+		echo 'contention playback sample is not a committed 3840x2160 HDR10 non-DV quality title' >&2
+		return 65
+	}
+	setting="$(contract_chosen_record "$samples_file" "$cohort" final | jq -r '.globalQuality // ""')" || {
+		echo "no final setting for cohort: $cohort" >&2
+		return 65
+	}
+	contract_is_icq_setting "$samples_file" "$setting" || {
+		echo "no final setting for cohort: $cohort" >&2
+		return 65
+	}
+	prepare_chosen_upstream "$cohort" final || return
 	assigned_node_capability_gate || return
 	runtime_pre_encode_gate "$(jq -n -c --argjson sample "$sample" '[$sample]')" || return
+	# shellcheck disable=SC2030 # The exported worker identity is consumed by runmeta in this subshell.
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -c \
+		--arg client "$BENCHMARK_PLEX_CLIENT_DEVICE" \
+		--arg playback "$BENCHMARK_PLAYBACK_SAMPLE_ID" \
+		'. + {contention: {clientDevice: $client, playbackSampleId: $playback}}' \
+		<<<"$BENCHMARK_UPSTREAM_IDENTITY_JSON")"
+	export BENCHMARK_UPSTREAM_IDENTITY_JSON
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode contention)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	run_id="$("$script_directory/runmeta.sh" create "contention-$contention_case" "$requested_run_id")"
 	run_directory="$benchmark_out/runs/$run_id"
+	validate_contention_resume_fragments "$run_directory" "$run_id" "$contention_case" "$worker_id" \
+		"$sample_id" "$cohort" "$setting" || return
 	run_scratch="$scratch_root/$run_id/$worker_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
 	attempt=1
@@ -1908,13 +2788,14 @@ contention_mode() (
 	failures="$(jq -r '.validation_failures' "$row_fixture")"
 	staged="$(mktemp "$run_directory/.contention-$contention_case-$worker_id-attempt-$attempt.XXXXXX")"
 	{
-		printf '%s\n' 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition'
+		printf '%s\n' 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id'
 		jq -r \
 			--arg run_id "$run_id" --arg case "$contention_case" --arg worker "$worker_id" \
 			--arg sample "$sample_id" --arg cohort "$cohort" --arg setting "$setting" \
 			--arg status "$status" --arg attempt "$attempt" --arg wall "$wall" \
 			--arg qsv "$qsv" --arg failures "$failures" \
-			'[$run_id,$case,$worker,$sample,$cohort,$setting,$status,$attempt,$wall,$qsv,$failures,"discarded"] | @csv' \
+			--arg strategy "$CONTRACT_STRATEGY_ID" \
+			'[$run_id,$case,$worker,$sample,$cohort,$setting,$status,$attempt,$wall,$qsv,$failures,"discarded",$strategy] | @csv' \
 			<<<'{}'
 	} >"$staged"
 	mv -- "$staged" "$fragment"
@@ -1922,184 +2803,714 @@ contention_mode() (
 	printf '%s\n' "$run_id"
 )
 
+validate_contention_observations() {
+	local evidence="$1" result
+	[[ -f "$evidence" && ! -L "$evidence" ]] || return 66
+	result="$(jq -e -c '
+		def nas: . as $items | type == "array" and length == 180 and
+			all(range(0; 180); . as $i | $items[$i] | type == "object" and
+				.offsetSeconds == ($i * 5) and (.value | type == "number" and . >= 0));
+		def baseline: type == "object" and keys == ["bufferingCount","bufferingDurationSeconds","durationSeconds","nasThroughputMbps","playbackMode","runId","seekToResumeSeconds","startLatencySeconds"] and
+			(.runId | type == "string" and length > 0) and .durationSeconds == 900 and .playbackMode == "direct-play" and
+			(.startLatencySeconds | type == "number" and . >= 0) and
+			(.bufferingCount | type == "number" and floor == . and . >= 0) and
+			(.bufferingDurationSeconds | type == "number" and . >= 0) and
+			(.seekToResumeSeconds | type == "array" and length == 7 and all(.[]; type == "number" and . >= 0)) and
+			(.nasThroughputMbps | nas);
+		def expected_workers($case): if $case == "a" then ["worker-1"] else ["worker-1","worker-2"] end;
+		def case_ok: . as $item | type == "object" and
+			(.case | type == "string" and test("^[a-d]$")) and
+			(.playbackMode == (if .case == "c" then "forced-transcode" else "direct-play" end)) and
+			(.startLatencySeconds | type == "number" and . >= 0) and
+			(.bufferingCount | type == "number" and floor == . and . >= 0) and
+			(.bufferingDurationSeconds | type == "number" and . >= 0) and (.nasThroughputMbps | nas) and
+			(.workerFragments | type == "array" and length == (expected_workers($item.case) | length) and
+				all(.[]; type == "object" and keys == ["file","runId"] and
+					(.runId | type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
+					(.file | type == "string" and test("^contention-[a-d]-worker-[12]-attempt-[1-9][0-9]*[.]csv$"))) and
+				([.[] | (.runId + "|" + .file)] | unique | length) == length and
+				([.[].runId] | unique | length) == length and
+				all(.[]; .file | test("^contention-" + $item.case + "-worker-[12]-attempt-[1-9][0-9]*[.]csv$")) and
+				([.[] | .file | capture("^contention-[a-d]-(?<worker>worker-[12])-attempt-[1-9][0-9]*[.]csv$").worker] | sort) == expected_workers($item.case)) and
+			(if .case == "d" then (.seekToResumeSeconds | type == "array" and length == 7 and all(.[]; type == "number" and . >= 0))
+			 else (.seekToResumeSeconds | type == "array") end);
+		if type != "object" or keys != ["baselines","cases","clientDevice","playbackSampleId","runId","schemaVersion","strategyId"] or
+			.schemaVersion != 1 or .strategyId != "qsv-hevc-icq-v1" or
+			(.runId | type != "string" or test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$") | not) or
+			(.clientDevice | type != "string" or test("^[a-z0-9][a-z0-9._-]{0,62}$") | not) or
+			(.playbackSampleId | type != "string" or test("^[a-z0-9][a-z0-9._-]*$") | not) or
+			(.baselines | type != "array" or length != 3 or all(.[]; baseline) | not) or
+			(.cases | type != "array" or length == 0 or all(.[]; case_ok) | not) or
+			([.cases[].case] | unique | length != length)
+		then error("invalid contention evidence")
+		else . as $root |
+			([$root.baselines[].startLatencySeconds] | max) as $max_start |
+			([$root.baselines[].seekToResumeSeconds[]] | max) as $max_seek |
+			([ $root.cases[] | select(.case != "d" and .bufferingCount != 0) | "case \(.case) buffering count \(.bufferingCount) must be zero" ] +
+			 [ $root.cases[] | select(.case != "d" and .bufferingDurationSeconds != 0) | "case \(.case) buffering duration \(.bufferingDurationSeconds) must be zero" ] +
+			 [ $root.cases[] | select(.startLatencySeconds > ($max_start + 2)) | "case \(.case) start latency \(.startLatencySeconds) exceeds baseline maximum plus 2 seconds \($max_start + 2)" ] +
+			 [ $root.cases[] | select(.case == "d") | .seekToResumeSeconds | to_entries[] | select(.value > ($max_seek + 3)) | "case d seek \(.key + 1) latency \(.value) exceeds baseline maximum plus 3 seconds \($max_seek + 3)" ]) as $errors |
+			{status: (if ($errors | length) == 0 then "passed" else "failed" end),
+			 baselinesRetained: 3, baselineMaxStartLatencySeconds: $max_start,
+			 baselineMaxSeekToResumeSeconds: $max_seek, failedEvents: $errors}
+		end
+	' "$evidence")" || return 65
+	jq -c . <<<"$result"
+}
+
+validate_contention_worker_manifest() {
+	local manifest="$1" contention_case="$2" fragment_fields="$3" client_device="$4" playback_sample="$5"
+	local sample_id cohort setting expected_source manifest_identity created_at normalized node_name
+	local expected_chosen expected_upstream expected_selected
+	sample_id="$(jq -r '.[3]' <<<"$fragment_fields")"
+	cohort="$(jq -r '.[4]' <<<"$fragment_fields")"
+	setting="$(jq -r '.[5]' <<<"$fragment_fields")"
+	expected_source="$(SAMPLE_ID="$sample_id" COHORT="$cohort" jq -e -c '
+		[.qualityPanel[]? | select(.id == env.SAMPLE_ID and .cohort == env.COHORT)] |
+		if length == 1 then .[0] | {path,sha256:("sha256:" + .sha256),size:.sizeBytes} else error("missing contention source") end
+	' "$samples_file")" || return 65
+	jq -e --arg mode "contention-$contention_case" '.mode == $mode' "$manifest" >/dev/null || return 65
+	manifest_identity="$(jq -e -c '
+		if type == "object" and has("createdAt") then del(.createdAt)
+		else error("invalid contention worker manifest") end
+	' "$manifest")" || return 65
+	created_at="$(jq -e -r '.createdAt | strings' "$manifest")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || return 65
+	normalized="$(contract_normalize_run_identity "$manifest_identity" "contention-$contention_case")" || return 65
+	expected_chosen="$(findings_chosen_identity "$cohort")" || return 65
+	expected_upstream="$(jq -n -c --argjson chosen "$expected_chosen" --arg client "$client_device" \
+		--arg playback "$playback_sample" '
+		$chosen + {contention:{clientDevice:$client,playbackSampleId:$playback}}
+	')" || return 65
+	expected_selected="$(jq -n -c --arg cohort "$cohort" --argjson setting "$setting" \
+		--arg quality "$(jq -r '.chosenSetting.qualityRunId' <<<"$expected_chosen")" '
+		[{cohort:$cohort,globalQuality:$setting,qualityRunId:$quality}]
+	')" || return 65
+	jq -e --arg client "$client_device" --argjson source "$expected_source" \
+		--argjson upstream "$expected_upstream" --argjson selected "$expected_selected" '
+		.clientDevice == $client and
+		.upstream == $upstream and .selectedSettings == $selected and
+		.sources == [$source] and
+		(.node.name | type == "string" and length > 0)
+	' <<<"$normalized" >/dev/null || return 65
+	node_name="$(jq -r '.node.name' <<<"$normalized")"
+	if ! contract_passing_icq_nodes "$samples_file" | rg -qx -- "$node_name"; then
+		return 65
+	fi
+	jq -n -c --arg case "$contention_case" --arg node "$node_name" '{case:$case,node:$node}'
+}
+
+validate_findings_inputs() {
+	local inputs="$1"
+	[[ -f "$inputs" && ! -L "$inputs" ]] || return 66
+	jq -e -S -c '
+		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+		def compact_utc:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z$") and
+			. as $original |
+			(capture("^(?<year>[0-9]{4})(?<month>[0-9]{2})(?<day>[0-9]{2})T(?<hour>[0-9]{2})(?<minute>[0-9]{2})(?<second>[0-9]{2})Z$") |
+				"\(.year)-\(.month)-\(.day)T\(.hour):\(.minute):\(.second)Z") as $iso |
+			try (($iso | fromdateiso8601 | strftime("%Y%m%dT%H%M%SZ")) == $original) catch false;
+		def run_id:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$") and
+			(split("-")[0] | compact_utc);
+		def basename($suffix):
+			type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9._-]*" + $suffix + "$");
+		def quality:
+			type == "object" and keys == ["candidatesSha256","resultsSha256","runId"] and
+			(.runId | run_id) and (.resultsSha256 | digest) and (.candidatesSha256 | digest);
+		def x265:
+			type == "object" and keys == ["comparisonsSha256","runId","sampleId"] and
+			(.runId | run_id) and (.sampleId == "avc-grain-memento" or .sampleId == "hdr10-grain-goodfellas") and
+			(.comparisonsSha256 | digest);
+		def savings:
+			type == "object" and keys == ["cohortsSha256","resultsSha256","runId"] and
+			(.runId | run_id) and (.resultsSha256 | digest) and (.cohortsSha256 | digest);
+		def fragment:
+			type == "object" and keys == ["file","runId","sha256"] and (.runId | run_id) and
+			(.file | basename("[.]csv")) and (.sha256 | digest);
+		def contention:
+			type == "object" and keys == ["fragments","observationsFile","observationsSha256","runId"] and
+			(.runId | run_id) and (.observationsFile | basename("[.]json")) and (.observationsSha256 | digest) and
+			(.fragments | type == "array" and length <= 16 and all(.[]; fragment) and
+				([.[] | (.runId + "|" + .file)] | unique | length) == length);
+		if type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and
+			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and (.quality | quality) and
+			(.x265 | type == "array" and length <= 2 and all(.[]; x265) and
+				([.[] | .sampleId] | unique | length) == length) and
+			(.savings == null or (.savings | savings)) and
+			(.contention == null or (.contention | contention))
+		then . else error("invalid findings inputs") end
+	' "$inputs"
+}
+
+findings_unsafe_artifact() {
+	local path="$1"
+	[[ -f "$path" && ! -L "$path" ]] || return 66
+}
+
+findings_sha256() {
+	local path="$1"
+	findings_unsafe_artifact "$path" || return
+	printf 'sha256:%s\n' "$(sha256sum "$path" | awk 'NR == 1 { print $1 }')"
+}
+
+findings_validate_manifest() {
+	local path="$1" run_id="$2" mode="$3" identity created_at
+	findings_unsafe_artifact "$path" || return
+	identity="$(jq -e -S -c 'if type == "object" and has("createdAt") then del(.createdAt) else error("manifest") end' "$path")" || return 65
+	jq -e --arg mode "$mode" '.mode == $mode' <<<"$identity" >/dev/null || return 65
+	identity="$(contract_normalize_run_identity "$identity" "$mode")" || return 65
+	created_at="$(jq -e -r '.createdAt | strings' "$path")" || return 65
+	contract_is_compact_utc_timestamp "$created_at" || return 65
+	[[ "$created_at" == "${run_id%-*}" ]] || return 65
+	printf '%s\n' "$identity"
+}
+
+findings_expected_sources() {
+	local panel="$1" selector="${2:-[]}" selector_filter
+	case "$panel" in
+	quality)
+		selector_filter='.qualityPanel[]?'
+		;;
+	x265)
+		selector_filter='.qualityPanel[]? | select(.id == $selector[0])'
+		;;
+	savings)
+		selector_filter='.savingsPanel[]? | select((.detectionOnly // false) != true and
+			(.cohort as $cohort | $selector | index($cohort)) != null)'
+		;;
+	*) return 64 ;;
+	esac
+	jq -e -c --argjson selector "$selector" "[$selector_filter |
+		{path,sha256:(\"sha256:\" + .sha256),size:.sizeBytes}] | sort_by(.path)" "$samples_file"
+}
+
+findings_chosen_identity() {
+	local cohort="$1" record quality_run quality_directory manifest results candidates
+	local manifest_digest results_digest candidates_digest
+	record="$(contract_chosen_record "$samples_file" "$cohort" final)" || return 65
+	quality_run="$(jq -r '.qualityRunId' <<<"$record")"
+	quality_directory="$benchmark_out/runs/$quality_run"
+	manifest="$quality_directory/manifest.json"
+	results="$quality_directory/results.csv"
+	candidates="$quality_directory/quality-candidates.json"
+	findings_unsafe_artifact "$manifest" && findings_unsafe_artifact "$results" &&
+		findings_unsafe_artifact "$candidates" || return 65
+	manifest_digest="$(findings_sha256 "$manifest")" || return
+	results_digest="$(findings_sha256 "$results")" || return
+	candidates_digest="$(findings_sha256 "$candidates")" || return
+	jq -e --arg results "$results_digest" --arg candidates "$candidates_digest" '
+		.qualityResultsSha256 == $results and .candidateEvidenceSha256 == $candidates
+	' <<<"$record" >/dev/null || return 65
+	jq -n -c --arg cohort "$cohort" --argjson chosen "$record" --arg manifest "$manifest_digest" \
+		--arg results "$results_digest" --arg candidates "$candidates_digest" '{
+			cohort:$cohort,chosenSetting:$chosen,qualityManifestSha256:$manifest,
+			qualityResultsSha256:$results,candidateEvidenceSha256:$candidates
+		}'
+}
+
+findings_validate_quality_manifest() {
+	local manifest="$1" expected_sources
+	expected_sources="$(findings_expected_sources quality)" || return
+	jq -e --argjson sources "$expected_sources" '
+		.selectedSettings == [] and .upstream == {} and .sources == $sources
+	' <<<"$manifest" >/dev/null
+}
+
+findings_validate_x265_manifest() {
+	local manifest="$1" sample_id="$2" cohort="$3" setting="$4" expected_sources expected_upstream expected_selected
+	expected_sources="$(findings_expected_sources x265 "$(jq -n -c --arg sample "$sample_id" '[$sample]')")" || return
+	expected_upstream="$(findings_chosen_identity "$cohort")" || return
+	expected_selected="$(jq -n -c --arg cohort "$cohort" --argjson setting "$setting" \
+		--arg run "$(jq -r '.chosenSetting.qualityRunId' <<<"$expected_upstream")" \
+		'[{cohort:$cohort,globalQuality:$setting,qualityRunId:$run}]')" || return
+	jq -e --argjson sources "$expected_sources" --argjson upstream "$expected_upstream" \
+		--argjson selected "$expected_selected" '
+		.sources == $sources and .upstream == $upstream and .selectedSettings == $selected
+	' <<<"$manifest" >/dev/null
+}
+
+findings_validate_savings_manifest() {
+	local manifest="$1" final_cohorts="$2" cohort expected_sources expected_selected='[]' expected_upstream='{}' chosen
+	expected_sources="$(findings_expected_sources savings "$final_cohorts")" || return
+	while IFS= read -r cohort; do
+		chosen="$(findings_chosen_identity "$cohort")" || return
+		expected_selected="$(jq -c --arg cohort "$cohort" --argjson setting "$(jq '.chosenSetting.globalQuality' <<<"$chosen")" \
+			--arg run "$(jq -r '.chosenSetting.qualityRunId' <<<"$chosen")" \
+			'. + [{cohort:$cohort,globalQuality:$setting,qualityRunId:$run}] | sort_by(.cohort)' <<<"$expected_selected")" || return
+		expected_upstream="$(jq -c --arg cohort "$cohort" --argjson chosen "$chosen" \
+			'. + {($cohort):$chosen}' <<<"$expected_upstream")" || return
+	done < <(jq -r '.[]' <<<"$final_cohorts")
+	expected_upstream="$(jq -n -c --argjson chosen "$expected_upstream" '{chosenSettings:$chosen}')"
+	jq -e --argjson sources "$expected_sources" --argjson upstream "$expected_upstream" \
+		--argjson selected "$expected_selected" '
+		.sources == $sources and .upstream == $upstream and .selectedSettings == $selected
+	' <<<"$manifest" >/dev/null
+}
+
+findings_validate_results() {
+	local path="$1" run_id="$2" panel="$3"
+	findings_unsafe_artifact "$path" || return
+	[[ "$(head -n 1 "$path")" == "$results_header" ]] || return 65
+	awk -F, -v run="$run_id" -v panel="$panel" -v strategy="$CONTRACT_STRATEGY_ID" '
+		NR > 1 { rows += 1; if (NF != 39 || $1 != run || $2 != panel || $37 != strategy) exit 65 }
+		END { if (rows < 1) exit 65 }
+	' "$path"
+}
+
+findings_results_json() {
+	local path="$1"
+	findings_unsafe_artifact "$path" || return
+	jq -R -s -e -c --arg header "$results_header" '
+		split("\n") | if .[-1] == "" then .[:-1] else . end |
+		if length < 2 or .[0] != $header then error("invalid results CSV") else
+			[.[1:][] |
+				split(",") |
+				if length != 39 then error("invalid results CSV row") else {
+					run_id:.[0],panel:.[1],sample_id:.[2],cohort:.[3],source_sha256:.[4],
+					clip_id:.[5],encoder:.[6],requested_setting:.[7],
+					selected_rate_control:.[8],status:.[9],attempt:.[10],
+					input_bytes:.[11],output_bytes:.[12],reduction_percent:.[13],
+					input_bit_rate:.[14],output_bit_rate:.[15],wall_seconds:.[16],
+					encode_fps:.[17],encode_speed:.[18],vmaf_harmonic_mean:.[19],
+					vmaf_1pct_low:.[20],ssim:.[21],gpu_busy_percent:.[22],
+					qsv_proof:.[23],validation_codec:.[24],validation_duration:.[25],
+					validation_resolution:.[26],validation_frame_rate:.[27],
+					validation_bit_depth:.[28],validation_hdr:.[29],
+					validation_audio_tracks:.[30],validation_subtitle_tracks:.[31],
+					validation_chapters:.[32],validation_failures:.[33],log_path:.[34],
+					output_disposition:.[35],strategy_id:.[36],qsv_initialization:.[37],
+					video_busy_nanoseconds:.[38]
+				} end
+			]
+		end
+	' "$path"
+}
+
+findings_validate_savings_results() {
+	local path="$1" run_id="$2" rows expected
+	rows="$(findings_results_json "$path")" || return 65
+	expected="$(jq -e -c '
+		. as $root |
+		[.savingsPanel[]? |
+			select((.detectionOnly // false) != true and .cohort != "dolby-vision" and
+				$root.chosenSettings[.cohort].state == "final") |
+			{sample_id:.id,cohort:.cohort,source_sha256:.sha256,clip_id:"full",
+			 requested_setting:($root.chosenSettings[.cohort].globalQuality | tostring)}] |
+		sort_by(.cohort,.sample_id)
+	' "$samples_file")" || return 65
+	jq -e --arg run "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson expected "$expected" '
+		def uint: test("^(0|[1-9][0-9]*)$");
+		def positive_uint: test("^[1-9][0-9]*$");
+		def decimal: test("^-?(0|[1-9][0-9]*)([.][0-9]+)?$");
+		def positive_decimal: decimal and (tonumber > 0);
+		def passed_validation:
+			.validation_codec == "passed" and .validation_duration == "passed" and
+			.validation_resolution == "passed" and .validation_frame_rate == "passed" and
+			.validation_bit_depth == "passed" and .validation_hdr == "passed" and
+			.validation_audio_tracks == "passed" and .validation_subtitle_tracks == "passed" and
+			.validation_chapters == "passed" and .validation_failures == "";
+		def valid:
+			.run_id == $run and .panel == "savings" and .encoder == "qsv" and
+			(.requested_setting | uint) and
+			.selected_rate_control == "ICQ" and .status == "passed" and
+			(.attempt | positive_uint) and (.input_bytes | positive_uint) and
+			(.output_bytes | positive_uint) and (.reduction_percent | decimal) and
+			(.input_bit_rate | positive_uint) and (.output_bit_rate | positive_uint) and
+			(.wall_seconds | positive_decimal) and (.encode_fps | positive_decimal) and
+			(.encode_speed | positive_decimal) and (.vmaf_harmonic_mean | decimal) and
+			(.vmaf_1pct_low | decimal) and (.ssim | decimal) and
+			(.gpu_busy_percent | decimal) and .qsv_proof == "passed" and
+			passed_validation and
+			(.log_path | test("^logs/[a-z0-9][a-z0-9.-]{0,191}[.]log$")) and
+			.output_disposition == "discarded" and .strategy_id == $strategy and
+			.qsv_initialization == "passed" and (.video_busy_nanoseconds | positive_uint);
+		. as $rows |
+		([$rows[] | {sample_id,cohort,source_sha256,clip_id,requested_setting}] |
+			sort_by(.cohort,.sample_id)) == $expected and
+		($rows | length) == ($expected | length) and
+		all($rows[]; valid)
+	' <<<"$rows" >/dev/null
+}
+
+findings_validate_quality_results() {
+	local path="$1" run_id="$2" rows expected
+	rows="$(findings_results_json "$path")" || return 65
+	expected="$(jq -e -c '
+		. as $root |
+		[.qualityPanel[]? |
+			select((.detectionOnly // false) != true and .cohort != "dolby-vision") |
+			. as $sample | $root.chosenSettings[.cohort] as $chosen |
+			select($chosen | type == "object") |
+			.clips | keys[] as $clip |
+			{sample_id:$sample.id,cohort:$sample.cohort,source_sha256:$sample.sha256,
+			 clip_id:$clip,requested_setting:($chosen.globalQuality | tostring)}] |
+		sort_by(.cohort,.sample_id,.clip_id)
+	' "$samples_file")" || return 65
+	jq -e --arg run "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
+		--argjson expected "$expected" '
+		def uint: test("^(0|[1-9][0-9]*)$");
+		def positive_uint: test("^[1-9][0-9]*$");
+		def decimal: test("^-?(0|[1-9][0-9]*)([.][0-9]+)?$");
+		def positive_decimal: decimal and (tonumber > 0);
+		def passed_validation:
+			.validation_codec == "passed" and .validation_duration == "passed" and
+			.validation_resolution == "passed" and .validation_frame_rate == "passed" and
+			.validation_bit_depth == "passed" and .validation_hdr == "passed" and
+			.validation_audio_tracks == "passed" and .validation_subtitle_tracks == "passed" and
+			.validation_chapters == "passed" and .validation_failures == "";
+		def valid:
+			.run_id == $run and .panel == "quality" and .encoder == "qsv" and
+			(.requested_setting | uint) and .selected_rate_control == "ICQ" and
+			.status == "passed" and (.attempt | positive_uint) and
+			(.input_bytes | positive_uint) and (.output_bytes | positive_uint) and
+			(.reduction_percent | decimal) and (.input_bit_rate | positive_uint) and
+			(.output_bit_rate | positive_uint) and (.wall_seconds | positive_decimal) and
+			(.encode_fps | positive_decimal) and (.encode_speed | positive_decimal) and
+			(.vmaf_harmonic_mean | decimal) and (.vmaf_1pct_low | decimal) and
+			(.ssim | decimal) and (.gpu_busy_percent | decimal) and
+			.qsv_proof == "passed" and passed_validation and
+			(.log_path | test("^logs/[a-z0-9][a-z0-9.-]{0,191}[.]log$")) and
+			.output_disposition == "discarded" and .strategy_id == $strategy and
+			.qsv_initialization == "passed" and (.video_busy_nanoseconds | positive_uint);
+		. as $rows |
+		[$rows[] |
+			. as $row |
+			select(any($expected[]; .cohort == $row.cohort and
+				.requested_setting == $row.requested_setting))] as $chosen |
+		([$chosen[] | {sample_id,cohort,source_sha256,clip_id,requested_setting}] |
+			sort_by(.cohort,.sample_id,.clip_id)) == $expected and
+		($chosen | length) == ($expected | length) and all($chosen[]; valid)
+	' <<<"$rows" >/dev/null
+}
+
+findings_markdown_escape() {
+	jq -Rr 'gsub("(?<char>[`*_{}\\[\\]()<>])"; "\\\(.char)")'
+}
+
+# Findings accepts a failed contention *observation* as evidence, but not a
+# failed worker encode. Every named fragment must be a completed ICQ encode
+# whose output was discarded after successful validation.
+findings_validate_contention_fragment() {
+	local path="$1" run_id="$2" header row fields fragment_case fragment_worker fragment_attempt fragment_setting
+	findings_unsafe_artifact "$path" || return
+	header="$(head -n 1 "$path")"
+	[[ "$header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition,strategy_id' &&
+		"$(wc -l <"$path" | tr -d ' ')" == '2' ]] || return 65
+	row="$(tail -n 1 "$path")"
+	fields="$(jq -R -e -c '
+		split(",") | select(length == 13 and all(.[]; startswith("\"") and endswith("\""))) |
+		map(.[1:-1])
+	' <<<"$row")" || return 65
+	jq -e --arg run "$run_id" '
+		.[0] == $run and
+		(.[1] | test("^[a-d]$")) and
+		(.[2] | test("^worker-[12]$")) and
+		(.[3] | test("^(avc-grain-memento|vc1-fugitive|hdr10-grain-goodfellas)$")) and
+		(.[4] | test("^(avc|vc1|hdr10)$")) and
+		(.[5] | test("^[0-9]+$")) and
+		.[6] == "passed" and
+		(.[7] | test("^[1-9][0-9]*$")) and
+		(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
+		.[9] == "passed" and .[10] == "" and
+		.[11] == "discarded" and .[12] == "qsv-hevc-icq-v1"
+	' <<<"$fields" >/dev/null || return 65
+	fragment_setting="$(jq -r '.[5]' <<<"$fields")"
+	contract_is_icq_setting "$samples_file" "$fragment_setting" || return 65
+	fragment_case="$(jq -r '.[1]' <<<"$fields")"
+	fragment_worker="$(jq -r '.[2]' <<<"$fields")"
+	fragment_attempt="$(jq -r '.[7]' <<<"$fields")"
+	[[ "$(basename "$path")" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]]
+}
+
+findings_required_contention_cases() {
+	local hdr_final avc_final vc1_final required='[]'
+	hdr_final="$(jq -r '.chosenSettings.hdr10.state == "final"' "$samples_file")"
+	avc_final="$(jq -r '.chosenSettings.avc.state == "final"' "$samples_file")"
+	vc1_final="$(jq -r '.chosenSettings.vc1.state == "final"' "$samples_file")"
+	if [[ "$hdr_final" == true ]]; then
+		required='["a"]'
+	fi
+	if [[ "$avc_final" == true && "$vc1_final" == true ]]; then
+		required="$(jq -c '. + ["b","c","d"]' <<<"$required")"
+	fi
+	printf '%s\n' "$required"
+}
+
+findings_validate_evidence() {
+	local run_id="$1" inputs="$2" quality_run quality_results quality_candidates quality_manifest
+	local savings_run savings_results savings_cohorts savings_manifest x265_entry x265_run x265_file x265_manifest
+	local contention_run contention_file contention_path fragment fragment_run fragment_file fragment_path fragment_manifest
+	local contention_client_device contention_playback_sample fragment_observation_case fragment_fields
+	local contention_node_bindings='[]' manifest_binding
+	local findings_cohort findings_setting normalized_manifest final_cohorts required_contention_cases
+	validate_findings_inputs "$inputs" >/dev/null || return 65
+	quality_run="$(jq -r '.quality.runId' "$inputs")"
+	quality_results="$benchmark_out/runs/$quality_run/results.csv"
+	quality_candidates="$benchmark_out/runs/$quality_run/quality-candidates.json"
+	quality_manifest="$benchmark_out/runs/$quality_run/manifest.json"
+	normalized_manifest="$(findings_validate_manifest "$quality_manifest" "$quality_run" quality)" || return 65
+	findings_validate_quality_manifest "$normalized_manifest" || return 65
+	findings_validate_results "$quality_results" "$quality_run" quality || return 65
+	findings_validate_quality_results "$quality_results" "$quality_run" || return 65
+	[[ "$(findings_sha256 "$quality_results")" == "$(jq -r '.quality.resultsSha256' "$inputs")" &&
+	"$(findings_sha256 "$quality_candidates")" == "$(jq -r '.quality.candidatesSha256' "$inputs")" ]] || return 65
+	jq -e --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" --arg digest "$(findings_sha256 "$quality_results")" \
+		--argjson schema "$CONTRACT_RESULTS_SCHEMA" '
+			type == "object" and .schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+			.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
+			(.cohorts | type == "object" and keys == ["avc","hdr10","vc1"] and
+			 all(.[]; type == "object" and (.status == "eligible" or .status == "no-go")))
+		' "$quality_candidates" >/dev/null || return 65
+	for findings_cohort in avc vc1 hdr10; do
+		if jq -e --arg cohort "$findings_cohort" '.chosenSettings[$cohort]?.state == "final"' "$samples_file" >/dev/null; then
+			findings_chosen_identity "$findings_cohort" >/dev/null || return 65
+			jq -e --arg run "$quality_run" --arg results "$(jq -r '.quality.resultsSha256' "$inputs")" \
+				--arg candidates "$(jq -r '.quality.candidatesSha256' "$inputs")" '
+					.qualityRunId == $run and .qualityResultsSha256 == $results and .candidateEvidenceSha256 == $candidates
+				' <<<"$(contract_chosen_record "$samples_file" "$findings_cohort" final)" >/dev/null || return 65
+		fi
+	done
+	while IFS= read -r x265_entry; do
+		x265_run="$(jq -r '.runId' <<<"$x265_entry")"
+		x265_file="$benchmark_out/runs/$x265_run/x265-comparisons.jsonl"
+		x265_manifest="$benchmark_out/runs/$x265_run/manifest.json"
+		normalized_manifest="$(findings_validate_manifest "$x265_manifest" "$x265_run" x265)" || return 65
+		[[ "$(findings_sha256 "$x265_file")" == "$(jq -r '.comparisonsSha256' <<<"$x265_entry")" ]] || return 65
+		findings_cohort="$(if [[ "$(jq -r '.sampleId' <<<"$x265_entry")" == avc-grain-memento ]]; then printf avc; else printf hdr10; fi)"
+		findings_setting="$(contract_chosen_record "$samples_file" "$findings_cohort" final | jq -r '.globalQuality')" || return 65
+		findings_validate_x265_manifest "$normalized_manifest" "$(jq -r '.sampleId' <<<"$x265_entry")" \
+			"$findings_cohort" "$findings_setting" || return 65
+		jq -s -e --arg run "$x265_run" --arg quality "$quality_run" --arg sample "$(jq -r '.sampleId' <<<"$x265_entry")" \
+			--arg strategy "$CONTRACT_STRATEGY_ID" --argjson setting "$findings_setting" '
+				length == 3 and all(.[]; type == "object" and
+					keys == ["clipId","lowerCrf","matchedBitRate","premiumPercent","qsvSetting","qualityRunId","sampleId","status","strategyId","upperCrf","x265RunId"] and
+					.strategyId == $strategy and .qualityRunId == $quality and .x265RunId == $run and .sampleId == $sample and .qsvSetting == $setting and
+					((.status == "unbracketed" and .lowerCrf == null and .upperCrf == null and .matchedBitRate == null and .premiumPercent == null) or
+					 (.status == "bracketed" and (.lowerCrf | type == "number") and (.upperCrf | type == "number") and (.matchedBitRate | type == "number" and . > 0) and (.premiumPercent | type == "number"))))
+			' "$x265_file" >/dev/null || return 65
+	done < <(jq -c '.x265[]' "$inputs")
+	if [[ "$(jq -r '.savings == null' "$inputs")" == 'false' ]]; then
+		savings_run="$(jq -r '.savings.runId' "$inputs")"
+		savings_results="$benchmark_out/runs/$savings_run/results.csv"
+		savings_cohorts="$benchmark_out/runs/$savings_run/savings-cohorts.json"
+		savings_manifest="$benchmark_out/runs/$savings_run/manifest.json"
+		normalized_manifest="$(findings_validate_manifest "$savings_manifest" "$savings_run" savings)" || return 65
+		findings_validate_results "$savings_results" "$savings_run" savings || return 65
+		[[ "$(findings_sha256 "$savings_results")" == "$(jq -r '.savings.resultsSha256' "$inputs")" &&
+		"$(findings_sha256 "$savings_cohorts")" == "$(jq -r '.savings.cohortsSha256' "$inputs")" ]] || return 65
+		findings_validate_savings_results "$savings_results" "$savings_run" || return 65
+		jq -e --arg run "$savings_run" --arg strategy "$CONTRACT_STRATEGY_ID" '
+			type == "object" and keys == ["cohorts","runId","schemaVersion","strategyId"] and .schemaVersion == 1 and
+			.strategyId == $strategy and .runId == $run and (.cohorts | type == "object" and keys == ["avc","hdr10","vc1"])
+		' "$savings_cohorts" >/dev/null || return 65
+		final_cohorts="$(jq -c '[.chosenSettings as $chosen | ["avc","vc1","hdr10"][] |
+			select($chosen[.]?.state == "final")]' "$samples_file")" || return
+		findings_validate_savings_manifest "$normalized_manifest" "$final_cohorts" || return 65
+	fi
+	required_contention_cases="$(findings_required_contention_cases)" || return 65
+	if [[ "$(jq -r 'length' <<<"$required_contention_cases")" == '0' ]]; then
+		[[ "$(jq -r '.contention == null' "$inputs")" == true ]] || return 65
+	else
+		[[ "$(jq -r '.contention != null' "$inputs")" == true ]] || return 65
+	fi
+	if [[ "$(jq -r '.contention == null' "$inputs")" == 'false' ]]; then
+		contention_run="$(jq -r '.contention.runId' "$inputs")"
+		contention_file="$(jq -r '.contention.observationsFile' "$inputs")"
+		contention_path="$benchmark_out/runs/$contention_run/$contention_file"
+		[[ "$(findings_sha256 "$contention_path")" == "$(jq -r '.contention.observationsSha256' "$inputs")" ]] || return 65
+		validate_contention_observations "$contention_path" >/dev/null || return 65
+		jq -e --arg run "$contention_run" --argjson required "$required_contention_cases" '
+			.runId == $run and ([.cases[].case] | sort) == ($required | sort)
+		' "$contention_path" >/dev/null || return 65
+		contention_client_device="$(jq -r '.clientDevice' "$contention_path")"
+		contention_playback_sample="$(jq -r '.playbackSampleId' "$contention_path")"
+		jq -e --argjson fragments "$(jq -c '[.contention.fragments[] | {runId,file}]' "$inputs")" '
+			([.cases[] | .workerFragments[]] | sort_by(.runId, .file)) == ($fragments | sort_by(.runId, .file))
+		' "$contention_path" >/dev/null || return 65
+		while IFS= read -r fragment; do
+			fragment_run="$(jq -r '.runId' <<<"$fragment")"
+			fragment_file="$(jq -r '.file' <<<"$fragment")"
+			fragment_path="$benchmark_out/runs/$fragment_run/$fragment_file"
+			[[ "$(findings_sha256 "$fragment_path")" == "$(jq -r '.sha256' <<<"$fragment")" ]] || return 65
+			findings_validate_contention_fragment "$fragment_path" "$fragment_run" || return 65
+			fragment_observation_case="$(jq -e -r --arg run "$fragment_run" --arg file "$fragment_file" '
+				[.cases[] | select(any(.workerFragments[]?; .runId == $run and .file == $file)) | .case] |
+				if length == 1 then .[0] else error("ambiguous contention fragment") end
+			' "$contention_path")" || return 65
+			fragment_fields="$(tail -n 1 "$fragment_path" | jq -R -e -c 'split(",") | map(.[1:-1])')" || return 65
+			[[ "$(jq -r '.[1]' <<<"$fragment_fields")" == "$fragment_observation_case" ]] || return 65
+			fragment_manifest="$benchmark_out/runs/$fragment_run/manifest.json"
+			findings_validate_manifest "$fragment_manifest" "$fragment_run" "contention-$fragment_observation_case" || return 65
+			manifest_binding="$(validate_contention_worker_manifest "$fragment_manifest" "$fragment_observation_case" "$fragment_fields" \
+				"$contention_client_device" "$contention_playback_sample")" || return 65
+			contention_node_bindings="$(jq -c --argjson binding "$manifest_binding" '. + [$binding]' <<<"$contention_node_bindings")"
+		done < <(jq -c '.contention.fragments[]' "$inputs")
+		jq -e 'group_by(.case) | all(.[]; if .[0].case == "a" then length == 1 else length == 2 and ([.[].node] | unique | length) == 2 end)' \
+			<<<"$contention_node_bindings" >/dev/null || return 65
+	fi
+}
+
+findings_conclusion() {
+	local cohort="$1" objective="$2" state="$3" savings_verdict="$4" x265_verdict="$5"
+	if [[ "$objective" == no-go || "$state" == rejected || "$savings_verdict" == NO-GO ]]; then
+		printf '%s\n' 'NO-GO'
+	elif [[ "$x265_verdict" == no-verdict ]]; then
+		printf '%s\n' 'no-verdict'
+	elif [[ "$savings_verdict" == MARGINAL ]]; then
+		printf '%s\n' 'MARGINAL'
+	elif [[ "$state" == final && "$savings_verdict" == GO && ("$cohort" == vc1 || "$x265_verdict" == admissible || "$x265_verdict" == not-applicable) ]]; then
+		printf '%s\n' 'GO'
+	else
+		printf '%s\n' 'no-verdict'
+	fi
+}
+
+findings_render_v1() {
+	local run_id="$1" inputs="$2" quality_run savings_run='' savings_results='' savings_cohorts=''
+	local final_cohorts contention_status='not applicable' findings_temp cohort
+	local state objective setting quality_summary savings_summary='' savings_verdict='not applicable' x265_verdict='not applicable' conclusion
+	local distribution stats contentions_present expected_x265 actual_x265 quality_rows capability_nodes
+	contract_validate_chosen_settings "$samples_file" || return 65
+	findings_validate_evidence "$run_id" "$inputs" || {
+		echo 'findings upstream evidence is invalid or stale' >&2
+		return 65
+	}
+	quality_run="$(jq -r '.quality.runId' "$inputs")"
+	quality_rows="$(findings_results_json "$benchmark_out/runs/$quality_run/results.csv")" || return 65
+	capability_nodes="$(contract_passing_icq_nodes "$samples_file" | awk '
+		BEGIN { separator = "" }
+		{ printf "%s%s", separator, $0; separator = ", " }
+	')"
+	[[ -n "$capability_nodes" ]] || capability_nodes='none'
+	final_cohorts="$(jq -c '[.chosenSettings as $chosen | ["avc","vc1","hdr10"][] | select($chosen[.]?.state == "final")]' "$samples_file")"
+	expected_x265="$(jq -c '[.[] | select(. == "avc" or . == "hdr10")]' <<<"$final_cohorts")"
+	actual_x265="$(jq -c '[.x265[] | if .sampleId == "avc-grain-memento" then "avc" else "hdr10" end] | sort' "$inputs")"
+	[[ "$actual_x265" == "$(jq -c 'sort' <<<"$expected_x265")" ]] || {
+		echo 'x265 evidence does not match final cohort applicability' >&2
+		return 65
+	}
+	if [[ "$(jq -r 'length' <<<"$final_cohorts")" -gt 0 ]]; then
+		[[ "$(jq -r '.savings != null' "$inputs")" == true ]] || {
+			echo 'final cohort is missing required savings evidence' >&2
+			return 65
+		}
+		savings_run="$(jq -r '.savings.runId' "$inputs")"
+		savings_results="$benchmark_out/runs/$savings_run/results.csv"
+		savings_cohorts="$benchmark_out/runs/$savings_run/savings-cohorts.json"
+		jq -e --argjson final "$final_cohorts" '
+			.cohorts as $cohorts | all($final[]; . as $cohort | $cohorts[$cohort].status == "measured")
+		' "$savings_cohorts" >/dev/null || {
+			echo 'savings cohort applicability does not match final cohort state' >&2
+			return 65
+		}
+	else
+		[[ "$(jq -r '.savings == null' "$inputs")" == true ]] || return 65
+	fi
+	contentions_present="$(jq -r '.contention != null' "$inputs")"
+	if [[ "$contentions_present" == true ]]; then
+		contention_status="$(validate_contention_observations \
+			"$benchmark_out/runs/$(jq -r '.contention.runId' "$inputs")/$(jq -r '.contention.observationsFile' "$inputs")" |
+			jq -r '.status')"
+	fi
+	findings_temp="$benchmark_out/runs/$run_id/findings.md.tmp"
+	{
+		printf '# Encode benchmark findings\n\n'
+		printf 'Evidence strategy: `qsv-hevc-icq-v1`  \nQuality run: `%s`\n\n' \
+			"$(printf '%s' "$quality_run" | findings_markdown_escape)"
+		for cohort in avc vc1 hdr10; do
+			savings_summary=''
+			savings_verdict='not applicable'
+			state="$(jq -r --arg cohort "$cohort" '.chosenSettings[$cohort].state // "no-setting"' "$samples_file")"
+			objective="$(jq -r --arg cohort "$cohort" '.cohorts[$cohort].status' "$benchmark_out/runs/$quality_run/quality-candidates.json")"
+			setting="$(jq -r --arg cohort "$cohort" '.chosenSettings[$cohort].globalQuality // "no setting"' "$samples_file")"
+			quality_summary="$(jq -r --arg cohort "$cohort" --arg setting "$setting" '
+				[.[] | select(.cohort == $cohort and .requested_setting == $setting)] as $rows |
+				if ($rows | length) == 0 then "not applicable" else
+					"VMAF " + ([$rows[].vmaf_harmonic_mean | tonumber] | min | tostring) +
+					"; SSIM " + ([$rows[].ssim | tonumber] | min | tostring) +
+					"; output validation passed; speed " +
+					([$rows[].encode_speed | tonumber] | min | tostring) +
+					"; output bytes " + ([$rows[].output_bytes | tonumber] | add | tostring)
+				end
+			' <<<"$quality_rows")" || return 65
+			x265_verdict='not applicable'
+			if [[ "$cohort" == avc || "$cohort" == hdr10 ]]; then
+				if [[ "$state" == final ]]; then
+					x265_verdict="$(jq -r --arg cohort "$cohort" '
+						[.x265[] | select((if .sampleId == "avc-grain-memento" then "avc" else "hdr10" end) == $cohort)] | .[0].runId
+					' "$inputs" | while IFS= read -r xrun; do
+						jq -s -r 'if any(.[]; .status == "unbracketed" or (.status == "bracketed" and .premiumPercent > 30)) then "no-verdict"
+						elif all(.[]; .status == "bracketed" and .premiumPercent <= 30) then "admissible" else "no-verdict" end' \
+							"$benchmark_out/runs/$xrun/x265-comparisons.jsonl"
+					done)"
+				fi
+			fi
+			if [[ -n "$savings_results" ]]; then
+				distribution="$(awk -F, -v cohort="$cohort" 'NR > 1 && $2 == "savings" && $4 == cohort && $10 == "passed" && $37 == "qsv-hevc-icq-v1" { print $14 }' "$savings_results" | jq -R -s -c --arg cohort "$cohort" '{cohort:$cohort,reductionPercent:(split("\n") | map(select(length > 0) | tonumber))}')"
+				if [[ "$(jq -r '.reductionPercent | length' <<<"$distribution")" -gt 0 ]]; then
+					stats="$(savings_stats /dev/stdin <<<"$distribution")" || return
+					savings_verdict="$(jq -r '.verdict' <<<"$stats")"
+					savings_summary="$(jq -r '"median " + (.median|tostring) + "; Q1 " + (.q1|tostring) + "; Q3 " + (.q3|tostring) + "; IQR " + (.iqr|tostring)' <<<"$stats")"
+				fi
+			fi
+			[[ -n "$savings_summary" ]] || savings_summary='not applicable'
+			conclusion="$(findings_conclusion "$cohort" "$objective" "$state" "$savings_verdict" "$x265_verdict")"
+			printf '## %s\n\n' "$(printf '%s' "$cohort" | findings_markdown_escape)"
+			printf -- '- Capability node basis: %s\n- Objective quality verdict: %s\n- Crop/finalist visual verdict: %s\n- Final global_quality: %s\n- Quality evidence: %s\n- x265 premium verdict: %s\n- Savings: %s; verdict %s\n- Contention: %s\n- Conclusion: **%s**\n\n' \
+				"$(printf '%s' "$capability_nodes" | findings_markdown_escape)" \
+				"$(printf '%s' "$objective" | findings_markdown_escape)" \
+				"$(printf '%s' "$state" | findings_markdown_escape)" \
+				"$(printf '%s' "$setting" | findings_markdown_escape)" \
+				"$(printf '%s' "$quality_summary" | findings_markdown_escape)" \
+				"$(printf '%s' "$x265_verdict" | findings_markdown_escape)" \
+				"$(printf '%s' "$savings_summary" | findings_markdown_escape)" \
+				"$(printf '%s' "$savings_verdict" | findings_markdown_escape)" \
+				"$(printf '%s' "$contention_status" | findings_markdown_escape)" \
+				"$(printf '%s' "$conclusion" | findings_markdown_escape)"
+		done
+		if [[ "$contention_status" == failed ]]; then
+			printf 'Processing window: required before benchmark encoding.\n'
+		fi
+	} >"$findings_temp"
+	# The input and upstream artifacts can change while rendering. Recheck the
+	# same exact evidence before the atomic publication point.
+	findings_validate_evidence "$run_id" "$inputs" || {
+		rm -f -- "$findings_temp"
+		return 65
+	}
+	mv -f -- "$findings_temp" "$benchmark_out/runs/$run_id/findings.md"
+	printf '%s\n' "$run_id"
+}
+
 findings_mode() {
-	local run_id="$1" run_directory inputs quality_run savings_run contention_file
-	local quality_results quality_comparisons comparisons_json comparison savings_results contention
-	local findings_temp cohort distribution stats comparison_status sample_id clip_id qsv_setting
-	local premium verdict contention_fragments='[]' fragment fragment_run fragment_file fragment_path
-	local fragment_header fragment_row fragment_fields fragment_case fragment_worker fragment_attempt
+	local run_id="$1" run_directory inputs
+	local mounted_inputs inputs_digest upstream_identity created_run
 	validate_run_id "$run_id" || return
 	run_directory="$benchmark_out/runs/$run_id"
-	inputs="$run_directory/findings-inputs.json"
+	mounted_inputs="${BENCHMARK_FINDINGS_INPUTS_FILE:-$run_directory/findings-inputs.json}"
+	inputs="$mounted_inputs"
 	[[ -f "$inputs" && ! -L "$inputs" ]] || {
 		echo 'findings inputs not found' >&2
 		return 66
 	}
-	quality_run="$(jq -e -r '.qualityRunId | strings' "$inputs")"
-	savings_run="$(jq -e -r '.savingsRunId | strings' "$inputs")"
-	contention_file="$(jq -e -r '.contentionFile | strings' "$inputs")"
-	contention_fragments="$(jq -e -c '
-		.contentionFragments |
-		select(type == "array" and length >= 1 and length <= 16) |
-		if
-			all(.[];
-				(type == "object") and (keys == ["file", "runId"]) and
-				(.runId | type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
-				(.file | type == "string" and test("^contention-[a-d]-worker-[12]-attempt-[1-9][0-9]*[.]csv$"))) and
-			([.[] | (.runId + "|" + .file)] | unique | length) == length
-		then . else error("invalid contention fragments") end
-	' "$inputs")" || {
-		echo 'invalid contention fragment inputs' >&2
-		return 65
-	}
-	validate_run_id "$quality_run" || return
-	validate_run_id "$savings_run" || return
-	[[ "$contention_file" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[.]json$ ]] || return 64
-	quality_results="$benchmark_out/runs/$quality_run/results.csv"
-	quality_comparisons="$benchmark_out/runs/$quality_run/x265-comparisons.jsonl"
-	savings_results="$benchmark_out/runs/$savings_run/results.csv"
-	contention="$run_directory/$contention_file"
-	ensure_results_file "$quality_results" || return
-	ensure_results_file "$savings_results" || return
-	[[ -f "$quality_comparisons" && ! -L "$quality_comparisons" ]] || {
-		echo 'quality x265 comparisons not found' >&2
-		return 66
-	}
-	[[ -f "$contention" && ! -L "$contention" ]] || return 66
-	contention_rows='[]'
-	while IFS= read -r fragment; do
-		fragment_run="$(jq -r '.runId' <<<"$fragment")"
-		fragment_file="$(jq -r '.file' <<<"$fragment")"
-		fragment_path="$benchmark_out/runs/$fragment_run/$fragment_file"
-		[[ -f "$fragment_path" && ! -L "$fragment_path" ]] || {
-			echo 'named contention fragment not found' >&2
-			return 66
-		}
-		fragment_header="$(head -n 1 "$fragment_path")"
-		[[ "$fragment_header" == 'run_id,case,worker_id,sample_id,cohort,setting,status,attempt,wall_seconds,qsv_proof,validation_failures,output_disposition' &&
-			"$(wc -l <"$fragment_path" | tr -d ' ')" == '2' ]] || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		fragment_row="$(tail -n 1 "$fragment_path")"
-		fragment_fields="$(jq -R -e -c '
-			split(",") |
-			select(length == 12 and all(.[]; startswith("\"") and endswith("\""))) |
-			map(.[1:-1])
-		' <<<"$fragment_row")" || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		jq -e --arg run "$fragment_run" '
-			.[0] == $run and
-			(.[1] | test("^[a-d]$")) and
-			(.[2] | test("^worker-[12]$")) and
-			(.[3] | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.[4] | test("^(avc|vc1|hdr10)$")) and
-			(.[5] | test("^(20|22|24|26|28)$")) and
-			(.[6] | test("^(passed|failed|invalid)$")) and
-			(.[7] | test("^[1-9][0-9]*$")) and
-			(.[8] | test("^[0-9]+([.][0-9]+)?$")) and
-			(.[9] | test("^(passed|suspect)$")) and
-			(.[10] | test("^[a-z0-9;-]*$")) and
-			.[11] == "discarded"
-		' <<<"$fragment_fields" >/dev/null || {
-			echo 'invalid named contention fragment' >&2
-			return 65
-		}
-		fragment_case="$(jq -r '.[1]' <<<"$fragment_fields")"
-		fragment_worker="$(jq -r '.[2]' <<<"$fragment_fields")"
-		fragment_attempt="$(jq -r '.[7]' <<<"$fragment_fields")"
-		[[ "$fragment_file" == "contention-$fragment_case-$fragment_worker-attempt-$fragment_attempt.csv" ]] || {
-			echo 'named contention fragment identity mismatch' >&2
-			return 65
-		}
-		contention_rows="$(jq -c --argjson row "$fragment_fields" '. + [$row]' <<<"$contention_rows")"
-	done < <(jq -c '.[]' <<<"$contention_fragments")
-	comparisons_json="$(jq -e -s '
-		if all(.[];
-			(type == "object") and
-			(.sample_id | type) == "string" and (.sample_id | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.clip_id | type) == "string" and (.clip_id | test("^[a-z0-9][a-z0-9._-]*$")) and
-			(.qsv_setting | type) == "string" and (.qsv_setting | test("^[0-9]+$")) and
-			((.status == "unbracketed") or
-			 (.status == "bracketed" and (.lower_crf | type) == "number" and
-			  (.upper_crf | type) == "number" and (.matched_bit_rate | type) == "number" and
-			  .matched_bit_rate > 0 and (.premium_percent | type) == "number")))
-		then . else error("invalid x265 comparison evidence") end
-	' "$quality_comparisons")" || return 65
-	jq -e '
-		(.baselineStartLatencySeconds | type) == "number" and .baselineStartLatencySeconds >= 0 and
-		(.bufferingCount | type) == "number" and (.bufferingCount | floor) == .bufferingCount and .bufferingCount >= 0 and
-		(.startLatencySeconds | type) == "number" and .startLatencySeconds >= 0 and
-		(.seekToResumeSeconds | type) == "number" and .seekToResumeSeconds >= 0 and
-		(.nasUplinkMbps | type) == "number" and .nasUplinkMbps > 0 and
-		(.measuredThroughputMbps | type) == "number" and .measuredThroughputMbps >= 0
-	' "$contention" >/dev/null || {
-		echo 'invalid contention evidence' >&2
-		return 65
-	}
-	findings_temp="$run_directory/findings.md.tmp"
-	{
-		printf '# Encode benchmark findings\n\n'
-		printf 'Quality run: `%s`  \n' "$quality_run"
-		printf 'Savings run: `%s`\n\n' "$savings_run"
-		printf '## Savings by cohort\n\n'
-		printf '| Cohort | Median %% | Q1 %% | Q3 %% | IQR %% | Verdict |\n'
-		printf '|---|---:|---:|---:|---:|---|\n'
-		while IFS= read -r cohort; do
-			[[ -n "$cohort" ]] || continue
-			distribution="$(awk -F, -v cohort="$cohort" '
-				NR > 1 && $2 == "savings" && $4 == cohort && $10 == "passed" { print $14 }
-			' "$savings_results" | jq -R -s -c --arg cohort "$cohort" \
-				'{cohort: $cohort, reductionPercent: (split("\n") | map(select(length > 0) | tonumber))}')"
-			stats="$(savings_stats /dev/stdin <<<"$distribution")"
-			printf '| %s | %s | %s | %s | %s | %s |\n' "$cohort" \
-				"$(jq -r '.median' <<<"$stats")" "$(jq -r '.q1' <<<"$stats")" \
-				"$(jq -r '.q3' <<<"$stats")" "$(jq -r '.iqr' <<<"$stats")" \
-				"$(jq -r '.verdict' <<<"$stats")"
-		done < <(awk -F, 'NR > 1 && $2 == "savings" && $10 == "passed" { print $4 }' "$savings_results" | sort -u)
-		printf '\n## Quality summary\n\n'
-		printf 'Passed variants: %s\n\n' "$(awk -F, 'NR > 1 && $2 == "quality" && $10 == "passed" { count += 1 } END { print count + 0 }' "$quality_results")"
-		printf '## x265 matched-VMAF comparison\n\n'
-		printf '| Sample | Clip | QSV setting | Status | Premium %% | Verdict |\n'
-		printf '|---|---|---:|---|---:|---|\n'
-		while IFS= read -r comparison; do
-			sample_id="$(jq -r '.sample_id' <<<"$comparison")"
-			clip_id="$(jq -r '.clip_id' <<<"$comparison")"
-			qsv_setting="$(jq -r '.qsv_setting' <<<"$comparison")"
-			comparison_status="$(jq -r '.status' <<<"$comparison")"
-			premium=''
-			verdict='No verdict'
-			if [[ "$comparison_status" == 'bracketed' ]]; then
-				premium="$(awk -v value="$(jq -r '.premium_percent' <<<"$comparison")" 'BEGIN { printf "%.6f", value }')"
-				verdict="$(awk -v value="$premium" 'BEGIN {
-					if (value <= 15) print "QSV preferred"
-					else if (value <= 30) print "QSV acceptable"
-					else print "Escalate"
-				}')"
-			fi
-			printf '| %s | %s | %s | %s | %s | %s |\n' "$sample_id" "$clip_id" \
-				"$qsv_setting" "$comparison_status" "$premium" "$verdict"
-		done < <(jq -c '.[]' <<<"$comparisons_json")
-		printf '\n'
-		printf '## Contention encode workers\n\n'
-		printf '| Run | Case | Worker | Sample | Cohort | Setting | Status | Wall seconds |\n'
-		printf '|---|---|---|---|---|---:|---|---:|\n'
-		jq -r '.[] | "| \(.[0]) | \(.[1]) | \(.[2]) | \(.[3]) | \(.[4]) | \(.[5]) | \(.[6]) | \(.[8]) |"' \
-			<<<"$contention_rows"
-		printf '\n## Contention summary\n\n'
-		jq -r '
-			"- Baseline start latency: \(.baselineStartLatencySeconds) seconds\n" +
-			"- Buffering count: \(.bufferingCount)\n" +
-			"- Contended start latency: \(.startLatencySeconds) seconds\n" +
-			"- Seek-to-resume: \(.seekToResumeSeconds) seconds\n" +
-			"- NAS uplink: \(.nasUplinkMbps) Mbps\n" +
-			"- Measured throughput: \(.measuredThroughputMbps) Mbps"
-		' "$contention"
-	} >"$findings_temp"
-	mv -f -- "$findings_temp" "$run_directory/findings.md"
-	printf '%s\n' "$run_id"
+	validate_findings_inputs "$inputs" >/dev/null || return 65
+	inputs_digest="$(findings_sha256 "$inputs")"
+	upstream_identity="$(jq -c --arg digest "$inputs_digest" '{findingsInputsSha256:$digest,quality:.quality,x265:.x265,savings:.savings,contention:.contention}' "$inputs")" || return 65
+	BENCHMARK_FINDINGS_INPUTS_SHA256="$inputs_digest"
+	BENCHMARK_UPSTREAM_IDENTITY_JSON="$upstream_identity"
+	export BENCHMARK_FINDINGS_INPUTS_SHA256 BENCHMARK_UPSTREAM_IDENTITY_JSON
+	created_run="$("$script_directory/runmeta.sh" create findings "$run_id")" || return
+	[[ "$created_run" == "$run_id" ]] || return 65
+	if [[ "$mounted_inputs" != "$run_directory/findings-inputs.json" ]]; then
+		cp -- "$mounted_inputs" "$run_directory/findings-inputs.json" || return
+		chmod 0600 "$run_directory/findings-inputs.json" || return
+	fi
+	inputs="$run_directory/findings-inputs.json"
+	findings_render_v1 "$run_id" "$inputs"
+	return
 }
 
 test_dispatch() {
@@ -2111,6 +3522,30 @@ test_dispatch() {
 	local action="$1"
 	shift
 	case "$action" in
+	chosen-upstream)
+		(($# == 2)) || usage
+		contract_load "$samples_file"
+		prepare_chosen_upstream "$1" "$2"
+		# shellcheck disable=SC2031 # This test action reads a separately exported worker identity.
+		jq -n -c --argjson upstream "$BENCHMARK_UPSTREAM_IDENTITY_JSON" \
+			--argjson selected "$BENCHMARK_SELECTED_SETTINGS_JSON" \
+			'{upstream:$upstream,selectedSettings:$selected}'
+		;;
+	running-image-evidence)
+		(($# == 0)) || usage
+		contract_load "$samples_file"
+		require_running_image_evidence
+		;;
+	icq-settings)
+		(($# == 0)) || usage
+		contract_load "$samples_file"
+		printf '%s\n' "$CONTRACT_ICQ_SETTINGS"
+		;;
+	icq-setting)
+		(($# == 1)) || usage
+		contract_load "$samples_file"
+		contract_is_icq_setting "$samples_file" "$1"
+		;;
 	results-header)
 		(($# == 0)) || usage
 		printf '%s\n' "$results_header"
@@ -2144,7 +3579,7 @@ test_dispatch() {
 		drm_fdinfo_metrics "$1"
 		;;
 	qsv-proof)
-		(($# == 3)) || usage
+		(($# == 4)) || usage
 		qsv_proof "$@"
 		;;
 	validate-probes)
@@ -2159,6 +3594,26 @@ test_dispatch() {
 		(($# == 3)) || usage
 		append_audio_inventory "$@"
 		;;
+	rank-quality-candidates)
+		(($# == 3)) || usage
+		rank_quality_candidates "$@"
+		;;
+	validate-contention-observations)
+		(($# == 1)) || usage
+		validate_contention_observations "$1"
+		;;
+	validate-findings-inputs)
+		(($# == 1)) || usage
+		validate_findings_inputs "$1"
+		;;
+	findings-fragment)
+		(($# == 2)) || usage
+		findings_validate_contention_fragment "$1" "$2"
+		;;
+	findings-conclusion)
+		(($# == 5)) || usage
+		findings_conclusion "$@"
+		;;
 	*) usage ;;
 	esac
 }
@@ -2169,27 +3624,48 @@ shift
 case "$mode" in
 capabilities)
 	(($# == 0)) || usage
+	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	capabilities
 	;;
 _test) test_dispatch "$@" ;;
 quality)
 	(($# == 0 || $# == 1)) || usage
+	contract_load "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	quality_mode "${1:-}"
+	;;
+x265)
+	(($# == 2)) || usage
+	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
+	x265_mode "$1" "$2"
 	;;
 savings)
 	(($# == 1)) || usage
+	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	savings_mode "$1"
 	;;
 finalist)
 	(($# == 2)) || usage
+	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	finalist_mode "$1" "$2"
 	;;
 contention)
 	(($# == 4)) || usage
+	contract_load "$samples_file" || exit $?
+	contract_validate_chosen_settings "$samples_file" || exit $?
+	require_running_image_evidence || exit $?
 	contention_mode "$1" "$2" "$3" "$4"
 	;;
 findings)
 	(($# == 1)) || usage
+	contract_load "$samples_file" || exit $?
 	findings_mode "$1"
 	;;
 *) usage ;;

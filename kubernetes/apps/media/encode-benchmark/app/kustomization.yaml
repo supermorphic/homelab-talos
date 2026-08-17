@@ -8,6 +8,7 @@ resources:
 configMapGenerator:
   - name: encode-benchmark-scripts
     files:
+      - contract.sh=scripts/contract.sh
       - probe.sh=scripts/probe.sh
       - census.sh=scripts/census.sh
       - runmeta.sh=scripts/runmeta.sh

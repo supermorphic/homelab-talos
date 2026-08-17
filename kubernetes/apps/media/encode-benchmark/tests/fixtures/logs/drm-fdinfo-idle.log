@@ -1,3 +1,5 @@
+render-node: /dev/dri/renderD128
+
 1000000000
 drm-driver: i915
 drm-engine-video: 300000000 ns
