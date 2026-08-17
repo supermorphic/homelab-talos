@@ -1402,22 +1402,23 @@ only from a secure prompt; do not record them in the terminal history, this runb
 or Git.
 
 ```bash
-printf 'Prowlarr API key: '
-IFS= read -r -s PROWLARR_API_KEY
-printf '\nSonarr API key: '
-IFS= read -r -s SONARR_API_KEY
-printf '\nRadarr API key: '
-IFS= read -r -s RADARR_API_KEY
-printf '\nLidarr API key: '
-IFS= read -r -s LIDARR_API_KEY
-printf '\nSeerr API key: '
-IFS= read -r -s SEERR_API_KEY
-printf '\n'
-export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY
-export GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM='write:monitoring:gatus-media-integration:sops'
-mise exec -- just repo gatus-media-integration-secrets
-unset PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY \
-  GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM
+(
+  set -euo pipefail
+  printf 'Prowlarr API key: '
+  IFS= read -r -s PROWLARR_API_KEY
+  printf '\nSonarr API key: '
+  IFS= read -r -s SONARR_API_KEY
+  printf '\nRadarr API key: '
+  IFS= read -r -s RADARR_API_KEY
+  printf '\nLidarr API key: '
+  IFS= read -r -s LIDARR_API_KEY
+  printf '\nSeerr API key: '
+  IFS= read -r -s SEERR_API_KEY
+  printf '\n'
+  export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY
+  export GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM='write:monitoring:gatus-media-integration:sops'
+  mise exec -- just repo gatus-media-integration-secrets
+)
 ```
 
 Commit only the resulting encrypted Secret. For rotation, update that encrypted Secret,
@@ -1479,7 +1480,11 @@ prometheus_results="$(
     --data-urlencode 'query=gatus_results_endpoint_success{group="Media Integration"}' \
     https://prometheus.lab.supermorphic.com/api/v1/query
 )"
-[[ "$(printf '%s' "$prometheus_results" | mise exec -- yq -r '.data.result | length')" == 6 ]]
+series_total="$(printf '%s' "$prometheus_results" | mise exec -- yq -r '.data.result | length')"
+[[ "$series_total" == 6 ]] || {
+  echo "Prometheus does not have exactly six Media Integration success series." >&2
+  exit 1
+}
 for probe_name in "${integration_probe_names[@]}"; do
   series_count="$(
     printf '%s' "$prometheus_results" \
