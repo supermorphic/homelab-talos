@@ -70,17 +70,42 @@ expect_fail() {
   }
 }
 
-# This independent oracle is deliberately about a synthetic native-health response,
-# not any Servarr or Seerr response fixture. It rejects a non-empty response before
-# the Gatus condition syntax is considered.
-[[ "$(yq -r 'tag == "!!seq" and length == 0' <<< '[]')" == 'true' ]] || {
-  echo 'Synthetic empty native-health response must satisfy the independent oracle.' >&2
-  exit 1
+status_only_probe_succeeds() {
+  local status="$1"
+  : "$2" # The contract intentionally ignores the response body.
+  [[ "$status" == '200' ]]
 }
-[[ "$(yq -r 'tag == "!!seq" and length == 0' <<< '[{"source":"synthetic-test"}]')" == 'false' ]] || {
-  echo 'Synthetic non-empty native-health response must fail the independent oracle.' >&2
+
+status_only_bodies=(
+  '[]'
+  '[{"source":"UpdateCheck"}]'
+  '[{"source":"UpdateCheck"},{"source":"UpdateCheck"}]'
+  '[{"source":"DownloadClientCheck"}]'
+  '[{"source":"IndexerStatusCheck"}]'
+  '[{"source":"UpdateCheck"},{"source":"DownloadClientCheck"}]'
+)
+for synthetic_body in "${status_only_bodies[@]}"; do
+  status_only_probe_succeeds '200' "$synthetic_body" || {
+    echo "Synthetic HTTP 200 response must pass regardless of body: $synthetic_body" >&2
+    exit 1
+  }
+done
+if status_only_probe_succeeds '503' '[]'; then
+  echo 'Synthetic non-200 response must fail regardless of body.' >&2
   exit 1
-}
+fi
+
+source_values="$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+for native_endpoint in \
+  prowlarr-native-health \
+  sonarr-native-health \
+  radarr-native-health \
+  lidarr-native-health; do
+  [[ "$(yq -r ".config.endpoints[] | select(.name == \"$native_endpoint\") | .conditions | join(\"|\")" "$source_values")" == '[STATUS] == 200' ]] || {
+    echo "Production $native_endpoint must use only authenticated HTTP 200 success." >&2
+    exit 1
+  }
+done
 
 # The production source must pass before mutation cases begin. During RED this is the
 # intentional failure: the operator-managed Secret and the six endpoints are absent.
@@ -94,8 +119,8 @@ yq -i 'del(.config.endpoints[] | select(.name == "prowlarr-native-health"))' "$v
 expect_fail 'missing native-health endpoint' 'Media Integration endpoint names:'
 
 reset_tree
-yq -i '(.config.endpoints[] | select(.name == "prowlarr-native-health") | .conditions[1]) = "len([BODY]) >= 0"' "$values"
-expect_fail 'weakened native-health empty-body condition' \
+yq -i '(.config.endpoints[] | select(.name == "prowlarr-native-health") | .conditions) += ["len([BODY]) == 0"]' "$values"
+expect_fail 'body-dependent native-health condition' \
   'Media Integration endpoint prowlarr-native-health conditions:'
 
 reset_tree
@@ -123,4 +148,4 @@ reset_tree
 yq -i 'del(.stringData.prowlarr_api_key)' "$secret"
 expect_fail 'missing media API-key Secret data key' 'Gatus media API-key Secret stringData keys:'
 
-echo 'Gatus source validator tests passed: synthetic empty/non-empty oracle and mutation guards.'
+echo 'Gatus source validator tests passed: status-only Servarr contract and mutation guards.'

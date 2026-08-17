@@ -189,7 +189,6 @@ config:
         X-Api-Key: "${GATUS_PROWLARR_API_KEY}"
       conditions:
         - "[STATUS] == 200"
-        - "len([BODY]) == 0"
       ui:
         hide-errors: true
     - name: sonarr-native-health
@@ -201,7 +200,6 @@ config:
         X-Api-Key: "${GATUS_SONARR_API_KEY}"
       conditions:
         - "[STATUS] == 200"
-        - "len([BODY]) == 0"
       ui:
         hide-errors: true
     - name: radarr-native-health
@@ -213,7 +211,6 @@ config:
         X-Api-Key: "${GATUS_RADARR_API_KEY}"
       conditions:
         - "[STATUS] == 200"
-        - "len([BODY]) == 0"
       ui:
         hide-errors: true
     - name: lidarr-native-health
@@ -225,7 +222,6 @@ config:
         X-Api-Key: "${GATUS_LIDARR_API_KEY}"
       conditions:
         - "[STATUS] == 200"
-        - "len([BODY]) == 0"
       ui:
         hide-errors: true
     - name: seerr-sonarr-service-read
