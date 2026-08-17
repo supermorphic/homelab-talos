@@ -2276,6 +2276,30 @@ PYTHON
 	[ "$(find "$BENCHMARK_SCRATCH" -mindepth 1 -print | wc -l | tr -d ' ')" -eq 0 ]
 }
 
+# Catches the production Job depending on test-only GPU identity variables or
+# discovering a missing manifest identity only after hashing the source panel.
+@test "quality derives GPU runtime identity from its assigned-node proof before source hashing" {
+	prepare_execution_run
+	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
+	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
+	: >"$BENCHMARK_COMMAND_LOG"
+
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	run jq -e '
+		.gpu.i915 == ("driver=i915;kernel=" + .node.kernel) and
+		.gpu.vpl == "backend=qsv;ffmpeg=8.1.2"
+	' "$manifest"
+	[ "$status" -eq 0 ]
+	awk '
+		/testsrc2=size=1920x1080:rate=30/ { proof = NR }
+		/^sha256sum / { hash = NR; exit }
+		END { exit !(proof > 0 && hash > proof) }
+	' "$BENCHMARK_COMMAND_LOG"
+}
+
 prepare_contention_samples() {
 	prepare_execution_run
 	export BENCHMARK_CLIENT_DEVICE='living-room-player'

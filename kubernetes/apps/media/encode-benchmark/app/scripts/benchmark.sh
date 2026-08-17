@@ -1303,7 +1303,30 @@ capabilities() (
 )
 
 assigned_node_capability_gate() {
-	capabilities >/dev/null
+	local evidence driver ffmpeg_version kernel
+	evidence="$(capabilities)" || return
+	driver="$(jq -e -r '
+		select(.status == "passed" and .proofStatus == "passed") |
+		.drmDriver | strings | select(. == "i915")
+	' <<<"$evidence")" || {
+		echo 'assigned-node i915 identity is unavailable' >&2
+		return 65
+	}
+	ffmpeg_version="$(jq -e -r '
+		.ffmpegVersion | strings |
+		select(test("^[A-Za-z0-9._+:-]+$"))
+	' <<<"$evidence")" || {
+		echo 'assigned-node VPL identity is unavailable' >&2
+		return 65
+	}
+	kernel="$(uname -r)"
+	[[ "$kernel" =~ ^[A-Za-z0-9._+:~-]+$ ]] || {
+		echo 'assigned-node i915 identity is unavailable' >&2
+		return 65
+	}
+	BENCHMARK_I915_VERSION="driver=$driver;kernel=$kernel"
+	BENCHMARK_VPL_VERSION="backend=qsv;ffmpeg=$ffmpeg_version"
+	export BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
 }
 
 probe_media() {
