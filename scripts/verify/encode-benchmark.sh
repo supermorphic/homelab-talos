@@ -43,7 +43,7 @@ scripts_count="$(yq -p=json -r '[.items[] | select(.metadata.name | test("^encod
 	exit 1
 }
 
-rule="$(kubectl --kubeconfig "$kubeconfig" --namespace media get prometheusrule encode-benchmark --output json)"
+rule="$(kubectl --kubeconfig "$kubeconfig" --namespace monitoring get prometheusrule encode-benchmark --output json)"
 [[ "$(yq -p=json -r '.metadata.name // ""' <<<"$rule")" == 'encode-benchmark' ]] || {
 	echo 'encode-benchmark PrometheusRule is missing.' >&2
 	exit 1
