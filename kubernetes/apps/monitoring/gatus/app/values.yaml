@@ -3,8 +3,32 @@
 # Storage is in-memory: uptime history resets on restart (fine for a status board)
 # and avoids a ReadWriteOnce PVC that deadlocks RollingUpdate on Longhorn.
 env:
-  - name: TZ
-    value: America/Denver
+  TZ: America/Denver
+  GATUS_PROWLARR_API_KEY:
+    valueFrom:
+      secretKeyRef:
+        name: gatus-media-integration-api-keys
+        key: prowlarr_api_key
+  GATUS_SONARR_API_KEY:
+    valueFrom:
+      secretKeyRef:
+        name: gatus-media-integration-api-keys
+        key: sonarr_api_key
+  GATUS_RADARR_API_KEY:
+    valueFrom:
+      secretKeyRef:
+        name: gatus-media-integration-api-keys
+        key: radarr_api_key
+  GATUS_LIDARR_API_KEY:
+    valueFrom:
+      secretKeyRef:
+        name: gatus-media-integration-api-keys
+        key: lidarr_api_key
+  GATUS_SEERR_API_KEY:
+    valueFrom:
+      secretKeyRef:
+        name: gatus-media-integration-api-keys
+        key: seerr_api_key
 serviceMonitor:
   enabled: true
   interval: 1m
@@ -156,6 +180,82 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    - name: prowlarr-native-health
+      group: Media Integration
+      url: "https://prowlarr.lab.supermorphic.com/api/v1/health"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_PROWLARR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "len([BODY]) == 0"
+      ui:
+        hide-errors: true
+    - name: sonarr-native-health
+      group: Media Integration
+      url: "https://sonarr.lab.supermorphic.com/api/v3/health"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_SONARR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "len([BODY]) == 0"
+      ui:
+        hide-errors: true
+    - name: radarr-native-health
+      group: Media Integration
+      url: "https://radarr.lab.supermorphic.com/api/v3/health"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_RADARR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "len([BODY]) == 0"
+      ui:
+        hide-errors: true
+    - name: lidarr-native-health
+      group: Media Integration
+      url: "https://lidarr.lab.supermorphic.com/api/v1/health"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_LIDARR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "len([BODY]) == 0"
+      ui:
+        hide-errors: true
+    - name: seerr-sonarr-service-read
+      group: Media Integration
+      url: "https://seerr.lab.supermorphic.com/api/v1/service/sonarr/0"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_SEERR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].server.id == 0"
+        - "has([BODY].profiles) == true"
+        - "has([BODY].rootFolders) == true"
+      ui:
+        hide-errors: true
+    - name: seerr-radarr-service-read
+      group: Media Integration
+      url: "https://seerr.lab.supermorphic.com/api/v1/service/radarr/0"
+      method: GET
+      interval: 1m
+      headers:
+        X-Api-Key: "${GATUS_SEERR_API_KEY}"
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].server.id == 0"
+        - "has([BODY].profiles) == true"
+        - "has([BODY].rootFolders) == true"
+      ui:
+        hide-errors: true
     # External dependency cert-manager relies on for wildcard-cert renewal.
     - name: letsencrypt-acme
       group: External
