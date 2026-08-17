@@ -1,15 +1,14 @@
 # Media integration health with Gatus — successor decision
 
-- **Status: Draft.**
+- **Status: Accepted.** Approved by the operator on 2026-08-16.
 
 Date: 2026-08-16.
 Branch: `dispatch-media-integration-health-decision`.
 
-If accepted, this record supersedes
+Supersedes
 [Media integration health active probes — successor decision](2026-08-16-media-integration-health-active-probes.md)
 and replaces the combined effective specification formed by that record and
 [Media integration health — decision](2026-08-16-media-integration-health.md).
-The accepted records remain unchanged while this record is in Draft status.
 
 This record completes the redesign of Stage 5 deferred by §8 of
 [Alerting architecture — decision](2026-08-13-alerting-architecture.md).
