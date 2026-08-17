@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: gatus-media-integration-api-keys
+    namespace: gatus
+type: Opaque
+stringData:
+    prowlarr_api_key: ENC[AES256_GCM,data:sWIIefZx2pMp+B5YLqvqCs0mtHfcjNKeFguZkvJcgyI=,iv:gEl1p1gwP4oWmX4gQWWFOnFFCDUEPMoO+L1h3Vx18j0=,tag:5CHsmu1eyIuNhvxjWRFJSA==,type:str]
+    sonarr_api_key: ENC[AES256_GCM,data:QJn+Y0fPDnrvpk7u7p2lCD4TbLtFwv5C4c04TEiuS7M=,iv:USp1iK8l2D0I3tHr0YcSvKXrE5HSNglPQlZfsoCn3mU=,tag:DfaY1W8eWcUxC9mI8u7jMA==,type:str]
+    radarr_api_key: ENC[AES256_GCM,data:nwe5hEOfg7woLuBbZKTTM9E6GJP6eNNokw51boyJtNk=,iv:XlSemhW4q3hXx+PKh81fI3I5MxQMRxxQv6a5pAuh9s4=,tag:LF4seT5JE+rhHSwWmw3IBQ==,type:str]
+    lidarr_api_key: ENC[AES256_GCM,data:Utgww1uERVYtplvqmB1TyzOBcGXBpAbGB+L3O8vnFdI=,iv:YeWkAzBxMjddLkn9tzxdhNTm1vkfHR9kCjkhuo2Smh8=,tag:cAawnImsRcJM2mdtutJMfQ==,type:str]
+    seerr_api_key: ENC[AES256_GCM,data:N+suOC4FDVwE5En/onk+4qzrYWLv9yrRr+CA5jQarzRXXY/BDpf+qV7vgsr1ITJd27Q8PoZq0QH/IW5wm7xYzPpZLT4=,iv:OOJMpf8bseDW26TuZniLWwLplsg/vzM41ynZgb6Dx/w=,tag:8nUQkjek5gVJRCsvQLNG4w==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB6Y3FabzBxb2NER1JmdE5X
+            SmlPejJjWXhLOE8yRU43ZzJ2QXJ2cmgrbFJnCmZnM3dLYm5EWFBHYmFwV1V1YU5U
+            eTNLRVZCbGtRcGgweHdmQjVQOVNEVEkKLS0tIEVjV1dwS2dTNzNEVzBMMDVuUm52
+            OWdqUGlBR2QrcFNDWWl1eEl0aTRvcTgKDYM7mkWk1N90n6EVa0tN868MoMqZGMSY
+            31WzdoKxjDA3D8vryDy/A77bEuofxQaFzDl6ia03PIMypx1Hni0isQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-08-17T14:58:15Z"
+    mac: ENC[AES256_GCM,data:SNr1NkiUk8DZjgg7+xoG1pnUBGM4mWGZtlLo60w1uSFWBPiFM2c7ETI68TTeTfBy8R1pogoSr4ixU8R/MAJ3Q2ktKUehnbZWJeKnwiHkTri+3kD4NxCJzjPzAVMkq8fvvJgkl8noeUCkjL3fv9N/B7VTP/ScFI0YNDARfcGYags=,iv:qP/OSNHqIjQQsJoRaEw1lKh9MIhlLR6gSLfgRokHnbk=,tag:H7jGmxmB638iq/hsz2AOnA==,type:str]
+    version: 3.13.2

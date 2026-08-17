@@ -5,6 +5,7 @@ resources:
   - ./helmrelease.yaml
   - ./helmrepository.yaml
   - ./httproute.yaml
+  - ./media-integration-api-keys.sops.yaml
   - ./namespace.yaml
 configMapGenerator:
   - name: gatus-values

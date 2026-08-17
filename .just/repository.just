@@ -73,6 +73,97 @@ secrets:
     }
     echo "Loaded age identity matches $expected."
 
+# Write only the SOPS-encrypted Gatus media-integration API-key Secret. The five
+# API keys are used by Gatus native-health endpoints; this recipe never echoes them.
+gatus-media-integration-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:monitoring:gatus-media-integration:sops'
+    target='kubernetes/apps/monitoring/gatus/app/media-integration-api-keys.sops.yaml'
+    umask 077
+    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-gatus-media-integration-secrets.XXXXXX")"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+
+    just repo secrets
+    [[ -n "${PROWLARR_API_KEY:-}" ]] || {
+      echo 'Set PROWLARR_API_KEY to the API key from Prowlarr Settings > General.' >&2
+      exit 1
+    }
+    [[ -n "${SONARR_API_KEY:-}" ]] || {
+      echo 'Set SONARR_API_KEY to the API key from Sonarr Settings > General.' >&2
+      exit 1
+    }
+    [[ -n "${RADARR_API_KEY:-}" ]] || {
+      echo 'Set RADARR_API_KEY to the API key from Radarr Settings > General.' >&2
+      exit 1
+    }
+    [[ -n "${LIDARR_API_KEY:-}" ]] || {
+      echo 'Set LIDARR_API_KEY to the API key from Lidarr Settings > General.' >&2
+      exit 1
+    }
+    [[ -n "${SEERR_API_KEY:-}" ]] || {
+      echo 'Set SEERR_API_KEY to the API key from Seerr Settings > General.' >&2
+      exit 1
+    }
+    [[ "${GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the Gatus media-integration Secret.' >&2
+      echo "Set GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+
+    mapfile -t expected_recipients < <(
+      target="$target" yq -r \
+        '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+        .sops.yaml
+    )
+    [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+      "${expected_recipients[0]}" != 'null' ]] || {
+      echo "Unable to select exactly one SOPS age recipient for $target." >&2
+      exit 1
+    }
+    expected_recipient="${expected_recipients[0]}"
+
+    export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY
+    plaintext="$temp_dir/media-integration-api-keys.yaml"
+    candidate="$temp_dir/media-integration-api-keys.sops.yaml"
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "gatus-media-integration-api-keys" |
+       .metadata.namespace = "gatus" |
+       .type = "Opaque" |
+       .stringData.prowlarr_api_key = strenv(PROWLARR_API_KEY) |
+       .stringData.sonarr_api_key = strenv(SONARR_API_KEY) |
+       .stringData.radarr_api_key = strenv(RADARR_API_KEY) |
+       .stringData.lidarr_api_key = strenv(LIDARR_API_KEY) |
+       .stringData.seerr_api_key = strenv(SEERR_API_KEY)' \
+      >"$plaintext"
+
+    sops --encrypt --filename-override "$target" "$plaintext" >"$candidate"
+    [[ "$(sops filestatus "$candidate" | yq -r '.encrypted')" == 'true' ]]
+    mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$candidate" | sort -u)
+    [[ "${#candidate_recipients[@]}" -eq 1 && \
+      "${candidate_recipients[0]}" == "$expected_recipient" ]]
+    [[ "$(yq -r 'keys | sort | join(",")' "$candidate")" == \
+      'apiVersion,kind,metadata,sops,stringData,type' ]]
+    [[ "$(yq -r '.metadata | keys | sort | join(",")' "$candidate")" == 'name,namespace' ]]
+    [[ "$(yq -r '.apiVersion' "$candidate")" == 'v1' ]]
+    [[ "$(yq -r '.kind' "$candidate")" == 'Secret' ]]
+    [[ "$(yq -r '.metadata.name' "$candidate")" == 'gatus-media-integration-api-keys' ]]
+    [[ "$(yq -r '.metadata.namespace' "$candidate")" == 'gatus' ]]
+    [[ "$(yq -r '.type' "$candidate")" == 'Opaque' ]]
+    [[ "$(yq -r 'has("data") | not' "$candidate")" == 'true' ]]
+    [[ "$(yq -r '.stringData | keys | sort | join(",")' "$candidate")" == \
+      'lidarr_api_key,prowlarr_api_key,radarr_api_key,seerr_api_key,sonarr_api_key' ]]
+    for supplied_value in \
+      "$PROWLARR_API_KEY" "$SONARR_API_KEY" "$RADARR_API_KEY" "$LIDARR_API_KEY" "$SEERR_API_KEY"; do
+      ! rg -Fq -- "$supplied_value" "$candidate"
+    done
+
+    mv -- "$candidate" "$target"
+    echo "Wrote SOPS-encrypted $target (gatus-media-integration-api-keys in gatus)."
+
 # Verify the external Pi-hole v6 HTTPS identity and write-capable app-session policy.
 pihole-status:
     #!/usr/bin/env bash

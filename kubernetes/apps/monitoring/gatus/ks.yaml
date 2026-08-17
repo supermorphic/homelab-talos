@@ -9,6 +9,10 @@ spec:
   dependsOn:
     - name: cilium
     - name: internal-gateway
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
   interval: 1h
   path: ./kubernetes/apps/monitoring/gatus/app
   prune: true
