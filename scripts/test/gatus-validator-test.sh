@@ -107,8 +107,8 @@ for native_endpoint in \
   }
 done
 
-# The production source must pass before mutation cases begin. During RED this is the
-# intentional failure: the operator-managed Secret and the six endpoints are absent.
+# The production source must pass before mutation cases begin; the direct assertion
+# above provides the status-only RED gate.
 expect_pass 'production Gatus source'
 
 values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
