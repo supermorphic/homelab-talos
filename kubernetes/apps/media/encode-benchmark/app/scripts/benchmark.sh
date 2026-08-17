@@ -2044,8 +2044,13 @@ rank_quality_candidates() {
 	candidates="$(jq -n -c \
 		--arg run_id "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
 		--arg digest "sha256:$digest" \
-		--argjson schema "$CONTRACT_RESULTS_SCHEMA" --argjson rows "$rows" \
-		--argjson expected "$expected" --argjson settings "$settings" '
+		--argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--slurpfile rows_input <(printf '%s\n' "$rows") \
+		--slurpfile expected_input <(printf '%s\n' "$expected") \
+		--slurpfile settings_input <(printf '%s\n' "$settings") '
+		($rows_input[0]) as $rows |
+		($expected_input[0]) as $expected |
+		($settings_input[0]) as $settings |
 		def numeric_at_least($minimum):
 			(tonumber?) as $number |
 			$number != null and ($number == $number) and ($number != infinite) and $number >= $minimum;
