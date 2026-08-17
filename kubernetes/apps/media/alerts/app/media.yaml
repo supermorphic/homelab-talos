@@ -60,6 +60,76 @@ spec:
           annotations:
             summary: Tautulli database claim is absent or unbound
             description: The media/tautulli PVC has not reported Bound for five minutes; watch history persistence is at risk.
+    - name: media-integration-health
+      rules:
+        - alert: ProwlarrNativeHealthApiUnavailable
+          expr: gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Prowlarr authenticated health API is unavailable
+            description: >-
+              The authenticated Prowlarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+        - alert: SonarrNativeHealthApiUnavailable
+          expr: gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Sonarr authenticated health API is unavailable
+            description: >-
+              The authenticated Sonarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+        - alert: RadarrNativeHealthApiUnavailable
+          expr: gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Radarr authenticated health API is unavailable
+            description: >-
+              The authenticated Radarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+        - alert: LidarrNativeHealthApiUnavailable
+          expr: gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Lidarr authenticated health API is unavailable
+            description: >-
+              The authenticated Lidarr health API has not returned HTTP 200 for 15 minutes. Inspect Gatus access, routing, authentication, and the application. The alert does not evaluate native health entries or identify an integration target.
+        - alert: SeerrSonarrServiceReadFailed
+          expr: gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Seerr cannot read its selected Sonarr service
+            description: >-
+              The authenticated Gatus read-through through Seerr has failed for 15 minutes. Seerr cannot read its selected Sonarr service. This does not prove that a Seerr request, download, or import failed.
+        - alert: SeerrRadarrServiceReadFailed
+          expr: gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Seerr cannot read its selected Radarr service
+            description: >-
+              The authenticated Gatus read-through through Seerr has failed for 15 minutes. Seerr cannot read its selected Radarr service. This does not prove that a Seerr request, download, or import failed.
+        - alert: MediaIntegrationProbeMissing
+          expr: |
+            absent(gatus_results_endpoint_success{group="Media Integration", name="prowlarr-native-health"})
+            or absent(gatus_results_endpoint_success{group="Media Integration", name="sonarr-native-health"})
+            or absent(gatus_results_endpoint_success{group="Media Integration", name="radarr-native-health"})
+            or absent(gatus_results_endpoint_success{group="Media Integration", name="lidarr-native-health"})
+            or absent(gatus_results_endpoint_success{group="Media Integration", name="seerr-sonarr-service-read"})
+            or absent(gatus_results_endpoint_success{group="Media Integration", name="seerr-radarr-service-read"})
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Media integration probe {{ $labels.name }} is missing'
+            description: 'The Media Integration/{{ $labels.name }} Gatus success series has been absent for five minutes. This is missing telemetry, not an application or integration failure.'
     # Detection for Plex's off-cluster port on 32400. Why each expression is shaped the
     # way it is — the flag="SYN" filter, the source regex, the flows-per-connection
     # ratio and its floor, the two absent() companions, and every threshold — is
