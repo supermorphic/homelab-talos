@@ -388,11 +388,11 @@ assert_guard_refuses() {
 	inputs="$BATS_TEST_TMPDIR/findings-inputs.json"
 	jq -n '{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",quality:{runId:"20260815T120000Z-aaaaaaaa",resultsSha256:("sha256:" + ("a" * 64)),candidatesSha256:("sha256:" + ("b" * 64))},x265:[],savings:null,contention:null}' >"$inputs"
 	chmod 0644 "$inputs"
-	input_mode_before="$(stat -f '%Lp' "$inputs" 2>/dev/null || stat -c '%a' "$inputs")"
+	input_mode_before="$(stat -c '%a' "$inputs" 2>/dev/null || stat -f '%Lp' "$inputs")"
 	export ENCODE_BENCHMARK_FINDINGS_CONFIRM='run:encode-benchmark:findings'
 	run_dispatch findings "$inputs"
 	[ "$status" -eq 0 ]
-	input_mode_after="$(stat -f '%Lp' "$inputs" 2>/dev/null || stat -c '%a' "$inputs")"
+	input_mode_after="$(stat -c '%a' "$inputs" 2>/dev/null || stat -f '%Lp' "$inputs")"
 	[ "$input_mode_after" = "$input_mode_before" ]
 	! awk -F '\t' -v path="$inputs" '$1 == "chmod" && index($2, path) { found = 1 } END { exit found }' "$STUB_CALLS"
 	job="$(job_capture)"
