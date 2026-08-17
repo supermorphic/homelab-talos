@@ -110,16 +110,16 @@ check_media_endpoint() {
 
 check_media_endpoint 'prowlarr-native-health' \
   'https://prowlarr.lab.supermorphic.com/api/v1/health' "\${GATUS_PROWLARR_API_KEY}" \
-  '[STATUS] == 200|len([BODY]) == 0'
+  '[STATUS] == 200'
 check_media_endpoint 'sonarr-native-health' \
   'https://sonarr.lab.supermorphic.com/api/v3/health' "\${GATUS_SONARR_API_KEY}" \
-  '[STATUS] == 200|len([BODY]) == 0'
+  '[STATUS] == 200'
 check_media_endpoint 'radarr-native-health' \
   'https://radarr.lab.supermorphic.com/api/v3/health' "\${GATUS_RADARR_API_KEY}" \
-  '[STATUS] == 200|len([BODY]) == 0'
+  '[STATUS] == 200'
 check_media_endpoint 'lidarr-native-health' \
   'https://lidarr.lab.supermorphic.com/api/v1/health' "\${GATUS_LIDARR_API_KEY}" \
-  '[STATUS] == 200|len([BODY]) == 0'
+  '[STATUS] == 200'
 check_media_endpoint 'seerr-sonarr-service-read' \
   'https://seerr.lab.supermorphic.com/api/v1/service/sonarr/0' "\${GATUS_SEERR_API_KEY}" \
   '[STATUS] == 200|[BODY].server.id == 0|has([BODY].profiles) == true|has([BODY].rootFolders) == true'

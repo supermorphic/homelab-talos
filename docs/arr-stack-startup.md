@@ -1389,9 +1389,9 @@ does not replace the operator acceptance gates in this runbook.
 
 - **Level 1** remains the existing unauthenticated `/ping` or status availability
   checks.
-- **Level 2** is the four `Media Integration` native-health endpoints. A failure is
-  generic application health; it does not identify Prowlarr, qBittorrent, Plex, or
-  another target as the cause.
+- **Level 2** is the four authenticated `Media Integration` native-health API
+  endpoints. Success proves that the trusted route, endpoint, and supplied API key
+  returned HTTP 200. Gatus does not evaluate the native health response entries.
 - **Level 3** is the two selected Seerr service reads. They prove only that Seerr can
   use stored downstream settings to read the selected service.
 - **Level 4** remains operator-run and can mutate durable state. Never schedule it.
@@ -1427,9 +1427,11 @@ Do not add a reloader.
 
 The probes use the existing internal DNS, trusted HTTPS Gateway, HTTPRoutes, and
 Services. If the Gateway does not forward `X-Api-Key`, stop and reassess; do not add
-Service-DNS access or a NetworkPolicy. The accepted residuals are Seerr-to-Plex,
-passive or event-driven Servarr latency, no generic provider attribution, and no
-continuous end-to-end workflow proof.
+Service-DNS access or a NetworkPolicy. The twelve Servarr-related inventory edges have
+no continuously evaluated integration-health signal from these probes; their native
+health details remain available for operator inspection. The accepted residuals are
+Seerr-to-Plex, passive or event-driven Servarr latency, no generic provider attribution,
+and no continuous end-to-end workflow proof.
 
 ### Operator-managed rollout gate
 
@@ -1501,10 +1503,11 @@ for probe_name in "${integration_probe_names[@]}"; do
 done
 ```
 
-For a later alert rollout, keep the new rules silent until this gate passes. Compare the
-four native-health results with the application health pages and the selected Seerr
-service settings. Do not create a request or run a native Test action as part of this
-verification.
+For a later alert rollout, keep the new rules silent until this gate passes. Confirm
+that each Servarr endpoint is green when its authenticated API returns HTTP 200,
+including when update notices are present. Compare the selected Seerr service settings
+with the two read-through results. Do not create a request or run a native Test action
+as part of this verification.
 
 ## Recovery and repeat setup
 
