@@ -21,8 +21,30 @@ setup() {
 			globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
 			x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
 		} and
-		.runtime.capabilityStatus == "pending" and
-		.runtime.capabilityEvidence == {nodes: []}
+		.runtime.capabilityStatus == "verified" and
+		(.runtime.capabilityEvidence.nodes | length) == 2 and
+		([.runtime.capabilityEvidence.nodes[].nodeName] == ["nuc1", "nuc3"]) and
+		([.runtime.capabilityEvidence.nodes[] | .strategyId] | all(. == "qsv-hevc-icq-v1")) and
+		([.runtime.capabilityEvidence.nodes[] | .proofSchemaVersion] | all(. == 3)) and
+		([.runtime.capabilityEvidence.nodes[] | .initialization] | all(. == "passed")) and
+		([.runtime.capabilityEvidence.nodes[] | .initializationReason] | all(. == "")) and
+		([.runtime.capabilityEvidence.nodes[] | .renderNode] | all(. == "/dev/dri/renderD128")) and
+		([.runtime.capabilityEvidence.nodes[] | .drmDriver] | all(. == "i915")) and
+		([.runtime.capabilityEvidence.nodes[] | .selectedRateControl] | all(. == "ICQ")) and
+		([.runtime.capabilityEvidence.nodes[] | .telemetryStatus] | all(. == "available")) and
+		([.runtime.capabilityEvidence.nodes[] | .telemetryReason] | all(. == "")) and
+		([.runtime.capabilityEvidence.nodes[] | .videoBusyNanoseconds] | all(. > 0)) and
+		([.runtime.capabilityEvidence.nodes[] | .videoBusyPercent] | all(. > 0)) and
+		([.runtime.capabilityEvidence.nodes[] | .encodeFps] | all(. > 0)) and
+		([.runtime.capabilityEvidence.nodes[] | .encodeSpeed] | all(. > 0)) and
+		([.runtime.capabilityEvidence.nodes[] | .decode] | all(. == "passed")) and
+		([.runtime.capabilityEvidence.nodes[] | .vmaf] | all(. == "passed")) and
+		([.runtime.capabilityEvidence.nodes[] | .proofStatus] | all(. == "passed")) and
+		([.runtime.capabilityEvidence.nodes[] | .proofReasons] | all(. == "")) and
+		([.runtime.capabilityEvidence.nodes[].verifiedAt] | all(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))) and
+		([.runtime.capabilityEvidence.nodes[] | .configuredImageDigest] | all(. == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
+		([.runtime.capabilityEvidence.nodes[] | .imageId] | all(. == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
+		.chosenSettings == {}
 	' "$samples_json"
 	[ "$status" -eq 0 ]
 }
