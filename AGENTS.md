@@ -44,25 +44,38 @@ solely to satisfy these style rules.
 
 ## Git and worktrees
 
-- Never commit or push directly to `main`; work on the assigned feature branch.
+- Never commit or push directly to `main`. Published implementation work must use an
+  appropriate feature branch. A runtime-managed worktree may start and operate at
+  detached `HEAD`, including making local commits; detached state alone is not unsafe.
+  Preserve useful work on an appropriate feature branch before publication or removal
+  of the worktree.
 - Never merge or enable auto-merge without explicit operator authorization for that
   specific merge. General or stale approval does not count.
-- The assigned worktree is the filesystem boundary for repository implementation files
-  and inputs. Established pinned-toolchain workflows may access their configured
-  user-level installations, caches, and state when permitted by the execution sandbox;
-  this does not make the workflow operator-run. Do not use files from another worktree
-  or the primary checkout as implementation inputs, and never modify them. Read-only
-  inspection of committed Git objects, refs, and history is allowed.
-- Do not create, remove, move, prune, repair, or otherwise manage worktrees. Worktree
-  lifecycle is operator-run.
-- Stop if the assigned branch or worktree is inconsistent or unsafe. Preserve unrelated
-  changes.
+- Perform implementation work in an isolated worktree unless the operator explicitly
+  authorizes work in the primary checkout. A worktree supplied by the operator or
+  supported agent runtime satisfies this requirement. Agents and supported agent
+  runtimes may create and manage task-owned worktrees when useful for filesystem
+  isolation or safe parallelism.
+- Treat the assigned or task-owned worktree as the filesystem boundary for repository
+  implementation files and inputs. Established pinned-toolchain workflows may access
+  their configured user-level installations, caches, and state when permitted by the
+  execution sandbox; this does not make the workflow operator-run. Do not use files from
+  another worktree or the primary checkout as implementation inputs, and do not modify
+  them unless explicitly authorized. Read-only inspection of committed Git objects,
+  refs, and history is allowed.
+- Do not modify, remove, repurpose, or prune a worktree owned by another active task or
+  whose ownership or preservation state is uncertain. Before removing a task-owned
+  worktree, preserve its useful work or intentionally discard it with appropriate
+  authority.
+- Stop if the current Git or worktree state is inconsistent or unsafe. Preserve
+  unrelated changes.
 - Keep each commit limited to one coherent change. Do not include unrelated edits, and
   split changes when they can be independently reviewed or reverted.
-- Before each push, fetch `origin` and inspect both `origin/main` and the remote feature
-  branch. If the remote feature branch contains unexpected commits absent locally, stop
-  rather than overwriting or automatically reconciling it. Otherwise, if `origin/main`
-  advanced, rebase the clean assigned branch onto it and rerun required validation.
+- Before each push, fetch `origin` and inspect `origin/main` and, when it exists, the
+  remote feature branch. If the remote feature branch contains unexpected commits absent
+  locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
+  `origin/main` advanced, rebase the clean feature branch onto it and rerun required
+  validation.
 - Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
   stop and ask the operator. When pushing rebased commits requires rewriting the assigned
   remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
@@ -72,57 +85,59 @@ solely to satisfy these style rules.
 
 ## Authority boundaries
 
-- Run repository workflows through the pinned toolchain with `mise exec -- just …`.
-  Use `mise exec -- <tool> …` for pinned ad hoc inspection when no recipe exists. Do not
-  substitute unpinned local tools.
-- Sandbox approval required solely for an established agent-owned workflow to access
-  approved toolchain installations, caches, or state does not make the workflow
-  operator-run. Sandbox approval does not authorize any action otherwise prohibited or
-  assigned to the operator by this file.
-- Normal repository and cluster reads may use established read-only workflows with
-  scoped worktree credentials. Changes to Flux-managed state go through Git.
-- If the assigned worktree lacks required cluster credentials, stop and ask the operator
-  to mint or provide the scoped access. Do not retrieve, copy, expose, or manage operator
-  credentials.
-- Agents may run established scoped verification with credentials provided to the
-  assigned worktree. Per-invocation authorization does not transfer credential custody
-  or operator ownership.
-- Platform rollouts, break-glass actions, recovery, secret custody, branch-protection
-  mutation, and similar privileged operations remain operator-run. Agents may prepare,
-  review, and validate their source changes.
-- GitHub protection checks and plans are read-only. The operator performs any authorized
-  protection mutation through the guarded workflow documented in the relevant runbook.
+- Run established repository workflows through the pinned toolchain with
+  `mise exec -- just …`. When no recipe exists, use `mise exec -- <tool> …`
+  for repository-dependent tools whose pinned version matters. Ordinary
+  read-only filesystem and Git inspection may use standard shell commands.
+  Do not substitute unpinned tools for established pinned repository workflows.
+- Agent-owned workflows should proceed autonomously when permitted by
+  repository policy. Runtime or sandbox approval does not change whether an
+  operation is agent-owned or operator-run. Complete all independent safe work
+  before stopping for required operator action.
+- Agents may use approved repository workflows to mint and use task-scoped
+  read-only cluster credentials and perform scoped verification without operator
+  intervention. Agents may not seek out, copy, adopt, or use elevated, write,
+  administrative, or break-glass credentials unless the operator explicitly
+  authorizes that credential for the specific task.
+- Persistent changes to Flux-managed state must go through Git. Agents may
+  perform task-scoped, reversible ephemeral cluster actions needed for approved
+  testing, benchmarking, verification, diagnostics, and cleanup of resources
+  they create for those purposes. Privileged, destructive, or persistent
+  live-state changes outside Git remain operator-run.
 
 ## Agent orchestration
 
-- Use an economical model appropriate for each delegated role. Do not inherit the
+- Use an economical model appropriate for each subagent role. Do not inherit the
   coordinator's high-capability model by default when a lower-cost model can
   reliably perform the task.
-- Freshly spawned delegated agents must use isolated task context when the runtime
-  supports it. Resuming an existing task-local agent for a scoped fix or clarification
-  is allowed when retaining that agent's task context is useful. Provide requirements,
-  reports, diffs, and other substantial handoffs through files rather than inherited
-  conversation history.
-- Use a capable model for architecture, cross-cutting judgment, difficult debugging,
-  and reviews that genuinely require that level of reasoning. Use a standard model for
-  normal implementation, integration, and task review. Use a fast model for mechanical,
-  tightly scoped work. Do not escalate a review model solely because it is a review.
-- If the same implementation approach fails twice, stop repeating it. Diagnose the
-  failure and change the approach, provide missing context, split the task, or escalate
-  to a more capable model.
+- Freshly spawned subagents should use isolated task context when the runtime
+  supports it. Resuming an existing task-local subagent for a scoped fix or
+  clarification is allowed when retaining its context is useful. Use files for
+  substantial cross-agent handoffs when they improve context isolation or
+  durability.
+- Use a capable model for architecture, cross-cutting judgment, difficult
+  debugging, and reviews that genuinely require that level of reasoning. Use a
+  standard model for normal implementation, integration, and task review. Use a
+  fast model for mechanical, tightly scoped work. Do not escalate a review
+  model solely because it is a review.
+- If the same implementation approach fails twice, stop repeating it. Diagnose
+  the failure and change the approach, provide missing context, split the task,
+  or escalate to a more capable model.
 - Delegation must provide useful context isolation, independent judgment,
-  specialization, or safe parallelism. Do not spawn additional agents merely to obtain
-  more opinions or repeat completed analysis.
-- Prefer focused tests, diffs, queries, and bounded logs over broad command output when
-  they provide the required evidence.
-- Treat repeated context compaction, excessive retries, or rapidly growing delegated
-  work as signals to reassess the task rather than continuing mechanically.
+  specialization, or safe parallelism. Do not spawn additional subagents merely
+  to obtain more opinions or repeat completed analysis.
+- Prefer focused tests, diffs, queries, and bounded logs over broad command
+  output when they provide the required evidence.
+- Treat repeated context compaction, excessive retries, or rapidly growing
+  delegated work as signals to reassess the task rather than continuing
+  mechanically.
 
 ## Secrets and credentials
 
 - Secret values committed to Git are SOPS-encrypted, and the age private key remains
   with the operator.
-- Do not print, copy, decrypt, re-encrypt, rewrite, or commit plaintext credentials.
+- Do not expose plaintext credential values in agent output, repository artifacts, or
+  commits. Handle task-scoped credentials only through approved repository workflows.
 - Secret-related implementation may manipulate templates, schemas, references,
   non-secret metadata, or unchanged operator-supplied encrypted artifacts without
   exposing the underlying values.
