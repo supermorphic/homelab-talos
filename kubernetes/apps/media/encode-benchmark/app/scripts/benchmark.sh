@@ -45,7 +45,11 @@ if [[ "$test_mode" != '1' ]]; then
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
 		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
 		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
-		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE; do
+		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE \
+		BENCHMARK_DIAGNOSTIC_MISSING_TOOL BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS \
+		BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW BENCHMARK_DIAGNOSTIC_MISSING_METRIC \
+		BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE \
+		BENCHMARK_DIAGNOSTIC_FAIL_ENCODE BENCHMARK_DIAGNOSTIC_FAIL_DECODE; do
 		if [[ -v "$test_hook" ]]; then
 			echo 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' >&2
 			exit 64
@@ -53,7 +57,7 @@ if [[ "$test_mode" != '1' ]]; then
 	done
 fi
 usage() {
-	echo 'usage: benchmark.sh capabilities | quality [run-id] | x265 <run-id> <sample-id> | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
+	echo 'usage: benchmark.sh capabilities | diagnostics | quality [run-id] | x265 <run-id> <sample-id> | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
 	exit 64
 }
 
@@ -988,6 +992,629 @@ diagnostic_hdr_classify() {
 			])
 		end
 	' <<<"$normalized"
+}
+
+diagnostic_publish_json() {
+	local destination="$1" document="$2" directory staged
+	directory="$(dirname "$destination")"
+	mkdir -p "$directory"
+	staged="$(mktemp "$directory/.diagnostic-json.XXXXXX")" || return
+	if ! jq -e -S -c . <<<"$document" >"$staged"; then
+		rm -f -- "$staged"
+		return 65
+	fi
+	mv -f -- "$staged" "$destination"
+	chmod 0444 "$destination"
+}
+
+diagnostic_status_merge() {
+	local first="$1" second="$2"
+	if [[ "$first" == 'failed' || "$second" == 'failed' ]]; then
+		printf '%s\n' 'failed'
+	elif [[ "$first" == 'harness-blocked' || "$second" == 'harness-blocked' ]]; then
+		printf '%s\n' 'harness-blocked'
+	else
+		printf '%s\n' 'complete'
+	fi
+}
+
+diagnostic_terminal() {
+	local status="$1" run_id="${2:-}" artifact='null'
+	if [[ -n "$run_id" ]]; then
+		artifact="$(jq -n --arg value "/out/runs/$run_id/diagnostics" '$value')"
+	fi
+	jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
+		--arg run "$run_id" --argjson artifact "$artifact" '{
+		schemaVersion:1,
+		strategyId:$strategy,
+		mode:"diagnostics",
+		status:$status,
+		runId:(if $run == "" then null else $run end),
+		artifactLocation:$artifact,
+		vmaf:{total:5,classified:0,unresolved:5},
+		hdr:{total:3,classified:0,unresolved:3}
+	}'
+}
+
+diagnostic_preflight() {
+	local panel_samples="$1" filters bitstream_filters source frame_probe
+	filters="$(ffmpeg -nostdin -hide_banner -filters)" || return
+	for filter in libvmaf ssim psnr; do
+		awk -v required="$filter" '$2 == required { found = 1 } END { exit !found }' <<<"$filters" || {
+			echo "$filter filter is unavailable for diagnostics" >&2
+			return 2
+		}
+	done
+	bitstream_filters="$(ffmpeg -nostdin -hide_banner -bsfs)" || return
+	awk '$1 == "trace_headers" { found = 1 } END { exit !found }' <<<"$bitstream_filters" || {
+		echo 'trace_headers bitstream filter is unavailable for diagnostics' >&2
+		return 2
+	}
+	source="$(jq -e -r '.[0].path | strings' <<<"$panel_samples")" || return 65
+	frame_probe="$(ffprobe -v error -select_streams v:0 -read_intervals '0%+1' \
+		-show_frames \
+		-show_entries 'frame=best_effort_timestamp_time,pkt_duration_time,duration_time,key_frame,pict_type' \
+		-of json "$source")" || {
+		echo 'ffprobe diagnostic frame preflight failed' >&2
+		return 2
+	}
+	jq -e '
+		(.frames | type) == "array" and (.frames | length) > 0 and
+		(.frames[0].best_effort_timestamp_time | type) == "string" and
+		((.frames[0].pkt_duration_time // .frames[0].duration_time) | type) == "string" and
+		(.frames[0].key_frame == 0 or .frames[0].key_frame == 1) and
+		(.frames[0].pict_type == "I" or .frames[0].pict_type == "P" or .frames[0].pict_type == "B")
+	' <<<"$frame_probe" >/dev/null || {
+		echo 'ffprobe required diagnostic frame fields are unavailable' >&2
+		return 2
+	}
+}
+
+diagnostic_assigned_node_capability_gate() {
+	local node_name="${NODE_NAME:-}" passing_nodes kernel ffmpeg_version
+	[[ "$node_name" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || {
+		echo 'diagnostic assigned-node capability identity is unavailable' >&2
+		return 65
+	}
+	passing_nodes="$(contract_passing_icq_nodes "$samples_file")" || return
+	grep -Fqx -- "$node_name" <<<"$passing_nodes" || {
+		echo 'diagnostic assigned node lacks committed passing ICQ capability evidence' >&2
+		return 65
+	}
+	kernel="$(uname -r)"
+	[[ "$kernel" =~ ^[A-Za-z0-9._+:~-]+$ ]] || {
+		echo 'diagnostic assigned-node i915 identity is unavailable' >&2
+		return 65
+	}
+	ffmpeg_version="$(ffmpeg -nostdin -version | awk 'NR == 1 { print $3 }')" || return
+	[[ "$ffmpeg_version" =~ ^[A-Za-z0-9._+:-]+$ ]] || {
+		echo 'diagnostic assigned-node QSV identity is unavailable' >&2
+		return 65
+	}
+	BENCHMARK_I915_VERSION="driver=i915;kernel=$kernel"
+	BENCHMARK_VPL_VERSION="backend=qsv;ffmpeg=$ffmpeg_version"
+	export BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
+}
+
+diagnostic_identity_json() {
+	"$script_directory/probe.sh" diagnostic-identity "$1"
+}
+
+diagnostic_vmaf_window() {
+	local metrics="$1" first="$2" last="$3"
+	[[ -f "$metrics" && ! -L "$metrics" ]] || return 66
+	jq -e -c --argjson first "$first" --argjson last "$last" '
+		if
+			(.frames | type) == "array" and
+			([.frames[] | select(
+				(.frameNum | type) == "number" and (.frameNum | floor) == .frameNum and
+				.frameNum >= $first and .frameNum <= $last and
+				(.metrics.vmaf | type) == "number"
+			)] | length) == 5 and
+			([.frames[] | select(.frameNum >= $first and .frameNum <= $last) | .frameNum] | sort) ==
+				[range($first; $last + 1)]
+		then
+			[.frames[] | select(.frameNum >= $first and .frameNum <= $last) |
+				{frameIndex:.frameNum,vmaf:.metrics.vmaf}] | sort_by(.frameIndex)
+		else error("missing diagnostic VMAF metrics") end
+	' "$metrics"
+}
+
+diagnostic_metric_value() {
+	local metric="$1" file="$2" value
+	[[ -f "$file" && ! -L "$file" ]] || return 66
+	case "$metric" in
+	ssim)
+		value="$(sed -n -E 's/^.*All:([0-9]+([.][0-9]+)?).*$/\1/p' "$file" | tail -n 1)"
+		;;
+	psnr)
+		value="$(sed -n -E 's/^.*psnr_avg:([0-9]+([.][0-9]+)?).*$/\1/p' "$file" | tail -n 1)"
+		;;
+	*) return 64 ;;
+	esac
+	[[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 65
+	printf '%s\n' "$value"
+}
+
+diagnostic_vmaf_setting() {
+	local sample_id="$1" clip_id="$2" observed="$3" setting="$4" source_clip="$5"
+	local output="$6" scratch="$7" source_identity="$8" source_window="$9"
+	local first=$((observed - 2)) last=$((observed + 2)) status='complete' reason=''
+	local encode_log="$scratch/encode-$setting.log" fdinfo_log="$scratch/fdinfo-$setting.log"
+	local current_metrics="$scratch/current-target-$observed-$setting.json"
+	local reset_metrics="$scratch/reset-target-$observed-$setting.json"
+	local encode_status=0 decode_status=0 output_identity='null' output_window='null'
+	local current_window='[]' reset_window='[]' current_target=0 reset_target=0
+	local offsets='[]' offset encoded_index metric_file metric_value offset_json
+	local encode_command decode_command current_command reset_command ssim_command psnr_command
+	local current_filter reset_filter ssim_filter psnr_filter classifier_input timeline
+	local ssim_json psnr_json
+	mkdir -p "$scratch"
+
+	encode_command="$(array_json ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
+		-filter_hw_device hw -i '<source-clip>' -map 0 -c:v hevc_qsv -preset veryslow \
+		-global_quality "$setting" -look_ahead 0 -extbrc 0 -c:a copy -c:s copy \
+		-map_metadata 0 -map_chapters 0 '<encoded-output>')"
+	decode_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -map 0:v:0 -f null -)"
+	current_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -lavfi \
+		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<current-vmaf.json>' -f null -)"
+	reset_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -filter_complex \
+		'[0:v]setpts=PTS-STARTPTS[distorted];[1:v]setpts=PTS-STARTPTS[reference];[distorted][reference]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<reset-vmaf.json>' -f null -)"
+
+	if [[ ! -f "$source_clip" || "$source_identity" == 'null' || "$source_window" == 'null' ]]; then
+		status='harness-blocked'
+		reason='source-clip-unavailable'
+	else
+		set +e
+		run_qsv_encode "$source_clip" "$output" "$setting" "$encode_log" "$fdinfo_log"
+		encode_status=$?
+		set -e
+	fi
+	if [[ "$status" == 'complete' && "$encode_status" -ne 0 ]]; then
+		status='failed'
+		reason='encode-failed'
+	elif [[ "$status" == 'complete' ]] && ! ffmpeg -nostdin -v error -i "$output" -map 0:v:0 -f null - >/dev/null 2>&1; then
+		decode_status=1
+		status='failed'
+		reason='decode-failed'
+	fi
+
+	if [[ "$status" == 'complete' ]]; then
+		output_identity="$(diagnostic_identity_json "$output")" || {
+			status='harness-blocked'
+			reason='output-identity-unavailable'
+			output_identity='null'
+		}
+	fi
+	if [[ "$status" == 'complete' ]]; then
+		output_window="$("$script_directory/probe.sh" diagnostic-window "$output" 0 90 "$first" "$last")" || {
+			status='harness-blocked'
+			reason='incomplete-output-frame-window'
+			output_window='null'
+		}
+	fi
+	if [[ "$status" == 'complete' ]]; then
+		current_filter="[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$current_metrics"
+		if ! ffmpeg -nostdin -v error -i "$output" -i "$source_clip" -lavfi "$current_filter" -f null - >/dev/null 2>&1 ||
+			! current_window="$(diagnostic_vmaf_window "$current_metrics" "$first" "$last")"; then
+			status='harness-blocked'
+			reason='missing-current-vmaf'
+			current_window='[]'
+		else
+			current_target="$(jq -e -r --argjson target "$observed" '.[] | select(.frameIndex == $target) | .vmaf' <<<"$current_window")"
+		fi
+	fi
+	if [[ "$status" == 'complete' ]]; then
+		reset_filter="[0:v]setpts=PTS-STARTPTS[distorted];[1:v]setpts=PTS-STARTPTS[reference];[distorted][reference]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$reset_metrics"
+		if ! ffmpeg -nostdin -v error -i "$output" -i "$source_clip" -filter_complex "$reset_filter" -f null - >/dev/null 2>&1 ||
+			! reset_window="$(diagnostic_vmaf_window "$reset_metrics" "$first" "$last")"; then
+			status='harness-blocked'
+			reason='missing-reset-vmaf'
+			reset_window='[]'
+		else
+			reset_target="$(jq -e -r --argjson target "$observed" '.[] | select(.frameIndex == $target) | .vmaf' <<<"$reset_window")"
+		fi
+	fi
+
+	for offset in -2 -1 0 1 2; do
+		encoded_index=$((observed + offset))
+		metric_file="$scratch/ssim-target-$observed-offset-$offset-setting-$setting.log"
+		ssim_filter="[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]ssim=stats_file=$metric_file"
+		ssim_command="$(array_json ffmpeg -nostdin -v error -i '<source-clip>' -i '<encoded-output>' -filter_complex \
+			"[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]ssim=stats_file=<ssim-metrics>" -f null -)"
+		metric_value='null'
+		if [[ "$status" == 'complete' ]]; then
+			if ffmpeg -nostdin -v error -i "$source_clip" -i "$output" -filter_complex "$ssim_filter" -f null - >/dev/null 2>&1 &&
+				metric_value="$(diagnostic_metric_value ssim "$metric_file")"; then :; else
+				status='harness-blocked'
+				reason='missing-ssim-metric'
+				metric_value='null'
+			fi
+		fi
+		ssim_json="$(jq -n -c --argjson command "$ssim_command" --argjson value "$metric_value" \
+			'{command:$command,value:$value}')"
+
+		metric_file="$scratch/psnr-target-$observed-offset-$offset-setting-$setting.log"
+		psnr_filter="[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]psnr=stats_file=$metric_file"
+		psnr_command="$(array_json ffmpeg -nostdin -v error -i '<source-clip>' -i '<encoded-output>' -filter_complex \
+			"[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]psnr=stats_file=<psnr-metrics>" -f null -)"
+		metric_value='null'
+		if [[ "$status" == 'complete' ]]; then
+			if ffmpeg -nostdin -v error -i "$source_clip" -i "$output" -filter_complex "$psnr_filter" -f null - >/dev/null 2>&1 &&
+				metric_value="$(diagnostic_metric_value psnr "$metric_file")"; then :; else
+				status='harness-blocked'
+				reason='missing-psnr-metric'
+				metric_value='null'
+			fi
+		fi
+		psnr_json="$(jq -n -c --argjson command "$psnr_command" --argjson value "$metric_value" \
+			'{command:$command,value:$value}')"
+		offset_json="$(jq -n -c --argjson offset "$offset" --argjson source "$observed" \
+			--argjson encoded "$encoded_index" --argjson ssim "$ssim_json" --argjson psnr "$psnr_json" '{
+			offset:$offset,sourceFrameIndex:$source,encodedFrameIndex:$encoded,ssim:$ssim,psnr:$psnr
+		}')"
+		offsets="$(jq -c --argjson value "$offset_json" '. + [$value]' <<<"$offsets")"
+	done
+	timeline='{"zeroOffsetAligned":false,"discontinuity":null}'
+	if [[ "$status" == 'complete' ]]; then
+		timeline="$(jq -n -c --argjson source "$source_window" --argjson output "$output_window" \
+			--argjson offsets "$offsets" --argjson observed "$observed" '
+			def unique_best($metric):
+				([$offsets[] | {offset,value:.[$metric].value}] | max_by(.value).value) as $best |
+				([$offsets[] | select(.[$metric].value == $best) | .offset]) as $matches |
+				if ($matches | length) == 1 then $matches[0] else null end;
+			(unique_best("ssim")) as $ssim_offset |
+			(unique_best("psnr")) as $psnr_offset |
+			($source.frames | map({frameIndex,bestEffortTimestamp,packetDuration})) as $source_timeline |
+			($output.frames | map({frameIndex,bestEffortTimestamp,packetDuration})) as $output_timeline |
+			{
+				zeroOffsetAligned:(
+					$source.decodedFrameCount == $output.decodedFrameCount and
+					$source.stream.averageFrameRate == $output.stream.averageFrameRate and
+					$source_timeline == $output_timeline
+				),
+				discontinuity:(
+					if $ssim_offset != null and $ssim_offset == $psnr_offset and $ssim_offset != 0 then
+						([$source.frames[] | select(.frameIndex == $observed)][0].bestEffortTimestamp) as $source_pts |
+						([$output.frames[] | select(.frameIndex == ($observed + $ssim_offset))][0].bestEffortTimestamp) as $output_pts |
+						if $source_pts == $output_pts then
+							{kind:"timestamp-discontinuity",offset:$ssim_offset}
+						else null end
+					else null end
+				)
+			}
+		')" || {
+			status='harness-blocked'
+			reason='timeline-evidence-invalid'
+			timeline='{"zeroOffsetAligned":false,"discontinuity":null}'
+		}
+	fi
+
+	classifier_input="$(jq -n -c --argjson quality "$setting" --arg status "$status" \
+		--argjson current "$current_target" --argjson reset "$reset_target" --argjson offsets "$offsets" \
+		--argjson timeline "$timeline" '{
+		globalQuality:$quality,
+		completeEvidence:($status == "complete"),
+		currentTargetVmaf:$current,
+		resetTargetVmaf:$reset,
+		sourceWindow:{status:(if $status == "failed" then "decode-error" else "clean" end)},
+		timeline:$timeline,
+		offsets:[$offsets[] | {offset,ssim:.ssim.value,psnr:.psnr.value}]
+	}')"
+	jq -n -c --argjson quality "$setting" --arg status "$status" --arg reason "$reason" \
+		--argjson source_identity "$source_identity" --argjson output_identity "$output_identity" \
+		--argjson source_window "$source_window" --argjson output_window "$output_window" \
+		--argjson encode "$encode_command" --argjson decode "$decode_command" \
+		--argjson current_command "$current_command" --argjson reset_command "$reset_command" \
+		--argjson current_window "$current_window" --argjson reset_window "$reset_window" \
+		--argjson offsets "$offsets" --argjson timeline "$timeline" --argjson classifier "$classifier_input" '{
+		globalQuality:$quality,status:$status,reason:(if $reason == "" then null else $reason end),
+		sourceIdentity:$source_identity,outputIdentity:$output_identity,
+		sourceFrameWindow:$source_window,outputFrameWindow:$output_window,
+		commands:{encode:$encode,decode:$decode,vmafCurrent:$current_command,vmafReset:$reset_command},
+		vmaf:{current:$current_window,reset:$reset_window},offsets:$offsets,timeline:$timeline,
+		classifierInput:$classifier
+	}'
+}
+
+diagnostic_hdr_pair() {
+	local media="$1" token="$2" start="$3" duration="$4"
+	local decoded='null' trace='null' status='complete' reason=''
+	local decoded_command trace_command
+	decoded_command="$(array_json ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
+		-show_frames -show_entries frame=side_data_list -of json "<$token>")"
+	trace_command="$(array_json ffmpeg -nostdin -v verbose -ss "$start" -i "<$token>" -t "$duration" \
+		-map 0:v:0 -c:v copy -bsf:v trace_headers -f null -)"
+	decoded="$("$script_directory/probe.sh" diagnostic-hdr-frame "$media" "$start" "$duration")" || {
+		status='harness-blocked'
+		reason='decoded-frame-oracle-failed'
+		decoded='{"status":"malformed"}'
+	}
+	trace="$("$script_directory/probe.sh" diagnostic-hdr-trace "$media" "$start" "$duration")" || {
+		status='harness-blocked'
+		reason='trace-headers-oracle-failed'
+		trace='{"status":"malformed"}'
+	}
+	jq -n -c --arg start "$start" --argjson duration "$duration" --arg status "$status" --arg reason "$reason" \
+		--argjson decoded "$decoded" --argjson trace "$trace" \
+		--argjson decoded_command "$decoded_command" --argjson trace_command "$trace_command" '{
+		start:$start,durationSeconds:$duration,status:$status,
+		reason:(if $reason == "" then null else $reason end),
+		decoded:{command:$decoded_command,oracle:$decoded},
+		trace:{command:$trace_command,oracle:$trace}
+	}'
+}
+
+diagnostic_hdr_evidence() {
+	local sample_id="$1" source="$2" clip_id="$3" timestamp="$4" clip="$5" output="$6" scratch="$7"
+	local clip_ready="${8:-1}" status='complete' reason='' encode_status=0 title_probe duration end_start
+	local source_identity='null' clip_identity='null' output_identity='null' stream_oracle='null'
+	local beginning detail ending clip_pair encoded_pair source_windows classifier_file normalized='null' classification
+	local encode_command decode_command clip_command stream_command
+	clip_command="$(array_json ffmpeg -nostdin -v error -ss "$timestamp" -i '<source-title>' -t 90 -map 0:v:0 -c copy '<source-clip>')"
+	encode_command="$(array_json ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
+		-filter_hw_device hw -i '<source-clip>' -map 0 -c:v hevc_qsv -preset veryslow \
+		-global_quality 16 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy \
+		-map_metadata 0 -map_chapters 0 '<encoded-output>')"
+	decode_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -map 0:v:0 -f null -)"
+	stream_command="$(array_json ffprobe -v error -select_streams v:0 -read_intervals '0%+10' \
+		-show_streams -show_entries stream_side_data -of json '<source-title>')"
+
+	source_identity="$(diagnostic_identity_json "$source")" || {
+		status='harness-blocked'
+		reason='source-identity-unavailable'
+		source_identity='null'
+	}
+	if [[ "$clip_ready" == '1' ]]; then
+		clip_identity="$(diagnostic_identity_json "$clip")" || {
+			status='harness-blocked'
+			reason='clip-identity-unavailable'
+			clip_identity='null'
+		}
+	else
+		status='harness-blocked'
+		reason='source-clip-unavailable'
+	fi
+	if ! title_probe="$(probe_media title "$source")" ||
+		! duration="$(jq -e -r '.durationSeconds | numbers | select(. >= 10)' <<<"$title_probe")"; then
+		status='harness-blocked'
+		reason='source-duration-unavailable'
+		duration=10
+	fi
+	end_start="$(awk -v duration="$duration" 'BEGIN { value = duration - 10; if (value < 0) value = 0; printf "%.6f", value }')"
+	stream_oracle="$("$script_directory/probe.sh" diagnostic-hdr-stream "$source" 0 10)" || {
+		status='harness-blocked'
+		reason='source-stream-oracle-failed'
+		stream_oracle='{"status":"malformed"}'
+	}
+	beginning="$(diagnostic_hdr_pair "$source" source-title 0 10)"
+	detail="$(diagnostic_hdr_pair "$source" source-title "$timestamp" 10)"
+	ending="$(diagnostic_hdr_pair "$source" source-title "$end_start" 10)"
+	clip_pair="$(diagnostic_hdr_pair "$clip" source-clip 0 10)"
+	for pair in "$beginning" "$detail" "$ending" "$clip_pair"; do
+		status="$(diagnostic_status_merge "$status" "$(jq -r '.status' <<<"$pair")")"
+	done
+
+	if [[ "$clip_ready" != '1' ]]; then
+		encoded_pair='{"start":"0","durationSeconds":10,"status":"harness-blocked","reason":"source-clip-unavailable","decoded":{"command":[],"oracle":{"status":"malformed"}},"trace":{"command":[],"oracle":{"status":"malformed"}}}'
+	else
+		set +e
+		run_qsv_encode "$clip" "$output" 16 "$scratch/encode.log" "$scratch/fdinfo.log"
+		encode_status=$?
+		set -e
+	fi
+	if [[ "$clip_ready" == '1' && "$encode_status" -ne 0 ]]; then
+		status='failed'
+		reason='encode-failed'
+	elif [[ "$clip_ready" == '1' ]] && ! ffmpeg -nostdin -v error -i "$output" -map 0:v:0 -f null - >/dev/null 2>&1; then
+		status='failed'
+		reason='decode-failed'
+	elif [[ "$clip_ready" == '1' ]]; then
+		output_identity="$(diagnostic_identity_json "$output")" || {
+			status='harness-blocked'
+			reason='output-identity-unavailable'
+			output_identity='null'
+		}
+	fi
+	if [[ "$status" == 'failed' ]]; then
+		encoded_pair='{"start":"0","durationSeconds":10,"status":"failed","reason":"encoded-output-unavailable","decoded":{"command":[],"oracle":{"status":"malformed"}},"trace":{"command":[],"oracle":{"status":"malformed"}}}'
+	elif [[ "$clip_ready" == '1' ]]; then
+		encoded_pair="$(diagnostic_hdr_pair "$output" encoded-output 0 10)"
+		status="$(diagnostic_status_merge "$status" "$(jq -r '.status' <<<"$encoded_pair")")"
+	fi
+
+	source_windows="$(jq -n -c --argjson beginning "$beginning" --argjson detail "$detail" --argjson ending "$ending" \
+		'{beginning:$beginning,detail:$detail,end:$ending}')"
+	classifier_file="$scratch/hdr-classifier.json"
+	jq -n -c --argjson stream "$stream_oracle" --argjson windows "$source_windows" \
+		--argjson clip "$clip_pair" --argjson encoded "$encoded_pair" '{
+		schemaVersion:1,
+		source:{streamProbe:$stream,windows:($windows | with_entries(.value = {decoded:.value.decoded.oracle,trace:.value.trace.oracle}))},
+		clip:{decoded:$clip.decoded.oracle,trace:$clip.trace.oracle},
+		encoded:{decoded:$encoded.decoded.oracle,trace:$encoded.trace.oracle}
+	}' >"$classifier_file"
+	if [[ "$status" == 'complete' ]]; then
+		normalized="$(diagnostic_hdr_normalize "$classifier_file")" || {
+			status='harness-blocked'
+			reason='HDR-oracle-normalization-failed'
+			normalized='null'
+		}
+	fi
+	if [[ "$status" == 'complete' ]] && jq -e '
+		[
+			.source.authoritative.reasons[]?,
+			.source.windows[].authoritative.reasons[]?,
+			.clip.authoritative.reasons[]?,
+			.encoded.authoritative.reasons[]?
+		] | any(. == "decoded-trace-disagreement" or . == "source-window-conflict")
+	' <<<"$normalized" >/dev/null; then
+		status='harness-blocked'
+		reason='conflicting-HDR-oracle'
+	fi
+	if [[ "$status" == 'complete' ]]; then
+		classification="$(diagnostic_hdr_classify "$classifier_file")" || {
+			status='harness-blocked'
+			reason='HDR-classification-failed'
+			classification='{"schemaVersion":1,"classification":"unresolved-oracle","reasons":["classification-failed"]}'
+		}
+	else
+		classification='{"schemaVersion":1,"classification":"unresolved-oracle","reasons":["incomplete-or-failed-evidence"]}'
+	fi
+	jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg sample "$sample_id" --arg clip_id "$clip_id" \
+		--arg status "$status" --arg reason "$reason" --argjson source_identity "$source_identity" \
+		--argjson clip_identity "$clip_identity" --argjson output_identity "$output_identity" \
+		--argjson clip_command "$clip_command" --argjson encode "$encode_command" --argjson decode "$decode_command" \
+		--argjson stream_command "$stream_command" --argjson stream "$stream_oracle" \
+		--argjson windows "$source_windows" --argjson clip_pair "$clip_pair" --argjson encoded_pair "$encoded_pair" \
+		--argjson normalized "$normalized" --argjson classification "$classification" '{
+		schemaVersion:1,strategyId:$strategy,sampleId:$sample,clipId:$clip_id,globalQuality:16,
+		status:$status,reason:(if $reason == "" then null else $reason end),
+		commands:{clip:$clip_command,encode:$encode,decode:$decode},
+		source:{identity:$source_identity,streamProbe:{command:$stream_command,oracle:$stream},windows:$windows},
+		clip:($clip_pair + {identity:$clip_identity}),
+		encoded:($encoded_pair + {identity:$output_identity}),
+		normalizedOracle:$normalized,classification:$classification
+	}'
+}
+
+diagnostics_mode() {
+	local panel_samples run_id='' run_directory diagnostic_root run_scratch manifest_temp
+	local overall_status='complete' sample_id clip_id observed timestamp source clip output
+	local sample source_identity source_window clip_command settings setting setting_json evidence classifier_file classification
+	local entry_status summary vmaf_entries='[]' hdr_entries='[]' title_scratch evidence_path clip_ready
+	panel_samples="$(jq -c '. as $root | [.qualityPanel[]? | select(.id as $sample_id |
+		([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] | index($sample_id) != null))]' "$samples_file")" || return
+	if ! require_running_image_evidence; then
+		diagnostic_terminal harness-blocked
+		return 2
+	fi
+	if ! diagnostic_assigned_node_capability_gate; then
+		diagnostic_terminal harness-blocked
+		return 2
+	fi
+	if ! runtime_pre_encode_gate "$panel_samples"; then
+		diagnostic_terminal harness-blocked
+		return 2
+	fi
+	if ! diagnostic_preflight "$panel_samples"; then
+		diagnostic_terminal harness-blocked
+		return 2
+	fi
+	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode diagnostics)"
+	export BENCHMARK_ENCODER_COMMANDS_JSON
+	run_id="$("$script_directory/runmeta.sh" create diagnostics)" || return
+	run_directory="$benchmark_out/runs/$run_id"
+	diagnostic_root="$run_directory/diagnostics"
+	run_scratch="$scratch_root/$run_id"
+	mkdir -p "$diagnostic_root/vmaf" "$diagnostic_root/hdr" "$run_scratch"
+	manifest_temp="$(mktemp "$diagnostic_root/.manifest.XXXXXX")" || return
+	cp -- "$run_directory/manifest.json" "$manifest_temp"
+	mv -f -- "$manifest_temp" "$diagnostic_root/manifest.json"
+	chmod 0444 "$diagnostic_root/manifest.json"
+
+	while IFS=$'\t' read -r sample_id clip_id observed; do
+		sample="$(jq -e -c --arg sample "$sample_id" '.qualityPanel[] | select(.id == $sample)' "$samples_file")" || return
+		source="$(jq -r '.path' <<<"$sample")"
+		timestamp="$(jq -e -r --arg clip "$clip_id" '.clips[$clip] | strings' <<<"$sample")" || return
+		title_scratch="$run_scratch/vmaf-$sample_id-$clip_id"
+		mkdir -p "$title_scratch"
+		clip="$title_scratch/diagnostic-vmaf-$sample_id-$clip_id-frame-$observed-source.mkv"
+		clip_command="$(array_json ffmpeg -nostdin -v error -ss "$timestamp" -i '<source-title>' -t 90 -map 0:v:0 -c copy '<source-clip>')"
+		entry_status='complete'
+		if ! ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0:v:0 -c copy "$clip" >/dev/null 2>&1; then
+			entry_status='harness-blocked'
+		fi
+		source_identity='null'
+		source_window='null'
+		if [[ "$entry_status" == 'complete' ]]; then
+			source_identity="$(diagnostic_identity_json "$clip")" || entry_status='harness-blocked'
+			if ! source_window="$("$script_directory/probe.sh" diagnostic-window "$clip" 0 90 "$((observed - 2))" "$((observed + 2))")"; then
+				entry_status='harness-blocked'
+				source_window='null'
+			fi
+		fi
+		settings='[]'
+		for setting in 16 30; do
+			output="$title_scratch/diagnostic-vmaf-$sample_id-$clip_id-frame-$observed-qsv-$setting.mkv"
+			mkdir -p "$title_scratch/setting-$setting"
+			if [[ -f "$clip" ]]; then
+				setting_json="$(diagnostic_vmaf_setting "$sample_id" "$clip_id" "$observed" "$setting" \
+					"$clip" "$output" "$title_scratch/setting-$setting" "$source_identity" "$source_window")"
+			else
+				setting_json="$(diagnostic_vmaf_setting "$sample_id" "$clip_id" "$observed" "$setting" \
+					"$clip" "$output" "$title_scratch/setting-$setting" "$source_identity" null)"
+			fi
+			settings="$(jq -c --argjson value "$setting_json" '. + [$value]' <<<"$settings")"
+			entry_status="$(diagnostic_status_merge "$entry_status" "$(jq -r '.status' <<<"$setting_json")")"
+		done
+		classifier_file="$title_scratch/classifier.json"
+		jq -n -c --arg sample "$sample_id" --arg clip "$clip_id" --argjson observed "$observed" \
+			--argjson settings "$settings" '{schemaVersion:1,sampleId:$sample,clipId:$clip,
+			observedFrameIndex:$observed,settings:[$settings[].classifierInput]}' >"$classifier_file"
+		classification="$(diagnostic_vmaf_classify "$classifier_file")" || {
+			entry_status='harness-blocked'
+			classification='{"schemaVersion":1,"classification":"unresolved","reasons":["classification-failed"]}'
+		}
+		evidence="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg sample "$sample_id" --arg clip "$clip_id" \
+			--argjson observed "$observed" --arg status "$entry_status" --argjson clip_command "$clip_command" \
+			--argjson source_identity "$source_identity" --argjson source_window "$source_window" \
+			--argjson settings "$settings" --argjson classification "$classification" '{
+			schemaVersion:1,strategyId:$strategy,sampleId:$sample,clipId:$clip,
+			observedFrameIndex:$observed,status:$status,
+			sourceClip:{command:$clip_command,identity:$source_identity,frameWindow:$source_window},
+			settings:[$settings[] | del(.classifierInput)],classification:$classification
+		}')"
+		evidence_path="$diagnostic_root/vmaf/$sample_id/$clip_id/evidence.json"
+		diagnostic_publish_json "$evidence_path" "$evidence" || return
+		vmaf_entries="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg status "$entry_status" \
+			--arg classification "$(jq -r '.classification' <<<"$classification")" \
+			--arg evidence "vmaf/$sample_id/$clip_id/evidence.json" \
+			'. + [{sampleId:$sample,clipId:$clip,status:$status,classification:$classification,evidence:$evidence}]' <<<"$vmaf_entries")"
+		overall_status="$(diagnostic_status_merge "$overall_status" "$entry_status")"
+	done < <(jq -r '.diagnostics.vmafPanel[] | [.sampleId,.clipId,.observedFrameIndex] | @tsv' "$samples_file")
+
+	while IFS=$'\t' read -r sample_id clip_id; do
+		sample="$(jq -e -c --arg sample "$sample_id" '.qualityPanel[] | select(.id == $sample)' "$samples_file")" || return
+		source="$(jq -r '.path' <<<"$sample")"
+		timestamp="$(jq -e -r --arg clip "$clip_id" '.clips[$clip] | strings' <<<"$sample")" || return
+		title_scratch="$run_scratch/hdr-$sample_id"
+		mkdir -p "$title_scratch"
+		clip="$title_scratch/diagnostic-hdr-$sample_id-source.mkv"
+		output="$title_scratch/diagnostic-hdr-$sample_id-qsv-16.mkv"
+		clip_ready=1
+		if ! ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0:v:0 -c copy "$clip" >/dev/null 2>&1; then
+			clip_ready=0
+		fi
+		evidence="$(diagnostic_hdr_evidence "$sample_id" "$source" "$clip_id" "$timestamp" "$clip" "$output" "$title_scratch" "$clip_ready")"
+		entry_status="$(jq -r '.status' <<<"$evidence")"
+		evidence_path="$diagnostic_root/hdr/$sample_id/evidence.json"
+		diagnostic_publish_json "$evidence_path" "$evidence" || return
+		hdr_entries="$(jq -c --arg sample "$sample_id" --arg status "$entry_status" \
+			--arg classification "$(jq -r '.classification.classification' <<<"$evidence")" \
+			--arg evidence "hdr/$sample_id/evidence.json" \
+			'. + [{sampleId:$sample,status:$status,classification:$classification,evidence:$evidence}]' <<<"$hdr_entries")"
+		overall_status="$(diagnostic_status_merge "$overall_status" "$entry_status")"
+	done < <(jq -r '.diagnostics.hdrPanel[] | [.sampleId,.clipId] | @tsv' "$samples_file")
+
+	if ! runtime_pre_encode_gate "$panel_samples" >/dev/null 2>&1; then
+		overall_status="$(diagnostic_status_merge "$overall_status" harness-blocked)"
+	fi
+	if ! require_running_image_evidence >/dev/null 2>&1; then
+		overall_status="$(diagnostic_status_merge "$overall_status" harness-blocked)"
+	fi
+	summary="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg run "$run_id" --arg status "$overall_status" \
+		--argjson vmaf "$vmaf_entries" --argjson hdr "$hdr_entries" '{
+		schemaVersion:1,strategyId:$strategy,mode:"diagnostics",runId:$run,status:$status,
+		vmaf:{total:5,entries:$vmaf},hdr:{total:3,entries:$hdr}
+	}')"
+	diagnostic_publish_json "$diagnostic_root/diagnostic-summary.json" "$summary" || return
+	rm -rf -- "$run_scratch"
+	diagnostic_terminal "$overall_status" "$run_id"
+	case "$overall_status" in
+	complete) return 0 ;;
+	failed) return 1 ;;
+	*) return 2 ;;
+	esac
 }
 
 ensure_results_file() {
@@ -2237,6 +2864,17 @@ encoder_commands_for_mode() {
 	if [[ "$mode" == 'quality' ]]; then
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
+	elif [[ "$mode" == 'diagnostics' ]]; then
+		commands="$(jq -n -c '[
+			"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
+			"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
+			"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
+			"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
+			"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
+		]')"
 	elif [[ "$mode" == 'x265' ]]; then
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		for ((setting = 10; setting <= 34; setting += 2)); do
@@ -4039,6 +4677,12 @@ capabilities)
 	capabilities
 	;;
 _test) test_dispatch "$@" ;;
+diagnostics)
+	(($# == 0)) || usage
+	contract_load "$samples_file" || exit $?
+	contract_require_diagnostics "$samples_file" || exit $?
+	diagnostics_mode
+	;;
 quality)
 	(($# == 0 || $# == 1)) || usage
 	contract_load "$samples_file" || exit $?

@@ -567,6 +567,209 @@ prepare_execution_run() {
 	export NODE_NAME='nuc1'
 }
 
+create_diagnostic_tools() {
+	stub_bin="$BATS_TEST_TMPDIR/diagnostic-bin"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+arguments="$*"
+case "$arguments" in
+*'-hide_banner -encoders'*)
+	printf '%s\n' ' V..... hevc_qsv Intel Quick Sync Video HEVC encoder' ' V....D libx265 libx265 H.265 / HEVC'
+	exit 0
+	;;
+*'-hide_banner -filters'*)
+	for filter in libvmaf ssim psnr; do
+		if [[ "${BENCHMARK_DIAGNOSTIC_MISSING_TOOL:-}" == "$filter" ]]; then
+			printf ' ... unavailable_%s decoy filter\n' "$filter"
+		else
+			printf ' ... %s diagnostic fixture filter\n' "$filter"
+		fi
+	done
+	exit 0
+	;;
+*'-hide_banner -bsfs'*)
+	if [[ "${BENCHMARK_DIAGNOSTIC_MISSING_TOOL:-}" == 'trace_headers' ]]; then
+		printf '%s\n' 'unavailable_trace_headers'
+	else
+		printf '%s\n' 'trace_headers'
+	fi
+	exit 0
+	;;
+*'-version'*)
+	printf '%s\n' 'ffmpeg version 8.1.2 fixture-build'
+	exit 0
+	;;
+esac
+
+last="${!#}"
+if [[ "$arguments" == *'-bsf:v trace_headers'* ]]; then
+	printf '%s\n' \
+		'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
+		'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
+		'display_primaries_x[2] = 34000' 'display_primaries_y[2] = 16000' \
+		'white_point_x = 15635' 'white_point_y = 16450' \
+		'max_display_mastering_luminance = 10000000' \
+		'min_display_mastering_luminance = 1' \
+		'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
+	exit 0
+fi
+
+if [[ "$arguments" == *'libvmaf='* && "$arguments" == *'log_path='* ]]; then
+	filter=''
+	for argument in "$@"; do
+		[[ "$argument" == *'libvmaf='* ]] && filter="$argument"
+	done
+	metrics_path="${filter##*log_path=}"
+	metrics_path="${metrics_path%%:*}"
+	target="$(sed -n -E 's/^.*target-([0-9]+).*$/\1/p' <<<"$metrics_path")"
+	[[ -n "$target" ]] || target=2
+	if [[ "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" != 'libvmaf' ]]; then
+		mkdir -p "$(dirname "$metrics_path")"
+		jq -n --argjson first "$((target - 2))" --argjson last "$((target + 2))" '
+			{frames:[range($first; $last + 1) | {frameNum:.,metrics:{vmaf:(if . == ($first + 2) then 0 else 96 end)}}]}
+		' >"$metrics_path"
+	fi
+	exit 0
+fi
+
+if [[ "$arguments" == *']ssim='* ]]; then
+	stats_path="$(sed -n -E 's/^.*ssim=stats_file=([^ ]+).*$/\1/p' <<<"$arguments")"
+	if [[ -n "$stats_path" && "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" != 'ssim' ]]; then
+		mkdir -p "$(dirname "$stats_path")"
+		printf '%s\n' 'n:1 Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >"$stats_path"
+	fi
+	exit 0
+fi
+
+if [[ "$arguments" == *']psnr='* ]]; then
+	stats_path="$(sed -n -E 's/^.*psnr=stats_file=([^ ]+).*$/\1/p' <<<"$arguments")"
+	if [[ -n "$stats_path" && "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" != 'psnr' ]]; then
+		mkdir -p "$(dirname "$stats_path")"
+		printf '%s\n' 'n:1 mse_avg:1.00 mse_y:1.00 mse_u:1.00 mse_v:1.00 psnr_avg:40.000000 psnr_y:40.000000 psnr_u:40.000000 psnr_v:40.000000' >"$stats_path"
+	fi
+	exit 0
+fi
+
+if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
+	if [[ "$last" == *'/diagnostic-'* && "${BENCHMARK_DIAGNOSTIC_FAIL_ENCODE:-0}" == '1' ]]; then
+		exit 88
+	fi
+	printf '%s\n' \
+		'[hevc_qsv @ 0x2000] Using the intelligent constant quality (ICQ) ratecontrol method' \
+		'frame= 2160 fps=72.0 q=-0.0 Lsize= 60123KiB time=00:01:30.00 bitrate=5473.0kbits/s speed=1.25x' >&2
+	if [[ "$last" == *'/diagnostic-'* && -n "${BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE:-}" && ! -e "${BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE}.drifted" ]]; then
+		printf 'drift' >>"$BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE"
+		: >"${BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE}.drifted"
+	fi
+	if [[ "$last" == *'/diagnostic-'* && -n "${BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE:-}" && ! -e "${BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE}.drifted" ]]; then
+		jq '.imageId = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+			"$BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE" >"$BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE.tmp"
+		mv -f -- "$BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE.tmp" "$BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE"
+		: >"${BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE}.drifted"
+	fi
+fi
+
+if [[ "$arguments" == *'-f null -'* && "$arguments" != *'libvmaf='* &&
+	"$arguments" != *']ssim='* && "$arguments" != *']psnr='* &&
+	"$arguments" == *'/diagnostic-'* && "${BENCHMARK_DIAGNOSTIC_FAIL_DECODE:-0}" == '1' ]]; then
+	exit 89
+fi
+
+if [[ "$last" != '-' && "$last" != '/dev/null' ]]; then
+	mkdir -p "$(dirname "$last")"
+	printf 'diagnostic fixture media' >"$last"
+fi
+EOF
+	cat >"$stub_bin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ffprobe %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+if [[ "${1:-}" == '-version' ]]; then
+	printf '%s\n' 'ffprobe version 8.1.2 fixture-build'
+	exit 0
+fi
+arguments="$*"
+if [[ "${BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS:-}" == 'missing' ]]; then
+	printf '%s\n' '{"streams":[{"start_time":"0.000000"}],"frames":[{}]}'
+	exit 0
+fi
+if [[ "$arguments" == *'stream_side_data'* ]]; then
+	jq -n '{streams:[{side_data_list:[
+		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
+		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
+	]}]}'
+	exit 0
+fi
+if [[ "$arguments" == *'frame=side_data_list'* ]]; then
+	jq -n '{frames:[{side_data_list:[
+		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
+		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
+	]}]}'
+	exit 0
+fi
+media="${!#}"
+target="$(sed -n -E 's/^.*frame-([0-9]+).*$/\1/p' <<<"$media")"
+[[ -n "$target" ]] || target=2
+count="$((target + 3))"
+if [[ "${BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW:-0}" == '1' && "$media" == *'/diagnostic-'* ]]; then
+	count="$((target + 2))"
+fi
+jq -n --argjson count "$count" '{
+	streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],
+	frames:[range(0;$count) | {best_effort_timestamp_time:(. / 24 | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
+}'
+EOF
+	cat >"$stub_bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == '-u' ]] || exit 97
+printf '%s\n' '568'
+EOF
+	cat >"$stub_bin/sha256sum" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+exec "$REAL_SHA256SUM" "$@"
+EOF
+	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
+	export PATH="$stub_bin:$PATH"
+	export BENCHMARK_COMMAND_LOG="$BATS_TEST_TMPDIR/diagnostic-commands.log"
+	: >"$BENCHMARK_COMMAND_LOG"
+}
+
+prepare_diagnostic_execution_run() {
+	local media_root source size sha image
+	create_diagnostic_tools
+	export BENCHMARK_NOW=20260819T120000Z
+	media_root="$BATS_TEST_TMPDIR/diagnostic-media"
+	mkdir -p "$media_root"
+	source="$media_root/source.mkv"
+	printf 'diagnostic source fixture bytes' >"$source"
+	size="$(wc -c <"$source" | tr -d ' ')"
+	sha="$(sha256sum "$source" | awk '{print $1}')"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" |
+		jq --arg path "$source" --arg sha "$sha" --argjson size "$size" '
+			.qualityPanel |= map(
+				.id as $id |
+				if (["avc-clean-coco","avc-grain-memento","vc1-fugitive","hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2"] | index($id)) != null
+				then .path = $path | .sha256 = $sha | .sizeBytes = $size
+				else . end
+			)
+		' >"$BENCHMARK_SAMPLES_FILE"
+	image="$(jq -r '.runtime.image' "$BENCHMARK_SAMPLES_FILE")"
+	export BENCHMARK_DISPATCH_IMAGE="$image"
+	export BENCHMARK_RUNNING_IMAGE_FILE="$BATS_TEST_TMPDIR/running-image.json"
+	jq -n --arg image "$image" --arg id "${image##*@}" \
+		'{configuredImage:$image,dispatchedImage:$image,imageId:$id}' >"$BENCHMARK_RUNNING_IMAGE_FILE"
+	export BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0
+	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
+	export BENCHMARK_TEST_TITLE_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
+	export NODE_NAME='nuc1'
+}
+
 prepare_savings_execution_run() {
 	prepare_execution_run
 	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
@@ -1675,6 +1878,196 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		run "$SCRIPTS/benchmark.sh" _test diagnostic-hdr-classify "$mutated"
 		[ "$status" -eq 0 ]
 		[ "$(jq -r '.classification' <<<"$output")" = 'unresolved-oracle' ]
+	done
+}
+
+# Catches the diagnostic entrypoint widening into a quality sweep, regenerating
+# a source clip for each setting, or publishing media before bounded evidence.
+@test "diagnostics runs exactly ten VMAF and three HDR encodes and publishes only bounded evidence" {
+	prepare_diagnostic_execution_run
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	terminal="$(tail -n 1 <<<"$output")"
+	run jq -e '
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		.mode == "diagnostics" and .status == "complete" and
+		(.runId | test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
+		.artifactLocation == ("/out/runs/" + .runId + "/diagnostics") and
+		.vmaf == {total:5,classified:0,unresolved:5} and
+		.hdr == {total:3,classified:0,unresolved:3}
+	' <<<"$terminal"
+	[ "$status" -eq 0 ]
+	run_id="$(jq -r '.runId' <<<"$terminal")"
+	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+
+	[ -f "$diagnostic_root/manifest.json" ]
+	[ -f "$diagnostic_root/diagnostic-summary.json" ]
+	run jq -e '
+		.mode == "diagnostics" and
+		.gpu.i915 == ("driver=i915;kernel=" + .node.kernel) and
+		.gpu.vpl == "backend=qsv;ffmpeg=8.1.2"
+	' "$diagnostic_root/manifest.json"
+	[ "$status" -eq 0 ]
+	[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
+	[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
+	[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+	run find "$diagnostic_root" -type f -name '*.tmp' -o -name '.*.tmp'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+
+	run awk '/-c:v hevc_qsv/ {count += 1} END {print count + 0}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	[ "$output" -eq 13 ]
+	run awk '/diagnostic-vmaf-.*-source[.]mkv$/ && /-c copy/ {count += 1} END {print count + 0}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	[ "$output" -eq 5 ]
+
+	run jq -e -s '
+		length == 5 and
+		([.[].settings[]] | length) == 10 and
+		([.[].settings[].globalQuality] | sort) == [16,16,16,16,16,30,30,30,30,30] and
+		all(.[]; .status == "complete" and .classification.classification == "unresolved") and
+		all(.[].settings[];
+			(.commands.vmafCurrent | type == "array" and index("setpts=PTS-STARTPTS") == null) and
+			(.commands.vmafReset | map(select(contains("setpts=PTS-STARTPTS"))) | length) == 1 and
+			(.offsets | map(.offset)) == [-2,-1,0,1,2] and
+			all(.offsets[];
+				(.ssim.command | join(" ") | contains("select=eq(n\\,")) and
+				(.ssim.command | join(" ") | ([scan("setpts=PTS-STARTPTS")] | length) == 2) and
+				(.psnr.command | join(" ") | contains("select=eq(n\\,")) and
+				(.psnr.command | join(" ") | ([scan("setpts=PTS-STARTPTS")] | length) == 2)
+			)
+		) and
+		([.[].settings[] | keys[]] | index("quality") == null) and
+		([.[].settings[] | keys[]] | index("candidate") == null)
+	' "$diagnostic_root"/vmaf/*/*/evidence.json
+	[ "$status" -eq 0 ]
+
+	run jq -e -s '
+		length == 3 and all(.[];
+			.status == "complete" and .globalQuality == 16 and
+			(.source.windows | keys) == ["beginning","detail","end"] and
+			all(.source.windows[]; .durationSeconds == 10 and (.trace.command | join(" ") | contains(" -t 10 "))) and
+			.clip.durationSeconds == 10 and .encoded.durationSeconds == 10 and
+			(.clip.trace.command | join(" ") | contains(" -t 10 ")) and
+			(.encoded.trace.command | join(" ") | contains(" -t 10 "))
+		)
+	' "$diagnostic_root"/hdr/*/evidence.json
+	[ "$status" -eq 0 ]
+
+	run jq -e '
+		keys == ["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] and
+		([.. | objects | keys[]] | map(select(. == "quality" or . == "findings" or
+			. == "finalist" or . == "x265" or . == "savings" or . == "contention" or
+			. == "crop" or . == "chosenSetting" or . == "downstreamAuthorization")) | length) == 0
+	' "$diagnostic_root/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
+}
+
+# Catches diagnostics adding a fourteenth synthetic capability encode or
+# hashing source media before its committed assigned-node proof is admitted.
+@test "diagnostics validates committed assigned-node capability before source hashes or run creation" {
+	prepare_diagnostic_execution_run
+	jq --arg node "$NODE_NAME" '
+		(.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node)).proofStatus = "failed"
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	: >"$BENCHMARK_COMMAND_LOG"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 2 ]
+	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	! rg -q '^-c:v hevc_qsv| -c:v hevc_qsv' "$BENCHMARK_COMMAND_LOG"
+	! rg -q '^sha256sum ' "$BENCHMARK_COMMAND_LOG"
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches runtime preflight creating a run or starting an encode when any
+# command required by the independent diagnostic oracles is unavailable.
+@test "diagnostics preflight blocks missing trace VMAF SSIM PSNR and ffprobe frame fields before run creation" {
+	for missing in trace_headers libvmaf ssim psnr; do
+		prepare_diagnostic_execution_run
+		export BENCHMARK_DIAGNOSTIC_MISSING_TOOL="$missing"
+		run "$SCRIPTS/benchmark.sh" diagnostics
+		[ "$status" -eq 2 ]
+		[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+		[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+		unset BENCHMARK_DIAGNOSTIC_MISSING_TOOL
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	done
+
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS=missing
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 2 ]
+	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# Catches incomplete or missing normalized oracle data being dropped with
+# scratch media or silently promoted to a cause classification.
+@test "diagnostics retains harness-blocked evidence for incomplete windows missing metrics and source or image drift" {
+	for failure in incomplete-window libvmaf ssim psnr source-drift image-drift; do
+		prepare_diagnostic_execution_run
+		case "$failure" in
+		incomplete-window) export BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW=1 ;;
+		libvmaf | ssim | psnr) export BENCHMARK_DIAGNOSTIC_MISSING_METRIC="$failure" ;;
+		source-drift)
+			export BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE="$(jq -r '.qualityPanel[] | select(.id == "avc-clean-coco") | .path' "$BENCHMARK_SAMPLES_FILE")"
+			;;
+		image-drift) export BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE="$BENCHMARK_RUNNING_IMAGE_FILE" ;;
+		esac
+
+		run "$SCRIPTS/benchmark.sh" diagnostics
+		[ "$status" -eq 2 ]
+		terminal="$(tail -n 1 <<<"$output")"
+		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
+		run_id="$(jq -r '.runId' <<<"$terminal")"
+		diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+		[ -f "$diagnostic_root/manifest.json" ]
+		[ -f "$diagnostic_root/diagnostic-summary.json" ]
+		run jq -e '.status == "harness-blocked"' "$diagnostic_root/diagnostic-summary.json"
+		[ "$status" -eq 0 ]
+		[ "$(find "$diagnostic_root" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 8 ]
+		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+
+		unset BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW BENCHMARK_DIAGNOSTIC_MISSING_METRIC
+		unset BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	done
+}
+
+# Catches an encoder or decoder process failure being rewritten as an encoder
+# defect instead of durable failed diagnostic evidence.
+@test "diagnostics retains encode and decode failures without automatic encoder classification" {
+	for failure in encode decode; do
+		prepare_diagnostic_execution_run
+		if [[ "$failure" == 'encode' ]]; then
+			export BENCHMARK_DIAGNOSTIC_FAIL_ENCODE=1
+		else
+			export BENCHMARK_DIAGNOSTIC_FAIL_DECODE=1
+		fi
+		run "$SCRIPTS/benchmark.sh" diagnostics
+		[ "$status" -eq 1 ]
+		terminal="$(tail -n 1 <<<"$output")"
+		[ "$(jq -r '.status' <<<"$terminal")" = 'failed' ]
+		run_id="$(jq -r '.runId' <<<"$terminal")"
+		diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+		run jq -e -s '
+			any(.[]; .status == "failed") and
+			all(.[]; if .status == "failed" then
+				(.classification.classification != "encoder-output-defect")
+			else true end)
+		' "$diagnostic_root"/vmaf/*/*/evidence.json "$diagnostic_root"/hdr/*/evidence.json
+		[ "$status" -eq 0 ]
+		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+
+		unset BENCHMARK_DIAGNOSTIC_FAIL_ENCODE BENCHMARK_DIAGNOSTIC_FAIL_DECODE
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
 }
 

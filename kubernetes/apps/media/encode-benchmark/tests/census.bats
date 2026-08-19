@@ -55,6 +55,52 @@ EOF
 	chmod +x "$stub_bin/ffprobe"
 }
 
+create_diagnostic_probe_stubs() {
+	stub_bin="$BATS_TEST_TMPDIR/diagnostic-probe-bin"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+arguments="$*"
+if [[ "$arguments" == *'stream_side_data'* ]]; then
+	jq -n '{streams:[{side_data_list:[
+		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
+		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
+	]}]}'
+	exit 0
+fi
+if [[ "$arguments" == *'frame=side_data_list'* ]]; then
+	jq -n '{frames:[{side_data_list:[
+		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
+		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
+	]}]}'
+	exit 0
+fi
+jq -n '{
+	streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],
+	frames:[range(0;45) | {best_effort_timestamp_time:(. / 24 | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
+}'
+EOF
+	cat >"$stub_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == *'-ss 00:10:00.000 -i '* ]]
+[[ "$*" == *'-t 10 -map 0:v:0 -c:v copy -bsf:v trace_headers -f null -'* ]]
+printf '%s\n' \
+	'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
+	'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
+	'display_primaries_x[2] = 34000' 'display_primaries_y[2] = 16000' \
+	'white_point_x = 15635' 'white_point_y = 16450' \
+	'max_display_mastering_luminance = 10000000' \
+	'min_display_mastering_luminance = 1' \
+	'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
+if [[ "${BENCHMARK_DIAGNOSTIC_TRACE_CONFLICT:-0}" == '1' ]]; then
+	printf '%s\n' 'max_content_light_level = 999' >&2
+fi
+EOF
+	chmod +x "$stub_bin/ffprobe" "$stub_bin/ffmpeg"
+}
+
 create_qbittorrent_stub() {
 	stub_python="$BATS_TEST_TMPDIR/qbittorrent-stub"
 	mkdir -p "$stub_python"
@@ -230,6 +276,98 @@ run_inventory_to_fixture() {
 		.maxCLL == {maxContent: 1000, maxAverage: 400}
 	' <<<"$output"
 	[ "$status" -eq 0 ]
+}
+
+# Catches the diagnostic probes rounding HDR rationals, accepting a partial
+# five-frame window, or publishing the input host path in normalized evidence.
+@test "diagnostic probes emit bounded frame and exact dual-oracle metadata" {
+	create_diagnostic_probe_stubs
+	export PATH="$stub_bin:$PATH"
+	media="$BATS_TEST_TMPDIR/Diagnostic Source.mkv"
+	printf 'diagnostic probe bytes' >"$media"
+
+	run "$SCRIPTS/probe.sh" diagnostic-identity "$media"
+	[ "$status" -eq 0 ]
+	identity="$output"
+	run jq -e '
+		keys == ["sha256","sizeBytes"] and
+		(.sha256 | test("^[0-9a-f]{64}$")) and .sizeBytes == 22 and
+		([.. | strings] | index($path) == null)
+	' --arg path "$media" <<<"$identity"
+	[ "$status" -eq 0 ]
+
+	run "$SCRIPTS/probe.sh" diagnostic-window "$media" 0 90 40 44
+	[ "$status" -eq 0 ]
+	window="$output"
+	run jq -e '
+		.decodedFrameCount == 45 and
+		.stream == {startTime:"0.000000",duration:"90.000000",timeBase:"1/1000",averageFrameRate:"24/1"} and
+		(.frames | map(.frameIndex)) == [40,41,42,43,44] and
+		all(.frames[];
+			keys == ["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"] and
+			(.bestEffortTimestamp | type == "string") and
+			.packetDuration == "0.041667" and (.keyFrame | type == "boolean") and
+			(.pictureType == "I" or .pictureType == "P")) and
+		([.. | strings] | index($path) == null)
+	' --arg path "$media" <<<"$window"
+	[ "$status" -eq 0 ]
+
+	for action in diagnostic-hdr-stream diagnostic-hdr-frame; do
+		run "$SCRIPTS/probe.sh" "$action" "$media" 00:10:00.000 10
+		[ "$status" -eq 0 ]
+		run jq -e '
+			.status == "ok" and
+			.metadata.masteringDisplay.displayPrimaries.red.x == {numerator:34000,denominator:50000} and
+			.metadata.masteringDisplay.luminance.max == {numerator:10000000,denominator:10000} and
+			.metadata.maxCLL == {numerator:1000,denominator:1} and
+			.metadata.maxFALL == {numerator:400,denominator:1}
+		' <<<"$output"
+		[ "$status" -eq 0 ]
+	done
+
+	run "$SCRIPTS/probe.sh" diagnostic-hdr-trace "$media" 00:10:00.000 10
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.status == "ok" and
+		.metadata.masteringDisplay.displayPrimaries.green.x == {numerator:13250,denominator:50000} and
+		.metadata.masteringDisplay.displayPrimaries.blue.y == {numerator:3000,denominator:50000} and
+		.metadata.masteringDisplay.whitePoint.y == {numerator:16450,denominator:50000} and
+		.metadata.maxFALL == {numerator:400,denominator:1}
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
+# Catches a frame-field or HDR side-data parser treating a partial structure as
+# admissible evidence instead of failing closed.
+@test "diagnostic probes reject incomplete windows and partial HDR metadata" {
+	create_diagnostic_probe_stubs
+	export PATH="$stub_bin:$PATH"
+	media="$BATS_TEST_TMPDIR/Diagnostic Source.mkv"
+	printf 'diagnostic probe bytes' >"$media"
+	for action in diagnostic-hdr-stream diagnostic-hdr-frame diagnostic-hdr-trace; do
+		run "$SCRIPTS/probe.sh" "$action" "$media" 0 10.1
+		[ "$status" -ne 0 ]
+	done
+
+	cat >"$stub_bin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'frame=side_data_list'* ]]; then
+	printf '%s\n' '{"frames":[{"side_data_list":[{"side_data_type":"Mastering display metadata","red_x":"34000/50000"}]}]}'
+else
+	printf '%s\n' '{"streams":[{"start_time":"0.000000","duration":"90.000000","time_base":"1/1000","avg_frame_rate":"24/1"}],"frames":[{"best_effort_timestamp_time":"0","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+fi
+EOF
+	chmod +x "$stub_bin/ffprobe"
+
+	run "$SCRIPTS/probe.sh" diagnostic-window "$media" 0 90 40 44
+	[ "$status" -ne 0 ]
+	run "$SCRIPTS/probe.sh" diagnostic-hdr-frame "$media" 0 10
+	[ "$status" -ne 0 ]
+
+	export BENCHMARK_DIAGNOSTIC_TRACE_CONFLICT=1
+	run "$SCRIPTS/probe.sh" diagnostic-hdr-trace "$media" 00:10:00.000 10
+	[ "$status" -ne 0 ]
 }
 
 # Catches a production break where aggregate container bitrate is allocated to
