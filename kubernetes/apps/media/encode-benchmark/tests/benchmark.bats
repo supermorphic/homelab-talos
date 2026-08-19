@@ -1894,17 +1894,34 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 # a source clip for each setting, or publishing media before bounded evidence.
 @test "diagnostics runs exactly ten VMAF and three HDR encodes and publishes only bounded evidence" {
 	prepare_diagnostic_execution_run
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/diagnostic-termination.json"
 
 	run "$SCRIPTS/benchmark.sh" diagnostics
 	[ "$status" -eq 0 ]
 	terminal="$(tail -n 1 <<<"$output")"
+	[ "$(<"$BENCHMARK_TERMINATION_LOG_PATH")" = "$terminal" ]
 	run jq -e '
 		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
 		.mode == "diagnostics" and .status == "complete" and
 		(.runId | test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")) and
 		.artifactLocation == ("/out/runs/" + .runId + "/diagnostics") and
-		.vmaf == {total:5,classified:0,unresolved:5} and
-		.hdr == {total:3,classified:0,unresolved:3}
+		.vmaf == {
+			total:5,
+			"encoder-output-defect":0,
+			"temporal-alignment-defect":0,
+			unresolved:5,
+			"vmaf-measurement-defect":0,
+			reasons:["offset-best-tie"]
+		} and
+		.hdr == {
+			total:3,
+			"clip-boundary-defect":0,
+			"encoder-output-defect":0,
+			preserved:3,
+			"source-probe-defect":0,
+			"unresolved-oracle":0,
+			reasons:["source-clip-encoded-metadata-agree"]
+		}
 	' <<<"$terminal"
 	[ "$status" -eq 0 ]
 	run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2060,6 +2077,13 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 			. == "crop" or . == "chosenSetting" or . == "downstreamAuthorization")) | length) == 0
 	' "$diagnostic_root/diagnostic-summary.json"
 	[ "$status" -eq 0 ]
+	run jq -e '
+		(.vmaf.entries | length) == 5 and
+		all(.vmaf.entries[]; .classification == "unresolved" and .reasons == ["offset-best-tie"]) and
+		(.hdr.entries | length) == 3 and
+		all(.hdr.entries[]; .classification == "preserved" and .reasons == ["source-clip-encoded-metadata-agree"])
+	' "$diagnostic_root/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
 }
 
 # Catches diagnostics accepting a dispatch-selected run id at the Job layer but
@@ -2097,28 +2121,32 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	terminal="$BATS_TEST_TMPDIR/diagnostic-terminal.json"
 	printf '%s\n' "$(tail -n 1 <<<"$output")" >"$terminal"
 
-	run bash -c 'source "$1"; contract_load "$2"; findings_validate_manifest "$3" "$4" diagnostics' \
-		_ "$SCRIPTS/benchmark.sh" "$BENCHMARK_SAMPLES_FILE" "$manifest" "$run_id"
-	[ "$status" -ne 0 ]
+	for requested_mode in diagnostics quality; do
+		run "$SCRIPTS/benchmark.sh" _test findings-manifest "$manifest" "$run_id" "$requested_mode"
+		[ "$status" -eq 65 ]
+	done
 
 	for candidate in "$summary" "$terminal"; do
 		run "$SCRIPTS/benchmark.sh" _test validate-findings-inputs "$candidate"
-		[ "$status" -ne 0 ]
+		[ "$status" -eq 65 ]
 	done
 
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$summary" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -ne 0 ]
+	[ "$status" -eq 65 ]
 
 	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
-	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'identity mismatch: mode (stored=diagnostics, current=quality)'* ]]
+	for downstream_mode in quality x265 savings finalist contention-a; do
+		run "$SCRIPTS/runmeta.sh" create "$downstream_mode" "$run_id"
+		[ "$status" -eq 65 ]
+		[[ "$output" == *"identity mismatch: mode (stored=diagnostics, current=$downstream_mode)"* ]]
+	done
 }
 
 # Catches diagnostics adding a fourteenth synthetic capability encode or
 # hashing source media before its committed assigned-node proof is admitted.
 @test "diagnostics validates committed assigned-node capability before source hashes or run creation" {
 	prepare_diagnostic_execution_run
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/diagnostic-preflight-termination.json"
 	jq --arg node "$NODE_NAME" '
 		(.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node)).proofStatus = "failed"
 	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
@@ -2127,7 +2155,20 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 
 	run "$SCRIPTS/benchmark.sh" diagnostics
 	[ "$status" -eq 2 ]
-	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	run jq -e '
+		.status == "harness-blocked" and
+		.runId == null and .artifactLocation == null and
+		.vmaf.unresolved == 5 and .hdr["unresolved-oracle"] == 3 and
+		.vmaf.reasons == ["incomplete-or-failed-evidence"] and
+		.hdr.reasons == ["incomplete-or-failed-evidence"]
+	' <<<"$(tail -n 1 <<<"$output")"
+	[ "$status" -eq 0 ]
+	run jq -S -c . "$BENCHMARK_TERMINATION_LOG_PATH"
+	[ "$status" -eq 0 ]
+	termination_json="$output"
+	run jq -S -c . <<<"$(tail -n 1 <<<"$output")"
+	[ "$status" -eq 0 ]
+	[ "$termination_json" = "$output" ]
 	! rg -q '^-c:v hevc_qsv| -c:v hevc_qsv' "$BENCHMARK_COMMAND_LOG"
 	! rg -q '^sha256sum ' "$BENCHMARK_COMMAND_LOG"
 	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]

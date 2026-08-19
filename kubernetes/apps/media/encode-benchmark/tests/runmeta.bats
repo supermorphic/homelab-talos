@@ -967,7 +967,7 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 
 	run "$SCRIPTS/runmeta.sh" create savings "$run_id"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 65 ]
 	[ "$output" = 'identity mismatch: mode (stored=quality, current=savings)' ]
 	[ "$(run_directory_count)" -eq 1 ]
 

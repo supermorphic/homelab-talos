@@ -29,7 +29,7 @@ if [[ "$test_mode" == '1' ]]; then
 	running_image_file="${BENCHMARK_RUNNING_IMAGE_FILE:-$running_image_file}"
 	running_image_wait_seconds="${BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS:-$running_image_wait_seconds}"
 else
-	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE; do
+	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE BENCHMARK_TERMINATION_LOG_PATH; do
 		if [[ -v "$override" ]]; then
 			echo "$override requires BENCHMARK_TEST_MODE=1" >&2
 			exit 64
@@ -1024,7 +1024,7 @@ diagnostic_invalidate_identity_evidence() {
 		' "$evidence")" || return
 		diagnostic_publish_json "$evidence" "$updated" || return
 		entry="$(jq -c '
-			.status = "harness-blocked" | .classification = "unresolved"
+			.status = "harness-blocked" | .classification = "unresolved" | .reasons = ["post-run-identity-drift"]
 		' <<<"$entry")" || return
 		entries="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$entries")" || return
 	done < <(jq -c '.[]' <<<"$vmaf_entries")
@@ -1043,7 +1043,7 @@ diagnostic_invalidate_identity_evidence() {
 		' "$evidence")" || return
 		diagnostic_publish_json "$evidence" "$updated" || return
 		entry="$(jq -c '
-			.status = "harness-blocked" | .classification = "unresolved-oracle"
+			.status = "harness-blocked" | .classification = "unresolved-oracle" | .reasons = ["post-run-identity-drift"]
 		' <<<"$entry")" || return
 		entries="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$entries")" || return
 	done < <(jq -c '.[]' <<<"$hdr_entries")
@@ -1061,22 +1061,126 @@ diagnostic_status_merge() {
 	fi
 }
 
-diagnostic_terminal() {
-	local status="$1" run_id="${2:-}" artifact='null'
+diagnostic_termination_log_path() {
+	if [[ -n "${BENCHMARK_TERMINATION_LOG_PATH:-}" ]]; then
+		[[ "$test_mode" == '1' ]] || {
+			echo 'BENCHMARK_TERMINATION_LOG_PATH requires BENCHMARK_TEST_MODE=1' >&2
+			return 64
+		}
+		printf '%s\n' "$BENCHMARK_TERMINATION_LOG_PATH"
+	elif [[ "$test_mode" == '1' ]]; then
+		printf '%s\n' "$scratch_root/diagnostic-termination-log.json"
+	else
+		printf '%s\n' '/dev/termination-log'
+	fi
+}
+
+diagnostic_terminal_payload() {
+	local status="$1" run_id="${2:-}" summary="${3:-}" artifact='null'
 	if [[ -n "$run_id" ]]; then
 		artifact="$(jq -n --arg value "/out/runs/$run_id/diagnostics" '$value')"
 	fi
+	if [[ -z "$summary" ]]; then
+		jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
+			--arg run "$run_id" --argjson artifact "$artifact" '{
+			schemaVersion:1,
+			strategyId:$strategy,
+			mode:"diagnostics",
+			status:$status,
+			runId:(if $run == "" then null else $run end),
+			artifactLocation:$artifact,
+			vmaf:{
+				total:5,
+				"encoder-output-defect":0,
+				"temporal-alignment-defect":0,
+				unresolved:5,
+				"vmaf-measurement-defect":0,
+				reasons:["incomplete-or-failed-evidence"]
+			},
+			hdr:{
+				total:3,
+				"clip-boundary-defect":0,
+				"encoder-output-defect":0,
+				preserved:0,
+				"source-probe-defect":0,
+				"unresolved-oracle":3,
+				reasons:["incomplete-or-failed-evidence"]
+			}
+		}'
+		return
+	fi
+	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" '
+		def valid_vmaf_entry:
+			type == "object" and
+			(keys | sort) == ["classification","clipId","evidence","reasons","sampleId","status"] and
+			(.classification == "encoder-output-defect" or .classification == "temporal-alignment-defect" or
+			 .classification == "unresolved" or .classification == "vmaf-measurement-defect") and
+			(.reasons | type == "array" and all(.[]; type == "string"));
+		def valid_hdr_entry:
+			type == "object" and
+			(keys | sort) == ["classification","evidence","reasons","sampleId","status"] and
+			(.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or
+			 .classification == "preserved" or .classification == "source-probe-defect" or
+			 .classification == "unresolved-oracle") and
+			(.reasons | type == "array" and all(.[]; type == "string"));
+		type == "object" and
+		(keys | sort) == ["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] and
+		.schemaVersion == 1 and .strategyId == $strategy and
+		.mode == "diagnostics" and .status == $status and .runId == $run and
+		(.vmaf | type == "object" and (keys | sort) == ["entries","total"] and .total == 5 and
+			(.entries | type == "array" and length == 5 and all(.[]; valid_vmaf_entry))) and
+		(.hdr | type == "object" and (keys | sort) == ["entries","total"] and .total == 3 and
+			(.entries | type == "array" and length == 3 and all(.[]; valid_hdr_entry)))
+	' <<<"$summary" >/dev/null || return 65
 	jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
-		--arg run "$run_id" --argjson artifact "$artifact" '{
-		schemaVersion:1,
-		strategyId:$strategy,
-		mode:"diagnostics",
-		status:$status,
-		runId:(if $run == "" then null else $run end),
-		artifactLocation:$artifact,
-		vmaf:{total:5,classified:0,unresolved:5},
-		hdr:{total:3,classified:0,unresolved:3}
-	}'
+		--arg run "$run_id" --argjson artifact "$artifact" --argjson summary "$summary" '
+		def reason_list($entries):
+			[$entries[]?.reasons[]?] | unique | sort;
+		def vmaf_counts($entries):
+			{
+				total: 5,
+				"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
+				"temporal-alignment-defect": ([$entries[] | select(.classification == "temporal-alignment-defect")] | length),
+				unresolved: ([$entries[] | select(.classification == "unresolved")] | length),
+				"vmaf-measurement-defect": ([$entries[] | select(.classification == "vmaf-measurement-defect")] | length),
+				reasons: reason_list($entries)
+			};
+		def hdr_counts($entries):
+			{
+				total: 3,
+				"clip-boundary-defect": ([$entries[] | select(.classification == "clip-boundary-defect")] | length),
+				"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
+				preserved: ([$entries[] | select(.classification == "preserved")] | length),
+				"source-probe-defect": ([$entries[] | select(.classification == "source-probe-defect")] | length),
+				"unresolved-oracle": ([$entries[] | select(.classification == "unresolved-oracle")] | length),
+				reasons: reason_list($entries)
+			};
+		{
+			schemaVersion:1,
+			strategyId:$strategy,
+			mode:"diagnostics",
+			status:$status,
+			runId:(if $run == "" then null else $run end),
+			artifactLocation:$artifact,
+			vmaf:(vmaf_counts($summary.vmaf.entries)),
+			hdr:(hdr_counts($summary.hdr.entries))
+		}
+	'
+}
+
+diagnostic_emit_terminal() {
+	local payload="$1" canonical path
+	path="$(diagnostic_termination_log_path)" || return
+	canonical="$(jq -e -S -c . <<<"$payload")" || return 65
+	mkdir -p "$(dirname "$path")"
+	printf '%s\n' "$canonical" >"$path" || return
+	printf '%s\n' "$canonical"
+}
+
+diagnostic_terminal() {
+	local status="$1" run_id="${2:-}" summary="${3:-}" payload
+	payload="$(diagnostic_terminal_payload "$status" "$run_id" "$summary")" || return
+	diagnostic_emit_terminal "$payload"
 }
 
 diagnostic_command_clip() {
@@ -1747,8 +1851,9 @@ diagnostics_mode() {
 		diagnostic_publish_json "$evidence_path" "$evidence" || return
 		vmaf_entries="$(jq -c --arg sample "$sample_id" --arg clip "$clip_id" --arg status "$entry_status" \
 			--arg classification "$(jq -r '.classification' <<<"$classification")" \
+			--argjson reasons "$(jq -c '.reasons' <<<"$classification")" \
 			--arg evidence "vmaf/$sample_id/$clip_id/evidence.json" \
-			'. + [{sampleId:$sample,clipId:$clip,status:$status,classification:$classification,evidence:$evidence}]' <<<"$vmaf_entries")"
+			'. + [{sampleId:$sample,clipId:$clip,status:$status,classification:$classification,reasons:$reasons,evidence:$evidence}]' <<<"$vmaf_entries")"
 		overall_status="$(diagnostic_status_merge "$overall_status" "$entry_status")"
 	done < <(jq -r '.diagnostics.vmafPanel[] | [.sampleId,.clipId,.observedFrameIndex] | @tsv' "$samples_file")
 
@@ -1770,8 +1875,9 @@ diagnostics_mode() {
 		diagnostic_publish_json "$evidence_path" "$evidence" || return
 		hdr_entries="$(jq -c --arg sample "$sample_id" --arg status "$entry_status" \
 			--arg classification "$(jq -r '.classification.classification' <<<"$evidence")" \
+			--argjson reasons "$(jq -c '.classification.reasons' <<<"$evidence")" \
 			--arg evidence "hdr/$sample_id/evidence.json" \
-			'. + [{sampleId:$sample,status:$status,classification:$classification,evidence:$evidence}]' <<<"$hdr_entries")"
+			'. + [{sampleId:$sample,status:$status,classification:$classification,reasons:$reasons,evidence:$evidence}]' <<<"$hdr_entries")"
 		overall_status="$(diagnostic_status_merge "$overall_status" "$entry_status")"
 	done < <(jq -r '.diagnostics.hdrPanel[] | [.sampleId,.clipId] | @tsv' "$samples_file")
 
@@ -1795,7 +1901,7 @@ diagnostics_mode() {
 	}')"
 	diagnostic_publish_json "$diagnostic_root/diagnostic-summary.json" "$summary" || return
 	rm -rf -- "$run_scratch"
-	diagnostic_terminal "$overall_status" "$run_id"
+	diagnostic_terminal "$overall_status" "$run_id" "$summary"
 	case "$overall_status" in
 	complete) return 0 ;;
 	failed) return 1 ;;
@@ -3182,9 +3288,18 @@ append_comparison_once() {
 rank_quality_candidates() {
 	local results="$1" candidate_samples="$2" run_id="$3"
 	local run_directory artifact staged rows expected settings expected_keys digest candidates
-	local probe_source probe_clip durable_status
+	local probe_source probe_clip durable_status diagnostic_status
 	if [[ ! -v CONTRACT_ICQ_SETTINGS ]]; then
 		contract_load "$candidate_samples" || return
+	fi
+	set +e
+	diagnostic_results_input_rejected "$results"
+	diagnostic_status=$?
+	set -e
+	if [[ "$diagnostic_status" == '65' ]]; then
+		return 65
+	elif [[ "$diagnostic_status" != '1' && "$diagnostic_status" != '66' ]]; then
+		return "$diagnostic_status"
 	fi
 	validate_run_id "$run_id" || return
 	ensure_results_file "$results" || return
@@ -4147,14 +4262,15 @@ validate_findings_inputs() {
 			(.runId | run_id) and (.observationsFile | basename("[.]json")) and (.observationsSha256 | digest) and
 			(.fragments | type == "array" and length <= 16 and all(.[]; fragment) and
 				([.[] | (.runId + "|" + .file)] | unique | length) == length);
-		if type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and
+		if type == "object" and .mode? == "diagnostics" then error("diagnostics artifact")
+		elif type == "object" and keys == ["contention","quality","savings","schemaVersion","strategyId","x265"] and
 			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and (.quality | quality) and
 			(.x265 | type == "array" and length <= 2 and all(.[]; x265) and
 				([.[] | .sampleId] | unique | length) == length) and
 			(.savings == null or (.savings | savings)) and
 			(.contention == null or (.contention | contention))
 		then . else error("invalid findings inputs") end
-	' "$inputs"
+	' "$inputs" || return 65
 }
 
 findings_unsafe_artifact() {
@@ -4171,13 +4287,25 @@ findings_sha256() {
 findings_validate_manifest() {
 	local path="$1" run_id="$2" mode="$3" identity created_at
 	findings_unsafe_artifact "$path" || return
+	case "$mode" in
+	quality | x265 | savings | contention-a | contention-b | contention-c | contention-d) ;;
+	*) return 65 ;;
+	esac
 	identity="$(jq -e -S -c 'if type == "object" and has("createdAt") then del(.createdAt) else error("manifest") end' "$path")" || return 65
+	jq -e '.mode != "diagnostics"' <<<"$identity" >/dev/null || return 65
 	jq -e --arg mode "$mode" '.mode == $mode' <<<"$identity" >/dev/null || return 65
 	identity="$(contract_normalize_run_identity "$identity" "$mode")" || return 65
 	created_at="$(jq -e -r '.createdAt | strings' "$path")" || return 65
 	contract_is_compact_utc_timestamp "$created_at" || return 65
 	[[ "$created_at" == "${run_id%-*}" ]] || return 65
 	printf '%s\n' "$identity"
+}
+
+diagnostic_results_input_rejected() {
+	local path="$1"
+	[[ -f "$path" && ! -L "$path" ]] || return 66
+	jq -e '.mode? == "diagnostics"' "$path" >/dev/null 2>&1 || return 1
+	return 65
 }
 
 findings_expected_sources() {
@@ -4835,9 +4963,20 @@ test_dispatch() {
 		(($# == 2)) || usage
 		findings_validate_contention_fragment "$1" "$2"
 		;;
+	findings-manifest)
+		(($# == 3)) || usage
+		contract_load "$samples_file"
+		findings_validate_manifest "$1" "$2" "$3"
+		;;
 	findings-conclusion)
 		(($# == 5)) || usage
 		findings_conclusion "$@"
+		;;
+	diagnostic-terminal)
+		(($# == 3)) || usage
+		contract_load "$samples_file"
+		summary="$(jq -e -c . "$3")" || return 65
+		diagnostic_terminal "$1" "$2" "$summary"
 		;;
 	*) usage ;;
 	esac

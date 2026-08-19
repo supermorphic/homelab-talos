@@ -1928,6 +1928,47 @@ write_diagnostics_results_fixture() {
 	' >"$STUB_BENCHMARK_PODS_JSON"
 }
 
+write_diagnostics_summary_fixture() {
+	local run_id="$1" status="$2" destination="$3"
+	jq -n -c --arg run "$run_id" --arg status "$status" '{
+		schemaVersion:1,
+		strategyId:"qsv-hevc-icq-v1",
+		mode:"diagnostics",
+		runId:$run,
+		status:$status,
+		vmaf:{
+			total:5,
+			entries:[
+				{sampleId:"avc-grain-memento",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/avc-grain-memento/detail/evidence.json"},
+				{sampleId:"avc-grain-memento",clipId:"motion",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/avc-grain-memento/motion/evidence.json"},
+				{sampleId:"vc1-fugitive",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/vc1-fugitive/detail/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/hdr10-grain-goodfellas/detail/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/hdr10-motion-john-wick-2/detail/evidence.json"}
+			]
+		},
+		hdr:{
+			total:3,
+			entries:[
+				{sampleId:"hdr10-clean-ministry",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-clean-ministry/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-grain-goodfellas/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-motion-john-wick-2/evidence.json"}
+			]
+		}
+	}' >"$destination"
+}
+
+produce_diagnostics_terminal_message() {
+	local status="$1" run_id="$2" summary="$3" termination="$4" samples_json
+	samples_json="$BATS_TEST_TMPDIR/diagnostic-samples.json"
+	yq -r '.data."samples.json"' \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml" >"$samples_json"
+	BENCHMARK_TEST_MODE=1 \
+	BENCHMARK_SAMPLES_FILE="$samples_json" \
+	BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal "$status" "$run_id" "$summary"
+}
+
 # Catches trusting benchmark-reported configured identity as runtime evidence;
 # results must compare the completed pod's actual imageID and redact media evidence.
 @test "results accepts matching actual imageID and prints only sanitized evidence" {
@@ -2168,26 +2209,26 @@ write_diagnostics_results_fixture() {
 # inspection or leaking an unsanitized terminal JSON payload.
 @test "results sanitize diagnostics terminal summaries through one pod query" {
 	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
 	for case_data in \
-		'Succeeded|complete|{"schemaVersion":1,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"classified":1,"unresolved":4},"hdr":{"total":3,"classified":0,"unresolved":3}}' \
-		'Failed|harness-blocked|{"schemaVersion":1,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"harness-blocked","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"classified":0,"unresolved":5},"hdr":{"total":3,"classified":0,"unresolved":3}}' \
-		'Failed|failed|{"schemaVersion":1,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"failed","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"classified":0,"unresolved":5},"hdr":{"total":3,"classified":1,"unresolved":2}}'; do
-		IFS='|' read -r pod_phase summary_status terminal_message <<<"$case_data"
+		'Succeeded|complete|complete' \
+		'Failed|harness-blocked|harness-blocked' \
+		'Failed|failed|failed'; do
+		IFS='|' read -r pod_phase summary_status producer_status <<<"$case_data"
 		: >"$STUB_CALLS"
+		write_diagnostics_summary_fixture "$run_id" "$producer_status" "$summary"
+		terminal_message="$(produce_diagnostics_terminal_message "$producer_status" "$run_id" "$summary" "$termination")"
+		[ "$(<"$termination")" = "$terminal_message" ]
 		write_diagnostics_results_fixture "$run_id" "$pod_phase" "$terminal_message"
 
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -eq 0 ]
-		[[ "$output" == *'mode=diagnostics'* ]]
-		[[ "$output" == *"phase=$pod_phase"* ]]
-		[[ "$output" == *"run_id=$run_id"* ]]
-		[[ "$output" == *"status=$summary_status"* ]]
-		[[ "$output" == *"artifact_location=/out/runs/$run_id/diagnostics"* ]]
-		[[ "$output" == *'vmaf_total=5'* ]]
-		[[ "$output" == *'hdr_total=3'* ]]
-		[[ "$output" != *'job/'* ]]
-		[[ "$output" != *'/media/'* ]]
-		[[ "$output" != *'nodeName'* ]]
+		[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id status=$summary_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=offset-best-tie hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0 hdr_reasons=source-clip-encoded-metadata-agree" ]
+		[[ "$output" != *'job/'* && "$output" != *'/media/'* && "$output" != *'/out/runs/'* ]]
+		[[ "$output" != *'node='* && "$output" != *'nodeName'* && "$output" != *'sourcePath'* ]]
+		[[ "$output" != *'stderr'* && "$output" != *'terminated'* ]]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / && index($2, "app.kubernetes.io/name=encode-benchmark") {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
@@ -2202,11 +2243,8 @@ write_diagnostics_results_fixture() {
 
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *'mode=diagnostics'* ]]
-	[[ "$output" == *'phase=Running'* ]]
-	[[ "$output" != *'summary='* ]]
-	[[ "$output" != *'no-sanitized-summary'* ]]
-	[[ "$output" == *"artifact_location=/out/runs/$run_id/diagnostics"* ]]
+	[ "$output" = "mode=diagnostics phase=Running run_id=$run_id status=active" ]
+	[[ "$output" != *'summary='* && "$output" != *'no-sanitized-summary'* && "$output" != *'/out/runs/'* ]]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
@@ -2219,19 +2257,69 @@ write_diagnostics_results_fixture() {
 	for case_data in \
 		'' \
 		'not-json' \
-		'{"schemaVersion":2,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"classified":1,"unresolved":4},"hdr":{"total":3,"classified":0,"unresolved":3}}' \
-		'{"schemaVersion":1,"strategyId":"wrong-strategy","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"classified":1,"unresolved":4},"hdr":{"total":3,"classified":0,"unresolved":3}}'; do
+		'{"schemaVersion":2,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"encoder-output-defect":0,"temporal-alignment-defect":0,"unresolved":5,"vmaf-measurement-defect":0,"reasons":["offset-best-tie"]},"hdr":{"total":3,"clip-boundary-defect":0,"encoder-output-defect":0,"preserved":3,"source-probe-defect":0,"unresolved-oracle":0,"reasons":["source-clip-encoded-metadata-agree"]}}' \
+		'{"schemaVersion":1,"strategyId":"wrong-strategy","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"encoder-output-defect":0,"temporal-alignment-defect":0,"unresolved":5,"vmaf-measurement-defect":0,"reasons":["offset-best-tie"]},"hdr":{"total":3,"clip-boundary-defect":0,"encoder-output-defect":0,"preserved":3,"source-probe-defect":0,"unresolved-oracle":0,"reasons":["source-clip-encoded-metadata-agree"]}}'; do
 		: >"$STUB_CALLS"
 		write_diagnostics_results_fixture "$run_id" Succeeded "$case_data"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
-		[[ "$output" == *'no-sanitized-summary'* || "$output" == *'terminal-summary-schema-error'* ]]
+		[[ "$output" == 'no-sanitized-summary' || "$output" == terminal-summary-schema-error:* ]]
 		if [[ -n "$case_data" ]]; then
 			[[ "$output" != *"$case_data"* ]]
 		fi
+		[[ "$output" != *'/media/'* && "$output" != *'/out/runs/'* && "$output" != *'nodeName'* ]]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	done
+}
+
+@test "results fail closed on mixed diagnostics pod provenance after one query" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods-mixed.json"
+	export STUB_BENCHMARK_PODS_JSON
+	jq -n -c --arg run "$run_id" --arg message "$terminal_message" '{
+		apiVersion:"v1",
+		items:[
+			{
+				metadata:{
+					name:"encode-benchmark-diagnostics-fixture-pod",
+					labels:{
+						"app.kubernetes.io/name":"encode-benchmark",
+						"homelab-talos/benchmark-run":$run,
+						"homelab-talos/benchmark-mode":"diagnostics",
+						"job-name":"encode-benchmark-diagnostics-fixture"
+					}
+				},
+				status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",state:{terminated:{message:$message}}}]}
+			},
+			{
+				metadata:{
+					name:"encode-benchmark-quality-fixture-pod",
+					labels:{
+						"app.kubernetes.io/name":"encode-benchmark",
+						"homelab-talos/benchmark-run":$run,
+						"homelab-talos/benchmark-mode":"quality",
+						"job-name":"encode-benchmark-quality-fixture"
+					}
+				},
+				spec:{nodeName:"nuc3"},
+				status:{phase:"Succeeded"}
+			}
+		]
+	}' >"$STUB_BENCHMARK_PODS_JSON"
+	: >"$STUB_CALLS"
+
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $run_id" ]
+	[[ "$output" != *'nuc3'* && "$output" != *'/media/'* && "$output" != *'/out/runs/'* ]]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 }
 
 # Catches accepting missing, malformed, or digest-mismatched kubelet imageID

@@ -80,12 +80,70 @@ diagnostic_sanitize_terminal() {
 		return 65
 	}
 	reason="$(jq -r --arg run "$requested_run_id" '
-		def count_object($total):
-			type == "object" and keys == ["classified","total","unresolved"] and
-			.total == $total and
-			(.classified | type == "number" and floor == . and . >= 0 and . <= $total) and
-			(.unresolved | type == "number" and floor == . and . >= 0 and . <= $total) and
-			(.classified + .unresolved == $total);
+		def sorted_unique: sort == unique;
+		def allowed_vmaf_reason:
+			. == "classification-failed" or
+			. == "classification-predicate-not-met" or
+			. == "incomplete-or-failed-evidence" or
+			. == "incomplete-setting-evidence" or
+			. == "independent-metrics-not-target-minimum" or
+			. == "missing-offset-window" or
+			. == "nonzero-ssim-psnr-offset-agreement" or
+			. == "offset-best-tie" or
+			. == "one-setting-evidence" or
+			. == "post-run-identity-drift" or
+			. == "pts-reset-clears-vmaf-zero" or
+			. == "source-window-clean" or
+			. == "ssim-psnr-offset-disagreement" or
+			. == "target-frame-local-metric-minimum" or
+			. == "timeline-discontinuity-at-offset" or
+			. == "vmaf-only-exact-zero" or
+			. == "zero-offset-timeline-agreement";
+		def allowed_hdr_reason:
+			. == "authoritative-source-metadata" or
+			. == "classification-failed" or
+			. == "clip-metadata-changed" or
+			. == "clip-window-absent" or
+			. == "clip-window-malformed" or
+			. == "clip-window-null" or
+			. == "decoded-trace-disagreement" or
+			. == "encoded-metadata-changed" or
+			. == "encoded-window-absent" or
+			. == "encoded-window-malformed" or
+			. == "encoded-window-null" or
+			. == "incomplete-or-failed-evidence" or
+			. == "post-run-identity-drift" or
+			. == "source-clip-encoded-metadata-agree" or
+			. == "source-stream-probe-absent" or
+			. == "source-stream-probe-conflict" or
+			. == "source-stream-probe-malformed" or
+			. == "source-probe-null" or
+			. == "source-window-absent" or
+			. == "source-window-conflict" or
+			. == "source-window-malformed" or
+			. == "source-window-null" or
+			. == "stream-probe-null";
+		def vmaf_counts:
+			type == "object" and
+			(keys | sort) == ["encoder-output-defect","reasons","temporal-alignment-defect","total","unresolved","vmaf-measurement-defect"] and
+			.total == 5 and
+			(."encoder-output-defect" | type == "number" and floor == . and . >= 0) and
+			(."temporal-alignment-defect" | type == "number" and floor == . and . >= 0) and
+			(.unresolved | type == "number" and floor == . and . >= 0) and
+			(."vmaf-measurement-defect" | type == "number" and floor == . and . >= 0) and
+			(."encoder-output-defect" + ."temporal-alignment-defect" + .unresolved + ."vmaf-measurement-defect" == 5) and
+			(.reasons | type == "array" and length >= 1 and sorted_unique and all(.[]; type == "string" and allowed_vmaf_reason));
+		def hdr_counts:
+			type == "object" and
+			(keys | sort) == ["clip-boundary-defect","encoder-output-defect","preserved","reasons","source-probe-defect","total","unresolved-oracle"] and
+			.total == 3 and
+			(."clip-boundary-defect" | type == "number" and floor == . and . >= 0) and
+			(."encoder-output-defect" | type == "number" and floor == . and . >= 0) and
+			(.preserved | type == "number" and floor == . and . >= 0) and
+			(."source-probe-defect" | type == "number" and floor == . and . >= 0) and
+			(."unresolved-oracle" | type == "number" and floor == . and . >= 0) and
+			(."clip-boundary-defect" + ."encoder-output-defect" + .preserved + ."source-probe-defect" + ."unresolved-oracle" == 3) and
+			(.reasons | type == "array" and length >= 1 and sorted_unique and all(.[]; type == "string" and allowed_hdr_reason));
 		if type != "object" then "not-object"
 		elif (keys | sort) != ["artifactLocation","hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] then "wrong-keys"
 		elif .schemaVersion != 1 then "wrong-schema-version"
@@ -94,8 +152,8 @@ diagnostic_sanitize_terminal() {
 		elif .status != "complete" and .status != "harness-blocked" and .status != "failed" then "wrong-status"
 		elif .runId != $run then "wrong-run-id"
 		elif .artifactLocation != ("/out/runs/" + $run + "/diagnostics") then "wrong-artifact-location"
-		elif (.vmaf | count_object(5) | not) then "wrong-vmaf-counts"
-		elif (.hdr | count_object(3) | not) then "wrong-hdr-counts"
+		elif (.vmaf | vmaf_counts | not) then "wrong-vmaf-counts"
+		elif (.hdr | hdr_counts | not) then "wrong-hdr-counts"
 		else "" end
 	' <<<"$parsed")" || {
 		printf '%s\n' "$(diagnostic_terminal_schema_error invalid-json)"
@@ -109,37 +167,43 @@ diagnostic_sanitize_terminal() {
 		"mode=diagnostics " +
 		"run_id=\(.runId) " +
 		"status=\(.status) " +
-		"artifact_location=\(.artifactLocation) " +
 		"vmaf_total=\(.vmaf.total) " +
-		"vmaf_classified=\(.vmaf.classified) " +
+		"vmaf_encoder_output_defect=\(.vmaf["encoder-output-defect"]) " +
+		"vmaf_temporal_alignment_defect=\(.vmaf["temporal-alignment-defect"]) " +
 		"vmaf_unresolved=\(.vmaf.unresolved) " +
+		"vmaf_vmaf_measurement_defect=\(.vmaf["vmaf-measurement-defect"]) " +
+		"vmaf_reasons=\(.vmaf.reasons | join(",")) " +
 		"hdr_total=\(.hdr.total) " +
-		"hdr_classified=\(.hdr.classified) " +
-		"hdr_unresolved=\(.hdr.unresolved)"
+		"hdr_clip_boundary_defect=\(.hdr["clip-boundary-defect"]) " +
+		"hdr_encoder_output_defect=\(.hdr["encoder-output-defect"]) " +
+		"hdr_preserved=\(.hdr.preserved) " +
+		"hdr_source_probe_defect=\(.hdr["source-probe-defect"]) " +
+		"hdr_unresolved_oracle=\(.hdr["unresolved-oracle"]) " +
+		"hdr_reasons=\(.hdr.reasons | join(","))"
 	' <<<"$parsed"
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods pod_count pod_json pod_phase terminal_message sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase terminal_message sanitized_terminal
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
 			| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
 			| select(.metadata.labels."homelab-talos/benchmark-run" == env.RUN_ID)
-			| select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")
 		]
 	' <<<"$all_pods_json")" || return 65
-	pod_count="$(jq -r 'length' <<<"$matching_pods")"
-	((pod_count == 1)) || {
-		echo "diagnostic result provenance rejected: expected one exact pod for run $requested_run_id" >&2
+	diagnostic_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")]' <<<"$matching_pods")" || return 65
+	pod_count="$(jq -r 'length' <<<"$diagnostic_pods")"
+	total_count="$(jq -r 'length' <<<"$matching_pods")"
+	((pod_count == 1 && total_count == 1)) || {
+		echo "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $requested_run_id" >&2
 		return 1
 	}
-	pod_json="$(jq -c '.[0]' <<<"$matching_pods")"
+	pod_json="$(jq -c '.[0]' <<<"$diagnostic_pods")"
 	pod_phase="$(jq -r '.status.phase // ""' <<<"$pod_json")"
 	case "$pod_phase" in
 	Running | Pending)
-		printf 'mode=diagnostics phase=%s run_id=%s status=active artifact_location=/out/runs/%s/diagnostics\n' \
-			"$pod_phase" "$requested_run_id" "$requested_run_id"
+		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "$pod_phase" "$requested_run_id"
 		return 0
 		;;
 	Succeeded | Failed)
@@ -161,12 +225,11 @@ diagnostic_results() {
 			printf '%s\n' "$sanitized_terminal" >&2
 			return 1
 		}
-		printf 'phase=%s %s\n' "$pod_phase" "$sanitized_terminal"
+		printf 'mode=diagnostics phase=%s %s\n' "$pod_phase" "${sanitized_terminal#mode=diagnostics }"
 		return 0
 		;;
 	*)
-		printf 'mode=diagnostics phase=%s run_id=%s status=active artifact_location=/out/runs/%s/diagnostics\n' \
-			"${pod_phase:-Unknown}" "$requested_run_id" "$requested_run_id"
+		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "${pod_phase:-Unknown}" "$requested_run_id"
 		return 0
 		;;
 	esac
@@ -318,7 +381,7 @@ diagnostic_mode_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
 		| select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")
 	] | length
 ' <<<"$diagnostic_pods")"
-if ((diagnostic_pod_count > 0 && diagnostic_pod_count == diagnostic_mode_pod_count)); then
+if ((diagnostic_mode_pod_count > 0)); then
 	diagnostic_results "$diagnostic_pods" "$run_id"
 	exit $?
 fi
