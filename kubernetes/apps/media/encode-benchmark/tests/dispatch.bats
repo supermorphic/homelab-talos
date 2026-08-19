@@ -2323,7 +2323,7 @@ write_diagnostics_custom_summary_fixture() {
 		write_diagnostics_summary_fixture "$run_id" "$producer_status" "$summary"
 		terminal_message="$(produce_diagnostics_terminal_message "$producer_status" "$run_id" "$summary" "$termination")"
 		[ "$(<"$termination")" = "$terminal_message" ]
-		[ "${#terminal_message}" -lt 3072 ]
+		[ "$(LC_ALL=C printf '%s' "$terminal_message" | wc -c | tr -d '[:space:]')" -lt 3072 ]
 		write_diagnostics_results_fixture "$run_id" "$pod_phase" "$terminal_message"
 
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
@@ -2444,8 +2444,10 @@ write_diagnostics_custom_summary_fixture() {
 @test "results consume the full literal diagnostics reason matrix through the terminal transport" {
 	run_id='20260819T120000Z-feedbeef'
 	termination="$BATS_TEST_TMPDIR/diagnostic-transport-matrix.json"
+	literal_vmaf_reasons='[]'
 
 	while IFS='|' read -r classification reasons expected_reasons vmaf_counts; do
+		literal_vmaf_reasons="$(jq -c --argjson reasons "$reasons" '. + $reasons | unique | sort' <<<"$literal_vmaf_reasons")"
 		summary="$BATS_TEST_TMPDIR/vmaf-matrix-$(printf '%s' "$classification|$reasons" | sha256sum | awk '{print $1}').json"
 		write_diagnostics_custom_summary_fixture "$run_id" "$classification" "$reasons" preserved '["source-clip-encoded-metadata-agree"]' "$summary"
 		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
@@ -2465,9 +2467,24 @@ unresolved|["missing-offset-window"]|missing-offset-window|vmaf_encoder_output_d
 unresolved|["offset-best-tie"]|offset-best-tie|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 unresolved|["one-setting-evidence"]|one-setting-evidence|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 unresolved|["ssim-psnr-offset-disagreement"]|ssim-psnr-offset-disagreement|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["assigned-node-capability-rejected"]|assigned-node-capability-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["classification-failed"]|classification-failed|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["diagnostic-preflight-rejected"]|diagnostic-preflight-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["incomplete-or-failed-evidence"]|incomplete-or-failed-evidence|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["post-run-identity-drift"]|post-run-identity-drift|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["runmeta-create-failed"]|runmeta-create-failed|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["running-image-evidence-rejected"]|running-image-evidence-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["runtime-pre-encode-gate-rejected"]|runtime-pre-encode-gate-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 EOF
+	contract_vmaf_reasons="$(bash -c '
+		source "$1"
+		contract_diagnostics_terminal_vmaf_reason_classes_json | jq -c "keys | sort"
+	' _ "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh")"
+	[ "$literal_vmaf_reasons" = "$contract_vmaf_reasons" ]
 
+	literal_hdr_reasons='[]'
 	while IFS='|' read -r classification reasons expected_reasons hdr_counts; do
+		literal_hdr_reasons="$(jq -c --argjson reasons "$reasons" '. + $reasons | unique | sort' <<<"$literal_hdr_reasons")"
 		summary="$BATS_TEST_TMPDIR/hdr-matrix-$(printf '%s' "$classification|$reasons" | sha256sum | awk '{print $1}').json"
 		write_diagnostics_custom_summary_fixture "$run_id" unresolved '["offset-best-tie"]' "$classification" "$reasons" "$summary"
 		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
@@ -2496,7 +2513,20 @@ unresolved-oracle|["encoded-window-null"]|encoded-window-null|hdr_clip_boundary_
 unresolved-oracle|["encoded-window-absent"]|encoded-window-absent|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["encoded-window-malformed"]|encoded-window-malformed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["decoded-trace-disagreement"]|decoded-trace-disagreement|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["assigned-node-capability-rejected"]|assigned-node-capability-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["classification-failed"]|classification-failed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["diagnostic-preflight-rejected"]|diagnostic-preflight-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["incomplete-or-failed-evidence"]|incomplete-or-failed-evidence|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["post-run-identity-drift"]|post-run-identity-drift|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["runmeta-create-failed"]|runmeta-create-failed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["running-image-evidence-rejected"]|running-image-evidence-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["runtime-pre-encode-gate-rejected"]|runtime-pre-encode-gate-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 EOF
+	contract_hdr_reasons="$(bash -c '
+		source "$1"
+		contract_diagnostics_terminal_hdr_reason_classes_json | jq -c "keys | sort"
+	' _ "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh")"
+	[ "$literal_hdr_reasons" = "$contract_hdr_reasons" ]
 }
 
 # Catches malformed diagnostics terminal output echoing raw pod data or quietly
@@ -2539,8 +2569,8 @@ EOF
 
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
-		[[ "$output" == terminal-summary-schema-error:* ]]
-		[[ "$output" != *'unknown-reason'* && "$output" != *'/media/'* && "$output" != *'nodeName'* ]]
+		[ "$output" = 'terminal-summary-schema-error:unknown-reason' ]
+		[[ "$output" != *'/media/'* && "$output" != *'nodeName'* ]]
 	done
 }
 
@@ -2552,16 +2582,27 @@ EOF
 	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
 
 	for mutation in \
-		'.vmaf.reasons = ["classification-failed","classification-predicate-not-met","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum"]' \
-		'.vmaf.reasons = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]' \
+		'.vmaf.reasons = ["classification-failed","classification-predicate-not-met","incomplete-or-failed-evidence","incomplete-setting-evidence","missing-offset-window","offset-best-tie","one-setting-evidence","post-run-identity-drift","ssim-psnr-offset-disagreement"] | .hdr.preserved = 0 | .hdr["unresolved-oracle"] = 3 | .hdr.reasons = ["clip-window-absent","clip-window-malformed","clip-window-null","decoded-trace-disagreement","encoded-window-absent","encoded-window-malformed","encoded-window-null","source-stream-probe-absent"]' \
 		'.vmaf.unresolved = 5 | .vmaf["encoder-output-defect"] = 0 | .vmaf.reasons = ["source-window-clean"]' ; do
 		case_terminal="$BATS_TEST_TMPDIR/limit-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
 		jq -c "$mutation" <<<"$terminal_message" >"$case_terminal"
 		write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
-		[[ "$output" == terminal-summary-schema-error:* ]]
+		if [[ "$mutation" == *'source-stream-probe-absent'* ]]; then
+			[ "$output" = 'terminal-summary-schema-error:too-many-reasons' ]
+		else
+			[ "$output" = 'terminal-summary-schema-error:wrong-vmaf-counts' ]
+		fi
 	done
+
+	case_terminal="$BATS_TEST_TMPDIR/overlong-terminal.json"
+	jq -c '.vmaf.reasons = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]' \
+		<<<"$terminal_message" >"$case_terminal"
+	write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = 'terminal-summary-schema-error:reason-too-long' ]
 
 	case_terminal="$BATS_TEST_TMPDIR/oversized-terminal.json"
 	printf '%3073s%s' '' "$terminal_message" >"$case_terminal"
@@ -2569,6 +2610,24 @@ EOF
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[[ "$output" == 'terminal-summary-schema-error:raw-message-too-large' ]]
+
+	case_terminal="$BATS_TEST_TMPDIR/oversized-multibyte-terminal.json"
+	canonical_bytes="$(LC_ALL=C printf '%s' "$terminal_message" | wc -c | tr -d '[:space:]')"
+	padding=$((3072 - canonical_bytes - 1))
+	{
+		printf '\357\273\277'
+		printf '%*s' "$padding" ''
+		printf '%s' "$terminal_message"
+	} >"$case_terminal"
+	raw_terminal_message="$(<"$case_terminal")"
+	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -gt 3072 ]
+	character_count="$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "${#1}"' _ "$raw_terminal_message")"
+	[ "$character_count" -le 3072 ]
+	jq -e -c . "$case_terminal" >/dev/null
+	write_diagnostics_results_fixture "$run_id" Failed "$raw_terminal_message"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
 }
 
 @test "diagnostic terminal producer rejects invalid status unknown excess and oversized reason payloads" {
@@ -2596,6 +2655,7 @@ EOF
 		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
 		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-unknown.json"
 	[ "$status" -eq 65 ]
+	[ "$output" = 'terminal-summary-schema-error:unknown-reason' ]
 
 	jq '.vmaf.entries[0].reasons = ["classification-predicate-not-met","incomplete-setting-evidence","missing-offset-window","offset-best-tie"] |
 		.vmaf.entries[1].reasons = ["one-setting-evidence","ssim-psnr-offset-disagreement"] |
@@ -2623,6 +2683,7 @@ EOF
 		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
 		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-overlong.json"
 	[ "$status" -eq 65 ]
+	[ "$output" = 'terminal-summary-schema-error:reason-too-long' ]
 
 	jq '.hdr.entries[0].classification = "preserved" | .hdr.entries[0].reasons = ["encoded-window-null"]' \
 		"$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-incompatible.json"

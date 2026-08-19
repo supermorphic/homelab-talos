@@ -7,6 +7,12 @@ CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT=64
 readonly CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT
 readonly CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT
 
+contract_diagnostics_terminal_byte_count() {
+	local value="$1"
+	local LC_ALL=C
+	printf '%s' "$value" | wc -c | tr -d '[:space:]'
+}
+
 contract_load() {
 	local file="$1"
 	jq -e '
@@ -182,7 +188,7 @@ EOF
 
 contract_diagnostics_terminal_hdr_reason_classes_json() {
 	cat <<'EOF'
-{"assigned-node-capability-rejected":["unresolved-oracle"],"authoritative-source-metadata":["clip-boundary-defect","source-probe-defect"],"classification-failed":["unresolved-oracle"],"clip-metadata-changed":["clip-boundary-defect"],"clip-window-absent":["unresolved-oracle"],"clip-window-malformed":["unresolved-oracle"],"clip-window-null":["unresolved-oracle"],"decoded-trace-disagreement":["unresolved-oracle"],"diagnostic-preflight-rejected":["unresolved-oracle"],"encoded-metadata-changed":["encoder-output-defect"],"encoded-window-absent":["unresolved-oracle"],"encoded-window-malformed":["unresolved-oracle"],"encoded-window-null":["unresolved-oracle"],"incomplete-or-failed-evidence":["unresolved-oracle"],"post-run-identity-drift":["unresolved-oracle"],"runmeta-create-failed":["unresolved-oracle"],"running-image-evidence-rejected":["unresolved-oracle"],"runtime-pre-encode-gate-rejected":["unresolved-oracle"],"source-and-clip-metadata-agree":["encoder-output-defect"],"source-clip-encoded-metadata-agree":["preserved"],"source-probe-null":["source-probe-defect"],"source-stream-probe-absent":["unresolved-oracle"],"source-stream-probe-conflict":["unresolved-oracle"],"source-stream-probe-malformed":["unresolved-oracle"],"source-window-absent":["unresolved-oracle"],"source-window-conflict":["unresolved-oracle"],"source-window-malformed":["unresolved-oracle"],"source-window-null":["unresolved-oracle"],"stream-probe-null":["source-probe-defect"]}
+{"assigned-node-capability-rejected":["unresolved-oracle"],"authoritative-source-metadata":["clip-boundary-defect","source-probe-defect"],"classification-failed":["unresolved-oracle"],"clip-metadata-changed":["clip-boundary-defect"],"clip-window-absent":["unresolved-oracle"],"clip-window-malformed":["unresolved-oracle"],"clip-window-null":["unresolved-oracle"],"decoded-trace-disagreement":["unresolved-oracle"],"diagnostic-preflight-rejected":["unresolved-oracle"],"encoded-metadata-changed":["encoder-output-defect"],"encoded-window-absent":["unresolved-oracle"],"encoded-window-malformed":["unresolved-oracle"],"encoded-window-null":["unresolved-oracle"],"incomplete-or-failed-evidence":["unresolved-oracle"],"post-run-identity-drift":["unresolved-oracle"],"runmeta-create-failed":["unresolved-oracle"],"running-image-evidence-rejected":["unresolved-oracle"],"runtime-pre-encode-gate-rejected":["unresolved-oracle"],"source-and-clip-metadata-agree":["encoder-output-defect"],"source-clip-encoded-metadata-agree":["preserved"],"source-stream-probe-absent":["unresolved-oracle"],"source-stream-probe-conflict":["unresolved-oracle"],"source-stream-probe-malformed":["unresolved-oracle"],"source-window-absent":["unresolved-oracle"],"source-window-conflict":["unresolved-oracle"],"source-window-malformed":["unresolved-oracle"],"source-window-null":["unresolved-oracle"],"stream-probe-null":["source-probe-defect"]}
 EOF
 }
 
@@ -204,6 +210,11 @@ contract_diagnostics_terminal_schema_reason() {
 		--argjson reason_length_limit "$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT" '
 		def sorted_unique: . == (sort | unique);
 		def int_nonneg: type == "number" and floor == . and . >= 0;
+		def terminal_reasons:
+			[(try .vmaf.reasons[] catch empty), (try .hdr.reasons[] catch empty)];
+		def has_unknown_reasons($section; $reason_classes):
+			try ($section.reasons | any(.[]; . as $reason |
+				($reason | type) == "string" and ($reason_classes[$reason] | type) != "array")) catch false;
 		def compatible_reasons($reason_classes; $counts):
 			type == "array" and
 			length >= 1 and
@@ -259,6 +270,9 @@ contract_diagnostics_terminal_schema_reason() {
 		elif ($status != "" and $payload_status != $status) then "wrong-status"
 		elif (($run == "" and .runId != null) or ($run != "" and .runId != $run)) then "wrong-run-id"
 		elif (($artifact == "" and .artifactLocation != null) or ($artifact != "" and .artifactLocation != $artifact)) then "wrong-artifact-location"
+		elif (terminal_reasons | any(.[]; type == "string" and length > $reason_length_limit)) then "reason-too-long"
+		elif has_unknown_reasons(.vmaf; $vmaf_reason_classes) or
+			has_unknown_reasons(.hdr; $hdr_reason_classes) then "unknown-reason"
 		elif (.vmaf | vmaf_counts | not) then "wrong-vmaf-counts"
 		elif (.hdr | hdr_counts | not) then "wrong-hdr-counts"
 		elif ((.vmaf.reasons + .hdr.reasons) | unique | length) > $reason_count_limit then "too-many-reasons"

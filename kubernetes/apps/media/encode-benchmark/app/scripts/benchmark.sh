@@ -1097,9 +1097,31 @@ diagnostic_termination_log_path() {
 	fi
 }
 
+diagnostic_summary_reason_error() {
+	local summary="$1" vmaf_reason_classes hdr_reason_classes
+	vmaf_reason_classes="$(contract_diagnostics_terminal_vmaf_reason_classes_json)" || return
+	hdr_reason_classes="$(contract_diagnostics_terminal_hdr_reason_classes_json)" || return
+	jq -r \
+		--argjson vmaf_reason_classes "$vmaf_reason_classes" \
+		--argjson hdr_reason_classes "$hdr_reason_classes" \
+		--argjson reason_length_limit "$diagnostic_terminal_reason_length_limit" '
+		def vmaf_reasons: [(try .vmaf.entries[]?.reasons[]? catch empty)];
+		def hdr_reasons: [(try .hdr.entries[]?.reasons[]? catch empty)];
+		if ((vmaf_reasons + hdr_reasons) |
+			any(.[]; type == "string" and length > $reason_length_limit)) then
+			"reason-too-long"
+		elif (vmaf_reasons | any(.[]; . as $reason |
+			($reason | type) == "string" and ($vmaf_reason_classes[$reason] | type) != "array")) or
+			(hdr_reasons | any(.[]; . as $reason |
+				($reason | type) == "string" and ($hdr_reason_classes[$reason] | type) != "array")) then
+			"unknown-reason"
+		else "" end
+	' <<<"$summary"
+}
+
 diagnostic_terminal_payload() {
 	local status="$1" run_id="${2:-}" summary="${3:-}" reason_code="${4:-incomplete-or-failed-evidence}"
-	local artifact='null' artifact_location='' allowed_vmaf allowed_hdr vmaf_reason_classes hdr_reason_classes validation_reason payload
+	local artifact='null' artifact_location='' allowed_vmaf allowed_hdr vmaf_reason_classes hdr_reason_classes summary_reason validation_reason payload
 	case "$status" in
 	complete | harness-blocked | failed) ;;
 	*)
@@ -1152,6 +1174,11 @@ diagnostic_terminal_payload() {
 			}
 		}')" || return 65
 	else
+		summary_reason="$(diagnostic_summary_reason_error "$summary")" || return 65
+		if [[ -n "$summary_reason" ]]; then
+			printf 'terminal-summary-schema-error:%s\n' "$summary_reason" >&2
+			return 65
+		fi
 		jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" \
 			--argjson allowed_vmaf "$allowed_vmaf" --argjson allowed_hdr "$allowed_hdr" \
 			--argjson vmaf_reason_classes "$vmaf_reason_classes" \
@@ -1231,10 +1258,11 @@ diagnostic_terminal_payload() {
 }
 
 diagnostic_emit_terminal() {
-	local payload="$1" canonical path
+	local payload="$1" canonical canonical_bytes path
 	path="$(diagnostic_termination_log_path)" || return
 	canonical="$(jq -e -S -c . <<<"$payload")" || return 65
-	((${#canonical} <= diagnostic_terminal_max_bytes)) || {
+	canonical_bytes="$(contract_diagnostics_terminal_byte_count "$canonical")" || return 65
+	((canonical_bytes <= diagnostic_terminal_max_bytes)) || {
 		echo 'diagnostic terminal payload exceeds byte limit' >&2
 		return 65
 	}

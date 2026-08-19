@@ -73,12 +73,13 @@ diagnostic_terminal_schema_error() {
 
 diagnostic_sanitize_terminal() {
 	local terminal_message="$1" requested_run_id="$2"
-	local parsed reason artifact_location
+	local raw_bytes parsed reason artifact_location
 	if [[ -z "$terminal_message" ]]; then
 		printf '%s\n' 'no-sanitized-summary'
 		return 65
 	fi
-	((${#terminal_message} <= diagnostic_terminal_max_bytes)) || {
+	raw_bytes="$(contract_diagnostics_terminal_byte_count "$terminal_message")" || return 65
+	((raw_bytes <= diagnostic_terminal_max_bytes)) || {
 		printf '%s\n' "$(diagnostic_terminal_schema_error raw-message-too-large)"
 		return 65
 	}
