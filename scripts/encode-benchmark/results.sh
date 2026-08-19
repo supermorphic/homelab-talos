@@ -40,8 +40,6 @@ configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha2
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
 diagnostic_terminal_max_bytes="$CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES"
-diagnostic_terminal_reason_count_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT"
-diagnostic_terminal_reason_length_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT"
 
 normalize_image_id() {
 	local image_id="$1" stripped
@@ -301,13 +299,6 @@ validate_prework_image_evidence() {
 
 diagnostic_pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
 	--selector "$selector" --output json)"
-diagnostic_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
-	[
-		.items[]
-		| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
-		| select(.metadata.labels."homelab-talos/benchmark-run" == strenv(RUN_ID))
-	] | length
-' <<<"$diagnostic_pods")"
 diagnostic_mode_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
 	[
 		.items[]

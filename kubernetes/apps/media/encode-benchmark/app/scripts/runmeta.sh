@@ -248,6 +248,7 @@ discover_identity() {
 		sources='[]'
 		;;
 	diagnostics)
+		# shellcheck disable=SC2016 # jq variables are evaluated by jq, not this shell.
 		panel='. as $root | .qualityPanel[]? | select(.id as $sample_id |
 			([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] |
 				index($sample_id) != null))'

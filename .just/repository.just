@@ -1355,7 +1355,7 @@ verify-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 33  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 34  # Update when adding/removing a guarded rollout recipe.
     @agent_access_recipe="$(just --dry-run bootstrap agent-access 2>&1)"; \
       normalized_recipe="$(tr '\n\t' '  ' <<<"$agent_access_recipe" | sed -E 's/\\[[:space:]]+/ /g; s/[[:space:]]+/ /g')"; \
       matrix_contract="scripts/verify/agent-access.sh \"\$kubeconfig\" '.talos/config'"; \

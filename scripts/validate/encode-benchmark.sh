@@ -197,6 +197,8 @@ assert_eq "$completed_expr" \
 
 # Parse the embedded panel document and gate evidence before any source media is runnable.
 samples_doc="$(yq -r '.data."samples.json"' "$samples")"
+samples_document="$temp_dir/samples.json"
+printf '%s\n' "$samples_doc" >"$samples_document"
 assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
 jq -e '
 	.schemaVersion == 2 and
@@ -210,6 +212,98 @@ jq -e '
 		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
 	}
 ' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
+jq -e '
+	.diagnostics == {
+		schemaVersion: 1,
+		resultSchemaVersion: 1,
+		strategyId: "qsv-hevc-icq-v1",
+		acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
+		decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
+		historicalQualityRunId: "20260817T233546Z-debc0498",
+		historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
+		vmafSettings: [16, 30],
+		hdrSetting: 16,
+		frameRadius: 2,
+		frameOffsets: [-2, -1, 0, 1, 2],
+		traceWindowSeconds: 10,
+		vmafPanel: [
+			{sampleId: "avc-clean-coco", clipId: "motion", observedFrameIndex: 1641},
+			{sampleId: "avc-grain-memento", clipId: "dark", observedFrameIndex: 523},
+			{sampleId: "avc-grain-memento", clipId: "detail", observedFrameIndex: 370},
+			{sampleId: "vc1-fugitive", clipId: "detail", observedFrameIndex: 781},
+			{sampleId: "vc1-fugitive", clipId: "motion", observedFrameIndex: 798}
+		],
+		hdrPanel: [
+			{sampleId: "hdr10-clean-ministry", clipId: "detail"},
+			{sampleId: "hdr10-grain-goodfellas", clipId: "detail"},
+			{sampleId: "hdr10-motion-john-wick-2", clipId: "detail"}
+		]
+	} and
+	([.diagnostics.vmafPanel[] as $panel | .diagnostics.vmafSettings[] |
+		{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .}] | length) == 10 and
+	([.diagnostics.hdrPanel[] as $panel |
+		{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .diagnostics.hdrSetting}] | length) == 3 and
+	([.diagnostics | .. | strings |
+		select(. == "quality" or . == "findings" or . == "candidate" or
+			. == "finalist" or . == "savings" or . == "x265" or . == "contention")] |
+		length) == 0
+' <<<"$samples_doc" >/dev/null ||
+	fail 'samples must publish the exact isolated diagnostics contract'
+
+diagnostics_confirmation='run:encode-benchmark:diagnostics'
+assert_eq "$(rg -F -o "$diagnostics_confirmation" "$dispatch_helper" | wc -l | tr -d ' ')" '1' \
+	'diagnostics dispatch confirmation literal count'
+assert_eq "$(rg -F -o '.spec.activeDeadlineSeconds = 14400' "$dispatch_helper" | wc -l | tr -d ' ')" '1' \
+	'diagnostics four-hour deadline override count'
+
+diagnostics_test_run='20260819T120000Z-feedbeef'
+diagnostics_test_artifact="/out/runs/$diagnostics_test_run/diagnostics"
+diagnostics_terminal_payload="$(jq -n -c \
+	--arg run "$diagnostics_test_run" --arg artifact "$diagnostics_test_artifact" '{
+		schemaVersion:1,
+		strategyId:"qsv-hevc-icq-v1",
+		mode:"diagnostics",
+		status:"complete",
+		runId:$run,
+		artifactLocation:$artifact,
+		vmaf:{
+			total:5,
+			"encoder-output-defect":0,
+			"temporal-alignment-defect":0,
+			unresolved:5,
+			"vmaf-measurement-defect":0,
+			reasons:["offset-best-tie"]
+		},
+		hdr:{
+			total:3,
+			"clip-boundary-defect":0,
+			"encoder-output-defect":0,
+			preserved:3,
+			"source-probe-defect":0,
+			"unresolved-oracle":0,
+			reasons:["source-clip-encoded-metadata-agree"]
+		}
+	}')"
+diagnostics_terminal_reason() {
+	local payload="$1"
+	bash -c '
+		source "$1"
+		contract_load "$2"
+		contract_diagnostics_terminal_schema_reason "$3" "$4" complete "$5"
+	' _ "$contract" "$samples_document" "$payload" "$diagnostics_test_run" "$diagnostics_test_artifact"
+}
+assert_eq "$(diagnostics_terminal_reason "$diagnostics_terminal_payload")" '' \
+	'diagnostics terminal fixed-count schema'
+for mutation in \
+	'.mode = "quality"' \
+	'.schemaVersion = 2' \
+	'.vmaf.total = 6' \
+	'.hdr.total = 4' \
+	'.artifactLocation = "/out/runs/20260819T120000Z-feedbeef"'; do
+	mutated_terminal="$(jq -c "$mutation" <<<"$diagnostics_terminal_payload")"
+	[[ -n "$(diagnostics_terminal_reason "$mutated_terminal")" ]] ||
+		fail "diagnostics terminal schema accepted mutation: $mutation"
+done
 jq -e '
 	def finalist($cohort; $id):
 		[.qualityPanel[] | select(.cohort == $cohort and .id == $id and
