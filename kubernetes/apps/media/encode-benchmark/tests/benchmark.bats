@@ -1552,8 +1552,6 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 
 	jq '
 		.settings |= map(
-			.timeline.zeroOffsetAligned = false |
-			.timeline.discontinuity = {offset: 1, kind: "duplicate"} |
 			.offsets |= map(
 				if .offset == 1 then
 					.ssim = 0.999 | .psnr = 42.5

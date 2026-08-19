@@ -705,6 +705,12 @@ diagnostic_vmaf_classify() {
 					$ssim_best.state == "unique" and
 					$psnr_best.state == "unique" and
 					$ssim_best.offset == $psnr_best.offset and
+					$ssim_best.offset != 0
+				),
+				timelineCorroboratesPairing: (
+					$ssim_best.state == "unique" and
+					$psnr_best.state == "unique" and
+					$ssim_best.offset == $psnr_best.offset and
 					$ssim_best.offset != 0 and
 					.timeline.discontinuity != null and
 					.timeline.discontinuity.offset == $ssim_best.offset
@@ -733,7 +739,8 @@ diagnostic_vmaf_classify() {
 				($settings | map(summarize) | sort_by(.globalQuality)) as $summaries |
 				if
 					all($summaries[];
-						.validNonzeroPairing and .currentZero and (.resetZero | not)
+						.validNonzeroPairing and .timelineCorroboratesPairing and
+						.currentZero and (.resetZero | not)
 					) and
 					([ $summaries[].pair.offset ] | unique | length) == 1
 				then
