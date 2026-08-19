@@ -488,6 +488,10 @@ verify_run() {
 	}
 	stored="$(stored_identity "$manifest")" || return
 	mode="$(jq -r '.mode' <<<"$stored")"
+	if [[ -n "$requested_mode" && "$mode" != "$requested_mode" ]]; then
+		printf 'identity mismatch: mode (stored=%s, current=%s)\n' "$mode" "$requested_mode" >&2
+		return 1
+	fi
 	if [[ -n "$requested_mode" ]]; then
 		mode="$requested_mode"
 	fi

@@ -2085,6 +2085,36 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 }
 
+# Catches diagnostics artifacts slipping into findings, candidate ranking, or a
+# resumed quality run because the validators trust run IDs more than mode/schema.
+@test "diagnostics artifacts are rejected by findings validators and quality resume" {
+	prepare_diagnostic_execution_run
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$(jq -r '.runId' <<<"$(tail -n 1 <<<"$output")")"
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	summary="$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json"
+	terminal="$BATS_TEST_TMPDIR/diagnostic-terminal.json"
+	printf '%s\n' "$(tail -n 1 <<<"$output")" >"$terminal"
+
+	run bash -c 'source "$1"; contract_load "$2"; findings_validate_manifest "$3" "$4" diagnostics' \
+		_ "$SCRIPTS/benchmark.sh" "$BENCHMARK_SAMPLES_FILE" "$manifest" "$run_id"
+	[ "$status" -ne 0 ]
+
+	for candidate in "$summary" "$terminal"; do
+		run "$SCRIPTS/benchmark.sh" _test validate-findings-inputs "$candidate"
+		[ "$status" -ne 0 ]
+	done
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$summary" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -ne 0 ]
+
+	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
+	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'identity mismatch: mode (stored=diagnostics, current=quality)'* ]]
+}
+
 # Catches diagnostics adding a fourteenth synthetic capability encode or
 # hashing source media before its committed assigned-node proof is admitted.
 @test "diagnostics validates committed assigned-node capability before source hashes or run creation" {

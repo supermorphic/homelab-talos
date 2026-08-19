@@ -38,33 +38,6 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
-jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
-	--selector "$selector" --output json)"
-pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
-	--selector "$selector" --output json)"
-job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
-((job_count > 0)) || {
-	echo "no owned benchmark Jobs found for run $run_id" >&2
-	exit 66
-}
-capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
-if ((capability_job_count > 0 && capability_job_count != job_count)); then
-	echo 'capability result provenance rejected: capability dispatch contains mixed Job modes' >&2
-	exit 1
-fi
-if ((capability_job_count > 0)); then
-	unique_job_names="$(yq -p=json -r '[.items[].metadata.name] | unique | length' <<<"$jobs")"
-	unique_target_nodes="$(yq -p=json -r \
-		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""] | unique | length' \
-		<<<"$jobs")"
-	all_target_nodes="$(yq -p=json -r \
-		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // "" | select(length > 0)] | length' \
-		<<<"$jobs")"
-	if ((unique_job_names != job_count || unique_target_nodes != job_count || all_target_nodes != job_count)); then
-		echo 'capability result provenance rejected: Job names and targeted nodes must be unique' >&2
-		exit 1
-	fi
-fi
 
 normalize_image_id() {
 	local image_id="$1" stripped
@@ -88,6 +61,115 @@ phase_for_job() {
 	else
 		printf '%s\n' 'Pending'
 	fi
+}
+
+diagnostic_terminal_schema_error() {
+	local reason="$1"
+	printf 'terminal-summary-schema-error:%s\n' "$reason"
+}
+
+diagnostic_sanitize_terminal() {
+	local terminal_message="$1" requested_run_id="$2"
+	local parsed reason
+	if [[ -z "$terminal_message" ]]; then
+		printf '%s\n' 'no-sanitized-summary'
+		return 65
+	fi
+	parsed="$(jq -e -c . <<<"$terminal_message" 2>/dev/null)" || {
+		printf '%s\n' 'no-sanitized-summary'
+		return 65
+	}
+	reason="$(jq -r --arg run "$requested_run_id" '
+		def count_object($total):
+			type == "object" and keys == ["classified","total","unresolved"] and
+			.total == $total and
+			(.classified | type == "number" and floor == . and . >= 0 and . <= $total) and
+			(.unresolved | type == "number" and floor == . and . >= 0 and . <= $total) and
+			(.classified + .unresolved == $total);
+		if type != "object" then "not-object"
+		elif (keys | sort) != ["artifactLocation","hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] then "wrong-keys"
+		elif .schemaVersion != 1 then "wrong-schema-version"
+		elif .strategyId != "qsv-hevc-icq-v1" then "wrong-strategy"
+		elif .mode != "diagnostics" then "wrong-mode"
+		elif .status != "complete" and .status != "harness-blocked" and .status != "failed" then "wrong-status"
+		elif .runId != $run then "wrong-run-id"
+		elif .artifactLocation != ("/out/runs/" + $run + "/diagnostics") then "wrong-artifact-location"
+		elif (.vmaf | count_object(5) | not) then "wrong-vmaf-counts"
+		elif (.hdr | count_object(3) | not) then "wrong-hdr-counts"
+		else "" end
+	' <<<"$parsed")" || {
+		printf '%s\n' "$(diagnostic_terminal_schema_error invalid-json)"
+		return 65
+	}
+	if [[ -n "$reason" ]]; then
+		printf '%s\n' "$(diagnostic_terminal_schema_error "$reason")"
+		return 65
+	fi
+	jq -r '
+		"mode=diagnostics " +
+		"run_id=\(.runId) " +
+		"status=\(.status) " +
+		"artifact_location=\(.artifactLocation) " +
+		"vmaf_total=\(.vmaf.total) " +
+		"vmaf_classified=\(.vmaf.classified) " +
+		"vmaf_unresolved=\(.vmaf.unresolved) " +
+		"hdr_total=\(.hdr.total) " +
+		"hdr_classified=\(.hdr.classified) " +
+		"hdr_unresolved=\(.hdr.unresolved)"
+	' <<<"$parsed"
+}
+
+diagnostic_results() {
+	local all_pods_json="$1" requested_run_id="$2" matching_pods pod_count pod_json pod_phase terminal_message sanitized_terminal
+	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
+		[
+			.items[]
+			| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
+			| select(.metadata.labels."homelab-talos/benchmark-run" == env.RUN_ID)
+			| select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")
+		]
+	' <<<"$all_pods_json")" || return 65
+	pod_count="$(jq -r 'length' <<<"$matching_pods")"
+	((pod_count == 1)) || {
+		echo "diagnostic result provenance rejected: expected one exact pod for run $requested_run_id" >&2
+		return 1
+	}
+	pod_json="$(jq -c '.[0]' <<<"$matching_pods")"
+	pod_phase="$(jq -r '.status.phase // ""' <<<"$pod_json")"
+	case "$pod_phase" in
+	Running | Pending)
+		printf 'mode=diagnostics phase=%s run_id=%s status=active artifact_location=/out/runs/%s/diagnostics\n' \
+			"$pod_phase" "$requested_run_id" "$requested_run_id"
+		return 0
+		;;
+	Succeeded | Failed)
+		terminal_message="$(jq -r '
+			[
+				.status.containerStatuses[]?
+				| select(.name == "benchmark")
+				| (.state.terminated.message // .lastState.terminated.message // "")
+			] |
+			if length == 1 then .[0]
+			elif length == 0 then ""
+			else error("ambiguous diagnostic terminal message")
+			end
+		' <<<"$pod_json" 2>/dev/null)" || {
+			printf '%s\n' "$(diagnostic_terminal_schema_error ambiguous-terminal-message)" >&2
+			return 1
+		}
+		sanitized_terminal="$(diagnostic_sanitize_terminal "$terminal_message" "$requested_run_id")" || {
+			printf '%s\n' "$sanitized_terminal" >&2
+			return 1
+		}
+		printf 'phase=%s %s\n' "$pod_phase" "$sanitized_terminal"
+		return 0
+		;;
+	*)
+		printf 'mode=diagnostics phase=%s run_id=%s status=active artifact_location=/out/runs/%s/diagnostics\n' \
+			"${pod_phase:-Unknown}" "$requested_run_id" "$requested_run_id"
+		return 0
+		;;
+	esac
 }
 
 sanitize_summary() {
@@ -218,6 +300,55 @@ validate_prework_image_evidence() {
 	normalized_evidence_id="$(normalize_image_id "$(jq -r '.imageId' <<<"$evidence")")" || return 65
 	[[ "$normalized_evidence_id" == "$live_image_id" && "${normalized_evidence_id##*@}" == "$configured_digest" ]] || return 65
 }
+
+diagnostic_pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
+	--selector "$selector" --output json)"
+diagnostic_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
+	[
+		.items[]
+		| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
+		| select(.metadata.labels."homelab-talos/benchmark-run" == strenv(RUN_ID))
+	] | length
+' <<<"$diagnostic_pods")"
+diagnostic_mode_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
+	[
+		.items[]
+		| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
+		| select(.metadata.labels."homelab-talos/benchmark-run" == strenv(RUN_ID))
+		| select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")
+	] | length
+' <<<"$diagnostic_pods")"
+if ((diagnostic_pod_count > 0 && diagnostic_pod_count == diagnostic_mode_pod_count)); then
+	diagnostic_results "$diagnostic_pods" "$run_id"
+	exit $?
+fi
+
+jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+	--selector "$selector" --output json)"
+pods="$diagnostic_pods"
+job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
+((job_count > 0)) || {
+	echo "no owned benchmark Jobs found for run $run_id" >&2
+	exit 66
+}
+capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
+if ((capability_job_count > 0 && capability_job_count != job_count)); then
+	echo 'capability result provenance rejected: capability dispatch contains mixed Job modes' >&2
+	exit 1
+fi
+if ((capability_job_count > 0)); then
+	unique_job_names="$(yq -p=json -r '[.items[].metadata.name] | unique | length' <<<"$jobs")"
+	unique_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""] | unique | length' \
+		<<<"$jobs")"
+	all_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // "" | select(length > 0)] | length' \
+		<<<"$jobs")"
+	if ((unique_job_names != job_count || unique_target_nodes != job_count || all_target_nodes != job_count)); then
+		echo 'capability result provenance rejected: Job names and targeted nodes must be unique' >&2
+		exit 1
+	fi
+fi
 
 evidence_status=0
 quality_completion_count=0
