@@ -14,6 +14,11 @@ setup() {
 	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 }
 
+write_diagnostic_fixture_field() {
+	local fixture="$1" group="$2" case_id="$3" field="$4" output_path="$5"
+	jq -e --arg id "$case_id" ".${group}[] | select(.id == \$id) | .${field}" "$fixture" >"$output_path"
+}
+
 # Catches findings accepting a legacy, ambiguous, or path-bearing input before
 # it can name an upstream artifact.  The expected value is hand-written from
 # the Task 10 schema rather than assembled by the runtime validator.
@@ -1489,6 +1494,89 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		"$FIXTURES/metrics/probe-source.json"
 	[ "$status" -eq 0 ]
 	[ "$(jq -r '.validation_hdr' <<<"$output")" = 'passed' ]
+}
+
+@test "diagnostic VMAF classifier returns the documented verdicts" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	for case_id in \
+		temporal-alignment \
+		encoder-output \
+		vmaf-measurement \
+		unresolved-disagreement \
+		unresolved-tie \
+		unresolved-missing-window \
+		unresolved-incomplete-setting \
+		unresolved-one-setting; do
+		evidence="$BATS_TEST_TMPDIR/$case_id-vmaf-evidence.json"
+		expected="$BATS_TEST_TMPDIR/$case_id-vmaf-expected.json"
+		write_diagnostic_fixture_field "$fixture" cases "$case_id" evidence "$evidence"
+		write_diagnostic_fixture_field "$fixture" cases "$case_id" expected "$expected"
+
+		run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$evidence"
+		[ "$status" -eq 0 ]
+		run jq -S -c . <<<"$output"
+		[ "$status" -eq 0 ]
+		actual="$output"
+		expected_json="$(jq -S -c . "$expected")"
+		[ "$actual" = "$expected_json" ]
+	done
+}
+
+@test "diagnostic HDR normalizer reduces exact rationals without decimal rounding" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-hdr-cases.json"
+	evidence="$BATS_TEST_TMPDIR/hdr-normalize.json"
+	write_diagnostic_fixture_field "$fixture" cases source-probe-defect evidence "$evidence"
+
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-hdr-normalize "$evidence"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.schemaVersion == 1 and
+		.source.authoritative.status == "ok" and
+		.source.authoritative.metadata.masteringDisplay.displayPrimaries.red.x ==
+			{numerator:53, denominator:200} and
+		.source.authoritative.metadata.masteringDisplay.displayPrimaries.red.y ==
+			{numerator:69, denominator:200} and
+		.source.authoritative.metadata.masteringDisplay.whitePoint.x ==
+			{numerator:3127, denominator:10000} and
+		.source.authoritative.metadata.masteringDisplay.luminance.min ==
+			{numerator:1, denominator:200} and
+		.source.authoritative.metadata.maxCLL == {numerator:1000, denominator:1} and
+		.source.windows.beginning.decoded.metadata.masteringDisplay.displayPrimaries.red.x ==
+			.source.windows.end.trace.metadata.masteringDisplay.displayPrimaries.red.x and
+		.source.windows.detail.decoded.metadata.masteringDisplay.whitePoint.x ==
+			.source.windows.beginning.trace.metadata.masteringDisplay.whitePoint.x and
+		(.. | objects | select(has("numerator") and has("denominator")) |
+			(.numerator | type) == "number" and (.denominator | type) == "number") and
+		(tostring | contains("0.265") | not) and
+		(tostring | contains("0.3127") | not)
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
+@test "diagnostic HDR classifier returns the documented verdicts" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-hdr-cases.json"
+	for case_id in \
+		source-probe-defect \
+		clip-boundary-defect \
+		encoder-output-defect \
+		preserved \
+		unresolved-source-null \
+		unresolved-source-absent \
+		unresolved-source-malformed \
+		unresolved-source-conflict; do
+		evidence="$BATS_TEST_TMPDIR/$case_id-hdr-evidence.json"
+		expected="$BATS_TEST_TMPDIR/$case_id-hdr-expected.json"
+		write_diagnostic_fixture_field "$fixture" cases "$case_id" evidence "$evidence"
+		write_diagnostic_fixture_field "$fixture" cases "$case_id" expected "$expected"
+
+		run "$SCRIPTS/benchmark.sh" _test diagnostic-hdr-classify "$evidence"
+		[ "$status" -eq 0 ]
+		run jq -S -c . <<<"$output"
+		[ "$status" -eq 0 ]
+		actual="$output"
+		expected_json="$(jq -S -c . "$expected")"
+		[ "$actual" = "$expected_json" ]
+	done
 }
 
 @test "quality passes title HDR metadata through orchestration and rejects missing output metadata" {

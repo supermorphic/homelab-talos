@@ -615,6 +615,352 @@ validate_probes() {
 		}'
 }
 
+diagnostic_vmaf_classify() {
+	local evidence="$1"
+	jq -e -c '
+		def exact_keys($keys): type == "object" and ((keys | sort) == ($keys | sort));
+		def nonempty_string: type == "string" and length > 0;
+		def offset_entry:
+			exact_keys(["offset", "psnr", "ssim"]) and
+			(.offset | type == "number" and floor == . and . >= -2 and . <= 2) and
+			((.ssim == null) or (.ssim | type == "number")) and
+			((.psnr == null) or (.psnr | type == "number"));
+		def timeline:
+			exact_keys(["discontinuity", "zeroOffsetAligned"]) and
+			(.zeroOffsetAligned | type == "boolean") and
+			(
+				.discontinuity == null or
+				(
+					.discontinuity |
+					exact_keys(["kind", "offset"]) and
+					(.kind == "duplicate" or .kind == "drop" or .kind == "timestamp-discontinuity") and
+					(.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0)
+				)
+			);
+		def source_window: exact_keys(["status"]) and (.status == "clean" or .status == "decode-error" or .status == "discontinuity");
+		def setting:
+			exact_keys([
+				"completeEvidence", "currentTargetVmaf", "globalQuality", "offsets",
+				"resetTargetVmaf", "sourceWindow", "timeline"
+			]) and
+			(.globalQuality == 16 or .globalQuality == 30) and
+			(.completeEvidence | type == "boolean") and
+			(.currentTargetVmaf | type == "number" and . >= 0) and
+			(.resetTargetVmaf | type == "number" and . >= 0) and
+			(.sourceWindow | source_window) and
+			(.timeline | timeline) and
+			(.offsets | type == "array" and length == 5 and all(.[]; offset_entry) and
+				([.[].offset] | sort == [-2, -1, 0, 1, 2]));
+		def unique_metric_offset($metric):
+			([.offsets[] | select(.[$metric] != null)] | length) as $present_count |
+			if $present_count != 5 then
+				{state: "missing"}
+			else
+				([.offsets[] | {offset, value: .[$metric]}] | max_by(.value).value) as $best_value |
+				([.offsets[] | select(.[$metric] == $best_value) | .offset]) as $best_offsets |
+				if ($best_offsets | length) == 1 then
+					{state: "unique", offset: $best_offsets[0]}
+				else
+					{state: "tie"}
+				end
+			end;
+		def unique_target_minimum($metric):
+			([.offsets[] | select(.[$metric] != null) | .[$metric]] | length) == 5 and
+			(
+				([.offsets[] | .[$metric]] | min) as $minimum |
+				([.offsets[] | select(.[$metric] == $minimum) | .offset]) as $minimum_offsets |
+				($minimum_offsets | length) == 1 and $minimum_offsets[0] == 0
+			);
+		def summarize:
+			. as $setting |
+			($setting | unique_metric_offset("ssim")) as $ssim_best |
+			($setting | unique_metric_offset("psnr")) as $psnr_best |
+			{
+				globalQuality: .globalQuality,
+				completeEvidence,
+				currentZero: (.currentTargetVmaf == 0),
+				resetZero: (.resetTargetVmaf == 0),
+				zeroAligned: .timeline.zeroOffsetAligned,
+				discontinuity: .timeline.discontinuity,
+				sourceStatus: .sourceWindow.status,
+				targetUniqueMinimum: (unique_target_minimum("ssim") and unique_target_minimum("psnr")),
+				ssimBest: $ssim_best,
+				psnrBest: $psnr_best,
+				pair: (
+					if $ssim_best.state == "missing" or $psnr_best.state == "missing" then
+						{state: "missing"}
+					elif $ssim_best.state == "tie" or $psnr_best.state == "tie" then
+						{state: "tie"}
+					elif $ssim_best.offset != $psnr_best.offset then
+						{state: "disagreement"}
+					else
+						{state: "unique", offset: $ssim_best.offset}
+					end
+				)
+			};
+		def classification($name; $reasons):
+			{schemaVersion: 1, classification: $name, reasons: $reasons};
+		if
+			exact_keys(["clipId", "observedFrameIndex", "sampleId", "schemaVersion", "settings"]) and
+			.schemaVersion == 1 and
+			(.sampleId | nonempty_string) and
+			(.clipId | nonempty_string) and
+			(.observedFrameIndex | type == "number" and floor == . and . >= 0) and
+			(.settings | type == "array" and length >= 1 and all(.[]; setting))
+		then
+			.settings as $settings |
+			if ($settings | length) == 1 then
+				classification("unresolved"; ["one-setting-evidence"])
+			elif ([ $settings[].globalQuality ] | sort) != [16, 30] then
+				classification("unresolved"; ["incomplete-setting-evidence"])
+			elif any($settings[]; .completeEvidence | not) then
+				classification("unresolved"; ["incomplete-setting-evidence"])
+			elif any($settings[]; ([.offsets[] | .ssim == null or .psnr == null] | any)) then
+				classification("unresolved"; ["missing-offset-window"])
+			else
+				($settings | map(summarize) | sort_by(.globalQuality)) as $summaries |
+				if any($summaries[]; .pair.state == "tie") then
+					classification("unresolved"; ["offset-best-tie"])
+				elif any($summaries[]; .pair.state == "disagreement") then
+					classification("unresolved"; ["ssim-psnr-offset-disagreement"])
+				elif any($summaries[]; .pair.state == "missing") then
+					classification("unresolved"; ["missing-offset-window"])
+				elif
+					all($summaries[];
+						(.pair.offset != 0) and .currentZero and (.resetZero | not) and
+						(.discontinuity != null) and (.discontinuity.offset == .pair.offset)
+					) and
+					([ $summaries[].pair.offset ] | unique | length) == 1
+				then
+					classification("temporal-alignment-defect"; [
+						"nonzero-ssim-psnr-offset-agreement",
+						"timeline-discontinuity-at-offset",
+						"pts-reset-clears-vmaf-zero"
+					])
+				elif
+					all($summaries[];
+						.zeroAligned and .currentZero and .resetZero and
+						.targetUniqueMinimum and .sourceStatus == "clean" and
+						(.discontinuity == null) and (.pair.offset != 0)
+					)
+				then
+					classification("encoder-output-defect"; [
+						"zero-offset-timeline-agreement",
+						"target-frame-local-metric-minimum",
+						"source-window-clean"
+					])
+				elif
+					all($summaries[];
+						.zeroAligned and .currentZero and .resetZero and
+						(.pair.offset == 0) and (.targetUniqueMinimum | not)
+					)
+				then
+					classification("vmaf-measurement-defect"; [
+						"zero-offset-timeline-agreement",
+						"independent-metrics-not-target-minimum",
+						"vmaf-only-exact-zero"
+					])
+				else
+					classification("unresolved"; ["classification-predicate-not-met"])
+				end
+			end
+		else
+			error("invalid diagnostic vmaf evidence")
+		end
+	' "$evidence"
+}
+
+diagnostic_hdr_normalize() {
+	local evidence="$1"
+	jq -e -c '
+		def exact_keys($keys): type == "object" and ((keys | sort) == ($keys | sort));
+		def gcd($a; $b):
+			if $b == 0 then $a else gcd($b; ($a % $b)) end;
+		def rational:
+			exact_keys(["denominator", "numerator"]) and
+			(.numerator | type == "number" and floor == . and . >= 0) and
+			(.denominator | type == "number" and floor == . and . > 0);
+		def reduced_rational:
+			(gcd(.numerator; .denominator)) as $divisor |
+			{
+				numerator: (.numerator / $divisor),
+				denominator: (.denominator / $divisor)
+			};
+		def chromaticity:
+			exact_keys(["x", "y"]) and (.x | rational) and (.y | rational);
+		def mastering_display:
+			exact_keys(["displayPrimaries", "luminance", "whitePoint"]) and
+			(.displayPrimaries | exact_keys(["blue", "green", "red"]) and
+				(.red | chromaticity) and (.green | chromaticity) and (.blue | chromaticity)) and
+			(.whitePoint | chromaticity) and
+			(.luminance | exact_keys(["max", "min"]) and (.min | rational) and (.max | rational));
+		def hdr_metadata:
+			exact_keys(["masteringDisplay", "maxCLL", "maxFALL"]) and
+			(.masteringDisplay | mastering_display) and
+			(.maxCLL | rational) and
+			(.maxFALL | rational);
+		def normalize_metadata:
+			{
+				masteringDisplay: {
+					displayPrimaries: {
+						red: {
+							x: (.masteringDisplay.displayPrimaries.red.x | reduced_rational),
+							y: (.masteringDisplay.displayPrimaries.red.y | reduced_rational)
+						},
+						green: {
+							x: (.masteringDisplay.displayPrimaries.green.x | reduced_rational),
+							y: (.masteringDisplay.displayPrimaries.green.y | reduced_rational)
+						},
+						blue: {
+							x: (.masteringDisplay.displayPrimaries.blue.x | reduced_rational),
+							y: (.masteringDisplay.displayPrimaries.blue.y | reduced_rational)
+						}
+					},
+					whitePoint: {
+						x: (.masteringDisplay.whitePoint.x | reduced_rational),
+						y: (.masteringDisplay.whitePoint.y | reduced_rational)
+					},
+					luminance: {
+						min: (.masteringDisplay.luminance.min | reduced_rational),
+						max: (.masteringDisplay.luminance.max | reduced_rational)
+					}
+				},
+				maxCLL: (.maxCLL | reduced_rational),
+				maxFALL: (.maxFALL | reduced_rational)
+			};
+		def oracle:
+			(
+				(exact_keys(["metadata", "status"]) and .status == "ok" and (.metadata | hdr_metadata)) or
+				(exact_keys(["status"]) and (.status == "null" or .status == "absent" or .status == "malformed"))
+			);
+		def normalize_oracle:
+			if .status == "ok" then
+				{status: "ok", metadata: (.metadata | normalize_metadata)}
+			else
+				{status}
+			end;
+		def oracle_pair:
+			exact_keys(["decoded", "trace"]) and (.decoded | oracle) and (.trace | oracle);
+		def authoritative_pair($null_reason; $absent_reason; $malformed_reason):
+			(.decoded | normalize_oracle) as $decoded |
+			(.trace | normalize_oracle) as $trace |
+			if ($decoded.status == "ok" and $trace.status == "ok") then
+				if $decoded.metadata == $trace.metadata then
+					{status: "ok", metadata: $decoded.metadata}
+				else
+					{status: "unresolved", reasons: ["decoded-trace-disagreement"]}
+				end
+			elif ($decoded.status == "null" or $trace.status == "null") then
+				{status: "unresolved", reasons: [$null_reason]}
+			elif ($decoded.status == "absent" or $trace.status == "absent") then
+				{status: "unresolved", reasons: [$absent_reason]}
+			else
+				{status: "unresolved", reasons: [$malformed_reason]}
+			end;
+		def source_windows:
+			exact_keys(["beginning", "detail", "end"]) and
+			(.beginning | oracle_pair) and
+			(.detail | oracle_pair) and
+			(.end | oracle_pair);
+		if
+			exact_keys(["clip", "encoded", "schemaVersion", "source"]) and
+			.schemaVersion == 1 and
+			(.source | exact_keys(["streamProbe", "windows"]) and
+				(.streamProbe | oracle) and
+				(.windows | source_windows)) and
+			(.clip | oracle_pair) and
+			(.encoded | oracle_pair)
+		then
+			{
+				schemaVersion: 1,
+				source: {
+					streamProbe: (.source.streamProbe | normalize_oracle),
+					windows: {
+						beginning: {
+							decoded: (.source.windows.beginning.decoded | normalize_oracle),
+							trace: (.source.windows.beginning.trace | normalize_oracle),
+							authoritative: (.source.windows.beginning | authoritative_pair(
+								"source-window-null"; "source-window-absent"; "source-window-malformed"
+							))
+						},
+						detail: {
+							decoded: (.source.windows.detail.decoded | normalize_oracle),
+							trace: (.source.windows.detail.trace | normalize_oracle),
+							authoritative: (.source.windows.detail | authoritative_pair(
+								"source-window-null"; "source-window-absent"; "source-window-malformed"
+							))
+						},
+						end: {
+							decoded: (.source.windows.end.decoded | normalize_oracle),
+							trace: (.source.windows.end.trace | normalize_oracle),
+							authoritative: (.source.windows.end | authoritative_pair(
+								"source-window-null"; "source-window-absent"; "source-window-malformed"
+							))
+						}
+					}
+				},
+				clip: {
+					decoded: (.clip.decoded | normalize_oracle),
+					trace: (.clip.trace | normalize_oracle),
+					authoritative: (.clip | authoritative_pair(
+						"clip-window-null"; "clip-window-absent"; "clip-window-malformed"
+					))
+				},
+				encoded: {
+					decoded: (.encoded.decoded | normalize_oracle),
+					trace: (.encoded.trace | normalize_oracle),
+					authoritative: (.encoded | authoritative_pair(
+						"encoded-window-null"; "encoded-window-absent"; "encoded-window-malformed"
+					))
+				}
+			} as $normalized |
+			($normalized.source.windows | [.beginning.authoritative, .detail.authoritative, .end.authoritative]) as $windows |
+			$normalized |
+			.source.authoritative =
+				if any($windows[]; .status != "ok") then
+					($windows | map(select(.status != "ok"))[0])
+				elif ([ $windows[].metadata ] | unique | length) != 1 then
+					{status: "unresolved", reasons: ["source-window-conflict"]}
+				else
+					{status: "ok", metadata: $windows[0].metadata}
+				end
+		else
+			error("invalid diagnostic hdr evidence")
+		end
+	' "$evidence"
+}
+
+diagnostic_hdr_classify() {
+	local evidence="$1" normalized
+	normalized="$(diagnostic_hdr_normalize "$evidence")" || return $?
+	jq -e -c '
+		def classification($name; $reasons):
+			{schemaVersion: 1, classification: $name, reasons: $reasons};
+		if .source.authoritative.status != "ok" then
+			classification("unresolved-oracle"; .source.authoritative.reasons)
+		elif .source.streamProbe.status == "null" then
+			classification("source-probe-defect"; [
+				"authoritative-source-metadata",
+				"stream-probe-null"
+			])
+		elif (.clip.authoritative.status != "ok" or .clip.authoritative.metadata != .source.authoritative.metadata) then
+			classification("clip-boundary-defect"; [
+				"authoritative-source-metadata",
+				"clip-metadata-changed"
+			])
+		elif (.encoded.authoritative.status != "ok" or .encoded.authoritative.metadata != .source.authoritative.metadata) then
+			classification("encoder-output-defect"; [
+				"source-and-clip-metadata-agree",
+				"encoded-metadata-changed"
+			])
+		else
+			classification("preserved"; [
+				"source-clip-encoded-metadata-agree"
+			])
+		end
+	' <<<"$normalized"
+}
+
 ensure_results_file() {
 	local results="$1"
 	local existing_header
@@ -3584,6 +3930,18 @@ test_dispatch() {
 	vmaf-stats)
 		(($# == 1)) || usage
 		vmaf_stats "$1"
+		;;
+	diagnostic-vmaf-classify)
+		(($# == 1)) || usage
+		diagnostic_vmaf_classify "$1"
+		;;
+	diagnostic-hdr-normalize)
+		(($# == 1)) || usage
+		diagnostic_hdr_normalize "$1"
+		;;
+	diagnostic-hdr-classify)
+		(($# == 1)) || usage
+		diagnostic_hdr_classify "$1"
 		;;
 	savings-stats)
 		(($# == 1)) || usage
