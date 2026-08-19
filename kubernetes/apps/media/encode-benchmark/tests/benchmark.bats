@@ -779,6 +779,62 @@ prepare_diagnostic_execution_run() {
 	export NODE_NAME='nuc1'
 }
 
+assert_results_consumes_diagnostics_terminal() {
+	local run_id="$1" pod_phase="$2" terminal_json="$3" expected_status="$4" expected_reason="$5"
+	local results_script stub_bin stub_calls kubeconfig pods_json
+	results_script="$(cd "$BATS_TEST_DIRNAME/../../../../.." && pwd)/scripts/encode-benchmark/results.sh"
+	stub_bin="$BATS_TEST_TMPDIR/results-stub-bin"
+	stub_calls="$BATS_TEST_TMPDIR/results-stub-calls.tsv"
+	kubeconfig="$BATS_TEST_TMPDIR/results-stub-kubeconfig"
+	pods_json="$BATS_TEST_TMPDIR/results-stub-pods.json"
+	mkdir -p "$stub_bin"
+	: >"$stub_calls"
+	printf '%s\n' 'apiVersion: v1' >"$kubeconfig"
+	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --arg message "$terminal_json" '{
+		apiVersion:"v1",
+		items:[
+			{
+				metadata:{
+					name:"encode-benchmark-diagnostics-fixture-pod",
+					labels:{
+						"app.kubernetes.io/name":"encode-benchmark",
+						"homelab-talos/benchmark-run":$run,
+						"homelab-talos/benchmark-mode":"diagnostics",
+						"job-name":"encode-benchmark-diagnostics-fixture"
+					}
+				},
+				status:{phase:$phase,containerStatuses:[{name:"benchmark",state:{terminated:{message:$message}}}]}
+			}
+		]
+	}' >"$pods_json"
+	cat >"$stub_bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'kubectl\t%s\n' "$*" >>"$RESULTS_STUB_CALLS"
+if [[ "$*" == *' config view '* ]]; then
+	printf '%s\n' 'https://192.168.90.20:6443'
+	exit 0
+fi
+if [[ "$*" == *' get pods '* ]]; then
+	cat "$RESULTS_STUB_PODS_JSON"
+	exit 0
+fi
+exit 99
+EOF
+	chmod +x "$stub_bin/kubectl"
+
+	run env \
+		PATH="$stub_bin:$PATH" \
+		RESULTS_STUB_CALLS="$stub_calls" \
+		RESULTS_STUB_PODS_JSON="$pods_json" \
+		"$results_script" "$kubeconfig" "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=$expected_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=$expected_reason hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3 hdr_reasons=$expected_reason" ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$stub_calls")" -eq 1 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
+}
+
 prepare_savings_execution_run() {
 	prepare_execution_run
 	prepare_quality_upstream hdr10 final 22 '[22,24,26]'
@@ -2142,25 +2198,67 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	done
 }
 
+@test "public benchmark entrypoints reject diagnostics run ids before mutation" {
+	prepare_diagnostic_execution_run
+	prepare_quality_upstream avc final 22 '[22,24,26]'
+	set_chosen_record avc final 22
+	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120000Z-feedbeef'
+	[ "$status" -eq 0 ]
+	diagnostic_run='20260819T120000Z-feedbeef'
+
+	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
+	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+	run "$SCRIPTS/benchmark.sh" savings "$diagnostic_run"
+	[ "$status" -eq 65 ]
+	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+
+	prepare_diagnostic_execution_run
+	prepare_quality_upstream avc provisional 22 '[22,24,26]'
+	set_chosen_record avc provisional 22
+	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120001Z-feedbeef'
+	[ "$status" -eq 0 ]
+	diagnostic_run='20260819T120001Z-feedbeef'
+	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$diagnostic_run:avc-grain-memento"
+	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+	run "$SCRIPTS/benchmark.sh" finalist "$diagnostic_run" avc-grain-memento
+	[ "$status" -eq 65 ]
+	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+
+	prepare_diagnostic_execution_run
+	prepare_quality_upstream avc final 22 '[22,24,26]'
+	set_chosen_record avc final 22
+	export BENCHMARK_PLEX_CLIENT_DEVICE='fixture-player'
+	export BENCHMARK_PLAYBACK_SAMPLE_ID='hdr10-grain-goodfellas'
+	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120002Z-feedbeef'
+	[ "$status" -eq 0 ]
+	diagnostic_run='20260819T120002Z-feedbeef'
+	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+	run "$SCRIPTS/benchmark.sh" contention "$diagnostic_run" b worker-1 avc-grain-memento
+	[ "$status" -eq 65 ]
+	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+}
+
 # Catches diagnostics adding a fourteenth synthetic capability encode or
 # hashing source media before its committed assigned-node proof is admitted.
 @test "diagnostics validates committed assigned-node capability before source hashes or run creation" {
 	prepare_diagnostic_execution_run
 	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/diagnostic-preflight-termination.json"
+	run_id='20260819T120000Z-feedbeef'
 	jq --arg node "$NODE_NAME" '
 		(.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node)).proofStatus = "failed"
 	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 	: >"$BENCHMARK_COMMAND_LOG"
 
-	run "$SCRIPTS/benchmark.sh" diagnostics
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
 	[ "$status" -eq 2 ]
-	run jq -e '
+	run jq -e --arg run "$run_id" '
 		.status == "harness-blocked" and
-		.runId == null and .artifactLocation == null and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
 		.vmaf.unresolved == 5 and .hdr["unresolved-oracle"] == 3 and
-		.vmaf.reasons == ["incomplete-or-failed-evidence"] and
-		.hdr.reasons == ["incomplete-or-failed-evidence"]
+		.vmaf.reasons == ["assigned-node-capability-rejected"] and
+		.hdr.reasons == ["assigned-node-capability-rejected"]
 	' <<<"$(tail -n 1 <<<"$output")"
 	[ "$status" -eq 0 ]
 	run jq -S -c . "$BENCHMARK_TERMINATION_LOG_PATH"
@@ -2172,38 +2270,136 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	! rg -q '^-c:v hevc_qsv| -c:v hevc_qsv' "$BENCHMARK_COMMAND_LOG"
 	! rg -q '^sha256sum ' "$BENCHMARK_COMMAND_LOG"
 	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$termination_json" harness-blocked assigned-node-capability-rejected
 }
 
 # Catches runtime preflight creating a run or starting an encode when any
 # command required by the independent diagnostic oracles is unavailable.
 @test "diagnostics preflight blocks missing trace VMAF SSIM PSNR and ffprobe frame fields before run creation" {
-	for missing in trace_headers libvmaf ssim psnr; do
+	for entry in \
+		"trace_headers|BENCHMARK_DIAGNOSTIC_MISSING_TOOL|diagnostic-preflight-rejected|20260819T120001Z-feedbeef" \
+		"libvmaf|BENCHMARK_DIAGNOSTIC_MISSING_TOOL|diagnostic-preflight-rejected|20260819T120002Z-feedbeef" \
+		"ssim|BENCHMARK_DIAGNOSTIC_MISSING_TOOL|diagnostic-preflight-rejected|20260819T120003Z-feedbeef" \
+		"psnr|BENCHMARK_DIAGNOSTIC_MISSING_TOOL|diagnostic-preflight-rejected|20260819T120004Z-feedbeef"; do
+		IFS='|' read -r missing variable expected_reason run_id <<<"$entry"
 		prepare_diagnostic_execution_run
-		export BENCHMARK_DIAGNOSTIC_MISSING_TOOL="$missing"
-		run "$SCRIPTS/benchmark.sh" diagnostics
+		export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
+		export "$variable"="$missing"
+		run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
 		[ "$status" -eq 2 ]
-		[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+		terminal_json="$(tail -n 1 <<<"$output")"
+		run jq -e --arg run "$run_id" --arg reason "$expected_reason" '
+			.status == "harness-blocked" and
+			.runId == $run and
+			.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+			.vmaf.reasons == [$reason] and
+			.hdr.reasons == [$reason]
+		' <<<"$terminal_json"
+		[ "$status" -eq 0 ]
 		[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
-		unset BENCHMARK_DIAGNOSTIC_MISSING_TOOL
+		assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked "$expected_reason"
+		unset BENCHMARK_DIAGNOSTIC_MISSING_TOOL BENCHMARK_TERMINATION_LOG_PATH
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
 
 	prepare_diagnostic_execution_run
+	run_id='20260819T120005Z-feedbeef'
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
 	export BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS=missing
-	run "$SCRIPTS/benchmark.sh" diagnostics
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
 	[ "$status" -eq 2 ]
-	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	terminal_json="$(tail -n 1 <<<"$output")"
+	run jq -e --arg run "$run_id" '
+		.status == "harness-blocked" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+		.vmaf.reasons == ["diagnostic-preflight-rejected"] and
+		.hdr.reasons == ["diagnostic-preflight-rejected"]
+	' <<<"$terminal_json"
+	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
-	unset BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked diagnostic-preflight-rejected
+	unset BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS BENCHMARK_TERMINATION_LOG_PATH
 
 	prepare_diagnostic_execution_run
+	run_id='20260819T120006Z-feedbeef'
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
 	export BENCHMARK_DIAGNOSTIC_MISSING_METRIC=libvmaf-version
-	run "$SCRIPTS/benchmark.sh" diagnostics
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
 	[ "$status" -eq 2 ]
-	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	terminal_json="$(tail -n 1 <<<"$output")"
+	run jq -e --arg run "$run_id" '
+		.status == "harness-blocked" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+		.vmaf.reasons == ["diagnostic-preflight-rejected"] and
+		.hdr.reasons == ["diagnostic-preflight-rejected"]
+	' <<<"$terminal_json"
+	[ "$status" -eq 0 ]
 	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
-	unset BENCHMARK_DIAGNOSTIC_MISSING_METRIC
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked diagnostic-preflight-rejected
+	unset BENCHMARK_DIAGNOSTIC_MISSING_METRIC BENCHMARK_TERMINATION_LOG_PATH
+}
+
+@test "diagnostics publish explicit run identity for running image runtime gate and run creation failures" {
+	prepare_diagnostic_execution_run
+	run_id='20260819T120007Z-feedbeef'
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
+	printf '%s\n' '{}' >"$BENCHMARK_RUNNING_IMAGE_FILE"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 2 ]
+	terminal_json="$(tail -n 1 <<<"$output")"
+	run jq -e --arg run "$run_id" '
+		.status == "harness-blocked" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+		.vmaf.reasons == ["running-image-evidence-rejected"] and
+		.hdr.reasons == ["running-image-evidence-rejected"]
+	' <<<"$terminal_json"
+	[ "$status" -eq 0 ]
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked running-image-evidence-rejected
+
+	prepare_diagnostic_execution_run
+	run_id='20260819T120008Z-feedbeef'
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
+	printf 'drift' >>"$(jq -r '.qualityPanel[] | select(.id == "avc-clean-coco") | .path' "$BENCHMARK_SAMPLES_FILE")"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 2 ]
+	terminal_json="$(tail -n 1 <<<"$output")"
+	run jq -e --arg run "$run_id" '
+		.status == "harness-blocked" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+		.vmaf.reasons == ["runtime-pre-encode-gate-rejected"] and
+		.hdr.reasons == ["runtime-pre-encode-gate-rejected"]
+	' <<<"$terminal_json"
+	[ "$status" -eq 0 ]
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked runtime-pre-encode-gate-rejected
+
+	prepare_diagnostic_execution_run
+	run_id='20260819T120009Z-feedbeef'
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/${run_id}-termination.json"
+	mkdir -p "$BENCHMARK_OUT/runs/$run_id"
+	jq -S -c --arg created_at "${run_id%-*}" '.mode = "quality" | .createdAt = $created_at' \
+		"$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$run_id/manifest.json"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 2 ]
+	terminal_json="$(tail -n 1 <<<"$output")"
+	run jq -e --arg run "$run_id" '
+		.status == "harness-blocked" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
+		.vmaf.reasons == ["runmeta-create-failed"] and
+		.hdr.reasons == ["runmeta-create-failed"]
+	' <<<"$terminal_json"
+	[ "$status" -eq 0 ]
+	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked runmeta-create-failed
 }
 
 # Catches incomplete or missing normalized oracle data being dropped with

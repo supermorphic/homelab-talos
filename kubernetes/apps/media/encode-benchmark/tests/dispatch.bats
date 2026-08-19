@@ -1969,6 +1969,74 @@ produce_diagnostics_terminal_message() {
 		_test diagnostic-terminal "$status" "$run_id" "$summary"
 }
 
+write_diagnostics_vmaf_case_summary_fixture() {
+	local run_id="$1" case_id="$2" destination="$3"
+	local fixture expected classification reasons
+	fixture="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-vmaf-cases.json"
+	expected="$(jq -e -c --arg id "$case_id" '.cases[] | select(.id == $id) | .expected' "$fixture")" || return
+	classification="$(jq -r '.classification' <<<"$expected")" || return
+	reasons="$(jq -c '.reasons' <<<"$expected")" || return
+	jq -n -c --arg run "$run_id" --arg classification "$classification" --argjson reasons "$reasons" '{
+		schemaVersion:1,
+		strategyId:"qsv-hevc-icq-v1",
+		mode:"diagnostics",
+		runId:$run,
+		status:"complete",
+		vmaf:{
+			total:5,
+			entries:[
+				{sampleId:"avc-grain-memento",clipId:"detail",status:"complete",classification:$classification,reasons:$reasons,evidence:"vmaf/avc-grain-memento/detail/evidence.json"},
+				{sampleId:"avc-grain-memento",clipId:"motion",status:"complete",classification:$classification,reasons:$reasons,evidence:"vmaf/avc-grain-memento/motion/evidence.json"},
+				{sampleId:"vc1-fugitive",clipId:"detail",status:"complete",classification:$classification,reasons:$reasons,evidence:"vmaf/vc1-fugitive/detail/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",clipId:"detail",status:"complete",classification:$classification,reasons:$reasons,evidence:"vmaf/hdr10-grain-goodfellas/detail/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",clipId:"detail",status:"complete",classification:$classification,reasons:$reasons,evidence:"vmaf/hdr10-motion-john-wick-2/detail/evidence.json"}
+			]
+		},
+		hdr:{
+			total:3,
+			entries:[
+				{sampleId:"hdr10-clean-ministry",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-clean-ministry/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-grain-goodfellas/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",status:"complete",classification:"preserved",reasons:["source-clip-encoded-metadata-agree"],evidence:"hdr/hdr10-motion-john-wick-2/evidence.json"}
+			]
+		}
+	}' >"$destination"
+}
+
+write_diagnostics_hdr_case_summary_fixture() {
+	local run_id="$1" case_id="$2" destination="$3"
+	local fixture expected classification reasons
+	fixture="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-hdr-cases.json"
+	expected="$(jq -e -c --arg id "$case_id" '.cases[] | select(.id == $id) | .expected' "$fixture")" || return
+	classification="$(jq -r '.classification' <<<"$expected")" || return
+	reasons="$(jq -c '.reasons' <<<"$expected")" || return
+	jq -n -c --arg run "$run_id" --arg classification "$classification" --argjson reasons "$reasons" '{
+		schemaVersion:1,
+		strategyId:"qsv-hevc-icq-v1",
+		mode:"diagnostics",
+		runId:$run,
+		status:"complete",
+		vmaf:{
+			total:5,
+			entries:[
+				{sampleId:"avc-grain-memento",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/avc-grain-memento/detail/evidence.json"},
+				{sampleId:"avc-grain-memento",clipId:"motion",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/avc-grain-memento/motion/evidence.json"},
+				{sampleId:"vc1-fugitive",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/vc1-fugitive/detail/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/hdr10-grain-goodfellas/detail/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",clipId:"detail",status:"complete",classification:"unresolved",reasons:["offset-best-tie"],evidence:"vmaf/hdr10-motion-john-wick-2/detail/evidence.json"}
+			]
+		},
+		hdr:{
+			total:3,
+			entries:[
+				{sampleId:"hdr10-clean-ministry",status:"complete",classification:$classification,reasons:$reasons,evidence:"hdr/hdr10-clean-ministry/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",status:"complete",classification:$classification,reasons:$reasons,evidence:"hdr/hdr10-grain-goodfellas/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",status:"complete",classification:$classification,reasons:$reasons,evidence:"hdr/hdr10-motion-john-wick-2/evidence.json"}
+			]
+		}
+	}' >"$destination"
+}
+
 # Catches trusting benchmark-reported configured identity as runtime evidence;
 # results must compare the completed pod's actual imageID and redact media evidence.
 @test "results accepts matching actual imageID and prints only sanitized evidence" {
@@ -2221,12 +2289,13 @@ produce_diagnostics_terminal_message() {
 		write_diagnostics_summary_fixture "$run_id" "$producer_status" "$summary"
 		terminal_message="$(produce_diagnostics_terminal_message "$producer_status" "$run_id" "$summary" "$termination")"
 		[ "$(<"$termination")" = "$terminal_message" ]
+		[ "${#terminal_message}" -lt 3072 ]
 		write_diagnostics_results_fixture "$run_id" "$pod_phase" "$terminal_message"
 
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -eq 0 ]
-		[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id status=$summary_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=offset-best-tie hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0 hdr_reasons=source-clip-encoded-metadata-agree" ]
-		[[ "$output" != *'job/'* && "$output" != *'/media/'* && "$output" != *'/out/runs/'* ]]
+		[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=$summary_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=offset-best-tie hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0 hdr_reasons=source-clip-encoded-metadata-agree" ]
+		[[ "$output" != *'job/'* && "$output" != *'/media/'* ]]
 		[[ "$output" != *'node='* && "$output" != *'nodeName'* && "$output" != *'sourcePath'* ]]
 		[[ "$output" != *'stderr'* && "$output" != *'terminated'* ]]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / && index($2, "app.kubernetes.io/name=encode-benchmark") {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
@@ -2250,6 +2319,94 @@ produce_diagnostics_terminal_message() {
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 }
 
+@test "results consume every documented diagnostics classifier reason through the terminal transport" {
+	run_id='20260819T120000Z-feedbeef'
+	termination="$BATS_TEST_TMPDIR/diagnostic-transport.json"
+
+	for case_id in \
+		temporal-alignment \
+		encoder-output \
+		vmaf-measurement \
+		unresolved-disagreement \
+		unresolved-tie \
+		unresolved-missing-window \
+		unresolved-incomplete-setting \
+		unresolved-one-setting; do
+		summary="$BATS_TEST_TMPDIR/$case_id-vmaf-summary.json"
+		write_diagnostics_vmaf_case_summary_fixture "$run_id" "$case_id" "$summary"
+		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+		[ "$(<"$termination")" = "$terminal_message" ]
+		write_diagnostics_results_fixture "$run_id" Succeeded "$terminal_message"
+
+		expected_classification="$(jq -r --arg id "$case_id" '.cases[] | select(.id == $id) | .expected.classification' \
+			"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-vmaf-cases.json")"
+		expected_reasons="$(jq -r --arg id "$case_id" '.cases[] | select(.id == $id) | .expected.reasons | sort | join(",")' \
+			"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-vmaf-cases.json")"
+		case "$expected_classification" in
+		encoder-output-defect)
+			vmaf_counts='vmaf_encoder_output_defect=5 vmaf_temporal_alignment_defect=0 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=0'
+			;;
+		temporal-alignment-defect)
+			vmaf_counts='vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=5 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=0'
+			;;
+		unresolved)
+			vmaf_counts='vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0'
+			;;
+		vmaf-measurement-defect)
+			vmaf_counts='vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=5'
+			;;
+		*) false ;;
+		esac
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "mode=diagnostics phase=Succeeded run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=complete vmaf_total=5 $vmaf_counts vmaf_reasons=$expected_reasons hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0 hdr_reasons=source-clip-encoded-metadata-agree" ]
+	done
+
+	for case_id in \
+		source-probe-defect \
+		clip-boundary-defect \
+		encoder-output-defect \
+		preserved \
+		unresolved-source-null \
+		unresolved-source-absent \
+		unresolved-source-malformed \
+		unresolved-source-conflict; do
+		summary="$BATS_TEST_TMPDIR/$case_id-hdr-summary.json"
+		write_diagnostics_hdr_case_summary_fixture "$run_id" "$case_id" "$summary"
+		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+		[ "$(<"$termination")" = "$terminal_message" ]
+		write_diagnostics_results_fixture "$run_id" Succeeded "$terminal_message"
+
+		expected_classification="$(jq -r --arg id "$case_id" '.cases[] | select(.id == $id) | .expected.classification' \
+			"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-hdr-cases.json")"
+		expected_reasons="$(jq -r --arg id "$case_id" '.cases[] | select(.id == $id) | .expected.reasons | sort | join(",")' \
+			"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/diagnostic-hdr-cases.json")"
+		case "$expected_classification" in
+		clip-boundary-defect)
+			hdr_counts='hdr_clip_boundary_defect=3 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=0'
+			;;
+		encoder-output-defect)
+			hdr_counts='hdr_clip_boundary_defect=0 hdr_encoder_output_defect=3 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=0'
+			;;
+		preserved)
+			hdr_counts='hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0'
+			;;
+		source-probe-defect)
+			hdr_counts='hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=3 hdr_unresolved_oracle=0'
+			;;
+		unresolved-oracle)
+			hdr_counts='hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3'
+			;;
+		*) false ;;
+		esac
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "mode=diagnostics phase=Succeeded run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=complete vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=offset-best-tie hdr_total=3 $hdr_counts hdr_reasons=$expected_reasons" ]
+	done
+}
+
 # Catches malformed diagnostics terminal output echoing raw pod data or quietly
 # flowing into downstream summary parsing.
 @test "results fail closed for missing malformed and mismatched diagnostics terminal summaries" {
@@ -2257,6 +2414,7 @@ produce_diagnostics_terminal_message() {
 	for case_data in \
 		'' \
 		'not-json' \
+		'{"schemaVersion":1,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"active","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"encoder-output-defect":0,"temporal-alignment-defect":0,"unresolved":5,"vmaf-measurement-defect":0,"reasons":["offset-best-tie"]},"hdr":{"total":3,"clip-boundary-defect":0,"encoder-output-defect":0,"preserved":3,"source-probe-defect":0,"unresolved-oracle":0,"reasons":["source-clip-encoded-metadata-agree"]}}' \
 		'{"schemaVersion":2,"strategyId":"qsv-hevc-icq-v1","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"encoder-output-defect":0,"temporal-alignment-defect":0,"unresolved":5,"vmaf-measurement-defect":0,"reasons":["offset-best-tie"]},"hdr":{"total":3,"clip-boundary-defect":0,"encoder-output-defect":0,"preserved":3,"source-probe-defect":0,"unresolved-oracle":0,"reasons":["source-clip-encoded-metadata-agree"]}}' \
 		'{"schemaVersion":1,"strategyId":"wrong-strategy","mode":"diagnostics","status":"complete","runId":"20260819T120000Z-feedbeef","artifactLocation":"/out/runs/20260819T120000Z-feedbeef/diagnostics","vmaf":{"total":5,"encoder-output-defect":0,"temporal-alignment-defect":0,"unresolved":5,"vmaf-measurement-defect":0,"reasons":["offset-best-tie"]},"hdr":{"total":3,"clip-boundary-defect":0,"encoder-output-defect":0,"preserved":3,"source-probe-defect":0,"unresolved-oracle":0,"reasons":["source-clip-encoded-metadata-agree"]}}'; do
 		: >"$STUB_CALLS"
@@ -2271,6 +2429,73 @@ produce_diagnostics_terminal_message() {
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	done
+}
+
+@test "results fail closed for diagnostics terminal reason vocabulary violations" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+
+	for mutation in \
+		'.vmaf.reasons = ["unknown-reason"]' \
+		'.hdr.reasons = ["unknown-reason"]'; do
+		case_terminal="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq -c "$mutation" <<<"$terminal_message" >"$case_terminal"
+		write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -ne 0 ]
+		[[ "$output" == terminal-summary-schema-error:* ]]
+		[[ "$output" != *'unknown-reason'* && "$output" != *'/media/'* && "$output" != *'nodeName'* ]]
+	done
+}
+
+@test "diagnostic terminal producer rejects invalid status unknown excess and oversized reason payloads" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	samples_json="$BATS_TEST_TMPDIR/diagnostic-samples.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	yq -r '.data."samples.json"' \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml" >"$samples_json"
+
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal active "$run_id" "$summary"
+	[ "$status" -eq 65 ]
+
+	jq '.vmaf.entries[0].reasons = ["unknown-reason"]' "$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-unknown.json"
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-unknown.json"
+	[ "$status" -eq 65 ]
+
+	jq '.vmaf.entries[0].reasons = ["classification-failed","classification-predicate-not-met","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum","timeline-discontinuity-at-offset","vmaf-only-exact-zero"]' \
+		"$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-excess.json"
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-excess.json"
+	[ "$status" -eq 65 ]
+
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		BENCHMARK_TERMINATION_LOG_MAX_BYTES=64 \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$summary"
+	[ "$status" -eq 65 ]
 }
 
 @test "results fail closed on mixed diagnostics pod provenance after one query" {

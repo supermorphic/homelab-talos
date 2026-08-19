@@ -11,6 +11,9 @@ samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 running_image_file='/provenance/image.json'
 running_image_wait_seconds=600
+diagnostic_terminal_max_bytes=3072
+diagnostic_terminal_reason_count_limit=16
+diagnostic_terminal_reason_length_limit=64
 results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
@@ -28,8 +31,9 @@ fi
 if [[ "$test_mode" == '1' ]]; then
 	running_image_file="${BENCHMARK_RUNNING_IMAGE_FILE:-$running_image_file}"
 	running_image_wait_seconds="${BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS:-$running_image_wait_seconds}"
+	diagnostic_terminal_max_bytes="${BENCHMARK_TERMINATION_LOG_MAX_BYTES:-$diagnostic_terminal_max_bytes}"
 else
-	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE BENCHMARK_TERMINATION_LOG_PATH; do
+	for override in BENCHMARK_RUNNING_IMAGE_FILE BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE BENCHMARK_TERMINATION_LOG_PATH BENCHMARK_TERMINATION_LOG_MAX_BYTES; do
 		if [[ -v "$override" ]]; then
 			echo "$override requires BENCHMARK_TEST_MODE=1" >&2
 			exit 64
@@ -38,6 +42,10 @@ else
 fi
 [[ "$running_image_wait_seconds" =~ ^[0-9]+$ ]] || {
 	echo 'running image evidence wait must be a non-negative integer' >&2
+	exit 64
+}
+[[ "$diagnostic_terminal_max_bytes" =~ ^[0-9]+$ && "$diagnostic_terminal_max_bytes" -gt 0 && "$diagnostic_terminal_max_bytes" -lt 4096 ]] || {
+	echo 'termination log byte limit must be a positive integer below 4096' >&2
 	exit 64
 }
 if [[ "$test_mode" != '1' ]]; then
@@ -1061,6 +1069,23 @@ diagnostic_status_merge() {
 	fi
 }
 
+diagnostic_terminal_vmaf_reasons_json() {
+	cat <<'EOF'
+["assigned-node-capability-rejected","classification-failed","classification-predicate-not-met","diagnostic-preflight-rejected","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum","timeline-discontinuity-at-offset","vmaf-only-exact-zero","zero-offset-timeline-agreement"]
+EOF
+}
+
+diagnostic_terminal_hdr_reasons_json() {
+	cat <<'EOF'
+["assigned-node-capability-rejected","authoritative-source-metadata","classification-failed","clip-metadata-changed","clip-window-absent","clip-window-malformed","clip-window-null","decoded-trace-disagreement","diagnostic-preflight-rejected","encoded-metadata-changed","encoded-window-absent","encoded-window-malformed","encoded-window-null","incomplete-or-failed-evidence","post-run-identity-drift","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-and-clip-metadata-agree","source-clip-encoded-metadata-agree","source-probe-null","source-stream-probe-absent","source-stream-probe-conflict","source-stream-probe-malformed","source-window-absent","source-window-conflict","source-window-malformed","source-window-null","stream-probe-null"]
+EOF
+}
+
+diagnostic_terminal_reason_allowed() {
+	local allowed="$1" reason="$2"
+	jq -e --arg reason "$reason" 'index($reason) != null' <<<"$allowed" >/dev/null
+}
+
 diagnostic_termination_log_path() {
 	if [[ -n "${BENCHMARK_TERMINATION_LOG_PATH:-}" ]]; then
 		[[ "$test_mode" == '1' ]] || {
@@ -1076,13 +1101,32 @@ diagnostic_termination_log_path() {
 }
 
 diagnostic_terminal_payload() {
-	local status="$1" run_id="${2:-}" summary="${3:-}" artifact='null'
+	local status="$1" run_id="${2:-}" summary="${3:-}" reason_code="${4:-incomplete-or-failed-evidence}"
+	local artifact='null' allowed_vmaf allowed_hdr
+	case "$status" in
+	complete | harness-blocked | failed) ;;
+	*)
+		echo 'diagnostic terminal status is invalid' >&2
+		return 65
+		;;
+	esac
+	[[ -z "$run_id" ]] || validate_run_id "$run_id" >/dev/null
 	if [[ -n "$run_id" ]]; then
 		artifact="$(jq -n --arg value "/out/runs/$run_id/diagnostics" '$value')"
 	fi
+	allowed_vmaf="$(diagnostic_terminal_vmaf_reasons_json)"
+	allowed_hdr="$(diagnostic_terminal_hdr_reasons_json)"
 	if [[ -z "$summary" ]]; then
+		diagnostic_terminal_reason_allowed "$allowed_vmaf" "$reason_code" || {
+			echo 'diagnostic VMAF terminal reason is invalid' >&2
+			return 65
+		}
+		diagnostic_terminal_reason_allowed "$allowed_hdr" "$reason_code" || {
+			echo 'diagnostic HDR terminal reason is invalid' >&2
+			return 65
+		}
 		jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
-			--arg run "$run_id" --argjson artifact "$artifact" '{
+			--arg run "$run_id" --arg reason "$reason_code" --argjson artifact "$artifact" '{
 			schemaVersion:1,
 			strategyId:$strategy,
 			mode:"diagnostics",
@@ -1095,7 +1139,7 @@ diagnostic_terminal_payload() {
 				"temporal-alignment-defect":0,
 				unresolved:5,
 				"vmaf-measurement-defect":0,
-				reasons:["incomplete-or-failed-evidence"]
+				reasons:[$reason]
 			},
 			hdr:{
 				total:3,
@@ -1104,25 +1148,34 @@ diagnostic_terminal_payload() {
 				preserved:0,
 				"source-probe-defect":0,
 				"unresolved-oracle":3,
-				reasons:["incomplete-or-failed-evidence"]
+				reasons:[$reason]
 			}
 		}'
 		return
 	fi
-	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" '
+	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" \
+		--argjson allowed_vmaf "$allowed_vmaf" --argjson allowed_hdr "$allowed_hdr" \
+		--argjson reason_count_limit "$diagnostic_terminal_reason_count_limit" \
+		--argjson reason_length_limit "$diagnostic_terminal_reason_length_limit" '
 		def valid_vmaf_entry:
 			type == "object" and
 			(keys | sort) == ["classification","clipId","evidence","reasons","sampleId","status"] and
+			(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
 			(.classification == "encoder-output-defect" or .classification == "temporal-alignment-defect" or
 			 .classification == "unresolved" or .classification == "vmaf-measurement-defect") and
-			(.reasons | type == "array" and all(.[]; type == "string"));
+			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
+				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
+					($reason | length) <= $reason_length_limit and ($allowed_vmaf | index($reason)) != null));
 		def valid_hdr_entry:
 			type == "object" and
 			(keys | sort) == ["classification","evidence","reasons","sampleId","status"] and
+			(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
 			(.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or
 			 .classification == "preserved" or .classification == "source-probe-defect" or
 			 .classification == "unresolved-oracle") and
-			(.reasons | type == "array" and all(.[]; type == "string"));
+			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
+				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
+					($reason | length) <= $reason_length_limit and ($allowed_hdr | index($reason)) != null));
 		type == "object" and
 		(keys | sort) == ["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] and
 		.schemaVersion == 1 and .strategyId == $strategy and
@@ -1172,14 +1225,18 @@ diagnostic_emit_terminal() {
 	local payload="$1" canonical path
 	path="$(diagnostic_termination_log_path)" || return
 	canonical="$(jq -e -S -c . <<<"$payload")" || return 65
+	((${#canonical} < diagnostic_terminal_max_bytes)) || {
+		echo 'diagnostic terminal payload exceeds byte limit' >&2
+		return 65
+	}
 	mkdir -p "$(dirname "$path")"
 	printf '%s\n' "$canonical" >"$path" || return
 	printf '%s\n' "$canonical"
 }
 
 diagnostic_terminal() {
-	local status="$1" run_id="${2:-}" summary="${3:-}" payload
-	payload="$(diagnostic_terminal_payload "$status" "$run_id" "$summary")" || return
+	local status="$1" run_id="${2:-}" summary="${3:-}" reason_code="${4:-incomplete-or-failed-evidence}" payload
+	payload="$(diagnostic_terminal_payload "$status" "$run_id" "$summary" "$reason_code")" || return
 	diagnostic_emit_terminal "$payload"
 }
 
@@ -1761,25 +1818,28 @@ diagnostics_mode() {
 	panel_samples="$(jq -c '. as $root | [.qualityPanel[]? | select(.id as $sample_id |
 		([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] | index($sample_id) != null))]' "$samples_file")" || return
 	if ! require_running_image_evidence; then
-		diagnostic_terminal harness-blocked
+		diagnostic_terminal harness-blocked "$explicit_run_id" '' running-image-evidence-rejected
 		return 2
 	fi
 	if ! diagnostic_assigned_node_capability_gate; then
-		diagnostic_terminal harness-blocked
+		diagnostic_terminal harness-blocked "$explicit_run_id" '' assigned-node-capability-rejected
 		return 2
 	fi
 	if ! runtime_pre_encode_gate "$panel_samples"; then
-		diagnostic_terminal harness-blocked
+		diagnostic_terminal harness-blocked "$explicit_run_id" '' runtime-pre-encode-gate-rejected
 		return 2
 	fi
 	if ! diagnostic_preflight "$panel_samples"; then
-		diagnostic_terminal harness-blocked
+		diagnostic_terminal harness-blocked "$explicit_run_id" '' diagnostic-preflight-rejected
 		return 2
 	fi
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode diagnostics)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	if [[ -n "$explicit_run_id" ]]; then
-		run_id="$("$script_directory/runmeta.sh" create diagnostics "$explicit_run_id")" || return
+		run_id="$("$script_directory/runmeta.sh" create diagnostics "$explicit_run_id")" || {
+			diagnostic_terminal harness-blocked "$explicit_run_id" '' runmeta-create-failed
+			return 2
+		}
 	else
 		run_id="$("$script_directory/runmeta.sh" create diagnostics)" || return
 	fi
