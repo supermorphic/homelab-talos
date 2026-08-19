@@ -100,6 +100,26 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
+@test "shared base contract accepts a minimal non-diagnostic samples document" {
+	minimal="$BATS_TEST_TMPDIR/minimal-non-diagnostic.json"
+	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" '
+		{
+			schemaVersion: 2,
+			strategy: $strategy,
+			runtime: {
+				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+			},
+			savingsSeed: 20260802,
+			qualityPanel: [],
+			savingsPanel: [],
+			chosenSettings: {}
+		}
+	' >"$minimal"
+
+	run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$minimal"
+	[ "$status" -eq 0 ]
+}
+
 # Catches accepting a configuration that has the right values but changes their
 # order, cardinality, or integer representation, which would make benchmark
 # evidence non-comparable across producers.
@@ -117,9 +137,8 @@ setup() {
 	done
 }
 
-@test "shared contract rejects non-canonical diagnostics scope" {
+@test "shared contract rejects malformed present diagnostics scope" {
 	for mutation in \
-		'del(.diagnostics)' \
 		'.diagnostics.vmafPanel[0].sampleId = "missing-title"' \
 		'.diagnostics.vmafPanel += [{"sampleId":"avc-clean-coco","clipId":"motion","observedFrameIndex":1641}]' \
 		'.diagnostics.hdrPanel[0].clipId = "motion"' \
@@ -133,6 +152,15 @@ setup() {
 		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
 		[ "$status" -eq 65 ]
 	done
+}
+
+@test "diagnostics mode requires a canonical diagnostics contract object" {
+	candidate="$BATS_TEST_TMPDIR/missing-diagnostics.json"
+	jq 'del(.diagnostics)' "$samples_json" >"$candidate"
+
+	run bash -c 'source "$1"; contract_load "$2"; contract_require_diagnostics "$2"' \
+		_ "$contract" "$candidate"
+	[ "$status" -eq 65 ]
 }
 
 # Catches producers drifting from the shared candidate membership check used by

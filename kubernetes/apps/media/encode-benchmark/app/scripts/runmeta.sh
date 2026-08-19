@@ -113,6 +113,14 @@ discover_identity() {
 	local savings_cohorts=''
 	local source_index=0
 
+	if [[ "$mode" == 'diagnostics' ]]; then
+		[[ -f "$samples_file" ]] || {
+			echo "samples configuration not found: $samples_file" >&2
+			return 66
+		}
+		contract_require_diagnostics "$samples_file" || return $?
+	fi
+
 	if [[ -n "$identity_fixture" ]]; then
 		[[ "$test_mode" == '1' ]] || {
 			echo 'BENCHMARK_IDENTITY_FIXTURE requires BENCHMARK_TEST_MODE=1' >&2

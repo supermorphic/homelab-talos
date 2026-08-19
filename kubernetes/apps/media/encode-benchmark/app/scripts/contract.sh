@@ -4,6 +4,31 @@
 contract_load() {
 	local file="$1"
 	jq -e '
+		.schemaVersion == 2 and
+		.strategy.id == "qsv-hevc-icq-v1" and
+		.strategy.resultsSchemaVersion == 2 and
+		.strategy.runManifestSchemaVersion == 2 and
+		.strategy.capabilityProofSchemaVersion == 3 and
+		.strategy.globalQualityCandidates == [16, 18, 20, 22, 24, 26, 28, 30] and
+		.strategy.x265 == {
+			initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2
+		}
+	' "$file" >/dev/null || return 65
+	if jq -e 'has("diagnostics")' "$file" >/dev/null; then
+		contract_validate_diagnostics_scope "$file" >/dev/null || return 65
+	fi
+	CONTRACT_STRATEGY_ID="$(jq -r '.strategy.id' "$file")"
+	CONTRACT_ICQ_SETTINGS="$(jq -r '.strategy.globalQualityCandidates | join(" ")' "$file")"
+	CONTRACT_RESULTS_SCHEMA="$(jq -r '.strategy.resultsSchemaVersion' "$file")"
+	CONTRACT_MANIFEST_SCHEMA="$(jq -r '.strategy.runManifestSchemaVersion' "$file")"
+	CONTRACT_CAPABILITY_SCHEMA="$(jq -r '.strategy.capabilityProofSchemaVersion' "$file")"
+	readonly CONTRACT_STRATEGY_ID CONTRACT_ICQ_SETTINGS CONTRACT_RESULTS_SCHEMA
+	readonly CONTRACT_MANIFEST_SCHEMA CONTRACT_CAPABILITY_SCHEMA
+}
+
+contract_validate_diagnostics_scope() {
+	local file="$1"
+	jq -e '
 		. as $root |
 		def exact_keys($expected): type == "object" and keys == $expected;
 		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
@@ -67,30 +92,26 @@ contract_load() {
 					"hdr10-grain-goodfellas/detail",
 					"hdr10-motion-john-wick-2/detail"
 				]));
-		.schemaVersion == 2 and
-		.strategy.id == "qsv-hevc-icq-v1" and
-		.strategy.resultsSchemaVersion == 2 and
-		.strategy.runManifestSchemaVersion == 2 and
-		.strategy.capabilityProofSchemaVersion == 3 and
-		.strategy.globalQualityCandidates == [16, 18, 20, 22, 24, 26, 28, 30] and
-		.strategy.x265 == {
-			initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2
-		} and
 		(.diagnostics | diagnostics_contract)
-	' "$file" >/dev/null || return 65
-	CONTRACT_STRATEGY_ID="$(jq -r '.strategy.id' "$file")"
-	CONTRACT_ICQ_SETTINGS="$(jq -r '.strategy.globalQualityCandidates | join(" ")' "$file")"
-	CONTRACT_RESULTS_SCHEMA="$(jq -r '.strategy.resultsSchemaVersion' "$file")"
-	CONTRACT_MANIFEST_SCHEMA="$(jq -r '.strategy.runManifestSchemaVersion' "$file")"
-	CONTRACT_CAPABILITY_SCHEMA="$(jq -r '.strategy.capabilityProofSchemaVersion' "$file")"
+	' "$file" >/dev/null
+}
+
+contract_require_diagnostics() {
+	local file="$1"
+	jq -e 'has("diagnostics")' "$file" >/dev/null || {
+		echo 'diagnostic contract is missing or malformed' >&2
+		return 65
+	}
+	contract_validate_diagnostics_scope "$file" >/dev/null || {
+		echo 'diagnostic contract is missing or malformed' >&2
+		return 65
+	}
 	CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA="$(jq -r '.diagnostics.schemaVersion' "$file")"
 	CONTRACT_DIAGNOSTICS_RESULT_SCHEMA="$(jq -r '.diagnostics.resultSchemaVersion' "$file")"
 	CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256="$(jq -r '.diagnostics.acceptedFindingsSha256' "$file")"
 	CONTRACT_DIAGNOSTICS_DECISION_SHA256="$(jq -r '.diagnostics.decisionSha256' "$file")"
 	CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID="$(jq -r '.diagnostics.historicalQualityRunId' "$file")"
 	CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID="$(jq -r '.diagnostics.historicalFindingsRunId' "$file")"
-	readonly CONTRACT_STRATEGY_ID CONTRACT_ICQ_SETTINGS CONTRACT_RESULTS_SCHEMA
-	readonly CONTRACT_MANIFEST_SCHEMA CONTRACT_CAPABILITY_SCHEMA
 	readonly CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA CONTRACT_DIAGNOSTICS_RESULT_SCHEMA
 	readonly CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256 CONTRACT_DIAGNOSTICS_DECISION_SHA256
 	readonly CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID

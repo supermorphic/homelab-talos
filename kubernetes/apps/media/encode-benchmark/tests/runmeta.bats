@@ -484,6 +484,32 @@ diagnostic_expected_panel_sha() {
 	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 }
 
+@test "diagnostics create and resume require a canonical diagnostics contract object" {
+	prepare_diagnostic_samples
+	base_samples="$BATS_TEST_TMPDIR/diagnostics-contract-base.json"
+	cp "$BENCHMARK_SAMPLES_FILE" "$base_samples"
+
+	jq 'del(.diagnostics)' "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic contract is missing or malformed' ]
+	[ "$(run_directory_count)" -eq 0 ]
+
+	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$output"
+
+	jq 'del(.diagnostics)' "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+
+	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic contract is missing or malformed' ]
+}
+
 @test "diagnostics resume refuses panel timestamp and historical scope drift" {
 	prepare_diagnostic_samples
 	run "$SCRIPTS/runmeta.sh" create diagnostics
