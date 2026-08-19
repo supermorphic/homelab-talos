@@ -1031,7 +1031,7 @@ dispatch_run() {
 			.spec.template.spec.containers[0].env += [{"name":"ENCODE_BENCHMARK_FINALIST_CONFIRM","value":strenv(FINALIST_CONFIRM)}]
 		' "$job"
 	elif [[ "$mode" == 'diagnostics' ]]; then
-		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh diagnostics
+		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh diagnostics "$run_id"
 		yq -i '
 			.spec.activeDeadlineSeconds = 14400
 		' "$job"

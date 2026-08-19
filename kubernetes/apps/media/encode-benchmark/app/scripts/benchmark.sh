@@ -57,7 +57,7 @@ if [[ "$test_mode" != '1' ]]; then
 	done
 fi
 usage() {
-	echo 'usage: benchmark.sh capabilities | diagnostics | quality [run-id] | x265 <run-id> <sample-id> | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
+	echo 'usage: benchmark.sh capabilities | diagnostics [run-id] | quality [run-id] | x265 <run-id> <sample-id> | savings <run-id> | finalist <run-id> <sample-id> | contention <run-id> <a|b|c|d> <worker-id> <sample-id> | findings <run-id>' >&2
 	exit 64
 }
 
@@ -1649,7 +1649,7 @@ diagnostic_hdr_evidence() {
 }
 
 diagnostics_mode() {
-	local panel_samples run_id='' run_directory diagnostic_root run_scratch manifest_temp
+	local explicit_run_id="${1:-}" panel_samples run_id='' run_directory diagnostic_root run_scratch manifest_temp
 	local overall_status='complete' sample_id clip_id observed timestamp source clip output
 	local sample source_identity source_window clip_command source_frame_command settings setting setting_json evidence classifier_file classification
 	local entry_status summary vmaf_entries='[]' hdr_entries='[]' title_scratch evidence_path clip_ready
@@ -1674,7 +1674,11 @@ diagnostics_mode() {
 	fi
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode diagnostics)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
-	run_id="$("$script_directory/runmeta.sh" create diagnostics)" || return
+	if [[ -n "$explicit_run_id" ]]; then
+		run_id="$("$script_directory/runmeta.sh" create diagnostics "$explicit_run_id")" || return
+	else
+		run_id="$("$script_directory/runmeta.sh" create diagnostics)" || return
+	fi
 	run_directory="$benchmark_out/runs/$run_id"
 	diagnostic_root="$run_directory/diagnostics"
 	run_scratch="$scratch_root/$run_id"
@@ -4851,10 +4855,10 @@ capabilities)
 	;;
 _test) test_dispatch "$@" ;;
 diagnostics)
-	(($# == 0)) || usage
+	(($# == 0 || $# == 1)) || usage
 	contract_load "$samples_file" || exit $?
 	contract_require_diagnostics "$samples_file" || exit $?
-	diagnostics_mode
+	diagnostics_mode "${1:-}"
 	;;
 quality)
 	(($# == 0 || $# == 1)) || usage

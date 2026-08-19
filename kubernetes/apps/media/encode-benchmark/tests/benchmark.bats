@@ -2062,6 +2062,29 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 }
 
+# Catches diagnostics accepting a dispatch-selected run id at the Job layer but
+# ignoring it at runtime, which would split the artifact directory from the Job
+# labels and the host-side dispatch result.
+@test "diagnostics honors an explicit run id as the manifest and artifact directory id" {
+	prepare_diagnostic_execution_run
+	run_id='20260819T120000Z-feedbeef'
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e --arg run "$run_id" '
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		.mode == "diagnostics" and .status == "complete" and
+		.runId == $run and
+		.artifactLocation == ("/out/runs/" + $run + "/diagnostics")
+	' <<<"$(tail -n 1 <<<"$output")"
+	[ "$status" -eq 0 ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/manifest.json" ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/diagnostics/manifest.json" ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json" ]
+	run jq -e --arg run "$run_id" '.runId == $run' "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
+}
+
 # Catches diagnostics adding a fourteenth synthetic capability encode or
 # hashing source media before its committed assigned-node proof is admitted.
 @test "diagnostics validates committed assigned-node capability before source hashes or run creation" {

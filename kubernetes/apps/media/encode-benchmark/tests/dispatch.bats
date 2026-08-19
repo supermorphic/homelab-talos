@@ -898,7 +898,8 @@ set_dispatch_chosen_record() {
 	job="$(job_capture)"
 	assert_hardened_job "$job"
 	[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '14400' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh diagnostics' ]
+	run_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")"
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh diagnostics $run_id" ]
 	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$job")" = 'false' ]
 	[ "$(yq -r '.spec.template.spec.securityContext.runAsNonRoot' "$job")" = 'true' ]
 	[ "$(yq -r '.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].values[0]' "$job")" = 'plex' ]
@@ -907,6 +908,22 @@ set_dispatch_chosen_record() {
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .readOnly' "$job")" = 'true' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "out") | .mountPath' "$job")" = '/out' ]
 	assert_call_precedes_first_create ' get configmap/encode-benchmark-samples '
+}
+
+# Catches diagnostics accepting a caller-supplied run id in labels/output while
+# dropping it from the runtime command, which would make runmeta create a
+# different artifact directory than dispatch announced.
+@test "diagnostics dispatch propagates an exact caller supplied run id into the runtime command" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	run_id='20260820T120000Z-feedbeef'
+
+	run_dispatch run diagnostics "$run_id"
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" = "$run_id" ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh diagnostics $run_id" ]
+	[[ "$output" == *"run_id=$run_id"* ]]
 }
 
 # Catches diagnostics dispatch trusting stale or drifted deployed scope instead of
@@ -1336,7 +1353,8 @@ EOF
 		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-diagnostics
 	[ "$status" -eq 0 ]
 	job="$(job_capture)"
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh diagnostics' ]
+	run_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")"
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh diagnostics $run_id" ]
 
 	rm -f -- "$STUB_CAPTURE_DIR"/*
 	: >"$STUB_CALLS"
