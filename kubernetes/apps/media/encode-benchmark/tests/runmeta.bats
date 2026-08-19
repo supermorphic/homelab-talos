@@ -439,6 +439,20 @@ diagnostic_expected_panel_sha() {
 	[ "$status" -eq 0 ]
 }
 
+@test "diagnostics identity refuses missing command identities" {
+	prepare_diagnostic_samples
+	unset BENCHMARK_ENCODER_COMMANDS_JSON
+
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic command identity is missing or malformed' ]
+
+	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic command identity is missing or malformed' ]
+}
+
 @test "diagnostics resume refuses panel timestamp and historical scope drift" {
 	prepare_diagnostic_samples
 	run "$SCRIPTS/runmeta.sh" create diagnostics
