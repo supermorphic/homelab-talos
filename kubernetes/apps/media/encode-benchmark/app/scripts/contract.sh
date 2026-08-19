@@ -450,7 +450,7 @@ contract_passing_icq_nodes() {
 contract_passing_diagnostic_nodes() {
 	local file="$1"
 	contract_passing_icq_nodes "$file" | while IFS= read -r node; do
-		jq -e --arg node "$node" '
+		if jq -e --arg node "$node" '
 			.runtime.capabilityEvidence.nodes[]? |
 			select(.nodeName == $node) |
 			(.diagnosticCapabilities |
@@ -460,10 +460,12 @@ contract_passing_diagnostic_nodes() {
 				.traceHeaders == "passed" and .libvmaf == "passed" and .ssim == "passed" and .psnr == "passed" and
 				.bestEffortTimestampTime == "passed" and .packetDurationTime == "passed" and
 				.keyFrame == "passed" and .pictType == "passed")
-		' --arg node_image "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .imageId' "$file")" \
-			--arg node_verified "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .verifiedAt' "$file")" "$file" >/dev/null &&
+			' --arg node_image "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .imageId' "$file")" \
+			--arg node_verified "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .verifiedAt' "$file")" "$file" >/dev/null; then
 			printf '%s\n' "$node"
+		fi
 	done
+	return 0
 }
 
 contract_chosen_record() {

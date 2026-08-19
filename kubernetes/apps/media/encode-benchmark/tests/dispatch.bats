@@ -986,6 +986,48 @@ set_dispatch_chosen_record() {
 	[ "$(mutation_count)" -eq 2 ]
 }
 
+# Catches the diagnostic selector returning the final rejected generic-QSV node's
+# status after it has already emitted an earlier eligible node.
+@test "diagnostics dispatch accepts an eligible node before an ineligible sorted node" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	evidence="$(jq -c '.nodes += [(.nodes[0] | .nodeName = "nuc3" | del(.diagnosticCapabilities))]' <<<"$(valid_capability_evidence)")"
+	set_capability_evidence verified "$evidence"
+
+	run_dispatch run diagnostics
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
+	[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "$(job_capture)")" = 'nuc1' ]
+}
+
+# Catches the reciprocal order: generic QSV evidence must not hide a later
+# diagnostic-capable node when generic nodes sort first.
+@test "diagnostics dispatch accepts an eligible node after an ineligible sorted node" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	evidence="$(jq -c '.nodes[0].nodeName = "nuc3" | .nodes += [(.nodes[0] | .nodeName = "nuc1" | del(.diagnosticCapabilities))]' <<<"$(valid_capability_evidence)")"
+	set_capability_evidence verified "$evidence"
+
+	run_dispatch run diagnostics
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
+	[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "$(job_capture)")" = 'nuc3' ]
+}
+
+# Catches selector failure bypassing the bounded diagnostics-specific no-evidence
+# response when normal QSV nodes exist but none has the required proof.
+@test "diagnostics reports bounded missing evidence when no node is diagnostically eligible" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	evidence="$(jq -c '.nodes += [(.nodes[0] | .nodeName = "nuc3")] | .nodes[].diagnosticCapabilities |= del(.)' <<<"$(valid_capability_evidence)")"
+	set_capability_evidence verified "$evidence"
+
+	run_dispatch run diagnostics
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic capability evidence is missing malformed stale or bound to another image' ]
+	assert_no_mutations
+}
+
 # Catches diagnostics resume or selector parsing that could mutate historical
 # quality/findings artifacts or widen the fixed contract beyond its sealed panel.
 @test "diagnostics rejects historical run ids and extra positional arguments before mutation" {
