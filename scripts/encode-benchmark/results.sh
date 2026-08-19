@@ -38,8 +38,9 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
-diagnostic_terminal_reason_count_limit=16
-diagnostic_terminal_reason_length_limit=64
+diagnostic_terminal_max_bytes="$CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES"
+diagnostic_terminal_reason_count_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT"
+diagnostic_terminal_reason_length_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT"
 
 normalize_image_id() {
 	local image_id="$1" stripped
@@ -70,73 +71,23 @@ diagnostic_terminal_schema_error() {
 	printf 'terminal-summary-schema-error:%s\n' "$reason"
 }
 
-diagnostic_terminal_allowed_vmaf_reasons_json() {
-	cat <<'EOF'
-["assigned-node-capability-rejected","classification-failed","classification-predicate-not-met","diagnostic-preflight-rejected","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum","timeline-discontinuity-at-offset","vmaf-only-exact-zero","zero-offset-timeline-agreement"]
-EOF
-}
-
-diagnostic_terminal_allowed_hdr_reasons_json() {
-	cat <<'EOF'
-["assigned-node-capability-rejected","authoritative-source-metadata","classification-failed","clip-metadata-changed","clip-window-absent","clip-window-malformed","clip-window-null","decoded-trace-disagreement","diagnostic-preflight-rejected","encoded-metadata-changed","encoded-window-absent","encoded-window-malformed","encoded-window-null","incomplete-or-failed-evidence","post-run-identity-drift","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-and-clip-metadata-agree","source-clip-encoded-metadata-agree","source-probe-null","source-stream-probe-absent","source-stream-probe-conflict","source-stream-probe-malformed","source-window-absent","source-window-conflict","source-window-malformed","source-window-null","stream-probe-null"]
-EOF
-}
-
 diagnostic_sanitize_terminal() {
 	local terminal_message="$1" requested_run_id="$2"
-	local parsed reason allowed_vmaf allowed_hdr
+	local parsed reason artifact_location
 	if [[ -z "$terminal_message" ]]; then
 		printf '%s\n' 'no-sanitized-summary'
 		return 65
 	fi
+	((${#terminal_message} <= diagnostic_terminal_max_bytes)) || {
+		printf '%s\n' "$(diagnostic_terminal_schema_error raw-message-too-large)"
+		return 65
+	}
 	parsed="$(jq -e -c . <<<"$terminal_message" 2>/dev/null)" || {
 		printf '%s\n' 'no-sanitized-summary'
 		return 65
 	}
-	allowed_vmaf="$(diagnostic_terminal_allowed_vmaf_reasons_json)"
-	allowed_hdr="$(diagnostic_terminal_allowed_hdr_reasons_json)"
-	reason="$(jq -r --arg run "$requested_run_id" \
-		--argjson allowed_vmaf "$allowed_vmaf" --argjson allowed_hdr "$allowed_hdr" \
-		--argjson reason_count_limit "$diagnostic_terminal_reason_count_limit" \
-		--argjson reason_length_limit "$diagnostic_terminal_reason_length_limit" '
-		def sorted_unique: sort == unique;
-		def vmaf_counts:
-			type == "object" and
-			(keys | sort) == ["encoder-output-defect","reasons","temporal-alignment-defect","total","unresolved","vmaf-measurement-defect"] and
-			.total == 5 and
-			(."encoder-output-defect" | type == "number" and floor == . and . >= 0) and
-			(."temporal-alignment-defect" | type == "number" and floor == . and . >= 0) and
-			(.unresolved | type == "number" and floor == . and . >= 0) and
-			(."vmaf-measurement-defect" | type == "number" and floor == . and . >= 0) and
-			(."encoder-output-defect" + ."temporal-alignment-defect" + .unresolved + ."vmaf-measurement-defect" == 5) and
-			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and sorted_unique and
-				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
-					($reason | length) <= $reason_length_limit and ($allowed_vmaf | index($reason)) != null));
-		def hdr_counts:
-			type == "object" and
-			(keys | sort) == ["clip-boundary-defect","encoder-output-defect","preserved","reasons","source-probe-defect","total","unresolved-oracle"] and
-			.total == 3 and
-			(."clip-boundary-defect" | type == "number" and floor == . and . >= 0) and
-			(."encoder-output-defect" | type == "number" and floor == . and . >= 0) and
-			(.preserved | type == "number" and floor == . and . >= 0) and
-			(."source-probe-defect" | type == "number" and floor == . and . >= 0) and
-			(."unresolved-oracle" | type == "number" and floor == . and . >= 0) and
-			(."clip-boundary-defect" + ."encoder-output-defect" + .preserved + ."source-probe-defect" + ."unresolved-oracle" == 3) and
-			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and sorted_unique and
-				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
-					($reason | length) <= $reason_length_limit and ($allowed_hdr | index($reason)) != null));
-		if type != "object" then "not-object"
-		elif (keys | sort) != ["artifactLocation","hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] then "wrong-keys"
-		elif .schemaVersion != 1 then "wrong-schema-version"
-		elif .strategyId != "qsv-hevc-icq-v1" then "wrong-strategy"
-		elif .mode != "diagnostics" then "wrong-mode"
-		elif .status != "complete" and .status != "harness-blocked" and .status != "failed" then "wrong-status"
-		elif .runId != $run then "wrong-run-id"
-		elif .artifactLocation != ("/out/runs/" + $run + "/diagnostics") then "wrong-artifact-location"
-		elif (.vmaf | vmaf_counts | not) then "wrong-vmaf-counts"
-		elif (.hdr | hdr_counts | not) then "wrong-hdr-counts"
-		else "" end
-	' <<<"$parsed")" || {
+	artifact_location="/out/runs/$requested_run_id/diagnostics"
+	reason="$(contract_diagnostics_terminal_schema_reason "$parsed" "$requested_run_id" '' "$artifact_location")" || {
 		printf '%s\n' "$(diagnostic_terminal_schema_error invalid-json)"
 		return 65
 	}

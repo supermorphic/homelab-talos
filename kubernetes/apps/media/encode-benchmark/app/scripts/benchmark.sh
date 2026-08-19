@@ -7,13 +7,14 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_directory/contract.sh"
 benchmark_out="${BENCHMARK_OUT:-/out}"
 scratch_root="${BENCHMARK_SCRATCH:-/scratch}"
+runs_root="$benchmark_out/runs"
 samples_file="${BENCHMARK_SAMPLES_FILE:-/config/samples.json}"
 test_mode="${BENCHMARK_TEST_MODE:-0}"
 running_image_file='/provenance/image.json'
 running_image_wait_seconds=600
-diagnostic_terminal_max_bytes=3072
-diagnostic_terminal_reason_count_limit=16
-diagnostic_terminal_reason_length_limit=64
+diagnostic_terminal_max_bytes="$CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES"
+diagnostic_terminal_reason_count_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT"
+diagnostic_terminal_reason_length_limit="$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT"
 results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
@@ -1070,15 +1071,11 @@ diagnostic_status_merge() {
 }
 
 diagnostic_terminal_vmaf_reasons_json() {
-	cat <<'EOF'
-["assigned-node-capability-rejected","classification-failed","classification-predicate-not-met","diagnostic-preflight-rejected","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum","timeline-discontinuity-at-offset","vmaf-only-exact-zero","zero-offset-timeline-agreement"]
-EOF
+	contract_diagnostics_terminal_vmaf_reason_classes_json | jq -c 'keys | sort'
 }
 
 diagnostic_terminal_hdr_reasons_json() {
-	cat <<'EOF'
-["assigned-node-capability-rejected","authoritative-source-metadata","classification-failed","clip-metadata-changed","clip-window-absent","clip-window-malformed","clip-window-null","decoded-trace-disagreement","diagnostic-preflight-rejected","encoded-metadata-changed","encoded-window-absent","encoded-window-malformed","encoded-window-null","incomplete-or-failed-evidence","post-run-identity-drift","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-and-clip-metadata-agree","source-clip-encoded-metadata-agree","source-probe-null","source-stream-probe-absent","source-stream-probe-conflict","source-stream-probe-malformed","source-window-absent","source-window-conflict","source-window-malformed","source-window-null","stream-probe-null"]
-EOF
+	contract_diagnostics_terminal_hdr_reason_classes_json | jq -c 'keys | sort'
 }
 
 diagnostic_terminal_reason_allowed() {
@@ -1102,7 +1099,7 @@ diagnostic_termination_log_path() {
 
 diagnostic_terminal_payload() {
 	local status="$1" run_id="${2:-}" summary="${3:-}" reason_code="${4:-incomplete-or-failed-evidence}"
-	local artifact='null' allowed_vmaf allowed_hdr
+	local artifact='null' artifact_location='' allowed_vmaf allowed_hdr vmaf_reason_classes hdr_reason_classes validation_reason payload
 	case "$status" in
 	complete | harness-blocked | failed) ;;
 	*)
@@ -1112,10 +1109,13 @@ diagnostic_terminal_payload() {
 	esac
 	[[ -z "$run_id" ]] || validate_run_id "$run_id" >/dev/null
 	if [[ -n "$run_id" ]]; then
+		artifact_location="/out/runs/$run_id/diagnostics"
 		artifact="$(jq -n --arg value "/out/runs/$run_id/diagnostics" '$value')"
 	fi
 	allowed_vmaf="$(diagnostic_terminal_vmaf_reasons_json)"
 	allowed_hdr="$(diagnostic_terminal_hdr_reasons_json)"
+	vmaf_reason_classes="$(contract_diagnostics_terminal_vmaf_reason_classes_json)"
+	hdr_reason_classes="$(contract_diagnostics_terminal_hdr_reason_classes_json)"
 	if [[ -z "$summary" ]]; then
 		diagnostic_terminal_reason_allowed "$allowed_vmaf" "$reason_code" || {
 			echo 'diagnostic VMAF terminal reason is invalid' >&2
@@ -1125,7 +1125,7 @@ diagnostic_terminal_payload() {
 			echo 'diagnostic HDR terminal reason is invalid' >&2
 			return 65
 		}
-		jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
+		payload="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
 			--arg run "$run_id" --arg reason "$reason_code" --argjson artifact "$artifact" '{
 			schemaVersion:1,
 			strategyId:$strategy,
@@ -1150,82 +1150,91 @@ diagnostic_terminal_payload() {
 				"unresolved-oracle":3,
 				reasons:[$reason]
 			}
-		}'
-		return
+		}')" || return 65
+	else
+		jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" \
+			--argjson allowed_vmaf "$allowed_vmaf" --argjson allowed_hdr "$allowed_hdr" \
+			--argjson vmaf_reason_classes "$vmaf_reason_classes" \
+			--argjson hdr_reason_classes "$hdr_reason_classes" \
+			--argjson reason_count_limit "$diagnostic_terminal_reason_count_limit" \
+			--argjson reason_length_limit "$diagnostic_terminal_reason_length_limit" '
+			def valid_vmaf_entry:
+				. as $entry |
+				type == "object" and
+				(keys | sort) == ["classification","clipId","evidence","reasons","sampleId","status"] and
+				(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
+				(.classification == "encoder-output-defect" or .classification == "temporal-alignment-defect" or
+				 .classification == "unresolved" or .classification == "vmaf-measurement-defect") and
+				(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
+					all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
+						($reason | length) <= $reason_length_limit and ($allowed_vmaf | index($reason)) != null)) and
+				($entry.reasons | all(.[]; . as $reason | ($vmaf_reason_classes[$reason] // []) | index($entry.classification) != null));
+			def valid_hdr_entry:
+				. as $entry |
+				type == "object" and
+				(keys | sort) == ["classification","evidence","reasons","sampleId","status"] and
+				(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
+				(.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or
+				 .classification == "preserved" or .classification == "source-probe-defect" or
+				 .classification == "unresolved-oracle") and
+				(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
+					all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
+						($reason | length) <= $reason_length_limit and ($allowed_hdr | index($reason)) != null)) and
+				($entry.reasons | all(.[]; . as $reason | ($hdr_reason_classes[$reason] // []) | index($entry.classification) != null));
+			type == "object" and
+			(keys | sort) == ["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] and
+			.schemaVersion == 1 and .strategyId == $strategy and
+			.mode == "diagnostics" and .status == $status and .runId == $run and
+			(.vmaf | type == "object" and (keys | sort) == ["entries","total"] and .total == 5 and
+				(.entries | type == "array" and length == 5 and all(.[]; valid_vmaf_entry))) and
+			(.hdr | type == "object" and (keys | sort) == ["entries","total"] and .total == 3 and
+				(.entries | type == "array" and length == 3 and all(.[]; valid_hdr_entry)))
+		' <<<"$summary" >/dev/null || return 65
+		payload="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
+			--arg run "$run_id" --argjson artifact "$artifact" --argjson summary "$summary" '
+			def reason_list($entries):
+				[$entries[]?.reasons[]?] | unique | sort;
+			def vmaf_counts($entries):
+				{
+					total: 5,
+					"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
+					"temporal-alignment-defect": ([$entries[] | select(.classification == "temporal-alignment-defect")] | length),
+					unresolved: ([$entries[] | select(.classification == "unresolved")] | length),
+					"vmaf-measurement-defect": ([$entries[] | select(.classification == "vmaf-measurement-defect")] | length),
+					reasons: reason_list($entries)
+				};
+			def hdr_counts($entries):
+				{
+					total: 3,
+					"clip-boundary-defect": ([$entries[] | select(.classification == "clip-boundary-defect")] | length),
+					"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
+					preserved: ([$entries[] | select(.classification == "preserved")] | length),
+					"source-probe-defect": ([$entries[] | select(.classification == "source-probe-defect")] | length),
+					"unresolved-oracle": ([$entries[] | select(.classification == "unresolved-oracle")] | length),
+					reasons: reason_list($entries)
+				};
+			{
+				schemaVersion:1,
+				strategyId:$strategy,
+				mode:"diagnostics",
+				status:$status,
+				runId:(if $run == "" then null else $run end),
+				artifactLocation:$artifact,
+				vmaf:(vmaf_counts($summary.vmaf.entries)),
+				hdr:(hdr_counts($summary.hdr.entries))
+			}
+		')" || return 65
 	fi
-	jq -e --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" --arg run "$run_id" \
-		--argjson allowed_vmaf "$allowed_vmaf" --argjson allowed_hdr "$allowed_hdr" \
-		--argjson reason_count_limit "$diagnostic_terminal_reason_count_limit" \
-		--argjson reason_length_limit "$diagnostic_terminal_reason_length_limit" '
-		def valid_vmaf_entry:
-			type == "object" and
-			(keys | sort) == ["classification","clipId","evidence","reasons","sampleId","status"] and
-			(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
-			(.classification == "encoder-output-defect" or .classification == "temporal-alignment-defect" or
-			 .classification == "unresolved" or .classification == "vmaf-measurement-defect") and
-			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
-				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
-					($reason | length) <= $reason_length_limit and ($allowed_vmaf | index($reason)) != null));
-		def valid_hdr_entry:
-			type == "object" and
-			(keys | sort) == ["classification","evidence","reasons","sampleId","status"] and
-			(.status == "complete" or .status == "harness-blocked" or .status == "failed") and
-			(.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or
-			 .classification == "preserved" or .classification == "source-probe-defect" or
-			 .classification == "unresolved-oracle") and
-			(.reasons | type == "array" and length >= 1 and length <= $reason_count_limit and
-				all(.[]; . as $reason | ($reason | type) == "string" and ($reason | length) > 0 and
-					($reason | length) <= $reason_length_limit and ($allowed_hdr | index($reason)) != null));
-		type == "object" and
-		(keys | sort) == ["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] and
-		.schemaVersion == 1 and .strategyId == $strategy and
-		.mode == "diagnostics" and .status == $status and .runId == $run and
-		(.vmaf | type == "object" and (keys | sort) == ["entries","total"] and .total == 5 and
-			(.entries | type == "array" and length == 5 and all(.[]; valid_vmaf_entry))) and
-		(.hdr | type == "object" and (keys | sort) == ["entries","total"] and .total == 3 and
-			(.entries | type == "array" and length == 3 and all(.[]; valid_hdr_entry)))
-	' <<<"$summary" >/dev/null || return 65
-	jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg status "$status" \
-		--arg run "$run_id" --argjson artifact "$artifact" --argjson summary "$summary" '
-		def reason_list($entries):
-			[$entries[]?.reasons[]?] | unique | sort;
-		def vmaf_counts($entries):
-			{
-				total: 5,
-				"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
-				"temporal-alignment-defect": ([$entries[] | select(.classification == "temporal-alignment-defect")] | length),
-				unresolved: ([$entries[] | select(.classification == "unresolved")] | length),
-				"vmaf-measurement-defect": ([$entries[] | select(.classification == "vmaf-measurement-defect")] | length),
-				reasons: reason_list($entries)
-			};
-		def hdr_counts($entries):
-			{
-				total: 3,
-				"clip-boundary-defect": ([$entries[] | select(.classification == "clip-boundary-defect")] | length),
-				"encoder-output-defect": ([$entries[] | select(.classification == "encoder-output-defect")] | length),
-				preserved: ([$entries[] | select(.classification == "preserved")] | length),
-				"source-probe-defect": ([$entries[] | select(.classification == "source-probe-defect")] | length),
-				"unresolved-oracle": ([$entries[] | select(.classification == "unresolved-oracle")] | length),
-				reasons: reason_list($entries)
-			};
-		{
-			schemaVersion:1,
-			strategyId:$strategy,
-			mode:"diagnostics",
-			status:$status,
-			runId:(if $run == "" then null else $run end),
-			artifactLocation:$artifact,
-			vmaf:(vmaf_counts($summary.vmaf.entries)),
-			hdr:(hdr_counts($summary.hdr.entries))
-		}
-	'
+	validation_reason="$(contract_diagnostics_terminal_schema_reason "$payload" "$run_id" "$status" "$artifact_location")" || return 65
+	[[ -z "$validation_reason" ]] || return 65
+	printf '%s\n' "$payload"
 }
 
 diagnostic_emit_terminal() {
 	local payload="$1" canonical path
 	path="$(diagnostic_termination_log_path)" || return
 	canonical="$(jq -e -S -c . <<<"$payload")" || return 65
-	((${#canonical} < diagnostic_terminal_max_bytes)) || {
+	((${#canonical} <= diagnostic_terminal_max_bytes)) || {
 		echo 'diagnostic terminal payload exceeds byte limit' >&2
 		return 65
 	}
@@ -1238,6 +1247,19 @@ diagnostic_terminal() {
 	local status="$1" run_id="${2:-}" summary="${3:-}" reason_code="${4:-incomplete-or-failed-evidence}" payload
 	payload="$(diagnostic_terminal_payload "$status" "$run_id" "$summary" "$reason_code")" || return
 	diagnostic_emit_terminal "$payload"
+}
+
+reject_diagnostics_resume_run_id() {
+	local requested_mode="$1" run_id="$2" manifest stored_mode
+	[[ -n "$run_id" ]] || return 0
+	validate_run_id "$run_id" || return
+	manifest="$runs_root/$run_id/manifest.json"
+	[[ -f "$manifest" && ! -L "$manifest" ]] || return 0
+	stored_mode="$(jq -e -r '.mode | select(type == "string")' "$manifest" 2>/dev/null || true)"
+	[[ "$stored_mode" != 'diagnostics' ]] || {
+		printf 'identity mismatch: mode (stored=diagnostics, current=%s)\n' "$requested_mode" >&2
+		return 65
+	}
 }
 
 diagnostic_command_clip() {
@@ -3620,6 +3642,7 @@ quality_mode() {
 	local panel_samples
 	local -a qsv_settings
 	read -r -a qsv_settings <<<"$CONTRACT_ICQ_SETTINGS"
+	reject_diagnostics_resume_run_id quality "$explicit_run_id" || return
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
@@ -3735,6 +3758,7 @@ x265_mode() (
 	trap 'if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
 	validate_run_id "$requested_run_id" || return
 	validate_sample_id "$requested_sample_id" || return
+	reject_diagnostics_resume_run_id x265 "$requested_run_id" || return
 	case "$requested_sample_id" in
 	avc-grain-memento | hdr10-grain-goodfellas) ;;
 	*)
@@ -3832,6 +3856,7 @@ savings_mode() {
 	local panel_samples final_cohorts panel_cohorts cohort_name selected_record selected_state
 	local upstream_map='{}' selected_settings='[]' cohort_applicability='{}' final_records='{}' artifact_staged
 	final_cohorts='[]'
+	reject_diagnostics_resume_run_id savings "$requested_run_id" || return
 	panel_cohorts="$(jq -e -c '[.savingsPanel[]?.cohort | select(. == "avc" or . == "vc1" or . == "hdr10")] | unique' "$samples_file")" || return 65
 	for cohort_name in avc vc1 hdr10; do
 		selected_state=''
@@ -3968,6 +3993,7 @@ finalist_mode() {
 	local sample sample_id cohort source sha setting expected_confirmation expected_finalist chosen
 	validate_run_id "$requested_run_id" || return
 	validate_sample_id "$requested_sample_id" || return
+	reject_diagnostics_resume_run_id finalist "$requested_run_id" || return
 	expected_confirmation="copy:encode-benchmark:$requested_run_id:$requested_sample_id"
 	[[ "${ENCODE_BENCHMARK_FINALIST_CONFIRM:-}" == "$expected_confirmation" ]] || {
 		echo "missing finalist confirmation for $requested_run_id/$requested_sample_id" >&2
@@ -4070,6 +4096,7 @@ contention_mode() (
 		if [[ -n "${run_scratch:-}" ]]; then rm -rf -- "$run_scratch"; fi' EXIT
 	validate_run_id "$requested_run_id" || return
 	validate_sample_id "$requested_sample_id" || return
+	reject_diagnostics_resume_run_id "contention-$contention_case" "$requested_run_id" || return
 	[[ "$contention_case" =~ ^[a-d]$ ]] || {
 		echo "invalid contention case: $contention_case" >&2
 		return 64

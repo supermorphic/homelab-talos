@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034
 
+CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES=3072
+CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT=16
+CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT=64
+readonly CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT
+readonly CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT
+
 contract_load() {
 	local file="$1"
 	jq -e '
@@ -160,6 +166,104 @@ contract_diagnostics_panel_sha256() {
 	local file="$1" panel_json
 	panel_json="$(contract_diagnostics_panel_json "$file")" || return 65
 	printf 'sha256:%s\n' "$(printf '%s' "$panel_json" | sha256sum | awk 'NR == 1 { print $1 }')"
+}
+
+contract_diagnostics_terminal_statuses_json() {
+	cat <<'EOF'
+["complete","failed","harness-blocked"]
+EOF
+}
+
+contract_diagnostics_terminal_vmaf_reason_classes_json() {
+	cat <<'EOF'
+{"assigned-node-capability-rejected":["unresolved"],"classification-failed":["unresolved"],"classification-predicate-not-met":["unresolved"],"diagnostic-preflight-rejected":["unresolved"],"incomplete-or-failed-evidence":["unresolved"],"incomplete-setting-evidence":["unresolved"],"independent-metrics-not-target-minimum":["vmaf-measurement-defect"],"missing-offset-window":["unresolved"],"nonzero-ssim-psnr-offset-agreement":["temporal-alignment-defect"],"offset-best-tie":["unresolved"],"one-setting-evidence":["unresolved"],"post-run-identity-drift":["unresolved"],"pts-reset-clears-vmaf-zero":["temporal-alignment-defect"],"runmeta-create-failed":["unresolved"],"running-image-evidence-rejected":["unresolved"],"runtime-pre-encode-gate-rejected":["unresolved"],"source-window-clean":["encoder-output-defect"],"ssim-psnr-offset-disagreement":["unresolved"],"target-frame-local-metric-minimum":["encoder-output-defect"],"timeline-discontinuity-at-offset":["temporal-alignment-defect"],"vmaf-only-exact-zero":["vmaf-measurement-defect"],"zero-offset-timeline-agreement":["encoder-output-defect","vmaf-measurement-defect"]}
+EOF
+}
+
+contract_diagnostics_terminal_hdr_reason_classes_json() {
+	cat <<'EOF'
+{"assigned-node-capability-rejected":["unresolved-oracle"],"authoritative-source-metadata":["clip-boundary-defect","source-probe-defect"],"classification-failed":["unresolved-oracle"],"clip-metadata-changed":["clip-boundary-defect"],"clip-window-absent":["unresolved-oracle"],"clip-window-malformed":["unresolved-oracle"],"clip-window-null":["unresolved-oracle"],"decoded-trace-disagreement":["unresolved-oracle"],"diagnostic-preflight-rejected":["unresolved-oracle"],"encoded-metadata-changed":["encoder-output-defect"],"encoded-window-absent":["unresolved-oracle"],"encoded-window-malformed":["unresolved-oracle"],"encoded-window-null":["unresolved-oracle"],"incomplete-or-failed-evidence":["unresolved-oracle"],"post-run-identity-drift":["unresolved-oracle"],"runmeta-create-failed":["unresolved-oracle"],"running-image-evidence-rejected":["unresolved-oracle"],"runtime-pre-encode-gate-rejected":["unresolved-oracle"],"source-and-clip-metadata-agree":["encoder-output-defect"],"source-clip-encoded-metadata-agree":["preserved"],"source-probe-null":["source-probe-defect"],"source-stream-probe-absent":["unresolved-oracle"],"source-stream-probe-conflict":["unresolved-oracle"],"source-stream-probe-malformed":["unresolved-oracle"],"source-window-absent":["unresolved-oracle"],"source-window-conflict":["unresolved-oracle"],"source-window-malformed":["unresolved-oracle"],"source-window-null":["unresolved-oracle"],"stream-probe-null":["source-probe-defect"]}
+EOF
+}
+
+contract_diagnostics_terminal_schema_reason() {
+	local payload="$1" requested_run_id="${2:-}" expected_status="${3:-}" expected_artifact_location="${4:-}"
+	local statuses vmaf_reason_classes hdr_reason_classes
+	statuses="$(contract_diagnostics_terminal_statuses_json)"
+	vmaf_reason_classes="$(contract_diagnostics_terminal_vmaf_reason_classes_json)"
+	hdr_reason_classes="$(contract_diagnostics_terminal_hdr_reason_classes_json)"
+	jq -r \
+		--arg strategy "$CONTRACT_STRATEGY_ID" \
+		--arg run "$requested_run_id" \
+		--arg status "$expected_status" \
+		--arg artifact "$expected_artifact_location" \
+		--argjson statuses "$statuses" \
+		--argjson vmaf_reason_classes "$vmaf_reason_classes" \
+		--argjson hdr_reason_classes "$hdr_reason_classes" \
+		--argjson reason_count_limit "$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_COUNT_LIMIT" \
+		--argjson reason_length_limit "$CONTRACT_DIAGNOSTIC_TERMINAL_REASON_LENGTH_LIMIT" '
+		def sorted_unique: . == (sort | unique);
+		def int_nonneg: type == "number" and floor == . and . >= 0;
+		def compatible_reasons($reason_classes; $counts):
+			type == "array" and
+			length >= 1 and
+			length <= $reason_count_limit and
+			sorted_unique and
+			all(.[]; . as $reason |
+				($reason | type) == "string" and
+				($reason | length) > 0 and
+				($reason | length) <= $reason_length_limit and
+				($reason_classes[$reason] | type) == "array" and
+				any(($reason_classes[$reason])[]; ($counts[.] // 0) > 0));
+		def vmaf_counts:
+			. as $section |
+			type == "object" and
+			(keys | sort) == ["encoder-output-defect","reasons","temporal-alignment-defect","total","unresolved","vmaf-measurement-defect"] and
+			.total == 5 and
+			(."encoder-output-defect" | int_nonneg) and
+			(."temporal-alignment-defect" | int_nonneg) and
+			(.unresolved | int_nonneg) and
+			(."vmaf-measurement-defect" | int_nonneg) and
+			(."encoder-output-defect" + ."temporal-alignment-defect" + .unresolved + ."vmaf-measurement-defect" == 5) and
+			($section.reasons | compatible_reasons($vmaf_reason_classes; {
+				"encoder-output-defect": $section["encoder-output-defect"],
+				"temporal-alignment-defect": $section["temporal-alignment-defect"],
+				"unresolved": $section.unresolved,
+				"vmaf-measurement-defect": $section["vmaf-measurement-defect"]
+			}));
+		def hdr_counts:
+			. as $section |
+			type == "object" and
+			(keys | sort) == ["clip-boundary-defect","encoder-output-defect","preserved","reasons","source-probe-defect","total","unresolved-oracle"] and
+			.total == 3 and
+			(."clip-boundary-defect" | int_nonneg) and
+			(."encoder-output-defect" | int_nonneg) and
+			(.preserved | int_nonneg) and
+			(."source-probe-defect" | int_nonneg) and
+			(."unresolved-oracle" | int_nonneg) and
+			(."clip-boundary-defect" + ."encoder-output-defect" + .preserved + ."source-probe-defect" + ."unresolved-oracle" == 3) and
+			($section.reasons | compatible_reasons($hdr_reason_classes; {
+				"clip-boundary-defect": $section["clip-boundary-defect"],
+				"encoder-output-defect": $section["encoder-output-defect"],
+				"preserved": $section.preserved,
+				"source-probe-defect": $section["source-probe-defect"],
+				"unresolved-oracle": $section["unresolved-oracle"]
+			}));
+		.status as $payload_status |
+		if type != "object" then "not-object"
+		elif (keys | sort) != ["artifactLocation","hdr","mode","runId","schemaVersion","status","strategyId","vmaf"] then "wrong-keys"
+		elif .schemaVersion != 1 then "wrong-schema-version"
+		elif .strategyId != $strategy then "wrong-strategy"
+		elif .mode != "diagnostics" then "wrong-mode"
+		elif ($statuses | index($payload_status)) == null then "wrong-status"
+		elif ($status != "" and $payload_status != $status) then "wrong-status"
+		elif (($run == "" and .runId != null) or ($run != "" and .runId != $run)) then "wrong-run-id"
+		elif (($artifact == "" and .artifactLocation != null) or ($artifact != "" and .artifactLocation != $artifact)) then "wrong-artifact-location"
+		elif (.vmaf | vmaf_counts | not) then "wrong-vmaf-counts"
+		elif (.hdr | hdr_counts | not) then "wrong-hdr-counts"
+		elif ((.vmaf.reasons + .hdr.reasons) | unique | length) > $reason_count_limit then "too-many-reasons"
+		else "" end
+	' <<<"$payload"
 }
 
 contract_normalize_selected_settings() {

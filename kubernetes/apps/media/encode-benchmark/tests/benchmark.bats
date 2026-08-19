@@ -19,6 +19,42 @@ write_diagnostic_fixture_field() {
 	jq -e --arg id "$case_id" ".${group}[] | select(.id == \$id) | .${field}" "$fixture" >"$output_path"
 }
 
+snapshot_tree_state() {
+	local root="$1" snapshot="$2"
+	(
+		cd "$root"
+		find . -mindepth 1 -print | LC_ALL=C sort | while IFS= read -r path; do
+			if [[ -d "$path" ]]; then
+				printf 'dir\t%s\n' "$path"
+			elif [[ -L "$path" ]]; then
+				printf 'symlink\t%s\t%s\n' "$path" "$(readlink "$path")"
+			else
+				printf 'file\t%s\t%s\t%s\n' \
+					"$path" \
+					"$(wc -c <"$path" | tr -d ' ')" \
+					"$("$REAL_SHA256SUM" "$path" | awk 'NR == 1 { print $1 }')"
+			fi
+		done
+	) >"$snapshot"
+}
+
+snapshot_command_logs() {
+	local snapshot="$1"
+	{
+		for log_path in "$BENCHMARK_COMMAND_LOG" "${BENCHMARK_COMMAND_JSON_LOG:-}"; do
+			[[ -n "$log_path" ]] || continue
+			if [[ -e "$log_path" ]]; then
+				printf 'file\t%s\t%s\t%s\n' \
+					"$log_path" \
+					"$(wc -c <"$log_path" | tr -d ' ')" \
+					"$("$REAL_SHA256SUM" "$log_path" | awk 'NR == 1 { print $1 }')"
+			else
+				printf 'missing\t%s\n' "$log_path"
+			fi
+		done
+	} >"$snapshot"
+}
+
 # Catches findings accepting a legacy, ambiguous, or path-bearing input before
 # it can name an upstream artifact.  The expected value is hand-written from
 # the Task 10 schema rather than assembled by the runtime validator.
@@ -2200,42 +2236,63 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 
 @test "public benchmark entrypoints reject diagnostics run ids before mutation" {
 	prepare_diagnostic_execution_run
-	prepare_quality_upstream avc final 22 '[22,24,26]'
-	set_chosen_record avc final 22
 	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120000Z-feedbeef'
 	[ "$status" -eq 0 ]
 	diagnostic_run='20260819T120000Z-feedbeef'
 
-	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
-	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-	run "$SCRIPTS/benchmark.sh" savings "$diagnostic_run"
-	[ "$status" -eq 65 ]
-	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+	for mode_case in quality x265 savings finalist contention; do
+		unset ENCODE_BENCHMARK_FINALIST_CONFIRM BENCHMARK_PLEX_CLIENT_DEVICE BENCHMARK_PLAYBACK_SAMPLE_ID
+		case "$mode_case" in
+		quality)
+			command=( "$SCRIPTS/benchmark.sh" quality "$diagnostic_run" )
+			current_mode='quality'
+			;;
+		x265)
+			prepare_quality_upstream avc final 22 '[22,24,26]'
+			command=( "$SCRIPTS/benchmark.sh" x265 "$diagnostic_run" avc-grain-memento )
+			current_mode='x265'
+			;;
+		savings)
+			prepare_quality_upstream avc final 22 '[22,24,26]'
+			command=( "$SCRIPTS/benchmark.sh" savings "$diagnostic_run" )
+			current_mode='savings'
+			;;
+		finalist)
+			prepare_quality_upstream avc provisional 22 '[22,24,26]'
+			export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$diagnostic_run:avc-grain-memento"
+			command=( "$SCRIPTS/benchmark.sh" finalist "$diagnostic_run" avc-grain-memento )
+			current_mode='finalist'
+			;;
+		contention)
+			prepare_quality_upstream avc final 22 '[22,24,26]'
+			export BENCHMARK_PLEX_CLIENT_DEVICE='fixture-player'
+			export BENCHMARK_PLAYBACK_SAMPLE_ID='hdr10-grain-goodfellas'
+			command=( "$SCRIPTS/benchmark.sh" contention "$diagnostic_run" b worker-1 avc-grain-memento )
+			current_mode='contention-b'
+			;;
+		esac
 
-	prepare_diagnostic_execution_run
-	prepare_quality_upstream avc provisional 22 '[22,24,26]'
-	set_chosen_record avc provisional 22
-	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120001Z-feedbeef'
-	[ "$status" -eq 0 ]
-	diagnostic_run='20260819T120001Z-feedbeef'
-	export ENCODE_BENCHMARK_FINALIST_CONFIRM="copy:encode-benchmark:$diagnostic_run:avc-grain-memento"
-	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-	run "$SCRIPTS/benchmark.sh" finalist "$diagnostic_run" avc-grain-memento
-	[ "$status" -eq 65 ]
-	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+		before_out="$BATS_TEST_TMPDIR/${mode_case}-before-out.snapshot"
+		after_out="$BATS_TEST_TMPDIR/${mode_case}-after-out.snapshot"
+		before_scratch="$BATS_TEST_TMPDIR/${mode_case}-before-scratch.snapshot"
+		after_scratch="$BATS_TEST_TMPDIR/${mode_case}-after-scratch.snapshot"
+		before_logs="$BATS_TEST_TMPDIR/${mode_case}-before-logs.snapshot"
+		after_logs="$BATS_TEST_TMPDIR/${mode_case}-after-logs.snapshot"
+		snapshot_tree_state "$BENCHMARK_OUT" "$before_out"
+		snapshot_tree_state "$BENCHMARK_SCRATCH" "$before_scratch"
+		snapshot_command_logs "$before_logs"
 
-	prepare_diagnostic_execution_run
-	prepare_quality_upstream avc final 22 '[22,24,26]'
-	set_chosen_record avc final 22
-	export BENCHMARK_PLEX_CLIENT_DEVICE='fixture-player'
-	export BENCHMARK_PLAYBACK_SAMPLE_ID='hdr10-grain-goodfellas'
-	run "$SCRIPTS/benchmark.sh" diagnostics '20260819T120002Z-feedbeef'
-	[ "$status" -eq 0 ]
-	diagnostic_run='20260819T120002Z-feedbeef'
-	before_count="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-	run "$SCRIPTS/benchmark.sh" contention "$diagnostic_run" b worker-1 avc-grain-memento
-	[ "$status" -eq 65 ]
-	[ "$before_count" = "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" ]
+		run "${command[@]}"
+		[ "$status" -eq 65 ]
+		[[ "$output" == *"identity mismatch: mode (stored=diagnostics, current=$current_mode)"* ]]
+
+		snapshot_tree_state "$BENCHMARK_OUT" "$after_out"
+		snapshot_tree_state "$BENCHMARK_SCRATCH" "$after_scratch"
+		snapshot_command_logs "$after_logs"
+		[ "$(<"$before_out")" = "$(<"$after_out")" ]
+		[ "$(<"$before_scratch")" = "$(<"$after_scratch")" ]
+		[ "$(<"$before_logs")" = "$(<"$after_logs")" ]
+	done
 }
 
 # Catches diagnostics adding a fourteenth synthetic capability encode or

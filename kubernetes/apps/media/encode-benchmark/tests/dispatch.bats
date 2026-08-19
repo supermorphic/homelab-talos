@@ -2037,6 +2037,40 @@ write_diagnostics_hdr_case_summary_fixture() {
 	}' >"$destination"
 }
 
+write_diagnostics_custom_summary_fixture() {
+	local run_id="$1" vmaf_classification="$2" vmaf_reasons_json="$3" hdr_classification="$4" hdr_reasons_json="$5" destination="$6"
+	jq -n -c \
+		--arg run "$run_id" \
+		--arg vmaf_classification "$vmaf_classification" \
+		--arg hdr_classification "$hdr_classification" \
+		--argjson vmaf_reasons "$vmaf_reasons_json" \
+		--argjson hdr_reasons "$hdr_reasons_json" '{
+		schemaVersion:1,
+		strategyId:"qsv-hevc-icq-v1",
+		mode:"diagnostics",
+		runId:$run,
+		status:"complete",
+		vmaf:{
+			total:5,
+			entries:[
+				{sampleId:"avc-grain-memento",clipId:"detail",status:"complete",classification:$vmaf_classification,reasons:$vmaf_reasons,evidence:"vmaf/avc-grain-memento/detail/evidence.json"},
+				{sampleId:"avc-grain-memento",clipId:"motion",status:"complete",classification:$vmaf_classification,reasons:$vmaf_reasons,evidence:"vmaf/avc-grain-memento/motion/evidence.json"},
+				{sampleId:"vc1-fugitive",clipId:"detail",status:"complete",classification:$vmaf_classification,reasons:$vmaf_reasons,evidence:"vmaf/vc1-fugitive/detail/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",clipId:"detail",status:"complete",classification:$vmaf_classification,reasons:$vmaf_reasons,evidence:"vmaf/hdr10-grain-goodfellas/detail/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",clipId:"detail",status:"complete",classification:$vmaf_classification,reasons:$vmaf_reasons,evidence:"vmaf/hdr10-motion-john-wick-2/detail/evidence.json"}
+			]
+		},
+		hdr:{
+			total:3,
+			entries:[
+				{sampleId:"hdr10-clean-ministry",status:"complete",classification:$hdr_classification,reasons:$hdr_reasons,evidence:"hdr/hdr10-clean-ministry/evidence.json"},
+				{sampleId:"hdr10-grain-goodfellas",status:"complete",classification:$hdr_classification,reasons:$hdr_reasons,evidence:"hdr/hdr10-grain-goodfellas/evidence.json"},
+				{sampleId:"hdr10-motion-john-wick-2",status:"complete",classification:$hdr_classification,reasons:$hdr_reasons,evidence:"hdr/hdr10-motion-john-wick-2/evidence.json"}
+			]
+		}
+	}' >"$destination"
+}
+
 # Catches trusting benchmark-reported configured identity as runtime evidence;
 # results must compare the completed pod's actual imageID and redact media evidence.
 @test "results accepts matching actual imageID and prints only sanitized evidence" {
@@ -2407,6 +2441,64 @@ write_diagnostics_hdr_case_summary_fixture() {
 	done
 }
 
+@test "results consume the full literal diagnostics reason matrix through the terminal transport" {
+	run_id='20260819T120000Z-feedbeef'
+	termination="$BATS_TEST_TMPDIR/diagnostic-transport-matrix.json"
+
+	while IFS='|' read -r classification reasons expected_reasons vmaf_counts; do
+		summary="$BATS_TEST_TMPDIR/vmaf-matrix-$(printf '%s' "$classification|$reasons" | sha256sum | awk '{print $1}').json"
+		write_diagnostics_custom_summary_fixture "$run_id" "$classification" "$reasons" preserved '["source-clip-encoded-metadata-agree"]' "$summary"
+		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+		[ "$(<"$termination")" = "$terminal_message" ]
+		write_diagnostics_results_fixture "$run_id" Succeeded "$terminal_message"
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "mode=diagnostics phase=Succeeded run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=complete vmaf_total=5 $vmaf_counts vmaf_reasons=$expected_reasons hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0 hdr_reasons=source-clip-encoded-metadata-agree" ]
+	done <<'EOF'
+temporal-alignment-defect|["nonzero-ssim-psnr-offset-agreement","timeline-discontinuity-at-offset","pts-reset-clears-vmaf-zero"]|nonzero-ssim-psnr-offset-agreement,pts-reset-clears-vmaf-zero,timeline-discontinuity-at-offset|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=5 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=0
+encoder-output-defect|["zero-offset-timeline-agreement","target-frame-local-metric-minimum","source-window-clean"]|source-window-clean,target-frame-local-metric-minimum,zero-offset-timeline-agreement|vmaf_encoder_output_defect=5 vmaf_temporal_alignment_defect=0 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=0
+vmaf-measurement-defect|["zero-offset-timeline-agreement","independent-metrics-not-target-minimum","vmaf-only-exact-zero"]|independent-metrics-not-target-minimum,vmaf-only-exact-zero,zero-offset-timeline-agreement|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=0 vmaf_vmaf_measurement_defect=5
+unresolved|["classification-predicate-not-met"]|classification-predicate-not-met|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["incomplete-setting-evidence"]|incomplete-setting-evidence|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["missing-offset-window"]|missing-offset-window|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["offset-best-tie"]|offset-best-tie|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["one-setting-evidence"]|one-setting-evidence|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["ssim-psnr-offset-disagreement"]|ssim-psnr-offset-disagreement|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+EOF
+
+	while IFS='|' read -r classification reasons expected_reasons hdr_counts; do
+		summary="$BATS_TEST_TMPDIR/hdr-matrix-$(printf '%s' "$classification|$reasons" | sha256sum | awk '{print $1}').json"
+		write_diagnostics_custom_summary_fixture "$run_id" unresolved '["offset-best-tie"]' "$classification" "$reasons" "$summary"
+		terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+		[ "$(<"$termination")" = "$terminal_message" ]
+		write_diagnostics_results_fixture "$run_id" Succeeded "$terminal_message"
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "mode=diagnostics phase=Succeeded run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=complete vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=offset-best-tie hdr_total=3 $hdr_counts hdr_reasons=$expected_reasons" ]
+	done <<'EOF'
+source-probe-defect|["authoritative-source-metadata","stream-probe-null"]|authoritative-source-metadata,stream-probe-null|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=3 hdr_unresolved_oracle=0
+clip-boundary-defect|["authoritative-source-metadata","clip-metadata-changed"]|authoritative-source-metadata,clip-metadata-changed|hdr_clip_boundary_defect=3 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=0
+encoder-output-defect|["source-and-clip-metadata-agree","encoded-metadata-changed"]|encoded-metadata-changed,source-and-clip-metadata-agree|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=3 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=0
+preserved|["source-clip-encoded-metadata-agree"]|source-clip-encoded-metadata-agree|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=3 hdr_source_probe_defect=0 hdr_unresolved_oracle=0
+unresolved-oracle|["source-stream-probe-absent"]|source-stream-probe-absent|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-stream-probe-malformed"]|source-stream-probe-malformed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-stream-probe-conflict"]|source-stream-probe-conflict|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-window-null"]|source-window-null|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-window-absent"]|source-window-absent|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-window-malformed"]|source-window-malformed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-window-conflict"]|source-window-conflict|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["clip-window-null"]|clip-window-null|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["clip-window-absent"]|clip-window-absent|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["clip-window-malformed"]|clip-window-malformed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["encoded-window-null"]|encoded-window-null|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["encoded-window-absent"]|encoded-window-absent|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["encoded-window-malformed"]|encoded-window-malformed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["decoded-trace-disagreement"]|decoded-trace-disagreement|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+EOF
+}
+
 # Catches malformed diagnostics terminal output echoing raw pod data or quietly
 # flowing into downstream summary parsing.
 @test "results fail closed for missing malformed and mismatched diagnostics terminal summaries" {
@@ -2452,6 +2544,33 @@ write_diagnostics_hdr_case_summary_fixture() {
 	done
 }
 
+@test "results fail closed for diagnostics terminal aggregate limits size and incompatible reason pairings" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+
+	for mutation in \
+		'.vmaf.reasons = ["classification-failed","classification-predicate-not-met","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runmeta-create-failed","running-image-evidence-rejected","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum"]' \
+		'.vmaf.reasons = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]' \
+		'.vmaf.unresolved = 5 | .vmaf["encoder-output-defect"] = 0 | .vmaf.reasons = ["source-window-clean"]' ; do
+		case_terminal="$BATS_TEST_TMPDIR/limit-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq -c "$mutation" <<<"$terminal_message" >"$case_terminal"
+		write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -ne 0 ]
+		[[ "$output" == terminal-summary-schema-error:* ]]
+	done
+
+	case_terminal="$BATS_TEST_TMPDIR/oversized-terminal.json"
+	printf '%3073s%s' '' "$terminal_message" >"$case_terminal"
+	write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == 'terminal-summary-schema-error:raw-message-too-large' ]]
+}
+
 @test "diagnostic terminal producer rejects invalid status unknown excess and oversized reason payloads" {
 	run_id='20260819T120000Z-feedbeef'
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
@@ -2478,7 +2597,14 @@ write_diagnostics_hdr_case_summary_fixture() {
 		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-unknown.json"
 	[ "$status" -eq 65 ]
 
-	jq '.vmaf.entries[0].reasons = ["classification-failed","classification-predicate-not-met","incomplete-or-failed-evidence","incomplete-setting-evidence","independent-metrics-not-target-minimum","missing-offset-window","nonzero-ssim-psnr-offset-agreement","offset-best-tie","one-setting-evidence","post-run-identity-drift","pts-reset-clears-vmaf-zero","runtime-pre-encode-gate-rejected","source-window-clean","ssim-psnr-offset-disagreement","target-frame-local-metric-minimum","timeline-discontinuity-at-offset","vmaf-only-exact-zero"]' \
+	jq '.vmaf.entries[0].reasons = ["classification-predicate-not-met","incomplete-setting-evidence","missing-offset-window","offset-best-tie"] |
+		.vmaf.entries[1].reasons = ["one-setting-evidence","ssim-psnr-offset-disagreement"] |
+		.hdr.entries[0].classification = "unresolved-oracle" |
+		.hdr.entries[0].reasons = ["clip-window-null","clip-window-absent","clip-window-malformed","decoded-trace-disagreement","encoded-window-null","encoded-window-absent"] |
+		.hdr.entries[1].classification = "unresolved-oracle" |
+		.hdr.entries[1].reasons = ["encoded-window-malformed","source-stream-probe-absent","source-stream-probe-conflict","source-stream-probe-malformed","source-window-absent","source-window-conflict"] |
+		.hdr.entries[2].classification = "unresolved-oracle" |
+		.hdr.entries[2].reasons = ["source-window-malformed","source-window-null"]' \
 		"$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-excess.json"
 	run env \
 		BENCHMARK_TEST_MODE=1 \
@@ -2486,6 +2612,26 @@ write_diagnostics_hdr_case_summary_fixture() {
 		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
 		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
 		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-excess.json"
+	[ "$status" -eq 65 ]
+
+	jq '.vmaf.entries[0].reasons = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]' \
+		"$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-overlong.json"
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-overlong.json"
+	[ "$status" -eq 65 ]
+
+	jq '.hdr.entries[0].classification = "preserved" | .hdr.entries[0].reasons = ["encoded-window-null"]' \
+		"$summary" >"$BATS_TEST_TMPDIR/diagnostic-summary-incompatible.json"
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$BATS_TEST_TMPDIR/diagnostic-summary-incompatible.json"
 	[ "$status" -eq 65 ]
 
 	run env \
