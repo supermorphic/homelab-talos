@@ -1522,6 +1522,74 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	done
 }
 
+@test "diagnostic VMAF temporal alignment requires a matching timeline discontinuity" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	evidence="$BATS_TEST_TMPDIR/temporal-alignment-evidence.json"
+	mutated="$BATS_TEST_TMPDIR/temporal-alignment-mismatch.json"
+	write_diagnostic_fixture_field "$fixture" cases temporal-alignment evidence "$evidence"
+	jq '
+		.settings[0].timeline.discontinuity.offset = 2
+	' "$evidence" >"$mutated"
+
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$mutated"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+}
+
+@test "diagnostic VMAF encoder-output requires a clean source window and no valid nonzero pairing" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	evidence="$BATS_TEST_TMPDIR/encoder-output-evidence.json"
+	dirty="$BATS_TEST_TMPDIR/encoder-output-dirty.json"
+	paired="$BATS_TEST_TMPDIR/encoder-output-valid-pair.json"
+	write_diagnostic_fixture_field "$fixture" cases encoder-output evidence "$evidence"
+
+	jq '
+		.settings[0].sourceWindow.status = "decode-error"
+	' "$evidence" >"$dirty"
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$dirty"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+
+	jq '
+		.settings |= map(
+			.timeline.zeroOffsetAligned = false |
+			.timeline.discontinuity = {offset: 1, kind: "duplicate"} |
+			.offsets |= map(
+				if .offset == 1 then
+					.ssim = 0.999 | .psnr = 42.5
+				else
+					.
+				end
+			)
+		)
+	' "$evidence" >"$paired"
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$paired"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+}
+
+@test "diagnostic VMAF measurement requires independent target metrics to stay nonzero" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	evidence="$BATS_TEST_TMPDIR/vmaf-measurement-evidence.json"
+	mutated="$BATS_TEST_TMPDIR/vmaf-measurement-metric-zero.json"
+	write_diagnostic_fixture_field "$fixture" cases vmaf-measurement evidence "$evidence"
+	jq '
+		.settings[0].offsets |= map(
+			if .offset == 0 then
+				.psnr = 0
+			elif .offset == -2 or .offset == -1 or .offset == 1 or .offset == 2 then
+				.psnr = -1
+			else
+				.
+			end
+		)
+	' "$evidence" >"$mutated"
+
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$mutated"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+}
+
 @test "diagnostic HDR normalizer reduces exact rationals without decimal rounding" {
 	fixture="$FIXTURES/encode-benchmark/diagnostic-hdr-cases.json"
 	evidence="$BATS_TEST_TMPDIR/hdr-normalize.json"
@@ -1576,6 +1644,39 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		actual="$output"
 		expected_json="$(jq -S -c . "$expected")"
 		[ "$actual" = "$expected_json" ]
+	done
+}
+
+@test "diagnostic HDR classifier fails closed for isolated absent malformed and conflicting stream probes" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-hdr-cases.json"
+	evidence="$BATS_TEST_TMPDIR/preserved-hdr-evidence.json"
+	write_diagnostic_fixture_field "$fixture" cases preserved evidence "$evidence"
+
+	for mutation in \
+		'.source.streamProbe = {status:"absent"}' \
+		'.source.streamProbe = {status:"malformed"}' \
+		'.source.streamProbe.metadata.maxFALL.numerator = 401'; do
+		mutated="$BATS_TEST_TMPDIR/stream-probe-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$evidence" >"$mutated"
+		run "$SCRIPTS/benchmark.sh" _test diagnostic-hdr-classify "$mutated"
+		[ "$status" -eq 0 ]
+		[ "$(jq -r '.classification' <<<"$output")" = 'unresolved-oracle' ]
+	done
+}
+
+@test "diagnostic HDR classifier rejects non-authoritative clip and encoded oracles" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-hdr-cases.json"
+	evidence="$BATS_TEST_TMPDIR/preserved-hdr-evidence.json"
+	write_diagnostic_fixture_field "$fixture" cases preserved evidence "$evidence"
+
+	for mutation in \
+		'.clip.trace.metadata.maxFALL.numerator = 401' \
+		'.encoded.trace.metadata.maxFALL.numerator = 401'; do
+		mutated="$BATS_TEST_TMPDIR/oracle-disagreement-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$evidence" >"$mutated"
+		run "$SCRIPTS/benchmark.sh" _test diagnostic-hdr-classify "$mutated"
+		[ "$status" -eq 0 ]
+		[ "$(jq -r '.classification' <<<"$output")" = 'unresolved-oracle' ]
 	done
 }
 

@@ -684,6 +684,10 @@ diagnostic_vmaf_classify() {
 				discontinuity: .timeline.discontinuity,
 				sourceStatus: .sourceWindow.status,
 				targetUniqueMinimum: (unique_target_minimum("ssim") and unique_target_minimum("psnr")),
+				independentTargetNonzero: (
+					([.offsets[] | select(.offset == 0)][0]) as $target |
+					($target.ssim != 0) and ($target.psnr != 0)
+				),
 				ssimBest: $ssim_best,
 				psnrBest: $psnr_best,
 				pair: (
@@ -696,6 +700,14 @@ diagnostic_vmaf_classify() {
 					else
 						{state: "unique", offset: $ssim_best.offset}
 					end
+				),
+				validNonzeroPairing: (
+					$ssim_best.state == "unique" and
+					$psnr_best.state == "unique" and
+					$ssim_best.offset == $psnr_best.offset and
+					$ssim_best.offset != 0 and
+					.timeline.discontinuity != null and
+					.timeline.discontinuity.offset == $ssim_best.offset
 				)
 			};
 		def classification($name; $reasons):
@@ -719,16 +731,9 @@ diagnostic_vmaf_classify() {
 				classification("unresolved"; ["missing-offset-window"])
 			else
 				($settings | map(summarize) | sort_by(.globalQuality)) as $summaries |
-				if any($summaries[]; .pair.state == "tie") then
-					classification("unresolved"; ["offset-best-tie"])
-				elif any($summaries[]; .pair.state == "disagreement") then
-					classification("unresolved"; ["ssim-psnr-offset-disagreement"])
-				elif any($summaries[]; .pair.state == "missing") then
-					classification("unresolved"; ["missing-offset-window"])
-				elif
+				if
 					all($summaries[];
-						(.pair.offset != 0) and .currentZero and (.resetZero | not) and
-						(.discontinuity != null) and (.discontinuity.offset == .pair.offset)
+						.validNonzeroPairing and .currentZero and (.resetZero | not)
 					) and
 					([ $summaries[].pair.offset ] | unique | length) == 1
 				then
@@ -741,7 +746,7 @@ diagnostic_vmaf_classify() {
 					all($summaries[];
 						.zeroAligned and .currentZero and .resetZero and
 						.targetUniqueMinimum and .sourceStatus == "clean" and
-						(.discontinuity == null) and (.pair.offset != 0)
+						(.discontinuity == null) and (.validNonzeroPairing | not)
 					)
 				then
 					classification("encoder-output-defect"; [
@@ -752,7 +757,8 @@ diagnostic_vmaf_classify() {
 				elif
 					all($summaries[];
 						.zeroAligned and .currentZero and .resetZero and
-						(.pair.offset == 0) and (.targetUniqueMinimum | not)
+						(.pair.offset == 0) and (.targetUniqueMinimum | not) and
+						.independentTargetNonzero
 					)
 				then
 					classification("vmaf-measurement-defect"; [
@@ -760,6 +766,12 @@ diagnostic_vmaf_classify() {
 						"independent-metrics-not-target-minimum",
 						"vmaf-only-exact-zero"
 					])
+				elif any($summaries[]; .pair.state == "tie") then
+					classification("unresolved"; ["offset-best-tie"])
+				elif any($summaries[]; .pair.state == "disagreement") then
+					classification("unresolved"; ["ssim-psnr-offset-disagreement"])
+				elif any($summaries[]; .pair.state == "missing") then
+					classification("unresolved"; ["missing-offset-window"])
 				else
 					classification("unresolved"; ["classification-predicate-not-met"])
 				end
@@ -943,12 +955,22 @@ diagnostic_hdr_classify() {
 				"authoritative-source-metadata",
 				"stream-probe-null"
 			])
-		elif (.clip.authoritative.status != "ok" or .clip.authoritative.metadata != .source.authoritative.metadata) then
+		elif .source.streamProbe.status == "absent" then
+			classification("unresolved-oracle"; ["source-stream-probe-absent"])
+		elif .source.streamProbe.status == "malformed" then
+			classification("unresolved-oracle"; ["source-stream-probe-malformed"])
+		elif .source.streamProbe.metadata != .source.authoritative.metadata then
+			classification("unresolved-oracle"; ["source-stream-probe-conflict"])
+		elif .clip.authoritative.status != "ok" then
+			classification("unresolved-oracle"; .clip.authoritative.reasons)
+		elif .clip.authoritative.metadata != .source.authoritative.metadata then
 			classification("clip-boundary-defect"; [
 				"authoritative-source-metadata",
 				"clip-metadata-changed"
 			])
-		elif (.encoded.authoritative.status != "ok" or .encoded.authoritative.metadata != .source.authoritative.metadata) then
+		elif .encoded.authoritative.status != "ok" then
+			classification("unresolved-oracle"; .encoded.authoritative.reasons)
+		elif .encoded.authoritative.metadata != .source.authoritative.metadata then
 			classification("encoder-output-defect"; [
 				"source-and-clip-metadata-agree",
 				"encoded-metadata-changed"
