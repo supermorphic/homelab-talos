@@ -1007,6 +1007,49 @@ diagnostic_publish_json() {
 	chmod 0444 "$destination"
 }
 
+diagnostic_invalidate_identity_evidence() {
+	local diagnostic_root="$1" vmaf_entries="$2" hdr_entries="$3"
+	local entries='[]' entry relative evidence updated
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || continue
+		relative="$(jq -e -r '.evidence | strings' <<<"$entry")" || return 65
+		evidence="$diagnostic_root/$relative"
+		updated="$(jq -e -c '
+			.status = "harness-blocked" |
+			.reason = "post-run-identity-drift" |
+			.settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift") |
+			.classification = {
+				schemaVersion:1, classification:"unresolved", reasons:["post-run-identity-drift"]
+			}
+		' "$evidence")" || return
+		diagnostic_publish_json "$evidence" "$updated" || return
+		entry="$(jq -c '
+			.status = "harness-blocked" | .classification = "unresolved"
+		' <<<"$entry")" || return
+		entries="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$entries")" || return
+	done < <(jq -c '.[]' <<<"$vmaf_entries")
+	vmaf_entries="$entries"
+	entries='[]'
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] || continue
+		relative="$(jq -e -r '.evidence | strings' <<<"$entry")" || return 65
+		evidence="$diagnostic_root/$relative"
+		updated="$(jq -e -c '
+			.status = "harness-blocked" |
+			.reason = "post-run-identity-drift" |
+			.classification = {
+				schemaVersion:1, classification:"unresolved-oracle", reasons:["post-run-identity-drift"]
+			}
+		' "$evidence")" || return
+		diagnostic_publish_json "$evidence" "$updated" || return
+		entry="$(jq -c '
+			.status = "harness-blocked" | .classification = "unresolved-oracle"
+		' <<<"$entry")" || return
+		entries="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$entries")" || return
+	done < <(jq -c '.[]' <<<"$hdr_entries")
+	jq -n -c --argjson vmaf "$vmaf_entries" --argjson hdr "$entries" '{vmaf:$vmaf,hdr:$hdr}'
+}
+
 diagnostic_status_merge() {
 	local first="$1" second="$2"
 	if [[ "$first" == 'failed' || "$second" == 'failed' ]]; then
@@ -1036,8 +1079,125 @@ diagnostic_terminal() {
 	}'
 }
 
+diagnostic_command_clip() {
+	array_json ffmpeg -nostdin -v error -ss "$1" -i '<source-title>' -t 90 \
+		-map 0:v:0 -c copy '<source-clip>'
+}
+
+diagnostic_command_encode() {
+	array_json ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
+		-filter_hw_device hw -i '<source-clip>' -map 0 -c:v hevc_qsv -preset veryslow \
+		-global_quality "$1" -look_ahead 0 -extbrc 0 -c:a copy -c:s copy \
+		-map_metadata 0 -map_chapters 0 '<encoded-output>'
+}
+
+diagnostic_command_decode() {
+	array_json ffmpeg -nostdin -v error -i '<encoded-output>' -map 0:v:0 -f null -
+}
+
+diagnostic_command_vmaf_frame() {
+	array_json ffprobe -v error -select_streams v:0 -read_intervals '0%+90' \
+		-show_streams -show_format -show_frames \
+		-show_entries 'stream=start_time,duration,time_base,avg_frame_rate:format=start_time,duration:frame=best_effort_timestamp_time,pkt_duration_time,duration_time,key_frame,pict_type' \
+		-of json "$1"
+}
+
+diagnostic_command_vmaf_current() {
+	array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -lavfi \
+		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<current-vmaf.json>' -f null -
+}
+
+diagnostic_command_vmaf_reset() {
+	array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -filter_complex \
+		'[0:v]setpts=PTS-STARTPTS[distorted];[1:v]setpts=PTS-STARTPTS[reference];[distorted][reference]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<reset-vmaf.json>' -f null -
+}
+
+diagnostic_command_offset_metric() {
+	local metric="$1" observed="$2" encoded="$3" metrics_token filter
+	case "$metric" in
+	ssim) metrics_token='<ssim-metrics>' ;;
+	psnr) metrics_token='<psnr-metrics>' ;;
+	*) return 64 ;;
+	esac
+	filter="[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded),setpts=PTS-STARTPTS[encoded];[source][encoded]$metric=stats_file=$metrics_token"
+	array_json ffmpeg -nostdin -v error -i '<source-clip>' -i '<encoded-output>' \
+		-filter_complex "$filter" -f null -
+}
+
+diagnostic_command_hdr_stream() {
+	array_json ffprobe -v error -select_streams v:0 -read_intervals '0%+10' \
+		-show_streams -show_entries stream_side_data -of json '<source-title>'
+}
+
+diagnostic_command_hdr_frame() {
+	array_json ffprobe -v error -select_streams v:0 -read_intervals "$2%+10" \
+		-show_frames -show_entries frame=side_data_list -of json "$1"
+}
+
+diagnostic_command_hdr_trace() {
+	array_json ffmpeg -nostdin -v verbose -ss "$2" -i "$1" -t 10 \
+		-map 0:v:0 -c:v copy -bsf:v trace_headers -f null -
+}
+
+diagnostic_append_command_identity() {
+	jq -c --arg command "$2" '. + [$command]' <<<"$1"
+}
+
+diagnostic_encoder_command_identities() {
+	local commands='[]' sample_id clip_id observed timestamp offset encoded command token start
+	while IFS=$'\t' read -r sample_id clip_id observed timestamp; do
+		for command in \
+			"$(diagnostic_command_clip "$timestamp")" \
+			"$(diagnostic_command_vmaf_frame '<source-clip>')" \
+			"$(diagnostic_command_vmaf_frame '<encoded-output>')" \
+			"$(diagnostic_command_encode 16)" \
+			"$(diagnostic_command_encode 30)" \
+			"$(diagnostic_command_decode)" \
+			"$(diagnostic_command_vmaf_current)" \
+			"$(diagnostic_command_vmaf_reset)"; do
+			commands="$(diagnostic_append_command_identity "$commands" "$command")" || return
+		done
+		for offset in -2 -1 0 1 2; do
+			encoded=$((observed + offset))
+			for command in \
+				"$(diagnostic_command_offset_metric ssim "$observed" "$encoded")" \
+				"$(diagnostic_command_offset_metric psnr "$observed" "$encoded")"; do
+				commands="$(diagnostic_append_command_identity "$commands" "$command")" || return
+			done
+		done
+	done < <(jq -r '. as $root | .diagnostics.vmafPanel[] as $entry |
+		($root.qualityPanel[] | select(.id == $entry.sampleId)) as $sample |
+		[$entry.sampleId,$entry.clipId,$entry.observedFrameIndex,$sample.clips[$entry.clipId]] | @tsv' "$samples_file")
+
+	while IFS=$'\t' read -r sample_id clip_id timestamp; do
+		for command in \
+			"$(diagnostic_command_clip "$timestamp")" \
+			"$(diagnostic_command_encode 16)" \
+			"$(diagnostic_command_decode)" \
+			"$(diagnostic_command_hdr_stream)"; do
+			commands="$(diagnostic_append_command_identity "$commands" "$command")" || return
+		done
+		while IFS=$'\t' read -r token start; do
+			for command in \
+				"$(diagnostic_command_hdr_frame "$token" "$start")" \
+				"$(diagnostic_command_hdr_trace "$token" "$start")"; do
+				commands="$(diagnostic_append_command_identity "$commands" "$command")" || return
+			done
+		done <<EOF
+<source-title>	0
+<source-title>	$timestamp
+<source-title>	<end-start>
+<source-clip>	0
+<encoded-output>	0
+EOF
+	done < <(jq -r '. as $root | .diagnostics.hdrPanel[] as $entry |
+		($root.qualityPanel[] | select(.id == $entry.sampleId)) as $sample |
+		[$entry.sampleId,$entry.clipId,$sample.clips[$entry.clipId]] | @tsv' "$samples_file")
+	jq -c 'unique' <<<"$commands"
+}
+
 diagnostic_preflight() {
-	local panel_samples="$1" filters bitstream_filters source frame_probe
+	local panel_samples="$1" filters bitstream_filters source frame_probe vmaf_probe_log vmaf_version
 	filters="$(ffmpeg -nostdin -hide_banner -filters)" || return
 	for filter in libvmaf ssim psnr; do
 		awk -v required="$filter" '$2 == required { found = 1 } END { exit !found }' <<<"$filters" || {
@@ -1068,6 +1228,26 @@ diagnostic_preflight() {
 		echo 'ffprobe required diagnostic frame fields are unavailable' >&2
 		return 2
 	}
+	vmaf_probe_log="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-vmaf.XXXXXX")" || return
+	if ! ffmpeg -nostdin -v error \
+		-f lavfi -i 'color=size=1920x1080:rate=1:duration=1' \
+		-f lavfi -i 'color=size=1920x1080:rate=1:duration=1' \
+		-lavfi "[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_probe_log:n_threads=1" \
+		-frames:v 1 -f null - >/dev/null 2>&1; then
+		rm -f -- "$vmaf_probe_log"
+		echo 'libvmaf runtime probe failed for diagnostics' >&2
+		return 2
+	fi
+	vmaf_version="$(jq -e -r '
+		.version | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"))
+	' "$vmaf_probe_log")" || {
+		rm -f -- "$vmaf_probe_log"
+		echo 'libvmaf runtime version is unavailable for diagnostics' >&2
+		return 2
+	}
+	rm -f -- "$vmaf_probe_log"
+	BENCHMARK_VMAF_VERSION="$vmaf_version"
+	export BENCHMARK_VMAF_VERSION
 }
 
 diagnostic_assigned_node_capability_gate() {
@@ -1146,20 +1326,16 @@ diagnostic_vmaf_setting() {
 	local encode_status=0 decode_status=0 output_identity='null' output_window='null'
 	local current_window='[]' reset_window='[]' current_target=0 reset_target=0
 	local offsets='[]' offset encoded_index metric_file metric_value offset_json
-	local encode_command decode_command current_command reset_command ssim_command psnr_command
+	local encode_command decode_command output_frame_command current_command reset_command ssim_command psnr_command
 	local current_filter reset_filter ssim_filter psnr_filter classifier_input timeline
 	local ssim_json psnr_json
 	mkdir -p "$scratch"
 
-	encode_command="$(array_json ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
-		-filter_hw_device hw -i '<source-clip>' -map 0 -c:v hevc_qsv -preset veryslow \
-		-global_quality "$setting" -look_ahead 0 -extbrc 0 -c:a copy -c:s copy \
-		-map_metadata 0 -map_chapters 0 '<encoded-output>')"
-	decode_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -map 0:v:0 -f null -)"
-	current_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -lavfi \
-		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<current-vmaf.json>' -f null -)"
-	reset_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -i '<source-clip>' -filter_complex \
-		'[0:v]setpts=PTS-STARTPTS[distorted];[1:v]setpts=PTS-STARTPTS[reference];[distorted][reference]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<reset-vmaf.json>' -f null -)"
+	encode_command="$(diagnostic_command_encode "$setting")"
+	decode_command="$(diagnostic_command_decode)"
+	output_frame_command="$(diagnostic_command_vmaf_frame '<encoded-output>')"
+	current_command="$(diagnostic_command_vmaf_current)"
+	reset_command="$(diagnostic_command_vmaf_reset)"
 
 	if [[ ! -f "$source_clip" || "$source_identity" == 'null' || "$source_window" == 'null' ]]; then
 		status='harness-blocked'
@@ -1220,8 +1396,7 @@ diagnostic_vmaf_setting() {
 		encoded_index=$((observed + offset))
 		metric_file="$scratch/ssim-target-$observed-offset-$offset-setting-$setting.log"
 		ssim_filter="[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]ssim=stats_file=$metric_file"
-		ssim_command="$(array_json ffmpeg -nostdin -v error -i '<source-clip>' -i '<encoded-output>' -filter_complex \
-			"[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]ssim=stats_file=<ssim-metrics>" -f null -)"
+		ssim_command="$(diagnostic_command_offset_metric ssim "$observed" "$encoded_index")"
 		metric_value='null'
 		if [[ "$status" == 'complete' ]]; then
 			if ffmpeg -nostdin -v error -i "$source_clip" -i "$output" -filter_complex "$ssim_filter" -f null - >/dev/null 2>&1 &&
@@ -1236,8 +1411,7 @@ diagnostic_vmaf_setting() {
 
 		metric_file="$scratch/psnr-target-$observed-offset-$offset-setting-$setting.log"
 		psnr_filter="[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]psnr=stats_file=$metric_file"
-		psnr_command="$(array_json ffmpeg -nostdin -v error -i '<source-clip>' -i '<encoded-output>' -filter_complex \
-			"[0:v]select=eq(n\\,$observed),setpts=PTS-STARTPTS[source];[1:v]select=eq(n\\,$encoded_index),setpts=PTS-STARTPTS[encoded];[source][encoded]psnr=stats_file=<psnr-metrics>" -f null -)"
+		psnr_command="$(diagnostic_command_offset_metric psnr "$observed" "$encoded_index")"
 		metric_value='null'
 		if [[ "$status" == 'complete' ]]; then
 			if ffmpeg -nostdin -v error -i "$source_clip" -i "$output" -filter_complex "$psnr_filter" -f null - >/dev/null 2>&1 &&
@@ -1305,13 +1479,15 @@ diagnostic_vmaf_setting() {
 		--argjson source_identity "$source_identity" --argjson output_identity "$output_identity" \
 		--argjson source_window "$source_window" --argjson output_window "$output_window" \
 		--argjson encode "$encode_command" --argjson decode "$decode_command" \
+		--argjson output_frame_command "$output_frame_command" \
 		--argjson current_command "$current_command" --argjson reset_command "$reset_command" \
 		--argjson current_window "$current_window" --argjson reset_window "$reset_window" \
 		--argjson offsets "$offsets" --argjson timeline "$timeline" --argjson classifier "$classifier_input" '{
 		globalQuality:$quality,status:$status,reason:(if $reason == "" then null else $reason end),
 		sourceIdentity:$source_identity,outputIdentity:$output_identity,
 		sourceFrameWindow:$source_window,outputFrameWindow:$output_window,
-		commands:{encode:$encode,decode:$decode,vmafCurrent:$current_command,vmafReset:$reset_command},
+		commands:{encode:$encode,decode:$decode,outputFrameProbe:$output_frame_command,
+			vmafCurrent:$current_command,vmafReset:$reset_command},
 		vmaf:{current:$current_window,reset:$reset_window},offsets:$offsets,timeline:$timeline,
 		classifierInput:$classifier
 	}'
@@ -1319,12 +1495,11 @@ diagnostic_vmaf_setting() {
 
 diagnostic_hdr_pair() {
 	local media="$1" token="$2" start="$3" duration="$4"
+	local recorded_start="${5:-$start}"
 	local decoded='null' trace='null' status='complete' reason=''
 	local decoded_command trace_command
-	decoded_command="$(array_json ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
-		-show_frames -show_entries frame=side_data_list -of json "<$token>")"
-	trace_command="$(array_json ffmpeg -nostdin -v verbose -ss "$start" -i "<$token>" -t "$duration" \
-		-map 0:v:0 -c:v copy -bsf:v trace_headers -f null -)"
+	decoded_command="$(diagnostic_command_hdr_frame "<$token>" "$recorded_start")"
+	trace_command="$(diagnostic_command_hdr_trace "<$token>" "$recorded_start")"
 	decoded="$("$script_directory/probe.sh" diagnostic-hdr-frame "$media" "$start" "$duration")" || {
 		status='harness-blocked'
 		reason='decoded-frame-oracle-failed'
@@ -1351,14 +1526,10 @@ diagnostic_hdr_evidence() {
 	local source_identity='null' clip_identity='null' output_identity='null' stream_oracle='null'
 	local beginning detail ending clip_pair encoded_pair source_windows classifier_file normalized='null' classification
 	local encode_command decode_command clip_command stream_command
-	clip_command="$(array_json ffmpeg -nostdin -v error -ss "$timestamp" -i '<source-title>' -t 90 -map 0:v:0 -c copy '<source-clip>')"
-	encode_command="$(array_json ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 \
-		-filter_hw_device hw -i '<source-clip>' -map 0 -c:v hevc_qsv -preset veryslow \
-		-global_quality 16 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy \
-		-map_metadata 0 -map_chapters 0 '<encoded-output>')"
-	decode_command="$(array_json ffmpeg -nostdin -v error -i '<encoded-output>' -map 0:v:0 -f null -)"
-	stream_command="$(array_json ffprobe -v error -select_streams v:0 -read_intervals '0%+10' \
-		-show_streams -show_entries stream_side_data -of json '<source-title>')"
+	clip_command="$(diagnostic_command_clip "$timestamp")"
+	encode_command="$(diagnostic_command_encode 16)"
+	decode_command="$(diagnostic_command_decode)"
+	stream_command="$(diagnostic_command_hdr_stream)"
 
 	source_identity="$(diagnostic_identity_json "$source")" || {
 		status='harness-blocked'
@@ -1389,7 +1560,7 @@ diagnostic_hdr_evidence() {
 	}
 	beginning="$(diagnostic_hdr_pair "$source" source-title 0 10)"
 	detail="$(diagnostic_hdr_pair "$source" source-title "$timestamp" 10)"
-	ending="$(diagnostic_hdr_pair "$source" source-title "$end_start" 10)"
+	ending="$(diagnostic_hdr_pair "$source" source-title "$end_start" 10 '<end-start>')"
 	clip_pair="$(diagnostic_hdr_pair "$clip" source-clip 0 10)"
 	for pair in "$beginning" "$detail" "$ending" "$clip_pair"; do
 		status="$(diagnostic_status_merge "$status" "$(jq -r '.status' <<<"$pair")")"
@@ -1480,8 +1651,9 @@ diagnostic_hdr_evidence() {
 diagnostics_mode() {
 	local panel_samples run_id='' run_directory diagnostic_root run_scratch manifest_temp
 	local overall_status='complete' sample_id clip_id observed timestamp source clip output
-	local sample source_identity source_window clip_command settings setting setting_json evidence classifier_file classification
+	local sample source_identity source_window clip_command source_frame_command settings setting setting_json evidence classifier_file classification
 	local entry_status summary vmaf_entries='[]' hdr_entries='[]' title_scratch evidence_path clip_ready
+	local post_identity_valid=1 invalidated_entries
 	panel_samples="$(jq -c '. as $root | [.qualityPanel[]? | select(.id as $sample_id |
 		([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] | index($sample_id) != null))]' "$samples_file")" || return
 	if ! require_running_image_evidence; then
@@ -1519,7 +1691,8 @@ diagnostics_mode() {
 		title_scratch="$run_scratch/vmaf-$sample_id-$clip_id"
 		mkdir -p "$title_scratch"
 		clip="$title_scratch/diagnostic-vmaf-$sample_id-$clip_id-frame-$observed-source.mkv"
-		clip_command="$(array_json ffmpeg -nostdin -v error -ss "$timestamp" -i '<source-title>' -t 90 -map 0:v:0 -c copy '<source-clip>')"
+		clip_command="$(diagnostic_command_clip "$timestamp")"
+		source_frame_command="$(diagnostic_command_vmaf_frame '<source-clip>')"
 		entry_status='complete'
 		if ! ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0:v:0 -c copy "$clip" >/dev/null 2>&1; then
 			entry_status='harness-blocked'
@@ -1557,11 +1730,13 @@ diagnostics_mode() {
 		}
 		evidence="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg sample "$sample_id" --arg clip "$clip_id" \
 			--argjson observed "$observed" --arg status "$entry_status" --argjson clip_command "$clip_command" \
+			--argjson source_frame_command "$source_frame_command" \
 			--argjson source_identity "$source_identity" --argjson source_window "$source_window" \
 			--argjson settings "$settings" --argjson classification "$classification" '{
 			schemaVersion:1,strategyId:$strategy,sampleId:$sample,clipId:$clip,
 			observedFrameIndex:$observed,status:$status,
-			sourceClip:{command:$clip_command,identity:$source_identity,frameWindow:$source_window},
+			sourceClip:{command:$clip_command,frameProbeCommand:$source_frame_command,
+				identity:$source_identity,frameWindow:$source_window},
 			settings:[$settings[] | del(.classifierInput)],classification:$classification
 		}')"
 		evidence_path="$diagnostic_root/vmaf/$sample_id/$clip_id/evidence.json"
@@ -1597,10 +1772,17 @@ diagnostics_mode() {
 	done < <(jq -r '.diagnostics.hdrPanel[] | [.sampleId,.clipId] | @tsv' "$samples_file")
 
 	if ! runtime_pre_encode_gate "$panel_samples" >/dev/null 2>&1; then
-		overall_status="$(diagnostic_status_merge "$overall_status" harness-blocked)"
+		post_identity_valid=0
 	fi
 	if ! require_running_image_evidence >/dev/null 2>&1; then
-		overall_status="$(diagnostic_status_merge "$overall_status" harness-blocked)"
+		post_identity_valid=0
+	fi
+	if ((post_identity_valid == 0)); then
+		invalidated_entries="$(diagnostic_invalidate_identity_evidence \
+			"$diagnostic_root" "$vmaf_entries" "$hdr_entries")" || return
+		vmaf_entries="$(jq -e -c '.vmaf' <<<"$invalidated_entries")" || return
+		hdr_entries="$(jq -e -c '.hdr' <<<"$invalidated_entries")" || return
+		overall_status='harness-blocked'
 	fi
 	summary="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg run "$run_id" --arg status "$overall_status" \
 		--argjson vmaf "$vmaf_entries" --argjson hdr "$hdr_entries" '{
@@ -2865,16 +3047,7 @@ encoder_commands_for_mode() {
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		read -r -a settings <<<"$CONTRACT_ICQ_SETTINGS"
 	elif [[ "$mode" == 'diagnostics' ]]; then
-		commands="$(jq -n -c '[
-			"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
-			"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
-			"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
-			"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
-			"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
-		]')"
+		commands="$(diagnostic_encoder_command_identities)" || return
 	elif [[ "$mode" == 'x265' ]]; then
 		commands="$(jq -n -c '["ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>"]')"
 		for ((setting = 10; setting <= 34; setting += 2)); do

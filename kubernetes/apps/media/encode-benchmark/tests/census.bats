@@ -86,17 +86,48 @@ EOF
 set -euo pipefail
 [[ "$*" == *'-ss 00:10:00.000 -i '* ]]
 [[ "$*" == *'-t 10 -map 0:v:0 -c:v copy -bsf:v trace_headers -f null -'* ]]
-printf '%s\n' \
-	'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
-	'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
-	'display_primaries_x[2] = 34000' 'display_primaries_y[2] = 16000' \
-	'white_point_x = 15635' 'white_point_y = 16450' \
-	'max_display_mastering_luminance = 10000000' \
-	'min_display_mastering_luminance = 1' \
-	'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
-if [[ "${BENCHMARK_DIAGNOSTIC_TRACE_CONFLICT:-0}" == '1' ]]; then
-	printf '%s\n' 'max_content_light_level = 999' >&2
-fi
+mastering_first_half() {
+	printf '%s\n' 'Mastering Display Colour Volume' \
+		'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
+		'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
+		'display_primaries_x[2] = 34000' >&2
+}
+mastering_first_half_conflicting() {
+	printf '%s\n' 'Mastering Display Colour Volume' \
+		'display_primaries_x[0] = 999' 'display_primaries_y[0] = 34500' \
+		'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
+		'display_primaries_x[2] = 34000' >&2
+}
+mastering_second_half() {
+	printf '%s\n' 'display_primaries_y[2] = 16000' \
+		'white_point_x = 15635' 'white_point_y = 16450' \
+		'max_display_mastering_luminance = 10000000' \
+		'min_display_mastering_luminance = 1' >&2
+}
+content_light() {
+	printf '%s\n' 'Content Light Level Information' \
+		'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
+}
+case "${BENCHMARK_DIAGNOSTIC_TRACE_SCENARIO:-complete}" in
+split-partial)
+	mastering_first_half
+	printf '%s\n' 'Mastering Display Colour Volume' >&2
+	mastering_second_half
+	content_light
+	;;
+conflicting-repeat)
+	mastering_first_half
+	mastering_second_half
+	mastering_first_half_conflicting
+	mastering_second_half
+	content_light
+	;;
+*)
+	content_light
+	mastering_first_half
+	mastering_second_half
+	;;
+esac
 EOF
 	chmod +x "$stub_bin/ffprobe" "$stub_bin/ffmpeg"
 }
@@ -365,7 +396,10 @@ EOF
 	run "$SCRIPTS/probe.sh" diagnostic-hdr-frame "$media" 0 10
 	[ "$status" -ne 0 ]
 
-	export BENCHMARK_DIAGNOSTIC_TRACE_CONFLICT=1
+	export BENCHMARK_DIAGNOSTIC_TRACE_SCENARIO=conflicting-repeat
+	run "$SCRIPTS/probe.sh" diagnostic-hdr-trace "$media" 00:10:00.000 10
+	[ "$status" -ne 0 ]
+	export BENCHMARK_DIAGNOSTIC_TRACE_SCENARIO=split-partial
 	run "$SCRIPTS/probe.sh" diagnostic-hdr-trace "$media" 00:10:00.000 10
 	[ "$status" -ne 0 ]
 }

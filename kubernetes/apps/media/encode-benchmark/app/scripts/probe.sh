@@ -148,32 +148,99 @@ diagnostic_hdr_probe() {
 	esac
 }
 
+diagnostic_hdr_trace_oracle() {
+	local trace_log="$1"
+	jq -Rn -c '
+		def field_event:
+			try (
+				capture("(?<key>display_primaries_[xy]\\[[0-2]\\]|white_point_[xy]|(?:max|min)_display_mastering_luminance|max_content_light_level|max_pic_average_light_level)[^=]*=[[:space:]]*(?<value>[0-9]+)") |
+				{type:"field",key:.key,value:(.value | tonumber)}
+			) catch null;
+		def collapse($expected):
+			if (.values | keys | sort) != ($expected | sort) then
+				error("partial trace_headers message")
+			elif any(.values[]; (unique | length) != 1) then
+				error("conflicting trace_headers message field")
+			else .values | with_entries(.value = .value[0]) end;
+		def mastering_fields: [
+			"display_primaries_x[0]", "display_primaries_y[0]",
+			"display_primaries_x[1]", "display_primaries_y[1]",
+			"display_primaries_x[2]", "display_primaries_y[2]",
+			"white_point_x", "white_point_y",
+			"max_display_mastering_luminance", "min_display_mastering_luminance"
+		];
+		def content_fields: ["max_content_light_level", "max_pic_average_light_level"];
+		[inputs |
+			if test("Mastering Display Colour Volume[[:space:]]*$") then
+				{type:"start",kind:"mastering"}
+			elif test("Content Light Level Information[[:space:]]*$") then
+				{type:"start",kind:"content"}
+			else field_event // empty end
+		] as $events |
+		([$events[] | select(.type == "start")] | length) as $heading_count |
+		([$events[] | select(.type == "field")] | length) as $field_count |
+		if $heading_count == 0 then
+			if $field_count == 0 then {status:"absent"}
+			else error("trace_headers fields lack message boundaries") end
+		else
+			reduce $events[] as $event (
+				{blocks:[],current:null};
+				if $event.type == "start" then
+					(if .current == null then . else .blocks += [.current] end) |
+					.current = {kind:$event.kind,values:{}}
+				elif .current == null then
+					error("trace_headers field precedes message boundary")
+				else
+					.current.values[$event.key] = ((.current.values[$event.key] // []) + [$event.value])
+				end
+			) |
+			if .current == null then . else .blocks += [.current] end |
+			[.blocks[] |
+				if .kind == "mastering" then {kind,values:collapse(mastering_fields)}
+				elif .kind == "content" then {kind,values:collapse(content_fields)}
+				else error("unknown trace_headers message") end
+			] as $blocks |
+			([$blocks[] | select(.kind == "mastering") | .values] | unique) as $mastering |
+			([$blocks[] | select(.kind == "content") | .values] | unique) as $content |
+			if ($mastering | length) != 1 or ($content | length) != 1 then
+				error("missing or conflicting trace_headers messages")
+			else
+				($mastering[0]) as $m | ($content[0]) as $c | {
+					status:"ok",
+					metadata:{
+						masteringDisplay:{
+							displayPrimaries:{
+								green:{x:{numerator:$m["display_primaries_x[0]"],denominator:50000},y:{numerator:$m["display_primaries_y[0]"],denominator:50000}},
+								blue:{x:{numerator:$m["display_primaries_x[1]"],denominator:50000},y:{numerator:$m["display_primaries_y[1]"],denominator:50000}},
+								red:{x:{numerator:$m["display_primaries_x[2]"],denominator:50000},y:{numerator:$m["display_primaries_y[2]"],denominator:50000}}
+							},
+							whitePoint:{x:{numerator:$m.white_point_x,denominator:50000},y:{numerator:$m.white_point_y,denominator:50000}},
+							luminance:{min:{numerator:$m.min_display_mastering_luminance,denominator:10000},max:{numerator:$m.max_display_mastering_luminance,denominator:10000}}
+						},
+						maxCLL:{numerator:$c.max_content_light_level,denominator:1},
+						maxFALL:{numerator:$c.max_pic_average_light_level,denominator:1}
+					}
+				}
+			end
+		end
+	' <"$trace_log"
+}
+
 diagnostic_hdr_trace() {
 	local path="$1" start="$2" duration="$3" trace_log trace_pid
-	local process_status=0 complete=0 values field
-	local -a required_fields=(
-		'display_primaries_x[0]' 'display_primaries_y[0]'
-		'display_primaries_x[1]' 'display_primaries_y[1]'
-		'display_primaries_x[2]' 'display_primaries_y[2]'
-		'white_point_x' 'white_point_y'
-		'max_display_mastering_luminance' 'min_display_mastering_luminance'
-		'max_content_light_level' 'max_pic_average_light_level'
-	)
+	local process_status=0 complete=0 oracle
 	[[ -f "$path" && -r "$path" ]] || return 66
 	diagnostic_validate_interval "$start" "$duration" || return
 	awk -v value="$duration" 'BEGIN { exit !(value <= 10) }' || return 64
 	trace_log="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-trace.XXXXXX")" || return
-	trap 'rm -f -- "$trace_log"' RETURN
 	: >"$trace_log"
 	ffmpeg -nostdin -v verbose -ss "$start" -i "$path" -t "$duration" \
 		-map 0:v:0 -c:v copy -bsf:v trace_headers -f null - >"$trace_log" 2>&1 &
 	trace_pid=$!
 	while kill -0 "$trace_pid" 2>/dev/null; do
-		complete=1
-		for field in "${required_fields[@]}"; do
-			grep -q -F "$field" "$trace_log" || complete=0
-		done
-		if ((complete)); then
+		if oracle="$(diagnostic_hdr_trace_oracle "$trace_log" 2>/dev/null)" &&
+			jq -e '.status == "ok"' <<<"$oracle" >/dev/null; then
+			complete=1
 			kill "$trace_pid" 2>/dev/null || true
 			break
 		fi
@@ -183,38 +250,17 @@ diagnostic_hdr_trace() {
 	wait "$trace_pid" 2>/dev/null
 	process_status=$?
 	set -e
-	if ((process_status != 0 && complete == 0)); then return "$process_status"; fi
-	values="$(jq -Rn '
-		[inputs |
-			capture("(?<key>display_primaries_[xy]\\[[0-2]\\]|white_point_[xy]|(?:max|min)_display_mastering_luminance|max_content_light_level|max_pic_average_light_level)[^=]*=[[:space:]]*(?<value>[0-9]+)") |
-			{key:.key,value:(.value | tonumber)}
-		] |
-		if any(group_by(.key)[]; ([.[].value] | unique | length) != 1) then
-			error("conflicting trace_headers metadata")
-		else reduce .[] as $item ({}; .[$item.key] = $item.value) end
-	' <"$trace_log")" || return
-	if [[ "$(jq -r 'length' <<<"$values")" == '0' ]]; then
-		printf '%s\n' '{"status":"absent"}'
-		return
+	if ((process_status != 0 && complete == 0)); then
+		rm -f -- "$trace_log"
+		return "$process_status"
 	fi
-	jq -e -n -c --argjson values "$values" '
-		if ($values | keys | length) != 12 then error("partial trace_headers metadata") else {
-			status:"ok",
-			metadata:{
-				masteringDisplay:{
-					displayPrimaries:{
-						green:{x:{numerator:$values["display_primaries_x[0]"],denominator:50000},y:{numerator:$values["display_primaries_y[0]"],denominator:50000}},
-						blue:{x:{numerator:$values["display_primaries_x[1]"],denominator:50000},y:{numerator:$values["display_primaries_y[1]"],denominator:50000}},
-						red:{x:{numerator:$values["display_primaries_x[2]"],denominator:50000},y:{numerator:$values["display_primaries_y[2]"],denominator:50000}}
-					},
-					whitePoint:{x:{numerator:$values.white_point_x,denominator:50000},y:{numerator:$values.white_point_y,denominator:50000}},
-					luminance:{min:{numerator:$values.min_display_mastering_luminance,denominator:10000},max:{numerator:$values.max_display_mastering_luminance,denominator:10000}}
-				},
-				maxCLL:{numerator:$values.max_content_light_level,denominator:1},
-				maxFALL:{numerator:$values.max_pic_average_light_level,denominator:1}
-			}
-		} end
-	'
+	set +e
+	oracle="$(diagnostic_hdr_trace_oracle "$trace_log")"
+	process_status=$?
+	set -e
+	rm -f -- "$trace_log"
+	((process_status == 0)) || return "$process_status"
+	printf '%s\n' "$oracle"
 }
 
 case "${1:-}" in

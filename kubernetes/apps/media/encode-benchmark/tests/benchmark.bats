@@ -574,6 +574,7 @@ create_diagnostic_tools() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+jq -c -n --args '$ARGS.positional' -- ffmpeg "$@" >>"$BENCHMARK_COMMAND_JSON_LOG"
 arguments="$*"
 case "$arguments" in
 *'-hide_banner -encoders'*)
@@ -607,12 +608,14 @@ esac
 last="${!#}"
 if [[ "$arguments" == *'-bsf:v trace_headers'* ]]; then
 	printf '%s\n' \
+		'Mastering Display Colour Volume' \
 		'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
 		'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
 		'display_primaries_x[2] = 34000' 'display_primaries_y[2] = 16000' \
 		'white_point_x = 15635' 'white_point_y = 16450' \
 		'max_display_mastering_luminance = 10000000' \
 		'min_display_mastering_luminance = 1' \
+		'Content Light Level Information' \
 		'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
 	exit 0
 fi
@@ -626,9 +629,12 @@ if [[ "$arguments" == *'libvmaf='* && "$arguments" == *'log_path='* ]]; then
 	metrics_path="${metrics_path%%:*}"
 	target="$(sed -n -E 's/^.*target-([0-9]+).*$/\1/p' <<<"$metrics_path")"
 	[[ -n "$target" ]] || target=2
-	if [[ "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" != 'libvmaf' ]]; then
+	if [[ "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" != 'libvmaf' ||
+		"$metrics_path" == *'/encode-benchmark-vmaf.'* ]]; then
 		mkdir -p "$(dirname "$metrics_path")"
-		jq -n --argjson first "$((target - 2))" --argjson last "$((target + 2))" '
+		jq -n --argjson first "$((target - 2))" --argjson last "$((target + 2))" \
+			--arg missing "${BENCHMARK_DIAGNOSTIC_MISSING_METRIC:-}" '
+			(if $missing == "libvmaf-version" then {} else {version:"3.0.0"} end) +
 			{frames:[range($first; $last + 1) | {frameNum:.,metrics:{vmaf:(if . == ($first + 2) then 0 else 96 end)}}]}
 		' >"$metrics_path"
 	fi
@@ -687,6 +693,7 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'ffprobe %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+jq -c -n --args '$ARGS.positional' -- ffprobe "$@" >>"$BENCHMARK_COMMAND_JSON_LOG"
 if [[ "${1:-}" == '-version' ]]; then
 	printf '%s\n' 'ffprobe version 8.1.2 fixture-build'
 	exit 0
@@ -737,7 +744,9 @@ EOF
 	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
 	export PATH="$stub_bin:$PATH"
 	export BENCHMARK_COMMAND_LOG="$BATS_TEST_TMPDIR/diagnostic-commands.log"
+	export BENCHMARK_COMMAND_JSON_LOG="$BATS_TEST_TMPDIR/diagnostic-command-argv.jsonl"
 	: >"$BENCHMARK_COMMAND_LOG"
+	: >"$BENCHMARK_COMMAND_JSON_LOG"
 }
 
 prepare_diagnostic_execution_run() {
@@ -1903,10 +1912,20 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 
 	[ -f "$diagnostic_root/manifest.json" ]
 	[ -f "$diagnostic_root/diagnostic-summary.json" ]
+	manifest_commands="$(jq -e -c '[.encoderCommands[] | fromjson]' "$diagnostic_root/manifest.json")"
 	run jq -e '
 		.mode == "diagnostics" and
 		.gpu.i915 == ("driver=i915;kernel=" + .node.kernel) and
-		.gpu.vpl == "backend=qsv;ffmpeg=8.1.2"
+		.gpu.vpl == "backend=qsv;ffmpeg=8.1.2" and
+		.vmaf == {model:"vmaf_4k_v0.6.1",version:"3.0.0"}
+	' "$diagnostic_root/manifest.json"
+	[ "$status" -eq 0 ]
+	run jq -e --argjson commands "$manifest_commands" '
+		($commands | length) > 0 and all($commands[]; type == "array" and length > 0) and
+		all($commands[]; index("-show_packets") == null) and
+		([$commands[] | select(any(.[]; contains("]ssim=stats_file=")))] | length) == 25 and
+		([$commands[] | select(any(.[]; contains("]psnr=stats_file=")))] | length) == 25 and
+		any($commands[]; . == ["ffmpeg","-nostdin","-v","error","-i","<encoded-output>","-i","<source-clip>","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=<current-vmaf.json>","-f","null","-"])
 	' "$diagnostic_root/manifest.json"
 	[ "$status" -eq 0 ]
 	[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
@@ -1923,16 +1942,23 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 	[ "$output" -eq 5 ]
 
-	run jq -e -s '
+	run jq -e -s --argjson manifest "$manifest_commands" '
+		def bound($command): $command as $needle | any($manifest[]; . == $needle);
 		length == 5 and
 		([.[].settings[]] | length) == 10 and
 		([.[].settings[].globalQuality] | sort) == [16,16,16,16,16,30,30,30,30,30] and
-		all(.[]; .status == "complete" and .classification.classification == "unresolved") and
+		all(.[];
+			.status == "complete" and .classification.classification == "unresolved" and
+			bound(.sourceClip.command) and bound(.sourceClip.frameProbeCommand)) and
 		all(.[].settings[];
+			bound(.commands.encode) and bound(.commands.decode) and
+			bound(.commands.outputFrameProbe) and bound(.commands.vmafCurrent) and
+			bound(.commands.vmafReset) and
 			(.commands.vmafCurrent | type == "array" and index("setpts=PTS-STARTPTS") == null) and
 			(.commands.vmafReset | map(select(contains("setpts=PTS-STARTPTS"))) | length) == 1 and
 			(.offsets | map(.offset)) == [-2,-1,0,1,2] and
 			all(.offsets[];
+				bound(.ssim.command) and bound(.psnr.command) and
 				(.ssim.command | join(" ") | contains("select=eq(n\\,")) and
 				(.ssim.command | join(" ") | ([scan("setpts=PTS-STARTPTS")] | length) == 2) and
 				(.psnr.command | join(" ") | contains("select=eq(n\\,")) and
@@ -1944,16 +1970,87 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	' "$diagnostic_root"/vmaf/*/*/evidence.json
 	[ "$status" -eq 0 ]
 
-	run jq -e -s '
+	run jq -e -s --argjson manifest "$manifest_commands" '
+		def bound($command): $command as $needle | any($manifest[]; . == $needle);
 		length == 3 and all(.[];
 			.status == "complete" and .globalQuality == 16 and
+			bound(.commands.clip) and bound(.commands.encode) and bound(.commands.decode) and
+			bound(.source.streamProbe.command) and
 			(.source.windows | keys) == ["beginning","detail","end"] and
-			all(.source.windows[]; .durationSeconds == 10 and (.trace.command | join(" ") | contains(" -t 10 "))) and
+			all(.source.windows[];
+				.durationSeconds == 10 and bound(.decoded.command) and bound(.trace.command) and
+				(.trace.command | join(" ") | contains(" -t 10 "))) and
 			.clip.durationSeconds == 10 and .encoded.durationSeconds == 10 and
+			bound(.clip.decoded.command) and bound(.clip.trace.command) and
+			bound(.encoded.decoded.command) and bound(.encoded.trace.command) and
 			(.clip.trace.command | join(" ") | contains(" -t 10 ")) and
 			(.encoded.trace.command | join(" ") | contains(" -t 10 "))
 		)
 	' "$diagnostic_root"/hdr/*/evidence.json
+	[ "$status" -eq 0 ]
+	vmaf_recorded_commands="$(jq -s -c '
+		[.[] | .sourceClip.command,.sourceClip.frameProbeCommand,
+			(.settings[] | .commands.encode,.commands.decode,.commands.outputFrameProbe,
+				.commands.vmafCurrent,.commands.vmafReset,
+				(.offsets[] | .ssim.command,.psnr.command))] | unique
+	' "$diagnostic_root"/vmaf/*/*/evidence.json)"
+	hdr_recorded_commands="$(jq -s -c '
+		[.[] | .commands.clip,.commands.encode,.commands.decode,.source.streamProbe.command,
+			(.source.windows[] | .decoded.command,.trace.command),
+			.clip.decoded.command,.clip.trace.command,
+			.encoded.decoded.command,.encoded.trace.command] | unique
+	' "$diagnostic_root"/hdr/*/evidence.json)"
+	recorded_commands="$(jq -n -c --argjson vmaf "$vmaf_recorded_commands" \
+		--argjson hdr "$hdr_recorded_commands" '$vmaf + $hdr | unique')"
+	run jq -e -n --argjson manifest "$manifest_commands" --argjson recorded "$recorded_commands" \
+		'($manifest | sort) == ($recorded | sort)'
+	[ "$status" -eq 0 ]
+	actual_commands="$(jq -s -c '
+		def has($value): $value as $needle | any(.[]; . == $needle);
+		def has_text($value): $value as $needle | any(.[]; contains($needle));
+		def diagnostic_command:
+			has("hevc_qsv") or has("0%+90") or has("stream_side_data") or
+			has("frame=side_data_list") or has("trace_headers") or
+			has_text("]ssim=stats_file=") or has_text("]psnr=stats_file=") or
+			(has_text("libvmaf=") and has_text("/diagnostic-vmaf-")) or
+			(has_text("/diagnostic-") and has("null")) or
+			(has_text("/diagnostic-") and has("90") and has("copy"));
+		def sanitize:
+			. as $command |
+			($command | index("-ss")) as $seek |
+			($command | index("-read_intervals")) as $interval |
+			[to_entries[] |
+				.key as $index | .value |
+				if ($command | has("trace_headers")) and $index == ($seek + 1) then "<start>"
+				elif ($command | has("frame=side_data_list")) and $index == ($interval + 1) then "<start>%+10"
+				elif test("/diagnostic-(vmaf|hdr)-.*-source[.]mkv$") then "<source-clip>"
+				elif test("/diagnostic-(vmaf|hdr)-.*-qsv-[0-9]+[.]mkv$") then "<encoded-output>"
+				elif test("/source[.]mkv$") then "<source-title>"
+				elif contains("libvmaf=") and contains("setpts=PTS-STARTPTS") then
+					sub("log_path=.*$";"log_path=<reset-vmaf.json>")
+				elif contains("libvmaf=") then sub("log_path=.*$";"log_path=<current-vmaf.json>")
+				elif contains("]ssim=stats_file=") then sub("stats_file=.*$";"stats_file=<ssim-metrics>")
+				elif contains("]psnr=stats_file=") then sub("stats_file=.*$";"stats_file=<psnr-metrics>")
+				else . end]
+			| map(if . == "<end-start>" then "<start>" else . end);
+		[.[] | select(diagnostic_command) | sanitize] | unique
+	' "$BENCHMARK_COMMAND_JSON_LOG")"
+	recorded_command_shapes="$(jq -n -c --argjson commands "$recorded_commands" '
+		def has($value): $value as $needle | any(.[]; . == $needle);
+		def sanitize:
+			. as $command |
+			($command | index("-ss")) as $seek |
+			($command | index("-read_intervals")) as $interval |
+			[to_entries[] |
+				.key as $index | .value |
+				if ($command | has("trace_headers")) and $index == ($seek + 1) then "<start>"
+				elif ($command | has("frame=side_data_list")) and $index == ($interval + 1) then "<start>%+10"
+				elif . == "<end-start>" then "<start>"
+				else . end];
+		[$commands[] | sanitize] | unique
+	')"
+	run jq -e -n --argjson actual "$actual_commands" --argjson recorded "$recorded_command_shapes" \
+		'($actual | sort) == ($recorded | sort)'
 	[ "$status" -eq 0 ]
 
 	run jq -e '
@@ -2004,6 +2101,15 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 2 ]
 	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
 	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	unset BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS
+
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_MISSING_METRIC=libvmaf-version
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 2 ]
+	[ "$(jq -r '.status' <<<"$(tail -n 1 <<<"$output")")" = 'harness-blocked' ]
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 0 ]
+	unset BENCHMARK_DIAGNOSTIC_MISSING_METRIC
 }
 
 # Catches incomplete or missing normalized oracle data being dropped with
@@ -2031,6 +2137,28 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		run jq -e '.status == "harness-blocked"' "$diagnostic_root/diagnostic-summary.json"
 		[ "$status" -eq 0 ]
 		[ "$(find "$diagnostic_root" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 8 ]
+		if [[ "$failure" == 'source-drift' || "$failure" == 'image-drift' ]]; then
+			run jq -e -s '
+				length == 5 and all(.[];
+					.status == "harness-blocked" and .reason == "post-run-identity-drift" and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]} and
+					all(.settings[]; .status == "harness-blocked" and .reason == "post-run-identity-drift"))
+			' "$diagnostic_root"/vmaf/*/*/evidence.json
+			[ "$status" -eq 0 ]
+			run jq -e -s '
+				length == 3 and all(.[];
+					.status == "harness-blocked" and .reason == "post-run-identity-drift" and
+					.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["post-run-identity-drift"]})
+			' "$diagnostic_root"/hdr/*/evidence.json
+			[ "$status" -eq 0 ]
+			run jq -e '
+				all(.vmaf.entries[];
+					.status == "harness-blocked" and .classification == "unresolved") and
+				all(.hdr.entries[];
+					.status == "harness-blocked" and .classification == "unresolved-oracle")
+			' "$diagnostic_root/diagnostic-summary.json"
+			[ "$status" -eq 0 ]
+		fi
 		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
 
 		unset BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW BENCHMARK_DIAGNOSTIC_MISSING_METRIC
