@@ -1928,6 +1928,46 @@ write_diagnostics_results_fixture() {
 	' >"$STUB_BENCHMARK_PODS_JSON"
 }
 
+write_diagnostics_results_fixture_from_file() {
+	local run_id="$1" pod_phase="$2" terminal_message_file="$3"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods.json"
+	unset STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
+	export STUB_BENCHMARK_PODS_JSON
+	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --rawfile message "$terminal_message_file" '
+		{
+			apiVersion:"v1",
+			items:[{
+				metadata:{
+					name:"encode-benchmark-diagnostics-fixture-pod",
+					labels:{
+						"app.kubernetes.io/name":"encode-benchmark",
+						"homelab-talos/benchmark-run":$run,
+						"homelab-talos/benchmark-mode":"diagnostics",
+						"job-name":"encode-benchmark-diagnostics-fixture"
+					},
+					ownerReferences:[{
+						apiVersion:"batch/v1",kind:"Job",name:"encode-benchmark-diagnostics-fixture",
+						uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true
+					}]
+				},
+				spec:{nodeName:"nuc2"},
+				status:{
+					phase:$phase,
+					containerStatuses:[{
+						name:"benchmark",
+						state:{terminated:{
+							exitCode:(if $phase == "Succeeded" then 0 else 1 end),
+							reason:(if $phase == "Succeeded" then "Completed" else "Error" end),
+							finishedAt:"2026-08-19T12:05:00Z",
+							message:$message
+						}}
+					}]
+				}
+			}]
+		}
+	' >"$STUB_BENCHMARK_PODS_JSON"
+}
+
 write_diagnostics_summary_fixture() {
 	local run_id="$1" status="$2" destination="$3"
 	jq -n -c --arg run "$run_id" --arg status "$status" '{
@@ -2628,6 +2668,74 @@ EOF
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
+}
+
+# Catches extracting the Pod termination message through command substitution,
+# which removes trailing line feeds before the raw byte-limit check.
+@test "results count exact diagnostics Pod message bytes including trailing line feeds" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+	canonical_bytes="$(LC_ALL=C printf '%s' "$terminal_message" | wc -c | tr -d '[:space:]')"
+
+	case_terminal="$BATS_TEST_TMPDIR/exact-limit-with-trailing-lf.json"
+	{
+		printf '%*s' "$((3072 - canonical_bytes - 1))" ''
+		printf '%s\n' "$terminal_message"
+	} >"$case_terminal"
+	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3072 ]
+	write_diagnostics_results_fixture_from_file "$run_id" Succeeded "$case_terminal"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == "mode=diagnostics phase=Succeeded run_id=$run_id "* ]]
+
+	case_terminal="$BATS_TEST_TMPDIR/over-limit-with-trailing-lf.json"
+	{
+		printf '%*s' "$((3072 - canonical_bytes))" ''
+		printf '%s\n' "$terminal_message"
+	} >"$case_terminal"
+	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3073 ]
+	write_diagnostics_results_fixture_from_file "$run_id" Failed "$case_terminal"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
+
+	case_terminal="$BATS_TEST_TMPDIR/over-limit-with-multiple-trailing-lfs.json"
+	{
+		printf '%*s' "$((3072 - canonical_bytes))" ''
+		printf '%s\n\n\n' "$terminal_message"
+	} >"$case_terminal"
+	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3075 ]
+	write_diagnostics_results_fixture_from_file "$run_id" Failed "$case_terminal"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
+}
+
+# Catches validating only the canonical payload and then appending an
+# unvalidated line-feed byte to the Kubernetes termination-log file.
+@test "diagnostic terminal producer writes only bounded canonical JSON bytes" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	canonical="$BATS_TEST_TMPDIR/diagnostic-terminal-canonical.json"
+	samples_json="$BATS_TEST_TMPDIR/diagnostic-samples.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	yq -r '.data."samples.json"' \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml" >"$samples_json"
+
+	run env \
+		BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_SAMPLES_FILE="$samples_json" \
+		BENCHMARK_TERMINATION_LOG_PATH="$termination" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" \
+		_test diagnostic-terminal complete "$run_id" "$summary"
+	[ "$status" -eq 0 ]
+	printf '%s' "$output" | jq -e -S -j -c . >"$canonical"
+	cmp -s "$canonical" "$termination"
+	[ "$(LC_ALL=C wc -c <"$termination" | tr -d '[:space:]')" -le 3072 ]
 }
 
 @test "diagnostic terminal producer rejects invalid status unknown excess and oversized reason payloads" {

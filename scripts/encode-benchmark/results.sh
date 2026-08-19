@@ -16,7 +16,8 @@ samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samp
 # shellcheck disable=SC1091
 source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
 samples_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-samples.XXXXXX")"
-trap 'rm -f -- "$samples_document"' EXIT
+diagnostic_terminal_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-terminal.XXXXXX")"
+trap 'rm -f -- "$samples_document" "$diagnostic_terminal_document"' EXIT
 yq -e -r '.data."samples.json"' "$samples_source" >"$samples_document"
 contract_load "$samples_document" || exit $?
 
@@ -72,18 +73,18 @@ diagnostic_terminal_schema_error() {
 }
 
 diagnostic_sanitize_terminal() {
-	local terminal_message="$1" requested_run_id="$2"
+	local terminal_message_file="$1" requested_run_id="$2"
 	local raw_bytes parsed reason artifact_location
-	if [[ -z "$terminal_message" ]]; then
+	if [[ ! -s "$terminal_message_file" ]]; then
 		printf '%s\n' 'no-sanitized-summary'
 		return 65
 	fi
-	raw_bytes="$(contract_diagnostics_terminal_byte_count "$terminal_message")" || return 65
+	raw_bytes="$(LC_ALL=C wc -c <"$terminal_message_file" | tr -d '[:space:]')" || return 65
 	((raw_bytes <= diagnostic_terminal_max_bytes)) || {
 		printf '%s\n' "$(diagnostic_terminal_schema_error raw-message-too-large)"
 		return 65
 	}
-	parsed="$(jq -e -c . <<<"$terminal_message" 2>/dev/null)" || {
+	parsed="$(jq -e -c . "$terminal_message_file" 2>/dev/null)" || {
 		printf '%s\n' 'no-sanitized-summary'
 		return 65
 	}
@@ -118,7 +119,7 @@ diagnostic_sanitize_terminal() {
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase terminal_message sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase sanitized_terminal
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
@@ -141,7 +142,7 @@ diagnostic_results() {
 		return 0
 		;;
 	Succeeded | Failed)
-		terminal_message="$(jq -r '
+		jq -j '
 			[
 				.status.containerStatuses[]?
 				| select(.name == "benchmark")
@@ -151,11 +152,11 @@ diagnostic_results() {
 			elif length == 0 then ""
 			else error("ambiguous diagnostic terminal message")
 			end
-		' <<<"$pod_json" 2>/dev/null)" || {
+		' <<<"$pod_json" >"$diagnostic_terminal_document" 2>/dev/null || {
 			printf '%s\n' "$(diagnostic_terminal_schema_error ambiguous-terminal-message)" >&2
 			return 1
 		}
-		sanitized_terminal="$(diagnostic_sanitize_terminal "$terminal_message" "$requested_run_id")" || {
+		sanitized_terminal="$(diagnostic_sanitize_terminal "$diagnostic_terminal_document" "$requested_run_id")" || {
 			printf '%s\n' "$sanitized_terminal" >&2
 			return 1
 		}

@@ -1267,7 +1267,7 @@ diagnostic_emit_terminal() {
 		return 65
 	}
 	mkdir -p "$(dirname "$path")"
-	printf '%s\n' "$canonical" >"$path" || return
+	printf '%s' "$canonical" >"$path" || return
 	printf '%s\n' "$canonical"
 }
 
