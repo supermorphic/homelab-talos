@@ -195,6 +195,9 @@ contract_normalize_run_identity() {
 				(.globalQuality as $value | [16,18,20,22,24,26,28,30] | index($value) != null) and
 				(.qualityRunId | run_id)) and
 			([.[].cohort] | unique | length) == length;
+		def diagnostics_encoder_commands:
+			type == "array" and length > 0 and
+			all(.[]; type == "string" and length > 0);
 		def diagnostics_upstream:
 			type == "object" and keys == ["diagnostics"] and
 			(.diagnostics | type == "object" and
@@ -244,14 +247,23 @@ contract_normalize_run_identity() {
 				(.size | type == "number" and . >= 0 and floor == .) and
 				(.sha256 | digest)
 			] | all))) and
-			(.encoderCommands | (type == "array" and ([.[] | type == "string"] | all))) and
+			((if $mode == "diagnostics"
+				then (.encoderCommands | diagnostics_encoder_commands)
+				else (.encoderCommands | (type == "array" and ([.[] | type == "string"] | all)))
+			end)) and
 			((if $mode == "diagnostics" then .selectedSettings == [] else (.selectedSettings | selected_settings) end)) and
 			((if $mode == "diagnostics" then (.upstream | diagnostics_upstream) else (.upstream | type == "object") end)) and
 			(.savingsSeed | type == "number" and floor == .) and
 			(.clientDevice == null or (.clientDevice | type == "string")) and
 			((.gpu == null and (.cpu | type == "object")) or
 				((.gpu | type == "object") and .cpu == null))
-		then . else error("invalid benchmark identity") end
+		then . else
+			if $mode == "diagnostics" and (.encoderCommands | diagnostics_encoder_commands | not) then
+				error("diagnostic command identity is missing or malformed")
+			else
+				error("invalid benchmark identity")
+			end
+		end
 	' <<<"$input_json"
 }
 

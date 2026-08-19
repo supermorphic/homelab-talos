@@ -444,13 +444,44 @@ diagnostic_expected_panel_sha() {
 	unset BENCHMARK_ENCODER_COMMANDS_JSON
 
 	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[ "$output" = 'diagnostic command identity is missing or malformed' ]
+	[ "$status" -eq 5 ]
+	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 
 	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
 	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[ "$output" = 'diagnostic command identity is missing or malformed' ]
+	[ "$status" -eq 5 ]
+	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
+}
+
+@test "diagnostics fixture identity refuses missing command identities" {
+	prepare_diagnostic_samples
+	expected_sources="$(diagnostic_expected_sources)"
+	expected_panel_sha="$(diagnostic_expected_panel_sha)"
+	fixture="$BATS_TEST_TMPDIR/diagnostics-identity-fixture.json"
+	jq \
+		--argjson sources "$expected_sources" \
+		--arg panel_sha "$expected_panel_sha" '
+		.mode = "diagnostics" |
+		.encoderCommands = [] |
+		.sources = $sources |
+		.selectedSettings = [] |
+		.upstream = {
+			diagnostics: {
+				manifestSchemaVersion: 1,
+				resultSchemaVersion: 1,
+				acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
+				decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
+				historicalQualityRunId: "20260817T233546Z-debc0498",
+				historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
+				panelSha256: $panel_sha
+			}
+		}
+	' "$BATS_TEST_DIRNAME/fixtures/manifests/identity.json" >"$fixture"
+	export BENCHMARK_IDENTITY_FIXTURE="$fixture"
+
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 5 ]
+	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 }
 
 @test "diagnostics resume refuses panel timestamp and historical scope drift" {

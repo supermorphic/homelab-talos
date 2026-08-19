@@ -284,15 +284,6 @@ discover_identity() {
 	)
 
 	encoder_commands="${BENCHMARK_ENCODER_COMMANDS_JSON:-[]}"
-	if [[ "$mode" == 'diagnostics' ]]; then
-		jq -e '
-			type == "array" and length > 0 and
-			all(.[]; type == "string" and length > 0)
-		' <<<"$encoder_commands" >/dev/null || {
-			echo 'diagnostic command identity is missing or malformed' >&2
-			return 65
-		}
-	fi
 	node_name="${NODE_NAME:-}"
 	kernel="$(uname -r)"
 	i915="${BENCHMARK_I915_VERSION:-}"
