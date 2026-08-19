@@ -430,6 +430,40 @@ prepare_evidence_source() {
 	export ENCODE_BENCHMARK_APP_DIR="$evidence_app"
 }
 
+write_deployed_samples_configmap() {
+	local samples_json="$1"
+	DEPLOYED_SAMPLES_JSON="$samples_json" yq -n '
+		.apiVersion = "v1" |
+		.kind = "ConfigMap" |
+		.metadata.name = "encode-benchmark-samples" |
+		.metadata.namespace = "media" |
+		.data."samples.json" = load_str(strenv(DEPLOYED_SAMPLES_JSON))
+	' >"$STUB_CAPTURE_DIR/ConfigMap-encode-benchmark-samples.yaml"
+}
+
+prepare_deployed_diagnostics_contract() {
+	local deployed_samples="$BATS_TEST_TMPDIR/deployed-diagnostics-samples.json"
+	yq -e -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$deployed_samples"
+	write_deployed_samples_configmap "$deployed_samples"
+}
+
+tamper_deployed_diagnostics_contract() {
+	local jq_filter="$1"
+	local deployed_samples="$BATS_TEST_TMPDIR/deployed-diagnostics-samples.json"
+	jq "$jq_filter" "$deployed_samples" >"$deployed_samples.tmp"
+	mv -f -- "$deployed_samples.tmp" "$deployed_samples"
+	write_deployed_samples_configmap "$deployed_samples"
+}
+
+assert_call_precedes_first_create() {
+	local pattern="$1"
+	awk -F '\t' -v pattern="$pattern" '
+		$1 == "kubectl" && $2 ~ /(^| )create( |$)/ && first_create == 0 { first_create = NR }
+		$1 == "kubectl" && $2 ~ pattern && first_match == 0 { first_match = NR }
+		END { exit !(first_match > 0 && (first_create == 0 || first_match < first_create)) }
+	' "$STUB_CALLS"
+}
+
 set_capability_evidence() {
 	local status="$1" evidence="$2"
 	CAPABILITY_STATUS="$status" CAPABILITY_EVIDENCE="$evidence" yq -i '
@@ -850,6 +884,85 @@ set_dispatch_chosen_record() {
 	[[ "$output" == *"run_id=$run_id"* ]]
 }
 
+# Catches diagnostics remaining unreachable behind the generic run-mode allowlist
+# or using the generic confirmation path instead of its dedicated operator gate.
+@test "diagnostics requires the exact confirmation before creating a Job" {
+	prepare_deployed_diagnostics_contract
+	assert_guard_refuses ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM run:encode-benchmark:quality run diagnostics
+
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	run_dispatch run diagnostics
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
+	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 1 ]
+	job="$(job_capture)"
+	assert_hardened_job "$job"
+	[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '14400' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh diagnostics' ]
+	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$job")" = 'false' ]
+	[ "$(yq -r '.spec.template.spec.securityContext.runAsNonRoot' "$job")" = 'true' ]
+	[ "$(yq -r '.spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].labelSelector.matchExpressions[0].values[0]' "$job")" = 'plex' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915"' "$job")" = '1' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915"' "$job")" = '1' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .readOnly' "$job")" = 'true' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "out") | .mountPath' "$job")" = '/out' ]
+	assert_call_precedes_first_create ' get configmap/encode-benchmark-samples '
+}
+
+# Catches diagnostics dispatch trusting stale or drifted deployed scope instead of
+# proving the live samples ConfigMap still matches the committed accepted decision.
+@test "diagnostics requires passing capability evidence and a matching deployed contract before create" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+
+	set_capability_evidence pending '{"nodes":[]}'
+	run_dispatch run diagnostics
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'capability evidence'* ]]
+	assert_no_mutations
+
+	set_capability_evidence verified "$(valid_capability_evidence)"
+	tamper_deployed_diagnostics_contract '.diagnostics.acceptedFindingsSha256 = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+	run_dispatch run diagnostics
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'accepted findings digest'* ]]
+	assert_no_mutations
+
+	prepare_deployed_diagnostics_contract
+	tamper_deployed_diagnostics_contract '.diagnostics.decisionSha256 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+	run_dispatch run diagnostics
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'decision digest'* ]]
+	assert_no_mutations
+
+	prepare_deployed_diagnostics_contract
+	tamper_deployed_diagnostics_contract '.diagnostics.vmafSettings = [16, 28]'
+	run_dispatch run diagnostics
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'diagnostics contract is missing or malformed'* ]]
+	assert_no_mutations
+}
+
+# Catches diagnostics resume or selector parsing that could mutate historical
+# quality/findings artifacts or widen the fixed contract beyond its sealed panel.
+@test "diagnostics rejects historical run ids and extra positional arguments before mutation" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	quality_run_id="$(yq -e -r '.data."samples.json" | from_json | .diagnostics.historicalQualityRunId' "$evidence_app/samples.yaml")"
+	findings_run_id="$(yq -e -r '.data."samples.json" | from_json | .diagnostics.historicalFindingsRunId' "$evidence_app/samples.yaml")"
+
+	for args in \
+		"$quality_run_id" \
+		"$findings_run_id" \
+		'20260820T120000Z-feedbeef avc-grain-memento' \
+		'20260820T120000Z-feedbeef 30' \
+		'20260820T120000Z-feedbeef findings'; do
+		run_dispatch run diagnostics $args
+		[ "$status" -ne 0 ]
+		assert_no_mutations
+	done
+}
+
 # Catches the CPU reference path inheriting GPU resources or the QSV capability
 # gate, losing its exact sample/node confirmation, or dropping established Job
 # mounts, security, and Plex separation while pinning the selected node.
@@ -1209,6 +1322,40 @@ EOF
 	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
 		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-x265 \
 		avc-grain-memento nuc3 "$run_id"
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+}
+
+# Catches the dedicated operator entrypoint dropping deployed-source checks,
+# widening arity beyond one optional run ID, or obscuring the exact confirmation.
+@test "diagnostics Just interface routes only an optional run id through the dedicated guard" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-diagnostics
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh diagnostics' ]
+
+	rm -f -- "$STUB_CAPTURE_DIR"/*
+	: >"$STUB_CALLS"
+	unset ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-diagnostics
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM'* ]]
+	assert_no_mutations
+
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-diagnostics \
+		20260820T120000Z-feedbeef avc-grain-memento
+	[ "$status" -ne 0 ]
+	assert_no_mutations
+
+	export STUB_GIT_STALE=1
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" \
+		kubeconfig="$KUBECONFIG_FIXTURE" encode-benchmark-diagnostics
 	[ "$status" -ne 0 ]
 	assert_no_mutations
 }

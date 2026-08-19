@@ -708,6 +708,25 @@ encode-benchmark-findings inputs_file run_id="": require-bash
     if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
     scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
 
+# Create one guarded diagnostics Job from the deployed diagnostics contract.
+# Set ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM=run:encode-benchmark:diagnostics.
+encode-benchmark-diagnostics run_id="": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run_id={{quote(run_id)}}
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark diagnostics' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    [[ "${ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM:-}" == 'run:encode-benchmark:diagnostics' ]] || {
+      echo 'Set ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM=run:encode-benchmark:diagnostics.' >&2
+      exit 64
+    }
+    args=(run diagnostics)
+    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
+
 # Thin finalist convenience alias. The shared run recipe owns the single source
 # guard and dispatch path; finalist confirmation remains run/sample-bound.
 encode-benchmark-finalist run_id sample_id:

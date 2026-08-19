@@ -147,6 +147,63 @@ require_capability_evidence() {
 	return 1
 }
 
+require_deployed_diagnostics_contract() {
+	local configmap_json deployed_document deployed_accept deployed_decision
+	local deployed_quality_run deployed_findings_run deployed_panel_sha committed_panel_sha
+	configmap_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get \
+		configmap/encode-benchmark-samples --output json)" || return
+	deployed_document="$temp_directory/deployed-samples.json"
+	yq -p=json -e -r '.data."samples.json"' <<<"$configmap_json" >"$deployed_document" || {
+		echo 'deployed diagnostics contract is missing or malformed' >&2
+		return 65
+	}
+	contract_validate_diagnostics_scope "$deployed_document" >/dev/null || {
+		echo 'deployed diagnostics contract is missing or malformed' >&2
+		return 65
+	}
+	deployed_accept="$(jq -r '.diagnostics.acceptedFindingsSha256' "$deployed_document")"
+	[[ "$deployed_accept" == "$CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256" ]] || {
+		echo 'deployed diagnostics accepted findings digest does not match committed source' >&2
+		return 65
+	}
+	deployed_decision="$(jq -r '.diagnostics.decisionSha256' "$deployed_document")"
+	[[ "$deployed_decision" == "$CONTRACT_DIAGNOSTICS_DECISION_SHA256" ]] || {
+		echo 'deployed diagnostics decision digest does not match committed source' >&2
+		return 65
+	}
+	deployed_quality_run="$(jq -r '.diagnostics.historicalQualityRunId' "$deployed_document")"
+	deployed_findings_run="$(jq -r '.diagnostics.historicalFindingsRunId' "$deployed_document")"
+	[[ "$deployed_quality_run" == "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" &&
+		"$deployed_findings_run" == "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" ]] || {
+		echo 'deployed diagnostics historical run references do not match committed source' >&2
+		return 65
+	}
+	deployed_panel_sha="$(contract_diagnostics_panel_sha256 "$deployed_document")" || {
+		echo 'deployed diagnostics panel identity is malformed' >&2
+		return 65
+	}
+	committed_panel_sha="$(contract_diagnostics_panel_sha256 "$samples_document")" || {
+		echo 'committed diagnostics panel identity is malformed' >&2
+		return 65
+	}
+	[[ "$deployed_panel_sha" == "$committed_panel_sha" ]] || {
+		echo 'deployed diagnostics panel identity does not match committed source' >&2
+		return 65
+	}
+}
+
+require_diagnostics_run_id() {
+	local run_id="$1"
+	[[ "$run_id" != "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" ]] || {
+		echo "diagnostics run id reuses the historical quality run id: $run_id" >&2
+		return 65
+	}
+	[[ "$run_id" != "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" ]] || {
+		echo "diagnostics run id reuses the historical findings run id: $run_id" >&2
+		return 65
+	}
+}
+
 contention_passing_nodes() {
 	local required="$1"
 	mapfile -t contention_nodes < <(contract_passing_icq_nodes "$samples_document")
@@ -783,6 +840,13 @@ dispatch_run() {
 	local client_device='' playback_sample='' candidate_output job_json image_configmap='' cleanup_index required_nodes=0
 	local -a candidates=() contention_nodes=() eligible_nodes=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
 	case "$mode" in
+	diagnostics)
+		(($# == 1 || $# == 2)) || return 64
+		supplied_run_id="${2:-}"
+		if [[ -n "$supplied_run_id" ]]; then validate_run_id "$supplied_run_id" || return; fi
+		require_confirmation ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM \
+			'run:encode-benchmark:diagnostics' || return
+		;;
 	quality | savings)
 		(($# == 1 || $# == 2)) || return 64
 		supplied_run_id="${2:-}"
@@ -849,10 +913,17 @@ dispatch_run() {
 		;;
 	esac
 	if [[ -n "$supplied_run_id" && -z "$contention_case" ]]; then validate_run_id "$supplied_run_id" || return; fi
-	if [[ "$mode" != 'x265' ]]; then
+	if [[ "$mode" != 'x265' && "$mode" != 'diagnostics' ]]; then
 		require_confirmation ENCODE_BENCHMARK_RUN_CONFIRM "run:encode-benchmark:$mode" || return
 	fi
 	load_source || return
+	if [[ "$mode" == 'diagnostics' ]]; then
+		contract_require_diagnostics "$samples_document" || return
+		require_deployed_diagnostics_contract || return
+		if [[ -n "$supplied_run_id" ]]; then
+			require_diagnostics_run_id "$supplied_run_id" || return
+		fi
+	fi
 	if [[ "$mode" == 'finalist' ]]; then
 		require_finalist_authorization "$sample_id" || return
 	elif [[ "$mode" == 'x265' ]]; then
@@ -958,6 +1029,11 @@ dispatch_run() {
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh finalist "$run_id" "$sample_id"
 		FINALIST_CONFIRM="$ENCODE_BENCHMARK_FINALIST_CONFIRM" yq -i '
 			.spec.template.spec.containers[0].env += [{"name":"ENCODE_BENCHMARK_FINALIST_CONFIRM","value":strenv(FINALIST_CONFIRM)}]
+		' "$job"
+	elif [[ "$mode" == 'diagnostics' ]]; then
+		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh diagnostics
+		yq -i '
+			.spec.activeDeadlineSeconds = 14400
 		' "$job"
 	elif [[ "$mode" == 'x265' ]]; then
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" \
