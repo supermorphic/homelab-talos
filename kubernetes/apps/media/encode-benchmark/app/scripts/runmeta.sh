@@ -93,7 +93,8 @@ normalize_identity() {
 discover_identity() {
 	local mode="$1"
 	local script_directory configured_image dispatched_image running_image configured_digest dispatched_digest running_digest
-	local samples_digest savings_seed execution_class selected_settings upstream_identity findings_inputs_sha256=''
+	local samples_digest savings_seed execution_class selected_settings upstream_identity diagnostics_identity
+	local diagnostics_panel_sha='' findings_inputs_sha256=''
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha probe_log=''
 	local savings_cohorts=''
@@ -140,7 +141,9 @@ discover_identity() {
 	}
 	samples_digest="$(sha256_file "$samples_file")"
 	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
-	if [[ -v BENCHMARK_SELECTED_SETTINGS_JSON ]]; then
+	if [[ "$mode" == 'diagnostics' ]]; then
+		selected_settings='[]'
+	elif [[ -v BENCHMARK_SELECTED_SETTINGS_JSON ]]; then
 		selected_settings="$BENCHMARK_SELECTED_SETTINGS_JSON"
 	else
 		selected_settings="$(jq -e -c '
@@ -169,6 +172,33 @@ discover_identity() {
 		echo 'upstream identity must be a JSON object' >&2
 		return 65
 	}
+	if [[ "$mode" == 'diagnostics' ]]; then
+		diagnostics_panel_sha="$(contract_diagnostics_panel_sha256 "$samples_file")" || {
+			echo 'diagnostic panel identity is malformed' >&2
+			return 65
+		}
+		diagnostics_identity="$(jq -n -c \
+			--argjson manifest_schema "$CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA" \
+			--argjson result_schema "$CONTRACT_DIAGNOSTICS_RESULT_SCHEMA" \
+			--arg accepted_findings_sha "$CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256" \
+			--arg decision_sha "$CONTRACT_DIAGNOSTICS_DECISION_SHA256" \
+			--arg historical_quality_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" \
+			--arg historical_findings_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" \
+			--arg panel_sha "$diagnostics_panel_sha" '
+			{
+				diagnostics: {
+					manifestSchemaVersion: $manifest_schema,
+					resultSchemaVersion: $result_schema,
+					acceptedFindingsSha256: $accepted_findings_sha,
+					decisionSha256: $decision_sha,
+					historicalQualityRunId: $historical_quality_run,
+					historicalFindingsRunId: $historical_findings_run,
+					panelSha256: $panel_sha
+				}
+			}'
+		)" || return 65
+		upstream_identity="$diagnostics_identity"
+	fi
 	if [[ "$mode" == 'findings' ]]; then
 		jq -e --arg digest "$findings_inputs_sha256" '.findingsInputsSha256 == $digest' <<<"$upstream_identity" >/dev/null || {
 			echo 'findings upstream identity does not bind the input digest' >&2
@@ -194,6 +224,11 @@ discover_identity() {
 	findings)
 		panel='empty'
 		sources='[]'
+		;;
+	diagnostics)
+		panel='. as $root | .qualityPanel[]? | select(.id as $sample_id |
+			([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] |
+				index($sample_id) != null))'
 		;;
 	quality) panel='.qualityPanel[]?' ;;
 	x265)

@@ -4,6 +4,69 @@
 contract_load() {
 	local file="$1"
 	jq -e '
+		. as $root |
+		def exact_keys($expected): type == "object" and keys == $expected;
+		def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+		def compact_utc:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z$") and
+			. as $original |
+			(capture("^(?<year>[0-9]{4})(?<month>[0-9]{2})(?<day>[0-9]{2})T(?<hour>[0-9]{2})(?<minute>[0-9]{2})(?<second>[0-9]{2})Z$") |
+				"\(.year)-\(.month)-\(.day)T\(.hour):\(.minute):\(.second)Z") as $iso |
+			try (($iso | fromdateiso8601 | strftime("%Y%m%dT%H%M%SZ")) == $original) catch false;
+		def run_id:
+			type == "string" and test("^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$") and
+			(split("-")[0] | compact_utc);
+		def sample_id: type == "string" and test("^[a-z0-9][a-z0-9._-]*$");
+		def clip_id: type == "string" and test("^[a-z0-9][a-z0-9._-]*$");
+		def quality_clip_exists($sample; $clip):
+			any($root.qualityPanel[]?;
+				.id == $sample and (.clips | (type == "object" and has($clip))));
+		def diagnostics_contract:
+			exact_keys([
+				"acceptedFindingsSha256", "decisionSha256", "frameOffsets", "frameRadius",
+				"hdrPanel", "hdrSetting", "historicalFindingsRunId", "historicalQualityRunId",
+				"resultSchemaVersion", "schemaVersion", "strategyId", "traceWindowSeconds",
+				"vmafPanel", "vmafSettings"
+			]) and
+			.schemaVersion == 1 and
+			.resultSchemaVersion == 1 and
+			.strategyId == "qsv-hevc-icq-v1" and
+			(.acceptedFindingsSha256 | digest) and
+			(.decisionSha256 | digest) and
+			(.historicalQualityRunId | run_id) and
+			(.historicalFindingsRunId | run_id) and
+			.vmafSettings == [16, 30] and
+			.hdrSetting == 16 and
+			.frameRadius == 2 and
+			.frameOffsets == [-2, -1, 0, 1, 2] and
+			.traceWindowSeconds == 10 and
+			(.vmafPanel | type == "array" and length == 5 and
+				all(.[];
+					exact_keys(["clipId", "observedFrameIndex", "sampleId"]) and
+					(.sampleId | sample_id) and
+					(.clipId | clip_id) and
+					(.observedFrameIndex | type == "number" and floor == . and . >= 0) and
+					quality_clip_exists(.sampleId; .clipId)) and
+				([.[] | "\(.sampleId)|\(.clipId)"] | unique | length) == 5 and
+				([.[] | "\(.sampleId)/\(.clipId)/\(.observedFrameIndex)"] == [
+					"avc-clean-coco/motion/1641",
+					"avc-grain-memento/dark/523",
+					"avc-grain-memento/detail/370",
+					"vc1-fugitive/detail/781",
+					"vc1-fugitive/motion/798"
+				])) and
+			(.hdrPanel | type == "array" and length == 3 and
+				all(.[];
+					exact_keys(["clipId", "sampleId"]) and
+					(.sampleId | sample_id) and
+					(.clipId | clip_id) and
+					quality_clip_exists(.sampleId; .clipId)) and
+				([.[] | .sampleId] | unique | length) == 3 and
+				([.[] | "\(.sampleId)/\(.clipId)"] == [
+					"hdr10-clean-ministry/detail",
+					"hdr10-grain-goodfellas/detail",
+					"hdr10-motion-john-wick-2/detail"
+				]));
 		.schemaVersion == 2 and
 		.strategy.id == "qsv-hevc-icq-v1" and
 		.strategy.resultsSchemaVersion == 2 and
@@ -12,15 +75,25 @@ contract_load() {
 		.strategy.globalQualityCandidates == [16, 18, 20, 22, 24, 26, 28, 30] and
 		.strategy.x265 == {
 			initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2
-		}
+		} and
+		(.diagnostics | diagnostics_contract)
 	' "$file" >/dev/null || return 65
 	CONTRACT_STRATEGY_ID="$(jq -r '.strategy.id' "$file")"
 	CONTRACT_ICQ_SETTINGS="$(jq -r '.strategy.globalQualityCandidates | join(" ")' "$file")"
 	CONTRACT_RESULTS_SCHEMA="$(jq -r '.strategy.resultsSchemaVersion' "$file")"
 	CONTRACT_MANIFEST_SCHEMA="$(jq -r '.strategy.runManifestSchemaVersion' "$file")"
 	CONTRACT_CAPABILITY_SCHEMA="$(jq -r '.strategy.capabilityProofSchemaVersion' "$file")"
+	CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA="$(jq -r '.diagnostics.schemaVersion' "$file")"
+	CONTRACT_DIAGNOSTICS_RESULT_SCHEMA="$(jq -r '.diagnostics.resultSchemaVersion' "$file")"
+	CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256="$(jq -r '.diagnostics.acceptedFindingsSha256' "$file")"
+	CONTRACT_DIAGNOSTICS_DECISION_SHA256="$(jq -r '.diagnostics.decisionSha256' "$file")"
+	CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID="$(jq -r '.diagnostics.historicalQualityRunId' "$file")"
+	CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID="$(jq -r '.diagnostics.historicalFindingsRunId' "$file")"
 	readonly CONTRACT_STRATEGY_ID CONTRACT_ICQ_SETTINGS CONTRACT_RESULTS_SCHEMA
 	readonly CONTRACT_MANIFEST_SCHEMA CONTRACT_CAPABILITY_SCHEMA
+	readonly CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA CONTRACT_DIAGNOSTICS_RESULT_SCHEMA
+	readonly CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256 CONTRACT_DIAGNOSTICS_DECISION_SHA256
+	readonly CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID
 }
 
 contract_validate_chosen_settings() {
@@ -52,6 +125,20 @@ contract_is_run_id() {
 	[[ "$value" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || return 1
 	timestamp="${value%-*}"
 	contract_is_compact_utc_timestamp "$timestamp"
+}
+
+contract_diagnostics_panel_json() {
+	local file="$1"
+	jq -e -S -c '
+		.diagnostics |
+		{vmafPanel, hdrPanel, vmafSettings, hdrSetting, frameRadius, frameOffsets, traceWindowSeconds}
+	' "$file"
+}
+
+contract_diagnostics_panel_sha256() {
+	local file="$1" panel_json
+	panel_json="$(contract_diagnostics_panel_json "$file")" || return 65
+	printf 'sha256:%s\n' "$(printf '%s' "$panel_json" | sha256sum | awk 'NR == 1 { print $1 }')"
 }
 
 contract_normalize_selected_settings() {
@@ -108,6 +195,21 @@ contract_normalize_run_identity() {
 				(.globalQuality as $value | [16,18,20,22,24,26,28,30] | index($value) != null) and
 				(.qualityRunId | run_id)) and
 			([.[].cohort] | unique | length) == length;
+		def diagnostics_upstream:
+			type == "object" and keys == ["diagnostics"] and
+			(.diagnostics | type == "object" and
+				keys == [
+					"acceptedFindingsSha256", "decisionSha256", "historicalFindingsRunId",
+					"historicalQualityRunId", "manifestSchemaVersion", "panelSha256",
+					"resultSchemaVersion"
+				] and
+				.manifestSchemaVersion == 1 and
+				.resultSchemaVersion == 1 and
+				(.acceptedFindingsSha256 | digest) and
+				(.decisionSha256 | digest) and
+				(.historicalQualityRunId | run_id) and
+				(.historicalFindingsRunId | run_id) and
+				(.panelSha256 | digest));
 		if
 			(keys == [
 				"clientDevice", "cpu", "encoderCommands", "gpu", "images", "mode", "node",
@@ -143,8 +245,8 @@ contract_normalize_run_identity() {
 				(.sha256 | digest)
 			] | all))) and
 			(.encoderCommands | (type == "array" and ([.[] | type == "string"] | all))) and
-			(.selectedSettings | selected_settings) and
-			(.upstream | type == "object") and
+			((if $mode == "diagnostics" then .selectedSettings == [] else (.selectedSettings | selected_settings) end)) and
+			((if $mode == "diagnostics" then (.upstream | diagnostics_upstream) else (.upstream | type == "object") end)) and
 			(.savingsSeed | type == "number" and floor == .) and
 			(.clientDevice == null or (.clientDevice | type == "string")) and
 			((.gpu == null and (.cpu | type == "object")) or

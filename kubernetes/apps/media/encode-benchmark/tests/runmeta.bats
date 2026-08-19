@@ -39,6 +39,41 @@ results_row() {
 	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,$encoder,22,$selected,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,hdr10,1,2,3,none,logs/a.log,discarded,$strategy,$initialization,$busy"
 }
 
+rewrite_samples_to_test_media() {
+	local file="$1"
+	local avc_fixture hdr_fixture avc_size hdr_size avc_sha hdr_sha
+	avc_fixture="$BATS_TEST_DIRNAME/fixtures/media/avc-8bit.mkv"
+	hdr_fixture="$BATS_TEST_DIRNAME/fixtures/media/hdr10-hevc-10bit.mkv"
+	avc_size="$(wc -c <"$avc_fixture" | tr -d '[:space:]')"
+	hdr_size="$(wc -c <"$hdr_fixture" | tr -d '[:space:]')"
+	avc_sha="$(sha256sum "$avc_fixture" | awk 'NR == 1 { print $1 }')"
+	hdr_sha="$(sha256sum "$hdr_fixture" | awk 'NR == 1 { print $1 }')"
+
+	jq \
+		--arg avc_path "$avc_fixture" \
+		--arg hdr_path "$hdr_fixture" \
+		--arg avc_sha "$avc_sha" \
+		--arg hdr_sha "$hdr_sha" \
+		--argjson avc_size "$avc_size" \
+		--argjson hdr_size "$hdr_size" '
+		.qualityPanel |= map(
+			if .cohort == "avc" or .cohort == "vc1" then
+				.path = $avc_path | .sizeBytes = $avc_size | .sha256 = $avc_sha
+			else
+				.path = $hdr_path | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
+			end
+		) |
+		.savingsPanel |= map(
+			if .cohort == "avc" or .cohort == "vc1" then
+				.path = $avc_path | .sizeBytes = $avc_size | .sha256 = $avc_sha
+			else
+				.path = $hdr_path | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
+			end
+		)
+	' "$file" >"$file.tmp"
+	mv -f -- "$file.tmp" "$file"
+}
+
 prepare_configmap_script_mount() {
 	configmap_root="$BATS_TEST_TMPDIR/scripts"
 	configmap_data="$configmap_root/..2026_08_02_12_00_00.000000000"
@@ -54,14 +89,101 @@ prepare_configmap_script_mount() {
 
 	samples_file="$BATS_TEST_TMPDIR/samples.json"
 	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$samples_file"
-	jq '.qualityPanel = [] | .savingsPanel = []' "$samples_file" >"$samples_file.tmp"
-	mv -f -- "$samples_file.tmp" "$samples_file"
+	rewrite_samples_to_test_media "$samples_file"
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_SAMPLES_FILE="$samples_file"
 	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export BENCHMARK_RUNNING_IMAGE='sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export BENCHMARK_I915_VERSION='fixture-i915'
 	export BENCHMARK_VPL_VERSION='fixture-vpl'
+}
+
+prepare_diagnostic_samples() {
+	unset BENCHMARK_IDENTITY_FIXTURE
+	diagnostic_media="$BATS_TEST_TMPDIR/diagnostic-media"
+	mkdir -p "$diagnostic_media"
+	avc_fixture="$BATS_TEST_DIRNAME/fixtures/media/avc-8bit.mkv"
+	hdr_fixture="$BATS_TEST_DIRNAME/fixtures/media/hdr10-hevc-10bit.mkv"
+	avc_size="$(wc -c <"$avc_fixture" | tr -d '[:space:]')"
+	hdr_size="$(wc -c <"$hdr_fixture" | tr -d '[:space:]')"
+	avc_sha="$(sha256sum "$avc_fixture" | awk 'NR == 1 { print $1 }')"
+	hdr_sha="$(sha256sum "$hdr_fixture" | awk 'NR == 1 { print $1 }')"
+
+	coco="$diagnostic_media/Coco (2017).mkv"
+	memento="$diagnostic_media/Memento (2000).mkv"
+	fugitive="$diagnostic_media/Fugitive (1993).mkv"
+	ministry="$diagnostic_media/Ministry Of Ungentlemanly Warfare (2024).mkv"
+	goodfellas="$diagnostic_media/Goodfellas (1990).mkv"
+	john_wick="$diagnostic_media/John Wick Chapter 2 (2017).mkv"
+	cp "$avc_fixture" "$coco"
+	cp "$avc_fixture" "$memento"
+	cp "$avc_fixture" "$fugitive"
+	cp "$hdr_fixture" "$ministry"
+	cp "$hdr_fixture" "$goodfellas"
+	cp "$hdr_fixture" "$john_wick"
+
+	jq \
+		--arg coco "$coco" \
+		--arg memento "$memento" \
+		--arg fugitive "$fugitive" \
+		--arg ministry "$ministry" \
+		--arg goodfellas "$goodfellas" \
+		--arg john_wick "$john_wick" \
+		--arg avc_sha "$avc_sha" \
+		--arg hdr_sha "$hdr_sha" \
+		--argjson avc_size "$avc_size" \
+		--argjson hdr_size "$hdr_size" '
+		.qualityPanel |= map(
+			if .id == "avc-clean-coco" then
+				.path = $coco | .sizeBytes = $avc_size | .sha256 = $avc_sha
+			elif .id == "avc-grain-memento" then
+				.path = $memento | .sizeBytes = $avc_size | .sha256 = $avc_sha
+			elif .id == "vc1-fugitive" then
+				.path = $fugitive | .sizeBytes = $avc_size | .sha256 = $avc_sha
+			elif .id == "hdr10-clean-ministry" then
+				.path = $ministry | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
+			elif .id == "hdr10-grain-goodfellas" then
+				.path = $goodfellas | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
+			elif .id == "hdr10-motion-john-wick-2" then
+				.path = $john_wick | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
+			else
+				.
+			end
+		)
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+
+	export BENCHMARK_ENCODER_COMMANDS_JSON='[
+		"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
+		"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
+		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
+		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
+		"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
+		"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
+		"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
+	]'
+}
+
+diagnostic_expected_sources() {
+	jq -S -c '
+		[
+			.qualityPanel[] |
+			select(.id == "avc-clean-coco" or .id == "avc-grain-memento" or
+				.id == "vc1-fugitive" or .id == "hdr10-clean-ministry" or
+				.id == "hdr10-grain-goodfellas" or .id == "hdr10-motion-john-wick-2") |
+			{path, size: .sizeBytes, sha256: ("sha256:" + .sha256)}
+		] | sort_by(.path)
+	' "$BENCHMARK_SAMPLES_FILE"
+}
+
+diagnostic_expected_panel_sha() {
+	local payload
+	payload="$(jq -S -c '
+		.diagnostics |
+		{vmafPanel, hdrPanel, vmafSettings, hdrSetting, frameRadius, frameOffsets, traceWindowSeconds}
+	' "$BENCHMARK_SAMPLES_FILE")"
+	printf 'sha256:%s\n' "$(printf '%s' "$payload" | sha256sum | awk 'NR == 1 { print $1 }')"
 }
 
 # Catches a production break where a bare create discovers and reuses an older
@@ -273,6 +395,80 @@ prepare_configmap_script_mount() {
 	[[ "$output" == *"run already exists: $run_id" ]]
 	[ -d "$collision" ]
 	[ "$(run_directory_count)" -eq 1 ]
+}
+
+@test "diagnostics identity binds the bounded panel sources and historical evidence" {
+	prepare_diagnostic_samples
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	expected_sources="$(diagnostic_expected_sources)"
+	expected_panel_sha="$(diagnostic_expected_panel_sha)"
+
+	run jq -e \
+		--argjson expected_sources "$expected_sources" \
+		--arg expected_panel_sha "$expected_panel_sha" '
+		.mode == "diagnostics" and
+		.schemaVersion == 2 and
+		.resultsSchemaVersion == 2 and
+		.selectedSettings == [] and
+		.sources == $expected_sources and
+		.encoderCommands == [
+			"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
+			"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
+			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
+			"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
+			"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
+			"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
+		] and
+		.upstream == {
+			diagnostics: {
+				manifestSchemaVersion: 1,
+				resultSchemaVersion: 1,
+				acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
+				decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
+				historicalQualityRunId: "20260817T233546Z-debc0498",
+				historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
+				panelSha256: $expected_panel_sha
+			}
+		}
+	' "$manifest"
+	[ "$status" -eq 0 ]
+}
+
+@test "diagnostics resume refuses panel timestamp and historical scope drift" {
+	prepare_diagnostic_samples
+	run "$SCRIPTS/runmeta.sh" create diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	base_samples="$BATS_TEST_TMPDIR/diagnostic-base-samples.json"
+	cp "$BENCHMARK_SAMPLES_FILE" "$base_samples"
+
+	jq '.diagnostics.vmafPanel[0].observedFrameIndex = 1642' \
+		"$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 65 ]
+	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
+
+	expression='(.qualityPanel[] | select(.id == "avc-clean-coco") | .clips.motion) = "00:05:01.000"'
+	jq "$expression" "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"identity mismatch: samplesDigest "* ]]
+	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
+
+	jq '.diagnostics.historicalQualityRunId = "20260817T233546Z-aaaaaaaa"' \
+		"$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"identity mismatch: upstream.diagnostics.historicalQualityRunId "* ]]
+	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
 }
 
 # Catches the race where a concurrent creator wins mkdir after this process has
@@ -666,19 +862,23 @@ EOF
 # pathname instead of reporting only the redacted identity field that vanished.
 @test "verify redacts a source path that disappears before resume" {
 	source_path="$BATS_TEST_TMPDIR/Secret Movie Name.mkv"
-	printf '%s' 'media-bytes' >"$source_path"
+	cp "$BATS_TEST_DIRNAME/fixtures/media/avc-8bit.mkv" "$source_path"
 	samples_file="$BATS_TEST_TMPDIR/samples-with-source.json"
-	jq -n --arg path "$source_path" \
-		--argjson strategy "$(yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.strategy')" '{
-		schemaVersion: 2, strategy: $strategy,
-		runtime: {image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},
-		savingsSeed: 20260802,
-		qualityPanel: [{
-			id: "secret-movie", cohort: "avc", path: $path, sizeBytes: 11,
-			sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		}],
-		savingsPanel: []
-	}' >"$samples_file"
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$samples_file"
+	rewrite_samples_to_test_media "$samples_file"
+	jq \
+		--arg path "$source_path" \
+		--arg sha "$(sha256sum "$source_path" | awk 'NR == 1 { print $1 }')" \
+		--argjson size "$(wc -c <"$source_path" | tr -d '[:space:]')" '
+		.qualityPanel |= map(
+			if .id == "avc-clean-coco" then
+				.path = $path | .sizeBytes = $size | .sha256 = $sha
+			else
+				.
+			end
+		)
+	' "$samples_file" >"$samples_file.tmp"
+	mv -f -- "$samples_file.tmp" "$samples_file"
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export BENCHMARK_SAMPLES_FILE="$samples_file"
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
@@ -686,7 +886,7 @@ EOF
 
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
 	[ "$status" -eq 66 ]
-	[ "$output" = 'identity unavailable: sources.0.path (stored=<redacted>, current=<unavailable>)' ]
+	[[ "$output" == identity\ unavailable:\ sources.*.path\ \(stored=\<redacted\>,\ current=\<unavailable\>\) ]]
 	[[ "$output" != *'Secret Movie Name.mkv'* ]]
 }
 
