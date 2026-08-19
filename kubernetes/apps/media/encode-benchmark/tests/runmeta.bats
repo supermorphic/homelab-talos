@@ -444,12 +444,12 @@ diagnostic_expected_panel_sha() {
 	unset BENCHMARK_ENCODER_COMMANDS_JSON
 
 	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 5 ]
+	[ "$status" -eq 65 ]
 	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 
 	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
 	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 5 ]
+	[ "$status" -eq 65 ]
 	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 }
 
@@ -480,7 +480,7 @@ diagnostic_expected_panel_sha() {
 	export BENCHMARK_IDENTITY_FIXTURE="$fixture"
 
 	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 5 ]
+	[ "$status" -eq 65 ]
 	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
 }
 

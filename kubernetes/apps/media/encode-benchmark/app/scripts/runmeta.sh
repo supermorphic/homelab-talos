@@ -87,7 +87,20 @@ image_digest() {
 normalize_identity() {
 	local input_json="$1"
 	local mode="$2"
-	contract_normalize_run_identity "$input_json" "$mode"
+	local output status
+	set +e
+	output="$(contract_normalize_run_identity "$input_json" "$mode" 2>&1)"
+	status=$?
+	set -e
+	if [[ "$status" -ne 0 ]]; then
+		if [[ "$mode" == 'diagnostics' && "$output" == *'diagnostic command identity is missing or malformed'* ]]; then
+			printf '%s\n' 'diagnostic command identity is missing or malformed' >&2
+			return 65
+		fi
+		printf '%s\n' "$output" >&2
+		return "$status"
+	fi
+	printf '%s\n' "$output"
 }
 
 discover_identity() {
