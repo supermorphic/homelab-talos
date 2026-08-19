@@ -99,11 +99,10 @@
       "expected": {
         "schemaVersion": 1,
         "classification": "temporal-alignment-defect",
-        "reasons": [
-          "nonzero-ssim-psnr-offset-agreement",
-          "timeline-discontinuity-at-offset",
-          "pts-reset-clears-vmaf-zero"
-        ]
+            "reasons": [
+              "nonzero-ssim-psnr-offset-agreement",
+              "timeline-discontinuity-at-offset"
+            ]
       }
     },
     {

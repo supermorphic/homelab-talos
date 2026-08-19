@@ -444,6 +444,28 @@ contract_passing_icq_nodes() {
 	' "$file" | sort -u
 }
 
+# Diagnostics use the same image-bound QSV proof plus a bounded proof that the
+# image exposes every independent diagnostic oracle before a diagnostic Job is
+# allowed to exist.
+contract_passing_diagnostic_nodes() {
+	local file="$1"
+	contract_passing_icq_nodes "$file" | while IFS= read -r node; do
+		jq -e --arg node "$node" '
+			.runtime.capabilityEvidence.nodes[]? |
+			select(.nodeName == $node) |
+			(.diagnosticCapabilities |
+				type == "object" and
+				(keys | sort) == ["bestEffortTimestampTime","imageId","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders","verifiedAt"] and
+				.imageId == $node_image and .verifiedAt == $node_verified and
+				.traceHeaders == "passed" and .libvmaf == "passed" and .ssim == "passed" and .psnr == "passed" and
+				.bestEffortTimestampTime == "passed" and .packetDurationTime == "passed" and
+				.keyFrame == "passed" and .pictType == "passed")
+		' --arg node_image "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .imageId' "$file")" \
+			--arg node_verified "$(jq -r --arg node "$node" '.runtime.capabilityEvidence.nodes[] | select(.nodeName == $node) | .verifiedAt' "$file")" "$file" >/dev/null &&
+			printf '%s\n' "$node"
+	done
+}
+
 contract_chosen_record() {
 	local file="$1" cohort="$2" required_state="${3:-}"
 	jq -e -c --arg cohort "$cohort" --arg required_state "$required_state" '

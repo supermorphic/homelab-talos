@@ -248,6 +248,9 @@ sanitize_capability_evidence() {
 			(.encodeSpeed | type == "number" and . >= 0) and
 			(.decode == "passed" or .decode == "failed") and
 			(.vmaf == "passed" or .vmaf == "failed") and
+			(.diagnosticCapabilities | type == "object" and
+				(keys | sort) == ["bestEffortTimestampTime","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders"] and
+				all(.[]; . == "passed" or . == "failed")) and
 			.configuredImageDigest == $digest and
 			.proofStatus == expected_status and .status == expected_status and
 			.proofReasons == (reason_list | join(";")) and
@@ -258,6 +261,7 @@ sanitize_capability_evidence() {
 				renderNode, drmDriver, selectedRateControl,
 			telemetryStatus, telemetryReason, videoBusyNanoseconds, videoBusyPercent,
 			encodeFps, encodeSpeed, decode, vmaf, proofStatus, proofReasons,
+			diagnosticCapabilities: (.diagnosticCapabilities + {imageId:$image_id,verifiedAt:$verified_at}),
 			verifiedAt: $verified_at, configuredImageDigest,
 			imageId: $image_id
 		}

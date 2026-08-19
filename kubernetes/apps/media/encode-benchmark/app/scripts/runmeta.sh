@@ -503,6 +503,16 @@ verify_run() {
 	fi
 }
 
+diagnostic_run_collision() {
+	local run_id="$1" run_directory
+	validate_run_id "$run_id" || return
+	run_directory="$runs_root/$run_id"
+	if [[ -e "$run_directory" || -L "$run_directory" ]]; then
+		echo "diagnostic run already exists: $run_id" >&2
+		return 73
+	fi
+}
+
 create_run() {
 	local mode="$1"
 	local explicit_run_id="${2:-}"
@@ -510,6 +520,9 @@ create_run() {
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
 		validate_run_id "$explicit_run_id" || return
+		if [[ "$mode" == 'diagnostics' ]]; then
+			diagnostic_run_collision "$explicit_run_id" || return
+		fi
 		now="${explicit_run_id%-*}"
 		if [[ -n "$dispatch_correlation_id" ]]; then
 			[[ "$mode" == 'quality' && "$explicit_run_id" == "$dispatch_correlation_id" ]] || {
@@ -747,6 +760,10 @@ case "$action" in
 create)
 	(($# == 1 || $# == 2)) || usage
 	create_run "$@"
+	;;
+diagnostic-precheck)
+	(($# == 1)) || usage
+	diagnostic_run_collision "$1"
 	;;
 verify)
 	(($# == 1)) || usage

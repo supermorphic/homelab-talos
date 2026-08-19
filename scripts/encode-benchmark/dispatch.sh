@@ -98,6 +98,16 @@ require_confirmation() {
 	}
 }
 
+require_diagnostic_capability_evidence() {
+	local nodes
+	nodes="$(contract_passing_diagnostic_nodes "$samples_document")" || return
+	[[ -n "$nodes" ]] || {
+		echo 'diagnostic capability evidence is missing malformed stale or bound to another image' >&2
+		return 65
+	}
+	printf '%s\n' "$nodes" | head -n 1
+}
+
 require_cluster_target() {
 	local api_server
 	[[ -f "$kubeconfig" ]] || {
@@ -836,7 +846,7 @@ require_cpu_node() {
 }
 
 dispatch_run() {
-	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' node_name='' run_id dispatch_id job name contention_case=''
+	local mode="${1:-}" supplied_run_id='' supplied_run_pair='' sample_id='' node_name='' diagnostic_node='' run_id dispatch_id job name contention_case=''
 	local client_device='' playback_sample='' candidate_output job_json image_configmap='' cleanup_index required_nodes=0
 	local -a candidates=() contention_nodes=() eligible_nodes=() created_names=() created_jobs=() created_job_jsons=() created_configmaps=() run_ids=()
 	case "$mode" in
@@ -920,6 +930,8 @@ dispatch_run() {
 	if [[ "$mode" == 'diagnostics' ]]; then
 		contract_require_diagnostics "$samples_document" || return
 		require_deployed_diagnostics_contract || return
+		diagnostic_node="$(require_diagnostic_capability_evidence)" || return
+		validate_node_name "$diagnostic_node" || return
 		if [[ -n "$supplied_run_id" ]]; then
 			require_diagnostics_run_id "$supplied_run_id" || return
 		fi
@@ -1032,8 +1044,9 @@ dispatch_run() {
 		' "$job"
 	elif [[ "$mode" == 'diagnostics' ]]; then
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh diagnostics "$run_id"
-		yq -i '
-			.spec.activeDeadlineSeconds = 14400
+		NODE_NAME="$diagnostic_node" yq -i '
+			.spec.activeDeadlineSeconds = 14400 |
+			.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME)
 		' "$job"
 	elif [[ "$mode" == 'x265' ]]; then
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" \

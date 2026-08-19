@@ -230,6 +230,25 @@ diagnostic_expected_panel_sha() {
 	[ "$(run_directory_count)" -eq 1 ]
 }
 
+# Catches diagnostics treating a completed matching directory as resumable,
+# which would let a later command replace immutable diagnostic evidence.
+@test "diagnostics create rejects an existing immutable run before identity discovery" {
+	prepare_diagnostic_samples
+	run_id='20260802T121501Z-deadbeef'
+	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
+	[ "$status" -eq 0 ]
+	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
+	before="$BATS_TEST_TMPDIR/diagnostic-manifest-before"
+	cp "$manifest" "$before"
+
+	# A broken identity fixture proves collision handling did not discover it.
+	export BENCHMARK_IDENTITY_FIXTURE="$BATS_TEST_TMPDIR/missing-identity.json"
+	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
+	[ "$status" -eq 73 ]
+	[ "$output" = "diagnostic run already exists: $run_id" ]
+	cmp -s "$before" "$manifest"
+}
+
 # Catches an explicit creator claiming or removing a pre-existing directory it
 # did not create, or overwriting an immutable manifest after identity drift.
 @test "explicit create preserves collision ownership and refuses identity mismatch" {
@@ -506,8 +525,8 @@ diagnostic_expected_panel_sha() {
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 
 	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
-	[ "$status" -eq 65 ]
-	[ "$output" = 'diagnostic contract is missing or malformed' ]
+	[ "$status" -eq 73 ]
+	[ "$output" = "diagnostic run already exists: $run_id" ]
 }
 
 @test "diagnostics resume refuses panel timestamp and historical scope drift" {

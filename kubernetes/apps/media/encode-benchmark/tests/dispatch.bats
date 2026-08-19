@@ -477,7 +477,7 @@ set_capability_evidence() {
 }
 
 valid_capability_evidence() {
-	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
+	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","diagnosticCapabilities":{"imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","verifiedAt":"2026-08-14T18:00:00Z","traceHeaders":"passed","libvmaf":"passed","ssim":"passed","psnr":"passed","bestEffortTimestampTime":"passed","packetDurationTime":"passed","keyFrame":"passed","pictType":"passed"},"proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
 }
 
 two_passing_capability_nodes() {
@@ -958,6 +958,32 @@ set_dispatch_chosen_record() {
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'diagnostics contract is missing or malformed'* ]]
 	assert_no_mutations
+}
+
+# Catches diagnostics using a generic QSV proof as a substitute for image-bound
+# diagnostic oracle proof.  Each missing item must stop before the first API
+# resource create, while the complete proof remains dispatchable.
+@test "diagnostics requires image-bound trace metric and frame-field proof before create" {
+	prepare_deployed_diagnostics_contract
+	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'
+	proof="$(jq -c '.nodes[0].diagnosticCapabilities = {
+		imageId:.nodes[0].imageId,verifiedAt:.nodes[0].verifiedAt,
+		traceHeaders:"passed",libvmaf:"passed",ssim:"passed",psnr:"passed",
+		bestEffortTimestampTime:"passed",packetDurationTime:"passed",
+		keyFrame:"passed",pictType:"passed"
+	}' <<<"$(valid_capability_evidence)")"
+
+	for missing in traceHeaders libvmaf ssim psnr bestEffortTimestampTime packetDurationTime keyFrame pictType; do
+		set_capability_evidence verified "$(jq -c --arg missing "$missing" 'del(.nodes[0].diagnosticCapabilities[$missing])' <<<"$proof")"
+		run_dispatch run diagnostics
+		[ "$status" -ne 0 ]
+		assert_no_mutations
+	done
+
+	set_capability_evidence verified "$proof"
+	run_dispatch run diagnostics
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
 }
 
 # Catches diagnostics resume or selector parsing that could mutate historical
@@ -1851,7 +1877,7 @@ EOF
 {"apiVersion":"v1","items":[{"metadata":{"name":"encode-benchmark-capabilities-fixture-pod","labels":{"job-name":"encode-benchmark-capabilities-fixture","homelab-talos/benchmark-run":"$run_id"},"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","controller":true,"blockOwnerDeletion":true}]},"spec":{"nodeName":"nuc2"},"status":{"phase":"Succeeded","containerStatuses":[{"name":"benchmark","imageID":"$image_id"}]}}]}
 EOF
 	cat >"$STUB_LOGS_FILE" <<'EOF'
-{"status":"passed","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","proofStatus":"passed","proofReasons":"","uid":568,"hevcQsv":true,"libx265":true,"nodeName":"nuc2","configuredImage":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","sourcePath":"/media/Secret Movie.mkv","source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","credential":"dont-print-me"}
+{"status":"passed","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","diagnosticCapabilities":{"traceHeaders":"passed","libvmaf":"passed","ssim":"passed","psnr":"passed","bestEffortTimestampTime":"passed","packetDurationTime":"passed","keyFrame":"passed","pictType":"passed"},"proofStatus":"passed","proofReasons":"","uid":568,"hevcQsv":true,"libx265":true,"nodeName":"nuc2","configuredImage":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","sourcePath":"/media/Secret Movie.mkv","source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","credential":"dont-print-me"}
 EOF
 	cat >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" <<EOF
 {"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"encode-benchmark-image-fixture","ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","controller":true,"blockOwnerDeletion":true}]},"data":{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}
@@ -1878,7 +1904,7 @@ write_multi_node_results_fixtures() {
 		spec:{nodeName:.},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:$image}]}
 	})}' >"$STUB_PODS_JSON"
 	for node in nuc1 nuc3; do
-		printf '%s\n' "{\"status\":\"passed\",\"strategyId\":\"qsv-hevc-icq-v1\",\"proofSchemaVersion\":3,\"initialization\":\"passed\",\"initializationReason\":\"\",\"renderNode\":\"/dev/dri/renderD128\",\"drmDriver\":\"i915\",\"selectedRateControl\":\"ICQ\",\"telemetryStatus\":\"available\",\"telemetryReason\":\"\",\"videoBusyNanoseconds\":800000000,\"videoBusyPercent\":40,\"encodeFps\":72,\"encodeSpeed\":1.25,\"decode\":\"passed\",\"vmaf\":\"passed\",\"proofStatus\":\"passed\",\"proofReasons\":\"\",\"uid\":568,\"hevcQsv\":true,\"libx265\":true,\"nodeName\":\"$node\",\"configuredImageDigest\":\"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"sourcePath\":\"/media/Secret Movie.mkv\"}" \
+		printf '%s\n' "{\"status\":\"passed\",\"strategyId\":\"qsv-hevc-icq-v1\",\"proofSchemaVersion\":3,\"initialization\":\"passed\",\"initializationReason\":\"\",\"renderNode\":\"/dev/dri/renderD128\",\"drmDriver\":\"i915\",\"selectedRateControl\":\"ICQ\",\"telemetryStatus\":\"available\",\"telemetryReason\":\"\",\"videoBusyNanoseconds\":800000000,\"videoBusyPercent\":40,\"encodeFps\":72,\"encodeSpeed\":1.25,\"decode\":\"passed\",\"vmaf\":\"passed\",\"diagnosticCapabilities\":{\"traceHeaders\":\"passed\",\"libvmaf\":\"passed\",\"ssim\":\"passed\",\"psnr\":\"passed\",\"bestEffortTimestampTime\":\"passed\",\"packetDurationTime\":\"passed\",\"keyFrame\":\"passed\",\"pictType\":\"passed\"},\"proofStatus\":\"passed\",\"proofReasons\":\"\",\"uid\":568,\"hevcQsv\":true,\"libx265\":true,\"nodeName\":\"$node\",\"configuredImageDigest\":\"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"sourcePath\":\"/media/Secret Movie.mkv\"}" \
 			>"$STUB_LOGS_DIR/encode-benchmark-capabilities-$lower_run-node-$node.log"
 		jq -n --arg node "$node" --arg run "$run_id" '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:("encode-benchmark-image-" + $node),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + ($run|ascii_downcase) + "-node-" + $node),uid:("uid-" + $node),controller:true,blockOwnerDeletion:true}]},data:{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}' >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-$node.json"
 	done

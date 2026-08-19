@@ -637,7 +637,19 @@ diagnostic_vmaf_classify() {
 			exact_keys(["offset", "psnr", "ssim"]) and
 			(.offset | type == "number" and floor == . and . >= -2 and . <= 2) and
 			((.ssim == null) or (.ssim | type == "number")) and
-			((.psnr == null) or (.psnr | type == "number"));
+			((.psnr == null) or (.psnr | type == "number") or
+				(.psnr | exact_keys(["kind"]) and .kind == "positive-infinity") or
+				(.psnr | exact_keys(["kind","value"]) and .kind == "finite" and (.value | type == "number")));
+		def metric_rank($metric):
+			if $metric == "psnr" then
+				if .psnr | type == "number" then {infinity:0,value:.psnr}
+				elif .psnr.kind == "finite" then {infinity:0,value:.psnr.value}
+				else {infinity:1,value:0} end
+			else {infinity:0,value:.ssim} end;
+		def metric_nonzero($metric):
+			if $metric == "psnr" and (.psnr | type) == "object" and .psnr.kind == "positive-infinity" then true
+			elif $metric == "psnr" and (.psnr | type) == "object" then .psnr.value != 0
+			else .[$metric] != 0 end;
 		def timeline:
 			exact_keys(["discontinuity", "zeroOffsetAligned"]) and
 			(.zeroOffsetAligned | type == "boolean") and
@@ -669,8 +681,8 @@ diagnostic_vmaf_classify() {
 			if $present_count != 5 then
 				{state: "missing"}
 			else
-				([.offsets[] | {offset, value: .[$metric]}] | max_by(.value).value) as $best_value |
-				([.offsets[] | select(.[$metric] == $best_value) | .offset]) as $best_offsets |
+				([.offsets[] | {offset, rank:(metric_rank($metric))}] | max_by([.rank.infinity,.rank.value]).rank) as $best_rank |
+				([.offsets[] | select(metric_rank($metric) == $best_rank) | .offset]) as $best_offsets |
 				if ($best_offsets | length) == 1 then
 					{state: "unique", offset: $best_offsets[0]}
 				else
@@ -680,8 +692,8 @@ diagnostic_vmaf_classify() {
 		def unique_target_minimum($metric):
 			([.offsets[] | select(.[$metric] != null) | .[$metric]] | length) == 5 and
 			(
-				([.offsets[] | .[$metric]] | min) as $minimum |
-				([.offsets[] | select(.[$metric] == $minimum) | .offset]) as $minimum_offsets |
+				([.offsets[] | {offset,rank:(metric_rank($metric))}] | min_by([.rank.infinity,.rank.value]).rank) as $minimum |
+				([.offsets[] | select(metric_rank($metric) == $minimum) | .offset]) as $minimum_offsets |
 				($minimum_offsets | length) == 1 and $minimum_offsets[0] == 0
 			);
 		def summarize:
@@ -699,7 +711,7 @@ diagnostic_vmaf_classify() {
 				targetUniqueMinimum: (unique_target_minimum("ssim") and unique_target_minimum("psnr")),
 				independentTargetNonzero: (
 					([.offsets[] | select(.offset == 0)][0]) as $target |
-					($target.ssim != 0) and ($target.psnr != 0)
+					($target | metric_nonzero("ssim")) and ($target | metric_nonzero("psnr"))
 				),
 				ssimBest: $ssim_best,
 				psnrBest: $psnr_best,
@@ -753,20 +765,19 @@ diagnostic_vmaf_classify() {
 				if
 					all($summaries[];
 						.validNonzeroPairing and .timelineCorroboratesPairing and
-						.currentZero and (.resetZero | not)
+						.currentZero
 					) and
 					([ $summaries[].pair.offset ] | unique | length) == 1
 				then
 					classification("temporal-alignment-defect"; [
 						"nonzero-ssim-psnr-offset-agreement",
-						"timeline-discontinuity-at-offset",
-						"pts-reset-clears-vmaf-zero"
+						"timeline-discontinuity-at-offset"
 					])
 				elif
 					all($summaries[];
 						.zeroAligned and .currentZero and .resetZero and
 						.targetUniqueMinimum and .sourceStatus == "clean" and
-						(.discontinuity == null) and (.validNonzeroPairing | not)
+						(.discontinuity == null) and (.timelineCorroboratesPairing | not)
 					)
 				then
 					classification("encoder-output-defect"; [
@@ -1467,7 +1478,7 @@ diagnostic_assigned_node_capability_gate() {
 		echo 'diagnostic assigned-node capability identity is unavailable' >&2
 		return 65
 	}
-	passing_nodes="$(contract_passing_icq_nodes "$samples_file")" || return
+	passing_nodes="$(contract_passing_diagnostic_nodes "$samples_file")" || return
 	grep -Fqx -- "$node_name" <<<"$passing_nodes" || {
 		echo 'diagnostic assigned node lacks committed passing ICQ capability evidence' >&2
 		return 65
@@ -1485,6 +1496,29 @@ diagnostic_assigned_node_capability_gate() {
 	BENCHMARK_I915_VERSION="driver=i915;kernel=$kernel"
 	BENCHMARK_VPL_VERSION="backend=qsv;ffmpeg=$ffmpeg_version"
 	export BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
+}
+
+diagnostic_capability_proof() {
+	local source="$1" filters bitstream_filters frame_probe
+	filters="$(ffmpeg -nostdin -hide_banner -filters 2>/dev/null || true)"
+	bitstream_filters="$(ffmpeg -nostdin -hide_banner -bsfs 2>/dev/null || true)"
+	frame_probe="$(ffprobe -v error -select_streams v:0 -read_intervals '0%+1' -show_frames \
+		-show_entries 'frame=best_effort_timestamp_time,pkt_duration_time,duration_time,key_frame,pict_type' -of json "$source" 2>/dev/null || true)"
+	jq -n -c --arg filters "$filters" --arg bsfs "$bitstream_filters" --argjson frames "${frame_probe:-null}" '
+		def filter($name): ($filters | split("\n") | any(. | split(" ") | map(select(length > 0)) | .[1] == $name));
+		def frame_field($name): ($frames.frames | type == "array" and length > 0 and
+			($frames.frames[0][$name] | type) == "string");
+		{
+			traceHeaders:(if ($bsfs | split("\n") | any(. == "trace_headers")) then "passed" else "failed" end),
+			libvmaf:(if filter("libvmaf") then "passed" else "failed" end),
+			ssim:(if filter("ssim") then "passed" else "failed" end),
+			psnr:(if filter("psnr") then "passed" else "failed" end),
+			bestEffortTimestampTime:(if frame_field("best_effort_timestamp_time") then "passed" else "failed" end),
+			packetDurationTime:(if (frame_field("pkt_duration_time") or frame_field("duration_time")) then "passed" else "failed" end),
+			keyFrame:(if ($frames.frames | type == "array" and length > 0 and ($frames.frames[0].key_frame == 0 or $frames.frames[0].key_frame == 1)) then "passed" else "failed" end),
+			pictType:(if ($frames.frames | type == "array" and length > 0 and ($frames.frames[0].pict_type == "I" or $frames.frames[0].pict_type == "P" or $frames.frames[0].pict_type == "B")) then "passed" else "failed" end)
+		}
+	'
 }
 
 diagnostic_identity_json() {
@@ -1519,7 +1553,14 @@ diagnostic_metric_value() {
 		value="$(sed -n -E 's/^.*All:([0-9]+([.][0-9]+)?).*$/\1/p' "$file" | tail -n 1)"
 		;;
 	psnr)
-		value="$(sed -n -E 's/^.*psnr_avg:([0-9]+([.][0-9]+)?).*$/\1/p' "$file" | tail -n 1)"
+		value="$(sed -n -E 's/^.*psnr_avg:(inf|[0-9]+([.][0-9]+)?).*$/\1/p' "$file" | tail -n 1)"
+		if [[ "$value" == 'inf' ]]; then
+			printf '%s\n' '{"kind":"positive-infinity"}'
+			return
+		fi
+		[[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 65
+		jq -n -c --argjson value "$value" '{kind:"finite",value:$value}'
+		return
 		;;
 	*) return 64 ;;
 	esac
@@ -1645,8 +1686,13 @@ diagnostic_vmaf_setting() {
 		timeline="$(jq -n -c --argjson source "$source_window" --argjson output "$output_window" \
 			--argjson offsets "$offsets" --argjson observed "$observed" '
 			def unique_best($metric):
-				([$offsets[] | {offset,value:.[$metric].value}] | max_by(.value).value) as $best |
-				([$offsets[] | select(.[$metric].value == $best) | .offset]) as $matches |
+				def rank:
+					if $metric == "psnr" then
+						if .[$metric].value.kind == "positive-infinity" then {infinity:1,value:0}
+						else {infinity:0,value:.[$metric].value.value} end
+					else {infinity:0,value:.[$metric].value} end;
+				([$offsets[] | {offset,rank:rank}] | max_by([.rank.infinity,.rank.value]).rank) as $best |
+				([$offsets[] | select(rank == $best) | .offset]) as $matches |
 				if ($matches | length) == 1 then $matches[0] else null end;
 			(unique_best("ssim")) as $ssim_offset |
 			(unique_best("psnr")) as $psnr_offset |
@@ -1677,12 +1723,12 @@ diagnostic_vmaf_setting() {
 
 	classifier_input="$(jq -n -c --argjson quality "$setting" --arg status "$status" \
 		--argjson current "$current_target" --argjson reset "$reset_target" --argjson offsets "$offsets" \
-		--argjson timeline "$timeline" '{
+		--argjson timeline "$timeline" --argjson source_window "$source_window" '{
 		globalQuality:$quality,
 		completeEvidence:($status == "complete"),
 		currentTargetVmaf:$current,
 		resetTargetVmaf:$reset,
-		sourceWindow:{status:(if $status == "failed" then "decode-error" else "clean" end)},
+		sourceWindow:{status:(if $status == "failed" then "decode-error" else ($source_window.sourceWindow.status // "discontinuity") end)},
 		timeline:$timeline,
 		offsets:[$offsets[] | {offset,ssim:.ssim.value,psnr:.psnr.value}]
 	}')"
@@ -1865,6 +1911,9 @@ diagnostics_mode() {
 	local sample source_identity source_window clip_command source_frame_command settings setting setting_json evidence classifier_file classification
 	local entry_status summary vmaf_entries='[]' hdr_entries='[]' title_scratch evidence_path clip_ready
 	local post_identity_valid=1 invalidated_entries
+	if [[ -n "$explicit_run_id" ]]; then
+		"$script_directory/runmeta.sh" diagnostic-precheck "$explicit_run_id" || return
+	fi
 	panel_samples="$(jq -c '. as $root | [.qualityPanel[]? | select(.id as $sample_id |
 		([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] | index($sample_id) != null))]' "$samples_file")" || return
 	if ! require_running_image_evidence; then
@@ -2934,7 +2983,7 @@ capability_proof() {
 	local capability_directory source encoded initialization_log proof_json metrics_json
 	local initialization_status=1 encode_status=1 decode='failed' vmaf='failed'
 	local proof_status='passed' reasons=''
-	local initialization selected binding render_node driver telemetry delta percent fps speed telemetry_reason
+	local initialization selected binding render_node driver telemetry delta percent fps speed telemetry_reason diagnostic_capabilities
 	local -a settings
 	capability_directory="$(dirname "$encode_log")"
 	source="$capability_directory/source.mkv"
@@ -2976,6 +3025,7 @@ capability_proof() {
 		'[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1' -f null - >/dev/null 2>&1; then
 		vmaf='passed'
 	fi
+	diagnostic_capabilities="$(diagnostic_capability_proof "$source")" || diagnostic_capabilities='{}'
 
 	[[ "$initialization" == 'passed' ]] || reasons='initialization'
 	if [[ "$binding" != 'passed' ]]; then
@@ -3022,7 +3072,7 @@ capability_proof() {
 		--arg decode "$decode" \
 		--arg vmaf "$vmaf" \
 		--arg proof_status "$proof_status" \
-		--arg reasons "$reasons" '{
+		--arg reasons "$reasons" --argjson diagnostic_capabilities "$diagnostic_capabilities" '{
 			strategyId: $strategy,
 			proofSchemaVersion: $schema,
 			initialization: $initialization,
@@ -3038,6 +3088,7 @@ capability_proof() {
 			encodeSpeed: $speed,
 			decode: $decode,
 			vmaf: $vmaf,
+			diagnosticCapabilities: $diagnostic_capabilities,
 			proofStatus: $proof_status,
 			proofReasons: $reasons
 		}'
@@ -5021,6 +5072,10 @@ test_dispatch() {
 	diagnostic-vmaf-classify)
 		(($# == 1)) || usage
 		diagnostic_vmaf_classify "$1"
+		;;
+	diagnostic-metric-value)
+		(($# == 2)) || usage
+		diagnostic_metric_value "$1" "$2"
 		;;
 	diagnostic-hdr-normalize)
 		(($# == 1)) || usage

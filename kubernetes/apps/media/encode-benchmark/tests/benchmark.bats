@@ -136,7 +136,14 @@ case "$*" in
 	exit 0
 	;;
 *'-hide_banner -filters'*)
-	printf '%s\n' ' ... libvmaf VV->V Calculate the VMAF between two video streams.'
+	printf '%s\n' \
+		' ... libvmaf VV->V Calculate the VMAF between two video streams.' \
+		' ... ssim VV->V Calculate the SSIM between two video streams.' \
+		' ... psnr VV->V Calculate the PSNR between two video streams.'
+	exit 0
+	;;
+*'-hide_banner -bsfs'*)
+	printf '%s\n' 'trace_headers'
 	exit 0
 	;;
 *'-version'*)
@@ -174,7 +181,7 @@ if [[ "${1:-}" == '-version' ]]; then
 	printf '%s\n' 'ffprobe version 8.1.2 fixture-build'
 	exit 0
 fi
-exit 97
+printf '%s\n' '{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
 EOF
 	cat >"$stub_bin/id" <<'EOF'
 #!/usr/bin/env bash
@@ -802,6 +809,13 @@ prepare_diagnostic_execution_run() {
 				if (["avc-clean-coco","avc-grain-memento","vc1-fugitive","hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2"] | index($id)) != null
 				then .path = $path | .sha256 = $sha | .sizeBytes = $size
 				else . end
+			) |
+			.runtime.capabilityEvidence.nodes |= map(
+				.diagnosticCapabilities = {
+					imageId:.imageId,verifiedAt:.verifiedAt,
+					traceHeaders:"passed",libvmaf:"passed",ssim:"passed",psnr:"passed",
+					bestEffortTimestampTime:"passed",packetDurationTime:"passed",keyFrame:"passed",pictType:"passed"
+				}
 			)
 		' >"$BENCHMARK_SAMPLES_FILE"
 	image="$(jq -r '.runtime.image' "$BENCHMARK_SAMPLES_FILE")"
@@ -1840,7 +1854,21 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
 }
 
-@test "diagnostic VMAF encoder-output requires a clean source window and no valid nonzero pairing" {
+# Catches temporal classification treating reset-PTS VMAF as a necessary cause
+# predicate instead of recorded supporting evidence.
+@test "diagnostic VMAF temporal alignment does not require reset VMAF to clear zero" {
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	evidence="$BATS_TEST_TMPDIR/temporal-reset-zero.json"
+	write_diagnostic_fixture_field "$fixture" cases temporal-alignment evidence "$evidence"
+	jq '.settings |= map(.resetTargetVmaf = 0)' "$evidence" >"$evidence.changed"
+	mv "$evidence.changed" "$evidence"
+
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$evidence"
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'temporal-alignment-defect' ]
+}
+
+@test "diagnostic VMAF encoder-output requires a clean source window and no timeline-correlated pairing" {
 	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
 	evidence="$BATS_TEST_TMPDIR/encoder-output-evidence.json"
 	dirty="$BATS_TEST_TMPDIR/encoder-output-dirty.json"
@@ -1867,7 +1895,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	' "$evidence" >"$paired"
 	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$paired"
 	[ "$status" -eq 0 ]
-	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+	[ "$(jq -r '.classification' <<<"$output")" = 'encoder-output-defect' ]
 }
 
 @test "diagnostic VMAF measurement requires independent target metrics to stay nonzero" {
@@ -1890,6 +1918,37 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$mutated"
 	[ "$status" -eq 0 ]
 	[ "$(jq -r '.classification' <<<"$output")" = 'unresolved' ]
+}
+
+# Catches PSNR parsing that drops FFmpeg's exact-match infinity, or compares it
+# as a finite surrogate.  The classifier cases use hand-written tagged values
+# to cover unique, tied, and mixed finite/infinite ordering.
+@test "diagnostic PSNR preserves positive infinity and classifies its deterministic ordering" {
+	psnr_log="$BATS_TEST_TMPDIR/psnr-infinity.log"
+	printf '%s\n' 'n:1 mse_avg:0.00 mse_y:0.00 psnr_avg:inf psnr_y:inf' >"$psnr_log"
+	run "$SCRIPTS/benchmark.sh" _test diagnostic-metric-value psnr "$psnr_log"
+	[ "$status" -eq 0 ]
+	[ "$output" = '{"kind":"positive-infinity"}' ]
+
+	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
+	base="$BATS_TEST_TMPDIR/psnr-ordering-base.json"
+	write_diagnostic_fixture_field "$fixture" cases encoder-output evidence "$base"
+	for case_id in unique tied mixed; do
+		evidence="$BATS_TEST_TMPDIR/psnr-$case_id.json"
+		jq --arg case_id "$case_id" '
+			.settings |= map(.offsets |= map(.psnr = {kind:"finite",value:.psnr})) |
+			if $case_id == "unique" then
+				.settings |= map(.offsets |= map(if .offset == 1 then .psnr = {kind:"positive-infinity"} else . end))
+			elif $case_id == "tied" then
+				.settings |= map(.offsets |= map(if .offset == 1 or .offset == 2 then .psnr = {kind:"positive-infinity"} else . end))
+			else
+				.settings[0].offsets |= map(if .offset == 1 then .psnr = {kind:"positive-infinity"} else . end)
+			end
+		' "$base" >"$evidence"
+		run "$SCRIPTS/benchmark.sh" _test diagnostic-vmaf-classify "$evidence"
+		[ "$status" -eq 0 ]
+		[ "$(jq -r '.classification' <<<"$output")" = 'encoder-output-defect' ]
+	done
 }
 
 @test "diagnostic HDR normalizer reduces exact rationals without decimal rounding" {
@@ -2201,6 +2260,32 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 }
 
+# Catches a second diagnostics invocation reopening durable evidence after the
+# first completed run.  The snapshots cover all retained artifacts and both
+# command logs, not merely the manifest.
+@test "diagnostics rejects a completed explicit run without changing evidence or commands" {
+	prepare_diagnostic_execution_run
+	run_id='20260819T120001Z-feedbeef'
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 0 ]
+	diagnostic_root="$BENCHMARK_OUT/runs/$run_id"
+	before_tree="$BATS_TEST_TMPDIR/diagnostic-before-tree.snapshot"
+	before_logs="$BATS_TEST_TMPDIR/diagnostic-before-logs.snapshot"
+	after_tree="$BATS_TEST_TMPDIR/diagnostic-after-tree.snapshot"
+	after_logs="$BATS_TEST_TMPDIR/diagnostic-after-logs.snapshot"
+	snapshot_tree_state "$diagnostic_root" "$before_tree"
+	snapshot_command_logs "$before_logs"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
+	[ "$status" -eq 73 ]
+	[ "$output" = "diagnostic run already exists: $run_id" ]
+	snapshot_tree_state "$diagnostic_root" "$after_tree"
+	snapshot_command_logs "$after_logs"
+	[ "$(<"$before_tree")" = "$(<"$after_tree")" ]
+	[ "$(<"$before_logs")" = "$(<"$after_logs")" ]
+}
+
 # Catches diagnostics artifacts slipping into findings, candidate ranking, or a
 # resumed quality run because the validators trust run IDs more than mode/schema.
 @test "diagnostics artifacts are rejected by findings validators and quality resume" {
@@ -2446,17 +2531,9 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		"$FIXTURES/manifests/identity.json" >"$BENCHMARK_OUT/runs/$run_id/manifest.json"
 
 	run "$SCRIPTS/benchmark.sh" diagnostics "$run_id"
-	[ "$status" -eq 2 ]
-	terminal_json="$(tail -n 1 <<<"$output")"
-	run jq -e --arg run "$run_id" '
-		.status == "harness-blocked" and
-		.runId == $run and
-		.artifactLocation == ("/out/runs/" + $run + "/diagnostics") and
-		.vmaf.reasons == ["runmeta-create-failed"] and
-		.hdr.reasons == ["runmeta-create-failed"]
-	' <<<"$terminal_json"
-	[ "$status" -eq 0 ]
-	assert_results_consumes_diagnostics_terminal "$run_id" Failed "$terminal_json" harness-blocked runmeta-create-failed
+	[ "$status" -eq 73 ]
+	[ "$output" = "diagnostic run already exists: $run_id" ]
+	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
 # Catches incomplete or missing normalized oracle data being dropped with
