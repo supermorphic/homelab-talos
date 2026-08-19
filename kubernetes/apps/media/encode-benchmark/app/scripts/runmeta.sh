@@ -198,14 +198,15 @@ discover_identity() {
 			echo 'diagnostic panel identity is malformed' >&2
 			return 65
 		}
-		diagnostics_identity="$(jq -n -c \
-			--argjson manifest_schema "$CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA" \
-			--argjson result_schema "$CONTRACT_DIAGNOSTICS_RESULT_SCHEMA" \
-			--arg accepted_findings_sha "$CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256" \
-			--arg decision_sha "$CONTRACT_DIAGNOSTICS_DECISION_SHA256" \
-			--arg historical_quality_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" \
-			--arg historical_findings_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" \
-			--arg panel_sha "$diagnostics_panel_sha" '
+		diagnostics_identity="$(
+			jq -n -c \
+				--argjson manifest_schema "$CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA" \
+				--argjson result_schema "$CONTRACT_DIAGNOSTICS_RESULT_SCHEMA" \
+				--arg accepted_findings_sha "$CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256" \
+				--arg decision_sha "$CONTRACT_DIAGNOSTICS_DECISION_SHA256" \
+				--arg historical_quality_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" \
+				--arg historical_findings_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" \
+				--arg panel_sha "$diagnostics_panel_sha" '
 			{
 				diagnostics: {
 					manifestSchemaVersion: $manifest_schema,
