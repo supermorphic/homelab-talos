@@ -322,9 +322,9 @@ capability_status="$(yq -r '.runtime.capabilityStatus' <<<"$samples_doc")"
 
 quality_count="$(yq -r '.qualityPanel | length' <<<"$samples_doc")"
 savings_count="$(yq -r '.savingsPanel | length' <<<"$samples_doc")"
-if [[ "$capability_status" == 'verified' ]]; then
-	configured_digest="${runtime_image##*@}"
-	jq -e --arg digest "$configured_digest" '
+valid_capability_evidence() {
+	local document="$1" digest="$2"
+	jq -e --arg digest "$digest" '
 		def reasons:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
@@ -340,9 +340,21 @@ if [[ "$capability_status" == 'verified' ]]; then
 				.telemetryStatus != "available" then "harness-blocked"
 			elif (reasons | length) == 0 then "passed"
 			else "failed" end;
+		def valid_diagnostic_capabilities:
+			. as $node |
+			(has("diagnosticCapabilities") | not) or
+			(.diagnosticCapabilities |
+				type == "object" and
+				(keys | sort) == ["bestEffortTimestampTime","imageId","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders","verifiedAt"] and
+				.imageId == $node.imageId and
+				.verifiedAt == $node.verifiedAt and
+				([.traceHeaders, .libvmaf, .ssim, .psnr, .bestEffortTimestampTime,
+					.packetDurationTime, .keyFrame, .pictType] |
+					all(.[]; . == "passed" or . == "failed")));
 		def valid_node:
 			type == "object" and
-			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
+			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"] or
+				keys == ["configuredImageDigest","decode","diagnosticCapabilities","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
 			.strategyId == "qsv-hevc-icq-v1" and
 			.proofSchemaVersion == 3 and
 			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
@@ -366,13 +378,64 @@ if [[ "$capability_status" == 'verified' ]]; then
 			.proofReasons == (reasons | join(";")) and
 			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
 			.configuredImageDigest == $digest and
-			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest));
+			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest)) and
+			valid_diagnostic_capabilities;
 		.runtime.capabilityEvidence
 		| (keys == ["nodes"]) and
 		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
 			([.[].nodeName] | unique | length) == length)
-	' <<<"$samples_doc" >/dev/null ||
+	' <<<"$document" >/dev/null
+}
+if [[ "$capability_status" == 'verified' ]]; then
+	configured_digest="${runtime_image##*@}"
+	valid_capability_evidence "$samples_doc" "$configured_digest" ||
 		fail 'verified capability evidence must contain unique valid schema-v3 node records'
+	# Catches a production predicate that no longer admits the committed bounded
+	# diagnostic proof or no longer rejects malformed nested evidence.
+	one_node_generic_capability_evidence="$(jq -c '
+		(.runtime.capabilityEvidence.nodes[0] | del(.diagnosticCapabilities)) as $generic_node |
+		.runtime.capabilityEvidence.nodes = [$generic_node]
+	' <<<"$samples_doc")"
+	mixed_capability_evidence="$(jq -c '
+		(.runtime.capabilityEvidence.nodes[0] | del(.diagnosticCapabilities)) as $fixture_node |
+		.runtime.capabilityEvidence.nodes = [
+			($fixture_node | .nodeName = "validator-generic"),
+			($fixture_node |
+				.nodeName = "validator-diagnostic" |
+				.diagnosticCapabilities = {
+					bestEffortTimestampTime:"passed", imageId:$fixture_node.imageId,
+					keyFrame:"passed", libvmaf:"passed", packetDurationTime:"passed",
+					pictType:"passed", psnr:"passed", ssim:"passed", traceHeaders:"passed",
+					verifiedAt:$fixture_node.verifiedAt
+				})
+		]
+	' <<<"$one_node_generic_capability_evidence")"
+	for capability_evidence_document in \
+		"$samples_doc" "$one_node_generic_capability_evidence" "$mixed_capability_evidence"; do
+		valid_capability_evidence "$capability_evidence_document" "$configured_digest" ||
+			fail 'capability evidence predicate rejected valid generic or diagnostic proof'
+	done
+	diagnostic_node_index="$(jq -er '
+		[.runtime.capabilityEvidence.nodes | to_entries[] |
+			select(.value | has("diagnosticCapabilities")) | .key] | first
+	' <<<"$mixed_capability_evidence")" ||
+		fail 'capability evidence mutation fixture lacks a diagnostic node'
+	# shellcheck disable=SC2016 # jq expands this variable, not the shell.
+	for capability_evidence_mutation in \
+		'del(.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders)' \
+		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders = "unknown"' \
+		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+		'def next_second:
+			capture("^(?<prefix>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:)(?<second>[0-9]{2})Z$") |
+			.prefix + ((((.second | tonumber) + 1) % 60) | tostring | if length == 1 then "0" + . else . end) + "Z";
+		.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.verifiedAt =
+			(.runtime.capabilityEvidence.nodes[$diagnostic_node_index].verifiedAt | next_second)'; do
+		mutated_capability_evidence="$(jq -c --argjson diagnostic_node_index "$diagnostic_node_index" \
+			"$capability_evidence_mutation" <<<"$mixed_capability_evidence")"
+		if valid_capability_evidence "$mutated_capability_evidence" "$configured_digest"; then
+			fail "capability evidence predicate accepted mutation: $capability_evidence_mutation"
+		fi
+	done
 else
 	jq -e '
 		.runtime.capabilityEvidence |
