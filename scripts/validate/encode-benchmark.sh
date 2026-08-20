@@ -322,9 +322,9 @@ capability_status="$(yq -r '.runtime.capabilityStatus' <<<"$samples_doc")"
 
 quality_count="$(yq -r '.qualityPanel | length' <<<"$samples_doc")"
 savings_count="$(yq -r '.savingsPanel | length' <<<"$samples_doc")"
-if [[ "$capability_status" == 'verified' ]]; then
-	configured_digest="${runtime_image##*@}"
-	jq -e --arg digest "$configured_digest" '
+valid_capability_evidence() {
+	local document="$1" digest="$2"
+	jq -e --arg digest "$digest" '
 		def reasons:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
@@ -384,8 +384,26 @@ if [[ "$capability_status" == 'verified' ]]; then
 		| (keys == ["nodes"]) and
 		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
 			([.[].nodeName] | unique | length) == length)
-	' <<<"$samples_doc" >/dev/null ||
+	' <<<"$document" >/dev/null
+}
+if [[ "$capability_status" == 'verified' ]]; then
+	configured_digest="${runtime_image##*@}"
+	valid_capability_evidence "$samples_doc" "$configured_digest" ||
 		fail 'verified capability evidence must contain unique valid schema-v3 node records'
+	# Catches a production predicate that no longer admits the committed bounded
+	# diagnostic proof or no longer rejects malformed nested evidence.
+	valid_capability_evidence "$samples_doc" "$configured_digest" ||
+		fail 'capability evidence predicate rejected the committed diagnostic proof'
+	for capability_evidence_mutation in \
+		'del(.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.traceHeaders)' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.traceHeaders = "unknown"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.verifiedAt = "2026-08-20T15:05:09Z"'; do
+		mutated_capability_evidence="$(jq -c "$capability_evidence_mutation" <<<"$samples_doc")"
+		if valid_capability_evidence "$mutated_capability_evidence" "$configured_digest"; then
+			fail "capability evidence predicate accepted mutation: $capability_evidence_mutation"
+		fi
+	done
 else
 	jq -e '
 		.runtime.capabilityEvidence |
