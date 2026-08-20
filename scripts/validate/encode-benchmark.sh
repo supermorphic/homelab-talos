@@ -392,19 +392,26 @@ if [[ "$capability_status" == 'verified' ]]; then
 		fail 'verified capability evidence must contain unique valid schema-v3 node records'
 	# Catches a production predicate that no longer admits the committed bounded
 	# diagnostic proof or no longer rejects malformed nested evidence.
-	generic_capability_evidence="$(jq -c 'del(.runtime.capabilityEvidence.nodes[].diagnosticCapabilities)' <<<"$samples_doc")"
-	mixed_capability_evidence="$(jq -c '
-		(.runtime.capabilityEvidence.nodes[1]) as $diagnostic_node |
-		del(.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities) |
-		.runtime.capabilityEvidence.nodes[1].diagnosticCapabilities = {
-			bestEffortTimestampTime:"passed", imageId:$diagnostic_node.imageId,
-			keyFrame:"passed", libvmaf:"passed", packetDurationTime:"passed",
-			pictType:"passed", psnr:"passed", ssim:"passed", traceHeaders:"passed",
-			verifiedAt:$diagnostic_node.verifiedAt
-		}
+	one_node_generic_capability_evidence="$(jq -c '
+		(.runtime.capabilityEvidence.nodes[0] | del(.diagnosticCapabilities)) as $generic_node |
+		.runtime.capabilityEvidence.nodes = [$generic_node]
 	' <<<"$samples_doc")"
+	mixed_capability_evidence="$(jq -c '
+		(.runtime.capabilityEvidence.nodes[0] | del(.diagnosticCapabilities)) as $fixture_node |
+		.runtime.capabilityEvidence.nodes = [
+			($fixture_node | .nodeName = "validator-generic"),
+			($fixture_node |
+				.nodeName = "validator-diagnostic" |
+				.diagnosticCapabilities = {
+					bestEffortTimestampTime:"passed", imageId:$fixture_node.imageId,
+					keyFrame:"passed", libvmaf:"passed", packetDurationTime:"passed",
+					pictType:"passed", psnr:"passed", ssim:"passed", traceHeaders:"passed",
+					verifiedAt:$fixture_node.verifiedAt
+				})
+		]
+	' <<<"$one_node_generic_capability_evidence")"
 	for capability_evidence_document in \
-		"$samples_doc" "$generic_capability_evidence" "$mixed_capability_evidence"; do
+		"$samples_doc" "$one_node_generic_capability_evidence" "$mixed_capability_evidence"; do
 		valid_capability_evidence "$capability_evidence_document" "$configured_digest" ||
 			fail 'capability evidence predicate rejected valid generic or diagnostic proof'
 	done
@@ -418,7 +425,11 @@ if [[ "$capability_status" == 'verified' ]]; then
 		'del(.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders)' \
 		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders = "unknown"' \
 		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
-		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.verifiedAt = "2026-08-20T15:05:09Z"'; do
+		'def next_second:
+			capture("^(?<prefix>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:)(?<second>[0-9]{2})Z$") |
+			.prefix + ((((.second | tonumber) + 1) % 60) | tostring | if length == 1 then "0" + . else . end) + "Z";
+		.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.verifiedAt =
+			(.runtime.capabilityEvidence.nodes[$diagnostic_node_index].verifiedAt | next_second)'; do
 		mutated_capability_evidence="$(jq -c --argjson diagnostic_node_index "$diagnostic_node_index" \
 			"$capability_evidence_mutation" <<<"$mixed_capability_evidence")"
 		if valid_capability_evidence "$mutated_capability_evidence" "$configured_digest"; then
