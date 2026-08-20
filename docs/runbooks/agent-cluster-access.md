@@ -55,6 +55,7 @@ ClusterRole adds only these campaign-required resources, each with `get`, `list`
 | `monitoring.coreos.com` | `prometheusrules`, `servicemonitors` |
 | `notification.toolkit.fluxcd.io` | `alerts`, `providers`, `receivers` |
 | `rbac.authorization.k8s.io` | `clusterrolebindings`, `clusterroles`, `rolebindings`, `roles` |
+| `scheduling.k8s.io` | `priorityclasses` |
 | `source.toolkit.fluxcd.io` | `buckets`, `gitrepositories`, `helmcharts`, `helmrepositories`, `ocirepositories` |
 | `storage.k8s.io` | `csidrivers`, `storageclasses` |
 | `tailscale.com` | `connectors`, `dnsconfigs`, `proxyclasses`, `proxygroups` |
@@ -81,6 +82,7 @@ bindings. They expose policy metadata, not Secret bodies, and grant no impersona
 | `media-storage` | observer | Reads the media storage contract. |
 | `plex` | diagnostic | Executes read-only runtime identity, Kubernetes API-token, and filesystem assertions inside the Plex pod. |
 | `intel-gpu-plugin` | observer | Reads plugin rollout and advertised resources. |
+| `encode-benchmark` | observer | Reads the inert benchmark inputs, including its PriorityClass. |
 | `qbittorrent` | observer | Reads rollout, route, and functional endpoint state. |
 | `prowlarr` | observer | Reads rollout, route, and application state. |
 | `sonarr` | observer | Reads rollout, route, and application state. |
