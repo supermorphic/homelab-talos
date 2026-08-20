@@ -73,7 +73,8 @@ case "$resource" in
   clusterissuers.cert-manager.io|ciliumclusterwidenetworkpolicies.cilium.io|\
   ciliumidentities.cilium.io|ciliumnodes.cilium.io|gatewayclasses.gateway.networking.k8s.io|\
   nodes.metrics.k8s.io|clusterrolebindings.rbac.authorization.k8s.io|\
-  clusterroles.rbac.authorization.k8s.io|csidrivers.storage.k8s.io|\
+  clusterroles.rbac.authorization.k8s.io|priorityclasses.scheduling.k8s.io|\
+  csidrivers.storage.k8s.io|\
   storageclasses.storage.k8s.io|connectors.tailscale.com|dnsconfigs.tailscale.com|\
   proxyclasses.tailscale.com|proxygroups.tailscale.com|users)
     [[ -z "$namespace" && "$all_namespaces" == true ]] || {
@@ -145,6 +146,11 @@ if rg -q -- '--as(=| )' "$named_log"; then
 fi
 rg -q -- '--context homelab-observer' "$named_log"
 rg -q -- '--context homelab-diagnostic' "$named_log"
+for context in homelab-observer homelab-diagnostic; do
+  for verb in get list watch; do
+    rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
+  done
+done
 
 admin_log="$(run_layout admin)"
 if rg -q -- '--context(=| )' "$admin_log"; then

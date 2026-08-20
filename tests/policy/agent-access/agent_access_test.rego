@@ -48,6 +48,7 @@ read_requirements := {
 	"monitoring.coreos.com": {"prometheusrules", "servicemonitors"},
 	"notification.toolkit.fluxcd.io": {"alerts", "providers", "receivers"},
 	"rbac.authorization.k8s.io": {"clusterrolebindings", "clusterroles", "rolebindings", "roles"},
+	"scheduling.k8s.io": {"priorityclasses"},
 	"source.toolkit.fluxcd.io": {"buckets", "gitrepositories", "helmcharts", "helmrepositories", "ocirepositories"},
 	"storage.k8s.io": {"csidrivers", "storageclasses"},
 	"tailscale.com": {"connectors", "dnsconfigs", "proxyclasses", "proxygroups"},
