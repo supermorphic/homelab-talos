@@ -16,7 +16,8 @@ samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samp
 # shellcheck disable=SC1091
 source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
 samples_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-samples.XXXXXX")"
-trap 'rm -f -- "$samples_document"' EXIT
+diagnostic_terminal_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-terminal.XXXXXX")"
+trap 'rm -f -- "$samples_document" "$diagnostic_terminal_document"' EXIT
 yq -e -r '.data."samples.json"' "$samples_source" >"$samples_document"
 contract_load "$samples_document" || exit $?
 
@@ -38,33 +39,7 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
-jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
-	--selector "$selector" --output json)"
-pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
-	--selector "$selector" --output json)"
-job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
-((job_count > 0)) || {
-	echo "no owned benchmark Jobs found for run $run_id" >&2
-	exit 66
-}
-capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
-if ((capability_job_count > 0 && capability_job_count != job_count)); then
-	echo 'capability result provenance rejected: capability dispatch contains mixed Job modes' >&2
-	exit 1
-fi
-if ((capability_job_count > 0)); then
-	unique_job_names="$(yq -p=json -r '[.items[].metadata.name] | unique | length' <<<"$jobs")"
-	unique_target_nodes="$(yq -p=json -r \
-		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""] | unique | length' \
-		<<<"$jobs")"
-	all_target_nodes="$(yq -p=json -r \
-		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // "" | select(length > 0)] | length' \
-		<<<"$jobs")"
-	if ((unique_job_names != job_count || unique_target_nodes != job_count || all_target_nodes != job_count)); then
-		echo 'capability result provenance rejected: Job names and targeted nodes must be unique' >&2
-		exit 1
-	fi
-fi
+diagnostic_terminal_max_bytes="$CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES"
 
 normalize_image_id() {
 	local image_id="$1" stripped
@@ -88,6 +63,109 @@ phase_for_job() {
 	else
 		printf '%s\n' 'Pending'
 	fi
+}
+
+diagnostic_terminal_schema_error() {
+	local reason="$1"
+	printf 'terminal-summary-schema-error:%s\n' "$reason"
+}
+
+diagnostic_sanitize_terminal() {
+	local terminal_message_file="$1" requested_run_id="$2"
+	local raw_bytes parsed reason artifact_location
+	if [[ ! -s "$terminal_message_file" ]]; then
+		printf '%s\n' 'no-sanitized-summary'
+		return 65
+	fi
+	raw_bytes="$(LC_ALL=C wc -c <"$terminal_message_file" | tr -d '[:space:]')" || return 65
+	((raw_bytes <= diagnostic_terminal_max_bytes)) || {
+		printf '%s\n' "$(diagnostic_terminal_schema_error raw-message-too-large)"
+		return 65
+	}
+	parsed="$(jq -e -c . "$terminal_message_file" 2>/dev/null)" || {
+		printf '%s\n' 'no-sanitized-summary'
+		return 65
+	}
+	artifact_location="/out/runs/$requested_run_id/diagnostics"
+	reason="$(contract_diagnostics_terminal_schema_reason "$parsed" "$requested_run_id" '' "$artifact_location")" || {
+		printf '%s\n' "$(diagnostic_terminal_schema_error invalid-json)"
+		return 65
+	}
+	if [[ -n "$reason" ]]; then
+		printf '%s\n' "$(diagnostic_terminal_schema_error "$reason")"
+		return 65
+	fi
+	jq -r '
+		"mode=diagnostics " +
+		"run_id=\(.runId) " +
+		"artifact_location=\(.artifactLocation) " +
+		"status=\(.status) " +
+		"vmaf_total=\(.vmaf.total) " +
+		"vmaf_encoder_output_defect=\(.vmaf["encoder-output-defect"]) " +
+		"vmaf_temporal_alignment_defect=\(.vmaf["temporal-alignment-defect"]) " +
+		"vmaf_unresolved=\(.vmaf.unresolved) " +
+		"vmaf_vmaf_measurement_defect=\(.vmaf["vmaf-measurement-defect"]) " +
+		"vmaf_reasons=\(.vmaf.reasons | join(",")) " +
+		"hdr_total=\(.hdr.total) " +
+		"hdr_clip_boundary_defect=\(.hdr["clip-boundary-defect"]) " +
+		"hdr_encoder_output_defect=\(.hdr["encoder-output-defect"]) " +
+		"hdr_preserved=\(.hdr.preserved) " +
+		"hdr_source_probe_defect=\(.hdr["source-probe-defect"]) " +
+		"hdr_unresolved_oracle=\(.hdr["unresolved-oracle"]) " +
+		"hdr_reasons=\(.hdr.reasons | join(","))"
+	' <<<"$parsed"
+}
+
+diagnostic_results() {
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase sanitized_terminal
+	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
+		[
+			.items[]
+			| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
+			| select(.metadata.labels."homelab-talos/benchmark-run" == env.RUN_ID)
+		]
+	' <<<"$all_pods_json")" || return 65
+	diagnostic_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")]' <<<"$matching_pods")" || return 65
+	pod_count="$(jq -r 'length' <<<"$diagnostic_pods")"
+	total_count="$(jq -r 'length' <<<"$matching_pods")"
+	((pod_count == 1 && total_count == 1)) || {
+		echo "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $requested_run_id" >&2
+		return 1
+	}
+	pod_json="$(jq -c '.[0]' <<<"$diagnostic_pods")"
+	pod_phase="$(jq -r '.status.phase // ""' <<<"$pod_json")"
+	case "$pod_phase" in
+	Running | Pending)
+		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "$pod_phase" "$requested_run_id"
+		return 0
+		;;
+	Succeeded | Failed)
+		jq -j '
+			[
+				.status.containerStatuses[]?
+				| select(.name == "benchmark")
+				| (.state.terminated.message // .lastState.terminated.message // "")
+			] |
+			if length == 1 then .[0]
+			elif length == 0 then ""
+			else error("ambiguous diagnostic terminal message")
+			end
+		' <<<"$pod_json" >"$diagnostic_terminal_document" 2>/dev/null || {
+			printf '%s\n' "$(diagnostic_terminal_schema_error ambiguous-terminal-message)" >&2
+			return 1
+		}
+		sanitized_terminal="$(diagnostic_sanitize_terminal "$diagnostic_terminal_document" "$requested_run_id")" || {
+			printf '%s\n' "$sanitized_terminal" >&2
+			return 1
+		}
+		printf 'mode=diagnostics phase=%s %s\n' "$pod_phase" "${sanitized_terminal#mode=diagnostics }"
+		return 0
+		;;
+	*)
+		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "${pod_phase:-Unknown}" "$requested_run_id"
+		return 0
+		;;
+	esac
 }
 
 sanitize_summary() {
@@ -170,6 +248,9 @@ sanitize_capability_evidence() {
 			(.encodeSpeed | type == "number" and . >= 0) and
 			(.decode == "passed" or .decode == "failed") and
 			(.vmaf == "passed" or .vmaf == "failed") and
+			(.diagnosticCapabilities | type == "object" and
+				(keys | sort) == ["bestEffortTimestampTime","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders"] and
+				all(.[]; . == "passed" or . == "failed")) and
 			.configuredImageDigest == $digest and
 			.proofStatus == expected_status and .status == expected_status and
 			.proofReasons == (reason_list | join(";")) and
@@ -180,6 +261,7 @@ sanitize_capability_evidence() {
 				renderNode, drmDriver, selectedRateControl,
 			telemetryStatus, telemetryReason, videoBusyNanoseconds, videoBusyPercent,
 			encodeFps, encodeSpeed, decode, vmaf, proofStatus, proofReasons,
+			diagnosticCapabilities: (.diagnosticCapabilities + {imageId:$image_id,verifiedAt:$verified_at}),
 			verifiedAt: $verified_at, configuredImageDigest,
 			imageId: $image_id
 		}
@@ -218,6 +300,48 @@ validate_prework_image_evidence() {
 	normalized_evidence_id="$(normalize_image_id "$(jq -r '.imageId' <<<"$evidence")")" || return 65
 	[[ "$normalized_evidence_id" == "$live_image_id" && "${normalized_evidence_id##*@}" == "$configured_digest" ]] || return 65
 }
+
+diagnostic_pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
+	--selector "$selector" --output json)"
+diagnostic_mode_pod_count="$(RUN_ID="$run_id" yq -p=json -r '
+	[
+		.items[]
+		| select(.metadata.labels."app.kubernetes.io/name" == "encode-benchmark")
+		| select(.metadata.labels."homelab-talos/benchmark-run" == strenv(RUN_ID))
+		| select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")
+	] | length
+' <<<"$diagnostic_pods")"
+if ((diagnostic_mode_pod_count > 0)); then
+	diagnostic_results "$diagnostic_pods" "$run_id"
+	exit $?
+fi
+
+jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+	--selector "$selector" --output json)"
+pods="$diagnostic_pods"
+job_count="$(yq -p=json -r '.items | length' <<<"$jobs")"
+((job_count > 0)) || {
+	echo "no owned benchmark Jobs found for run $run_id" >&2
+	exit 66
+}
+capability_job_count="$(yq -p=json -r '[.items[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "capabilities")] | length' <<<"$jobs")"
+if ((capability_job_count > 0 && capability_job_count != job_count)); then
+	echo 'capability result provenance rejected: capability dispatch contains mixed Job modes' >&2
+	exit 1
+fi
+if ((capability_job_count > 0)); then
+	unique_job_names="$(yq -p=json -r '[.items[].metadata.name] | unique | length' <<<"$jobs")"
+	unique_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // ""] | unique | length' \
+		<<<"$jobs")"
+	all_target_nodes="$(yq -p=json -r \
+		'[.items[].spec.template.spec.nodeSelector."kubernetes.io/hostname" // "" | select(length > 0)] | length' \
+		<<<"$jobs")"
+	if ((unique_job_names != job_count || unique_target_nodes != job_count || all_target_nodes != job_count)); then
+		echo 'capability result provenance rejected: Job names and targeted nodes must be unique' >&2
+		exit 1
+	fi
+fi
 
 evidence_status=0
 quality_completion_count=0

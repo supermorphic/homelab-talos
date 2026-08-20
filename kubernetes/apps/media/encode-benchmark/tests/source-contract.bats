@@ -49,6 +49,77 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
+@test "embedded samples publish the exact bounded diagnostics contract" {
+	run jq -e '
+		.diagnostics == {
+			schemaVersion: 1,
+			resultSchemaVersion: 1,
+			strategyId: "qsv-hevc-icq-v1",
+			acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
+			decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
+			historicalQualityRunId: "20260817T233546Z-debc0498",
+			historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
+			vmafSettings: [16, 30],
+			hdrSetting: 16,
+			frameRadius: 2,
+			frameOffsets: [-2, -1, 0, 1, 2],
+			traceWindowSeconds: 10,
+			vmafPanel: [
+				{sampleId: "avc-clean-coco", clipId: "motion", observedFrameIndex: 1641},
+				{sampleId: "avc-grain-memento", clipId: "dark", observedFrameIndex: 523},
+				{sampleId: "avc-grain-memento", clipId: "detail", observedFrameIndex: 370},
+				{sampleId: "vc1-fugitive", clipId: "detail", observedFrameIndex: 781},
+				{sampleId: "vc1-fugitive", clipId: "motion", observedFrameIndex: 798}
+			],
+			hdrPanel: [
+				{sampleId: "hdr10-clean-ministry", clipId: "detail"},
+				{sampleId: "hdr10-grain-goodfellas", clipId: "detail"},
+				{sampleId: "hdr10-motion-john-wick-2", clipId: "detail"}
+			]
+		} and
+		([.diagnostics.vmafPanel[] | "\(.sampleId)/\(.clipId)/\(.observedFrameIndex)"] == [
+			"avc-clean-coco/motion/1641",
+			"avc-grain-memento/dark/523",
+			"avc-grain-memento/detail/370",
+			"vc1-fugitive/detail/781",
+			"vc1-fugitive/motion/798"
+		]) and
+		([.diagnostics.hdrPanel[] | "\(.sampleId)/\(.clipId)"] == [
+			"hdr10-clean-ministry/detail",
+			"hdr10-grain-goodfellas/detail",
+			"hdr10-motion-john-wick-2/detail"
+		]) and
+		([.diagnostics.vmafPanel[] as $panel | .diagnostics.vmafSettings[] |
+			{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .}] | length) == 10 and
+		([.diagnostics.hdrPanel[] as $panel |
+			{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .diagnostics.hdrSetting}] | length) == 3 and
+		([.diagnostics | .. | strings |
+			select(. == "quality" or . == "x265" or . == "savings" or
+				. == "finalist" or . == "findings" or . == "contention")] | length) == 0
+	' "$samples_json"
+	[ "$status" -eq 0 ]
+}
+
+@test "shared base contract accepts a minimal non-diagnostic samples document" {
+	minimal="$BATS_TEST_TMPDIR/minimal-non-diagnostic.json"
+	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" '
+		{
+			schemaVersion: 2,
+			strategy: $strategy,
+			runtime: {
+				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+			},
+			savingsSeed: 20260802,
+			qualityPanel: [],
+			savingsPanel: [],
+			chosenSettings: {}
+		}
+	' >"$minimal"
+
+	run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$minimal"
+	[ "$status" -eq 0 ]
+}
+
 # Catches accepting a configuration that has the right values but changes their
 # order, cardinality, or integer representation, which would make benchmark
 # evidence non-comparable across producers.
@@ -64,6 +135,32 @@ setup() {
 		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
 		[ "$status" -eq 65 ]
 	done
+}
+
+@test "shared contract rejects malformed present diagnostics scope" {
+	for mutation in \
+		'.diagnostics.vmafPanel[0].sampleId = "missing-title"' \
+		'.diagnostics.vmafPanel += [{"sampleId":"avc-clean-coco","clipId":"motion","observedFrameIndex":1641}]' \
+		'.diagnostics.hdrPanel[0].clipId = "motion"' \
+		'.diagnostics.vmafSettings = [16, 28]' \
+		'.diagnostics.frameOffsets = [-2, -1, 0, 1, 3]' \
+		'.diagnostics.traceWindowSeconds = 11' \
+		'.diagnostics.acceptedFindingsSha256 = "sha256:ABC"' \
+		'.diagnostics.historicalQualityRunId = "not-a-run-id"'; do
+		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$samples_json" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
+		[ "$status" -eq 65 ]
+	done
+}
+
+@test "diagnostics mode requires a canonical diagnostics contract object" {
+	candidate="$BATS_TEST_TMPDIR/missing-diagnostics.json"
+	jq 'del(.diagnostics)' "$samples_json" >"$candidate"
+
+	run bash -c 'source "$1"; contract_load "$2"; contract_require_diagnostics "$2"' \
+		_ "$contract" "$candidate"
+	[ "$status" -eq 65 ]
 }
 
 # Catches producers drifting from the shared candidate membership check used by

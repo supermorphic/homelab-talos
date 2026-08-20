@@ -12,6 +12,8 @@ metadata:
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 86400
+  # Dispatch narrows this only for diagnostics; the shared template stays at the
+  # standard benchmark deadline for every other mode.
   activeDeadlineSeconds: 129600
   template:
     metadata:

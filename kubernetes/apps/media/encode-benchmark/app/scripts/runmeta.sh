@@ -87,17 +87,39 @@ image_digest() {
 normalize_identity() {
 	local input_json="$1"
 	local mode="$2"
-	contract_normalize_run_identity "$input_json" "$mode"
+	local output status
+	set +e
+	output="$(contract_normalize_run_identity "$input_json" "$mode" 2>&1)"
+	status=$?
+	set -e
+	if [[ "$status" -ne 0 ]]; then
+		if [[ "$mode" == 'diagnostics' && "$output" == *'diagnostic command identity is missing or malformed'* ]]; then
+			printf '%s\n' 'diagnostic command identity is missing or malformed' >&2
+			return 65
+		fi
+		printf '%s\n' "$output" >&2
+		return "$status"
+	fi
+	printf '%s\n' "$output"
 }
 
 discover_identity() {
 	local mode="$1"
 	local script_directory configured_image dispatched_image running_image configured_digest dispatched_digest running_digest
-	local samples_digest savings_seed execution_class selected_settings upstream_identity findings_inputs_sha256=''
+	local samples_digest savings_seed execution_class selected_settings upstream_identity diagnostics_identity
+	local diagnostics_panel_sha='' findings_inputs_sha256=''
 	local script_digests='{}' sources='[]' encoder_commands node_name kernel i915 vpl cpu_model ffmpeg_version libx265_version
 	local vmaf_model vmaf_version client_device source_json source_path source_size source_sha probe_log=''
 	local savings_cohorts=''
 	local source_index=0
+
+	if [[ "$mode" == 'diagnostics' ]]; then
+		[[ -f "$samples_file" ]] || {
+			echo "samples configuration not found: $samples_file" >&2
+			return 66
+		}
+		contract_require_diagnostics "$samples_file" || return $?
+	fi
 
 	if [[ -n "$identity_fixture" ]]; then
 		[[ "$test_mode" == '1' ]] || {
@@ -140,7 +162,9 @@ discover_identity() {
 	}
 	samples_digest="$(sha256_file "$samples_file")"
 	savings_seed="$(jq -r '.savingsSeed' "$samples_file")"
-	if [[ -v BENCHMARK_SELECTED_SETTINGS_JSON ]]; then
+	if [[ "$mode" == 'diagnostics' ]]; then
+		selected_settings='[]'
+	elif [[ -v BENCHMARK_SELECTED_SETTINGS_JSON ]]; then
 		selected_settings="$BENCHMARK_SELECTED_SETTINGS_JSON"
 	else
 		selected_settings="$(jq -e -c '
@@ -169,6 +193,34 @@ discover_identity() {
 		echo 'upstream identity must be a JSON object' >&2
 		return 65
 	}
+	if [[ "$mode" == 'diagnostics' ]]; then
+		diagnostics_panel_sha="$(contract_diagnostics_panel_sha256 "$samples_file")" || {
+			echo 'diagnostic panel identity is malformed' >&2
+			return 65
+		}
+		diagnostics_identity="$(
+			jq -n -c \
+				--argjson manifest_schema "$CONTRACT_DIAGNOSTICS_MANIFEST_SCHEMA" \
+				--argjson result_schema "$CONTRACT_DIAGNOSTICS_RESULT_SCHEMA" \
+				--arg accepted_findings_sha "$CONTRACT_DIAGNOSTICS_ACCEPTED_FINDINGS_SHA256" \
+				--arg decision_sha "$CONTRACT_DIAGNOSTICS_DECISION_SHA256" \
+				--arg historical_quality_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_QUALITY_RUN_ID" \
+				--arg historical_findings_run "$CONTRACT_DIAGNOSTICS_HISTORICAL_FINDINGS_RUN_ID" \
+				--arg panel_sha "$diagnostics_panel_sha" '
+			{
+				diagnostics: {
+					manifestSchemaVersion: $manifest_schema,
+					resultSchemaVersion: $result_schema,
+					acceptedFindingsSha256: $accepted_findings_sha,
+					decisionSha256: $decision_sha,
+					historicalQualityRunId: $historical_quality_run,
+					historicalFindingsRunId: $historical_findings_run,
+					panelSha256: $panel_sha
+				}
+			}'
+		)" || return 65
+		upstream_identity="$diagnostics_identity"
+	fi
 	if [[ "$mode" == 'findings' ]]; then
 		jq -e --arg digest "$findings_inputs_sha256" '.findingsInputsSha256 == $digest' <<<"$upstream_identity" >/dev/null || {
 			echo 'findings upstream identity does not bind the input digest' >&2
@@ -194,6 +246,12 @@ discover_identity() {
 	findings)
 		panel='empty'
 		sources='[]'
+		;;
+	diagnostics)
+		# shellcheck disable=SC2016 # jq variables are evaluated by jq, not this shell.
+		panel='. as $root | .qualityPanel[]? | select(.id as $sample_id |
+			([$root.diagnostics.vmafPanel[].sampleId, $root.diagnostics.hdrPanel[].sampleId] |
+				index($sample_id) != null))'
 		;;
 	quality) panel='.qualityPanel[]?' ;;
 	x265)
@@ -431,6 +489,10 @@ verify_run() {
 	}
 	stored="$(stored_identity "$manifest")" || return
 	mode="$(jq -r '.mode' <<<"$stored")"
+	if [[ -n "$requested_mode" && "$mode" != "$requested_mode" ]]; then
+		printf 'identity mismatch: mode (stored=%s, current=%s)\n' "$mode" "$requested_mode" >&2
+		return 65
+	fi
 	if [[ -n "$requested_mode" ]]; then
 		mode="$requested_mode"
 	fi
@@ -441,6 +503,16 @@ verify_run() {
 	fi
 }
 
+diagnostic_run_collision() {
+	local run_id="$1" run_directory
+	validate_run_id "$run_id" || return
+	run_directory="$runs_root/$run_id"
+	if [[ -e "$run_directory" || -L "$run_directory" ]]; then
+		echo "diagnostic run already exists: $run_id" >&2
+		return 73
+	fi
+}
+
 create_run() {
 	local mode="$1"
 	local explicit_run_id="${2:-}"
@@ -448,6 +520,9 @@ create_run() {
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
 		validate_run_id "$explicit_run_id" || return
+		if [[ "$mode" == 'diagnostics' ]]; then
+			diagnostic_run_collision "$explicit_run_id" || return
+		fi
 		now="${explicit_run_id%-*}"
 		if [[ -n "$dispatch_correlation_id" ]]; then
 			[[ "$mode" == 'quality' && "$explicit_run_id" == "$dispatch_correlation_id" ]] || {
@@ -685,6 +760,10 @@ case "$action" in
 create)
 	(($# == 1 || $# == 2)) || usage
 	create_run "$@"
+	;;
+diagnostic-precheck)
+	(($# == 1)) || usage
+	diagnostic_run_collision "$1"
 	;;
 verify)
 	(($# == 1)) || usage

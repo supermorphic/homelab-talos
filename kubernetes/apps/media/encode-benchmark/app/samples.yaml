@@ -198,6 +198,61 @@ data:
           "clips": {}
         }
       ],
+      "diagnostics": {
+        "schemaVersion": 1,
+        "resultSchemaVersion": 1,
+        "strategyId": "qsv-hevc-icq-v1",
+        "acceptedFindingsSha256": "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
+        "decisionSha256": "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
+        "historicalQualityRunId": "20260817T233546Z-debc0498",
+        "historicalFindingsRunId": "20260818T214739Z-8bc2de3e",
+        "vmafSettings": [16, 30],
+        "hdrSetting": 16,
+        "frameRadius": 2,
+        "frameOffsets": [-2, -1, 0, 1, 2],
+        "traceWindowSeconds": 10,
+        "vmafPanel": [
+          {
+            "sampleId": "avc-clean-coco",
+            "clipId": "motion",
+            "observedFrameIndex": 1641
+          },
+          {
+            "sampleId": "avc-grain-memento",
+            "clipId": "dark",
+            "observedFrameIndex": 523
+          },
+          {
+            "sampleId": "avc-grain-memento",
+            "clipId": "detail",
+            "observedFrameIndex": 370
+          },
+          {
+            "sampleId": "vc1-fugitive",
+            "clipId": "detail",
+            "observedFrameIndex": 781
+          },
+          {
+            "sampleId": "vc1-fugitive",
+            "clipId": "motion",
+            "observedFrameIndex": 798
+          }
+        ],
+        "hdrPanel": [
+          {
+            "sampleId": "hdr10-clean-ministry",
+            "clipId": "detail"
+          },
+          {
+            "sampleId": "hdr10-grain-goodfellas",
+            "clipId": "detail"
+          },
+          {
+            "sampleId": "hdr10-motion-john-wick-2",
+            "clipId": "detail"
+          }
+        ]
+      },
       "savingsPanel": [
         {
           "cohort": "avc",
