@@ -392,14 +392,35 @@ if [[ "$capability_status" == 'verified' ]]; then
 		fail 'verified capability evidence must contain unique valid schema-v3 node records'
 	# Catches a production predicate that no longer admits the committed bounded
 	# diagnostic proof or no longer rejects malformed nested evidence.
-	valid_capability_evidence "$samples_doc" "$configured_digest" ||
-		fail 'capability evidence predicate rejected the committed diagnostic proof'
+	generic_capability_evidence="$(jq -c 'del(.runtime.capabilityEvidence.nodes[].diagnosticCapabilities)' <<<"$samples_doc")"
+	mixed_capability_evidence="$(jq -c '
+		(.runtime.capabilityEvidence.nodes[1]) as $diagnostic_node |
+		del(.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities) |
+		.runtime.capabilityEvidence.nodes[1].diagnosticCapabilities = {
+			bestEffortTimestampTime:"passed", imageId:$diagnostic_node.imageId,
+			keyFrame:"passed", libvmaf:"passed", packetDurationTime:"passed",
+			pictType:"passed", psnr:"passed", ssim:"passed", traceHeaders:"passed",
+			verifiedAt:$diagnostic_node.verifiedAt
+		}
+	' <<<"$samples_doc")"
+	for capability_evidence_document in \
+		"$samples_doc" "$generic_capability_evidence" "$mixed_capability_evidence"; do
+		valid_capability_evidence "$capability_evidence_document" "$configured_digest" ||
+			fail 'capability evidence predicate rejected valid generic or diagnostic proof'
+	done
+	diagnostic_node_index="$(jq -er '
+		[.runtime.capabilityEvidence.nodes | to_entries[] |
+			select(.value | has("diagnosticCapabilities")) | .key] | first
+	' <<<"$mixed_capability_evidence")" ||
+		fail 'capability evidence mutation fixture lacks a diagnostic node'
+	# shellcheck disable=SC2016 # jq expands this variable, not the shell.
 	for capability_evidence_mutation in \
-		'del(.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.traceHeaders)' \
-		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.traceHeaders = "unknown"' \
-		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
-		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.verifiedAt = "2026-08-20T15:05:09Z"'; do
-		mutated_capability_evidence="$(jq -c "$capability_evidence_mutation" <<<"$samples_doc")"
+		'del(.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders)' \
+		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.traceHeaders = "unknown"' \
+		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+		'.runtime.capabilityEvidence.nodes[$diagnostic_node_index].diagnosticCapabilities.verifiedAt = "2026-08-20T15:05:09Z"'; do
+		mutated_capability_evidence="$(jq -c --argjson diagnostic_node_index "$diagnostic_node_index" \
+			"$capability_evidence_mutation" <<<"$mixed_capability_evidence")"
 		if valid_capability_evidence "$mutated_capability_evidence" "$configured_digest"; then
 			fail "capability evidence predicate accepted mutation: $capability_evidence_mutation"
 		fi
