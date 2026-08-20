@@ -340,9 +340,21 @@ if [[ "$capability_status" == 'verified' ]]; then
 				.telemetryStatus != "available" then "harness-blocked"
 			elif (reasons | length) == 0 then "passed"
 			else "failed" end;
+		def valid_diagnostic_capabilities:
+			. as $node |
+			(has("diagnosticCapabilities") | not) or
+			(.diagnosticCapabilities |
+				type == "object" and
+				(keys | sort) == ["bestEffortTimestampTime","imageId","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders","verifiedAt"] and
+				.imageId == $node.imageId and
+				.verifiedAt == $node.verifiedAt and
+				([.traceHeaders, .libvmaf, .ssim, .psnr, .bestEffortTimestampTime,
+					.packetDurationTime, .keyFrame, .pictType] |
+					all(.[]; . == "passed" or . == "failed")));
 		def valid_node:
 			type == "object" and
-			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
+			(keys == ["configuredImageDigest","decode","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"] or
+				keys == ["configuredImageDigest","decode","diagnosticCapabilities","drmDriver","encodeFps","encodeSpeed","imageId","initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode","selectedRateControl","strategyId","telemetryReason","telemetryStatus","verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"]) and
 			.strategyId == "qsv-hevc-icq-v1" and
 			.proofSchemaVersion == 3 and
 			(.nodeName | type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")) and
@@ -366,7 +378,8 @@ if [[ "$capability_status" == 'verified' ]]; then
 			.proofReasons == (reasons | join(";")) and
 			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
 			.configuredImageDigest == $digest and
-			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest));
+			(.imageId | type == "string" and test("^([^@[:space:]]+@)?sha256:[0-9a-f]{64}$") and (sub("^.*@"; "") == $digest)) and
+			valid_diagnostic_capabilities;
 		.runtime.capabilityEvidence
 		| (keys == ["nodes"]) and
 		  (.nodes | type == "array" and length > 0 and all(.[]; valid_node) and
