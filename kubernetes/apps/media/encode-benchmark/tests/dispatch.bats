@@ -133,14 +133,27 @@ if contains logs "$@"; then
 		[[ "${STUB_HANDOFF_LOG_READY:-1}" == '1' ]] && printf '%s\n' 'running_image_evidence=accepted'
 		exit 0
 	fi
+	log_path=''
 	if [[ -n "${STUB_LOGS_DIR:-}" ]]; then
 		resource=''
 		for argument in "$@"; do
 			if [[ "$argument" == job/* ]]; then resource="${argument#job/}"; fi
 		done
-		sed -n '1,$p' "$STUB_LOGS_DIR/$resource.log"
+		log_path="$STUB_LOGS_DIR/$resource.log"
 	elif [[ -n "${STUB_LOGS_FILE:-}" ]]; then
-		sed -n '1,$p' "$STUB_LOGS_FILE"
+		log_path="$STUB_LOGS_FILE"
+	fi
+	if [[ -n "$log_path" ]]; then
+		tail_count="$(argument_after --tail "$@" || true)"
+		for argument in "$@"; do
+			[[ "$argument" == --tail=* ]] && tail_count="${argument#--tail=}"
+		done
+		if [[ -n "$tail_count" ]]; then
+			[[ "$tail_count" =~ ^[0-9]+$ ]] || exit 64
+			tail -n "$tail_count" "$log_path"
+		else
+			sed -n '1,$p' "$log_path"
+		fi
 	fi
 	exit 0
 fi
@@ -928,24 +941,41 @@ set_dispatch_chosen_record() {
 	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = 'docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].env | length' "$job")" = '0' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | [.mountPath,.readOnly] | @tsv' "$job")" = $'/evidence\ttrue' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | [.mountPath,.subPath,.readOnly] | @tsv' "$job")" = $'/evidence\tbenchmark/runs/20260820T223425Z-082b3d38/diagnostics\ttrue' ]
 	[ "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
 	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | [.persistentVolumeClaim.claimName,.persistentVolumeClaim.readOnly] | @tsv' "$job")" = $'media-data\ttrue' ]
-	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | .persistentVolumeClaim.subPath' "$job")" = 'benchmark/runs/20260820T223425Z-082b3d38/diagnostics' ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | (has("persistentVolumeClaim") and (.persistentVolumeClaim | has("subPath") | not))' "$job")" = 'true' ]
 	[ "$(yq -r '(.spec.template.spec.containers[0].resources.requests | has("gpu.intel.com/i915")) or (.spec.template.spec.containers[0].resources.limits | has("gpu.intel.com/i915"))' "$job")" = 'false' ]
 }
 
 # Results must not reuse the diagnostics result selector: this validates the
 # collector's exact Job/Pod ownership and prints the one canonical JSON value
 # from the controlled collector log unchanged.
+write_canonical_collector_json() {
+	local path="$1" run_id="$2"
+	jq -n -S -c --arg run "$run_id" '
+		def class: {schemaVersion:1,classification:"unresolved",reasons:["classification-predicate-not-met"]};
+		def setting($quality): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:[],reset:[]},offsets:[],timeline:{zeroOffsetAligned:true,discontinuity:null}};
+		def source: {decodedFrameCount:2160,stream:{startTime:"0",duration:"90",timeBase:"1/90000",averageFrameRate:"24/1"},frames:[]};
+		def vmaf($sample; $clip; $index): {sampleId:$sample,clipId:$clip,observedFrameIndex:$index,status:"complete",sourceContinuity:source,settings:[setting(16),setting(30)],classification:class};
+		def hdr($sample): {sampleId:$sample,clipId:"detail",globalQuality:16,status:"complete",reason:null,normalizedOracle:{schemaVersion:1,source:{streamProbe:{status:"null"},windows:{},authoritative:{status:"unresolved",reasons:["source-window-null"]}},clip:{},encoded:{}},classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["source-window-null"]}};
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:[vmaf("avc-clean-coco";"motion";1641),vmaf("avc-grain-memento";"dark";523),vmaf("avc-grain-memento";"detail";370),vmaf("vc1-fugitive";"detail";781),vmaf("vc1-fugitive";"motion";798)],hdr:[hdr("hdr10-clean-ministry"),hdr("hdr10-grain-goodfellas"),hdr("hdr10-motion-john-wick-2")]}' >"$path"
+}
+
+@test "kubectl log stub implements --tail using kubectl argument semantics" {
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
+	export STUB_LOGS_FILE
+	printf '%s\n%s\n' first second >"$STUB_LOGS_FILE"
+	run kubectl --namespace media logs job/collector --container benchmark --tail=1
+	[ "$status" -eq 0 ]
+	[ "$output" = 'second' ]
+}
+
 @test "diagnostic evidence reader results require one terminal owned collector" {
 	run_id='20260820T223425Z-082b3d38'
 	job_name="encode-benchmark-evidence-reader-${run_id,,}"
 	collector_json="$BATS_TEST_TMPDIR/collector.json"
-	jq -n -S -c --arg run "$run_id" '
-		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,
-		 vmaf:["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion" | split("/") | {sampleId:.[0],clipId:.[1]}],
-		 hdr:["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2" | {sampleId:.}]}' >"$collector_json"
+	write_canonical_collector_json "$collector_json" "$run_id"
 	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
 	STUB_LOGS_FILE="$collector_json"
@@ -966,7 +996,7 @@ set_dispatch_chosen_record() {
 	run_id='20260820T223425Z-082b3d38'
 	job_name="encode-benchmark-evidence-reader-${run_id,,}"
 	collector_json="$BATS_TEST_TMPDIR/collector.json"
-	jq -n -S -c --arg run "$run_id" '{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion" | split("/") | {sampleId:.[0],clipId:.[1]}],hdr:["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2" | {sampleId:.}]}' >"$collector_json"
+	write_canonical_collector_json "$collector_json" "$run_id"
 	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
 	STUB_LOGS_FILE="$collector_json"
@@ -974,7 +1004,7 @@ set_dispatch_chosen_record() {
 	jq -n --arg name "$job_name" --arg run "$run_id" '{items:[{metadata:{name:$name,uid:"fixture-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"},annotations:{"homelab-talos/benchmark-owned":"true"}},spec:{template:{spec:{containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0}}]}' >"$STUB_JOBS_JSON"
 	jq -n --arg name "$job_name" '{items:[{metadata:{name:($name + "-pod"),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$STUB_BENCHMARK_PODS_JSON"
 
-	for mutation in job-owner pod-owner wrong-image nonterminal ambiguous-output; do
+	for mutation in job-owner pod-owner wrong-image nonterminal ambiguous-output forbidden-nested; do
 		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
 		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
 		cp "$collector_json" "$BATS_TEST_TMPDIR/base-output.json"
@@ -984,6 +1014,7 @@ set_dispatch_chosen_record() {
 		wrong-image) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
 		nonterminal) jq '.items[0].status.conditions = [] | .items[0].status.succeeded = 0' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		ambiguous-output) printf '%s\n%s\n' "$(cat "$BATS_TEST_TMPDIR/base-output.json")" "$(cat "$BATS_TEST_TMPDIR/base-output.json")" >"$collector_json" ;;
+		forbidden-nested) jq -S -c '.vmaf[0].settings = {artifactPath:"unexpected"}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		esac
 		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
 		[ "$status" -ne 0 ]

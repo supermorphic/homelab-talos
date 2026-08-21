@@ -117,7 +117,7 @@ diagnostic_sanitize_terminal() {
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods unexpected_pods pod_count unexpected_count pod_json pod_phase sanitized_terminal
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
@@ -126,8 +126,10 @@ diagnostic_results() {
 		]
 	' <<<"$all_pods_json")" || return 65
 	diagnostic_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")]' <<<"$matching_pods")" || return 65
+	unexpected_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" != "diagnostics" and .metadata.labels."homelab-talos/benchmark-mode" != "diagnostic-evidence-reader")]' <<<"$matching_pods")" || return 65
 	pod_count="$(jq -r 'length' <<<"$diagnostic_pods")"
-	((pod_count == 1)) || {
+	unexpected_count="$(jq -r 'length' <<<"$unexpected_pods")"
+	((pod_count == 1 && unexpected_count == 0)) || {
 		echo "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $requested_run_id" >&2
 		return 1
 	}

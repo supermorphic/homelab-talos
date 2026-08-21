@@ -95,15 +95,18 @@ validate_vmaf() {
 	local sample="$1" clip="$2" index="$3" path="$4"
 	jq -e --arg sample "$sample" --arg clip "$clip" --argjson index "$index" '
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
-		def frame: type == "object" and has("frameIndex") and (.frameIndex | type == "number");
-		def window: type == "object" and has("decodedFrameCount") and has("stream") and has("frames") and (.decodedFrameCount | type == "number" and . >= 0) and (.stream | type == "object") and (.frames | type == "array" and length <= 5 and all(.[]; frame));
-		def metric: type == "object" and has("current") and has("reset") and (.current | type == "array" and length <= 5) and (.reset | type == "array" and length <= 5);
-		def offset: type == "object" and has("offset") and has("ssim") and has("psnr") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2);
-		def setting: type == "object" and has("globalQuality") and has("status") and has("reason") and has("vmaf") and has("offsets") and has("timeline") and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (.reason == null or (.reason | type == "string")) and (.vmaf|metric) and (.offsets | type == "array" and length <= 5 and all(.[]; offset)) and (.timeline | type == "object");
+		def frame: type == "object" and (keys | sort) == ["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"] and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | type == "string") and (.packetDuration | type == "string") and (.keyFrame | type == "boolean") and (.pictureType | type == "string");
+		def window: type == "object" and (keys | sort) == ["decodedFrameCount","frames","stream"] and (.decodedFrameCount | type == "number" and . >= 0) and (.stream | type == "object" and (keys | sort) == ["averageFrameRate","duration","startTime","timeBase"] and all(.[]; type == "string")) and (.frames | type == "array" and length <= 5 and all(.[]; frame));
+		def vmaf_frame: type == "object" and (keys | sort) == ["frameIndex","vmaf"] and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
+		def metric: type == "object" and (keys | sort) == ["current","reset"] and (.current | type == "array" and length <= 5 and all(.[]; vmaf_frame)) and (.reset | type == "array" and length <= 5 and all(.[]; vmaf_frame));
+		def metric_value: . == null or type == "number" or (type == "object" and ((keys | sort) == ["kind"] and .kind == "positive-infinity" or (keys | sort) == ["kind","value"] and .kind == "finite" and (.value | type == "number")));
+		def recorded_metric: type == "object" and (keys | sort) == ["command","value"] and (.command | type == "array") and (.value | metric_value);
+		def offset: type == "object" and (keys | sort) == ["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"] and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.sourceFrameIndex | type == "number" and floor == .) and (.encodedFrameIndex | type == "number" and floor == .) and (.ssim | recorded_metric) and (.psnr | recorded_metric);
+		def setting: type == "object" and (keys | sort) == ["globalQuality","offsets","reason","status","timeline","vmaf"] and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (.reason == null or (.reason | type == "string")) and (.vmaf|metric) and (.offsets | type == "array" and length <= 5 and all(.[]; offset)) and (.timeline | type == "object" and (keys | sort) == ["discontinuity","zeroOffsetAligned"] and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (type == "object" and (keys | sort) == ["kind","offset"] and (.kind | type == "string") and (.offset | type == "number" and floor == .))));
 		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == $clip and .observedFrameIndex == $index and (.status|status) and
 		(.sourceClip | type == "object" and (.frameWindow | window)) and
 		(.settings | type == "array" and length == 2 and all(.[]; setting) and ([.[].globalQuality] | sort) == [16,30]) and
-		(.classification | type == "object" and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
+		(.classification | type == "object" and (keys | sort) == ["classification","reasons","schemaVersion"] and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
 	' "$path" >/dev/null
 }
 
@@ -111,9 +114,24 @@ validate_hdr() {
 	local sample="$1" path="$2"
 	jq -e --arg sample "$sample" '
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
+		def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
+		def rational: exact(["denominator","numerator"]) and (.numerator | type == "number" and floor == . and . >= 0) and (.denominator | type == "number" and floor == . and . > 0);
+		def chromaticity: exact(["x","y"]) and (.x | rational) and (.y | rational);
+		def metadata: exact(["masteringDisplay","maxCLL","maxFALL"]) and
+			(.masteringDisplay | exact(["displayPrimaries","luminance","whitePoint"]) and
+				(.displayPrimaries | exact(["blue","green","red"]) and (.red | chromaticity) and (.green | chromaticity) and (.blue | chromaticity)) and
+				(.whitePoint | chromaticity) and (.luminance | exact(["max","min"]) and (.min | rational) and (.max | rational))) and
+			(.maxCLL | rational) and (.maxFALL | rational);
+		def oracle: (exact(["status"]) and (.status == "null" or .status == "absent" or .status == "malformed")) or (exact(["metadata","status"]) and .status == "ok" and (.metadata | metadata));
+		def authoritative: (exact(["metadata","status"]) and .status == "ok" and (.metadata | metadata)) or (exact(["reasons","status"]) and .status == "unresolved" and (.reasons | type == "array" and all(.[]; type == "string")));
+		def oracle_pair: exact(["decoded","trace"]) and (.decoded | oracle) and (.trace | oracle);
+		def normalized: exact(["clip","encoded","schemaVersion","source"]) and .schemaVersion == 1 and
+			(.source | exact(["authoritative","streamProbe","windows"]) and (.streamProbe | oracle) and (.authoritative | authoritative) and (.windows | type == "object" and ([keys[]] | all(. == "beginning" or . == "detail" or . == "end")) and all(.[]; exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative)))) and
+			((.clip | exact([])) or (.clip | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative))) and
+			((.encoded | exact([])) or (.encoded | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative)));
 		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == "detail" and .globalQuality == 16 and (.status|status) and (.reason == null or (.reason | type == "string")) and
-		(.normalizedOracle | type == "object" and .schemaVersion == 1 and (.source | type == "object") and (.clip | type == "object") and (.encoded | type == "object")) and
-		(.classification | type == "object" and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
+		(.normalizedOracle | normalized) and
+		(.classification | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
 	' "$path" >/dev/null
 }
 
@@ -148,8 +166,15 @@ canonical="$(jq -n -S -c --arg run "$EVIDENCE_RUN_ID" \
 	--slurpfile hdr0 "$evidence_root/hdr/hdr10-clean-ministry/evidence.json" \
 	--slurpfile hdr1 "$evidence_root/hdr/hdr10-grain-goodfellas/evidence.json" \
 	--slurpfile hdr2 "$evidence_root/hdr/hdr10-motion-john-wick-2/evidence.json" '
-		def vmaf($raw): $raw[0] | {sampleId,clipId,observedFrameIndex,status,sourceContinuity:(.sourceClip.frameWindow | {decodedFrameCount,stream:(.stream | {startTime,duration,timeBase,averageFrameRate}),frames:[.frames[] | {frameIndex,bestEffortTimestamp,packetDuration,keyFrame,pictureType}]}),settings:[.settings[] | {globalQuality,status,reason,vmaf,offsets,timeline}],classification};
-		def hdr($raw): $raw[0] | {sampleId,clipId,globalQuality,status,reason,normalizedOracle,classification};
+		def vmaf_metric: {current:[.current[] | {frameIndex,vmaf}],reset:[.reset[] | {frameIndex,vmaf}]};
+		def offset: {offset,ssim:.ssim.value,psnr:.psnr.value};
+		def vmaf($raw): $raw[0] | {sampleId,clipId,observedFrameIndex,status,sourceContinuity:(.sourceClip.frameWindow | {decodedFrameCount,stream:(.stream | {startTime,duration,timeBase,averageFrameRate}),frames:[.frames[] | {frameIndex,bestEffortTimestamp,packetDuration,keyFrame,pictureType}]}),settings:[.settings[] | {globalQuality,status,reason,vmaf:(.vmaf | vmaf_metric),offsets:[.offsets[] | offset],timeline}],classification};
+		def gcd($a; $b): if $b == 0 then $a else gcd($b; ($a % $b)) end;
+		def normalize_rationals:
+			walk(if type == "object" and (keys | sort) == ["denominator","numerator"] and (.numerator | type == "number" and floor == . and . >= 0) and (.denominator | type == "number" and floor == . and . > 0) then
+				(gcd(.numerator; .denominator)) as $divisor | {numerator:(.numerator / $divisor),denominator:(.denominator / $divisor)}
+			else . end);
+		def hdr($raw): $raw[0] | {sampleId,clipId,globalQuality,status,reason,normalizedOracle:(.normalizedOracle | normalize_rationals),classification};
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:[vmaf($vmaf0),vmaf($vmaf1),vmaf($vmaf2),vmaf($vmaf3),vmaf($vmaf4)],hdr:[hdr($hdr0),hdr($hdr1),hdr($hdr2)]}
 	')" || exit 65
 canonical_bytes="$(printf '%s' "$canonical" | LC_ALL=C wc -c | tr -d '[:space:]')"
