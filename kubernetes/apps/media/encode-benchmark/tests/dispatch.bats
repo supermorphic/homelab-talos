@@ -954,12 +954,31 @@ set_dispatch_chosen_record() {
 write_canonical_collector_json() {
 	local path="$1" run_id="$2"
 	jq -n -S -c --arg run "$run_id" '
-		def class: {schemaVersion:1,classification:"unresolved",reasons:["classification-predicate-not-met"]};
+		def class: {schemaVersion:1,classification:"unresolved",reasons:["offset-best-tie"]};
 		def setting($quality): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:[],reset:[]},offsets:[],timeline:{zeroOffsetAligned:true,discontinuity:null}};
 		def source: {decodedFrameCount:2160,stream:{startTime:"0",duration:"90",timeBase:"1/90000",averageFrameRate:"24/1"},frames:[]};
 		def vmaf($sample; $clip; $index): {sampleId:$sample,clipId:$clip,observedFrameIndex:$index,status:"complete",sourceContinuity:source,settings:[setting(16),setting(30)],classification:class};
-		def hdr($sample): {sampleId:$sample,clipId:"detail",globalQuality:16,status:"complete",reason:null,normalizedOracle:{schemaVersion:1,source:{streamProbe:{status:"null"},windows:{},authoritative:{status:"unresolved",reasons:["source-window-null"]}},clip:{},encoded:{}},classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["source-window-null"]}};
+		def oracle: {status:"null"};
+		def normalized_pair($reason): {decoded:oracle,trace:oracle,authoritative:{status:"unresolved",reasons:[$reason]}};
+		def hdr($sample): {sampleId:$sample,clipId:"detail",globalQuality:16,status:"complete",reason:null,normalizedOracle:{schemaVersion:1,source:{streamProbe:oracle,windows:{beginning:normalized_pair("source-window-null"),detail:normalized_pair("source-window-null"),end:normalized_pair("source-window-null")},authoritative:{status:"unresolved",reasons:["source-window-null"]}},clip:normalized_pair("clip-window-null"),encoded:normalized_pair("encoded-window-null")},classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["source-window-null"]}};
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:[vmaf("avc-clean-coco";"motion";1641),vmaf("avc-grain-memento";"dark";523),vmaf("avc-grain-memento";"detail";370),vmaf("vc1-fugitive";"detail";781),vmaf("vc1-fugitive";"motion";798)],hdr:[hdr("hdr10-clean-ministry"),hdr("hdr10-grain-goodfellas"),hdr("hdr10-motion-john-wick-2")]}' >"$path"
+}
+
+write_collector_runtime_fixtures() {
+	local run_id="$1" jobs_path="$2" pods_path="$3" job name
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+	run_dispatch evidence-reader
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	name="$(yq -r '.metadata.name' "$job")"
+	yq -o=json -I=0 '
+		.metadata.uid = "fixture-job-uid" |
+		.status.conditions = [{"type":"Complete","status":"True"}] |
+		.status.succeeded = 1 |
+		.status.failed = 0
+	' "$job" | jq -c '{items:[.]}' >"$jobs_path"
+	jq -n --arg name "$name" --arg run "$run_id" '
+		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
 }
 
 @test "kubectl log stub implements --tail using kubectl argument semantics" {
@@ -980,12 +999,7 @@ write_canonical_collector_json() {
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
 	STUB_LOGS_FILE="$collector_json"
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
-	jq -n --arg name "$job_name" --arg run "$run_id" '
-		{items:[{metadata:{name:$name,uid:"fixture-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		 spec:{template:{spec:{containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},
-		 status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0}}]}' >"$STUB_JOBS_JSON"
-	jq -n --arg name "$job_name" '
-		{items:[{metadata:{name:($name + "-pod"),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$STUB_BENCHMARK_PODS_JSON"
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
 	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
 	[ "$status" -eq 0 ]
@@ -1001,10 +1015,13 @@ write_canonical_collector_json() {
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
 	STUB_LOGS_FILE="$collector_json"
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
-	jq -n --arg name "$job_name" --arg run "$run_id" '{items:[{metadata:{name:$name,uid:"fixture-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"},annotations:{"homelab-talos/benchmark-owned":"true"}},spec:{template:{spec:{containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0}}]}' >"$STUB_JOBS_JSON"
-	jq -n --arg name "$job_name" '{items:[{metadata:{name:($name + "-pod"),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$STUB_BENCHMARK_PODS_JSON"
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
-	for mutation in job-owner pod-owner wrong-image nonterminal ambiguous-output forbidden-nested; do
+	for mutation in job-owner pod-owner wrong-image nonterminal job-name wrong-command wrong-scripts-annotation \
+		wrong-scripts-volume writable-evidence forbidden-volume forbidden-env forbidden-gpu token-enabled extra-container \
+		ambiguous-output forbidden-nested \
+		forbidden-setting-reason forbidden-classification-reason forbidden-timeline-kind \
+		forbidden-frame-string forbidden-authoritative-reason; do
 		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
 		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
 		cp "$collector_json" "$BATS_TEST_TMPDIR/base-output.json"
@@ -1013,8 +1030,23 @@ write_canonical_collector_json() {
 		pod-owner) jq '.items[0].metadata.ownerReferences[0].uid = "wrong"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
 		wrong-image) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
 		nonterminal) jq '.items[0].status.conditions = [] | .items[0].status.succeeded = 0' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		job-name) jq '.items[0].metadata.name = "encode-benchmark-evidence-reader-20260821t223425z-082b3d38"' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON"; jq '.items[0].metadata.ownerReferences[0].name = "encode-benchmark-evidence-reader-20260821t223425z-082b3d38"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		wrong-command) jq '.items[0].spec.template.spec.containers[0].command = ["/scripts/benchmark.sh","quality"]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		wrong-scripts-annotation) jq '.items[0].metadata.annotations."homelab-talos/scripts-configmap" = "encode-benchmark-scripts-aaaaaaaaaa"' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		wrong-scripts-volume) jq '.items[0].spec.template.spec.volumes[] |= if .name == "scripts" then .configMap.name = "encode-benchmark-scripts-aaaaaaaaaa" else . end' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		writable-evidence) jq '.items[0].spec.template.spec.containers[0].volumeMounts[] |= if .name == "evidence" then .readOnly = false else . end' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		forbidden-volume) jq '.items[0].spec.template.spec.containers[0].volumeMounts += [{name:"media",mountPath:"/media",readOnly:true}] | .items[0].spec.template.spec.volumes += [{name:"media",persistentVolumeClaim:{claimName:"media-data"}}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		forbidden-env) jq '.items[0].spec.template.spec.containers[0].env = [{name:"NODE_NAME",valueFrom:{fieldRef:{fieldPath:"spec.nodeName"}}}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		forbidden-gpu) jq '.items[0].spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" = 1' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		token-enabled) jq '.items[0].spec.template.spec.automountServiceAccountToken = true' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		extra-container) jq '.items[0].spec.template.spec.containers += [{name:"sidecar",image:"example.invalid/sidecar@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		ambiguous-output) printf '%s\n%s\n' "$(cat "$BATS_TEST_TMPDIR/base-output.json")" "$(cat "$BATS_TEST_TMPDIR/base-output.json")" >"$collector_json" ;;
 		forbidden-nested) jq -S -c '.vmaf[0].settings = {artifactPath:"unexpected"}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		forbidden-setting-reason) jq -S -c '.vmaf[0].settings[0].reason = "/media/private"' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		forbidden-classification-reason) jq -S -c '.vmaf[0].classification.reasons = ["credential-fragment"]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		forbidden-timeline-kind) jq -S -c '.vmaf[0].settings[0].timeline.discontinuity = {kind:"credential-fragment",offset:1}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		forbidden-frame-string) jq -S -c '.vmaf[0].sourceContinuity.stream.startTime = "/out/private"' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		forbidden-authoritative-reason) jq -S -c '.hdr[0].normalizedOracle.source.authoritative.reasons = ["credential-fragment"]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		esac
 		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
 		[ "$status" -ne 0 ]
@@ -3042,6 +3074,59 @@ EOF
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+}
+
+@test "results allow at most one exactly owned deterministic evidence reader beside diagnostics" {
+	local run_id='20260820T223425Z-082b3d38' reader_job reader_pod summary termination terminal_message case_name readers
+	reader_job='encode-benchmark-evidence-reader-20260820t223425z-082b3d38'
+	reader_pod="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{
+		metadata:{name:($job + "-pod"),labels:{
+			"app.kubernetes.io/name":"encode-benchmark",
+			"homelab-talos/benchmark-run":$run,
+			"homelab-talos/benchmark-mode":"diagnostic-evidence-reader",
+			"job-name":$job
+		},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"reader-job-uid",controller:true,blockOwnerDeletion:true}]},
+		status:{phase:"Succeeded"}
+	}')"
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods-reader-coexistence.json"
+	export STUB_BENCHMARK_PODS_JSON
+
+	for case_name in zero one duplicate spoofed mislabeled other-mode; do
+		case "$case_name" in
+		zero) readers='[]' ;;
+		one) readers="[$reader_pod]" ;;
+		duplicate) readers="[$reader_pod,$(jq -c '.metadata.name += "-duplicate"' <<<"$reader_pod")]" ;;
+		spoofed) readers="[$(jq -c 'del(.metadata.ownerReferences)' <<<"$reader_pod")]" ;;
+		mislabeled) readers="[$(jq -c '.metadata.labels."job-name" = "encode-benchmark-evidence-reader-spoofed"' <<<"$reader_pod")]" ;;
+		other-mode) readers="[$(jq -c '.metadata.labels."homelab-talos/benchmark-mode" = "quality"' <<<"$reader_pod")]" ;;
+		esac
+		jq -n -c --arg run "$run_id" --arg message "$terminal_message" --argjson readers "$readers" '{
+			items:([{
+				metadata:{name:"encode-benchmark-diagnostics-fixture-pod",labels:{
+					"app.kubernetes.io/name":"encode-benchmark",
+					"homelab-talos/benchmark-run":$run,
+					"homelab-talos/benchmark-mode":"diagnostics",
+					"job-name":"encode-benchmark-diagnostics-fixture"
+				}},
+				status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",state:{terminated:{message:$message}}}]}
+			}] + $readers)
+		}' >"$STUB_BENCHMARK_PODS_JSON"
+		: >"$STUB_CALLS"
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		if [[ "$case_name" == 'zero' || "$case_name" == 'one' ]]; then
+			[ "$status" -eq 0 ]
+			[[ "$output" == 'mode=diagnostics phase=Succeeded '* ]]
+		else
+			[ "$status" -ne 0 ]
+			[ "$output" = "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $run_id" ]
+		fi
+		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
+		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs| logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+	done
 }
 
 # Catches accepting missing, malformed, or digest-mismatched kubelet imageID

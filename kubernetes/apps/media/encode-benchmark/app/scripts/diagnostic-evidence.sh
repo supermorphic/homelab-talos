@@ -6,6 +6,12 @@ set -euo pipefail
 
 readonly EVIDENCE_RUN_ID='20260820T223425Z-082b3d38'
 readonly EVIDENCE_MAX_BYTES=65536
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$script_directory/contract.sh"
+vmaf_reason_classes="$(contract_diagnostics_terminal_vmaf_reason_classes_json)"
+hdr_reason_classes="$(contract_diagnostics_terminal_hdr_reason_classes_json)"
+readonly script_directory vmaf_reason_classes hdr_reason_classes
 
 if (($# != 3)) || [[ "$1" != 'collect' ]]; then
 	echo 'usage: diagnostic-evidence.sh collect <run-id> <evidence-root>' >&2
@@ -77,15 +83,19 @@ jq -e --arg run "$EVIDENCE_RUN_ID" '
 	echo 'diagnostic manifest does not bind the approved immutable run' >&2
 	exit 65
 }
-jq -e --arg run "$EVIDENCE_RUN_ID" '
+jq -e --arg run "$EVIDENCE_RUN_ID" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
 	def status: . == "complete" or . == "failed" or . == "harness-blocked";
-	def class: type == "string" and test("^(temporal-alignment-defect|encoder-output-defect|vmaf-measurement-defect|unresolved|source-probe-defect|clip-boundary-defect|preserved|unresolved-oracle)$");
-	def reason_list: type == "array" and length <= 8 and all(.[]; type == "string" and test("^[a-z0-9][a-z0-9-]*$"));
-	def vmaf_entry: type == "object" and has("sampleId") and has("clipId") and has("status") and has("classification") and has("reasons") and has("evidence") and (.status|status) and (.classification|class) and (.reasons|reason_list) and (.evidence|type == "string" and test("^vmaf/[a-z0-9-]+/[a-z0-9-]+/evidence[.]json$"));
-	def hdr_entry: type == "object" and has("sampleId") and has("status") and has("classification") and has("reasons") and has("evidence") and (.status|status) and (.classification|class) and (.reasons|reason_list) and (.evidence|type == "string" and test("^hdr/[a-z0-9-]+/evidence[.]json$"));
-	type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .mode == "diagnostics" and .runId == $run and (.status|status) and
-	(.vmaf | type == "object" and .total == 5 and (.entries | type == "array" and length == 5 and all(.[]; vmaf_entry) and ([.[] | [.sampleId,.clipId] | join("/")] | sort) == ["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion"])) and
-	(.hdr | type == "object" and .total == 3 and (.entries | type == "array" and length == 3 and all(.[]; hdr_entry) and ([.[] | .sampleId] | sort) == ["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2"]))
+	def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
+	def reasons($classes; $classification):
+		type == "array" and length >= 1 and length <= 16 and length == (unique | length) and
+		all(.[]; type == "string" and ($classes[.] | type == "array") and ($classes[.] | index($classification)) != null);
+	def vmaf_class: . == "temporal-alignment-defect" or . == "encoder-output-defect" or . == "vmaf-measurement-defect" or . == "unresolved";
+	def hdr_class: . == "source-probe-defect" or . == "clip-boundary-defect" or . == "encoder-output-defect" or . == "preserved" or . == "unresolved-oracle";
+	def vmaf_entry: . as $entry | exact(["classification","clipId","evidence","reasons","sampleId","status"]) and (.status|status) and (.classification|vmaf_class) and (.reasons|reasons($vmaf_reason_classes; $entry.classification)) and (.evidence|type == "string" and test("^vmaf/[a-z0-9-]+/[a-z0-9-]+/evidence[.]json$"));
+	def hdr_entry: . as $entry | exact(["classification","evidence","reasons","sampleId","status"]) and (.status|status) and (.classification|hdr_class) and (.reasons|reasons($hdr_reason_classes; $entry.classification)) and (.evidence|type == "string" and test("^hdr/[a-z0-9-]+/evidence[.]json$"));
+	exact(["hdr","mode","runId","schemaVersion","status","strategyId","vmaf"]) and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .mode == "diagnostics" and .runId == $run and (.status|status) and
+	(.vmaf | exact(["entries","total"]) and .total == 5 and (.entries | type == "array" and length == 5 and all(.[]; vmaf_entry) and ([.[] | [.sampleId,.clipId] | join("/")] | sort) == ["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion"])) and
+	(.hdr | exact(["entries","total"]) and .total == 3 and (.entries | type == "array" and length == 3 and all(.[]; hdr_entry) and ([.[] | .sampleId] | sort) == ["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2"]))
 ' "$summary" >/dev/null || {
 	echo 'diagnostic summary does not bind the approved panel' >&2
 	exit 65
@@ -93,28 +103,38 @@ jq -e --arg run "$EVIDENCE_RUN_ID" '
 
 validate_vmaf() {
 	local sample="$1" clip="$2" index="$3" path="$4"
-	jq -e --arg sample "$sample" --arg clip "$clip" --argjson index "$index" '
+	jq -e --arg sample "$sample" --arg clip "$clip" --argjson index "$index" --argjson reason_classes "$vmaf_reason_classes" '
+		def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
-		def frame: type == "object" and (keys | sort) == ["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"] and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | type == "string") and (.packetDuration | type == "string") and (.keyFrame | type == "boolean") and (.pictureType | type == "string");
-		def window: type == "object" and (keys | sort) == ["decodedFrameCount","frames","stream"] and (.decodedFrameCount | type == "number" and . >= 0) and (.stream | type == "object" and (keys | sort) == ["averageFrameRate","duration","startTime","timeBase"] and all(.[]; type == "string")) and (.frames | type == "array" and length <= 5 and all(.[]; frame));
-		def vmaf_frame: type == "object" and (keys | sort) == ["frameIndex","vmaf"] and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
-		def metric: type == "object" and (keys | sort) == ["current","reset"] and (.current | type == "array" and length <= 5 and all(.[]; vmaf_frame)) and (.reset | type == "array" and length <= 5 and all(.[]; vmaf_frame));
+		def command: type == "array" and all(.[]; type == "string");
+		def identity: exact(["sha256","sizeBytes"]) and (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and (.sizeBytes | type == "number" and floor == . and . >= 0);
+		def numeric_string: type == "string" and test("^-?[0-9]+([.][0-9]+)?$");
+		def rational_string: type == "string" and test("^-?[0-9]+/[1-9][0-9]*$");
+		def frame: exact(["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string) and (.keyFrame | type == "boolean") and (.pictureType == "I" or .pictureType == "P" or .pictureType == "B");
+		def continuity: exact(["issue","status"]) and (.status == "clean" and .issue == null or .status == "discontinuity" and (.issue | exact(["afterFrameIndex","kind"]) and (.afterFrameIndex | type == "number" and floor == .) and (.kind == "gap" or .kind == "inconsistent-duration" or .kind == "non-monotonic-timestamp" or .kind == "repeat")));
+		def window: exact(["decodedFrameCount","frames","sourceWindow","stream"]) and (.decodedFrameCount | type == "number" and floor == . and . >= 0) and (.stream | exact(["averageFrameRate","duration","startTime","timeBase"]) and (.startTime | numeric_string) and (.duration | numeric_string) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length <= 5 and all(.[]; frame)) and (.sourceWindow | continuity);
+		def vmaf_frame: exact(["frameIndex","vmaf"]) and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
+		def metric: exact(["current","reset"]) and (.current | type == "array" and length <= 5 and all(.[]; vmaf_frame)) and (.reset | type == "array" and length <= 5 and all(.[]; vmaf_frame));
 		def psnr_value: . == null or type == "number" or (type == "object" and ((keys | sort) == ["kind"] and .kind == "positive-infinity" or (keys | sort) == ["kind","value"] and .kind == "finite" and (.value | type == "number")));
-		def recorded_metric(value): type == "object" and (keys | sort) == ["command","value"] and (.command | type == "array") and (.value | value);
-		def offset: type == "object" and (keys | sort) == ["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"] and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.sourceFrameIndex | type == "number" and floor == .) and (.encodedFrameIndex | type == "number" and floor == .) and (.ssim | recorded_metric(. == null or type == "number")) and (.psnr | recorded_metric(psnr_value));
-		def setting: type == "object" and (keys | sort) == ["globalQuality","offsets","reason","status","timeline","vmaf"] and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (.reason == null or (.reason | type == "string")) and (.vmaf|metric) and (.offsets | type == "array" and length <= 5 and all(.[]; offset)) and (.timeline | type == "object" and (keys | sort) == ["discontinuity","zeroOffsetAligned"] and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (type == "object" and (keys | sort) == ["kind","offset"] and (.kind | type == "string") and (.offset | type == "number" and floor == .))));
-		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == $clip and .observedFrameIndex == $index and (.status|status) and
-		(.sourceClip | type == "object" and (.frameWindow | window)) and
+		def recorded_metric(value): exact(["command","value"]) and (.command | command) and (.value | value);
+		def offset: exact(["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"]) and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and .sourceFrameIndex == $index and .encodedFrameIndex == ($index + .offset) and (.ssim | recorded_metric(. == null or type == "number")) and (.psnr | recorded_metric(psnr_value));
+		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "timeline-evidence-invalid";
+		def classification: . as $class | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification == "encoder-output-defect" or .classification == "temporal-alignment-defect" or .classification == "unresolved" or .classification == "vmaf-measurement-defect") and (.reasons | type == "array" and length >= 1 and length <= 16 and length == (unique | length) and all(.[]; type == "string" and ($reason_classes[.] | type == "array") and ($reason_classes[.] | index($class.classification)) != null));
+		def setting: exact(["commands","globalQuality","offsets","outputFrameWindow","outputIdentity","reason","sourceFrameWindow","sourceIdentity","status","timeline","vmaf"]) and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (if .status == "complete" then .reason == null else (.reason | setting_reason) end) and (.sourceIdentity | identity) and (.outputIdentity | identity) and (.sourceFrameWindow | window) and (.outputFrameWindow | window) and (.commands | exact(["decode","encode","outputFrameProbe","vmafCurrent","vmafReset"]) and all(.[]; command)) and (.vmaf|metric) and (.offsets | type == "array" and length <= 5 and all(.[]; offset)) and (.timeline | exact(["discontinuity","zeroOffsetAligned"]) and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (exact(["kind","offset"]) and (.kind == "drop" or .kind == "duplicate" or .kind == "timestamp-discontinuity") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0))));
+		exact(["classification","clipId","observedFrameIndex","sampleId","schemaVersion","settings","sourceClip","status","strategyId"]) and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == $clip and .observedFrameIndex == $index and (.status|status) and
+		(.sourceClip | exact(["command","frameProbeCommand","frameWindow","identity"]) and (.command | command) and (.frameProbeCommand | command) and (.identity | identity) and (.frameWindow | window)) and
 		(.settings | type == "array" and length == 2 and all(.[]; setting) and ([.[].globalQuality] | sort) == [16,30]) and
-		(.classification | type == "object" and (keys | sort) == ["classification","reasons","schemaVersion"] and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array" and all(.[]; type == "string")))
+		(.classification | classification)
 	' "$path" >/dev/null
 }
 
 validate_hdr() {
 	local sample="$1" path="$2"
-	jq -e --arg sample "$sample" '
+	jq -e --arg sample "$sample" --argjson reason_classes "$hdr_reason_classes" '
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
 		def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
+		def command: type == "array" and all(.[]; type == "string");
+		def identity: exact(["sha256","sizeBytes"]) and (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and (.sizeBytes | type == "number" and floor == . and . >= 0);
 		def rational: exact(["denominator","numerator"]) and (.numerator | type == "number" and floor == . and . >= 0) and (.denominator | type == "number" and floor == . and . > 0);
 		def chromaticity: exact(["x","y"]) and (.x | rational) and (.y | rational);
 		def metadata: exact(["masteringDisplay","maxCLL","maxFALL"]) and
@@ -123,15 +143,29 @@ validate_hdr() {
 				(.whitePoint | chromaticity) and (.luminance | exact(["max","min"]) and (.min | rational) and (.max | rational))) and
 			(.maxCLL | rational) and (.maxFALL | rational);
 		def oracle: (exact(["status"]) and (.status == "null" or .status == "absent" or .status == "malformed")) or (exact(["metadata","status"]) and .status == "ok" and (.metadata | metadata));
-		def authoritative: (exact(["metadata","status"]) and .status == "ok" and (.metadata | metadata)) or (exact(["reasons","status"]) and .status == "unresolved" and (.reasons | type == "array" and all(.[]; type == "string")));
+		def reasons($allowed): type == "array" and length == 1 and all(.[]; . as $reason | type == "string" and ($allowed | index($reason)) != null);
+		def source_window_reason: . == "decoded-trace-disagreement" or . == "source-window-absent" or . == "source-window-malformed" or . == "source-window-null";
+		def source_reason: source_window_reason or . == "source-window-conflict";
+		def clip_reason: . == "clip-window-absent" or . == "clip-window-malformed" or . == "clip-window-null" or . == "decoded-trace-disagreement";
+		def encoded_reason: . == "decoded-trace-disagreement" or . == "encoded-window-absent" or . == "encoded-window-malformed" or . == "encoded-window-null";
+		def authoritative($allowed): (exact(["metadata","status"]) and .status == "ok" and (.metadata | metadata)) or (exact(["reasons","status"]) and .status == "unresolved" and (.reasons | reasons($allowed)));
+		def raw_oracle: exact(["command","oracle"]) and (.command | command) and (.oracle | oracle);
+		def pair_reason: . == "decoded-frame-oracle-failed" or . == "encoded-output-unavailable" or . == "source-clip-unavailable" or . == "trace-headers-oracle-failed";
+		def raw_pair: exact(["decoded","durationSeconds","reason","start","status","trace"]) and (.start | type == "string") and .durationSeconds == 10 and (.status | status) and (if .status == "complete" then .reason == null else (.reason | pair_reason) end) and (.decoded | raw_oracle) and (.trace | raw_oracle);
 		def oracle_pair: exact(["decoded","trace"]) and (.decoded | oracle) and (.trace | oracle);
 		def normalized: exact(["clip","encoded","schemaVersion","source"]) and .schemaVersion == 1 and
-			(.source | exact(["authoritative","streamProbe","windows"]) and (.streamProbe | oracle) and (.authoritative | authoritative) and (.windows | type == "object" and ([keys[]] | all(. == "beginning" or . == "detail" or . == "end")) and all(.[]; exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative)))) and
-			((.clip | exact([])) or (.clip | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative))) and
-			((.encoded | exact([])) or (.encoded | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative)));
-		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == "detail" and .globalQuality == 16 and (.status|status) and (.reason == null or (.reason | type == "string")) and
+			(.source | exact(["authoritative","streamProbe","windows"]) and (.streamProbe | oracle) and (.authoritative | authoritative(["decoded-trace-disagreement","source-window-absent","source-window-conflict","source-window-malformed","source-window-null"])) and (.windows | exact(["beginning","detail","end"]) and all(.[]; exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative(["decoded-trace-disagreement","source-window-absent","source-window-malformed","source-window-null"]))))) and
+			(.clip | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative(["clip-window-absent","clip-window-malformed","clip-window-null","decoded-trace-disagreement"]))) and
+			(.encoded | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative(["decoded-trace-disagreement","encoded-window-absent","encoded-window-malformed","encoded-window-null"])));
+		def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
+		def classification: . as $class | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or .classification == "preserved" or .classification == "source-probe-defect" or .classification == "unresolved-oracle") and (.reasons | type == "array" and length >= 1 and length <= 16 and length == (unique | length) and all(.[]; type == "string" and ($reason_classes[.] | type == "array") and ($reason_classes[.] | index($class.classification)) != null));
+		exact(["classification","clip","clipId","commands","encoded","globalQuality","normalizedOracle","reason","sampleId","schemaVersion","source","status","strategyId"]) and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == "detail" and .globalQuality == 16 and (.status|status) and (if .status == "complete" then .reason == null else (.reason | evidence_reason) end) and
+		(.commands | exact(["clip","decode","encode"]) and all(.[]; command)) and
+		(.source | exact(["identity","streamProbe","windows"]) and (.identity | identity) and (.streamProbe | exact(["command","oracle"]) and (.command | command) and (.oracle | oracle)) and (.windows | exact(["beginning","detail","end"]) and all(.[]; raw_pair))) and
+		(.clip | exact(["decoded","durationSeconds","identity","reason","start","status","trace"]) and (del(.identity) | raw_pair) and (.identity | identity)) and
+		(.encoded | exact(["decoded","durationSeconds","identity","reason","start","status","trace"]) and (del(.identity) | raw_pair) and (.identity | identity)) and
 		(.normalizedOracle | normalized) and
-		(.classification | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array" and all(.[]; type == "string")))
+		(.classification | classification)
 	' "$path" >/dev/null
 }
 
@@ -144,14 +178,36 @@ vmaf_rows=(
 )
 for row in "${vmaf_rows[@]}"; do
 	read -r sample clip index <<<"$row"
-	validate_vmaf "$sample" "$clip" "$index" "$evidence_root/vmaf/$sample/$clip/evidence.json" || {
+	evidence_path="$evidence_root/vmaf/$sample/$clip/evidence.json"
+	validate_vmaf "$sample" "$clip" "$index" "$evidence_path" || {
 		echo 'VMAF diagnostic evidence violates its approved schema' >&2
+		exit 65
+	}
+	jq -e --arg sample "$sample" --arg clip "$clip" --slurpfile evidence "$evidence_path" '
+		[.vmaf.entries[] | select(.sampleId == $sample and .clipId == $clip)] as $entries |
+		($entries | length) == 1 and
+		$entries[0].status == $evidence[0].status and
+		$entries[0].classification == $evidence[0].classification.classification and
+		$entries[0].reasons == $evidence[0].classification.reasons
+	' "$summary" >/dev/null || {
+		echo 'VMAF diagnostic evidence does not match its retained summary' >&2
 		exit 65
 	}
 done
 for sample in hdr10-clean-ministry hdr10-grain-goodfellas hdr10-motion-john-wick-2; do
-	validate_hdr "$sample" "$evidence_root/hdr/$sample/evidence.json" || {
+	evidence_path="$evidence_root/hdr/$sample/evidence.json"
+	validate_hdr "$sample" "$evidence_path" || {
 		echo 'HDR diagnostic evidence violates its approved schema' >&2
+		exit 65
+	}
+	jq -e --arg sample "$sample" --slurpfile evidence "$evidence_path" '
+		[.hdr.entries[] | select(.sampleId == $sample)] as $entries |
+		($entries | length) == 1 and
+		$entries[0].status == $evidence[0].status and
+		$entries[0].classification == $evidence[0].classification.classification and
+		$entries[0].reasons == $evidence[0].classification.reasons
+	' "$summary" >/dev/null || {
+		echo 'HDR diagnostic evidence does not match its retained summary' >&2
 		exit 65
 	}
 done
