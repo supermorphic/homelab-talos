@@ -48,11 +48,14 @@ jq -e --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg image "$co
 	 .spec.template.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
 	 .spec.template.metadata.labels."homelab-talos/benchmark-run" == $run and
 	 .spec.template.metadata.labels."homelab-talos/benchmark-mode" == $mode) and
-	(.spec.template.spec.automountServiceAccountToken == false and .spec.template.spec.restartPolicy == "Never") and
+	(.spec.template.spec.automountServiceAccountToken == false and .spec.template.spec.restartPolicy == "Never" and
+	 .spec.template.spec.securityContext == {runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}} and
+	 (.spec.template.spec | has("initContainers") | not)) and
 	(.spec.template.spec.containers | type == "array" and length == 1) and
 	(.spec.template.spec.containers[0] | .name == "benchmark" and .image == $image and
 	 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence"] and
 	 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
+	 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
 	 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
 	 (.volumeMounts | type == "array" and length == 2 and
 	  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and

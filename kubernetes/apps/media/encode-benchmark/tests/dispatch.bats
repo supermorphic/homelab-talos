@@ -1019,6 +1019,7 @@ write_collector_runtime_fixtures() {
 
 	for mutation in job-owner pod-owner wrong-image nonterminal job-name wrong-command wrong-scripts-annotation \
 		wrong-scripts-volume writable-evidence forbidden-volume forbidden-env forbidden-gpu token-enabled extra-container \
+		weakened-run-as-non-root weakened-container-security added-capabilities init-container \
 		ambiguous-output forbidden-nested \
 		forbidden-setting-reason forbidden-classification-reason forbidden-timeline-kind \
 		forbidden-frame-string forbidden-authoritative-reason; do
@@ -1040,6 +1041,10 @@ write_collector_runtime_fixtures() {
 		forbidden-gpu) jq '.items[0].spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" = 1' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		token-enabled) jq '.items[0].spec.template.spec.automountServiceAccountToken = true' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		extra-container) jq '.items[0].spec.template.spec.containers += [{name:"sidecar",image:"example.invalid/sidecar@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		weakened-run-as-non-root) jq '.items[0].spec.template.spec.securityContext.runAsNonRoot = false' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		weakened-container-security) jq '.items[0].spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation = true' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		added-capabilities) jq '.items[0].spec.template.spec.containers[0].securityContext.capabilities.add = ["NET_ADMIN"]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		init-container) jq '.items[0].spec.template.spec.initContainers = [{name:"setup",image:"example.invalid/setup@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		ambiguous-output) printf '%s\n%s\n' "$(cat "$BATS_TEST_TMPDIR/base-output.json")" "$(cat "$BATS_TEST_TMPDIR/base-output.json")" >"$collector_json" ;;
 		forbidden-nested) jq -S -c '.vmaf[0].settings = {artifactPath:"unexpected"}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		forbidden-setting-reason) jq -S -c '.vmaf[0].settings[0].reason = "/media/private"' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
@@ -3076,29 +3081,36 @@ EOF
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 }
 
-@test "results allow at most one exactly owned deterministic evidence reader beside diagnostics" {
-	local run_id='20260820T223425Z-082b3d38' reader_job reader_pod summary termination terminal_message case_name readers
+@test "results allow only a dispatch-bound reader owned by the deterministic reader Job beside diagnostics" {
+	local run_id='20260820T223425Z-082b3d38' reader_job reader_pod reader_job_json summary termination terminal_message case_name readers
 	reader_job='encode-benchmark-evidence-reader-20260820t223425z-082b3d38'
 	reader_pod="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{
 		metadata:{name:($job + "-pod"),labels:{
 			"app.kubernetes.io/name":"encode-benchmark",
+			"homelab-talos/benchmark-dispatch":$run,
 			"homelab-talos/benchmark-run":$run,
 			"homelab-talos/benchmark-mode":"diagnostic-evidence-reader",
 			"job-name":$job
 		},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"reader-job-uid",controller:true,blockOwnerDeletion:true}]},
 		status:{phase:"Succeeded"}
 	}')"
+	reader_job_json="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{items:[{metadata:{name:$job,uid:"reader-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"}}}]}')"
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
 	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
 	write_diagnostics_summary_fixture "$run_id" complete "$summary"
 	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods-reader-coexistence.json"
-	export STUB_BENCHMARK_PODS_JSON
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-reader-jobs.json"
+	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
+	printf '%s\n' "$reader_job_json" >"$STUB_JOBS_JSON"
 
-	for case_name in zero one duplicate spoofed mislabeled other-mode; do
+	for case_name in zero one missing-dispatch wrong-dispatch wrong-owner-uid duplicate spoofed mislabeled other-mode; do
 		case "$case_name" in
 		zero) readers='[]' ;;
 		one) readers="[$reader_pod]" ;;
+		missing-dispatch) readers="[$(jq -c 'del(.metadata.labels."homelab-talos/benchmark-dispatch")' <<<"$reader_pod")]" ;;
+		wrong-dispatch) readers="[$(jq -c '.metadata.labels."homelab-talos/benchmark-dispatch" = "20260820T223425Z-deadbeef"' <<<"$reader_pod")]" ;;
+		wrong-owner-uid) readers="[$(jq -c '.metadata.ownerReferences[0].uid = "plausible-other-job-uid"' <<<"$reader_pod")]" ;;
 		duplicate) readers="[$reader_pod,$(jq -c '.metadata.name += "-duplicate"' <<<"$reader_pod")]" ;;
 		spoofed) readers="[$(jq -c 'del(.metadata.ownerReferences)' <<<"$reader_pod")]" ;;
 		mislabeled) readers="[$(jq -c '.metadata.labels."job-name" = "encode-benchmark-evidence-reader-spoofed"' <<<"$reader_pod")]" ;;
@@ -3125,7 +3137,12 @@ EOF
 			[ "$output" = "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $run_id" ]
 		fi
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs| logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+		if [[ "$case_name" != 'zero' && "$case_name" != 'duplicate' && "$case_name" != 'other-mode' ]]; then
+			[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
+		else
+			[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+		fi
+		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	done
 }
 
