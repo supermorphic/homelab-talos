@@ -47,7 +47,7 @@ jq -e --arg name "$name" --arg uid "$uid" --arg image "$configured_image" '
 	($image_id == $image or $image_id == ($image | split("@") | .[1]))
 ' <<<"$pod" >/dev/null || { echo 'diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid' >&2; exit 1; }
 
-payload="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$name" --container benchmark --tail=1)"
+payload="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$name" --container benchmark)"
 [[ "$(wc -l <<<"$payload" | tr -d '[:space:]')" == '1' ]] || { echo 'diagnostic evidence result is ambiguous' >&2; exit 65; }
 payload_bytes="$(printf '%s' "$payload" | LC_ALL=C wc -c | tr -d '[:space:]')"
 [[ "$payload_bytes" =~ ^[0-9]+$ && "$payload_bytes" -le "$MAX_BYTES" ]] || { echo 'diagnostic evidence result exceeds its bounded size' >&2; exit 65; }

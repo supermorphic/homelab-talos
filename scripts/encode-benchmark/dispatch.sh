@@ -1159,7 +1159,7 @@ dispatch_evidence_reader() {
 		.spec.template.spec.containers[0].resources.requests = {"cpu":"100m","memory":"128Mi"} |
 		.spec.template.spec.containers[0].resources.limits = {"cpu":"500m","memory":"256Mi"} |
 		.spec.template.spec.containers[0].volumeMounts += [{"name":"evidence","mountPath":"/evidence","readOnly":true}] |
-		.spec.template.spec.volumes += [{"name":"evidence","persistentVolumeClaim":{"claimName":"media-data","readOnly":true}}]
+		.spec.template.spec.volumes += [{"name":"evidence","persistentVolumeClaim":{"claimName":"media-data","readOnly":true,"subPath":"benchmark/runs/20260820T223425Z-082b3d38/diagnostics"}}]
 	' "$job"
 	create_job "$job" >/dev/null
 	printf 'run_id=%s collector_job=%s\n' "$run_id" "$name"

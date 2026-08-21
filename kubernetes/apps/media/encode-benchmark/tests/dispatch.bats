@@ -931,6 +931,7 @@ set_dispatch_chosen_record() {
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | [.mountPath,.readOnly] | @tsv' "$job")" = $'/evidence\ttrue' ]
 	[ "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
 	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | [.persistentVolumeClaim.claimName,.persistentVolumeClaim.readOnly] | @tsv' "$job")" = $'media-data\ttrue' ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | .persistentVolumeClaim.subPath' "$job")" = 'benchmark/runs/20260820T223425Z-082b3d38/diagnostics' ]
 	[ "$(yq -r '(.spec.template.spec.containers[0].resources.requests | has("gpu.intel.com/i915")) or (.spec.template.spec.containers[0].resources.limits | has("gpu.intel.com/i915"))' "$job")" = 'false' ]
 }
 

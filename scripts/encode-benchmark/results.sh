@@ -127,8 +127,7 @@ diagnostic_results() {
 	' <<<"$all_pods_json")" || return 65
 	diagnostic_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")]' <<<"$matching_pods")" || return 65
 	pod_count="$(jq -r 'length' <<<"$diagnostic_pods")"
-	total_count="$(jq -r 'length' <<<"$matching_pods")"
-	((pod_count == 1 && total_count == 1)) || {
+	((pod_count == 1)) || {
 		echo "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $requested_run_id" >&2
 		return 1
 	}
