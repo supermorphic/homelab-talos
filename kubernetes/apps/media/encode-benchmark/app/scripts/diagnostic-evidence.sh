@@ -99,14 +99,14 @@ validate_vmaf() {
 		def window: type == "object" and (keys | sort) == ["decodedFrameCount","frames","stream"] and (.decodedFrameCount | type == "number" and . >= 0) and (.stream | type == "object" and (keys | sort) == ["averageFrameRate","duration","startTime","timeBase"] and all(.[]; type == "string")) and (.frames | type == "array" and length <= 5 and all(.[]; frame));
 		def vmaf_frame: type == "object" and (keys | sort) == ["frameIndex","vmaf"] and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
 		def metric: type == "object" and (keys | sort) == ["current","reset"] and (.current | type == "array" and length <= 5 and all(.[]; vmaf_frame)) and (.reset | type == "array" and length <= 5 and all(.[]; vmaf_frame));
-		def metric_value: . == null or type == "number" or (type == "object" and ((keys | sort) == ["kind"] and .kind == "positive-infinity" or (keys | sort) == ["kind","value"] and .kind == "finite" and (.value | type == "number")));
-		def recorded_metric: type == "object" and (keys | sort) == ["command","value"] and (.command | type == "array") and (.value | metric_value);
-		def offset: type == "object" and (keys | sort) == ["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"] and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.sourceFrameIndex | type == "number" and floor == .) and (.encodedFrameIndex | type == "number" and floor == .) and (.ssim | recorded_metric) and (.psnr | recorded_metric);
+		def psnr_value: . == null or type == "number" or (type == "object" and ((keys | sort) == ["kind"] and .kind == "positive-infinity" or (keys | sort) == ["kind","value"] and .kind == "finite" and (.value | type == "number")));
+		def recorded_metric(value): type == "object" and (keys | sort) == ["command","value"] and (.command | type == "array") and (.value | value);
+		def offset: type == "object" and (keys | sort) == ["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"] and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.sourceFrameIndex | type == "number" and floor == .) and (.encodedFrameIndex | type == "number" and floor == .) and (.ssim | recorded_metric(. == null or type == "number")) and (.psnr | recorded_metric(psnr_value));
 		def setting: type == "object" and (keys | sort) == ["globalQuality","offsets","reason","status","timeline","vmaf"] and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (.reason == null or (.reason | type == "string")) and (.vmaf|metric) and (.offsets | type == "array" and length <= 5 and all(.[]; offset)) and (.timeline | type == "object" and (keys | sort) == ["discontinuity","zeroOffsetAligned"] and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (type == "object" and (keys | sort) == ["kind","offset"] and (.kind | type == "string") and (.offset | type == "number" and floor == .))));
 		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == $clip and .observedFrameIndex == $index and (.status|status) and
 		(.sourceClip | type == "object" and (.frameWindow | window)) and
 		(.settings | type == "array" and length == 2 and all(.[]; setting) and ([.[].globalQuality] | sort) == [16,30]) and
-		(.classification | type == "object" and (keys | sort) == ["classification","reasons","schemaVersion"] and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
+		(.classification | type == "object" and (keys | sort) == ["classification","reasons","schemaVersion"] and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array" and all(.[]; type == "string")))
 	' "$path" >/dev/null
 }
 
@@ -131,7 +131,7 @@ validate_hdr() {
 			((.encoded | exact([])) or (.encoded | exact(["authoritative","decoded","trace"]) and (.decoded | oracle) and (.trace | oracle) and (.authoritative | authoritative)));
 		type == "object" and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == "detail" and .globalQuality == 16 and (.status|status) and (.reason == null or (.reason | type == "string")) and
 		(.normalizedOracle | normalized) and
-		(.classification | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array"))
+		(.classification | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification | type == "string") and (.reasons | type == "array" and all(.[]; type == "string")))
 	' "$path" >/dev/null
 }
 

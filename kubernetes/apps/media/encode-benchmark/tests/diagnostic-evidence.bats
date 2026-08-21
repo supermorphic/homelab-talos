@@ -96,6 +96,15 @@ setup() {
 	[ "$status" -ne 0 ]
 }
 
+@test "collector rejects non-string classification reasons" {
+	create_valid_evidence_tree
+	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
+	jq '.classification.reasons = [{artifactPath:"unexpected"}]' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT"
+	[ "$status" -ne 0 ]
+}
+
 @test "collector rejects injected VMAF frame fields" {
 	create_valid_evidence_tree
 	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
@@ -123,6 +132,15 @@ setup() {
 	[ "$status" -eq 0 ]
 	run jq -e '.vmaf[0].settings[0].offsets == [{offset:0,ssim:0.99,psnr:{kind:"positive-infinity"}}] and (tostring | contains("secret") | not)' <<<"$output"
 	[ "$status" -eq 0 ]
+}
+
+@test "collector rejects tagged positive infinity for SSIM" {
+	create_valid_evidence_tree
+	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
+	jq '.settings[0].offsets = [{offset:0,sourceFrameIndex:1641,encodedFrameIndex:1641,ssim:{command:[],value:{kind:"positive-infinity"}},psnr:{command:[],value:42.0}}]' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT"
+	[ "$status" -ne 0 ]
 }
 
 @test "collector reduces exact HDR rationals without decimal rounding" {
