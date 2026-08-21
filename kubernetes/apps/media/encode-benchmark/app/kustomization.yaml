@@ -9,6 +9,7 @@ configMapGenerator:
   - name: encode-benchmark-scripts
     files:
       - contract.sh=scripts/contract.sh
+      - diagnostic-contract.jq=scripts/diagnostic-contract.jq
       - probe.sh=scripts/probe.sh
       - census.sh=scripts/census.sh
       - runmeta.sh=scripts/runmeta.sh

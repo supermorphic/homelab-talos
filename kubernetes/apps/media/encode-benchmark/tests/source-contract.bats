@@ -8,6 +8,17 @@ setup() {
 	yq -r '.data."samples.json"' "$samples" >"$samples_json"
 }
 
+@test "canonical shell validation includes the diagnostic evidence results helper" {
+	validator='scripts/validate/encode-benchmark.sh'
+	run awk '
+		/^shell_sources[+]=[(]/ { in_inventory = 1 }
+		in_inventory { print }
+		in_inventory && /^\)$/ { exit }
+	' "$validator"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"$diagnostic_evidence_results_helper"'* ]]
+}
+
 # Catches the source contract reverting to the older schema or a partial ICQ
 # sweep that cannot compare every agreed candidate across later benchmark modes.
 @test "embedded samples publish the exact ordered ICQ strategy contract" {

@@ -937,7 +937,17 @@ set_dispatch_chosen_record() {
 	job="$(job_capture)"
 	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-mode"' "$job")" = 'diagnostic-evidence-reader' ]
 	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" = '20260820T223425Z-082b3d38' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/diagnostic-evidence.sh collect 20260820T223425Z-082b3d38 /evidence' ]
+	panel_sha="$(
+		source "$evidence_app/scripts/contract.sh"
+		yq -e -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$BATS_TEST_TMPDIR/reader-samples.json"
+		contract_diagnostics_panel_sha256 "$BATS_TEST_TMPDIR/reader-samples.json"
+	)"
+	evidence_panel="$(
+		source "$evidence_app/scripts/contract.sh"
+		contract_diagnostics_evidence_panel_json "$BATS_TEST_TMPDIR/reader-samples.json"
+	)"
+	[ "$panel_sha" = 'sha256:2722def1986d9591db363063315b94e8faca78ace7c56a7b6a55c6c9b4889e6f' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/diagnostic-evidence.sh collect 20260820T223425Z-082b3d38 /evidence $panel_sha $evidence_panel" ]
 	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = 'docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].env | length' "$job")" = '0' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
@@ -955,17 +965,21 @@ write_canonical_collector_json() {
 	local path="$1" run_id="$2"
 	jq -n -S -c --arg run "$run_id" '
 		def class: {schemaVersion:1,classification:"unresolved",reasons:["offset-best-tie"]};
-		def setting($quality): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:[],reset:[]},offsets:[],timeline:{zeroOffsetAligned:true,discontinuity:null}};
-		def source: {decodedFrameCount:2160,stream:{startTime:"0",duration:"90",timeBase:"1/90000",averageFrameRate:"24/1"},frames:[]};
-		def vmaf($sample; $clip; $index): {sampleId:$sample,clipId:$clip,observedFrameIndex:$index,status:"complete",sourceContinuity:source,settings:[setting(16),setting(30)],classification:class};
-		def oracle: {status:"null"};
-		def normalized_pair($reason): {decoded:oracle,trace:oracle,authoritative:{status:"unresolved",reasons:[$reason]}};
-		def hdr($sample): {sampleId:$sample,clipId:"detail",globalQuality:16,status:"complete",reason:null,normalizedOracle:{schemaVersion:1,source:{streamProbe:oracle,windows:{beginning:normalized_pair("source-window-null"),detail:normalized_pair("source-window-null"),end:normalized_pair("source-window-null")},authoritative:{status:"unresolved",reasons:["source-window-null"]}},clip:normalized_pair("clip-window-null"),encoded:normalized_pair("encoded-window-null")},classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["source-window-null"]}};
+		def frames($index): ["0","0.041667","0.083334","0.125001","0.166668"] | to_entries | map({frameIndex:($index - 2 + .key),bestEffortTimestamp:.value,packetDuration:"0.041667",keyFrame:false,pictureType:"P"});
+		def vmaf_frames($index): [range($index - 2; $index + 3) | {frameIndex:.,vmaf:90}];
+		def offsets: [range(-2; 3) | {offset:.,ssim:0.9,psnr:{kind:"finite",value:40}}];
+		def setting($quality; $index): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:vmaf_frames($index),reset:vmaf_frames($index)},offsets:offsets,timeline:{zeroOffsetAligned:true,discontinuity:null}};
+		def source($index): {decodedFrameCount:2160,stream:{startTime:"0",duration:"90",timeBase:"1/90000",averageFrameRate:"24/1"},frames:frames($index),sourceWindow:{status:"clean",issue:null}};
+		def vmaf($sample; $clip; $index): {sampleId:$sample,clipId:$clip,observedFrameIndex:$index,status:"complete",sourceContinuity:source($index),settings:[setting(16;$index),setting(30;$index)],classification:class};
+		def stream_oracle: {status:"null"};
+		def pair_oracle: {status:"absent"};
+		def normalized_pair($reason): {decoded:pair_oracle,trace:pair_oracle,authoritative:{status:"unresolved",reasons:[$reason]}};
+		def hdr($sample): {sampleId:$sample,clipId:"detail",globalQuality:16,status:"complete",reason:null,normalizedOracle:{schemaVersion:1,source:{streamProbe:stream_oracle,windows:{beginning:normalized_pair("source-window-absent"),detail:normalized_pair("source-window-absent"),end:normalized_pair("source-window-absent")},authoritative:{status:"unresolved",reasons:["source-window-absent"]}},clip:normalized_pair("clip-window-absent"),encoded:normalized_pair("encoded-window-absent")},classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["source-window-absent"]}};
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:[vmaf("avc-clean-coco";"motion";1641),vmaf("avc-grain-memento";"dark";523),vmaf("avc-grain-memento";"detail";370),vmaf("vc1-fugitive";"detail";781),vmaf("vc1-fugitive";"motion";798)],hdr:[hdr("hdr10-clean-ministry"),hdr("hdr10-grain-goodfellas"),hdr("hdr10-motion-john-wick-2")]}' >"$path"
 }
 
 write_collector_runtime_fixtures() {
-	local run_id="$1" jobs_path="$2" pods_path="$3" job name
+	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
 	run_dispatch evidence-reader
 	[ "$status" -eq 0 ]
@@ -977,8 +991,9 @@ write_collector_runtime_fixtures() {
 		.status.succeeded = 1 |
 		.status.failed = 0
 	' "$job" | jq -c '{items:[.]}' >"$jobs_path"
-	jq -n --arg name "$name" --arg run "$run_id" '
-		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
+	pod_spec="$(yq -o=json -I=0 '.spec.template.spec' "$job")"
+	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
+		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
 }
 
 @test "kubectl log stub implements --tail using kubectl argument semantics" {
@@ -1006,6 +1021,291 @@ write_collector_runtime_fixtures() {
 	[ "$output" = "$(cat "$collector_json")" ]
 }
 
+@test "diagnostic evidence reader binds every VMAF row to the committed observed frame" {
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	write_canonical_collector_json "$collector_json" "$run_id"
+	jq -S -c '
+		.vmaf |= map(
+			.observedFrameIndex += 1 |
+			.sourceContinuity.frames |= map(.frameIndex += 1) |
+			.settings |= map(.vmaf.current |= map(.frameIndex += 1) | .vmaf.reset |= map(.frameIndex += 1)))
+	' "$collector_json" >"$BATS_TEST_TMPDIR/shifted.json"
+	mv "$BATS_TEST_TMPDIR/shifted.json" "$collector_json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic evidence result schema rejected' ]
+}
+
+@test "diagnostic evidence reader admits only exact producer classifier failure overrides" {
+	local case_name run_id collector_json
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for case_name in vmaf hdr; do
+		write_canonical_collector_json "$collector_json" "$run_id"
+		case "$case_name" in
+		vmaf)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .classification = {schemaVersion:1,classification:"unresolved",reasons:["classification-failed"]})' "$collector_json" >"$BATS_TEST_TMPDIR/classifier-failed.json"
+			;;
+		hdr)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "HDR-classification-failed" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["classification-failed"]})' "$collector_json" >"$BATS_TEST_TMPDIR/classifier-failed.json"
+			;;
+		esac
+		mv "$BATS_TEST_TMPDIR/classifier-failed.json" "$collector_json"
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -eq 0 ] || {
+			echo "diagnostic evidence results rejected exact producer classifier failure override: $case_name" >&3
+			return 1
+		}
+	done
+}
+
+@test "diagnostic evidence reader results accept producer-shaped null partial projections" {
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	write_canonical_collector_json "$collector_json" "$run_id"
+	jq -S -c '
+		.vmaf[0] |= (
+			.status = "failed" |
+			.settings |= map(
+				.status = "failed" | .reason = "decode-failed" |
+				.vmaf = {current:[],reset:[]} |
+				.offsets |= map(.ssim = null | .psnr = null) |
+				.timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]}) |
+		.hdr[0] |= (
+			.status = "harness-blocked" | .reason = "HDR-oracle-normalization-failed" |
+			.normalizedOracle = null |
+			.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})
+	' "$collector_json" >"$BATS_TEST_TMPDIR/partial.json"
+	mv "$BATS_TEST_TMPDIR/partial.json" "$collector_json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(cat "$collector_json")" ]
+}
+
+@test "diagnostic evidence reader rejects an unreachable post-run VMAF acquisition shape" {
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	write_canonical_collector_json "$collector_json" "$run_id"
+	jq -S -c '
+		.vmaf[0] |= (
+			.status = "harness-blocked" |
+			.settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift") |
+			.settings[0].vmaf.current = [] |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})
+	' "$collector_json" >"$BATS_TEST_TMPDIR/post-run.json"
+	mv "$BATS_TEST_TMPDIR/post-run.json" "$collector_json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic evidence result schema rejected' ]
+}
+
+@test "diagnostic evidence reader accepts the reachable acquisition projection matrix" {
+	local case_name run_id collector_json
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for case_name in vmaf-source-null vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
+		write_canonical_collector_json "$collector_json" "$run_id"
+		case "$case_name" in
+		vmaf-source-null)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = "source-clip-unavailable" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-current)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-current-vmaf" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-reset)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-reset-vmaf" | .vmaf.reset = [] | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-first-ssim)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-ssim-metric" | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-final-psnr)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-psnr-metric" | .offsets[4].psnr = null | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-failed-dominates)
+			jq -S -c '.vmaf[0] |= (.status = "failed" | .settings[0] |= (.status = "failed" | .reason = "encode-failed" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .settings[1] |= (.status = "harness-blocked" | .reason = "missing-reset-vmaf" | .vmaf.reset = [] | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-post-reset)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift" | .vmaf.reset = [] | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-post-final-psnr)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift" | .offsets[4].psnr = null | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-failed)
+			jq -S -c '.hdr[0] |= (.status = "failed" | .reason = "decode-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-normalization)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "HDR-oracle-normalization-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-conflict)
+			jq -S -c '
+				def first: {
+					masteringDisplay:{displayPrimaries:{red:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},green:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},blue:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}}},whitePoint:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},luminance:{min:{numerator:1,denominator:2},max:{numerator:1,denominator:2}}},maxCLL:{numerator:1,denominator:2},maxFALL:{numerator:1,denominator:2}};
+				def second: first | .masteringDisplay.displayPrimaries.red.x = {numerator:1,denominator:3};
+				.hdr[0] |= (
+					.status = "harness-blocked" | .reason = "conflicting-HDR-oracle" |
+					.normalizedOracle.source.windows.beginning = {
+						decoded:{status:"ok",metadata:first},trace:{status:"ok",metadata:second},
+						authoritative:{status:"unresolved",reasons:["decoded-trace-disagreement"]}} |
+					.normalizedOracle.source.authoritative = {status:"unresolved",reasons:["decoded-trace-disagreement"]} |
+					.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})
+			' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-ok-rationals)
+			jq -S -c '
+				def metadata: {
+					masteringDisplay:{
+						displayPrimaries:{
+							red:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},
+							green:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},
+							blue:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}}},
+						whitePoint:{x:{numerator:1,denominator:2},y:{numerator:1,denominator:2}},
+						luminance:{min:{numerator:1,denominator:2},max:{numerator:1,denominator:2}}},
+					maxCLL:{numerator:1,denominator:2},maxFALL:{numerator:1,denominator:2}};
+				.hdr[0].normalizedOracle.source.windows.beginning = {
+					decoded:{status:"ok",metadata:metadata},trace:{status:"ok",metadata:metadata},
+					authoritative:{status:"ok",metadata:metadata}}
+			' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-post-null)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "post-run-identity-drift" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-post-complete)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "post-run-identity-drift" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		esac
+		mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -eq 0 ] || {
+			echo "diagnostic evidence results rejected reachable acquisition projection: $case_name" >&3
+			return 1
+		}
+	done
+}
+
+@test "diagnostic evidence reader rejects the impossible acquisition projection matrix" {
+	local case_name run_id collector_json
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for case_name in post-reset-with-offsets post-offset-hole post-null-source-with-metrics normal-reset-with-offsets wrong-top-merge complete-null-hdr failed-retained-hdr normalization-retained-hdr conflict-null-hdr conflict-without-conflict; do
+		write_canonical_collector_json "$collector_json" "$run_id"
+		case "$case_name" in
+		post-reset-with-offsets)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift" | .vmaf.reset = []) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		post-offset-hole)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift" | .offsets[1] = {offset:-1,ssim:null,psnr:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		post-null-source-with-metrics)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = "post-run-identity-drift") | .classification = {schemaVersion:1,classification:"unresolved",reasons:["post-run-identity-drift"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		normal-reset-with-offsets)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-reset-vmaf" | .vmaf.reset = [] | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		wrong-top-merge)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings[0] |= (.status = "failed" | .reason = "decode-failed" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		complete-null-hdr)
+			jq -S -c '.hdr[0].normalizedOracle = null' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		failed-retained-hdr)
+			jq -S -c '.hdr[0] |= (.status = "failed" | .reason = "encode-failed" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		normalization-retained-hdr)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "HDR-oracle-normalization-failed" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		conflict-null-hdr)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "conflicting-HDR-oracle" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		conflict-without-conflict)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "conflicting-HDR-oracle" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		esac
+		mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -eq 65 ] || {
+			echo "diagnostic evidence results accepted impossible acquisition projection: $case_name" >&3
+			return 1
+		}
+	done
+}
+
+@test "diagnostic evidence reader rejects projected HDR frame and trace null oracles" {
+	local accepted='' mutation run_id collector_json
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for mutation in decoded-null trace-null; do
+		write_canonical_collector_json "$collector_json" "$run_id"
+		case "$mutation" in
+		decoded-null)
+			jq -S -c '.hdr[0].normalizedOracle.source.windows.beginning.decoded = {status:"null"}' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		trace-null)
+			jq -S -c '.hdr[0].normalizedOracle.clip.trace = {status:"null"}' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		esac
+		mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		if [ "$status" -eq 0 ]; then
+			accepted="${accepted}${accepted:+ }$mutation"
+		else
+			[ "$status" -eq 65 ]
+			[ "$output" = 'diagnostic evidence result schema rejected' ]
+		fi
+	done
+	[ -z "$accepted" ] || {
+		echo "diagnostic evidence results accepted producer-impossible projected HDR mutations: $accepted" >&3
+		return 1
+	}
+}
+
 @test "diagnostic evidence reader results reject invalid ownership image phase and ambiguous output" {
 	run_id='20260820T223425Z-082b3d38'
 	job_name="encode-benchmark-evidence-reader-${run_id,,}"
@@ -1020,9 +1320,23 @@ write_collector_runtime_fixtures() {
 	for mutation in job-owner pod-owner wrong-image nonterminal job-name wrong-command wrong-scripts-annotation \
 		wrong-scripts-volume writable-evidence forbidden-volume forbidden-env forbidden-gpu token-enabled extra-container \
 		weakened-run-as-non-root weakened-container-security added-capabilities init-container \
+		pod-init-container pod-extra-container pod-forbidden-env pod-forbidden-env-from pod-volume-device \
+		pod-token-enabled pod-writable-evidence pod-resource-drift \
+		pod-forbidden-volume pod-weakened-run-as-non-root pod-weakened-container-security \
+		pod-privileged pod-container-run-as-user pod-container-run-as-non-root \
+		pod-container-read-only-root pod-container-seccomp-unconfined \
+		pod-host-network pod-host-pid pod-host-ipc pod-share-process pod-ephemeral-container \
+		pod-supplemental-groups pod-apparmor-unconfined pod-seccomp-unconfined pod-security-annotation \
 		ambiguous-output forbidden-nested \
 		forbidden-setting-reason forbidden-classification-reason forbidden-timeline-kind \
-		forbidden-frame-string forbidden-authoritative-reason; do
+		forbidden-frame-string forbidden-authoritative-reason \
+		missing-source-frame duplicate-source-frame wrong-source-frame \
+		missing-current-vmaf duplicate-reset-vmaf wrong-current-vmaf \
+		missing-offset duplicate-offset wrong-offset complete-row-failed-setting \
+		complete-null-source complete-null-normalized failed-null-source failed-row-harness-setting \
+		failed-hdr-normalized harness-hdr-failed-reason \
+		false-vmaf-complete-class false-hdr-complete-class \
+		noncomplete-vmaf-causal noncomplete-hdr-causal; do
 		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
 		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
 		cp "$collector_json" "$BATS_TEST_TMPDIR/base-output.json"
@@ -1045,6 +1359,31 @@ write_collector_runtime_fixtures() {
 		weakened-container-security) jq '.items[0].spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation = true' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		added-capabilities) jq '.items[0].spec.template.spec.containers[0].securityContext.capabilities.add = ["NET_ADMIN"]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
 		init-container) jq '.items[0].spec.template.spec.initContainers = [{name:"setup",image:"example.invalid/setup@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		pod-init-container) jq '.items[0].spec.initContainers = [{name:"setup",image:"example.invalid/setup@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-extra-container) jq '.items[0].spec.containers += [{name:"sidecar",image:"example.invalid/sidecar@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-forbidden-env) jq '.items[0].spec.containers[0].env = [{name:"NODE_NAME",valueFrom:{fieldRef:{fieldPath:"spec.nodeName"}}}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-forbidden-env-from) jq '.items[0].spec.containers[0].envFrom = [{configMapRef:{name:"injected"}}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-volume-device) jq '.items[0].spec.containers[0].volumeDevices = [{name:"device",devicePath:"/dev/injected"}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-token-enabled) jq '.items[0].spec.automountServiceAccountToken = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-writable-evidence) jq '.items[0].spec.containers[0].volumeMounts[] |= if .name == "evidence" then .readOnly = false else . end' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-resource-drift) jq '.items[0].spec.containers[0].resources.limits.cpu = "1"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-forbidden-volume) jq '.items[0].spec.containers[0].volumeMounts += [{name:"media",mountPath:"/media",readOnly:true}] | .items[0].spec.volumes += [{name:"media",persistentVolumeClaim:{claimName:"media-data"}}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-weakened-run-as-non-root) jq '.items[0].spec.securityContext.runAsNonRoot = false' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-weakened-container-security) jq '.items[0].spec.containers[0].securityContext.allowPrivilegeEscalation = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-privileged) jq '.items[0].spec.containers[0].securityContext.privileged = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-container-run-as-user) jq '.items[0].spec.containers[0].securityContext.runAsUser = 0' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-container-run-as-non-root) jq '.items[0].spec.containers[0].securityContext.runAsNonRoot = false' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-container-read-only-root) jq '.items[0].spec.containers[0].securityContext.readOnlyRootFilesystem = false' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-container-seccomp-unconfined) jq '.items[0].spec.containers[0].securityContext.seccompProfile = {type:"Unconfined"}' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-host-network) jq '.items[0].spec.hostNetwork = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-host-pid) jq '.items[0].spec.hostPID = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-host-ipc) jq '.items[0].spec.hostIPC = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-share-process) jq '.items[0].spec.shareProcessNamespace = true' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-ephemeral-container) jq '.items[0].spec.ephemeralContainers = [{name:"debug",image:"example.invalid/debug@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",securityContext:{privileged:true}}]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-supplemental-groups) jq '.items[0].spec.securityContext.supplementalGroups = [0]' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-apparmor-unconfined) jq '.items[0].spec.securityContext.appArmorProfile = {type:"Unconfined"}' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-seccomp-unconfined) jq '.items[0].spec.securityContext.seccompProfile = {type:"Unconfined"}' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-security-annotation) jq '.items[0].metadata.annotations."container.apparmor.security.beta.kubernetes.io/benchmark" = "unconfined"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
 		ambiguous-output) printf '%s\n%s\n' "$(cat "$BATS_TEST_TMPDIR/base-output.json")" "$(cat "$BATS_TEST_TMPDIR/base-output.json")" >"$collector_json" ;;
 		forbidden-nested) jq -S -c '.vmaf[0].settings = {artifactPath:"unexpected"}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		forbidden-setting-reason) jq -S -c '.vmaf[0].settings[0].reason = "/media/private"' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
@@ -1052,9 +1391,51 @@ write_collector_runtime_fixtures() {
 		forbidden-timeline-kind) jq -S -c '.vmaf[0].settings[0].timeline.discontinuity = {kind:"credential-fragment",offset:1}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		forbidden-frame-string) jq -S -c '.vmaf[0].sourceContinuity.stream.startTime = "/out/private"' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		forbidden-authoritative-reason) jq -S -c '.hdr[0].normalizedOracle.source.authoritative.reasons = ["credential-fragment"]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		missing-source-frame) jq -S -c '.vmaf[0].sourceContinuity.frames |= .[0:4]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		duplicate-source-frame) jq -S -c '.vmaf[0].sourceContinuity.frames[4] = .vmaf[0].sourceContinuity.frames[0]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		wrong-source-frame) jq -S -c '.vmaf[0].sourceContinuity.frames[4].frameIndex = (.vmaf[0].observedFrameIndex + 3)' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		missing-current-vmaf) jq -S -c '.vmaf[0].settings[0].vmaf.current |= .[0:4]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		duplicate-reset-vmaf) jq -S -c '.vmaf[0].settings[0].vmaf.reset[4] = .vmaf[0].settings[0].vmaf.reset[0]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		wrong-current-vmaf) jq -S -c '.vmaf[0].settings[0].vmaf.current[4].frameIndex = (.vmaf[0].observedFrameIndex + 3)' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		missing-offset) jq -S -c '.vmaf[0].settings[0].offsets |= .[0:4]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		duplicate-offset) jq -S -c '.vmaf[0].settings[0].offsets[4] = .vmaf[0].settings[0].offsets[3]' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		wrong-offset) jq -S -c '.vmaf[0].settings[0].offsets[4].offset = 3' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		complete-row-failed-setting) jq -S -c '.vmaf[0].settings[0] |= (.status = "failed" | .reason = "decode-failed" | .vmaf.current = [] | .vmaf.reset = [] | .offsets = [])' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		complete-null-source) jq -S -c '.vmaf[0].sourceContinuity = null' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		complete-null-normalized) jq -S -c '.hdr[0].normalizedOracle = null' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		failed-null-source) jq -S -c '
+			.vmaf[0] |= (
+				.status = "failed" | .sourceContinuity = null |
+				.settings |= map(.status = "failed" | .reason = "decode-failed" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+				.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-or-failed-evidence"]})
+		' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		failed-row-harness-setting) jq -S -c '
+			.vmaf[0] |= (
+				.status = "failed" |
+				.settings |= map(.status = "harness-blocked" | .reason = "missing-current-vmaf" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+				.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-or-failed-evidence"]})
+		' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		failed-hdr-normalized) jq -S -c '.hdr[0] |= (.status = "failed" | .reason = "encode-failed" | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		harness-hdr-failed-reason) jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "decode-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		false-vmaf-complete-class) jq -S -c '.vmaf[0].classification = {schemaVersion:1,classification:"encoder-output-defect",reasons:["current-reset-stable","zero-offset-aligned","icq-correlated-quality-loss"]}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		false-hdr-complete-class) jq -S -c '.hdr[0].classification = {schemaVersion:1,classification:"source-probe-defect",reasons:["source-conflict-before-encode"]}' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		noncomplete-vmaf-causal) jq -S -c '
+			.vmaf[0] |= (
+				.status = "failed" |
+				.settings |= map(.status = "failed" | .reason = "decode-failed" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+				.classification = {schemaVersion:1,classification:"vmaf-measurement-defect",reasons:["vmaf-only-exact-zero"]})
+		' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
+		noncomplete-hdr-causal) jq -S -c '
+			.hdr[0] |= (
+				.status = "failed" | .reason = "decode-failed" | .normalizedOracle = null |
+				.classification = {schemaVersion:1,classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]})
+		' "$BATS_TEST_TMPDIR/base-output.json" >"$collector_json" ;;
 		esac
 		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
-		[ "$status" -ne 0 ]
+		[ "$status" -ne 0 ] || {
+			echo "diagnostic evidence results accepted invalid mutation: $mutation" >&3
+			return 1
+		}
 		cp "$BATS_TEST_TMPDIR/base-jobs.json" "$STUB_JOBS_JSON"
 		cp "$BATS_TEST_TMPDIR/base-pods.json" "$STUB_BENCHMARK_PODS_JSON"
 		cp "$BATS_TEST_TMPDIR/base-output.json" "$collector_json"

@@ -174,6 +174,36 @@ contract_diagnostics_panel_sha256() {
 	printf 'sha256:%s\n' "$(printf '%s' "$panel_json" | sha256sum | awk 'NR == 1 { print $1 }')"
 }
 
+contract_diagnostics_evidence_panel_json() {
+	local file="$1"
+	jq -e -S -c '
+		. as $root |
+		{
+			schemaVersion:1,
+			durationSeconds:10,
+			vmaf:[
+				$root.diagnostics.vmafPanel[] as $row |
+				{
+					sampleId:$row.sampleId,
+					clipId:$row.clipId,
+					observedFrameIndex:$row.observedFrameIndex,
+					evidence:("vmaf/" + $row.sampleId + "/" + $row.clipId + "/evidence.json")
+				}
+			],
+			hdr:[
+				$root.diagnostics.hdrPanel[] as $row |
+				([$root.qualityPanel[] | select(.id == $row.sampleId)][0].clips[$row.clipId]) as $timestamp |
+				{
+					sampleId:$row.sampleId,
+					clipId:$row.clipId,
+					evidence:("hdr/" + $row.sampleId + "/evidence.json"),
+					starts:{beginning:"0",detail:$timestamp,end:"<end-start>",clip:$timestamp,encoded:$timestamp}
+				}
+			]
+		}
+	' "$file"
+}
+
 contract_diagnostics_terminal_statuses_json() {
 	cat <<'EOF'
 ["complete","failed","harness-blocked"]

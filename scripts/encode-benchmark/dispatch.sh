@@ -1136,17 +1136,25 @@ dispatch_clean() {
 # mounts only the one immutable run subtree read-only and prints its canonical
 # sanitized value; it never needs media, scratch, a GPU, or pod/node identity.
 dispatch_evidence_reader() {
-	local run_id='20260820T223425Z-082b3d38' expected name job
+	local run_id='20260820T223425Z-082b3d38' expected name job panel_sha256 evidence_panel
 	(($# == 0)) || return 64
 	expected="read:encode-benchmark:diagnostic-evidence:$run_id"
 	require_confirmation ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM "$expected" || return
 	load_source || return
 	require_cluster_target || return
 	ensure_evidence_reader_available || return
+	panel_sha256="$(contract_diagnostics_panel_sha256 "$samples_document")" || {
+		echo 'committed diagnostics panel identity is malformed' >&2
+		return 65
+	}
+	evidence_panel="$(contract_diagnostics_evidence_panel_json "$samples_document")" || {
+		echo 'committed diagnostic evidence panel is malformed' >&2
+		return 65
+	}
 	name="encode-benchmark-evidence-reader-${run_id,,}"
 	job="$temp_directory/evidence-reader.yaml"
 	render_job "$job" diagnostic-evidence-reader "$run_id" "$run_id" '' "$name" \
-		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence
+		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence "$panel_sha256" "$evidence_panel"
 	remove_mounts_and_volumes "$job" media out scratch samples image-evidence
 	yq -i '
 		del(.spec.template.spec.containers[0].env) |
