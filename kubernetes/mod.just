@@ -727,6 +727,18 @@ encode-benchmark-diagnostics run_id="": require-bash
     if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
     scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
 
+# Create the one read-only collector for the approved retained diagnostics run.
+# Guard: ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM=read:encode-benchmark:diagnostic-evidence:20260820T223425Z-082b3d38.
+encode-benchmark-diagnostic-evidence-reader: require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/lib/rollout.sh
+    require_deployed_source 'encode-benchmark diagnostic evidence reader' \
+      kubernetes/mod.just \
+      scripts/encode-benchmark \
+      kubernetes/apps/media/encode-benchmark
+    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' evidence-reader
+
 # Thin finalist convenience alias. The shared run recipe owns the single source
 # guard and dispatch path; finalist confirmation remains run/sample-bound.
 encode-benchmark-finalist run_id sample_id:
@@ -770,6 +782,10 @@ encode-benchmark-x265 sample_id node_name run_id="": require-bash
 # Read-only Job phase, pod node, sanitized summary, and actual kubelet imageID evidence.
 encode-benchmark-results run_id: require-bash
     @scripts/encode-benchmark/results.sh {{quote(kubeconfig)}} {{quote(run_id)}}
+
+# Read and validate the one canonical, redacted diagnostic evidence value.
+encode-benchmark-diagnostic-evidence-results: require-bash
+    @scripts/encode-benchmark/diagnostic-evidence-results.sh {{quote(kubeconfig)}}
 
 # Read-only live acceptance for activated inert inputs and ephemeral pod placement.
 encode-benchmark-verify: require-bash

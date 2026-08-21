@@ -910,6 +910,88 @@ set_dispatch_chosen_record() {
 	assert_call_precedes_first_create ' get configmap/encode-benchmark-samples '
 }
 
+# The evidence reader is a separate, bounded read-only Job.  This catches
+# accidental reuse of the encode diagnostic selector, GPU/media mounts, a
+# writable output volume, or node identity injection from the shared template.
+@test "diagnostic evidence reader dispatch creates only a read-only collector Job" {
+	assert_guard_refuses ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM \
+		'run:encode-benchmark:diagnostic-evidence' evidence-reader
+
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM='read:encode-benchmark:diagnostic-evidence:20260820T223425Z-082b3d38'
+	run_dispatch evidence-reader
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 1 ]
+	job="$(job_capture)"
+	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-mode"' "$job")" = 'diagnostic-evidence-reader' ]
+	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" = '20260820T223425Z-082b3d38' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/diagnostic-evidence.sh collect 20260820T223425Z-082b3d38 /evidence' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = 'docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].env | length' "$job")" = '0' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | [.mountPath,.readOnly] | @tsv' "$job")" = $'/evidence\ttrue' ]
+	[ "$(yq -r '.spec.template.spec.volumes | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
+	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "evidence") | [.persistentVolumeClaim.claimName,.persistentVolumeClaim.readOnly] | @tsv' "$job")" = $'media-data\ttrue' ]
+	[ "$(yq -r '(.spec.template.spec.containers[0].resources.requests | has("gpu.intel.com/i915")) or (.spec.template.spec.containers[0].resources.limits | has("gpu.intel.com/i915"))' "$job")" = 'false' ]
+}
+
+# Results must not reuse the diagnostics result selector: this validates the
+# collector's exact Job/Pod ownership and prints the one canonical JSON value
+# from the controlled collector log unchanged.
+@test "diagnostic evidence reader results require one terminal owned collector" {
+	run_id='20260820T223425Z-082b3d38'
+	job_name="encode-benchmark-evidence-reader-${run_id,,}"
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	jq -n -S -c --arg run "$run_id" '
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,
+		 vmaf:["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion" | split("/") | {sampleId:.[0],clipId:.[1]}],
+		 hdr:["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2" | {sampleId:.}]}' >"$collector_json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	jq -n --arg name "$job_name" --arg run "$run_id" '
+		{items:[{metadata:{name:$name,uid:"fixture-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"},annotations:{"homelab-talos/benchmark-owned":"true"}},
+		 spec:{template:{spec:{containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},
+		 status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0}}]}' >"$STUB_JOBS_JSON"
+	jq -n --arg name "$job_name" '
+		{items:[{metadata:{name:($name + "-pod"),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(cat "$collector_json")" ]
+}
+
+@test "diagnostic evidence reader results reject invalid ownership image phase and ambiguous output" {
+	run_id='20260820T223425Z-082b3d38'
+	job_name="encode-benchmark-evidence-reader-${run_id,,}"
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	jq -n -S -c --arg run "$run_id" '{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostic-evidence-reader",runId:$run,vmaf:["avc-clean-coco/motion","avc-grain-memento/dark","avc-grain-memento/detail","vc1-fugitive/detail","vc1-fugitive/motion" | split("/") | {sampleId:.[0],clipId:.[1]}],hdr:["hdr10-clean-ministry","hdr10-grain-goodfellas","hdr10-motion-john-wick-2" | {sampleId:.}]}' >"$collector_json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	jq -n --arg name "$job_name" --arg run "$run_id" '{items:[{metadata:{name:$name,uid:"fixture-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"},annotations:{"homelab-talos/benchmark-owned":"true"}},spec:{template:{spec:{containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0}}]}' >"$STUB_JOBS_JSON"
+	jq -n --arg name "$job_name" '{items:[{metadata:{name:($name + "-pod"),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$STUB_BENCHMARK_PODS_JSON"
+
+	for mutation in job-owner pod-owner wrong-image nonterminal ambiguous-output; do
+		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
+		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
+		cp "$collector_json" "$BATS_TEST_TMPDIR/base-output.json"
+		case "$mutation" in
+		job-owner) jq 'del(.items[0].metadata.annotations."homelab-talos/benchmark-owned")' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		pod-owner) jq '.items[0].metadata.ownerReferences[0].uid = "wrong"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		wrong-image) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		nonterminal) jq '.items[0].status.conditions = [] | .items[0].status.succeeded = 0' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON" ;;
+		ambiguous-output) printf '%s\n%s\n' "$(cat "$BATS_TEST_TMPDIR/base-output.json")" "$(cat "$BATS_TEST_TMPDIR/base-output.json")" >"$collector_json" ;;
+		esac
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -ne 0 ]
+		cp "$BATS_TEST_TMPDIR/base-jobs.json" "$STUB_JOBS_JSON"
+		cp "$BATS_TEST_TMPDIR/base-pods.json" "$STUB_BENCHMARK_PODS_JSON"
+		cp "$BATS_TEST_TMPDIR/base-output.json" "$collector_json"
+	done
+}
+
 # Catches diagnostics accepting a caller-supplied run id in labels/output while
 # dropping it from the runtime command, which would make runmeta create a
 # different artifact directory than dispatch announced.

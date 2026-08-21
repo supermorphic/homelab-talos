@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if (($# < 2)); then
-	echo 'usage: dispatch.sh <kubeconfig> <capabilities|census|findings|run|clean> ...' >&2
+	echo 'usage: dispatch.sh <kubeconfig> <capabilities|census|evidence-reader|findings|run|clean> ...' >&2
 	exit 64
 fi
 
@@ -261,6 +261,17 @@ ensure_run_available() {
 		--output json)"
 	[[ "$(yq -p=json -r '.items | length' <<<"$existing")" == '0' ]] || {
 		echo "generated benchmark run already has owned Jobs: $run_id" >&2
+		return 73
+	}
+}
+
+ensure_evidence_reader_available() {
+	local existing
+	existing="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=20260820T223425Z-082b3d38,homelab-talos/benchmark-mode=diagnostic-evidence-reader" \
+		--output json)"
+	[[ "$(yq -p=json -r '.items | length' <<<"$existing")" == '0' ]] || {
+		echo 'diagnostic evidence reader Job already exists for the approved run' >&2
 		return 73
 	}
 }
@@ -1121,6 +1132,39 @@ dispatch_clean() {
 	printf 'run_id=%s cleanup_job=%s artifact_location=/out/runs/%s\n' "$run_id" "$name" "$run_id"
 }
 
+# The collector has no relationship to the diagnostic encoder selector.  It
+# mounts only the one immutable run subtree read-only and prints its canonical
+# sanitized value; it never needs media, scratch, a GPU, or pod/node identity.
+dispatch_evidence_reader() {
+	local run_id='20260820T223425Z-082b3d38' expected name job
+	(($# == 0)) || return 64
+	expected="read:encode-benchmark:diagnostic-evidence:$run_id"
+	require_confirmation ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM "$expected" || return
+	load_source || return
+	require_cluster_target || return
+	ensure_evidence_reader_available || return
+	name="encode-benchmark-evidence-reader-${run_id,,}"
+	job="$temp_directory/evidence-reader.yaml"
+	render_job "$job" diagnostic-evidence-reader "$run_id" "$run_id" '' "$name" \
+		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence
+	remove_mounts_and_volumes "$job" media out scratch samples image-evidence
+	yq -i '
+		del(.spec.template.spec.containers[0].env) |
+		del(.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915") |
+		del(.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915") |
+		del(.spec.template.spec.containers[0].resources.requests."ephemeral-storage") |
+		del(.spec.template.spec.containers[0].resources.limits."ephemeral-storage") |
+		.spec.activeDeadlineSeconds = 300 |
+		.spec.ttlSecondsAfterFinished = 3600 |
+		.spec.template.spec.containers[0].resources.requests = {"cpu":"100m","memory":"128Mi"} |
+		.spec.template.spec.containers[0].resources.limits = {"cpu":"500m","memory":"256Mi"} |
+		.spec.template.spec.containers[0].volumeMounts += [{"name":"evidence","mountPath":"/evidence","readOnly":true}] |
+		.spec.template.spec.volumes += [{"name":"evidence","persistentVolumeClaim":{"claimName":"media-data","readOnly":true}}]
+	' "$job"
+	create_job "$job" >/dev/null
+	printf 'run_id=%s collector_job=%s\n' "$run_id" "$name"
+}
+
 validate_findings_inputs_file() {
 	local path="$1"
 	[[ -f "$path" && ! -L "$path" ]] || return 66
@@ -1225,6 +1269,10 @@ capabilities)
 census)
 	(($# == 0)) || exit 64
 	dispatch_census
+	;;
+evidence-reader)
+	(($# == 0)) || exit 64
+	dispatch_evidence_reader "$@"
 	;;
 findings)
 	dispatch_findings "$@"
