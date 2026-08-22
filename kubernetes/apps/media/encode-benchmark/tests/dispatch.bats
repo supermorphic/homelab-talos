@@ -996,6 +996,37 @@ write_collector_runtime_fixtures() {
 		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
 }
 
+write_failed_collector_runtime_fixtures() {
+	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+	run_dispatch evidence-reader
+	[ "$status" -eq 0 ]
+	job="$(job_capture)"
+	name="$(yq -r '.metadata.name' "$job")"
+	yq -o=json -I=0 '
+		.metadata.uid = "fixture-job-uid" |
+		.status.conditions = [{"type":"Failed","status":"True","reason":"BackoffLimitExceeded"}] |
+		.status.succeeded = 0 |
+		.status.failed = 1
+	' "$job" | jq -c '{items:[.]}' >"$jobs_path"
+	pod_spec="$(yq -o=json -I=0 '.spec.template.spec' "$job")"
+	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
+		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Failed",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",ready:false,restartCount:0,state:{terminated:{exitCode:65,reason:"Error"}}}]}}]}' >"$pods_path"
+}
+
+producer_fixed_failed_collector_lines() {
+	awk '
+		/^[[:space:]]*echo '\''[^'\'']+'\'' >&2$/ {
+			line = $0
+			sub(/^[[:space:]]*echo '\''/, "", line)
+			sub(/'\'' >&2$/, "", line)
+			if (line != "usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel>") {
+				print line
+			}
+		}
+	' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/diagnostic-evidence.sh"
+}
+
 @test "kubectl log stub implements --tail using kubectl argument semantics" {
 	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
 	export STUB_LOGS_FILE
@@ -1019,6 +1050,140 @@ write_collector_runtime_fixtures() {
 	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$(cat "$collector_json")" ]
+}
+
+@test "diagnostic evidence reader returns canonical failed collector statuses for the full fixed vocabulary" {
+	local line reason run_id
+	local -a producer_lines
+	local -A seen_reasons=()
+	run_id='20260820T223425Z-082b3d38'
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	mapfile -t producer_lines < <(producer_fixed_failed_collector_lines)
+	[ "${#producer_lines[@]}" -eq 16 ]
+
+	for line in "${producer_lines[@]}"; do
+		printf '%s\n' "$line" >"$STUB_LOGS_FILE"
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -eq 0 ] || {
+			echo "diagnostic evidence results rejected mapped failed collector line: $line" >&3
+			return 1
+		}
+		[ "$(jq -c 'keys' <<<"$output")" = '["mode","reason","runId","schemaVersion","status","strategyId"]' ] || {
+			echo "diagnostic evidence results returned the wrong failed collector shape for: $line" >&3
+			return 1
+		}
+		[ "$(jq -r '.mode' <<<"$output")" = 'diagnostic-evidence-reader' ]
+		[ "$(jq -r '.runId' <<<"$output")" = "$run_id" ]
+		[ "$(jq -r '.schemaVersion' <<<"$output")" = '1' ]
+		[ "$(jq -r '.status' <<<"$output")" = 'failed' ]
+		[ "$(jq -r '.strategyId' <<<"$output")" = 'qsv-hevc-icq-v1' ]
+		reason="$(jq -r '.reason' <<<"$output")"
+		[[ "$reason" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || {
+			echo "diagnostic evidence results returned an unsafe failed collector reason for: $line" >&3
+			return 1
+		}
+		[[ -z "${seen_reasons[$reason]+x}" ]] || {
+			echo "diagnostic evidence results collapsed distinct collector lines into one reason: $reason" >&3
+			return 1
+		}
+		seen_reasons["$reason"]="$line"
+		if [[ "$line" == 'VMAF diagnostic evidence violates its approved schema' ]]; then
+			[ "$reason" = 'vmaf-diagnostic-evidence-schema-invalid' ] || {
+				echo "diagnostic evidence results changed the VMAF schema exemplar mapping" >&3
+				return 1
+			}
+		fi
+	done
+	[ "${#seen_reasons[@]}" -eq "${#producer_lines[@]}" ]
+}
+
+@test "diagnostic evidence reader rejects failed collector outputs outside the bounded failure contract" {
+	local mutation expected run_id
+	run_id='20260820T223425Z-082b3d38'
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	printf '%s\n' 'VMAF diagnostic evidence violates its approved schema' >"$STUB_LOGS_FILE"
+	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for mutation in complete-condition wrong-failure-reason pod-succeeded wrong-exit-code wrong-terminate-reason restarted usage-line jq-stderr tool-stderr unknown-line empty-line multiline oversized; do
+		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
+		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
+		printf '%s\n' 'VMAF diagnostic evidence violates its approved schema' >"$STUB_LOGS_FILE"
+		case "$mutation" in
+		complete-condition)
+			expected='diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid'
+			jq '.items[0].status.conditions = [{"type":"Complete","status":"True"}] | .items[0].status.succeeded = 1 | .items[0].status.failed = 0' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON"
+			;;
+		wrong-failure-reason)
+			expected='diagnostic evidence result provenance rejected: Job is not the terminal collector'
+			jq '.items[0].status.conditions[0].reason = "DeadlineExceeded"' "$BATS_TEST_TMPDIR/base-jobs.json" >"$STUB_JOBS_JSON"
+			;;
+		pod-succeeded)
+			expected='diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid'
+			jq '.items[0].status.phase = "Succeeded"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON"
+			;;
+		wrong-exit-code)
+			expected='diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid'
+			jq '.items[0].status.containerStatuses[0].state.terminated.exitCode = 1' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON"
+			;;
+		wrong-terminate-reason)
+			expected='diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid'
+			jq '.items[0].status.containerStatuses[0].state.terminated.reason = "Completed"' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON"
+			;;
+		restarted)
+			expected='diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid'
+			jq '.items[0].status.containerStatuses[0].restartCount = 1 | .items[0].status.containerStatuses[0].lastState = {terminated:{exitCode:65,reason:"Error"}}' "$BATS_TEST_TMPDIR/base-pods.json" >"$STUB_BENCHMARK_PODS_JSON"
+			;;
+		usage-line)
+			expected='diagnostic evidence failed result is not allowlisted'
+			printf '%s\n' 'usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel>' >"$STUB_LOGS_FILE"
+			;;
+		jq-stderr)
+			expected='diagnostic evidence failed result is not allowlisted'
+			printf '%s\n' 'jq: error (at /evidence/vmaf.json:17): Cannot index string with string "panel"' >"$STUB_LOGS_FILE"
+			;;
+		tool-stderr)
+			expected='diagnostic evidence failed result is not allowlisted'
+			printf '%s\n' 'find: /evidence: No such file or directory' >"$STUB_LOGS_FILE"
+			;;
+		unknown-line)
+			expected='diagnostic evidence failed result is not allowlisted'
+			printf '%s\n' 'diagnostic evidence leaked /media/private' >"$STUB_LOGS_FILE"
+			;;
+		empty-line)
+			expected='diagnostic evidence failed result is not allowlisted'
+			: >"$STUB_LOGS_FILE"
+			;;
+		multiline)
+			expected='diagnostic evidence result is ambiguous'
+			printf '%s\n%s\n' 'VMAF diagnostic evidence violates its approved schema' 'HDR diagnostic evidence violates its approved schema' >"$STUB_LOGS_FILE"
+			;;
+		oversized)
+			expected='diagnostic evidence result exceeds its bounded size'
+			jq -n --argjson length 65537 '{padding:("a" * $length)}' | tr -d '\n' >"$STUB_LOGS_FILE"
+			;;
+		esac
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -ne 0 ] || {
+			echo "diagnostic evidence results accepted invalid failed collector mutation: $mutation" >&3
+			return 1
+		}
+		[ "$output" = "$expected" ] || {
+			echo "diagnostic evidence results returned the wrong rejection for mutation: $mutation" >&3
+			return 1
+		}
+		[[ "$output" != *'/media/private'* ]]
+		cp "$BATS_TEST_TMPDIR/base-jobs.json" "$STUB_JOBS_JSON"
+		cp "$BATS_TEST_TMPDIR/base-pods.json" "$STUB_BENCHMARK_PODS_JSON"
+	done
 }
 
 @test "diagnostic evidence reader binds every VMAF row to the committed observed frame" {

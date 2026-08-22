@@ -20,6 +20,28 @@ app_directory="$repository_root/kubernetes/apps/media/encode-benchmark/app"
 # shellcheck disable=SC1091
 source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
 
+failed_collector_reason() {
+	case "${1:-}" in
+	'diagnostic evidence reader panel identity is malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-identity-malformed' ;;
+	'diagnostic evidence reader panel bounds are malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-bounds-malformed' ;;
+	'diagnostic evidence reader rejects an unapproved run id') printf '%s\n' 'diagnostic-evidence-reader-unapproved-run-id' ;;
+	'diagnostic evidence root is missing or unsafe') printf '%s\n' 'diagnostic-evidence-root-unsafe' ;;
+	'diagnostic evidence contains a symlink') printf '%s\n' 'diagnostic-evidence-symlink-present' ;;
+	'diagnostic evidence files are missing or unexpected') printf '%s\n' 'diagnostic-evidence-files-unexpected' ;;
+	'diagnostic evidence file is unsafe') printf '%s\n' 'diagnostic-evidence-file-unsafe' ;;
+	'diagnostic evidence input exceeds its bounded size') printf '%s\n' 'diagnostic-evidence-input-exceeds-bounded-size' ;;
+	'diagnostic evidence is malformed JSON') printf '%s\n' 'diagnostic-evidence-malformed-json' ;;
+	'diagnostic manifest does not bind the approved immutable run') printf '%s\n' 'diagnostic-manifest-binding-invalid' ;;
+	'diagnostic summary does not bind the approved panel') printf '%s\n' 'diagnostic-summary-binding-invalid' ;;
+	'VMAF diagnostic evidence violates its approved schema') printf '%s\n' 'vmaf-diagnostic-evidence-schema-invalid' ;;
+	'VMAF diagnostic evidence does not match its retained summary') printf '%s\n' 'vmaf-diagnostic-evidence-summary-mismatch' ;;
+	'HDR diagnostic evidence violates its approved schema') printf '%s\n' 'hdr-diagnostic-evidence-schema-invalid' ;;
+	'HDR diagnostic evidence does not match its retained summary') printf '%s\n' 'hdr-diagnostic-evidence-summary-mismatch' ;;
+	'canonical diagnostic evidence exceeds the output limit') printf '%s\n' 'canonical-diagnostic-evidence-output-limit-exceeded' ;;
+	*) return 1 ;;
+	esac
+}
+
 [[ -f "$kubeconfig" ]] || {
 	echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
 	exit 1
@@ -51,36 +73,46 @@ jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs --s
 job="$(jq -c '.items[0]' <<<"$jobs")"
 name="$(jq -e -r '.metadata.name | select(. == "encode-benchmark-evidence-reader-20260820t223425z-082b3d38")' <<<"$job")" || exit 65
 uid="$(jq -e -r '.metadata.uid | select(type == "string" and length > 0)' <<<"$job")" || exit 65
-jq -e --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
-	.metadata.name == $name and
-	.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
-	.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
-	.metadata.labels."homelab-talos/benchmark-run" == $run and .metadata.labels."homelab-talos/benchmark-mode" == $mode and
-	.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
-	.metadata.annotations."homelab-talos/scripts-configmap" == $scripts and
-	.spec.backoffLimit == 0 and .spec.activeDeadlineSeconds == 300 and .spec.ttlSecondsAfterFinished == 3600 and
-	(.spec.template.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
-	 .spec.template.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
-	 .spec.template.metadata.labels."homelab-talos/benchmark-run" == $run and
-	 .spec.template.metadata.labels."homelab-talos/benchmark-mode" == $mode) and
-	(.spec.template.spec.automountServiceAccountToken == false and .spec.template.spec.restartPolicy == "Never" and
-	 .spec.template.spec.securityContext == {runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}} and
-	 (.spec.template.spec | has("initContainers") | not)) and
-	(.spec.template.spec.containers | type == "array" and length == 1) and
-	(.spec.template.spec.containers[0] | .name == "benchmark" and .image == $image and
-		 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
-	 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
-	 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
-	 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
-	 (.volumeMounts | type == "array" and length == 2 and
-	  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
-	  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
-	(.spec.template.spec.volumes | type == "array" and length == 2 and
-	 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
-	 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1) and
-	([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 1) and
-	(.status.succeeded == 1 and (.status.failed // 0) == 0)
-' <<<"$job" >/dev/null || {
+job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
+	def base_contract:
+		.metadata.name == $name and
+		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+		.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+		.metadata.labels."homelab-talos/benchmark-run" == $run and .metadata.labels."homelab-talos/benchmark-mode" == $mode and
+		.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
+		.metadata.annotations."homelab-talos/scripts-configmap" == $scripts and
+		.spec.backoffLimit == 0 and .spec.activeDeadlineSeconds == 300 and .spec.ttlSecondsAfterFinished == 3600 and
+		(.spec.template.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+		 .spec.template.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+		 .spec.template.metadata.labels."homelab-talos/benchmark-run" == $run and
+		 .spec.template.metadata.labels."homelab-talos/benchmark-mode" == $mode) and
+		(.spec.template.spec.automountServiceAccountToken == false and .spec.template.spec.restartPolicy == "Never" and
+		 .spec.template.spec.securityContext == {runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}} and
+		 (.spec.template.spec | has("initContainers") | not)) and
+		(.spec.template.spec.containers | type == "array" and length == 1) and
+		(.spec.template.spec.containers[0] | .name == "benchmark" and .image == $image and
+			 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
+		 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
+		 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
+		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
+		 (.volumeMounts | type == "array" and length == 2 and
+		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
+		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
+		(.spec.template.spec.volumes | type == "array" and length == 2 and
+		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
+		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1);
+	if base_contract and
+		([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 1) and
+		(.status.succeeded == 1 and (.status.failed // 0) == 0)
+	then "complete"
+	elif base_contract and
+		([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 0) and
+		([.status.conditions[]? | select(.type == "Failed" and .status == "True" and .reason == "BackoffLimitExceeded")] | length == 1) and
+		((.status.active // 0) == 0) and ((.status.succeeded // 0) == 0) and ((.status.failed // 0) == 1)
+	then "failed"
+	else empty end
+' <<<"$job")" || true
+[[ "$job_state" == 'complete' || "$job_state" == 'failed' ]] || {
 	echo 'diagnostic evidence result provenance rejected: Job is not the terminal collector' >&2
 	exit 1
 }
@@ -91,38 +123,51 @@ pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods --s
 	exit 1
 }
 pod="$(jq -c '.items[0]' <<<"$pods")"
-jq -e --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg uid "$uid" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
-	.status.phase == "Succeeded" and
-	.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
-	.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
-	.metadata.labels."homelab-talos/benchmark-run" == $run and
-	.metadata.labels."homelab-talos/benchmark-mode" == $mode and
-	.metadata.labels."job-name" == $name and
-	([(.metadata.annotations // {}) | keys[] | select(test("apparmor|seccomp"; "i"))] | length) == 0 and
-	(.metadata.ownerReferences | type == "array" and length == 1 and .[0].apiVersion == "batch/v1" and .[0].kind == "Job" and .[0].name == $name and .[0].uid == $uid and .[0].controller == true and .[0].blockOwnerDeletion == true) and
-	(.spec.automountServiceAccountToken == false and .spec.restartPolicy == "Never" and
-	 .spec.securityContext == {runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}} and
-	 (.spec.hostNetwork // false) == false and (.spec.hostPID // false) == false and (.spec.hostIPC // false) == false and
-	 (.spec.shareProcessNamespace // false) == false and
-	 ((.spec.initContainers // []) | type == "array" and length == 0) and
-	 ((.spec.ephemeralContainers // []) | type == "array" and length == 0)) and
-	(.spec.containers | type == "array" and length == 1) and
-	(.spec.containers[0] |
-	 .name == "benchmark" and .image == $image and
-	 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
-	 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
-	 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
-	 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
-	 (.volumeMounts | type == "array" and length == 2 and
-	  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
-	  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
-	(.spec.volumes | type == "array" and length == 2 and
-	 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
-	 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1) and
-	(.status.containerStatuses | type == "array" and length == 1 and .[0].name == "benchmark") and
-	([.status.containerStatuses[] | select(.name == "benchmark") | .imageID | sub("^(docker-pullable|containerd)://"; "")] | .[0]) as $image_id |
-	($image_id == $image or $image_id == ($image | split("@") | .[1]))
-' <<<"$pod" >/dev/null || {
+pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg uid "$uid" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
+	def image_matches:
+		([.status.containerStatuses[] | select(.name == "benchmark") | .imageID | sub("^(docker-pullable|containerd)://"; "")] | .[0]) as $image_id |
+		($image_id == $image or $image_id == ($image | split("@") | .[1]));
+	def base_contract:
+		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+		.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+		.metadata.labels."homelab-talos/benchmark-run" == $run and
+		.metadata.labels."homelab-talos/benchmark-mode" == $mode and
+		.metadata.labels."job-name" == $name and
+		([(.metadata.annotations // {}) | keys[] | select(test("apparmor|seccomp"; "i"))] | length) == 0 and
+		(.metadata.ownerReferences | type == "array" and length == 1 and .[0].apiVersion == "batch/v1" and .[0].kind == "Job" and .[0].name == $name and .[0].uid == $uid and .[0].controller == true and .[0].blockOwnerDeletion == true) and
+		(.spec.automountServiceAccountToken == false and .spec.restartPolicy == "Never" and
+		 .spec.securityContext == {runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}} and
+		 (.spec.hostNetwork // false) == false and (.spec.hostPID // false) == false and (.spec.hostIPC // false) == false and
+		 (.spec.shareProcessNamespace // false) == false and
+		 ((.spec.initContainers // []) | type == "array" and length == 0) and
+		 ((.spec.ephemeralContainers // []) | type == "array" and length == 0)) and
+		(.spec.containers | type == "array" and length == 1) and
+		(.spec.containers[0] |
+		 .name == "benchmark" and .image == $image and
+		 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
+		 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
+		 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
+		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
+		 (.volumeMounts | type == "array" and length == 2 and
+		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
+		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
+		(.spec.volumes | type == "array" and length == 2 and
+		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
+		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1) and
+		(.status.containerStatuses | type == "array" and length == 1 and .[0].name == "benchmark") and
+		image_matches;
+	if base_contract and .status.phase == "Succeeded" then "complete"
+	elif base_contract and .status.phase == "Failed" and
+		(.status.containerStatuses[0].ready == false) and
+		(.status.containerStatuses[0].restartCount == 0) and
+		((.status.containerStatuses[0].lastState // {}) == {}) and
+		(.status.containerStatuses[0].state | type == "object" and (keys | sort) == ["terminated"]) and
+		(.status.containerStatuses[0].state.terminated.exitCode == 65) and
+		(.status.containerStatuses[0].state.terminated.reason == "Error")
+	then "failed"
+	else empty end
+' <<<"$pod")" || true
+[[ "$pod_state" == "$job_state" ]] || {
 	echo 'diagnostic evidence result provenance rejected: Pod ownership or image identity is invalid' >&2
 	exit 1
 }
@@ -137,6 +182,24 @@ payload_bytes="$(printf '%s' "$payload" | LC_ALL=C wc -c | tr -d '[:space:]')"
 	echo 'diagnostic evidence result exceeds its bounded size' >&2
 	exit 65
 }
+if [[ "$job_state" == 'failed' ]]; then
+	failed_reason="$(failed_collector_reason "$payload" || true)"
+	[[ -n "$failed_reason" ]] || {
+		echo 'diagnostic evidence failed result is not allowlisted' >&2
+		exit 65
+	}
+	jq -n -S -c --arg run "$RUN_ID" --arg reason "$failed_reason" '
+		{
+			schemaVersion:1,
+			strategyId:"qsv-hevc-icq-v1",
+			mode:"diagnostic-evidence-reader",
+			runId:$run,
+			status:"failed",
+			reason:$reason
+		}
+	'
+	exit 0
+fi
 [[ "$(jq -S -c . <<<"$payload")" == "$payload" ]] || {
 	echo 'diagnostic evidence result is not canonical' >&2
 	exit 65
