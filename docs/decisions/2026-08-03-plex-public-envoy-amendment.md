@@ -120,9 +120,9 @@ determine which path a client took. See section 12.
 
 ## 4. Architecture
 
-![Split-horizon data flow](images/2026-08-03-plex-split-horizon-data-flow.png)
+![Split-horizon data flow](../specs/images/2026-08-03-plex-split-horizon-data-flow.png)
 
-Editable source: [`2026-08-03-plex-split-horizon-data-flow.svg`](images/2026-08-03-plex-split-horizon-data-flow.svg)
+Editable source: [`2026-08-03-plex-split-horizon-data-flow.svg`](../specs/images/2026-08-03-plex-split-horizon-data-flow.svg)
 
 ### 4.1 Private horizon — unchanged
 
@@ -221,9 +221,9 @@ network already holds a position that makes this hop the lesser problem.
 
 ## 6. Gateway isolation and trust boundaries
 
-![Public Envoy trust boundaries](images/2026-08-03-plex-public-envoy-trust-boundaries.png)
+![Public Envoy trust boundaries](../specs/images/2026-08-03-plex-public-envoy-trust-boundaries.png)
 
-Editable source: [`2026-08-03-plex-public-envoy-trust-boundaries.svg`](images/2026-08-03-plex-public-envoy-trust-boundaries.svg)
+Editable source: [`2026-08-03-plex-public-envoy-trust-boundaries.svg`](../specs/images/2026-08-03-plex-public-envoy-trust-boundaries.svg)
 
 ### 6.1 The controller watch scope is not additive
 

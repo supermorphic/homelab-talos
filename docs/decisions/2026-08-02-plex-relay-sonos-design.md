@@ -297,10 +297,10 @@ The selected Relay design avoids the inbound path below. The diagram is retained
 because it defines the fallback's exact exposure and prevents a future “one port is
 harmless” assumption.
 
-![Plex public-port trust boundaries](images/2026-08-02-plex-remote-access-trust-boundaries.png)
+![Plex public-port trust boundaries](../specs/images/2026-08-02-plex-remote-access-trust-boundaries.png)
 
 Editable source:
-[2026-08-02-plex-remote-access-trust-boundaries.svg](images/2026-08-02-plex-remote-access-trust-boundaries.svg).
+[2026-08-02-plex-remote-access-trust-boundaries.svg](../specs/images/2026-08-02-plex-remote-access-trust-boundaries.svg).
 
 A single DNAT does **not** automatically expose every VLAN or the Kubernetes API.
 It exposes Plex continuously, and a Plex compromise inherits the pod's mounts,
