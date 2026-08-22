@@ -99,7 +99,7 @@ job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
 		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
 		(.spec.template.spec.volumes | type == "array" and length == 2 and
-		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
+		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 365)] | length) == 1 and
 		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1);
 	if base_contract and
 		([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 1) and
@@ -152,7 +152,7 @@ pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
 		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
 		(.spec.volumes | type == "array" and length == 2 and
-		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 555)] | length) == 1 and
+		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 365)] | length) == 1 and
 		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1) and
 		(.status.containerStatuses | type == "array" and length == 1 and .[0].name == "benchmark") and
 		image_matches;

@@ -979,37 +979,41 @@ write_canonical_collector_json() {
 }
 
 write_collector_runtime_fixtures() {
-	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec
+	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec api_scripts_mode
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
 	run_dispatch evidence-reader
 	[ "$status" -eq 0 ]
 	job="$(job_capture)"
 	name="$(yq -r '.metadata.name' "$job")"
-	yq -o=json -I=0 '
+	api_scripts_mode=$((8#555))
+	API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '
 		.metadata.uid = "fixture-job-uid" |
+		(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) |
 		.status.conditions = [{"type":"Complete","status":"True"}] |
 		.status.succeeded = 1 |
 		.status.failed = 0
 	' "$job" | jq -c '{items:[.]}' >"$jobs_path"
-	pod_spec="$(yq -o=json -I=0 '.spec.template.spec' "$job")"
+	pod_spec="$(API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) | .spec.template.spec' "$job")"
 	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
 		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
 }
 
 write_failed_collector_runtime_fixtures() {
-	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec
+	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec api_scripts_mode
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
 	run_dispatch evidence-reader
 	[ "$status" -eq 0 ]
 	job="$(job_capture)"
 	name="$(yq -r '.metadata.name' "$job")"
-	yq -o=json -I=0 '
+	api_scripts_mode=$((8#555))
+	API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '
 		.metadata.uid = "fixture-job-uid" |
+		(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) |
 		.status.conditions = [{"type":"Failed","status":"True","reason":"BackoffLimitExceeded"}] |
 		.status.succeeded = 0 |
 		.status.failed = 1
 	' "$job" | jq -c '{items:[.]}' >"$jobs_path"
-	pod_spec="$(yq -o=json -I=0 '.spec.template.spec' "$job")"
+	pod_spec="$(API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) | .spec.template.spec' "$job")"
 	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
 		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Failed",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",ready:false,restartCount:0,state:{terminated:{exitCode:65,reason:"Error"}}}]}}]}' >"$pods_path"
 }
