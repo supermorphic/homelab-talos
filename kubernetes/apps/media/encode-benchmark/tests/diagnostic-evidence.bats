@@ -654,14 +654,21 @@ run_collector() {
 			.vmaf = {current:[],reset:[]} |
 			.offsets |= map(.ssim.value = null | .psnr.value = null) |
 			.timeline = {zeroOffsetAligned:false,discontinuity:null}) |
-		.classification = {schemaVersion:1,classification:"vmaf-measurement-defect",reasons:["vmaf-only-exact-zero"]}
+		.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]}
 	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
 	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-	jq '.vmaf.entries[0].status = "failed" | .vmaf.entries[0].classification = "vmaf-measurement-defect" | .vmaf.entries[0].reasons = ["vmaf-only-exact-zero"]' "$EVIDENCE_ROOT/diagnostic-summary.json" >"$BATS_TEST_TMPDIR/summary.json"
-	mv "$BATS_TEST_TMPDIR/summary.json" "$EVIDENCE_ROOT/diagnostic-summary.json"
+	set_vmaf_summary_partial failed
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
-	[ "$status" -ne 0 ]
+	[ "$status" -eq 0 ]
+
+	jq '.classification = {schemaVersion:1,classification:"vmaf-measurement-defect",reasons:["vmaf-only-exact-zero"]}' \
+		"$path" >"$BATS_TEST_TMPDIR/evidence.json"
+	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'VMAF diagnostic evidence violates its approved schema' ]
 }
 
 @test "collector rejects causal HDR classification for non-complete evidence" {
@@ -671,14 +678,21 @@ run_collector() {
 		.status = "failed" | .reason = "decode-failed" |
 		.encoded = {start:.encoded.start,durationSeconds:10,status:"failed",reason:"encoded-output-unavailable",identity:null,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}} |
 		.normalizedOracle = null |
-		.classification = {schemaVersion:1,classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]}
+		.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]}
 	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
 	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-	jq '.hdr.entries[0].status = "failed" | .hdr.entries[0].classification = "preserved" | .hdr.entries[0].reasons = ["source-clip-encoded-metadata-agree"]' "$EVIDENCE_ROOT/diagnostic-summary.json" >"$BATS_TEST_TMPDIR/summary.json"
-	mv "$BATS_TEST_TMPDIR/summary.json" "$EVIDENCE_ROOT/diagnostic-summary.json"
+	set_hdr_summary_partial failed
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
-	[ "$status" -ne 0 ]
+	[ "$status" -eq 0 ]
+
+	jq '.classification = {schemaVersion:1,classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]}' \
+		"$path" >"$BATS_TEST_TMPDIR/evidence.json"
+	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'HDR diagnostic evidence violates its approved schema' ]
 }
 
 @test "collector admits only the producer VMAF classifier-failure override" {
