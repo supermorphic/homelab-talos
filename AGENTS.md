@@ -7,12 +7,12 @@ this file.
 
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
 Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its relevant README or runbook and the current
-accepted decisions. This root file is the sole repository-policy surface; supporting
+Before changing a subsystem, inspect its relevant README or runbook and relevant completed
+design specifications. This root file is the sole repository-policy surface; supporting
 documentation supplies procedure, not competing instructions. Use the current repository
-state and accepted decisions as the implementation baseline. Repository policy and
-accepted decisions take precedence over stale plans, prior conversation context, and
-assumptions.
+state and current documentation as the implementation baseline. Repository policy and
+current source state take precedence over historical specifications, transient plans,
+prior conversation context, and assumptions.
 
 ## Communication style
 
@@ -175,13 +175,28 @@ solely to satisfy these style rules.
   `kubernetes/README.md`.
 - A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate`, or uses a StatefulSet; it
   must not use `RollingUpdate`.
-- Durable architectural decisions belong in `docs/decisions/`. Accepted decisions are
-  superseded, never revised.
-- Brainstorming specifications and implementation plans remain session-local or
-  otherwise uncommitted. Do not create committed `docs/superpowers/specs/` or
-  `docs/superpowers/plans/` artifacts unless the operator explicitly changes this
-  policy.
+- Durable design specifications belong in `docs/specs/`. Specifications may evolve during
+  implementation and must be reconciled with the implemented and validated result before
+  merge. After merge, treat them as historical records.
+- Implementation plans are transient execution artifacts. Store repository-local plans
+  under `.tmp/plans/`, keep them uncommitted, and use them for execution, task resumption,
+  and agent handoff.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
+
+## Design lifecycle
+
+- Use monotonically increasing numeric identifiers for durable design specifications,
+  such as `001-<name>.md`.
+- A design specification may evolve while implementation is in progress. When
+  implementation findings materially change the design, update the specification to
+  reflect the resulting design and rationale.
+- Before merge, reconcile the specification with the implemented and validated result.
+- After merge, treat the specification as a historical record. A later material redesign
+  uses a new numbered specification rather than rewriting the completed record.
+- When a transient implementation plan corresponds to a numbered specification, use the
+  same numeric identifier and descriptive name where practical.
+- Repository-defined artifact locations override tool or skill defaults. Do not create
+  implementation plans under `docs/` unless the operator explicitly requests it.
 
 ## Validation
 
