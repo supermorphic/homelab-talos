@@ -213,14 +213,15 @@ After acquisition, the producer rechecks source, clip, and output identities. Dr
 invalidates the affected evidence instead of leaving a stale causal classification.
 
 The diagnostic Job's termination message is a separate, small monitoring interface. It
-contains only run identity, artifact location, overall status, bounded category counts,
-and allowlisted reason codes. The message is canonical JSON, has a 3,072-byte maximum,
-and limits reason count and length. The ordinary results reader queries the matching
-Pods once, requires exactly one canonical diagnostics Pod, and allows beside it only the
-deterministic reader Pod with matching dispatch and Job ownership. Active work produces
-a terse state line. Terminal work is reported only after schema, count, reason, run, and
-artifact-location validation; raw diagnostic files and logs are never printed through
-this interface.
+contains protocol identity (`schemaVersion`, `strategyId`, and `mode`), run identity,
+artifact location, overall status, bounded category counts, and allowlisted reason
+codes. It contains no raw diagnostic evidence. The message is canonical JSON, has a
+3,072-byte maximum, and limits reason count and length. The ordinary results reader
+queries the matching Pods once, requires exactly one canonical diagnostics Pod, and
+allows beside it only the deterministic reader Pod with matching dispatch and Job
+ownership. Active work produces a terse state line. Terminal work is reported only
+after schema, count, reason, run, and artifact-location validation; raw diagnostic files
+and logs are never printed through this interface.
 
 ## Read-only diagnostic evidence reader
 
