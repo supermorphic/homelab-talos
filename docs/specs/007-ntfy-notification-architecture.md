@@ -53,9 +53,11 @@ LoadBalancer, or Internet-facing ntfy listener is part of this design.
 The official iOS client needs ntfy's upstream wake-up service. The self-hosted server
 sends the upstream service the message identifier and hashed topic needed for APNs to
 wake the client; message bodies remain on the self-hosted instance. Network policy
-therefore allows world HTTPS egress for this wake-up path while restricting inbound
-application traffic to the internal Gateway, Tailscale proxies, approved producers,
-Homepage, Gatus, and node probes.
+therefore allows world HTTPS egress for this wake-up path. On inbound port `80`, it
+permits the internal Gateway, Tailscale proxies, Gatus, every endpoint in the `media`
+namespace, Homepage, the alert bridge, and node probes. This grants network reachability,
+not topic-write authority. Required authentication and the token ACLs make Seerr the
+only media workload authorized to write the `media` topic.
 
 ## Alertmanager delivery path
 
@@ -75,11 +77,12 @@ notifications. The bridge maps firing critical alerts to urgent messages on `cri
 maps warnings to `homelab`, and publishes resolved messages at default priority. Watchdog
 and alerts outside the critical/warning route remain on the null receiver.
 
-Seerr is the only direct media producer and writes bounded request and issue events to
-`media`. Direct integrations from Plex, qBittorrent, the `*arr` applications, and
-Tautulli were rejected because each would create another notification policy surface
-without shared silences. Flux and platform health use Prometheus rules instead of
-routine Flux event notifications.
+Seerr is the only direct media producer. Its managed notification mask writes exactly
+the **Media Available**, **Request Processing Failed**, and **Issue Reported** event
+classes to `media`. Direct integrations from Plex, qBittorrent, the `*arr` applications,
+and Tautulli were rejected because each would create another notification policy
+surface without shared silences. Flux and platform health use Prometheus rules instead
+of routine Flux event notifications.
 
 ## Observability and validation
 
