@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_directory
+
 diagnostic_file_size() {
 	local path="$1"
 	if stat -c '%s' "$path" 2>/dev/null; then
@@ -34,39 +37,10 @@ diagnostic_window() {
 		-show_streams -show_format -show_frames \
 		-show_entries 'stream=start_time,duration,time_base,avg_frame_rate:format=start_time,duration:frame=best_effort_timestamp_time,pkt_duration_time,duration_time,key_frame,pict_type' \
 		-of json "$path")" || return
-	jq -e -c --argjson first "$first" --argjson last "$last" '
+	jq -e -c -L "$script_directory" --argjson first "$first" --argjson last "$last" '
+		include "diagnostic-contract";
 		def numeric_string: type == "string" and test("^-?[0-9]+([.][0-9]+)?$");
 		def rational_string: type == "string" and test("^-?[0-9]+/[1-9][0-9]*$");
-		# ffprobe emits bounded decimal timestamps.  Convert at most nine decimal
-		# places to integer nanoseconds so continuity comparisons are exact rather
-		# than dependent on floating-point or display rounding.
-		def decimal_units:
-			capture("^(?<sign>-?)(?<whole>[0-9]+)([.](?<fraction>[0-9]{1,9}))?$") |
-			((.fraction // "") + "000000000" | .[0:9] | tonumber) as $fraction |
-			((.whole | tonumber) * 1000000000 + $fraction) as $units |
-			if .sign == "-" then -$units else $units end;
-		def continuity($window):
-			reduce range(1; ($window | length)) as $index
-				({status:"clean",issue:null};
-				 if .status != "clean" then .
-				 else
-					$window[$index - 1] as $previous |
-					$window[$index] as $current |
-					($previous.bestEffortTimestamp | decimal_units) as $previous_timestamp |
-					($current.bestEffortTimestamp | decimal_units) as $current_timestamp |
-					($previous.packetDuration | decimal_units) as $previous_duration |
-					if $previous_duration <= 0 then
-						{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
-					elif $current_timestamp == $previous_timestamp then
-						{status:"discontinuity",issue:{kind:"repeat",afterFrameIndex:$previous.frameIndex}}
-					elif $current_timestamp < $previous_timestamp then
-						{status:"discontinuity",issue:{kind:"non-monotonic-timestamp",afterFrameIndex:$previous.frameIndex}}
-					elif $current_timestamp > ($previous_timestamp + $previous_duration) then
-						{status:"discontinuity",issue:{kind:"gap",afterFrameIndex:$previous.frameIndex}}
-					elif $current_timestamp < ($previous_timestamp + $previous_duration) then
-						{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
-					else . end
-				 end);
 		if
 			(.streams | type) == "array" and (.streams | length) == 1 and
 			(.frames | type) == "array" and (.frames | length) > $last and
@@ -99,7 +73,7 @@ diagnostic_window() {
 					averageFrameRate:.streams[0].avg_frame_rate
 				},
 				frames:$window,
-				sourceWindow:continuity($window)
+				sourceWindow:($window | diagnostic_continuity)
 			} end
 		else error("incomplete diagnostic stream") end
 	' <<<"$probe_json"

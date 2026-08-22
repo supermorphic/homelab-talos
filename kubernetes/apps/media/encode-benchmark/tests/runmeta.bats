@@ -1057,12 +1057,12 @@ EOF
 }
 
 # Catches a production break where any tested command regresses to the shared
-# scaffold after all five behavior contracts have landed.
-@test "ConfigMap maps all six tested commands to real scripts" {
+# scaffold after all seven behavior contracts have landed.
+@test "ConfigMap maps all seven tested commands to real scripts" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh' ]
+	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
 

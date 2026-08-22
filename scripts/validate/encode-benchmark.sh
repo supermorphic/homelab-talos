@@ -16,6 +16,7 @@ probe="$app/scripts/probe.sh"
 census="$app/scripts/census.sh"
 runmeta="$app/scripts/runmeta.sh"
 benchmark="$app/scripts/benchmark.sh"
+diagnostic_evidence="$app/scripts/diagnostic-evidence.sh"
 stills="$app/scripts/stills.sh"
 template="$base/templates/job.yaml"
 tests_dir="$base/tests"
@@ -31,6 +32,7 @@ inventory='scripts/encode-benchmark/torrent-inventory.py'
 preflight_helper='scripts/encode-benchmark/preflight.sh'
 dispatch_helper='scripts/encode-benchmark/dispatch.sh'
 results_helper='scripts/encode-benchmark/results.sh'
+diagnostic_evidence_results_helper='scripts/encode-benchmark/diagnostic-evidence-results.sh'
 selection_helper='scripts/encode-benchmark/select-samples.sh'
 live_verifier='scripts/verify/encode-benchmark.sh'
 validator='scripts/validate/encode-benchmark.sh'
@@ -64,6 +66,7 @@ for file in \
 	"$census" \
 	"$runmeta" \
 	"$benchmark" \
+	"$diagnostic_evidence" \
 	"$stills" \
 	"$template" \
 	"$contract_test" \
@@ -78,6 +81,7 @@ for file in \
 	"$preflight_helper" \
 	"$dispatch_helper" \
 	"$results_helper" \
+	"$diagnostic_evidence_results_helper" \
 	"$selection_helper" \
 	"$live_verifier" \
 	"$validator" \
@@ -90,11 +94,13 @@ done
 [[ -x "$census" ]] || fail "$census must be executable"
 [[ -x "$runmeta" ]] || fail "$runmeta must be executable"
 [[ -x "$benchmark" ]] || fail "$benchmark must be executable"
+[[ -x "$diagnostic_evidence" ]] || fail "$diagnostic_evidence must be executable"
 [[ -x "$stills" ]] || fail "$stills must be executable"
 [[ -x "$inventory" ]] || fail "$inventory must be executable"
 [[ -x "$preflight_helper" ]] || fail "$preflight_helper must be executable"
 [[ -x "$dispatch_helper" ]] || fail "$dispatch_helper must be executable"
 [[ -x "$results_helper" ]] || fail "$results_helper must be executable"
+[[ -x "$diagnostic_evidence_results_helper" ]] || fail "$diagnostic_evidence_results_helper must be executable"
 [[ -x "$selection_helper" ]] || fail "$selection_helper must be executable"
 [[ -x "$live_verifier" ]] || fail "$live_verifier must be executable"
 
@@ -136,7 +142,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='contract.sh=scripts/contract.sh,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,stills.sh=scripts/stills.sh'
+expected_mappings='contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,stills.sh=scripts/stills.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -161,7 +167,7 @@ scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^
 [[ "$scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
 	fail "rendered scripts ConfigMap is not hash-suffixed: $scripts_name"
 scripts_keys="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data | keys | sort | join(",")' "$render")"
-assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,probe.sh,runmeta.sh,stills.sh' \
+assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,diagnostic-contract.jq,diagnostic-evidence.sh,probe.sh,runmeta.sh,stills.sh' \
 	'rendered scripts ConfigMap command keys'
 
 # Scheduling and alerting remain present even though execution is absent.
@@ -677,6 +683,7 @@ shell_sources+=(
 	"$preflight_helper"
 	"$dispatch_helper"
 	"$results_helper"
+	"$diagnostic_evidence_results_helper"
 	"$selection_helper"
 	"$live_verifier"
 	"$validator"

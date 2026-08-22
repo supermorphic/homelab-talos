@@ -117,7 +117,8 @@ diagnostic_sanitize_terminal() {
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods pod_count total_count pod_json pod_phase sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal
+	local reader_job='encode-benchmark-evidence-reader-20260820t223425z-082b3d38'
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
@@ -126,9 +127,52 @@ diagnostic_results() {
 		]
 	' <<<"$all_pods_json")" || return 65
 	diagnostic_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics")]' <<<"$matching_pods")" || return 65
+	reader_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" == "diagnostic-evidence-reader")]' <<<"$matching_pods")" || return 65
+	unexpected_pods="$(jq -c '[.[] | select(.metadata.labels."homelab-talos/benchmark-mode" != "diagnostics" and .metadata.labels."homelab-talos/benchmark-mode" != "diagnostic-evidence-reader")]' <<<"$matching_pods")" || return 65
 	pod_count="$(jq -r 'length' <<<"$diagnostic_pods")"
-	total_count="$(jq -r 'length' <<<"$matching_pods")"
-	((pod_count == 1 && total_count == 1)) || {
+	reader_count="$(jq -r 'length' <<<"$reader_pods")"
+	unexpected_count="$(jq -r 'length' <<<"$unexpected_pods")"
+	reader_valid=1
+	if ((reader_count == 1)); then
+		jq -e --arg run "$requested_run_id" --arg job "$reader_job" '
+			.[0] |
+			.metadata.name | startswith($job + "-")
+		' <<<"$reader_pods" >/dev/null && jq -e --arg run "$requested_run_id" --arg job "$reader_job" '
+			.[0] |
+			.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+			.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+			.metadata.labels."homelab-talos/benchmark-run" == $run and
+			.metadata.labels."homelab-talos/benchmark-mode" == "diagnostic-evidence-reader" and
+			.metadata.labels."job-name" == $job and
+			(.metadata.ownerReferences | type == "array" and length == 1 and
+				 .[0].apiVersion == "batch/v1" and .[0].kind == "Job" and .[0].name == $job and
+				 (.[0].uid | type == "string" and length > 0) and .[0].controller == true and .[0].blockOwnerDeletion == true)
+		' <<<"$reader_pods" >/dev/null || reader_valid=0
+		if ! reader_jobs_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+			--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-dispatch=$requested_run_id,homelab-talos/benchmark-run=$requested_run_id,homelab-talos/benchmark-mode=diagnostic-evidence-reader" \
+			--output json)"; then
+			reader_valid=0
+		elif ! reader_job_uid="$(jq -e -r --arg run "$requested_run_id" --arg job "$reader_job" '
+			.items |
+			if length == 1 then .[0] else error("expected one reader Job") end |
+			select(
+				.metadata.name == $job and
+				.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+				.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+				.metadata.labels."homelab-talos/benchmark-run" == $run and
+				.metadata.labels."homelab-talos/benchmark-mode" == "diagnostic-evidence-reader" and
+				(.metadata.uid | type == "string" and length > 0)
+			) |
+			.metadata.uid
+		' <<<"$reader_jobs_json")"; then
+			reader_valid=0
+		elif ! jq -e --arg uid "$reader_job_uid" '.[0].metadata.ownerReferences[0].uid == $uid' <<<"$reader_pods" >/dev/null; then
+			reader_valid=0
+		fi
+	elif ((reader_count != 0)); then
+		reader_valid=0
+	fi
+	((pod_count == 1 && unexpected_count == 0 && reader_valid == 1)) || {
 		echo "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $requested_run_id" >&2
 		return 1
 	}
