@@ -121,6 +121,64 @@ run_collector() {
 	[[ "$output" == *'manifest'* ]]
 }
 
+@test "collector reports every manifest binding issue without retained values" {
+	local case_name mutation expected_field expected_kind
+	while IFS=$'\t' read -r case_name mutation expected_field expected_kind; do
+		create_valid_evidence_tree
+		jq "$mutation" "$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+		mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 65 ] || {
+			echo "collector accepted invalid manifest binding: $case_name" >&3
+			return 1
+		}
+		run jq -e -S -c --arg field "$expected_field" --arg kind "$expected_kind" '
+			keys == ["manifestIssues","reason","schemaVersion","status"] and
+			.schemaVersion == 1 and .status == "failed" and
+			.reason == "diagnostic-manifest-binding-invalid" and
+			.manifestIssues == [{field:$field,kind:$kind}]
+		' <<<"$output"
+		[ "$status" -eq 0 ] || {
+			echo "collector returned the wrong bounded issue for: $case_name" >&3
+			return 1
+		}
+		[[ "$output" != *'deadbeef'* && "$output" != *'ffff'* ]]
+	done <<'EOF'
+wrong-manifest-type	[]	manifest	wrong-type
+missing-schema-version	del(.schemaVersion)	schemaVersion	missing
+wrong-schema-version-type	.schemaVersion = "2"	schemaVersion	wrong-type
+wrong-mode	.mode = "quality"	mode	mismatch
+wrong-run	.runId = "20260820T223425Z-deadbeef"	runId	mismatch
+missing-upstream	del(.upstream)	upstream.diagnostics	missing
+wrong-upstream-type	.upstream = []	upstream.diagnostics	missing
+wrong-diagnostics-type	.upstream.diagnostics = []	upstream.diagnostics	wrong-type
+missing-manifest-schema	del(.upstream.diagnostics.manifestSchemaVersion)	upstream.diagnostics.manifestSchemaVersion	missing
+wrong-result-schema	.upstream.diagnostics.resultSchemaVersion = 2	upstream.diagnostics.resultSchemaVersion	mismatch
+wrong-findings-type	.upstream.diagnostics.acceptedFindingsSha256 = 7	upstream.diagnostics.acceptedFindingsSha256	wrong-type
+wrong-decision	.upstream.diagnostics.decisionSha256 = ("sha256:" + ("f" * 64))	upstream.diagnostics.decisionSha256	mismatch
+missing-quality-run	del(.upstream.diagnostics.historicalQualityRunId)	upstream.diagnostics.historicalQualityRunId	missing
+wrong-findings-run	.upstream.diagnostics.historicalFindingsRunId = "20260820T223425Z-deadbeef"	upstream.diagnostics.historicalFindingsRunId	mismatch
+wrong-panel	.upstream.diagnostics.panelSha256 = ("sha256:" + ("f" * 64))	upstream.diagnostics.panelSha256	mismatch
+EOF
+}
+
+@test "collector reports multiple manifest issues once in fixed order" {
+	create_valid_evidence_tree
+	jq '.mode = "quality" | del(.upstream.diagnostics.resultSchemaVersion) | .upstream.diagnostics.panelSha256 = ("sha256:" + ("f" * 64))' \
+		"$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+	mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 65 ]
+	run jq -e -S -c '.manifestIssues == [
+		{field:"mode",kind:"mismatch"},
+		{field:"upstream.diagnostics.resultSchemaVersion",kind:"missing"},
+		{field:"upstream.diagnostics.panelSha256",kind:"mismatch"}
+	]' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
 @test "rendered scripts ConfigMap includes the collector executable" {
 	run kustomize build "$BATS_TEST_DIRNAME/../app"
 	[ "$status" -eq 0 ]
