@@ -246,28 +246,80 @@ download-side data into `/data/downloads/.RecycleBin`. The recycle bin keeps tha
 for seven days. The organized file below `/data/media` is a separate hardlink name and
 remains available to Plex even after the download-side name is removed.
 
-1. Pause qbit_manage by setting its Flux Kustomization to `spec.suspend: true` through
-   Git, or use an existing approved guarded operator workflow when immediate containment
-   is required. Keep qBittorrent and Gluetun running so unrelated torrents continue to
-   seed.
-2. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
+1. From the authorized main clone with its administrator `.kube/config`, stop both
+   reconciliation layers before stopping the workload. The HelmRelease has drift
+   detection enabled, so suspending only the parent Kustomization does not make a manual
+   Deployment scale durable:
+
+   ```bash
+   mise exec -- flux suspend kustomization qbit-manage \
+     --namespace flux-system --kubeconfig .kube/config
+   mise exec -- flux suspend helmrelease qbit-manage \
+     --namespace media --kubeconfig .kube/config
+
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization qbit-manage \
+     --output jsonpath='{.spec.suspend}')" = true
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace media get helmrelease qbit-manage \
+     --output jsonpath='{.spec.suspend}')" = true
+
+   mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     scale deployment/qbit-manage --replicas=0
+
+   qbit_manage_pods="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace media get pod --selector app.kubernetes.io/name=qbit-manage \
+     --output name)"
+   if test -n "$qbit_manage_pods"; then
+     mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+       wait --for=delete pod --selector app.kubernetes.io/name=qbit-manage --timeout=2m
+   fi
+
+   test "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get deployment/qbit-manage --output jsonpath='{.spec.replicas}')" = 0
+   test -z "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get pod --selector app.kubernetes.io/name=qbit-manage --output name)"
+   ```
+
+   Containment is complete only after the Deployment reports zero desired replicas and
+   the Pod query is empty. Keep qBittorrent and Gluetun running so unrelated torrents
+   continue to seed. These are operator-run administrative actions; never run them with
+   a linked-worktree observer or diagnostic credential.
+2. In the assigned feature worktree, record the persistent containment state through
+   Git: keep `kubernetes/apps/media/qbit-manage/ks.yaml` suspended and set
+   `spec.suspend: true` on the qbit_manage HelmRelease while recovery is in progress.
+   Commit, review, and merge this state. Do not put the live administrator kubeconfig in
+   the worktree.
+3. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
    torrent, original download path, and recycle entry. Do not put a torrent name,
    passkey, complete tracker URL, or unsanitized log in Git, chat, or a ticket.
-3. Confirm the intended original path does not contain replacement data. Do not
+4. Confirm the intended original path does not contain replacement data. Do not
    overwrite or merge directory trees.
-4. Within the seven-day window, use an approved guarded operator workflow to move only
+5. Within the seven-day window, use an approved guarded operator workflow to move only
    the identified entry from `.RecycleBin` back to its original download path on the
    same SMB filesystem. If no suitable workflow exists, add and review one; do not use
    an ad hoc raw Pod shell.
-5. Re-add the authorized torrent to qBittorrent when continued seeding is required.
+6. Re-add the authorized torrent to qBittorrent when continued seeding is required.
    Select the original category and restored content path, then force a recheck before
    starting it. Do not download over the recovered data.
-6. Correct the classification or cleanup policy through Git before resuming
+7. Correct the classification or cleanup policy through Git before resuming
    qbit_manage. For private content, require `tracker-private` and any dedicated tracker
    tag before another policy run.
-7. Verify the torrent checks cleanly, the tracker receives an announce when applicable,
-   the organized library file still plays, and unrelated torrents were unchanged. Then
-   return qbit_manage to its intended Git-managed suspend state.
+8. Verify the torrent checks cleanly, the tracker receives an announce when applicable,
+   the organized library file still plays, and unrelated torrents were unchanged.
+9. Prepare the recovery source in the assigned feature worktree: keep the Flux
+   Kustomization at `spec.suspend: true`, set the HelmRelease to `spec.suspend: false`,
+   and include the corrected policy or ciphertext. Merge that state before any live
+   resume.
+10. Update the authorized main clone to the exact merged commit and run the guarded
+    bootstrap in [Configure qbit_manage deployment](../guides/qbit-manage.md). That
+    workflow resumes the Flux Kustomization, applies the merged HelmRelease state,
+    recreates the Deployment, and runs live verification. Do not directly resume the
+    HelmRelease or scale the Deployment up.
+
+If the guarded bootstrap fails, its Kustomization suspension still does not stop a
+preserved Deployment. Repeat the operator workload-stop sequence above and require zero
+active Pods before continuing recovery.
 
 After seven days, do not assume the recycle entry exists. The organized library
 hardlink still survives, but reconstructing a seedable download path becomes a
