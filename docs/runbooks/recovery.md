@@ -246,36 +246,78 @@ download-side data into `/data/downloads/.RecycleBin`. The recycle bin keeps tha
 for seven days. The organized file below `/data/media` is a separate hardlink name and
 remains available to Plex even after the download-side name is removed.
 
-1. From the authorized main clone with its administrator `.kube/config`, first suspend
-   `flux-system/cluster-apps`. This parent reconciles every application child definition
-   below `kubernetes/apps`, including `flux-system/qbit-manage`. Its suspension does not
-   stop any workload. It temporarily pauses Git changes to all application child
-   definitions, so it has a broad blast radius: make the reviewed child-suspension
-   change promptly and keep this window as short as possible.
+1. From the authorized main clone with its administrator `.kube/config`, stop the full
+   ownership chain from the top down. `flux-system/flux-system` applies
+   `flux-system/cluster-apps`; `cluster-apps` applies `flux-system/qbit-manage`; and the
+   qbit_manage Kustomization applies `media/HelmRelease/qbit-manage`. Suspending only
+   `cluster-apps` is unsafe because the active top-level Kustomization can apply its Git
+   declaration and remove that manual suspension.
 
-   With parent ownership paused, suspend the qbit_manage child and its HelmRelease before
-   scaling the workload. The HelmRelease has drift detection enabled, so the child and
-   HelmRelease suspensions are both required to keep their controllers from undoing the
-   manual scale while the parent is paused:
+   First suspend `flux-system/flux-system`, which is the top-level Kustomization and owns
+   its own Git declaration. This freezes the top-level GitOps apply path. Then suspend
+   `cluster-apps`, which freezes reconciliation of every application child definition.
+   Existing child Kustomizations and workloads are not stopped by those two suspensions;
+   the GitRepository also remains able to fetch a reviewed recovery commit. This is a
+   broad cluster-wide GitOps freeze. Keep it as short as the reviewed merge permits, and
+   notify the operator responsible for other concurrent reconciliation work.
+
+   A Flux suspension affects subsequent executions, not an execution that already
+   started. After each suspension, require `.spec.suspend: true` and wait until the
+   controller reports the current `.metadata.generation` in
+   `.status.observedGeneration`. Do not continue if a wait fails:
 
    ```bash
+   mise exec -- flux suspend kustomization flux-system \
+     --namespace flux-system --kubeconfig .kube/config
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization flux-system \
+     --output jsonpath='{.spec.suspend}')" = true
+   flux_system_generation="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization flux-system \
+     --output jsonpath='{.metadata.generation}')"
+   mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
+     wait kustomization/flux-system \
+     --for="jsonpath={.status.observedGeneration}=${flux_system_generation}" \
+     --timeout=2m
+
    mise exec -- flux suspend kustomization cluster-apps \
      --namespace flux-system --kubeconfig .kube/config
    test "$(mise exec -- kubectl --kubeconfig .kube/config \
      --namespace flux-system get kustomization cluster-apps \
      --output jsonpath='{.spec.suspend}')" = true
+   cluster_apps_generation="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization cluster-apps \
+     --output jsonpath='{.metadata.generation}')"
+   mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
+     wait kustomization/cluster-apps \
+     --for="jsonpath={.status.observedGeneration}=${cluster_apps_generation}" \
+     --timeout=2m
 
    mise exec -- flux suspend kustomization qbit-manage \
      --namespace flux-system --kubeconfig .kube/config
-   mise exec -- flux suspend helmrelease qbit-manage \
-     --namespace media --kubeconfig .kube/config
-
    test "$(mise exec -- kubectl --kubeconfig .kube/config \
      --namespace flux-system get kustomization qbit-manage \
      --output jsonpath='{.spec.suspend}')" = true
+   qbit_manage_generation="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization qbit-manage \
+     --output jsonpath='{.metadata.generation}')"
+   mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
+     wait kustomization/qbit-manage \
+     --for="jsonpath={.status.observedGeneration}=${qbit_manage_generation}" \
+     --timeout=2m
+
+   mise exec -- flux suspend helmrelease qbit-manage \
+     --namespace media --kubeconfig .kube/config
    test "$(mise exec -- kubectl --kubeconfig .kube/config \
      --namespace media get helmrelease qbit-manage \
      --output jsonpath='{.spec.suspend}')" = true
+   qbit_manage_hr_generation="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace media get helmrelease qbit-manage \
+     --output jsonpath='{.metadata.generation}')"
+   mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     wait helmrelease/qbit-manage \
+     --for="jsonpath={.status.observedGeneration}=${qbit_manage_hr_generation}" \
+     --timeout=2m
 
    mise exec -- kubectl --kubeconfig .kube/config --namespace media \
      scale deployment/qbit-manage --replicas=0
@@ -295,20 +337,25 @@ remains available to Plex even after the download-side name is removed.
    ```
 
    The zero-replica and empty-Pod checks prove that the workload is stopped at that
-   point. They do not make containment durable: if `cluster-apps` resumes before the
-   child suspension is merged, it can restore the active child definition from Git.
-   Keep all three reconcilers suspended until steps 2 and 3 complete. Keep qBittorrent
-   and Gluetun running so unrelated torrents continue to seed. These are operator-run
-   administrative actions; never run them with a linked-worktree observer or diagnostic
-   credential.
+   point. They do not make containment durable. Keep both owning Kustomizations, the
+   qbit_manage child, and its HelmRelease suspended until steps 2 and 3 complete. Keep
+   qBittorrent and Gluetun running so unrelated torrents continue to seed. These are
+   operator-run administrative actions; never run them with a linked-worktree observer
+   or diagnostic credential.
 2. In the assigned feature worktree, set `spec.suspend: true` in
    `kubernetes/apps/media/qbit-manage/ks.yaml`. Commit, review, and merge this persistent
    child suspension promptly. Do not run live commands or put the administrator
-   kubeconfig in the worktree. Do not resume `cluster-apps` before the merged source is
+   kubeconfig in the worktree. Do not resume either owner before the merged source is
    available to Flux; the previous Git state can otherwise reactivate the child.
+
+   If review or merge is blocked, stop here. Keep `flux-system`, `cluster-apps`, the
+   qbit_manage child, and its HelmRelease suspended, and keep the Deployment at zero
+   replicas. Escalate that broad GitOps reconciliation remains frozen. Do not resume an
+   owner as a fallback; restoration requires the reviewed child suspension in the Flux
+   source artifact or an explicit operator-directed incident plan.
 3. Update the authorized main clone to the exact merged `origin/main` commit. Reconcile
-   the Flux source, prove that its artifact contains that commit, then resume and
-   reconcile `cluster-apps`:
+   the Flux source while both owners remain suspended, prove that its artifact contains
+   that commit, and recheck every containment oracle before restoring ownership:
 
    ```bash
    test -z "$(git status --porcelain)"
@@ -327,30 +374,69 @@ remains available to Plex even after the download-side name is removed.
      *) printf 'Flux artifact does not contain %s\n' "$expected_revision" >&2; false ;;
    esac
 
+   for kustomization in flux-system cluster-apps qbit-manage; do
+     test "$(mise exec -- kubectl --kubeconfig .kube/config \
+       --namespace flux-system get kustomization "$kustomization" \
+       --output jsonpath='{.spec.suspend}')" = true
+   done
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace media get helmrelease qbit-manage \
+     --output jsonpath='{.spec.suspend}')" = true
+   test "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get deployment/qbit-manage --output jsonpath='{.spec.replicas}')" = 0
+   test -z "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get pod --selector app.kubernetes.io/name=qbit-manage --output name)"
+   ```
+
+   Resume only the top-level `flux-system` Kustomization. For one named resource, the
+   pinned Flux CLI waits for the resumed Kustomization to finish applying its current
+   source revision. That apply restores the `cluster-apps` declaration from the fetched
+   Git artifact. Prove the top-level apply used the expected revision, then explicitly
+   resume and reconcile `cluster-apps` so it applies the merged qbit_manage child
+   declaration. The qbit_manage child and its HelmRelease remain suspended throughout;
+   do not resume either one:
+
+   ```bash
+   mise exec -- flux resume kustomization flux-system \
+     --namespace flux-system --kubeconfig .kube/config
+   top_level_revision="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization flux-system \
+     --output jsonpath='{.status.lastAppliedRevision}')"
+   case "$top_level_revision" in
+     *"$expected_revision"*) ;;
+     *) printf 'flux-system did not apply %s\n' "$expected_revision" >&2; false ;;
+   esac
+
    mise exec -- flux resume kustomization cluster-apps \
      --namespace flux-system --kubeconfig .kube/config
    mise exec -- flux reconcile kustomization cluster-apps \
-     --namespace flux-system --with-source --kubeconfig .kube/config --timeout 10m
+     --namespace flux-system --kubeconfig .kube/config --timeout 10m
    ```
 
-   If either parent command fails, immediately run the following command and confirm the
-   result before diagnosis:
+   If any command fails, repeat step 1 from the top-level suspension and all of its
+   oracles. Do not try to recover by suspending only `cluster-apps`.
+
+   After the restoration commands succeed, verify that broad reconciliation recovered
+   at the exact fetched revision and that the Git-managed child suspension did not
+   restart qbit_manage:
 
    ```bash
-   mise exec -- flux suspend kustomization cluster-apps \
-     --namespace flux-system --kubeconfig .kube/config
-   test "$(mise exec -- kubectl --kubeconfig .kube/config \
-     --namespace flux-system get kustomization cluster-apps \
-     --output jsonpath='{.spec.suspend}')" = true
-   ```
-
-   After both parent commands succeed, verify that the active parent applied the
-   Git-managed child suspension and did not restart qbit_manage:
-
-   ```bash
-   test "$(mise exec -- kubectl --kubeconfig .kube/config \
-     --namespace flux-system get kustomization cluster-apps \
-     --output jsonpath='{.spec.suspend}')" = false
+   mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
+     wait --for=condition=Ready kustomization/flux-system \
+     kustomization/cluster-apps --timeout=10m
+   for kustomization in flux-system cluster-apps; do
+     test "$(mise exec -- kubectl --kubeconfig .kube/config \
+       --namespace flux-system get kustomization "$kustomization" \
+       --output jsonpath='{.spec.suspend}')" = false
+     applied_revision="$(mise exec -- kubectl --kubeconfig .kube/config \
+       --namespace flux-system get kustomization "$kustomization" \
+       --output jsonpath='{.status.lastAppliedRevision}')"
+     case "$applied_revision" in
+       *"$expected_revision"*) ;;
+       *) printf '%s did not apply %s\n' \
+            "$kustomization" "$expected_revision" >&2; false ;;
+     esac
+   done
    test "$(mise exec -- kubectl --kubeconfig .kube/config \
      --namespace flux-system get kustomization qbit-manage \
      --output jsonpath='{.spec.suspend}')" = true
@@ -363,10 +449,10 @@ remains available to Plex even after the download-side name is removed.
      get pod --selector app.kubernetes.io/name=qbit-manage --output name)"
    ```
 
-   The parent can now remain active: Git keeps the child suspended, the child cannot
+   Both owners can now remain active: Git keeps the child suspended, the child cannot
    reconcile the HelmRelease, and the still-suspended HelmRelease cannot restore the
-   Deployment. If any check fails, suspend `cluster-apps` again and do not claim durable
-   containment.
+   Deployment. If any check fails, repeat step 1 from the top-level suspension and do
+   not claim durable containment.
 4. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
    torrent, original download path, and recycle entry. Do not put a torrent name,
    passkey, complete tracker URL, or unsanitized log in Git, chat, or a ticket.
@@ -389,8 +475,8 @@ remains available to Plex even after the download-side name is removed.
    and include the corrected policy or ciphertext. Merge that state before any live
    resume.
 11. Update the authorized main clone to the exact merged commit. Confirm that
-    `cluster-apps` is active and the qbit_manage child remains suspended, then run the
-    guarded bootstrap in
+    both `flux-system` and `cluster-apps` are active and the qbit_manage child remains
+    suspended, then run the guarded bootstrap in
     [Configure qbit_manage deployment](../guides/qbit-manage.md). That workflow
     reconciles the active parent, verifies the child suspension, resumes the child only
     after the corrected merged source is ready, applies the HelmRelease state, recreates
@@ -399,8 +485,9 @@ remains available to Plex even after the download-side name is removed.
 
 If the guarded bootstrap fails, its Kustomization suspension still does not stop a
 preserved Deployment. Repeat the complete operator workload-stop sequence above,
-starting with temporary `cluster-apps` suspension. Require the merged child suspension,
-safe parent resume, and zero active Pods before continuing recovery.
+starting with temporary top-level `flux-system` suspension. Require the merged child
+suspension, safe ownership-chain restoration, and zero active Pods before continuing
+recovery.
 
 After seven days, do not assume the recycle entry exists. The organized library
 hardlink still survives, but reconstructing a seedable download path becomes a

@@ -118,11 +118,14 @@ This bootstrap applies the current active policy. Do not interpret any obsolete 
 message about an inert dry run as the current contract. Attend the first run, inspect
 only sanitized local logs, and stop the running workload if classification or cleanup is
 unexpected. The approved stop requires the operator to suspend both the Flux
-owner `cluster-apps` before suspending the qbit_manage Kustomization and HelmRelease,
-then scale `media/deployment/qbit-manage` to zero and verify that no matching Pod
-remains. Suspending `cluster-apps` temporarily pauses reconciliation of every application
-child definition, so this broad-impact window must last only until the reviewed Git
-change makes the child suspension persistent. Follow
+top-level owner `flux-system` and its `cluster-apps` child before suspending the
+qbit_manage Kustomization and HelmRelease, then scale
+`media/deployment/qbit-manage` to zero and verify that no matching Pod remains. The
+procedure waits for each controller to observe its suspended generation before moving
+down the ownership chain. Suspending the two owners freezes the top-level GitOps apply
+path and reconciliation of every application child definition, so this broad-impact
+window must last only until the reviewed Git change makes the qbit_manage child
+suspension persistent. Follow
 [Recover a qbit_manage mistaken clean](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
 for the exact pinned commands.
 
@@ -145,9 +148,12 @@ An authentication failure normally means the encrypted Secret does not match the
 permanent qBittorrent WebUI credential. The bootstrap trap re-suspends reconciliation,
 but it does not stop a preserved Deployment. If policy execution must be contained,
 complete the operator-run workload-stop procedure in the recovery runbook. That
-procedure temporarily suspends the owning `cluster-apps` Kustomization before stopping
-the child reconcilers and workload, records the child suspension through Git, safely
-resumes `cluster-apps`, and verifies that qbit_manage remains at zero active Pods.
+procedure temporarily suspends the top-level `flux-system` Kustomization and then
+`cluster-apps` before stopping the child reconcilers and workload. It records the
+qbit_manage child suspension through Git, safely resumes the ownership chain, and
+verifies that qbit_manage remains at zero active Pods. If the reviewed suspension cannot
+merge, the operator must keep the broad GitOps freeze in place and escalate instead of
+resuming either owner.
 
 Recreate the ciphertext in the assigned feature worktree, publish the correction through
 Git, and keep the Git Kustomization suspended. Resume and reconcile only by running the
