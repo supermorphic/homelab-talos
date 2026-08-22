@@ -117,6 +117,9 @@ service:
     annotations:
       metallb.io/address-pool: internal
       metallb.io/loadBalancerIPs: 192.168.90.31
+    # The WAN mapping targets the LoadBalancer address directly. Avoid allocating a
+    # second listener on every node for a path this Service does not use.
+    allocateLoadBalancerNodePorts: false
     # Preserve the client source address. Cluster would SNAT every remote client to a
     # node address, destroying session attribution on the one service being published.
     externalTrafficPolicy: Local

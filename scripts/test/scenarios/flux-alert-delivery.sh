@@ -54,6 +54,31 @@ if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
   exit 1
 fi
 
+# This Alertmanager version exposes notification counters by integration, but not by
+# receiver. Prove that ntfy is the only loaded webhook before using the webhook counter
+# as the delivery oracle. This prevents unrelated webhook traffic from satisfying the
+# test if another webhook receiver is added later.
+alertmanager_status="$(
+  flux_alerts_prometheus_get "$alertmanager_base_url" "$alertmanager_resolve" \
+    '/api/v2/status'
+)"
+alertmanager_config="$(yq -r '.config.original // ""' <<<"$alertmanager_status")"
+[[ -n "$alertmanager_config" ]] || {
+  echo 'Alertmanager status API returned no loaded configuration.' >&2
+  exit 1
+}
+webhook_config_count="$(
+  yq -r '[.receivers[]?.webhook_configs[]?] | length' <<<"$alertmanager_config"
+)"
+ntfy_webhook_config_count="$(
+  yq -r '[.receivers[]? | select(.name == "ntfy") | .webhook_configs[]?] | length' \
+    <<<"$alertmanager_config"
+)"
+[[ "$webhook_config_count" -eq 1 && "$ntfy_webhook_config_count" -eq 1 ]] || {
+  echo 'Refusing delivery test: ntfy is not the only loaded Alertmanager webhook.' >&2
+  exit 1
+}
+
 query_value() {
   local query="$1"
   local response
@@ -147,12 +172,22 @@ wait_for_alertmanager_route() {
   return 1
 }
 
-notification_total_query='sum(alertmanager_notifications_total{integration="webhook",receiver="ntfy"}) or vector(0)'
-notification_failed_query='sum(alertmanager_notifications_failed_total{integration="webhook",receiver="ntfy"}) or vector(0)'
+notification_total_query='sum(alertmanager_notifications_total{integration="webhook"}) or vector(0)'
+notification_failed_query='sum(alertmanager_notifications_failed_total{integration="webhook"}) or vector(0)'
+notification_total_series_query='count(alertmanager_notifications_total{integration="webhook"})'
+notification_failed_series_query='count(alertmanager_notifications_failed_total{integration="webhook"})'
 alert_metric_query="count(gotk_resource_info{customresource_kind=\"Kustomization\",exported_namespace=\"$namespace\",name=\"$test_name\",ready!=\"True\",suspended!=\"true\"})"
 pending_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\",alertstate=\"pending\"})"
 firing_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\",alertstate=\"firing\"})"
 any_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\"})"
+
+notification_total_series_count="$(query_value "$notification_total_series_query")"
+notification_failed_series_count="$(query_value "$notification_failed_series_query")"
+if ! numeric_gt "$notification_total_series_count" 0 || \
+  ! numeric_gt "$notification_failed_series_count" 0; then
+  echo 'Refusing delivery test: Alertmanager webhook notification metric series are absent.' >&2
+  exit 1
+fi
 
 notification_total_before="$(query_value "$notification_total_query")"
 notification_failed_before="$(query_value "$notification_failed_query")"

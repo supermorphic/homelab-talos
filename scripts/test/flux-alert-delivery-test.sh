@@ -79,6 +79,17 @@ rg -q 'homelab-talos/test.*flux-alert-delivery' "$scenario"
 rg -q 'FluxReconciliationFailure' "$scenario"
 rg -q 'alertmanager_notifications_total' "$scenario"
 rg -q 'alertmanager_notifications_failed_total' "$scenario"
+# The deployed Alertmanager notification metrics expose the integration label but not a
+# receiver label. Keep the metric oracle aligned with labels that exist at runtime; the
+# independently checked loaded configuration contains only the ntfy webhook receiver.
+rg -Fq 'sum(alertmanager_notifications_total{integration="webhook"}) or vector(0)' "$scenario"
+rg -Fq 'sum(alertmanager_notifications_failed_total{integration="webhook"}) or vector(0)' "$scenario"
+rg -Fq 'webhook_config_count=' "$scenario"
+rg -Fq 'ntfy_webhook_config_count=' "$scenario"
+rg -Fq 'ntfy is not the only loaded Alertmanager webhook' "$scenario"
+rg -Fq 'notification_total_series_query=' "$scenario"
+rg -Fq 'notification_failed_series_query=' "$scenario"
+rg -Fq 'notification metric series are absent' "$scenario"
 rg -q 'delete kustomization "\$test_name"' "$scenario"
 rg -q 'created=false' "$scenario"
 

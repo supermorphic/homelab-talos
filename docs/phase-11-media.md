@@ -75,22 +75,21 @@ config volume, and Plex starts and checks its database.
   zero re-matching; the later *arr apps mount this same share at `/data`), transcode
   scratch on a node-local `emptyDir` (never the NAS). A 120s termination grace period
   lets Plex close its SQLite DB cleanly on planned drains.
-- Exposed at `plex.lab.supermorphic.com` through the internal Envoy gateway;
-  local clients connect via the custom access URL (below). A dedicated LoadBalancer
-  address, `192.168.90.31`, also exists (`kubernetes/apps/media/plex/app/values.yaml`)
-  for the operator's WAN DNAT to Plex's own `32400` listener — see
-  `docs/decisions/2026-08-11-plex-direct-remote-access.md`. **It is not an advertised
-  client path**: Plex still advertises its pod IP, not the LoadBalancer address, so
-  local GDM auto-discovery still does not work off it.
+- The internal browser path is `plex.lab.supermorphic.com` through Envoy Gateway. A
+  dedicated LoadBalancer address also exists for the separately accepted direct-access
+  design. Plex account/server settings, custom access URLs, Pi-hole behavior, and the
+  operator-managed WAN rule are external state; follow
+  [`docs/runbooks/plex-direct-remote-access.md`](runbooks/plex-direct-remote-access.md)
+  rather than inferring their current values from this phase record.
 - Plex stays a single replica (no active-active support). The RWX SMB share is
   shared across pods/apps, not for Plex replicas.
 
 ### First-run (manual, one-time)
 - Sign in at `https://plex.lab.supermorphic.com` (the short-lived `plex.tv/claim` token
   is never committed).
-- **Settings → Network → Custom server access URLs:** add
-  `https://plex.lab.supermorphic.com` so clients reach Plex through the gateway (needed
-  because Plex advertises its pod IP, not the LoadBalancer address, as a client path).
+- **Settings → Network → Custom server access URLs:** follow the measured procedure in
+  [`docs/runbooks/plex-direct-remote-access.md`](runbooks/plex-direct-remote-access.md).
+  Do not infer the current or permanent value from this historical first-run record.
 - Add libraries from `/data/media/movies` and `/data/media/tv`.
 - **Settings → Transcoder:** set the transcode temporary directory to `/transcode`.
 - **Enable Plex's scheduled database backups** (Settings → Scheduled Tasks) as a second
