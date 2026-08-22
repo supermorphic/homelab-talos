@@ -73,8 +73,8 @@ Do not rely on Prowlarr priority as an H&R safety control.
 
 ## First real torrent acceptance
 
-There were no active CZTeam torrents during rollout, so complete these checks
-with the first real torrent:
+Complete these checks with the first current CZTeam torrent after a policy or
+tracker configuration change:
 
 1. Confirm it receives both `tracker-private` and `tracker-czteam` after the
    next qbit_manage run.

@@ -23,13 +23,25 @@ it to create short-lived API sessions. Enabling `app_sudo` gives those sessions
 broad configuration-write permission, so dedicate the password to ExternalDNS
 and rotate it if the cluster or credential is compromised.
 
+Run every repository command below from the root of the assigned feature
+worktree. Do not run a CA refresh or SOPS writer from the primary checkout: both
+workflows can replace tracked files in the current worktree. Before continuing,
+confirm the current directory is the intended worktree and its repository root:
+
+```bash
+test "$(git rev-parse --show-toplevel)" = "$PWD"
+git status --short --branch
+```
+
+Stop unless that output identifies the assigned feature worktree rather than the
+primary checkout.
+
 ## Run the read-only check
 
-Run this after Pi-hole maintenance and before a provider-credential or foundation
+Run this after Pi-hole maintenance and before provider-credential or foundation
 operations:
 
 ```bash
-cd /Users/ksiggins/Development/homelab-talos
 mise exec -- just repo pihole-status
 ```
 
@@ -76,7 +88,6 @@ Use the guarded workflow to retrieve only the public CA through the reviewed
 `p1` SSH connection:
 
 ```bash
-cd /Users/ksiggins/Development/homelab-talos
 export PIHOLE_CA_REFRESH_CONFIRM='refresh:pihole-ca:p1:pi.hole'
 mise exec -- just repo pihole-ca-refresh
 unset PIHOLE_CA_REFRESH_CONFIRM
@@ -104,8 +115,6 @@ load both provider values. Hidden reads keep their literal values out of shell
 history:
 
 ```bash
-cd /Users/ksiggins/Development/homelab-talos
-
 printf 'SOPS age private key: '
 read -rs SOPS_AGE_KEY
 printf '\n'

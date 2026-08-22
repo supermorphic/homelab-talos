@@ -55,6 +55,22 @@ handed it to the Sonos speaker. The Sonos VLAN could not route to the internal G
 address, so the cast failed. Replacing it with the LoadBalancer-derived `plex.direct`
 URL restored Plexamp-to-Sonos playback and did not regress full local Direct Play.
 
+Plex's **LAN Networks** setting includes the trusted client VLANs and the Pod CIDR
+`10.244.0.0/16`, but excludes the cluster VLAN `192.168.90.0/24`. Local application
+sessions use the internal Envoy route, so Plex sees an Envoy Pod address rather than the
+original client address. Without the Pod CIDR, Plex classifies those local sessions as
+remote. They can then consume the per-user remote stream allowance and receive remote
+quality treatment, which can throttle normal household playback. Tautulli's current
+activity view is the independent check that a local session is classified as **LAN**.
+
+The cluster VLAN is deliberately excluded. The current LoadBalancer uses
+`externalTrafficPolicy: Local`, which preserves an off-site client's public source
+address. If that policy changed to `Cluster`, a remote connection could instead reach
+Plex with a node source address from `192.168.90.0/24`. Treating that whole VLAN as LAN
+would then exempt the Internet session from remote limits. The Pod CIDR has no equivalent
+off-cluster source risk because external clients cannot originate with a routable Pod
+address.
+
 Pi-hole must allow the private answer embedded in `plex.direct`; DNS rebind protection
 must not strip it. The Sonos VLAN also needs a router rule to the Plex LoadBalancer on
 TCP `32400`. These are operator-owned runtime settings, not Git-managed cluster state.

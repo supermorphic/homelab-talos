@@ -49,7 +49,7 @@ not authorize deleting the archive.
 
 The Caddy runtime ConfigMap is content-addressed by Kustomize. A change to the
 Caddyfile or either mounted installer script therefore changes the ConfigMap name in
-the Deployment pod template and triggers a `Recreate` rollout. The Grafana dashboard
+the Deployment pod template and triggers a `Recreate` replacement. The Grafana dashboard
 ConfigMap intentionally keeps its stable name because it is discovered separately by
 label. This split prevents Flux from applying new server configuration without the
 running Caddy process loading it.
@@ -116,5 +116,4 @@ latest passed cases, 30-day pass rate, duration history, failures by scenario, a
 since successful resilience/conformance. Its links resolve to stable report URLs.
 
 Homepage and Grafana presentation are served by the active application. Gatus probes
-the archive index every minute through the complete internal user-facing path; it was
-added only at activation to avoid a guaranteed false alarm before human acceptance.
+the archive index every minute through the complete internal user-facing path.

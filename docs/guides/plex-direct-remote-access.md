@@ -37,6 +37,16 @@ Before changing exposure:
 4. Inventory existing WAN forwards. There must be no second Plex or TCP `32400` rule.
 5. Record the current Plex settings privately. Do not put a WAN address, Plex token,
    account identity, or client address in the repository.
+6. Start a local playback session through `plex.lab.supermorphic.com`. In Tautulli's
+   current activity view, require the session to show **LAN**, not **WAN**. Complete this
+   check before setting or relying on the per-user remote-stream limit.
+
+If the local session shows **WAN**, stop. The internal Envoy route hides the client behind
+an Envoy Pod address. Set **LAN Networks** to the trusted client VLANs plus the current Pod
+CIDR (`10.244.0.0/16`), then repeat the Tautulli check. Do not include the cluster VLAN
+`192.168.90.0/24`. Otherwise local sessions can consume the remote stream allowance and
+receive remote quality treatment, while a future source-NAT path through a node could
+incorrectly exempt an Internet session from remote limits.
 
 The required Plex settings are:
 
@@ -48,7 +58,7 @@ The required Plex settings are:
 | Allowed without authentication | Empty |
 | Remote streams per user | `2` |
 | Custom server access URLs | Only the private LoadBalancer-derived `plex.direct` URL, with port `32400` |
-| LAN Networks | Trusted client VLANs and the pod network; never the cluster VLAN |
+| LAN Networks | Trusted client VLANs and `10.244.0.0/16`; never `192.168.90.0/24` |
 
 The custom URL has this form:
 
@@ -86,6 +96,8 @@ the private answer embedded in `plex.direct` instead of stripping it as DNS rebi
 
 Force client rediscovery before each test. Require these behaviors:
 
+- a local session displays **LAN** in Tautulli before remote-stream limits are treated as
+  an effective control;
 - Plexamp switches to Sonos and plays without AirPlay;
 - native Sonos plays the Plex library;
 - Apple TV, Plexamp, and Plex iOS local playback continue through the internal path;

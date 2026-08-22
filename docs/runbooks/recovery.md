@@ -239,6 +239,41 @@ Require VPN status `running`, Sweden egress, a nonzero forwarded port applied to
 qBittorrent, and no residential-address leak. Avoid rapid repeated reconnect tests;
 provider rate limiting can obscure the original failure.
 
+## Recover a qbit_manage mistaken clean
+
+Use this procedure when qbit_manage removed the wrong torrent and moved its
+download-side data into `/data/downloads/.RecycleBin`. The recycle bin keeps that name
+for seven days. The organized file below `/data/media` is a separate hardlink name and
+remains available to Plex even after the download-side name is removed.
+
+1. Pause qbit_manage by setting its Flux Kustomization to `spec.suspend: true` through
+   Git, or use an existing approved guarded operator workflow when immediate containment
+   is required. Keep qBittorrent and Gluetun running so unrelated torrents continue to
+   seed.
+2. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
+   torrent, original download path, and recycle entry. Do not put a torrent name,
+   passkey, complete tracker URL, or unsanitized log in Git, chat, or a ticket.
+3. Confirm the intended original path does not contain replacement data. Do not
+   overwrite or merge directory trees.
+4. Within the seven-day window, use an approved guarded operator workflow to move only
+   the identified entry from `.RecycleBin` back to its original download path on the
+   same SMB filesystem. If no suitable workflow exists, add and review one; do not use
+   an ad hoc raw Pod shell.
+5. Re-add the authorized torrent to qBittorrent when continued seeding is required.
+   Select the original category and restored content path, then force a recheck before
+   starting it. Do not download over the recovered data.
+6. Correct the classification or cleanup policy through Git before resuming
+   qbit_manage. For private content, require `tracker-private` and any dedicated tracker
+   tag before another policy run.
+7. Verify the torrent checks cleanly, the tracker receives an announce when applicable,
+   the organized library file still plays, and unrelated torrents were unchanged. Then
+   return qbit_manage to its intended Git-managed suspend state.
+
+After seven days, do not assume the recycle entry exists. The organized library
+hardlink still survives, but reconstructing a seedable download path becomes a
+case-specific operator action. Do not weaken global cleanup safety or copy the entire
+library tree back into downloads.
+
 ## Escalation
 
 Stop and escalate when recovery would require:

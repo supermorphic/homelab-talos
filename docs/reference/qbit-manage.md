@@ -9,6 +9,8 @@ organized `/data/media` library.
 The SOPS-encrypted `qbit-manage-secret` supplies the qBittorrent Web UI credential as
 `QBT_USER` and `QBT_PASS`. The password manager remains the human source for the same
 credential used by the media applications.
+Use the [qbit_manage deployment guide](../guides/qbit-manage.md) to create that
+ciphertext and perform a guarded bootstrap.
 
 ## Classification contract
 
@@ -47,6 +49,8 @@ The public and music maximum times are unconditional. Cleanup moves only the
 download-side name into `/data/downloads/.RecycleBin`; the recycle bin retains it for
 seven days. The organized library name remains because the imported file is a hardlink
 on the same SMB filesystem.
+Use the [recovery runbook](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
+before the seven-day window expires when cleanup targets the wrong torrent.
 
 ## Ownership boundaries
 

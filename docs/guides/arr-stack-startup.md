@@ -50,7 +50,7 @@ Work through the steps incrementally. You do not need every application live at 
 For example, connect Prowlarr to Sonarr as soon as Sonarr is ready, then complete Radarr
 later. For a fresh or deliberately suspended Lidarr deployment, keep it suspended until
 the first-run configuration, Homepage Secret, and authorized import gate pass. Make the
-active state durable through Git after those checks.
+intended `spec.suspend` state durable through Git after those checks.
 
 ## qBittorrent
 
@@ -596,8 +596,9 @@ mise exec -- just kube arr-verify radarr
 
 ## Lidarr
 
-Lidarr is staged suspended. From a clean checkout of the authorized deployment
-source, the operator performs its guarded first bootstrap:
+Current source keeps Lidarr active with `spec.suspend: false`. For a new empty PVC,
+first set `spec.suspend: true` through Git. From a clean checkout of that exact deployed
+source, the operator performs the guarded bootstrap:
 
 ```bash
 export ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr'
@@ -822,14 +823,14 @@ first-run configuration, and the authorized real-import acceptance gate all pass
 
 The recipe leaves that encrypted file untracked in the checkout, and every guarded
 `bootstrap` recipe refuses to run from a checkout with any uncommitted change. Commit
-the Secret on the feature branch before attempting another guarded rollout.
+the Secret on the feature branch before attempting another guarded bootstrap.
 
 ## Connect Prowlarr to Sonarr, Radarr, and Lidarr
 
 Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
-is available — you do not need all three at once. Connect **Sonarr** immediately after
-its rollout, then connect **Radarr** after its activation. Connect **Lidarr** after its
-guarded bootstrap and first-run configuration, once its endpoint is available.
+is available — you do not need all three at once. Connect **Sonarr** and **Radarr** after
+their endpoints pass the relevant verification. Connect **Lidarr** after its guarded
+bootstrap and first-run configuration, once its endpoint is available.
 For a fresh deployment, leave it Git-suspended until the Prowlarr-backed authorized
 real-import acceptance gate passes. Each app connection is independent, and this is where each
 application's API key is used.
@@ -916,8 +917,8 @@ mise exec -- just kube plex-verify
 
 ## Seerr
 
-Complete this section only after the Phase 14 Seerr rollout is live. Open
-`https://seerr.lab.supermorphic.com`.
+Current source keeps Seerr active with `spec.suspend: false`. Open
+`https://seerr.lab.supermorphic.com` after `mise exec -- just kube seerr-verify` passes.
 
 ### Plex
 
@@ -1123,14 +1124,14 @@ error. Collect both link counts from the download-side and library-side files fo
 the same track. If a shell is needed to inspect inode or link counts, use an
 existing guarded recipe or a NAS-side shell; never use raw `kubectl exec`.
 
-Do not begin the follow-up PR or create the Plex Music library until every item above
+Do not make Lidarr active or create the Plex Music library until every item above
 passes. If the deployed saved naming values or labels differ from this recorded
 walkthrough, preserve the authoritative preview output and safety states, then record
 the deployed values for a follow-up guide correction.
 
 The required Lidarr order for a fresh deployment is: guarded bootstrap; create the
 required profiles and root folder; connect Prowlarr while the Git source remains
-suspended; complete authorized acceptance; make activation durable through Git; then run
+suspended; complete authorized acceptance; set `spec.suspend: false` through Git; then run
 the guarded verification:
 
 ```bash
@@ -1424,9 +1425,10 @@ health details remain available for operator inspection. The accepted residuals 
 Seerr-to-Plex, passive or event-driven Servarr latency, no generic provider attribution,
 and no continuous end-to-end workflow proof.
 
-### Operator-managed rollout gate
+### Post-reconciliation acceptance
 
-Do not treat source validation as rollout evidence. After Flux applies the change,
+Do not treat source validation as runtime evidence. After Flux applies a probe or
+credential change,
 wait for three distinct successful one-minute cycles for each probe. Use this bounded
 Gatus-history check:
 
@@ -1494,11 +1496,14 @@ for probe_name in "${integration_probe_names[@]}"; do
 done
 ```
 
-For a later alert rollout, keep the new rules silent until this gate passes. Confirm
-that each Servarr endpoint is green when its authenticated API returns HTTP 200,
-including when update notices are present. Compare the selected Seerr service settings
-with the two read-through results. Do not create a request or run a native Test action
-as part of this verification.
+The current media alerts application evaluates four 15-minute
+`*NativeHealthApiUnavailable` warnings, the two 15-minute Seerr selected-service read
+warnings, and `MediaIntegrationProbeMissing` after five minutes without a required
+series. Confirm the rules are loaded and inactive after the six probes are green. A
+Servarr endpoint is green whenever its authenticated API returns HTTP 200, including
+when update notices are present; its body entries are not an alert condition. Compare
+the selected Seerr service settings with the two read-through results. Do not create a
+request or run a native Test action as part of this verification.
 
 ## Recovery and repeat setup
 
