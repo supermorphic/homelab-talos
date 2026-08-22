@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root="${1:-$(git rev-parse --show-toplevel)}"
 cd "$repo_root"
 repo_root="$(pwd -P)"
-validator_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
 if ! git_root="$(git rev-parse --show-toplevel)"; then
   echo "Validator root must be a Git worktree: $repo_root" >&2
@@ -14,10 +13,6 @@ if [[ "$repo_root" != "$git_root" ]]; then
   echo "Validator root must be the Git worktree root: $repo_root" >&2
   exit 1
 fi
-
-# Design specs deliberately name paths that do not exist yet. Decision records are
-# selected below through the lifecycle parser, so frozen Accepted records stay unscanned.
-exclude_specs=(':(exclude)docs/superpowers/*' ':(exclude)docs/decisions/*')
 
 failed=0
 
@@ -151,27 +146,17 @@ scan_bare_path() {
 
 markdown_paths="$(mktemp)"
 bare_paths="$(mktemp)"
-changed_decision_paths="$(mktemp)"
-trap 'rm -f "$markdown_paths" "$bare_paths" "$changed_decision_paths"' EXIT
-
-if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-  git fetch --quiet origin main
-fi
+trap 'rm -f "$markdown_paths" "$bare_paths"' EXIT
 
 markdown_pattern="!?\\[[^\\]\\[]*\\]\\((<[^<>]*>|(?<destination>(?:\\\\.|[^()[:space:]>]|\\((?&destination)\\))+))(?:[[:space:]]+(\"[^\"]*\"|'[^']*'|\\((?:\\\\.|[^()])*\\)))?\\)"
-mise exec -C "$validator_root" -- uv run --locked --no-dev python "$validator_root/scripts/repository/decisions.py" \
-  changed-content --base origin/main --repo "$repo_root" --null >"$changed_decision_paths"
-
-git ls-files -z '*.md' "${exclude_specs[@]}" >"$markdown_paths"
-cat "$changed_decision_paths" >>"$markdown_paths"
+git ls-files -z '*.md' >"$markdown_paths"
 while IFS= read -r -d '' source; do
   [[ -e "$source" ]] || continue
   scan_markdown "$source"
 done <"$markdown_paths"
 
-bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
-git ls-files -z "${exclude_specs[@]}" >"$bare_paths"
-cat "$changed_decision_paths" >>"$bare_paths"
+bare_pattern='(?<![\w$/{}.-])(?:docs/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
+git ls-files -z ':(exclude)docs/specs/*' >"$bare_paths"
 while IFS= read -r -d '' source; do
   [[ -e "$source" ]] || continue
   scan_bare_path "$source"

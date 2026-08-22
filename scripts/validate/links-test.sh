@@ -16,6 +16,9 @@ missing_bare_target="$docs_dir/$missing_bare_name.md"
 live_dir='docs/runbooks'
 dollar='$'
 interpolated="${dollar}base/README.md"
+specs_dir="$docs_dir/specs"
+planned_spec_name='001-example.md'
+planned_spec_path="$specs_dir/$planned_spec_name"
 
 new_repo() {
   local path="$1"
@@ -42,6 +45,42 @@ if ! PATH="$toolchain_bin" "$validator" "$toolchain_repo" \
   >"$temp_root/toolchain.out" 2>&1; then
   cat "$temp_root/toolchain.out" >&2
   echo 'Expected the validator to resolve pinned tools from its repository root.' >&2
+  exit 1
+fi
+
+planned_spec_repo="$temp_root/planned-spec"
+new_repo "$planned_spec_repo"
+mkdir -p "$planned_spec_repo/$specs_dir"
+printf '# Example\n\nImplement %s.\n' "$missing_bare_target" \
+  >"$planned_spec_repo/$planned_spec_path"
+git -C "$planned_spec_repo" add -A
+if ! "$validator" "$planned_spec_repo" >"$temp_root/planned-spec.out" 2>&1; then
+  cat "$temp_root/planned-spec.out" >&2
+  echo 'Expected a planned spec bare path to be ignored.' >&2
+  exit 1
+fi
+
+spec_link_repo="$temp_root/spec-link"
+new_repo "$spec_link_repo"
+mkdir -p "$spec_link_repo/$specs_dir"
+printf '# Example\n\n[missing](missing.md)\n' \
+  >"$spec_link_repo/$planned_spec_path"
+git -C "$spec_link_repo" add -A
+if "$validator" "$spec_link_repo" >"$temp_root/spec-link.out" 2>&1; then
+  echo 'Expected a broken Markdown link in a spec to fail.' >&2
+  exit 1
+fi
+rg -q "$planned_spec_path:3: missing Markdown link target 'missing.md'" \
+  "$temp_root/spec-link.out"
+
+no_origin_repo="$temp_root/no-origin"
+new_repo "$no_origin_repo"
+printf 'tracked\n' >"$no_origin_repo/source.md"
+git -C "$no_origin_repo" add source.md
+git -C "$no_origin_repo" update-ref -d refs/remotes/origin/main
+if ! "$validator" "$no_origin_repo" >"$temp_root/no-origin.out" 2>&1; then
+  cat "$temp_root/no-origin.out" >&2
+  echo 'Expected validation to work without origin/main.' >&2
   exit 1
 fi
 
@@ -221,69 +260,6 @@ if ! "$validator" "$deleted_repo" >"$temp_root/deleted.out" 2>&1; then
   exit 1
 fi
 
-excluded_repo="$temp_root/excluded"
-new_repo "$excluded_repo"
-superpowers_dir='superpowers'
-excluded_target='missing-excluded.md'
-mkdir -p "$excluded_repo/$docs_dir/$superpowers_dir"
-printf 'See [excluded](%s).\n' "$excluded_target" \
-  >"$excluded_repo/$docs_dir/$superpowers_dir/source.md"
-git -C "$excluded_repo" add -A
-if ! "$validator" "$excluded_repo" >"$temp_root/excluded.out" 2>&1; then
-  cat "$temp_root/excluded.out" >&2
-  echo 'Expected docs/superpowers to be excluded.' >&2
-  exit 1
-fi
-
-decision_repo="$temp_root/decision"
-new_repo "$decision_repo"
-decision_dir='docs/decisions'
-decision_name='2026-08-02-example.md'
-mkdir -p "$decision_repo/$decision_dir"
-printf '# Decision\n\n- **Status: Accepted.**\n\n[missing](missing.md)\n' \
-  >"$decision_repo/$decision_dir/$decision_name"
-git -C "$decision_repo" add -A
-git -C "$decision_repo" commit --quiet -m 'add accepted decision'
-git -C "$decision_repo" update-ref refs/remotes/origin/main HEAD
-if ! "$validator" "$decision_repo" >"$temp_root/decision-frozen.out" 2>&1; then
-  cat "$temp_root/decision-frozen.out" >&2
-  echo 'Expected an unchanged Accepted decision to remain outside link validation.' >&2
-  exit 1
-fi
-printf '\nChanged body.\n' >>"$decision_repo/$decision_dir/$decision_name"
-git -C "$decision_repo" add "$decision_dir/$decision_name"
-git -C "$decision_repo" commit --quiet -m 'revise decision'
-if "$validator" "$decision_repo" >"$temp_root/decision-changed.out" 2>&1; then
-  echo 'Expected a changed decision body to be link-validated.' >&2
-  exit 1
-fi
-rg -F -q "$decision_dir/$decision_name:5: missing Markdown link target 'missing.md'" \
-  "$temp_root/decision-changed.out"
-
-decision_bare_repo="$temp_root/decision-bare"
-new_repo "$decision_bare_repo"
-decision_bare_name='2026-08-02-bare-example.md'
-mkdir -p "$decision_bare_repo/$decision_dir"
-printf '# Decision\n\n- **Status: Accepted.**\n\nSee %s.\n' "$missing_bare_target" \
-  >"$decision_bare_repo/$decision_dir/$decision_bare_name"
-git -C "$decision_bare_repo" add -A
-git -C "$decision_bare_repo" commit --quiet -m 'add accepted decision'
-git -C "$decision_bare_repo" update-ref refs/remotes/origin/main HEAD
-if ! "$validator" "$decision_bare_repo" >"$temp_root/decision-bare-frozen.out" 2>&1; then
-  cat "$temp_root/decision-bare-frozen.out" >&2
-  echo 'Expected an unchanged Accepted decision to remain outside bare-path validation.' >&2
-  exit 1
-fi
-printf '\nChanged body.\n' >>"$decision_bare_repo/$decision_dir/$decision_bare_name"
-git -C "$decision_bare_repo" add "$decision_dir/$decision_bare_name"
-git -C "$decision_bare_repo" commit --quiet -m 'revise decision'
-if "$validator" "$decision_bare_repo" >"$temp_root/decision-bare-changed.out" 2>&1; then
-  echo 'Expected a changed decision bare path to be link-validated.' >&2
-  exit 1
-fi
-rg -F -q "$decision_dir/$decision_bare_name:5: missing bare path target '$missing_bare_target'" \
-  "$temp_root/decision-bare-changed.out"
-
 neighbor_repo="$temp_root/neighbor"
 new_repo "$neighbor_repo"
 neighbor_dir='neighbor'
@@ -347,5 +323,6 @@ if ! "$validator" "$accept_repo" >"$temp_root/accept.out" 2>&1; then
   exit 1
 fi
 
+echo 'Focused link validator fixture cases passed.'
 "$validator" "$repo_root"
 echo 'Link validator tests passed.'

@@ -8,7 +8,6 @@ executions:
     - validation.repo-lint
     - validation.repo-verify
     - validation.links
-    - validation.decisions
     - validation.test-harness
     - validation.policy-unit
     - validation.kubeconform
@@ -265,10 +264,6 @@ suites:
   - metadata: {id: validation.links, source: validation, framework: bash, suite: ci, tier: offline, target: documentation, scenario: links, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo links-validate", implementation: scripts/validate/links.sh}
-    native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.decisions, source: validation, framework: python, suite: ci, tier: offline, target: documentation, scenario: lifecycle, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
-    confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just repo decisions-validate", implementation: scripts/repository/decisions.py}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.test-harness, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
