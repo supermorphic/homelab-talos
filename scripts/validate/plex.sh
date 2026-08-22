@@ -35,6 +35,20 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 
 [[ "$(yq -r '.spec.chartRef.kind' "$hr")" == 'OCIRepository' ]]
 [[ "$(yq -r '.spec.chartRef.name' "$hr")" == 'app-template' ]]
+[[ "$(yq -r '.spec.postRenderers | length' "$hr")" == '1' ]]
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches | length' "$hr")" == '1' ]]
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches[0].target | keys | sort | join(",")' "$hr")" == 'kind,name,version' ]]
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches[0].target.version' "$hr")" == 'v1' ]]
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches[0].target.kind' "$hr")" == 'Service' ]]
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches[0].target.name' "$hr")" == 'plex' ]]
+service_nodeport_patch="$(yq -r '.spec.postRenderers[0].kustomize.patches[0].patch' "$hr")"
+[[ "$(yq -r '
+  length == 1 and
+  .[0].op == "add" and
+  .[0].path == "/spec/ports/0/nodePort" and
+  (.[0] | has("value")) and
+  .[0].value == null
+' <<<"$service_nodeport_patch")" == 'true' ]]
 
 [[ "$(yq -r "$controller.type" "$values")" == 'deployment' ]]
 [[ "$(yq -r "$controller.strategy" "$values")" == 'Recreate' ]]
@@ -200,16 +214,39 @@ for container in runtime-identity app; do
   [[ "$(yq -r "(.spec.template.spec.initContainers[], .spec.template.spec.containers[]) | select(.name == \"$container\") | .image" "$rendered")" == "$image_repository:$image_tag@$image_digest" ]]
 done
 
+# Apply the same Flux Helm post-renderer declared by the source. Existing LoadBalancer
+# Services retain API-allocated NodePorts when allocation is disabled unless the port's
+# nodePort field is explicitly submitted as null.
+mkdir "$temp_dir/post-render"
+yq ea -o=yaml \
+  'select(.apiVersion != null and .kind != null and .metadata.name != null)' \
+  "$temp_dir/render.yaml" >"$temp_dir/post-render/render.yaml"
+export service_nodeport_patch
+yq -n '
+  .apiVersion = "kustomize.config.k8s.io/v1beta1" |
+  .kind = "Kustomization" |
+  .resources = ["render.yaml"] |
+  .patches = [
+    {
+      "target": {"version": "v1", "kind": "Service", "name": "plex"},
+      "patch": strenv(service_nodeport_patch)
+    }
+  ]
+' >"$temp_dir/post-render/kustomization.yaml"
+kustomize build "$temp_dir/post-render" >"$temp_dir/final-render.yaml"
+
 # The Service assertions above read values.yaml and compare it to the literal just
-# written there — not an independent check. The render is: it is Helm's own output,
-# not the input we wrote.
+# written there. The final render is independent: Helm output plus the Flux post-render.
 yq -o=yaml 'select(.kind == "Service" and .metadata.name == "plex")' \
-  "$temp_dir/render.yaml" >"$temp_dir/service.yaml"
+  "$temp_dir/final-render.yaml" >"$temp_dir/service.yaml"
 rendered_service="$temp_dir/service.yaml"
 
 [[ "$(yq -r '.spec.type' "$rendered_service")" == 'LoadBalancer' ]]
 [[ "$(yq -r '.spec.externalTrafficPolicy' "$rendered_service")" == 'Local' ]]
 [[ "$(yq -r '.metadata.annotations."metallb.io/loadBalancerIPs"' "$rendered_service")" == '192.168.90.31' ]]
 [[ "$(yq -r '.spec.allocateLoadBalancerNodePorts | (type == "!!bool" and . == false)' "$rendered_service")" == 'true' ]]
+[[ "$(yq -r '.spec.ports | length' "$rendered_service")" == '1' ]]
+[[ "$(yq -r '.spec.ports[0] | has("nodePort")' "$rendered_service")" == 'true' ]]
+[[ "$(yq -r '.spec.ports[0].nodePort | type' "$rendered_service")" == '!!null' ]]
 
 echo "Plex relay identity, deterministic image, private routing, network containment, and pinned render passed validation."
