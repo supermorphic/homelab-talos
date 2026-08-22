@@ -6,7 +6,9 @@ This runbook is the stage-B deliverable named in
 `kubernetes/apps/media/alerts/app/prometheusrule.yaml`, and the stage-C exercise
 that closes the companion decision's
 [§7.1 gate](../decisions/2026-08-11-plex-direct-remote-access.md) before any DNAT
-to Plex is created.
+to Plex is created. The accepted
+[permanence decision](../decisions/2026-08-22-plex-direct-remote-access-permanence.md)
+retains this detection and response path.
 
 > **Historical Stage-C context:** on 2026-08-12, when the synthetic gate was
 > exercised, there was no Plex DNAT. The LoadBalancer address was reachable from the

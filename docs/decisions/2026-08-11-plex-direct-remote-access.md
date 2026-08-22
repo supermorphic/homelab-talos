@@ -1,6 +1,6 @@
 # Plex direct remote access — decision
 
-- **Status: Accepted.**
+- **Status: Superseded by 2026-08-22-plex-direct-remote-access-permanence.md.**
 
 Date: 2026-08-11.
 Branch: `investigate-plex-remote-access`.

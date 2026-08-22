@@ -1,8 +1,8 @@
 # Plex direct remote access — exposure runbook
 
-Procedure for stages 3 and 4 of
-[Plex direct remote access — decision](../decisions/2026-08-11-plex-direct-remote-access.md),
-plus the phase-0 baseline that must be captured first.
+Procedure for the permanent design in
+[Plex direct remote access — permanence decision](../decisions/2026-08-22-plex-direct-remote-access-permanence.md),
+including the stages and phase-0 baseline from the superseded experiment decision.
 
 This runbook publishes Plex to the Internet. Everything before it created capability
 without exposure; this is the step that changes what the world can reach. Read
@@ -12,9 +12,10 @@ conditions require an immediate revert, and one of them is checked before you be
 > **Time boundary:** this runbook includes the 2026-08-12 experiment record. Statements
 > below about no DNAT, synthetic-only traffic, recorded Plex settings, and acceptance
 > results describe that dated run. They do not prove current UniFi, Plex, DNS, IPv6, or
-> cluster state. The accepted decision authorizes a staged experiment and leaves
-> permanence to a separate decision. Use [Current-state verification](#current-state-verification)
-> before relying on the exposure today.
+> cluster state. The permanence decision retains the successful design but does not turn
+> historical evidence into continuous proof. Use
+> [Current-state verification](#current-state-verification) before relying on the
+> exposure today.
 
 Detection is a precondition. For the dated experiment, Stage C of
 [Plex remote access detection](plex-remote-access-detection.md) was exercised on
@@ -50,7 +51,8 @@ account identifiers, client addresses, and raw flow or scan output private.
 ### Repository and cluster
 
 1. Confirm Git still declares one Plex `LoadBalancer` address, `externalTrafficPolicy:
-   Local`, and TCP `32400` only. Run the source gate:
+   Local`, `allocateLoadBalancerNodePorts: false`, and TCP `32400` only. Run the source
+   gate:
 
    ```bash
    mise exec -- just kube plex-validate
@@ -74,10 +76,11 @@ account identifiers, client addresses, and raw flow or scan output private.
      --namespace media get ciliumnetworkpolicy plex --output yaml
    ```
 
-   Confirm the Service has one TCP application port and the EndpointSlice reports a ready
-   Plex target. Privately note whether the API allocated a node port and include every
-   observed listener in the off-network filtering test; record only the sanitized pass or
-   fail outcome publicly. These reads prove object state, not packet enforcement. The
+   Confirm the Service has one TCP application port, no allocated NodePort, and a ready
+   Plex target in the EndpointSlice. If any additional listener exists, stop this
+   verification path and include it in the privately recorded off-network filtering
+   test; record only the sanitized pass or fail outcome publicly. These reads prove
+   object state, not packet enforcement. The
    established enforcement proof is the operator-attended, state-changing
    `plex-network-policy-test`, which creates and removes run-scoped probe Pods and
    requires `PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy'`. Run it in an
@@ -102,11 +105,9 @@ account identifiers, client addresses, and raw flow or scan output private.
 ### Plex, detection, and recovery
 
 1. Record Remote Access, the manual public port, Relay, authentication-bypass networks,
-   Secure Connections, and custom access URLs. Compare them with both the accepted
-   decision and the dated experiment result in this runbook. The accepted decision
-   retains the internal Envoy custom URL, while the experiment recorded success with only
-   the `plex.direct` URL. The experiment does not supersede the decision; resolve that
-   difference in the separate permanence decision.
+   Secure Connections, the IPv4-only client-network setting, and custom access URLs.
+   Compare them with the permanence decision. The list must contain exactly the one
+   measured Plex-managed URL and must not advertise the internal Envoy hostname.
 2. Follow [Plex remote-access detection](plex-remote-access-detection.md) to confirm
    Hubble metrics, Prometheus rules, Alertmanager, and ntfy are healthy. Historical
    Stage-C results do not prove current detector health.
@@ -117,8 +118,8 @@ account identifiers, client addresses, and raw flow or scan output private.
    healthy before treating recovery as an effective control.
 
 A dated, sanitized record of these checks supplies evidence for the current operating
-state. It is not continuous proof, and it does not decide permanence; that remains a
-separate operator decision.
+state. It is not continuous proof; the permanence decision defines the accepted design
+and the events that require review.
 
 ## Phase 0 — baseline, before touching anything
 
