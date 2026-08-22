@@ -1,0 +1,87 @@
+# Flux Reconciliation Alerting
+
+## Purpose
+
+Detect when Flux-managed desired state is no longer reconciling. Controller scrape
+health proves that a Flux controller process is reachable, but it does not prove that
+each Kustomization, HelmRelease, or source reports `Ready=True`.
+
+## Metric architecture
+
+The existing Flux PodMonitor remains responsible for controller-runtime and scrape
+health. The kube-prometheus-stack general target-down rules cover loss of those scrape
+targets.
+
+Per-resource readiness comes from a dedicated `flux-kube-state-metrics` Helm release in
+the `monitoring` namespace. It disables all standard collectors and runs in
+custom-resource-state-only mode, so it emits `gotk_resource_info` without duplicating
+the bundled exporter's `kube_*` metrics. It collects these Flux kinds:
+
+- Kustomization;
+- HelmRelease;
+- GitRepository;
+- OCIRepository; and
+- HelmRepository.
+
+Each collector uses a distinct help string. kube-state-metrics can discard resource
+families when multiple custom-resource collectors produce the same sanitized metric
+header, so the help strings are part of the correctness contract.
+
+## Isolation and authority boundary
+
+The dedicated exporter avoids changing kube-prometheus-stack values. That release had a
+confirmed upgrade wedge in which a values change could leave the Helm upgrade waiting
+for an in-cache object. Reusing its bundled kube-state-metrics instance would have
+coupled reconciliation visibility to that risky shared upgrade path.
+
+The exporter has only `list` and `watch` access to the five Flux resource kinds and to
+CustomResourceDefinitions needed for collector discovery. It cannot read Secrets or
+mutate cluster state. The chart's broad RBAC generation is disabled and the repository
+owns the focused ClusterRole and binding.
+
+## Alert semantics
+
+`FluxReconciliationFailure` selects any exported resource that is not suspended and
+whose Ready condition is not `True`. This includes `False`, `Unknown`, and a missing
+Ready label. The condition must persist for 15 minutes before the warning fires.
+
+`FluxResourceMetricsMissing` checks each configured kind independently. A single
+family-wide absence check was rejected because series from four working collectors can
+hide failure of the fifth. The warning identifies loss of the monitoring signal rather
+than asserting that a Flux resource failed.
+
+Both warnings follow the existing Alertmanager route to the synchronous
+`alertmanager-ntfy` bridge and the `homelab` topic. Alertmanager retains ownership of
+grouping, deduplication, inhibition, repeat timing, and resolved messages. This design
+does not create a Flux-specific topic or routine Flux event-notification path.
+
+## Validation model
+
+Cluster-independent checks validate the custom-resource configuration, unique help
+strings, minimal RBAC, PrometheusRule syntax, and the behavior of readiness, suspension,
+and partial metric-loss expressions. This catches errors that a successful YAML render
+cannot detect.
+
+The guarded diagnostic workflow checks the independent live stages: exporter target
+health, presence of all five resource kinds, rule health, Alertmanager connectivity, and
+the expected ntfy receiver and route. Live acceptance observed all five kinds and
+healthy inactive rules after adding the required CRD-discovery permission.
+
+A confirmation-guarded firing-and-resolved delivery experiment remains useful optional
+end-to-end evidence. It is not required to define or retain this architecture.
+
+## Rejected alternatives
+
+- Controller metrics alone cannot report readiness of individual Flux objects.
+- The removed `gotk_reconcile_condition` metric is not available in the deployed Flux
+  version and must not be treated as a source.
+- Extending the kube-prometheus-stack bundled exporter would re-enter the known upgrade
+  failure path.
+- One family-wide absence alert would allow partial collector loss to remain invisible.
+
+## Consequences
+
+Flux object failures are visible without changing the upgrade-fragile monitoring
+release. The extra exporter consumes a small amount of CPU and memory and introduces
+one additional component to operate, but it has a narrow read-only authority surface
+and produces no duplicate standard Kubernetes metrics.
