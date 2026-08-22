@@ -1,72 +1,61 @@
 # Media Integration Health with Gatus
 
-## Purpose
+## Historical boundary
 
-Add bounded continuous evidence beyond media service availability without creating a
-custom collector or exporter. The implemented redesign uses the existing Gatus workload,
-ServiceMonitor, metric, trusted HTTPS routes, and alert delivery path.
+This specification records the implemented Gatus redesign before the API-reachability
+correction in specification 031. The six authenticated GET probes and their credential,
+route, and metric architecture were implemented. The original four Servarr body
+conditions were later removed, so their success semantics here do not describe current
+source.
 
-This design replaced the custom collector and active-probe designs recorded in
-specifications 028 and 029. The later API-reachability refinement in specification 031
-defines the current exact Servarr success and alert semantics.
+The intended `*NativeHealthIssue` alerts in this design were not implemented before the
+successor changed their evidence boundary and names. Specification 031 is self-contained
+for the current Servarr probes and implemented alerts.
 
 ## Design choice
 
-Gatus performs six authenticated, non-mutating GET checks in group
+The redesign replaced the custom collector and active POST probes in specifications 028
+and 029 with six authenticated, non-mutating Gatus GET checks in group
 `Media Integration`:
 
-| Endpoint | Request |
-| --- | --- |
-| `prowlarr-native-health` | Prowlarr `GET /api/v1/health` |
-| `sonarr-native-health` | Sonarr `GET /api/v3/health` |
-| `radarr-native-health` | Radarr `GET /api/v3/health` |
-| `lidarr-native-health` | Lidarr `GET /api/v1/health` |
-| `seerr-sonarr-service-read` | Seerr `GET /api/v1/service/sonarr/0` |
-| `seerr-radarr-service-read` | Seerr `GET /api/v1/service/radarr/0` |
+| Endpoint | Request | Original success conditions |
+| --- | --- | --- |
+| `prowlarr-native-health` | Prowlarr `GET /api/v1/health` | HTTP 200 and `len([BODY]) == 0` |
+| `sonarr-native-health` | Sonarr `GET /api/v3/health` | HTTP 200 and `len([BODY]) == 0` |
+| `radarr-native-health` | Radarr `GET /api/v3/health` | HTTP 200 and `len([BODY]) == 0` |
+| `lidarr-native-health` | Lidarr `GET /api/v1/health` | HTTP 200 and `len([BODY]) == 0` |
+| `seerr-sonarr-service-read` | Seerr `GET /api/v1/service/sonarr/0` | HTTP 200, `server.id == 0`, and `profiles` and `rootFolders` present |
+| `seerr-radarr-service-read` | Seerr `GET /api/v1/service/radarr/0` | HTTP 200, `server.id == 0`, and `profiles` and `rootFolders` present |
 
-All six run once per minute, send an application-specific `X-Api-Key`, and hide detailed
-errors in the Gatus UI. The current Servarr probes require only HTTP 200. The two Seerr
-reads require HTTP 200, selected server ID `0`, and the presence of `profiles` and
-`rootFolders`.
+All six ran once per minute, sent an application-specific `X-Api-Key`, and hid detailed
+errors in the Gatus UI. The initial implementation used this exact endpoint and condition
+set. The two Seerr body assertions remain part of current source; only the four Servarr
+body-length assertions were replaced.
 
 No collector, exporter, adapter package, custom image, Deployment, Service,
-ServiceMonitor, metrics contract, or network policy was added. Prometheus continues to
-scrape Gatus and consumes `gatus_results_endpoint_success` with only the stable `group`
-and `name` labels.
+ServiceMonitor, metrics contract, or network policy was added. Prometheus continued to
+scrape the existing Gatus ServiceMonitor and consume
+`gatus_results_endpoint_success` through the stable `group` and `name` labels.
 
-## Assurance levels
+## Original assurance levels
 
-The design separates four levels that must not be presented as equivalent:
+The redesign separated four levels:
 
-| Level | Continuous or manual evidence | Boundary |
+| Level | Evidence | Original interpretation |
 | --- | --- | --- |
-| 1 — availability | Existing unauthenticated Prowlarr, Sonarr, Radarr, and Lidarr `/ping` checks and Seerr status check | The application responds through its trusted route |
-| 2 — authenticated API reachability | Four Servarr health-API GETs | The route, endpoint, and supplied credential returned HTTP 200; response health entries are not evaluated |
-| 3 — selected integration read | Two Seerr service-detail GETs | Seerr can use its stored downstream settings to read the selected Sonarr or Radarr service |
-| 4 — deep workflow verification | Native Test actions, searches, requests, downloads, imports, and Plex refreshes | Stronger but potentially state-changing evidence kept outside continuous monitoring |
+| 1 — availability | Existing unauthenticated Prowlarr, Sonarr, Radarr, and Lidarr `/ping` checks and Seerr status check | The application responded through its trusted route |
+| 2 — native application health | Four authenticated Servarr health GETs with empty-array conditions | The application returned HTTP 200 and no native health entries |
+| 3 — selected integration read | Two Seerr service-detail GETs | Seerr used its stored settings to read the selected Sonarr or Radarr service |
+| 4 — deep workflow verification | Native Test actions, searches, requests, downloads, imports, and Plex refreshes | Stronger but potentially state-changing evidence remained outside continuous monitoring |
 
-The fifteen-edge inventory from the earlier collector design remains useful as a gap
-map. It is not a claim that six Gatus checks provide fifteen independent integration
-signals. In particular, the four Servarr endpoints do not identify Prowlarr,
-qBittorrent, Plex, an indexer, or another provider as a failing target.
-
-## Servarr interpretation change
-
-The first Gatus implementation paired HTTP 200 with `len([BODY]) == 0` for the four
-Servarr health responses. That treated any native health entry as a failed probe. In
-practice, Servarr includes informational update-availability entries in the same array.
-The deployed Gatus condition language could not safely filter `UpdateCheck` entries while
-rejecting every operational entry.
-
-The repository removed the four body-length assertions. This preserved credentialed
-API-path evidence and avoided coupling release-channel policy to operational monitoring.
-Specification 031 records the current truth table, alert names, and reduced coverage.
-The Seerr body assertions were not removed because they check a bounded selected-service
-response rather than a generic health-entry array.
+The fifteen-edge inventory from the collector design remained a gap map, not a promise
+of fifteen independent probes. Under the original Level 2 interpretation, one Servarr
+health result could be relevant to several edges but could not attribute a failure to a
+specific Prowlarr, qBittorrent, Plex, indexer, or other provider.
 
 ## Credential boundary
 
-One purpose-specific SOPS-encrypted Secret in namespace `gatus` contains exactly these
+One purpose-specific SOPS-encrypted Secret in namespace `gatus` contained exactly these
 keys:
 
 ```text
@@ -77,69 +66,89 @@ lidarr_api_key
 seerr_api_key
 ```
 
-Only the Gatus container receives the Secret. Each key is projected through an explicit
-`secretKeyRef` environment variable and appears in configuration only as the matching
-environment placeholder in an `X-Api-Key` header. No `envFrom` reference grants the
+Only the Gatus container received the Secret. Each key was projected through an explicit
+`secretKeyRef` environment variable and appeared in configuration only as the matching
+environment placeholder in an `X-Api-Key` header. No `envFrom` reference granted the
 container the complete Secret implicitly.
 
-The application API keys are broad upstream credentials. The purpose-specific Secret
-limits their consumer and storage boundary; it does not make the underlying keys
-read-only. Values must not appear in URLs, endpoint names, conditions, labels, events,
-fixtures, logs, or documentation.
+The application API keys were broad upstream credentials. The purpose-specific Secret
+limited their consumer and storage boundary; it did not make the underlying keys
+read-only. Values were excluded from URLs, endpoint names, conditions, labels, events,
+fixtures, logs, and documentation.
 
 ## Network and metrics path
 
-The probes reuse the same application hostnames and route as Level 1:
+The probes reused the Level 1 application hostnames and path:
 
 ```text
 Gatus -> internal DNS -> internal HTTPS Gateway -> existing HTTPRoute -> media Service
 ```
 
-They add authenticated paths and headers, not destinations. Gatus has no
-`CiliumNetworkPolicy`, and the selected media paths already traverse the internal
-Gateway. The design does not add direct Service-DNS probe paths or a second probe
+They added authenticated paths and headers, not destinations. Gatus had no
+`CiliumNetworkPolicy`, and the selected media paths already traversed the internal
+Gateway. The design added neither direct Service-DNS probe paths nor a second probe
 workload.
 
-Gatus uses in-memory history, so restarts can discard dashboard history. Prometheus
-retains the continuously scraped success series used for alerts. Neither history surface
-stores response bodies or credentials as metric labels.
+Gatus used in-memory history, so restarts could discard dashboard history. Prometheus
+retained the continuously scraped success series intended for alerts. Neither history
+surface exported response bodies or credentials as metric labels.
 
-## Alert architecture
+## Intended alert contract
 
-The media alerts application consumes the six Gatus series. Four warning alerts cover a
-15-minute Servarr authenticated-API failure, two warning alerts cover a 15-minute Seerr
-selected-service read failure, and `MediaIntegrationProbeMissing` covers five minutes of
-missing telemetry for any expected series.
+The original design specified four 15-minute warning alerts named
+`ProwlarrNativeHealthIssue`, `SonarrNativeHealthIssue`, `RadarrNativeHealthIssue`, and
+`LidarrNativeHealthIssue`. Their intended evidence was a failed authenticated check that
+required HTTP 200 and an empty native-health array. The annotations were to direct the
+operator to application-native health details without naming an integration target.
 
-These rules authorize no remediation. A Servarr alert reports authenticated API
-unavailability, not a native-health or integration issue. A Seerr alert reports failure
-of the selected read-through, not failure of a request, download, import, or full media
-workflow. The missing-series alert reports telemetry loss rather than application or
-integration failure.
+It also specified `SeerrSonarrServiceReadFailed` and
+`SeerrRadarrServiceReadFailed` after 15 minutes, plus
+`MediaIntegrationProbeMissing` after five minutes of missing telemetry. The Seerr alerts
+were bounded to selected read-through failure and did not prove that a request, download,
+import, or later workflow step failed.
 
-## Validation model
+None of these media-integration alerts shipped with the initial six-probe implementation.
+Before alert implementation, specification 031 replaced the four Servarr semantics and
+the `*NativeHealthIssue` names. The later alert change implemented that successor
+contract, the two unchanged Seerr alerts, and the missing-telemetry alert. Those
+implemented effects belong to specification 031 rather than this historical contract.
 
-Source validation fixes the exact six endpoint names, group, GET methods, URLs,
-one-minute interval, API-key placeholders, conditions, hidden-error behavior, Secret
-metadata, Secret keys, and rendered `secretKeyRef` mappings. Mutation tests reject a
-missing or extra endpoint, a mutating method, a body-dependent Servarr condition, a wrong
-key placeholder, and a wrong rendered Secret reference.
+## Original validation model
 
-Promtool fixtures use the exact rule source and independently cover each alert's hold,
-recovery, isolation from the other five series, annotations, and missing-series behavior.
-These source tests cannot prove live credentials, Gateway header forwarding,
-application-owned configuration, or downstream Seerr access.
+The implementation validator pinned the exact six endpoint names, group, GET methods,
+URLs, one-minute interval, API-key placeholders, conditions, hidden-error behavior,
+Secret metadata, Secret keys, and rendered `secretKeyRef` mappings. The initial mutation
+test used empty and non-empty synthetic arrays as the independent oracle and rejected a
+weakened Servarr body-length condition.
 
-## Rejected alternatives and consequences
+Those checks established the pre-successor source contract. The successor removed the
+four body-length conditions and replaced the independent oracle with the status-only
+truth table now described in specification 031. The stable endpoint, credential, route,
+and Seerr validation remained.
 
-The custom collector was rejected because its adapter, image, workload, scrape target,
-network policy, API compatibility, and credential lifecycle cost exceeded the bounded
-signals selected here. Exportarr did not cover the same application set or selected
-Seerr reads. Continuous POST tests and end-to-end transactions were rejected because
-they add API behavior or durable work to continuous monitoring.
+## Why the Servarr semantics changed
 
-The current design accepts no continuous Seerr-to-Plex evidence, no generic target
-attribution from Servarr, no evaluation of Servarr native health entries, and no proof
-of searches, requests, downloads, imports, or Plex refreshes. In return, it adds six
-authenticated reads and one encrypted credential boundary to software and metrics paths
-the cluster already operates.
+Servarr includes informational update-availability entries in the same native health
+array as operational entries. The original `len([BODY]) == 0` condition therefore made
+routine update notices fail Level 2.
+
+The deployed Gatus condition language could not safely filter every `UpdateCheck` entry
+while rejecting every other entry in an arbitrary array. Fixed-index checks would depend
+on order and length. Serialized-body matching would depend on JSON formatting and could
+accept a mixed informational and operational result. Changing an application's release
+branch only to make the probe green would also couple update policy to monitoring.
+
+The successor retained the authenticated GETs but narrowed them to exact HTTP-200 API
+reachability. It deliberately gave up continuous evaluation of Servarr health entries.
+The Seerr conditions did not have this arbitrary-array problem and were retained.
+
+## Historical consequences
+
+The Gatus redesign avoided the proposed custom collector, adapter, workload, scrape
+target, network policy, and continuous POST-test lifecycle while adding six authenticated
+signals to an existing execution surface. Its first Servarr body contract proved too
+broad for routine native health responses and was replaced before its intended alert
+names were implemented.
+
+No current Servarr condition or alert effect should be derived from this specification.
+Specification 031 defines those exact current boundaries.

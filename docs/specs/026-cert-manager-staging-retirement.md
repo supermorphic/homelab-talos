@@ -10,14 +10,15 @@ not a useful standing service dependency.
 
 The foundation rollout used a `letsencrypt-staging` `ClusterIssuer` and a separate
 staging wildcard `Certificate` to prove Cloudflare DNS-01 issuance before requesting the
-production certificate. Neither the internal Gateway nor an application consumed the
-staging Secret.
+production certificate. No source-managed Gateway, Ingress, or workload referenced the
+staging Secret. Git does not establish whether an untracked or external live consumer
+ever used it.
 
-Keeping those resources after the proof added recurring ACME account and DNS challenge
-activity without protecting a served route. A successful staging renewal also could not
-prove production renewal because the two issuers used different ACME endpoints and
-accounts. The repository therefore removed the permanent staging `ClusterIssuer`,
-staging `Certificate`, and their Kustomize references.
+Keeping those resources in desired state after the proof would retain recurring ACME
+account and DNS challenge activity without protecting a source-managed served route. A
+successful staging renewal also could not prove production renewal because the two
+issuers used different ACME endpoints and accounts. The repository therefore removed the
+permanent staging `ClusterIssuer`, staging `Certificate`, and their Kustomize references.
 
 Current validation rejects the retired issuer name, staging certificate name, and
 staging Secret name anywhere in Kubernetes source. A future staging issuance experiment
@@ -79,14 +80,16 @@ an ACME renewal.
 
 ## State and authority boundary
 
-Flux pruning removed the source-managed staging `Certificate` and `ClusterIssuer`.
-Secrets that may have been created by the retired certificate are live-state artifacts,
-not current Git resources, and Git cannot prove their presence, references, or removal.
-Any cleanup of such an orphan remains an operator-owned action after exact reference
-checks; it is not part of this specification's source state.
+The repository removed the staging `Certificate` and `ClusterIssuer` from desired state
+so Flux reconciliation and pruning could retire those source-managed resources. Current
+Git proves their source absence, but it does not prove that reconciliation completed or
+that the live resources are absent. Secrets that may have been created by the retired
+certificate are live-state artifacts, not current Git resources. Git cannot prove their
+presence, references, or removal. Current live verification is required for those facts,
+and any orphan cleanup remains an operator-owned action after exact reference checks.
 
 Production continuity depends on normal cert-manager renewal plus advance expiry and
 missing-telemetry alerts. The design accepts loss of the permanent staging canary because
-that canary neither exercised the production account nor terminated served traffic.
-Certificates outside cert-manager, general Longhorn health, and Trivy findings remain
-outside this boundary.
+that canary did not exercise the production account and no source-managed served route
+referenced its Secret. Certificates outside cert-manager, general Longhorn health, and
+Trivy findings remain outside this boundary.

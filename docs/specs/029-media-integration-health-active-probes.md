@@ -86,9 +86,11 @@ adapters, an image and deployment, a new scrape target, five credentials, a netw
 policy, compatibility fixtures, and fifteen-edge classification.
 
 The later Gatus redesign chose a smaller assurance boundary: four authenticated Servarr
-health-API reachability checks and two selected Seerr service reads. It intentionally
-gave up continuous Prowlarr-direction native tests and most edge attribution to avoid a
-custom adapter product and continuous POST operations.
+native-health GETs and two selected Seerr service reads. Its initial Servarr contract
+required both HTTP 200 and an empty response array; specification 031 records the later
+reachability-only correction. The Gatus design intentionally gave up continuous
+Prowlarr-direction native tests and most edge attribution to avoid a custom adapter
+product and continuous POST operations.
 
 No current endpoint, alert, workload, or operator action should be derived from this
 historical active-probe design.
