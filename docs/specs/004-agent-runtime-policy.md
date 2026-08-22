@@ -40,8 +40,11 @@ Authority is based on what an operation can do, not which command spells it.
   workflows.
 - Persistent changes to Flux-managed Kubernetes state go through Git so the desired
   state, review record, and live reconciliation remain aligned.
-- Credential minting, secret creation, privileged platform rollout, destructive or
-  persistent out-of-band cluster changes, and break-glass recovery remain operator-run.
+- Agents may use approved workflows to mint task-scoped read-only cluster credentials.
+  Seeking or using elevated, write, administrative, or break-glass credentials requires
+  explicit operator authorization for the specific task. Secret creation, privileged
+  platform rollout, and destructive or persistent out-of-band cluster changes remain
+  operator-run.
 - Merge and auto-merge always require explicit authorization for that specific merge.
 
 This boundary permits useful read-only and reduced-privilege work without pretending
@@ -55,9 +58,12 @@ Credentials are separated by scope and checkout location.
 
 - The primary clone may hold the operator's administrative Kubernetes and Talos
   credentials for bootstrap and recovery.
-- A feature worktree begins without cluster credentials. When live verification is
-  needed, the operator may mint task-scoped Kubernetes observer and diagnostic contexts
-  plus a Talos reader credential into that worktree.
+- A feature worktree begins without cluster credentials. When scoped verification needs
+  read-only access, the agent may use the approved repository workflow to mint
+  task-scoped Kubernetes and Talos reader credentials into that worktree without
+  operator intervention. Diagnostic subresources or any elevated, write,
+  administrative, or break-glass credential require explicit authorization for the
+  specific task.
 - Observer access covers the bounded resource reads needed by registered verifiers and
   denies Secret reads and mutation. Diagnostic access adds the named pod subresources
   required by specific verifiers. It is reduced privilege, not a claim of read-only

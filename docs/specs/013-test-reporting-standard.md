@@ -179,9 +179,9 @@ authorizing archive deletion.
 A run is authoritative only when it is finalized from a clean checkout and its Git
 commit equals both current `origin/main` and the deployed Flux artifact revision.
 Historical or feature-commit runs may be retained as candidates, but they do not update
-stable latest links, Homepage summaries, Grafana metrics, or operational rollups.
-Republishing the same run and digest is idempotent; reusing an ID with different content
-is rejected.
+stable latest links, Homepage summaries, or last-run metrics. Candidate publications do
+contribute to the lifetime published-run and test-case counters. Republishing the same
+run and digest is idempotent; reusing an ID with different content is rejected.
 
 ## Campaign model
 
@@ -204,11 +204,13 @@ matching Flux artifact for operator-published mode. Every child emits and valida
 own canonical run, and the coordinator records that run and its publication result in an
 ignored local journal.
 
-Assertion failures can be published and do not prevent later independent suites when
-cleanup and recovery are safe. Invalid canonical output, a broken child, lost Lease,
-failed or unclassified cleanup or recovery, bounded publication failure, or source drift
-stops the campaign. Only publication failure is resumable; source drift requires a new
-campaign against the newly deployed revision.
+Ordinary assertion failures can be published and do not prevent later independent suites
+when cleanup and recovery are safe. Validation is an exception: a validation failure
+stops a composed campaign. Smoke failures are collected, but they prevent all later
+state-changing stages. Invalid canonical output, a broken child, lost Lease, failed or
+unclassified cleanup or recovery, bounded publication failure, or source drift also stops
+the campaign. Only publication failure is resumable; source drift requires a new campaign
+against the newly deployed revision.
 
 ## Consequences
 
