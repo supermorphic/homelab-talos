@@ -93,6 +93,9 @@ fi
 [[ "$(yq -r '.service.app.type' "$values")" == 'LoadBalancer' ]]
 [[ "$(yq -r '.service.app.annotations."metallb.io/address-pool"' "$values")" == 'internal' ]]
 [[ "$(yq -r '.service.app.annotations."metallb.io/loadBalancerIPs"' "$values")" == '192.168.90.31' ]]
+# The gateway forwards to the LoadBalancer address, never to a node. Do not allocate a
+# second, node-wide listener for this Internet-facing Service.
+[[ "$(yq -r '.service.app.allocateLoadBalancerNodePorts | (type == "!!bool" and . == false)' "$values")" == 'true' ]]
 # Local preserves the client address, so Plex can attribute remote sessions and classify
 # LAN bandwidth correctly. Cluster would SNAT every client to a node address.
 [[ "$(yq -r '.service.app.externalTrafficPolicy' "$values")" == 'Local' ]]
@@ -207,5 +210,6 @@ rendered_service="$temp_dir/service.yaml"
 [[ "$(yq -r '.spec.type' "$rendered_service")" == 'LoadBalancer' ]]
 [[ "$(yq -r '.spec.externalTrafficPolicy' "$rendered_service")" == 'Local' ]]
 [[ "$(yq -r '.metadata.annotations."metallb.io/loadBalancerIPs"' "$rendered_service")" == '192.168.90.31' ]]
+[[ "$(yq -r '.spec.allocateLoadBalancerNodePorts | (type == "!!bool" and . == false)' "$rendered_service")" == 'true' ]]
 
 echo "Plex relay identity, deterministic image, private routing, network containment, and pinned render passed validation."
