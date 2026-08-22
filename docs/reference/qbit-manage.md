@@ -113,10 +113,13 @@ Use the read-only live verifier for workload, configuration, and policy state:
 mise exec -- just kube qbit-manage-verify
 ```
 
-Pause qbit_manage by changing `spec.suspend` through Git. This does not stop
-qBittorrent from seeding. Disable cleanup by changing both cleanup-enabled groups to
-`cleanup: false`; disable all share limits with `commands.share_limits: false`. Make
-these changes through a reviewed pull request.
+Changing the qbit_manage Kustomization's `spec.suspend` through Git stops Flux
+reconciliation. It does not stop the running Deployment or its 15-minute policy loop.
+For an active policy incident, use the
+[recovery runbook's workload-stop procedure](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean).
+That procedure leaves qBittorrent running so it can continue seeding. Disable cleanup by
+changing both cleanup-enabled groups to `cleanup: false`; disable all share limits with
+`commands.share_limits: false`. Make these changes through a reviewed pull request.
 
 Do not publish qbit_manage logs. They can contain torrent names, tracker URLs, and
 passkeys.

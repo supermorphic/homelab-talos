@@ -118,5 +118,7 @@ Never:
 - mass-reset unrelated public limits; or
 - stop qBittorrent/Gluetun as part of policy rollback.
 
-If qbit_manage itself must be paused, set `spec.suspend: true` through GitOps or
-use an existing guarded operator recipe. qBittorrent must continue seeding.
+Changing the qbit_manage Kustomization's `spec.suspend` stops reconciliation, not the
+running policy Deployment. If policy execution must stop, use the
+[recovery runbook's workload-stop procedure](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean).
+That procedure keeps qBittorrent running so it can continue seeding.

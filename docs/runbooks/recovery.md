@@ -246,12 +246,25 @@ download-side data into `/data/downloads/.RecycleBin`. The recycle bin keeps tha
 for seven days. The organized file below `/data/media` is a separate hardlink name and
 remains available to Plex even after the download-side name is removed.
 
-1. From the authorized main clone with its administrator `.kube/config`, stop both
-   reconciliation layers before stopping the workload. The HelmRelease has drift
-   detection enabled, so suspending only the parent Kustomization does not make a manual
-   Deployment scale durable:
+1. From the authorized main clone with its administrator `.kube/config`, first suspend
+   `flux-system/cluster-apps`. This parent reconciles every application child definition
+   below `kubernetes/apps`, including `flux-system/qbit-manage`. Its suspension does not
+   stop any workload. It temporarily pauses Git changes to all application child
+   definitions, so it has a broad blast radius: make the reviewed child-suspension
+   change promptly and keep this window as short as possible.
+
+   With parent ownership paused, suspend the qbit_manage child and its HelmRelease before
+   scaling the workload. The HelmRelease has drift detection enabled, so the child and
+   HelmRelease suspensions are both required to keep their controllers from undoing the
+   manual scale while the parent is paused:
 
    ```bash
+   mise exec -- flux suspend kustomization cluster-apps \
+     --namespace flux-system --kubeconfig .kube/config
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization cluster-apps \
+     --output jsonpath='{.spec.suspend}')" = true
+
    mise exec -- flux suspend kustomization qbit-manage \
      --namespace flux-system --kubeconfig .kube/config
    mise exec -- flux suspend helmrelease qbit-manage \
@@ -281,45 +294,113 @@ remains available to Plex even after the download-side name is removed.
      get pod --selector app.kubernetes.io/name=qbit-manage --output name)"
    ```
 
-   Containment is complete only after the Deployment reports zero desired replicas and
-   the Pod query is empty. Keep qBittorrent and Gluetun running so unrelated torrents
-   continue to seed. These are operator-run administrative actions; never run them with
-   a linked-worktree observer or diagnostic credential.
-2. In the assigned feature worktree, record the persistent containment state through
-   Git: keep `kubernetes/apps/media/qbit-manage/ks.yaml` suspended and set
-   `spec.suspend: true` on the qbit_manage HelmRelease while recovery is in progress.
-   Commit, review, and merge this state. Do not put the live administrator kubeconfig in
-   the worktree.
-3. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
+   The zero-replica and empty-Pod checks prove that the workload is stopped at that
+   point. They do not make containment durable: if `cluster-apps` resumes before the
+   child suspension is merged, it can restore the active child definition from Git.
+   Keep all three reconcilers suspended until steps 2 and 3 complete. Keep qBittorrent
+   and Gluetun running so unrelated torrents continue to seed. These are operator-run
+   administrative actions; never run them with a linked-worktree observer or diagnostic
+   credential.
+2. In the assigned feature worktree, set `spec.suspend: true` in
+   `kubernetes/apps/media/qbit-manage/ks.yaml`. Commit, review, and merge this persistent
+   child suspension promptly. Do not run live commands or put the administrator
+   kubeconfig in the worktree. Do not resume `cluster-apps` before the merged source is
+   available to Flux; the previous Git state can otherwise reactivate the child.
+3. Update the authorized main clone to the exact merged `origin/main` commit. Reconcile
+   the Flux source, prove that its artifact contains that commit, then resume and
+   reconcile `cluster-apps`:
+
+   ```bash
+   test -z "$(git status --porcelain)"
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+   test "$(mise exec -- yq -r '.spec.suspend' \
+     kubernetes/apps/media/qbit-manage/ks.yaml)" = true
+   expected_revision="$(git rev-parse HEAD)"
+
+   mise exec -- flux reconcile source git flux-system \
+     --namespace flux-system --kubeconfig .kube/config
+   artifact_revision="$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get gitrepository flux-system \
+     --output jsonpath='{.status.artifact.revision}')"
+   case "$artifact_revision" in
+     *"$expected_revision"*) ;;
+     *) printf 'Flux artifact does not contain %s\n' "$expected_revision" >&2; false ;;
+   esac
+
+   mise exec -- flux resume kustomization cluster-apps \
+     --namespace flux-system --kubeconfig .kube/config
+   mise exec -- flux reconcile kustomization cluster-apps \
+     --namespace flux-system --with-source --kubeconfig .kube/config --timeout 10m
+   ```
+
+   If either parent command fails, immediately run the following command and confirm the
+   result before diagnosis:
+
+   ```bash
+   mise exec -- flux suspend kustomization cluster-apps \
+     --namespace flux-system --kubeconfig .kube/config
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization cluster-apps \
+     --output jsonpath='{.spec.suspend}')" = true
+   ```
+
+   After both parent commands succeed, verify that the active parent applied the
+   Git-managed child suspension and did not restart qbit_manage:
+
+   ```bash
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization cluster-apps \
+     --output jsonpath='{.spec.suspend}')" = false
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace flux-system get kustomization qbit-manage \
+     --output jsonpath='{.spec.suspend}')" = true
+   test "$(mise exec -- kubectl --kubeconfig .kube/config \
+     --namespace media get helmrelease qbit-manage \
+     --output jsonpath='{.spec.suspend}')" = true
+   test "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get deployment/qbit-manage --output jsonpath='{.spec.replicas}')" = 0
+   test -z "$(mise exec -- kubectl --kubeconfig .kube/config --namespace media \
+     get pod --selector app.kubernetes.io/name=qbit-manage --output name)"
+   ```
+
+   The parent can now remain active: Git keeps the child suspended, the child cannot
+   reconcile the HelmRelease, and the still-suspended HelmRelease cannot restore the
+   Deployment. If any check fails, suspend `cluster-apps` again and do not claim durable
+   containment.
+4. Use the qBittorrent UI and locally inspected qbit_manage logs to identify the exact
    torrent, original download path, and recycle entry. Do not put a torrent name,
    passkey, complete tracker URL, or unsanitized log in Git, chat, or a ticket.
-4. Confirm the intended original path does not contain replacement data. Do not
+5. Confirm the intended original path does not contain replacement data. Do not
    overwrite or merge directory trees.
-5. Within the seven-day window, use an approved guarded operator workflow to move only
+6. Within the seven-day window, use an approved guarded operator workflow to move only
    the identified entry from `.RecycleBin` back to its original download path on the
    same SMB filesystem. If no suitable workflow exists, add and review one; do not use
    an ad hoc raw Pod shell.
-6. Re-add the authorized torrent to qBittorrent when continued seeding is required.
+7. Re-add the authorized torrent to qBittorrent when continued seeding is required.
    Select the original category and restored content path, then force a recheck before
    starting it. Do not download over the recovered data.
-7. Correct the classification or cleanup policy through Git before resuming
+8. Correct the classification or cleanup policy through Git before resuming
    qbit_manage. For private content, require `tracker-private` and any dedicated tracker
    tag before another policy run.
-8. Verify the torrent checks cleanly, the tracker receives an announce when applicable,
+9. Verify the torrent checks cleanly, the tracker receives an announce when applicable,
    the organized library file still plays, and unrelated torrents were unchanged.
-9. Prepare the recovery source in the assigned feature worktree: keep the Flux
+10. Prepare the recovery source in the assigned feature worktree: keep the Flux
    Kustomization at `spec.suspend: true`, set the HelmRelease to `spec.suspend: false`,
    and include the corrected policy or ciphertext. Merge that state before any live
    resume.
-10. Update the authorized main clone to the exact merged commit and run the guarded
-    bootstrap in [Configure qbit_manage deployment](../guides/qbit-manage.md). That
-    workflow resumes the Flux Kustomization, applies the merged HelmRelease state,
-    recreates the Deployment, and runs live verification. Do not directly resume the
-    HelmRelease or scale the Deployment up.
+11. Update the authorized main clone to the exact merged commit. Confirm that
+    `cluster-apps` is active and the qbit_manage child remains suspended, then run the
+    guarded bootstrap in
+    [Configure qbit_manage deployment](../guides/qbit-manage.md). That workflow
+    reconciles the active parent, verifies the child suspension, resumes the child only
+    after the corrected merged source is ready, applies the HelmRelease state, recreates
+    the Deployment, and runs live verification. Do not directly resume the HelmRelease
+    or scale the Deployment up.
 
 If the guarded bootstrap fails, its Kustomization suspension still does not stop a
-preserved Deployment. Repeat the operator workload-stop sequence above and require zero
-active Pods before continuing recovery.
+preserved Deployment. Repeat the complete operator workload-stop sequence above,
+starting with temporary `cluster-apps` suspension. Require the merged child suspension,
+safe parent resume, and zero active Pods before continuing recovery.
 
 After seven days, do not assume the recycle entry exists. The organized library
 hardlink still survives, but reconstructing a seedable download path becomes a

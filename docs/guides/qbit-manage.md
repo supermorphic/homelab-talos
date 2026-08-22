@@ -118,8 +118,11 @@ This bootstrap applies the current active policy. Do not interpret any obsolete 
 message about an inert dry run as the current contract. Attend the first run, inspect
 only sanitized local logs, and stop the running workload if classification or cleanup is
 unexpected. The approved stop requires the operator to suspend both the Flux
-Kustomization and HelmRelease, scale `media/deployment/qbit-manage` to zero, and verify
-that no matching Pod remains. Follow
+owner `cluster-apps` before suspending the qbit_manage Kustomization and HelmRelease,
+then scale `media/deployment/qbit-manage` to zero and verify that no matching Pod
+remains. Suspending `cluster-apps` temporarily pauses reconciliation of every application
+child definition, so this broad-impact window must last only until the reviewed Git
+change makes the child suspension persistent. Follow
 [Recover a qbit_manage mistaken clean](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
 for the exact pinned commands.
 
@@ -141,8 +144,10 @@ operator-authorized containment procedure.
 An authentication failure normally means the encrypted Secret does not match the
 permanent qBittorrent WebUI credential. The bootstrap trap re-suspends reconciliation,
 but it does not stop a preserved Deployment. If policy execution must be contained,
-complete the operator-run workload-stop procedure in the recovery runbook and verify
-zero active qbit_manage Pods.
+complete the operator-run workload-stop procedure in the recovery runbook. That
+procedure temporarily suspends the owning `cluster-apps` Kustomization before stopping
+the child reconcilers and workload, records the child suspension through Git, safely
+resumes `cluster-apps`, and verifies that qbit_manage remains at zero active Pods.
 
 Recreate the ciphertext in the assigned feature worktree, publish the correction through
 Git, and keep the Git Kustomization suspended. Resume and reconcile only by running the
