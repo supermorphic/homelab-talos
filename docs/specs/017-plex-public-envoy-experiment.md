@@ -103,9 +103,13 @@ passed.
 
 After direct Plex access succeeded, the Flux-managed public Gateway, namespace,
 certificate, EnvoyProxy, HTTPRoute, dedicated MetalLB pool, and DDNS drift exporter were
-removed. The public DNS record, UniFi DDNS entry, and scoped Cloudflare credential were
-operator-owned external state and were retired outside Git. The public MetalLB address
-is unallocated.
+removed. The public MetalLB address is unallocated.
+
+The required external disposition was to delete the public Cloudflare A record, disable
+the UniFi DDNS entry, and then revoke the scoped Cloudflare credential. Those resources
+are operator-owned state outside Git. Their absence from the repository does not prove
+that the actions completed or describe their current state; each must be verified in
+Cloudflare and UniFi before relying on the teardown.
 
 Useful independent changes remain:
 

@@ -38,10 +38,13 @@ The `plex-remote-access` Prometheus rule group contains five alerts:
 | `PlexRemoteFlowMetricsMissing` | Critical | No Plex flow series for 15 minutes |
 | `PlexRemoteTcpMetricsMissing` | Critical | No Plex TCP-flag series for 15 minutes |
 
-Every rate expression selects `destination="media/plex"`, a source identity containing
-`reserved:world`, and TCP `flag="SYN"`. The source uses a substring regular expression
-because Cilium can combine `reserved:world` with a matching CIDR policy identity. Exact
-equality would miss those bounded compound identities.
+Every TCP connection-rate expression selects `destination="media/plex"`, a source
+identity containing `reserved:world`, and `flag="SYN"`. The probe rule's flow-rate
+numerator selects the same destination and source but cannot select a TCP flag because
+`hubble_flows_processed_total` has no flag label. Its denominator and rate floor use the
+SYN-filtered TCP metric. The source uses a substring regular expression because Cilium
+can combine `reserved:world` with a matching CIDR policy identity. Exact equality would
+miss those bounded compound identities.
 
 The `SYN` filter distinguishes a client opening a connection to Plex from traffic
 returning from Plex's own outbound connections. Without it, normal Plex-cloud activity
@@ -99,12 +102,21 @@ activity data before firewall action.
 
 ## Proof
 
-Promtool tests extract the expressions from the same PrometheusRule that Flux applies.
-They prove pending and firing timing, resolution, internal-source exclusions, compound
-`reserved:world` identities, idle probe behavior, real-session silence, the full-
-handshake rate corridor, and independent loss of the flow and TCP metrics. This is
-stronger than syntax checking because the test data independently exercises each
-semantic branch.
+The alert validator extracts each rule file's `.spec` from the PrometheusRule that Flux
+applies, then runs promtool against those extracted rules. The Plex fixtures assert:
+
+- the probe alert is non-firing at an earlier evaluation and firing later for a low
+  flow-per-SYN counter series;
+- a higher flow-per-SYN series and an idle series keep the probe alert silent;
+- each missing-metric alert fires after its hold, including independent TCP-metric loss
+  while the flow metric remains present;
+- an elevated SYN-rate series below the flood threshold fires the elevated-rate alert;
+- busy internal-source series do not fire the elevated-rate or flood alerts; and
+- a compound CIDR plus `reserved:world` identity fires the flood alert.
+
+These fixtures use synthetic Hubble counters. They do not prove completed TCP handshakes
+or alert recovery and resolution after firing. Their value beyond syntax checking is the
+independent firing and exclusion behavior they actually assert.
 
 A live half-open exercise from a LAN host outside the cluster produced about 16.5 SYNs
 per second. The flood, elevated-rate, and probe-surge alerts fired and reached their ntfy

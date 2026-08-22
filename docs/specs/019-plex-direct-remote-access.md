@@ -9,19 +9,21 @@ application.
 
 ## Architecture
 
-The remote path is:
+The public remote path uses the connection Plex derives from the observed WAN address:
 
 ```text
-<load-balancer-address-with-dashes>.<certificate-uuid>.plex.direct:32400
-  -> residential WAN IPv4
+<wan-address-with-dashes>.<hash>.plex.direct:32400
+  -> residential WAN IPv4 resolved from that name
   -> one UniFi DNAT: WAN TCP 32400 -> 192.168.90.31:32400
   -> Plex LoadBalancer Service
   -> Plex Media Server
 ```
 
-Plex owns the `plex.direct` DNS name and certificate. The remote path needs no
-operator-managed public DNS record, DDNS updater, public Gateway, or Internet-facing
-operator certificate.
+Plex publishes this connection after it learns the WAN address and the manual public
+port. It also checks its own WAN-derived `plex.direct` address on TCP `32400`, which is
+why the network policy admits that public egress port. Plex owns the `plex.direct` DNS
+name and certificate. The remote path needs no operator-managed public DNS record, DDNS
+updater, public Gateway, or Internet-facing operator certificate.
 
 The Plex Service requests the explicit LAN address `192.168.90.31` from MetalLB's
 non-auto-assigned `internal` pool. It exposes only TCP `32400` and uses
@@ -36,18 +38,22 @@ Pi-hole resolves it to the shared internal Envoy Gateway, which forwards to
 `plex:32400`. The internal HTTPRoute uses `timeouts.request: 0s`, because Envoy's
 default 15-second request deadline interrupts long Direct Play responses.
 
-The validated Plex **Custom server access URLs** value is different. It contains only
-the TLS-valid name for the Plex LoadBalancer address:
+The validated Plex **Custom server access URLs** value is different. It contains the
+TLS-valid name derived from the private Plex LoadBalancer address:
 
 ```text
 https://<load-balancer-address-with-dashes>.<certificate-uuid>.plex.direct:32400
 ```
 
-The internal Envoy hostname must not be advertised through that Plex setting. During
-the accepted experiment, Plex's cloud service preferred the custom Envoy URL and handed
-it to the Sonos speaker. The Sonos VLAN could not route to the internal Gateway address,
-so the cast failed. Removing that URL left the `plex.direct` connection, restored
-Plexamp-to-Sonos playback, and did not regress full local Direct Play.
+This private address-derived name resolves directly to the LAN LoadBalancer. It is a
+local client-discovery path and never routes through the WAN DNAT. It coexists with the
+separate WAN address-derived remote connection that Plex publishes.
+
+The internal Envoy hostname must not be advertised through the custom URL setting.
+During the accepted experiment, Plex's cloud service preferred that Envoy URL and
+handed it to the Sonos speaker. The Sonos VLAN could not route to the internal Gateway
+address, so the cast failed. Replacing it with the LoadBalancer-derived `plex.direct`
+URL restored Plexamp-to-Sonos playback and did not regress full local Direct Play.
 
 Pi-hole must allow the private answer embedded in `plex.direct`; DNS rebind protection
 must not strip it. The Sonos VLAN also needs a router rule to the Plex LoadBalancer on
