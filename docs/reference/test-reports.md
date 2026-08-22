@@ -60,78 +60,6 @@ official Caddy image stamps that file capability onto `/usr/bin/caddy`; omitting
 from the capability bounding set makes Linux reject the executable before Caddy reads
 its configuration. Caddy itself listens only on the unprivileged 8080 and 9090 ports.
 
-## Source rollout and activation
-
-The initial source was deliberately staged with `suspend: true` and without a Gatus
-endpoint. The operator then ran:
-
-```bash
-git fetch origin main
-TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports \
-  mise exec -- just bootstrap test-reports
-```
-
-The bootstrap validates that its guard and application source match `origin/main`,
-resumes only the test-report Kustomization, and verifies the PVC, restricted runtime,
-route, DNS/TLS, and initial catalog. If acceptance fails it re-suspends the
-Kustomization while preserving the PVC.
-
-Next, publish a clean, finalized current-main run and open its returned URL:
-
-```bash
-mise exec -- just ci
-
-TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> \
-  mise exec -- just test publish <run-id>
-```
-
-Review the root index and report at `https://tests.lab.supermorphic.com`, the available
-Homepage rollups, and the provisioned Grafana `Cluster Verification` dashboard. Before
-activation, run the exact-report persistence proof:
-
-```bash
-TEST_REPORT_RUN_ID=<published-run-id> \
-CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence \
-  mise exec -- just test resilience test-reports-persistence
-```
-
-This operator-only Chainsaw scenario holds the cluster-wide test Lease, records the
-selected authoritative report and PVC identities, deletes only the Caddy pod, waits for
-native Kubernetes recovery, and proves the exact report, canonical artifact, catalog
-entry, and bound volume survived. Its Python phase controller compares structured
-cross-phase state and writes sanitized evidence; Chainsaw owns deletion, readiness,
-resource assertions, catch diagnostics, and finally recovery.
-
-After the persistence run passes, publish its canonical result while its Git SHA still
-matches current main. The final activation PR changes `suspend: false` and adds a Gatus
-probe for the archive index through internal DNS, TLS, Gateway, Caddy, and the retained
-current generation. Treat the persistence run and publication as pre-merge gates for
-that PR.
-
-Recorded 2026-07-27: persistence passed on clean deployed main and was published as
-canonical run `20260727T224640Z-ca4bcd1e50fb-operator-e58961e6`.
-
-After activation merges, run:
-
-```bash
-mise exec -- just kube test-reports-verify
-```
-
-Agents stage and validate the source but do not bootstrap or publish. GitHub Actions
-does not have cluster access and never publishes here; its reports remain GitHub
-workflow artifacts.
-
-If reconciliation fails, collect the dedicated read-only diagnostics:
-
-```bash
-mise exec -- just kube test-reports-diagnostics
-```
-
-The command is scoped to the test-report Kustomization and namespace. It prints
-the publication Lease and permissions, validates a Lease manifest with a non-mutating
-server-side dry run, and prints Deployment, pod, PVC, events, and the static server's
-non-secret logs without changing cluster state.
-
 ## Publication and authority
 
 Publishing is intentionally a push operation from the operator workstation. There is
@@ -152,7 +80,7 @@ authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
 
 For routine multi-suite publication, use the catalog-backed campaigns documented in
-[`docs/test-campaigns.md`](test-campaigns.md). Campaign publication requires exact
+[`docs/guides/test-campaigns.md`](../guides/test-campaigns.md). Campaign publication requires exact
 current-main authority and therefore never uploads candidate children. Standalone
 `just test publish` keeps the historical and candidate workflow above.
 

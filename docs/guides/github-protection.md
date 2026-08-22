@@ -9,17 +9,13 @@ The control objective is:
 > `refs/heads/main` can be updated only by GitHub completing a current, successful
 > pull-request merge.
 
-## What was configured
+## Required state
 
-On 2026-07-31, an agent configured the repository through the GitHub REST API after
-receiving explicit operator authorization for that operation. It did not come from
-`.github/workflows/ci.yml`: that workflow publishes the `ci` check but cannot create
-repository rulesets or change merge settings.
-
-The initial API read-back reported:
+`.github/workflows/ci.yml` publishes the `ci` check but cannot create repository
+rulesets or change merge settings. The live GitHub repository must have:
 
 - repository merge methods: squash enabled, merge commits and rebase disabled;
-- active repository ruleset: `Protect main`, ID `20116777` at creation time;
+- one active repository ruleset named `Protect main`;
 - target: only `refs/heads/main`, with no excluded refs and no bypass actors;
 - required pull request: zero approvals and squash as its only merge method;
 - optional review gates: all off;
@@ -28,12 +24,8 @@ The initial API read-back reported:
 - linear history required; and
 - deletion and force pushes blocked.
 
-The ruleset ID is historical information, not a stable identifier. GitHub assigns a
-new ID if the ruleset is deleted and recreated. The checker discovers the current ID
-by name and verifies the complete ruleset.
-
 The tracked implementation is
-[`scripts/repository/github_protection.py`](../scripts/repository/github_protection.py).
+[`scripts/repository/github_protection.py`](../../scripts/repository/github_protection.py).
 It dynamically obtains the GitHub Actions integration ID from a recent successful
 `ci` check rather than retaining `15368` as a global constant.
 
@@ -108,7 +100,7 @@ For this repository, a passing result resembles:
 ```text
 Repository: supermorphic/homelab-talos
 GitHub Actions source: integration 15368 from successful commit <sha>
-Ruleset: Protect main (ID 20116777)
+Ruleset: Protect main (ID <current-id>)
 GitHub protection check: PASS
 main accepts squash-merged pull requests only after strict GitHub Actions ci.
 ```

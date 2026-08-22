@@ -1,13 +1,11 @@
 # Tailscale single-user setup (operator walkthrough)
 
-A step-by-step guide for a first-time Tailscale user to stand up the private remote
-access path for this cluster: the Tailscale Kubernetes Operator + a shared HA ingress
-`ProxyGroup`, and (in PR2) ntfy exposed privately to your tailnet.
+A step-by-step guide for a first-time Tailscale user to create the private remote
+access path for this cluster: the Tailscale Kubernetes Operator, a shared HA ingress
+`ProxyGroup`, and ntfy exposed privately to the tailnet.
 
-This is the operator-facing companion to `docs/tailscale-operator.md` (which holds the
-design rationale, the privileged-namespace exception, and the repo wiring). Work through
-the numbered steps in order. Steps 1–7 unblock PR1's CI; steps 8–9 are needed before
-rollout; steps 10–15 are rollout and acceptance.
+This is the detailed companion to [Configure the Tailscale Kubernetes
+Operator](tailscale-operator.md). Work through the numbered steps in order.
 
 > Security model: ntfy is **never** exposed to the public internet. LAN access stays on
 > the internal gateway (`ntfy.lab.supermorphic.com`); off-site access is private over
@@ -154,7 +152,8 @@ using HA ProxyGroup-backed Services to be able to ping the proxies (a documented
 limitation). The last two grants belong to the `*.lab.supermorphic.com` subnet-router
 feature — your devices → DNS (Pi-hole `192.168.90.2`) and HTTPS (Envoy Gateway VIP
 `192.168.90.30`) reached over the `tag:lab-router` subnet router. Its `/32` routes are
-approved **manually** on each replica device; see `docs/tailscale-lab-domain.md`.
+auto-approved for each tagged replica; see
+[Tailscale lab-domain access](tailscale-lab-domain.md).
 
 > **ICMP grant `dst`:** use `"tag:k8s"`, **not** `"tag:k8s:*"`. The Admin Console rejects
 > the `:*` form with `tag not found: "tag:k8s:*"` (a port suffix is not valid on a tag
@@ -224,10 +223,10 @@ certificate name becomes public. ntfy's eventual name looks like
 `ntfy.<your-tailnet>.ts.net`. Don't hard-code it yet — let the operator create the
 service and use the address it reports (step 13).
 
-## 10. Merge / deploy PR1
+## 10. Deploy the operator
 
-PR1 (`feat/tailscale-operator`) deploys, via GitOps only (do **not** `helm install`
-manually):
+The repository deploys this structure through GitOps only. Do not run `helm install`
+manually:
 
 ```text
 Tailscale Kubernetes Operator
@@ -248,17 +247,17 @@ spec:
   replicas: 2
 ```
 
-The app is committed `suspend: true`. After the PR merges and the Secret (step 7) is in
-place, roll it out from `main`:
+For a deliberately suspended or fresh installation, publish the Secret and application
+source through a pull request, then roll it out from deployed `main`:
 
 ```sh
 TAILSCALE_OPERATOR_BOOTSTRAP_CONFIRM='bootstrap:networking:tailscale-operator' \
 mise exec -- just bootstrap tailscale-operator
 ```
 
-Then flip the Git source to `suspend: false`, commit, and push.
+The current source is durably active with `suspend: false`.
 
-## 11. Verify PR1
+## 11. Verify the operator
 
 Run the live verification:
 
@@ -278,10 +277,10 @@ tailscale-operator     tag:k8s-operator
 **Mandatory Cilium-compatibility test** (the verify step reminds you): from a device on
 the tailnet, create a throwaway `Ingress` referencing `ingress-proxies` in front of any
 test Service and confirm `tailnet client → ProxyGroup → Kubernetes Service` works with
-valid HTTPS on the live Cilium cluster, then delete it. **Do not proceed to the ntfy PR
-until this passes.**
+valid HTTPS on the live Cilium cluster, then delete it. Do not expose ntfy until this
+passes.
 
-## 12. PR2 exposes ntfy privately
+## 12. Expose ntfy privately
 
 ntfy's Ingress reuses the shared ProxyGroup and tags the advertised Tailscale Service as
 `tag:ntfy`:
@@ -318,10 +317,10 @@ advertised by the two ProxyGroup replicas.
 
 ## 13. Get the canonical ntfy URL
 
-After PR2 deploys:
+After the ntfy Ingress deploys:
 
 ```sh
-kubectl get ingress -n ntfy
+mise exec -- kubectl --kubeconfig .kube/config get ingress -n ntfy
 ```
 
 ```text

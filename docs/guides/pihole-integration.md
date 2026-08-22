@@ -1,6 +1,6 @@
-# Pi-hole Integration and Reinstall Runbook
+# Maintain the Pi-hole integration
 
-## Scope and Ownership
+## Scope and ownership
 
 Pi-hole is external infrastructure at `192.168.90.2`, reached over SSH as `p1`
 and over its API as `https://pi.hole`. It remains managed outside this
@@ -23,9 +23,9 @@ it to create short-lived API sessions. Enabling `app_sudo` gives those sessions
 broad configuration-write permission, so dedicate the password to ExternalDNS
 and rotate it if the cluster or credential is compromised.
 
-## Normal Read-only Check
+## Run the read-only check
 
-Run this after Pi-hole maintenance and before Phase 7 credential or bootstrap
+Run this after Pi-hole maintenance and before a provider-credential or foundation
 operations:
 
 ```bash
@@ -38,7 +38,7 @@ for `pi.hole`, requires `app_sudo=true`, compares the live public CA byte-for-by
 with the tracked CA, and calls the Pi-hole version endpoint with certificate
 verification enabled. It never requests an application password.
 
-## Pi-hole-side Setup After a Fresh Install
+## Prepare Pi-hole after a fresh install
 
 Complete these steps before updating `homelab-talos`:
 
@@ -67,7 +67,7 @@ Complete these steps before updating `homelab-talos`:
 Do not copy `/etc/pihole/tls.pem` or any private key into this repository. Only
 the public `/etc/pihole/tls_ca.crt` trust anchor is tracked.
 
-## Refresh the Public CA After Reinstall or Rotation
+## Refresh the public CA after reinstall or rotation
 
 A fresh Pi-hole installation normally creates a new CA. Until Git and Flux carry
 that CA, ExternalDNS fails closed with a certificate error.
@@ -97,7 +97,7 @@ The CA is public, but changing it changes which server ExternalDNS trusts. Treat
 the diff as a security-sensitive trust-anchor rotation and verify the displayed
 fingerprint against the Pi-hole host before committing.
 
-## Replace the SOPS-encrypted Application Password
+## Replace the SOPS-encrypted application password
 
 The guarded writer also validates the Cloudflare token used by cert-manager, so
 load both provider values. Hidden reads keep their literal values out of shell
@@ -144,9 +144,9 @@ An exit trap attempts record removal on every failure path. If cleanup cannot be
 proven, the recipe fails and prints the exact temporary record to remove in
 Pi-hole's Local DNS UI before retrying.
 
-## Validate, Publish, and Reconcile
+## Validate, publish, and reconcile
 
-Validate the complete Phase 7 source after either CA or password rotation:
+Validate the complete foundation source after either CA or password rotation:
 
 ```bash
 mise exec -- just kube foundation-validate
@@ -157,18 +157,14 @@ git status --short
 Review, commit, and push the CA and/or SOPS ciphertext changes explicitly. Git
 push remains a human review boundary and is not hidden inside a Just recipe.
 
-If Phase 7 is already active, Flux reconciles the committed change. Check it with:
+Flux reconciles the committed change. Check it with:
 
 ```bash
 mise exec -- just kube foundation-status
 mise exec -- just kube foundation-verify
 ```
 
-If this is the first Phase 7 deployment, continue with the network confirmation
-and `just bootstrap foundation` sequence in
-[`phase-7-foundation.md`](phase-7-foundation.md).
-
-## Rotation and Failure Behavior
+## Rotation and failure behavior
 
 - Revoking or replacing the application password requires rerunning
   `just repo phase7-secrets`, committing the new ciphertext, and reconciling Flux.

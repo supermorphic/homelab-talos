@@ -166,5 +166,5 @@ disruptions. Existing standalone suite confirmations remain unchanged; the
 campaign confirmation delegates only the confirmations belonging to its
 source-reviewed member list.
 
-See [Persistent test reports](test-reports.md) for archive authority, retention,
+See [Persistent test reports](../reference/test-reports.md) for archive authority, retention,
 URLs, and observability.

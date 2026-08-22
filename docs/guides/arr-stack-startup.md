@@ -1,6 +1,6 @@
 # Media automation greenfield startup
 
-Use this runbook after deploying the media applications onto empty configuration
+Use this guide after deploying the media applications onto empty configuration
 PVCs. It covers the runtime setup that cannot be expressed by the existing Helm
 values alone: qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr.
 
@@ -39,21 +39,18 @@ Configure the stack in this order:
 8. Complete a direct Radarr import and configure and validate its Plex refresh
    connection.
 9. Complete the blocking Lidarr authorized real-import acceptance.
-10. In PR 2, make Lidarr's activation durable, then run
-    `mise exec -- just kube arr-verify lidarr`.
+10. Run `mise exec -- just kube arr-verify lidarr` after its setup and import gate pass.
 11. Create the Plex Music library at `/Volumes/Prometheus/media/music` and run
     its initial manual scan.
 12. Configure and validate the Lidarr Plex refresh connection.
 13. Seerr connections to Plex, Sonarr, and Radarr, followed by a Seerr request
     test.
 
-Complete a service's guarded bootstrap and durable `suspend: false` activation
-before configuring it here. **Lidarr is the exception:** keep its PR 1 source at
-`suspend: true` after bootstrap until its first-run configuration, authorized import,
-and Homepage Secret acceptance gate pass; PR 2 performs the activation. Work through the
-steps incrementally as each service is activated — you do not need every application live
-at once. For example, connect Prowlarr to Sonarr as soon as Sonarr is up (step 6's Sonarr
-connection), before Radarr has been activated, and complete Radarr's steps later.
+Work through the steps incrementally. You do not need every application live at once.
+For example, connect Prowlarr to Sonarr as soon as Sonarr is ready, then complete Radarr
+later. For a fresh or deliberately suspended Lidarr deployment, keep it suspended until
+the first-run configuration, Homepage Secret, and authorized import gate pass. Make the
+active state durable through Git after those checks.
 
 ## qBittorrent
 
@@ -818,26 +815,23 @@ mise exec -- just repo homepage-lidarr-secrets
 unset LIDARR_API_KEY HOMEPAGE_LIDARR_SECRETS_CONFIRM
 ```
 
-Run this recipe only after first boot. Only the resulting SOPS-encrypted
-`homepage-lidarr.sops.yaml` enters PR 2; do not add it to the initial staging PR,
-and never commit the plaintext API key. Keep `kubernetes/apps/media/lidarr/ks.yaml`
-at `suspend: true` until this Secret, the first-run configuration, and the authorized
-real-import acceptance gate all pass; PR 2 is the only activation change.
+Run this recipe only after first boot. Commit only the resulting SOPS-encrypted
+`homepage-lidarr.sops.yaml`; never commit the plaintext API key. For a fresh deployment,
+keep `kubernetes/apps/media/lidarr/ks.yaml` at `suspend: true` until this Secret, the
+first-run configuration, and the authorized real-import acceptance gate all pass.
 
 The recipe leaves that encrypted file untracked in the checkout, and every guarded
 `bootstrap` recipe refuses to run from a checkout with any uncommitted change. Commit
-the Secret to the PR 2 branch (or stash it) before attempting another guarded rollout
-from this worktree.
+the Secret on the feature branch before attempting another guarded rollout.
 
 ## Connect Prowlarr to Sonarr, Radarr, and Lidarr
 
 Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
 is available — you do not need all three at once. Connect **Sonarr** immediately after
 its rollout, then connect **Radarr** after its activation. Connect **Lidarr** after its
-guarded bootstrap and first-run configuration, once its staged endpoint is available,
-while `kubernetes/apps/media/lidarr/ks.yaml` remains Git-suspended. Lidarr's durable
-activation remains deferred to PR 2 until the Prowlarr-backed authorized real-import
-acceptance gate passes. Each app connection is independent, and this is where each
+guarded bootstrap and first-run configuration, once its endpoint is available.
+For a fresh deployment, leave it Git-suspended until the Prowlarr-backed authorized
+real-import acceptance gate passes. Each app connection is independent, and this is where each
 application's API key is used.
 
 ### Sonarr application
@@ -905,8 +899,7 @@ automation path. Open `https://plex.lab.supermorphic.com`.
    Sonarr or Radarr imports depend on manually choosing **Scan Library Files**;
    their direct Plex connections below notify Plex after organized-library changes.
 
-Creating the Plex Music library is explicitly deferred until the blocking Lidarr
-real-import acceptance succeeds, PR 2 makes activation durable, and
+Create the Plex Music library only after the Lidarr real-import acceptance succeeds and
 `mise exec -- just kube arr-verify lidarr` passes. Then create it at
 `/Volumes/Prometheus/media/music`, run one initial manual scan, and only then
 configure the Lidarr connection below.
@@ -1030,11 +1023,11 @@ mise exec -- just kube seerr-verify
 
 ## Tautulli
 
-Tautulli begins with an empty database; watch history starts at this rollout. It reads Plex
+Tautulli begins with an empty database; watch history starts when setup completes. It reads Plex
 through `http://plex.media.svc.cluster.local:32400` and never mounts Plex or shared-media
 storage. The Tautulli **Plex Logs** viewer is therefore intentionally unavailable.
 
-After PR 1 is merged, the operator runs:
+For a deliberately suspended or fresh deployment, run:
 
 ```bash
 export MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:tautulli'
@@ -1092,21 +1085,19 @@ unset TAUTULLI_API_KEY HOMEPAGE_TAUTULLI_SECRETS_CONFIRM
 ```
 
 Commit only the generated encrypted `homepage-tautulli.sops.yaml`; never commit the key.
-PR 2 may set `suspend: false` only after authentication, exact status, verifier, library,
-and real-playback gates all pass.
+Set `suspend: false` through Git only after authentication, exact status, verifier,
+library, and real-playback gates all pass.
 
 ## End-to-end acceptance
 
 ### Direct Lidarr test — blocking operator gate
 
-Perform this gate at step 9 of [Order of operations](#order-of-operations): only
-after the Sonarr and Radarr direct-import and Plex refresh validations. Then make
-activation durable in PR 2 and run `mise exec -- just kube arr-verify lidarr`
-before creating the Plex Music library. It appears here with the other acceptance
-evidence for reference.
+Perform this gate at step 9 of [Order of operations](#order-of-operations), after the
+Sonarr and Radarr direct-import and Plex refresh validations. Run
+`mise exec -- just kube arr-verify lidarr` before creating the Plex Music library.
 
-This is the blocking gate between the initial staging PR and the follow-up activation
-PR, not automated E2E coverage. Before grabbing, search for a real artist and confirm
+This is an operator acceptance gate, not automated E2E coverage. Before grabbing,
+search for a real artist and confirm
 its artist and album metadata loads. Add it with root `/data/media/music`, quality
 profile `Lossless Preferred`, metadata profile `Standard`, and only the intended test
 album monitored. Do not search or monitor the whole discography. Choose one authorized,
@@ -1135,11 +1126,11 @@ existing guarded recipe or a NAS-side shell; never use raw `kubectl exec`.
 Do not begin the follow-up PR or create the Plex Music library until every item above
 passes. If the deployed saved naming values or labels differ from this recorded
 walkthrough, preserve the authoritative preview output and safety states, then record
-the deployed values for a follow-up runbook correction.
+the deployed values for a follow-up guide correction.
 
-The required Lidarr order is: guarded bootstrap; create the required profiles and
-root folder; connect Prowlarr while the Git source remains suspended and the staged
-endpoint is available; complete authorized acceptance; activate in PR 2; then run
+The required Lidarr order for a fresh deployment is: guarded bootstrap; create the
+required profiles and root folder; connect Prowlarr while the Git source remains
+suspended; complete authorized acceptance; make activation durable through Git; then run
 the guarded verification:
 
 ```bash
@@ -1167,8 +1158,8 @@ artist or album searches work; the real search is verified during first-run acce
 5. Confirm Radarr imports it below `/data/media/movies`.
 
 The download and imported files must be hardlinks, not duplicate copies. The
-shared-filesystem proof and prior acceptance evidence are in
-[`phase-11-media.md`](phase-11-media.md).
+shared-filesystem contract and accepted design are in
+[specification 006](../specs/006-media-stack-architecture.md).
 
 ## Direct Plex library-refresh connections
 
@@ -1185,7 +1176,7 @@ Sonarr/Radarr/Lidarr
 Use each application's native **Settings → Connect → Add → Plex Media Server**
 dialog. Select **Test**, require success, and only then **Save**. Never put a
 username, password, token, screenshot, shell-history value, or example secret in
-this runbook or Git. Obtain **Auth Token** through the application's
+this guide or Git. Obtain **Auth Token** through the application's
 **Authenticate with Plex.tv** flow, or enter the existing token securely.
 
 Unless an app-specific section says otherwise, use these deployed values:
@@ -1292,8 +1283,8 @@ without manually choosing **Scan Library Files**.
 
 ### Create the Plex Music library
 
-Only after the blocking Lidarr authorized real-import acceptance passes, PR 2
-makes activation durable, and `mise exec -- just kube arr-verify lidarr` passes,
+Only after the Lidarr authorized real-import acceptance and
+`mise exec -- just kube arr-verify lidarr` pass,
 create the Plex Music library at `/Volumes/Prometheus/media/music` and run its
 initial manual scan. This is the one manual scan for the new library; subsequent
 Lidarr-organized changes use the connection below.
@@ -1382,10 +1373,10 @@ The video automation setup is not accepted until both direct *arr flows and thei
 Plex refresh validations pass. The request workflow is not accepted until the
 Seerr request flow passes.
 
-## Stage 5 integration-health operations
+## Integration-health operations
 
-Stage 5 adds bounded continuous evidence to the existing availability checks. It
-does not replace the operator acceptance gates in this runbook.
+These checks add bounded continuous evidence to the existing availability checks. They
+do not replace the operator acceptance gates in this guide.
 
 - **Level 1** remains the existing unauthenticated `/ping` or status availability
   checks.
@@ -1398,7 +1389,7 @@ does not replace the operator acceptance gates in this runbook.
 
 The purpose-specific Gatus Secret has exactly five API keys, and only Gatus consumes
 it. The operator creates or rotates it with the guarded recipe below. Enter values
-only from a secure prompt; do not record them in the terminal history, this runbook,
+only from a secure prompt; do not record them in the terminal history, this guide,
 or Git.
 
 ```bash

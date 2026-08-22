@@ -1,10 +1,10 @@
 # Tailscale access for `*.lab.supermorphic.com`
 
-Operator runbook for reaching the internal `*.lab.supermorphic.com` applications from
+Operator guide for reaching the internal `*.lab.supermorphic.com` applications from
 authorized Tailscale clients — **same URLs as on the home LAN**, no per-app Tailscale
 hostnames, no Funnel, no public exposure.
 
-## Architecture (Decision C — split DNS + narrow subnet router)
+## Current path
 
 ```text
 tailnet client
@@ -53,8 +53,9 @@ CIDR (`10.96.0.0/12`).
 The operator can only create the Connector devices if the OAuth client (tagged
 `tag:k8s-operator`) **already owns** `tag:lab-router`, so this ACL change must be saved
 **before** the guarded bootstrap. These steps are **additive** — do not replace the
-existing policy (the full annotated policy lives in `docs/tailscale-operator.md`; the
-initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
+existing policy. The full annotated policy is in
+[Tailscale Kubernetes Operator](tailscale-operator.md); the initial walkthrough is
+[Tailscale single-user setup](tailscale-single-user-setup.md).
 
 1. Open Admin Console → **Access controls** (<https://login.tailscale.com/admin/acls>).
    The console has two views — a **Visual Editor** and a **JSON Editor** — that edit the
@@ -103,9 +104,10 @@ initial-setup walkthrough is `docs/tailscale-single-user-setup.md`).
 > shared Gateway VIP :443 can reach them all (shared-IP L4 limitation; per-app isolation
 > stays with app authentication).
 
-### Step 2 — guarded rollout
+### Step 2 — deploy or recover the Connector
 
-From a clean checkout synchronized with the current `origin/main` source:
+For a deliberately suspended or fresh installation, run from a clean checkout
+synchronized with the deployed `origin/main` source:
 
 ```bash
 TAILSCALE_SUBNET_ROUTER_BOOTSTRAP_CONFIRM='bootstrap:networking:tailscale-subnet-router' \
@@ -214,16 +216,11 @@ is more specific than the local `192.168.90.0/24`, the client routes Pi-hole and
 still succeeds — and note that home access to those two IPs then depends on Connector
 availability while Tailscale is up.
 
-### Step 6 — durable activation
+### Step 6 — verify durable state
 
-For an initially staged deployment, make the tested state durable after client acceptance:
-
-1. Set `tailscale-operator-subnet-router` to `suspend: false` in
-   `kubernetes/apps/networking/tailscale-operator/ks.yaml`.
-2. Run `mise exec -- just ci`.
-3. Publish the validated change through the repository's normal Git workflow and wait for
-   Flux to reconcile it.
-4. Run `mise exec -- just kube tailscale-subnet-router-verify`.
+Current source keeps `tailscale-operator-subnet-router` at `suspend: false`. After client
+acceptance, run `mise exec -- just kube tailscale-subnet-router-verify` and confirm both
+tailnet devices still advertise only the approved `/32` routes.
 
 ---
 

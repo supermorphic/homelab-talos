@@ -39,19 +39,18 @@ doing so creates a different cluster identity.
 
 `just talos generate` requires `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE`, verifies the
 loaded identity with `just repo secrets`, and lets Talhelper decrypt the tracked
-bundle while rendering ignored output. During Phase 6,
-`just bootstrap flux-sops` validates the same identity and creates
+bundle while rendering ignored output. `just bootstrap flux-sops` validates the same identity and creates
 `flux-system/sops-age` without exposing the private key in Git or command output.
 An existing matching Secret is left unchanged; a mismatched Secret is never
 overwritten by that workflow. The permanent encrypted `flux-canary` Secret proves
 that in-cluster decryption remains functional.
 
-Phase 7 provider credentials are created only through
+Foundation provider credentials are created only through
 `just repo phase7-secrets`. The workflow validates a zone-scoped Cloudflare token
 and proves a dedicated Pi-hole v6 application password can create and remove a
 temporary record over CA-verified HTTPS. It writes plaintext only inside an
 owner-readable temporary directory, encrypts each Secret for the repository
 recipient, and moves only ciphertext into the tracked application directories.
-Exact environment variables and confirmation text are documented in
-[`phase-7-foundation.md`](phase-7-foundation.md); Pi-hole reinstall and trust-
-anchor rotation are in [`pihole-integration.md`](pihole-integration.md).
+Exact environment variables and confirmation text are part of the guarded recipe;
+Pi-hole reinstall and trust-anchor rotation are in
+[Maintain the Pi-hole integration](pihole-integration.md).

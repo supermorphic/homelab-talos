@@ -1,10 +1,10 @@
 # ntfy startup guide
 
-Operator runbook for the self-hosted **ntfy** notification service
+Setup and credential guide for the self-hosted **ntfy** notification service
 (`kubernetes/apps/monitoring/ntfy/`, namespace `ntfy`). Notifications reach your iPhone
 on the LAN (`https://ntfy.lab.supermorphic.com`) and off-site privately over Tailscale
 (`https://ntfy.tail163214.ts.net`). The Tailscale foundation
-(`docs/tailscale-single-user-setup.md`) must already be rolled out.
+([Tailscale single-user setup](tailscale-single-user-setup.md)) must already be complete.
 
 Topics:
 
@@ -21,7 +21,7 @@ topic with its own rotatable token. Homepage uses a separate token that can only
 ## A. Credential model (registry + lifecycle)
 
 All ntfy identities are declared in
-[`kubernetes/apps/monitoring/ntfy/config/identities.yaml`](../kubernetes/apps/monitoring/ntfy/config/identities.yaml)
+[`kubernetes/apps/monitoring/ntfy/config/identities.yaml`](../../kubernetes/apps/monitoring/ntfy/config/identities.yaml)
 and managed through one guarded lifecycle. The canonical store is the SOPS-encrypted
 `Secret/ntfy-secret` (namespace `ntfy`), which carries:
 
