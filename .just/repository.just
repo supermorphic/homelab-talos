@@ -291,10 +291,10 @@ phase7-secrets:
     pihole_target='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
     pihole_ca='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
     pihole_api='https://pi.hole'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-foundation-secrets.XXXXXX)"
+    temp_dir="$(mktemp -d /tmp/homelab-talos-phase7-secrets.XXXXXX)"
     pihole_sid=''
     pihole_record_cleanup_needed=false
-    pihole_test_hostname="foundation-preflight-$$-${RANDOM}.lab.supermorphic.com"
+    pihole_test_hostname="phase7-preflight-$$-${RANDOM}.lab.supermorphic.com"
     pihole_test_record="192.0.2.1 $pihole_test_hostname"
     pihole_test_url="$pihole_api/api/config/dns/hosts/192.0.2.1%20$pihole_test_hostname"
     pihole_curl=(
