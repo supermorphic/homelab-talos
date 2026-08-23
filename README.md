@@ -84,28 +84,13 @@ disruptive recovery and a Plex node reboot. Campaigns capture and publish every 
 run automatically. See the [test campaign guide](docs/guides/test-campaigns.md) for focused
 campaigns, failure behavior, resume, and exact membership.
 
-AI agents follow the same rules via [`AGENTS.md`](AGENTS.md) (canonical) and
-[`CLAUDE.md`](CLAUDE.md) (a thin `@AGENTS.md` adapter).
+### Agent workflow
 
-### Agent-driven PR loop
-
-Most changes are made by an AI agent. The division of labor:
-
-| Step | Who |
-|---|---|
-| Plan approval (substantial or cross-cutting changes only) | agent proposes → **you approve** |
-| Branch → source changes → offline validation → staged commits → push → open PR | agent |
-| Scoped live verification after the operator mints the required credential | agent |
-| Credential minting, secret handling, platform rollout, and break-glass or recovery | **you** |
-| GitHub protection mutation | **you**, with per-invocation authorization |
-| Review the PR diff and required green `ci` check | **you** |
-| Squash-merge | **you** |
-
-The agent owns offline validation and scoped live verification; you own minting,
-secrets, platform rollout, break-glass, protection mutation, and merge. The agent
-never self-merges or runs a platform rollout. Because merging to `main` deploys via
-Flux, the PR plus a green `ci` check is the review gate before anything reaches the
-cluster; the active ruleset makes that gate mandatory rather than conventional.
+Agents use the development workflow above. Repository authority, credential, live-action,
+publication, and merge boundaries are defined only in [`AGENTS.md`](AGENTS.md);
+[`CLAUDE.md`](CLAUDE.md) is a thin adapter. The
+[agent cluster-access guide](docs/guides/agent-cluster-access.md) describes the current
+task-scoped credential procedure.
 
 ## Physical KVM Note
 
@@ -216,7 +201,7 @@ available for focused developer validation.
 | `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Destructive after confirmation |
 | `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
-| `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Operator-run on demand; directory-dependent access contract documented below |
+| `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Location-aware credential installation |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Cluster bootstrap; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Cluster bootstrap; destructive after confirmation |
@@ -503,8 +488,8 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 
 - `talos/` holds declarative Talhelper inputs and its current source documentation.
 - `.talos/config` holds the ignored Talos API client credential: the main clone's
-  admin identity is generated from encrypted Talhelper source, while a linked
-  worktree receives only an operator-minted `os:reader` identity.
+  admin identity is generated from encrypted Talhelper source, while the location-aware
+  workflow gives a linked worktree only an `os:reader` identity.
 - `.kube/config` holds the ignored Kubernetes credential: the main clone receives
   the admin identity retrieved through the Talos machine API, while a linked
   worktree receives only observer and diagnostic ServiceAccount contexts.
@@ -530,9 +515,9 @@ Each checkout has its own ignored credential directories, and credential
 installation depends on which checkout runs the command:
 
 - main clone + `mise exec -- just talos kubeconfig` -> admin Kubernetes credential
-- worktree + operator-run `mise exec -- just talos kubeconfig` -> observer/diagnostic
+- worktree + `mise exec -- just talos kubeconfig` -> observer/diagnostic
   Kubernetes contexts and `os:reader` Talos credential
-- new worktree -> no credential until the operator runs the command on demand
+- new worktree -> no credential until the command runs in that worktree
 - expired token/certificate -> rerun the same command in that worktree
 
 The worktree path uses the main clone's admin credentials only to mint scoped

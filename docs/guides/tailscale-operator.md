@@ -4,6 +4,14 @@ The Tailscale Kubernetes Operator and the shared two-replica ingress `ProxyGroup
 provide private tailnet access for selected in-cluster services. Current source is in
 [`kubernetes/apps/networking/tailscale-operator/`](../../kubernetes/apps/networking/tailscale-operator/).
 
+## Pod Security boundary
+
+The `tailscale` namespace uses the `privileged` Pod Security level because the
+operator-created ingress `ProxyGroup` and subnet-router proxy workloads need
+`/dev/net/tun` and `NET_ADMIN`. The namespace label permits those workload settings; it
+does not grant the device or capability to every Pod. Each generated proxy workload
+still owns its security context.
+
 ## Tailnet prerequisites
 
 Complete these settings in the Tailscale admin console before a fresh deployment.
