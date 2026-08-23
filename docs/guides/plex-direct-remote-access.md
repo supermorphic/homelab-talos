@@ -23,11 +23,17 @@ public IPv6 filtering are operator-owned state outside Git.
 
 Before changing exposure:
 
-1. Confirm the Plex application, LoadBalancer, and policy are healthy:
+1. Confirm the Git-managed listener shape, rendered Service, live application,
+   LoadBalancer, endpoints, and policy are healthy:
 
    ```bash
+   mise exec -- just kube plex-validate
    mise exec -- just kube plex-verify
    ```
+
+   Require one TCP application port, the explicit LoadBalancer address,
+   `externalTrafficPolicy: Local`, `allocateLoadBalancerNodePorts: false`, no allocated
+   NodePort, a ready Plex endpoint, and `world` ingress only on TCP `32400`.
 
 2. Confirm all Plex remote-access alerts are loaded and inactive. Follow the
    [detection response runbook](../runbooks/plex-remote-access-detection.md) when a rule
@@ -40,6 +46,8 @@ Before changing exposure:
 6. Start a local playback session through `plex.lab.supermorphic.com`. In Tautulli's
    current activity view, require the session to show **LAN**, not **WAN**. Complete this
    check before setting or relying on the per-user remote-stream limit.
+7. Confirm the Plex configuration and database backup is healthy. Bulk media has no
+   independent backup; recovery after total media loss depends on reacquisition.
 
 If the local session shows **WAN**, stop. The internal Envoy route hides the client behind
 an Envoy Pod address. Set **LAN Networks** to the trusted client VLANs plus the current Pod
@@ -53,10 +61,13 @@ The required Plex settings are:
 | Setting | Required value |
 | --- | --- |
 | Remote Access | Enabled |
+| Authentication | Required |
 | Manually specify public port | `32400` |
 | Relay | Enabled as fallback |
 | Allowed without authentication | Empty |
+| Account multi-factor authentication | Enabled |
 | Remote streams per user | `2` |
+| Client network | IPv4 only |
 | Custom server access URLs | Only the private LoadBalancer-derived `plex.direct` URL, with port `32400` |
 | LAN Networks | Trusted client VLANs and `10.244.0.0/16`; never `192.168.90.0/24` |
 
@@ -110,9 +121,11 @@ internal Gateway or a retired Plex host.
 
 Run external negative checks from a genuinely off-network client:
 
-1. Only TCP `32400` answers among the reviewed scan set.
-2. No AAAA record or public IPv6 path exists for the published Plex names.
-3. UniFi shows no automatic UPnP or NAT-PMP mapping.
+1. UniFi has exactly one Plex mapping: one public TCP port to the LoadBalancer and
+   internal TCP `32400`. No duplicate, wildcard, range, or UDP mapping exists.
+2. Only TCP `32400` answers among the reviewed scan set.
+3. No AAAA record or public IPv6 path exists for the published Plex names.
+4. UniFi shows no automatic UPnP or NAT-PMP mapping.
 
 A scan from the LAN is not evidence about the WAN boundary. Verify the alert and source
 path during the window with:
@@ -139,6 +152,10 @@ with a `Recreate` Deployment and a `ReadWriteOncePod` claim.
 Do not remove the workload hardening, read-only media mount, bounded egress, detection,
 or Relay fallback when disabling the router path. A permanent change to the Git-managed
 LoadBalancer or policy goes through a separate reviewed Git change.
+
+Review the complete design when the gateway mapping, public DNS, address family, Plex
+network or account settings, Service listener shape, Cilium policy, notification route,
+or recovery design changes.
 
 ## Escalation
 

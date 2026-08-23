@@ -2,10 +2,10 @@
 
 ## Purpose
 
-Provide the current remote path that satisfied the Plexamp and Sonos objective without
-regressing local playback. The design publishes Plex's own TLS listener through one
-router rule. It does not recreate the retired public Envoy plane or expose another media
-application.
+Retain as permanent the IPv4-only remote path that satisfied the Plexamp and Sonos
+objective without regressing local playback. The design publishes Plex's own TLS
+listener through one router rule. It does not recreate the retired public Envoy plane,
+expose another media application, or add a public IPv6 path.
 
 ## Architecture
 
@@ -28,8 +28,10 @@ updater, public Gateway, or Internet-facing operator certificate.
 The Plex Service requests the explicit LAN address `192.168.90.31` from MetalLB's
 non-auto-assigned `internal` pool. It exposes only TCP `32400` and uses
 `externalTrafficPolicy: Local` so Plex and Hubble retain the real off-cluster source
-identity instead of a node SNAT address. The LoadBalancer makes Plex reachable on the
-LAN; only the external UniFi DNAT creates Internet exposure.
+identity instead of a node SNAT address. It sets `allocateLoadBalancerNodePorts: false`
+so the Service does not retain a second Kubernetes listener form that the design does
+not use. The LoadBalancer makes Plex reachable on the LAN; only the external UniFi DNAT
+creates Internet exposure.
 
 ## Local and client-discovery paths
 
@@ -38,8 +40,8 @@ Pi-hole resolves it to the shared internal Envoy Gateway, which forwards to
 `plex:32400`. The internal HTTPRoute uses `timeouts.request: 0s`, because Envoy's
 default 15-second request deadline interrupts long Direct Play responses.
 
-The validated Plex **Custom server access URLs** value is different. It contains the
-TLS-valid name derived from the private Plex LoadBalancer address:
+The validated Plex **Custom server access URLs** list is different. It contains exactly
+one entry: the TLS-valid name derived from the private Plex LoadBalancer address:
 
 ```text
 https://<load-balancer-address-with-dashes>.<certificate-uuid>.plex.direct:32400
@@ -87,9 +89,11 @@ admits LAN clients to the LoadBalancer address. Other ingress ports remain close
 policy retains the exact in-cluster consumers and the bounded egress described by the
 Relay and hardening specification.
 
-Plex Remote Access remains enabled, the manually specified public port matches `32400`,
-Relay remains enabled as a fallback, and unauthenticated-network settings remain empty.
-Changing Secure Connections is outside this design.
+Plex Remote Access and authentication remain enabled, the manually specified public port
+matches `32400`, Relay remains enabled as a fallback, and unauthenticated-network
+settings remain empty. Account multi-factor authentication remains enabled, remote
+streams stay bounded per user, and the client network remains IPv4-only. Changing Secure
+Connections is outside this design.
 
 The direct listener has no rate limiter or hardened edge proxy before Plex. A public
 Plex parser or API vulnerability therefore has greater consequence than it did behind
@@ -98,6 +102,21 @@ image, read-only media, absent Kubernetes API token, restricted Cilium policy, d
 prompt patching, and the ability to remove one DNAT quickly.
 
 ![Plex public-port trust boundaries](images/2026-08-02-plex-remote-access-trust-boundaries.png)
+
+## Detection and response
+
+The permanent design retains the Hubble-derived remote-connection alerts, missing-metric
+alerts, workload-policy-denial alert, Prometheus evaluation, Alertmanager route, and
+synchronous ntfy adapter. A 2026-08-22 verification observed healthy live rules and
+targets and both a firing and resolved notification through the production route. That
+dated result does not prove continuous detector health.
+
+The guarded Flux delivery exercise uses Alertmanager's aggregate webhook counters only
+after it proves that ntfy is the sole loaded webhook receiver and that both success and
+failure series exist. This prevents unrelated webhook traffic from satisfying the
+delivery oracle. Detection remains aggregate: it does not identify a remote client,
+detect every Plex authentication failure, or retain application requests. Source
+attribution and session review remain bounded operator actions.
 
 ## Validated result
 
@@ -130,15 +149,27 @@ prove that the UniFi DNAT, Plex settings, Pi-hole rebind exception, Sonos VLAN r
 public IPv6 filtering, or account settings still match this design. Current operation
 requires separate, sanitized checks of those systems and an actually off-network scan.
 
+Plex retains a read-only media mount and cannot delete library media. Radarr and Sonarr
+remain the removal authorities for their managed libraries, while download cleanup stays
+under the qBittorrent and qbit_manage policy. The NAS account remains limited to the
+media share and the write access that media automation requires. Plex configuration,
+database, identity, and watch history require recoverable backups. Bulk media has no
+independent backup by operator decision; total loss requires reacquisition and can be
+slow or incomplete.
+
 Removing the DNAT blocks new remote connections but existing router conntrack entries
 can survive. Restarting Plex evicts established sessions but also interrupts every local
 client because Plex is a single `Recreate` Deployment on a `ReadWriteOncePod` claim. A
 restart is therefore an incident action when eviction is required, not a routine part
 of removing exposure.
 
+Review this design after a change to the gateway mapping, public DNS, address-family
+configuration, Plex network or account settings, Service listener shape, Cilium policy,
+notification route, or recovery design. A calendar-based review is not required.
+
 ## Consequences
 
-This path is smaller and more compatible than the public Envoy design and exposes no
-operator-controlled TLS key. Its cost is continuous Internet reachability to Plex's own
-listener. The remote-access detection specification defines the available aggregate
-signals and their limits.
+This permanent path is smaller and more compatible than the public Envoy design and
+exposes no operator-controlled TLS key. Its cost is continuous Internet reachability to
+Plex's own listener. The [remote-access detection specification](020-plex-remote-access-detection.md)
+defines the available aggregate signals and their limits.

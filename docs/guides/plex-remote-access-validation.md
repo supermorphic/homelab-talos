@@ -17,18 +17,43 @@ cluster credentials.
 
 Before starting:
 
-1. Run `mise exec -- just kube plex-verify`.
-2. Confirm Plex is not in active household use.
-3. Confirm Cilium, the `cilium-monitoring` ServiceMonitor, Prometheus, Alertmanager, and
-   ntfy are healthy.
-4. Confirm the five `plex-remote-access` alerts are loaded and not firing.
-5. Start a bounded observation window:
+1. Run the cluster-independent source checks:
+
+   ```bash
+   mise exec -- just kube plex-validate
+   mise exec -- just kube cilium-validate
+   mise exec -- just kube alerts-validate media
+   mise exec -- just kube alerts-validate networking
+   mise exec -- just kube alerts-coverage-validate
+   ```
+
+2. With approved read-only cluster credentials, verify the live Plex, Cilium,
+   monitoring, and notification-route wiring:
+
+   ```bash
+   mise exec -- just kube plex-verify
+   mise exec -- just kube cilium-verify
+   mise exec -- just kube monitoring-verify
+   mise exec -- just kube alertmanager-ntfy-verify
+   ```
+
+   These commands do not prove Plex rule health or notification delivery. Inspect the
+   live Prometheus targets for `hubble-metrics` and require them to be up. Inspect the
+   five `PlexRemote*` rules and `PlexWorkloadPolicyDenied`; require healthy evaluation
+   with no last error. Require both missing-metric alerts to be inactive before using
+   the connection-rate alerts as evidence.
+3. When an independent firing-and-resolved test of the production notification route is
+   required, use the guarded [Alertmanager producer procedure](ntfy-startup.md#alertmanager)
+   in its own approved window. The read-only verifier proves wiring, not delivery.
+4. Confirm Plex is not in active household use.
+5. Confirm the five `plex-remote-access` alerts are loaded and not firing.
+6. Start a bounded observation window:
 
    ```bash
    mise exec -- just kube plex-network-observe 600
    ```
 
-6. Confirm the chosen LAN source appears with an identity containing
+7. Confirm the chosen LAN source appears with an identity containing
    `reserved:world`. Stop if it does not. An in-cluster pod has a cluster identity and
    cannot validate the rules' source matcher.
 
