@@ -56,4 +56,4 @@
 - [029 — Media Integration Health Active Probes](specs/029-media-integration-health-active-probes.md) — Records the unimplemented active-probe revision and why it was replaced.
 - [030 — Media Integration Health with Gatus](specs/030-media-integration-health-gatus.md) — Records the implemented Gatus redesign before its API-success semantics changed.
 - [031 — Media Integration Health API Reachability](specs/031-media-integration-health-api-reachability.md) — Describes the current authenticated Servarr reachability checks and alerts.
-- [032 — Documentation Lifecycle Migration](specs/032-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.
+- [022 — Documentation Lifecycle Migration](specs/022-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.

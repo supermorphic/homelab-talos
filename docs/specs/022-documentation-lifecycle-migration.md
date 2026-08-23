@@ -93,8 +93,10 @@ before it is removed. The ledger is an execution aid, not durable documentation.
 
 Numbered specifications are assigned according to the chronology of the original design
 lineages. Records that amended or reported findings about an earlier design inherit that
-parent lineage rather than receiving artificial independent status. A later material
-redesign remains distinct and receives a later number.
+parent lineage rather than receiving an artificial independent record. The surviving
+lineages are numbered consecutively from `001` through `022`, without gaps. This one-time
+migration renumbering does not authorize renumbering historical specifications after
+merge. A later material redesign receives the next number after the current maximum.
 
 When historical records disagree, the implemented and validated repository state wins.
 If neither current source nor current documentation resolves a material conflict, the
@@ -123,13 +125,48 @@ Legacy records are reconciled as follows:
   facts move to references or source-adjacent README files; stale status, rollout logs,
   and duplicated content are deleted.
 - Images and other durable supporting assets move with the specification or current
-  document that uses them. Unreferenced or obsolete assets are deleted.
+  document that uses them. Image names are descriptive and have no date or specification
+  number prefix. Unreferenced or obsolete assets are deleted.
 - Tracked and ignored legacy plans are removed. Only plans for genuinely active work are
   recreated under `.tmp/plans/` and reconciled with the current specification and intent.
 
 Every retained document has one primary purpose. Mixed documents are split only when the
 resulting parts remain useful; otherwise their useful content moves to the best primary
 destination.
+
+## Phase disposition
+
+The former phase documents are not retained as a separate documentation category. Their
+durable content has these destinations:
+
+| Former phases | Durable destinations |
+| --- | --- |
+| 0–6 | Talos and Flux platform specification, NUC reference, Talos and Kubernetes READMEs, and recovery runbook |
+| 7 | Platform and certificate specifications, application READMEs, and Pi-hole guide |
+| 8 | Validated outcome in the platform specification; dated logs and counters are deleted |
+| 9 | Platform specification and Longhorn README |
+| 10 | Flux alerting, ntfy, Portainer, platform, and test-reporting specifications, plus application READMEs |
+| 11 | Media architecture, Plex Relay and Sonos, and Plex direct-access specifications, plus media guidance and the recovery runbook |
+| 12 | Media architecture specification, qbit_manage references, and ProtonVPN and Gluetun guide |
+| 13 | Lidarr and media architecture specifications, plus the media startup guide |
+| 14 | Tautulli and media architecture specifications, plus the media startup guide |
+
+This table records where the deleted phase history went. Phase numbers are not retained
+as current lifecycle or rollout labels.
+
+## Source references to documentation
+
+Source and configuration comments must explain the current constraint without requiring
+the reader to open another document. They may link to a specification when its historical
+rationale helps explain a non-obvious design choice, accepted tradeoff, or rejected
+alternative. The specification supplies context; it is not the source of current
+authority.
+
+Current procedures and facts link to the applicable guide, runbook, reference, or
+source-adjacent README. Generic specification banners and comprehensive source-to-spec
+traceability are not required. During this migration, existing callouts are retained only
+when they meet this boundary, and missing callouts are added only where a specific
+non-obvious constraint would otherwise be easy to change incorrectly.
 
 ## Runbook boundary
 
@@ -157,6 +194,11 @@ test-chain entries.
 No replacement documentation or specification validator is introduced. Numeric naming
 and document placement are repository policy enforced through `AGENTS.md` and review, not
 through a parser or generated index.
+
+The tracked ignore file contains only repository-defined generic artifact locations. A
+tool-specific local state directory belongs in the clone-local Git exclude file when it
+needs an exclusion; it does not belong in repository policy. The generic `/.tmp/` ignore
+continues to cover transient repository plans.
 
 The ordinary link-integrity checker remains because it detects useful failures such as
 broken links after files move. It is simplified so that it:
@@ -213,7 +255,13 @@ The migration is complete when:
 - current durable documents are navigable through `docs/README.md` and classified under
   `specs/`, `reference/`, `guides/`, or `runbooks/`;
 - every legacy decision, review, phase document, and plan has a recorded disposition;
-- useful design history is reconciled into chronological numbered specifications;
+- useful design history is reconciled into 22 consecutively numbered specifications;
+- durable specification images use descriptive names without date or specification
+  number prefixes;
+- source-to-document callouts are self-contained and follow the selective-reference
+  boundary;
+- former phases have documented durable destinations without remaining a lifecycle;
+- the tracked ignore file contains no tool-specific local state path;
 - current procedures and facts are reconciled into the appropriate current documents;
 - obsolete records, legacy lifecycle tooling, and generated lifecycle artifacts are gone;
 - generic link validation passes without lifecycle-specific behavior;
