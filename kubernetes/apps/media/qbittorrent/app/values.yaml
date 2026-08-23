@@ -3,7 +3,7 @@
 # Gluetun is a native sidecar (restartPolicy: Always) with a startup probe on its control
 # server, so qBittorrent only starts after the tunnel+firewall are up (fail-closed at
 # boot). Only Gluetun holds NET_ADMIN + /dev/net/tun; qBittorrent cannot alter routes.
-# See docs/specs/006-media-stack-architecture.md and docs/guides/protonvpn-gluetun.md.
+# See docs/guides/protonvpn-gluetun.md for credential rotation and operating procedures.
 controllers:
   qbittorrent:
     type: deployment
