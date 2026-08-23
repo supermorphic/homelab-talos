@@ -4,8 +4,9 @@
 
 This specification records the first complete design for continuous media-integration
 health. It was not implemented and does not describe the current deployment. The
-targeted-probe revision in specification 029 replaced two passive mechanisms, and the
-Gatus design in specification 030 later replaced the custom collector as a whole.
+[targeted-probe revision](019-media-integration-health-active-probes.md) replaced two
+passive mechanisms, and the [Gatus design](020-media-integration-health-gatus.md) later
+replaced the custom collector as a whole.
 
 The value retained here is the assurance model: service availability, source access,
 API compatibility, expected configuration, and an integration probe are different
@@ -111,7 +112,8 @@ edge failures.
 Implementation research found that the assumed passive structured endpoints did not
 exist for the six Prowlarr-direction edges. Relevant names appeared only in localized
 human health messages, which the design itself prohibited as an API contract. That
-finding produced the active-test revision in specification 029.
+finding produced the
+[active-test revision](019-media-integration-health-active-probes.md).
 
 The larger collector design was then replaced before implementation. Its custom image,
 adapter surface, compatibility contract, five source credentials, new workload, scrape

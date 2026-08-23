@@ -76,8 +76,10 @@ interprets its stable `group` and `name` labels:
 
 Application-specific Platform and Media alerts remain in their subject files. The
 current production-certificate signal and retirement of permanent staging issuance are
-described in specification 026. Media integration signals are described in
-specifications 030 and 031.
+described in [specification 016](016-cert-manager-staging-retirement.md). Media
+integration signals are described in
+the [Gatus design](020-media-integration-health-gatus.md) and
+[API-reachability design](021-media-integration-health-api-reachability.md).
 
 This gap closure does not add native Longhorn volume-health rules or Trivy finding
 alerts. Some workloads have PVC-specific alerts and Longhorn UI reachability coverage,

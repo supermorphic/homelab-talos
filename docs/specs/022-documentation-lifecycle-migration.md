@@ -49,8 +49,8 @@ repository policy, a specification template, or a required specification outline
 Specification placement and naming rules belong only in `AGENTS.md`. Source-adjacent
 README files remain in place rather than being moved into the four `docs/` categories.
 
-The old `docs/decisions/` and `docs/phases/` categories are removed. No replacement
-`history/` or `phases/` category is introduced.
+The old `docs/decisions/` category and root-level `docs/phase-*.md` files are removed. No
+replacement `history/` or `phases/` category is introduced.
 
 ## Specification lifecycle
 

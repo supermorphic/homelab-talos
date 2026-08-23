@@ -3,20 +3,22 @@
 ## Historical boundary
 
 This specification records the implemented Gatus redesign before the API-reachability
-correction in specification 031. The six authenticated GET probes and their credential,
-route, and metric architecture were implemented. The original four Servarr body
-conditions were later removed, so their success semantics here do not describe current
-source.
+correction in the
+[API-reachability design](021-media-integration-health-api-reachability.md). The six
+authenticated GET probes and their credential, route, and metric architecture were
+implemented. The original four Servarr body conditions were later removed, so their success
+semantics here do not describe current source.
 
 The intended `*NativeHealthIssue` alerts in this design were not implemented before the
-successor changed their evidence boundary and names. Specification 031 is self-contained
-for the current Servarr probes and implemented alerts.
+successor changed their evidence boundary and names.
+The [API-reachability successor](021-media-integration-health-api-reachability.md) is
+self-contained for the current Servarr probes and implemented alerts.
 
 ## Design choice
 
-The redesign replaced the custom collector and active POST probes in specifications 028
-and 029 with six authenticated, non-mutating Gatus GET checks in group
-`Media Integration`:
+The redesign replaced the [custom collector](018-media-integration-health-collector.md)
+and [active POST probes](019-media-integration-health-active-probes.md) with six
+authenticated, non-mutating Gatus GET checks in group `Media Integration`:
 
 | Endpoint | Request | Original success conditions |
 | --- | --- | --- |
@@ -108,10 +110,13 @@ were bounded to selected read-through failure and did not prove that a request, 
 import, or later workflow step failed.
 
 None of these media-integration alerts shipped with the initial six-probe implementation.
-Before alert implementation, specification 031 replaced the four Servarr semantics and
-the `*NativeHealthIssue` names. The later alert change implemented that successor
-contract, the two unchanged Seerr alerts, and the missing-telemetry alert. Those
-implemented effects belong to specification 031 rather than this historical contract.
+Before alert implementation, the
+[API-reachability correction](021-media-integration-health-api-reachability.md) replaced
+the four Servarr semantics and the `*NativeHealthIssue` names. The later alert change
+implemented that successor contract, the two unchanged Seerr alerts, and the
+missing-telemetry alert. Those implemented effects belong to the
+[API-reachability design](021-media-integration-health-api-reachability.md) rather than
+this historical contract.
 
 ## Original validation model
 
@@ -123,8 +128,9 @@ weakened Servarr body-length condition.
 
 Those checks established the pre-successor source contract. The successor removed the
 four body-length conditions and replaced the independent oracle with the status-only
-truth table now described in specification 031. The stable endpoint, credential, route,
-and Seerr validation remained.
+truth table now described in the
+[API-reachability design](021-media-integration-health-api-reachability.md). The stable
+endpoint, credential, route, and Seerr validation remained.
 
 ## Why the Servarr semantics changed
 
@@ -151,4 +157,5 @@ broad for routine native health responses and was replaced before its intended a
 names were implemented.
 
 No current Servarr condition or alert effect should be derived from this specification.
-Specification 031 defines those exact current boundaries.
+The [API-reachability design](021-media-integration-health-api-reachability.md) defines
+those exact current boundaries.

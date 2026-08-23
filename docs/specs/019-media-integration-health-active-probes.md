@@ -2,15 +2,17 @@
 
 ## Historical boundary
 
-This specification records a revision to the unimplemented collector in specification
-028. It did not become the current deployment. Specification 030 replaced the collector
-and these active POST probes with six non-mutating GET checks in the existing Gatus
-workload.
+This specification records a revision to the
+[unimplemented collector](018-media-integration-health-collector.md). It did not become
+the current deployment. The [Gatus design](020-media-integration-health-gatus.md) replaced
+the collector and these active POST probes with six non-mutating GET checks in the existing
+Gatus workload.
 
 The revision retained the fifteen-edge inventory, collector workload, metrics,
-credentials, network policy, failure classification, and alert model from specification
-028. It changed only the unsafe assumption that localized native-health messages could
-provide structured Prowlarr-direction evidence.
+credentials, network policy, failure classification, and alert model from
+the [collector design](018-media-integration-health-collector.md). It changed only the
+unsafe assumption that localized native-health messages could provide structured
+Prowlarr-direction evidence.
 
 ## Contract finding
 
@@ -87,7 +89,8 @@ policy, compatibility fixtures, and fifteen-edge classification.
 
 The later Gatus redesign chose a smaller assurance boundary: four authenticated Servarr
 native-health GETs and two selected Seerr service reads. Its initial Servarr contract
-required both HTTP 200 and an empty response array; specification 031 records the later
+required both HTTP 200 and an empty response array; the
+[API-reachability design](021-media-integration-health-api-reachability.md) records the later
 reachability-only correction. The Gatus design intentionally gave up continuous
 Prowlarr-direction native tests and most edge attribution to avoid a custom adapter
 product and continuous POST operations.

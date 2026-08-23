@@ -3,7 +3,8 @@
 Use this runbook when one of the five `plex-remote-access` alerts or
 `PlexWorkloadPolicyDenied` fires. The rule source is under
 `kubernetes/apps/media/alerts/` and `kubernetes/apps/networking/alerts/`.
-Specification 020 records the signal design and limits.
+[Specification 014](../specs/014-plex-remote-access-detection.md) records the signal
+design and limits.
 
 Prometheus stores aggregate flow counts, not public source addresses. Diagnose source
 activity with the bounded, read-only Hubble workflow:

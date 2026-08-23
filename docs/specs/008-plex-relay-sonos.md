@@ -140,4 +140,6 @@ host, credential, patching, bandwidth, and compromise boundary.
 The identity repair and workload hardening remain useful under every remote-access
 mechanism. Relay supplies a low-capability recovery path without another ingress rule,
 but direct access remains necessary for the validated Sonos and high-bitrate behavior.
-The direct path and its detection design are recorded in specifications 019 and 020.
+The direct path and its detection design are recorded in
+[specification 013](013-plex-direct-remote-access.md) and
+[specification 014](014-plex-remote-access-detection.md).
