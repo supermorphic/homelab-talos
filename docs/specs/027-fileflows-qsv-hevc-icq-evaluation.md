@@ -247,7 +247,7 @@ emits canonical schema-v1 `status: failed` JSON with reason
 `diagnostic-manifest-binding-invalid` and a nonempty `manifestIssues` array, then exits
 with the defined contract exit. Each issue contains only `field` and `kind`; `kind` is
 `missing`, `wrong-type`, or `mismatch`, never the retained or expected value. The field
-allowlist is `manifest`, `schemaVersion`, `mode`, `runId`, `upstream.diagnostics`, and
+allowlist is `manifest`, `schemaVersion`, `mode`, `createdAt`, `upstream.diagnostics`, and
 `upstream.diagnostics.manifestSchemaVersion`,
 `upstream.diagnostics.resultSchemaVersion`,
 `upstream.diagnostics.acceptedFindingsSha256`,
