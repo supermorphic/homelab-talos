@@ -25,7 +25,7 @@ controllers:
         # the Deployment automatically. `just ci` asserts it equals the real hash, so a config
         # edit can never silently fail to deploy. Update it whenever config.yml changes:
         #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
-        config-hash: "03cc20257da48745c1f0f92781ddcf714ed80064"
+        config-hash: "9f81ba7ba81d5f6c95067527888d94ef3885dbb1"
       securityContext:
         runAsNonRoot: true
         runAsUser: 568
