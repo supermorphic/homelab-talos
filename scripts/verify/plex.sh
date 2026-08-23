@@ -58,6 +58,14 @@ service="$("${kc[@]}" --namespace "$ns" get service plex --output json)"
   echo 'Plex Service must preserve client addresses with externalTrafficPolicy Local.' >&2
   exit 1
 }
+[[ "$(yq -r '.spec.allocateLoadBalancerNodePorts | (type == "!!bool" and . == false)' - <<<"$service")" == 'true' ]] || {
+  echo 'Plex Service must disable LoadBalancer NodePort allocation.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.spec.ports[]? | select(has("nodePort"))] | length' - <<<"$service")" == '0' ]] || {
+  echo 'Plex Service retains an allocated NodePort.' >&2
+  exit 1
+}
 [[ "$(yq -r '[.status.loadBalancer.ingress[]?.ip] | join(",")' - <<<"$service")" == '192.168.90.31' ]] || {
   echo 'Plex Service does not hold exactly 192.168.90.31.' >&2
   exit 1
@@ -81,4 +89,4 @@ curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/identity" 
   echo "Plex /identity is not reachable via the internal gateway." >&2
   exit 1
 }
-echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, UID 568 plex runtime identity, API token absent, media read-only, config writable, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'
+echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, UID 568 plex runtime identity, API token absent, media read-only, config writable, LoadBalancer NodePort allocation disabled with no allocated NodePort, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'

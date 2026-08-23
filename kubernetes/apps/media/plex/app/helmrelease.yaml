@@ -15,6 +15,20 @@ spec:
     remediation:
       retries: 3
   interval: 1h
+  postRenderers:
+    - kustomize:
+        patches:
+          # Kubernetes does not deallocate an existing LoadBalancer NodePort when
+          # allocateLoadBalancerNodePorts becomes false. Submit an explicit null so
+          # Helm removes the API-allocated field without a live Service patch.
+          - target:
+              version: v1
+              kind: Service
+              name: plex
+            patch: |
+              - op: add
+                path: /spec/ports/0/nodePort
+                value: null
   releaseName: plex
   timeout: 10m
   upgrade:

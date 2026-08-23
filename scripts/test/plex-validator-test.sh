@@ -68,6 +68,11 @@ reset_tree
 yq -i '.service.app.allocateLoadBalancerNodePorts = true' "$app/values.yaml"
 expect_fail 'node-wide listener allocation enabled'
 
+echo '4b. Removing explicit existing NodePort deallocation is rejected.'
+reset_tree
+yq -i 'del(.spec.postRenderers)' "$app/helmrelease.yaml"
+expect_fail 'existing NodePort deallocation removed'
+
 echo '5. A renamed/second Service port key is rejected.'
 reset_tree
 yq -i '.service.app.ports.https.port = 443' "$app/values.yaml"

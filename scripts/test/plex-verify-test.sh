@@ -41,16 +41,22 @@ case " $* " in
   *' --namespace media get service plex --output json '*)
     case "${FAKE_LAYOUT:-}" in
       service-wrong-address)
-        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.32"}]}}}\n'
+        printf '{"spec":{"type":"LoadBalancer","allocateLoadBalancerNodePorts":false,"externalTrafficPolicy":"Local","ports":[{"port":32400,"protocol":"TCP"}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.32"}]}}}\n'
         ;;
       service-not-loadbalancer)
-        printf '{"spec":{"type":"ClusterIP","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        printf '{"spec":{"type":"ClusterIP","allocateLoadBalancerNodePorts":false,"externalTrafficPolicy":"Local","ports":[{"port":32400,"protocol":"TCP"}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
         ;;
       service-cluster-policy)
-        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Cluster"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        printf '{"spec":{"type":"LoadBalancer","allocateLoadBalancerNodePorts":false,"externalTrafficPolicy":"Cluster","ports":[{"port":32400,"protocol":"TCP"}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        ;;
+      service-nodeport-allocation-enabled)
+        printf '{"spec":{"type":"LoadBalancer","allocateLoadBalancerNodePorts":true,"externalTrafficPolicy":"Local","ports":[{"port":32400,"protocol":"TCP","nodePort":32000}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        ;;
+      service-nodeport-retained)
+        printf '{"spec":{"type":"LoadBalancer","allocateLoadBalancerNodePorts":false,"externalTrafficPolicy":"Local","ports":[{"port":32400,"protocol":"TCP","nodePort":32000}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
         ;;
       *)
-        printf '{"spec":{"type":"LoadBalancer","externalTrafficPolicy":"Local"},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
+        printf '{"spec":{"type":"LoadBalancer","allocateLoadBalancerNodePorts":false,"externalTrafficPolicy":"Local","ports":[{"port":32400,"protocol":"TCP"}]},"status":{"loadBalancer":{"ingress":[{"ip":"192.168.90.31"}]}}}\n'
         ;;
     esac
     ;;
@@ -200,6 +206,38 @@ if [[ "$verifier_status" -eq 0 ]]; then
 fi
 rg -qx 'Plex Service must preserve client addresses with externalTrafficPolicy Local.' "$output" || {
   echo 'Plex verifier failed the Cluster-policy case, but not with the expected message.' >&2
+  cat "$output" >&2
+  exit 1
+}
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-nodeport-allocation-enabled >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted enabled LoadBalancer NodePort allocation.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service must disable LoadBalancer NodePort allocation.' "$output" || {
+  echo 'Plex verifier failed enabled NodePort allocation with the wrong message.' >&2
+  cat "$output" >&2
+  exit 1
+}
+
+: >"$exec_log"
+set +e
+run_verifier 'ro,relatime' service-nodeport-retained >"$output" 2>&1
+verifier_status="$?"
+set -e
+if [[ "$verifier_status" -eq 0 ]]; then
+  echo 'Plex verifier accepted a retained allocated NodePort.' >&2
+  cat "$output" >&2
+  exit 1
+fi
+rg -qx 'Plex Service retains an allocated NodePort.' "$output" || {
+  echo 'Plex verifier failed retained NodePort allocation with the wrong message.' >&2
   cat "$output" >&2
   exit 1
 }
