@@ -259,23 +259,40 @@ if [[ "$tracked_agent_files" != 'AGENTS.md' ]]; then
   exit 1
 fi
 
-expected_agent_headings="$(printf '%s\n' \
-  'Repository context' \
-  'Git and worktrees' \
-  'Authority boundaries' \
-  'Secrets and credentials' \
-  'Public repository' \
-  'Repository invariants' \
-  'Validation' \
-  'Completion')"
-actual_agent_headings="$(sed -n 's/^## //p' "$repo_root/AGENTS.md")"
-if [[ "$actual_agent_headings" != "$expected_agent_headings" ]]; then
-  echo 'AGENTS.md semantic sections are missing, extra, or out of order.' >&2
-  diff -u \
-    <(printf '%s\n' "$expected_agent_headings") \
-    <(printf '%s\n' "$actual_agent_headings") >&2 || true
-  exit 1
-fi
+required_agent_headings=(
+  'Repository context'
+  'Communication style'
+  'Git and worktrees'
+  'Authority boundaries'
+  'Agent orchestration'
+  'Secrets and credentials'
+  'Public repository'
+  'Repository invariants'
+  'Design lifecycle'
+  'Validation'
+  'Completion'
+)
+mapfile -t actual_agent_headings < <(sed -n 's/^## //p' "$repo_root/AGENTS.md")
+previous_heading_index=-1
+for required_heading in "${required_agent_headings[@]}"; do
+  heading_count=0
+  heading_index=-1
+  for index in "${!actual_agent_headings[@]}"; do
+    if [[ "${actual_agent_headings[$index]}" == "$required_heading" ]]; then
+      ((heading_count += 1))
+      heading_index="$index"
+    fi
+  done
+  if ((heading_count != 1 || heading_index <= previous_heading_index)); then
+    echo 'AGENTS.md canonical semantic sections must each appear once and in order.' >&2
+    printf 'Required sections:\n' >&2
+    printf '  %s\n' "${required_agent_headings[@]}" >&2
+    printf 'Actual sections:\n' >&2
+    printf '  %s\n' "${actual_agent_headings[@]}" >&2
+    exit 1
+  fi
+  previous_heading_index="$heading_index"
+done
 
 if rg -q '\[(Authoritative —|Operator policy — operator|Gotcha)\]' "$repo_root/AGENTS.md"; then
   echo 'AGENTS.md must not expose design-time provenance labels.' >&2
