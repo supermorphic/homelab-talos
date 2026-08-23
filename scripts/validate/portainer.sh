@@ -12,6 +12,7 @@ ns="$app/namespace.yaml"
 rbac="$app/rbac.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 secret="$app/portainer-admin-password.sops.yaml"
+bootstrap='.just/bootstrap.just'
 # The rule lives in the monitoring alerts application; placement and wiring belong to
 # `just kube alerts-validate monitoring`. The content contract stays here.
 rule='kubernetes/apps/monitoring/alerts/app/portainer.yaml'
@@ -40,6 +41,16 @@ rg -Fq "jsonpath='{.metadata.annotations.helm\\.sh/resource-policy}'" "$verify_s
 
 rg -qx '  - ./portainer/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./portainer/ks.yaml is not wired into the monitoring root.' >&2
+  exit 1
+}
+rg -Fq \
+  'activate Portainer in Git by setting suspend=false and adding its Gatus endpoint in the same reviewed change' \
+  "$bootstrap" || {
+  echo 'Portainer bootstrap must describe the activation-time Gatus endpoint change.' >&2
+  exit 1
+}
+! rg -Fq 'The active Gatus probe is already declared.' "$bootstrap" || {
+  echo 'Portainer bootstrap must not claim that suspended source already has its Gatus endpoint.' >&2
   exit 1
 }
 

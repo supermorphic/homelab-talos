@@ -1614,10 +1614,11 @@ qbit-manage:
     bootstrap_complete=true
     echo "qbit-manage live acceptance passed (INERT dry-run: no torrent field or file changed). Set suspend=false in Git, commit, push, and rerun just kube qbit-manage-verify. See docs/guides/qbit-manage.md for activation and docs/reference/qbit-manage.md for the active policy."
 
-# Reconcile the suspended Phase 11 Intel GPU device plugin after guarded checks, then
-# verify. Deploy + activate this BEFORE adding the gpu.intel.com/i915 request to Plex
-# (requesting a resource that is not yet advertised would leave Plex pod Pending). On
-# failure the resumed Kustomization is re-suspended while its resources are preserved.
+# Reconcile the Intel GPU device plugin from source staged with suspend=true, then
+# verify it before the activation change sets suspend=false.
+# Plex already declares its gpu.intel.com/i915 request; reconcile Plex only after the
+# plugin advertises it. On failure, the resumed Kustomization is re-suspended while its
+# resources are preserved.
 intel-gpu-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1953,7 +1954,7 @@ portainer:
 
     just kube portainer-verify
     bootstrap_complete=true
-    echo 'Portainer live acceptance passed. Run the guarded persistence test, then set suspend=false in Git, commit, push, and rerun just kube portainer-verify. The active Gatus probe is already declared.'
+    echo 'Portainer live acceptance passed. Run the guarded persistence test, then activate Portainer in Git by setting suspend=false and adding its Gatus endpoint in the same reviewed change. Commit, push, wait for Flux, and rerun just kube portainer-verify.'
 
 # Reconcile the suspended persistent test-report host after guarded source/static
 # validation, then run live read-only acceptance. Publication remains a separate,
