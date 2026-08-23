@@ -23,17 +23,51 @@ public IPv6 filtering are operator-owned state outside Git.
 
 Before changing exposure:
 
-1. Confirm the Git-managed listener shape, rendered Service, live application,
-   LoadBalancer, endpoints, and policy are healthy:
+1. Confirm the Git-managed listener shape and rendered Service, then run the established
+   live verifier:
 
    ```bash
    mise exec -- just kube plex-validate
    mise exec -- just kube plex-verify
    ```
 
-   Require one TCP application port, the explicit LoadBalancer address,
-   `externalTrafficPolicy: Local`, `allocateLoadBalancerNodePorts: false`, no allocated
-   NodePort, a ready Plex endpoint, and `world` ingress only on TCP `32400`.
+   Source validation requires one TCP application port, the explicit LoadBalancer
+   address, `externalTrafficPolicy: Local`, `allocateLoadBalancerNodePorts: false`, and
+   the post-rendered null NodePort field. The live verifier checks workload readiness,
+   runtime hardening, the LoadBalancer type and address, `externalTrafficPolicy: Local`,
+   disabled NodePort allocation, absence of an allocated NodePort, route acceptance,
+   DNS, and the internal TLS identity endpoint. It does not read the ready EndpointSlice,
+   the live application-port value, or the applied CiliumNetworkPolicy. Inspect all three
+   objects:
+
+   ```bash
+   mise exec -- kubectl --kubeconfig .kube/config --context homelab-diagnostic \
+     --namespace media get service plex --output yaml
+   mise exec -- kubectl --kubeconfig .kube/config --context homelab-diagnostic \
+     --namespace media get endpointslice \
+     --selector kubernetes.io/service-name=plex --output yaml
+   mise exec -- kubectl --kubeconfig .kube/config --context homelab-diagnostic \
+     --namespace media get ciliumnetworkpolicy plex --output yaml
+   ```
+
+   Require the Service to expose exactly one application port, TCP `32400`, with no
+   allocated `nodePort`. Require at least one EndpointSlice endpoint with
+   `conditions.ready: true` and TCP port `32400`. Require the applied policy to select
+   Plex and contain exactly one `world` ingress rule with only TCP `32400`; no second
+   `world` rule or port is permitted.
+
+   These reads prove API object state, not packet enforcement. The established
+   enforcement proof is the operator-attended, state-changing test below. It creates and
+   removes run-scoped probe Pods. Run it only in an approved window after reviewing the
+   test catalog entry:
+
+   ```bash
+   PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' \
+     mise exec -- just kube plex-network-policy-test
+   ```
+
+   Do not treat source validation or the read-only object inspection as deployed packet
+   containment without that guarded proof.
 
 2. Confirm all Plex remote-access alerts are loaded and inactive. Follow the
    [detection response runbook](../runbooks/plex-remote-access-detection.md) when a rule
@@ -41,13 +75,20 @@ Before changing exposure:
 3. Confirm UPnP and NAT-PMP are disabled in UniFi. Plex must not be able to create an
    independent mapping.
 4. Inventory existing WAN forwards. There must be no second Plex or TCP `32400` rule.
-5. Record the current Plex settings privately. Do not put a WAN address, Plex token,
+5. Confirm UniFi Intrusion Prevention remains in **Notify and Block** mode, protects the
+   Servers network, uses the intended Standard categories, and has no unintended
+   exclusion. Confirm the detection engine and normal UniFi update channels are current.
+6. Record the current Plex settings privately. Do not put a WAN address, Plex token,
    account identity, or client address in the repository.
-6. Start a local playback session through `plex.lab.supermorphic.com`. In Tautulli's
+7. Start a local playback session through `plex.lab.supermorphic.com`. In Tautulli's
    current activity view, require the session to show **LAN**, not **WAN**. Complete this
    check before setting or relying on the per-user remote-stream limit.
-7. Confirm the Plex configuration and database backup is healthy. Bulk media has no
-   independent backup; recovery after total media loss depends on reacquisition.
+8. Confirm Plex scheduled database backups and the Longhorn off-cluster configuration
+   backup are healthy. Require current evidence that the configuration restore has been
+   rehearsed with a throwaway claim and isolated Plex validation as described in
+   [Recover Longhorn and application state](../runbooks/recovery.md#recover-longhorn-and-application-state).
+   Bulk media has no independent backup; recovery after total media loss depends on
+   reacquisition.
 
 If the local session shows **WAN**, stop. The internal Envoy route hides the client behind
 an Envoy Pod address. Set **LAN Networks** to the trusted client VLANs plus the current Pod
@@ -70,6 +111,7 @@ The required Plex settings are:
 | Client network | IPv4 only |
 | Custom server access URLs | Only the private LoadBalancer-derived `plex.direct` URL, with port `32400` |
 | LAN Networks | Trusted client VLANs and `10.244.0.0/16`; never `192.168.90.0/24` |
+| Empty trash automatically after every scan | Disabled |
 
 The custom URL has this form:
 
@@ -124,7 +166,10 @@ Run external negative checks from a genuinely off-network client:
 1. UniFi has exactly one Plex mapping: one public TCP port to the LoadBalancer and
    internal TCP `32400`. No duplicate, wildcard, range, or UDP mapping exists.
 2. Only TCP `32400` answers among the reviewed scan set.
-3. No AAAA record or public IPv6 path exists for the published Plex names.
+3. Verify IPv6 independently. Inspect delegated prefixes, global addresses on cluster
+   nodes, public DNS answers, and UniFi unsolicited-inbound IPv6 policy. From an actually
+   off-network IPv6 source, confirm no Plex connection succeeds. An absent AAAA answer
+   or the IPv4 DNAT state does not prove the other IPv6 boundaries.
 4. UniFi shows no automatic UPnP or NAT-PMP mapping.
 
 A scan from the LAN is not evidence about the WAN boundary. Verify the alert and source

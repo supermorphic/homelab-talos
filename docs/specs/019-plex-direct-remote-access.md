@@ -29,9 +29,15 @@ The Plex Service requests the explicit LAN address `192.168.90.31` from MetalLB'
 non-auto-assigned `internal` pool. It exposes only TCP `32400` and uses
 `externalTrafficPolicy: Local` so Plex and Hubble retain the real off-cluster source
 identity instead of a node SNAT address. It sets `allocateLoadBalancerNodePorts: false`
-so the Service does not retain a second Kubernetes listener form that the design does
-not use. The LoadBalancer makes Plex reachable on the LAN; only the external UniFi DNAT
-creates Internet exposure.
+to prevent future NodePort allocation for a listener form that the design does not use.
+Kubernetes does not deallocate an existing NodePort when that field changes to `false`,
+so the HelmRelease post-render also submits `nodePort: null` for the application port to
+clear any retained API allocation. Source validation enforces the Boolean in
+`values.yaml` and separately requires the final Helm-plus-post-render output to contain
+both `allocateLoadBalancerNodePorts: false` and the explicit null port field. The live
+verifier then requires the applied Service to contain no allocated NodePort. The
+LoadBalancer makes Plex reachable on the LAN; only the external UniFi DNAT creates
+Internet exposure.
 
 ## Local and client-discovery paths
 
@@ -149,13 +155,20 @@ prove that the UniFi DNAT, Plex settings, Pi-hole rebind exception, Sonos VLAN r
 public IPv6 filtering, or account settings still match this design. Current operation
 requires separate, sanitized checks of those systems and an actually off-network scan.
 
-Plex retains a read-only media mount and cannot delete library media. Radarr and Sonarr
-remain the removal authorities for their managed libraries, while download cleanup stays
-under the qBittorrent and qbit_manage policy. The NAS account remains limited to the
-media share and the write access that media automation requires. Plex configuration,
-database, identity, and watch history require recoverable backups. Bulk media has no
-independent backup by operator decision; total loss requires reacquisition and can be
-slow or incomplete.
+Plex retains a read-only media mount and cannot delete library media. Its application
+setting **Empty trash automatically after every scan** also remains disabled so a
+temporary SMB or NAS outage does not remove library entries when media disappears from a
+scan. Radarr and Sonarr remain the removal authorities for their managed libraries,
+while download cleanup stays under the qBittorrent and qbit_manage policy. The NAS
+account remains limited to the media share and the write access that media automation
+requires.
+
+Plex configuration, database, identity, and watch history require recoverable backups.
+The control includes scheduled Plex database backups, the established off-cluster
+Longhorn backup, and a rehearsed configuration restore into a throwaway claim with an
+isolated Plex validation before any production replacement. Bulk media has no independent
+backup by operator decision; total loss requires reacquisition and can be slow or
+incomplete.
 
 Removing the DNAT blocks new remote connections but existing router conntrack entries
 can survive. Restarting Plex evicts established sessions but also interrupts every local
