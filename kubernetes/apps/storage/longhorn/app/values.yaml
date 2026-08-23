@@ -1,5 +1,5 @@
-# Longhorn 1.12.0 values. Mirrors the proven homelab-gitops config plus the Talos
-# data path and hard replica anti-affinity from the Phase 9 plan.
+# Longhorn 1.12.0 values. Uses the dedicated Talos data path and hard replica
+# anti-affinity so two replicas span different nodes.
 preUpgradeChecker:
   jobEnabled: false
 defaultSettings:
@@ -17,10 +17,11 @@ defaultSettings:
   # node is unreachable, Longhorn force-deletes its stuck pods so Kubernetes can
   # reschedule them onto a healthy node and re-attach the volume from a surviving
   # replica. Without this (default "do-nothing") a powered-off node leaves e.g. Plex
-  # stuck Terminating and it never recreates. Verified via the Phase-11 node-down test.
+  # stuck Terminating and it never recreates. Verified by the Plex node-down test.
   nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
 metrics:
-  # No Prometheus Operator until Phase 10; enable the ServiceMonitor then.
+  # Keep the chart ServiceMonitor disabled because the current monitoring source does
+  # not declare a Longhorn scrape through this value.
   serviceMonitor:
     enabled: false
 persistence:

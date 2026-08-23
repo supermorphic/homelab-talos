@@ -17,7 +17,7 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$values" "$route" "$secret" "$base/app/kustomization.yaml" "$oci"; do
   [[ -f "$f" ]] || {
-    echo "Missing Phase 12 qBittorrent source: $f" >&2
+    echo "Missing qBittorrent source: $f" >&2
     echo 'Run just repo protonvpn-secrets if the ProtonVPN Secret is missing.' >&2
     exit 1
   }
@@ -129,4 +129,4 @@ helm template qbittorrent "$chart_url" --version "$chart_tag" --namespace media 
 [[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .restartPolicy' "$temp_dir/render.yaml")" == 'Always' ]]
 yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .livenessProbe.exec.command[]' "$temp_dir/render.yaml" | rg -q '/v1/portforward'
 
-echo 'Phase 12 qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'
+echo 'qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'

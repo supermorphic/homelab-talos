@@ -182,13 +182,13 @@ role_verbs="$(yq -r 'select(.kind == "ClusterRole" and .metadata.name == "portai
     exit 1
   }
 
-# Cilium Phase-1 isolation: Gateway/health ingress plus API/DNS egress only.
+# Cilium isolation for the read-only Portainer design: Gateway/health ingress plus API/DNS egress only.
 [[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$policy")" == 'portainer' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[].port] | sort | join(",")' "$policy")" == '9000,9443' ]]
 [[ "$(yq -r '.spec.egress[0].toEntities[0]' "$policy")" == 'kube-apiserver' ]]
 [[ "$(yq -r '[.spec.egress[].toPorts[]?.ports[]?.port] | unique | join(",")' "$policy")" == '53' ]]
 ! rg -q '(9001|AGENT_SECRET)' "$policy" "$values" || {
-  echo 'Pi Agent connectivity and AGENT_SECRET must remain deferred in Phase 1.' >&2
+  echo 'Pi Agent connectivity and AGENT_SECRET must remain outside the read-only Portainer design.' >&2
   exit 1
 }
 

@@ -50,7 +50,7 @@ fail_precondition() { echo "PRECONDITION FAILED: $1" >&2; write_recovery 'not-re
 
 # --- node derivation + reboot-token check (per review: reboot the node Plex is ON) -------
 pod="$(find_pod)"
-[[ -n "$pod" ]] || fail_precondition 'no Plex pod found (is Phase 11 bootstrapped?)'
+[[ -n "$pod" ]] || fail_precondition 'no Plex pod found (is Plex deployed?)'
 [[ "$(pod_ready "$pod")" == 'True' ]] || fail_precondition "Plex pod $pod is not Ready before the test"
 orig_node="$(k get pod "$pod" -o jsonpath='{.spec.nodeName}')"
 case "$orig_node" in

@@ -175,4 +175,4 @@ yq -r '
   }
 
 just kube foundation-verify
-echo 'Phase 10 monitoring acceptance passed: the stack and Flux exporter are Ready; Prometheus discovered an up exporter target, ingested every configured Flux resource kind, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'
+echo 'Monitoring acceptance passed: the stack and Flux exporter are Ready; Prometheus discovered an up exporter target, ingested every configured Flux resource kind, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'

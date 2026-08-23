@@ -16,7 +16,7 @@ for f in "$ks" "$secret" "$values" "$hr" "$repo" "$routes" \
   "$base/app/namespace.yaml" "$base/app/kustomization.yaml" \
   "$base/config/kustomization.yaml" kubernetes/apps/monitoring/kustomization.yaml; do
   [[ -f "$f" ]] || {
-    echo "Missing Phase 10 monitoring source: $f" >&2
+    echo "Missing monitoring source: $f" >&2
     echo 'Run just repo monitoring-secrets if the Grafana Secret is missing.' >&2
     exit 1
   }
@@ -214,4 +214,4 @@ yq -e '
 bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics"
 shellcheck --external-sources "$flux_alerts_lib" "$flux_alerts_diagnostics"
 
-echo 'Phase 10 monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
+echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'

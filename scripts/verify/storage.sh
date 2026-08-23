@@ -49,4 +49,4 @@ for j in daily-snapshot daily-backup; do
 done
 
 just kube foundation-verify
-echo 'Phase 9 read-only storage verification passed: Longhorn is healthy on three nodes (disks at /var/mnt/longhorn), the default StorageClass has two replicas, the backup target is available, and recurring jobs are present.'
+echo 'Longhorn read-only storage verification passed: Longhorn is healthy on three nodes (disks at /var/mnt/longhorn), the default StorageClass has two replicas, the backup target is available, and recurring jobs are present.'

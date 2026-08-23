@@ -55,7 +55,7 @@ probe_main() {
   local kubeconfig="$1"
   local ns='media' pod
   pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=qbittorrent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
-  [[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is Phase 12 bootstrapped?).' >&2; exit 1; }
+  [[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is qBittorrent deployed?).' >&2; exit 1; }
 
   # One exec: read the configured resolver, then actively resolve via the default
   # (Gluetun) resolver and directly against each non-tunnel resolver. Each direct query

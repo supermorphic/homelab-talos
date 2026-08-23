@@ -29,7 +29,7 @@ for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.ya
   "$allure_icon" \
   "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
   "$monitoring_routes" "$portainer_route" "$ntfy_route" "$test_reports_route"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Homepage source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./homepage/ks.yaml is not listed in the monitoring kustomization.' >&2
@@ -184,4 +184,4 @@ assert_command_finds_nothing \
 
 kustomize build "$base/app" >/dev/null
 
-echo 'Phase 10 Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted widget Secrets passed validation.'
+echo 'Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted widget Secrets passed validation.'

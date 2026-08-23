@@ -22,7 +22,7 @@ ns='media'
 duration="${LEAK_SENTINEL_DURATION:-120}"
 
 pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=qbittorrent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
-[[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is Phase 12 bootstrapped?).' >&2; exit 1; }
+[[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is qBittorrent deployed?).' >&2; exit 1; }
 
 gx() { kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c gluetun -- "$@"; }
 apikey="$(gx sh -c 'grep -E "^apikey" /gluetun/auth/config.toml | sed -E "s/.*\"(.*)\".*/\1/"' 2>/dev/null | tr -d '\r')"

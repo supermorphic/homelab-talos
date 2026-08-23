@@ -20,4 +20,4 @@ advertised="$(kubectl --kubeconfig "$kubeconfig" get nodes --output json | yq -r
   echo 'No node advertises gpu.intel.com/i915 — check /dev/dri on the NUCs (the siderolabs/i915 extension) and the plugin logs.' >&2
   exit 1
 }
-echo "Phase 11 intel-gpu-plugin acceptance passed: Kustomization Ready, DaemonSet rolled out, $advertised node(s) advertise gpu.intel.com/i915."
+echo "Intel GPU plugin acceptance passed: Kustomization Ready, DaemonSet rolled out, $advertised node(s) advertise gpu.intel.com/i915."

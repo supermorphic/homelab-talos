@@ -52,4 +52,4 @@ rg -q '<svg([[:space:]>])' <<<"$allure_icon" || {
 }
 
 just kube foundation-verify
-echo 'Phase 10 Homepage acceptance passed: Kustomization Ready, deployment rolled out, HTTPRoute accepted, Allure icon mounted and served, and the dashboard reachable with trusted HTTPS at homepage.lab.supermorphic.com.'
+echo 'Homepage acceptance passed: Kustomization Ready, deployment rolled out, HTTPRoute accepted, Allure icon mounted and served, and the dashboard reachable with trusted HTTPS at homepage.lab.supermorphic.com.'

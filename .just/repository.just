@@ -281,7 +281,7 @@ pihole-ca-refresh:
     install -m 0644 "$temp_dir/pihole-ca.crt" "$target"
     echo 'Review the certificate diff and fingerprint before committing the trust-anchor rotation.'
 
-# Validate Phase 7 provider credentials and write only SOPS-encrypted Secret manifests.
+# Validate internal foundation provider credentials and write only SOPS-encrypted Secret manifests.
 phase7-secrets:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -291,10 +291,10 @@ phase7-secrets:
     pihole_target='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
     pihole_ca='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
     pihole_api='https://pi.hole'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-phase7-secrets.XXXXXX)"
+    temp_dir="$(mktemp -d /tmp/homelab-talos-foundation-secrets.XXXXXX)"
     pihole_sid=''
     pihole_record_cleanup_needed=false
-    pihole_test_hostname="phase7-preflight-$$-${RANDOM}.lab.supermorphic.com"
+    pihole_test_hostname="foundation-preflight-$$-${RANDOM}.lab.supermorphic.com"
     pihole_test_record="192.0.2.1 $pihole_test_hostname"
     pihole_test_url="$pihole_api/api/config/dns/hosts/192.0.2.1%20$pihole_test_hostname"
     pihole_curl=(
@@ -350,7 +350,7 @@ phase7-secrets:
       exit 1
     }
     [[ "${PHASE7_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to write the Phase 7 encrypted Secret manifests.' >&2
+      echo 'Refusing to write the internal foundation encrypted Secret manifests.' >&2
       echo "Set PHASE7_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
       exit 1
     }
@@ -459,7 +459,7 @@ phase7-secrets:
 
     mv -- "$temp_dir/cloudflare.sops.yaml" "$cloudflare_target"
     mv -- "$temp_dir/pihole.sops.yaml" "$pihole_target"
-    echo 'Phase 7 provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext was written.'
+    echo 'Internal foundation provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext was written.'
 
 # Validate the UNAS CIFS credentials and write only the SOPS-encrypted Longhorn
 # backup Secret (nas-credentials in longhorn-system). Best-effort smbclient auth
@@ -1336,7 +1336,7 @@ links-validate:
 verify: toolchain-validate verify-files verify-shell-scripts
     just talos source-validate
     just repo secret-scan
-    @echo "Repository and Phase 2 Talos source checks passed."
+    @echo "Repository and Talos source checks passed."
 
 # Fail unless running under bash >= 5. macOS /bin/bash 3.2 does not honor set -e
 # for a failed bare [[ ]] or (( )) mid-recipe, so validation assertions would

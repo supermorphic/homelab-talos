@@ -7,7 +7,7 @@ ds="$base/app/daemonset.yaml"
 bootstrap='.just/bootstrap.just'
 
 for f in "$ks" "$ds" "$base/app/kustomization.yaml"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 11 intel-gpu-plugin source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Intel GPU plugin source: $f" >&2; exit 1; }
 done
 
 rg -qx '  - ./intel-gpu-plugin/ks.yaml' kubernetes/apps/kube-system/kustomization.yaml || {

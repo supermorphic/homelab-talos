@@ -10,7 +10,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-trivy-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$values" "$hr" "$repo" "$base/app/namespace.yaml" "$base/app/kustomization.yaml"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 10 Trivy source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Trivy source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./trivy-operator/ks.yaml' kubernetes/apps/security/kustomization.yaml || {
   echo 'Refusing: ./trivy-operator/ks.yaml is not listed in the security kustomization.' >&2
@@ -36,4 +36,4 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
   helm template trivy-operator trivy-operator --repo https://aquasecurity.github.io/helm-charts --version "$chart_version" --namespace trivy-system --values "$values" >"$temp_dir/trivy.yaml"
 [[ "$(yq ea 'select(.kind == "ConfigMap" and .metadata.name == "trivy-operator-config") | .data.OPERATOR_SBOM_GENERATION_ENABLED' "$temp_dir/trivy.yaml")" == 'false' ]]
 
-echo 'Phase 10 Trivy Operator source, wiring, dependency, pinned chart, scanner settings, and render passed validation.'
+echo 'Trivy Operator source, wiring, dependency, pinned chart, scanner settings, and render passed validation.'

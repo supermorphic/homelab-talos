@@ -38,7 +38,7 @@ k() { kubectl --kubeconfig "$kubeconfig" --namespace "$ns" "$@"; }
 app_exec() { k exec "$1" -c app -- sh -c "$2"; }
 
 pod="$(k get pod -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
-[[ -n "$pod" ]] || { echo 'No sonarr pod found (is Phase 13 bootstrapped?).' >&2; write_recovery 'not-required' 'aborted; nothing created'; exit 3; }
+[[ -n "$pod" ]] || { echo 'No sonarr pod found (is Sonarr deployed?).' >&2; write_recovery 'not-required' 'aborted; nothing created'; exit 3; }
 
 cleanup() {
   local cleanup_ok=true

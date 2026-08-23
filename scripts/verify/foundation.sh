@@ -11,14 +11,14 @@ require_bash
 }
 
 kubeconfig="$1"
-phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
+foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
 [[ -f "$kubeconfig" ]] || {
   echo "Missing $kubeconfig; run just talos kubeconfig." >&2
   exit 1
 }
 
 just kube flux-verify
-for name in "${phase7_names[@]}"; do
+for name in "${foundation_names[@]}"; do
   kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
     --for=condition=Ready "kustomization/$name" --timeout=15m
   state="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$name" --output json)"
@@ -107,4 +107,4 @@ response="$(curl --silent --show-error --fail --max-time 15 \
 [[ -n "$response" ]]
 
 just kube cilium-postflight
-echo 'Phase 7 verification passed: certificates, MetalLB, Envoy Gateway, Pi-hole DNS, trusted HTTPS, echo, Talos, and etcd are healthy.'
+echo 'Internal foundation verification passed: certificates, MetalLB, Envoy Gateway, Pi-hole DNS, trusted HTTPS, echo, Talos, and etcd are healthy.'

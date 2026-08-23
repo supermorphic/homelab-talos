@@ -36,7 +36,7 @@ spec:
                 path: /spec/template/spec/serviceAccountName
                 value: portainer-readonly
           # Standard Agents are deferred. Only the Gateway backend port belongs
-          # on the in-cluster Service in Phase 1.
+          # on the in-cluster Service in the read-only Portainer design.
           - target:
               version: v1
               kind: Service

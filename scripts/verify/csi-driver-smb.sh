@@ -19,4 +19,4 @@ kubectl --kubeconfig "$kubeconfig" get csidriver smb.csi.k8s.io >/dev/null || {
   echo 'CSIDriver smb.csi.k8s.io is not registered.' >&2
   exit 1
 }
-echo 'Phase 11 csi-driver-smb acceptance passed: Kustomization Ready, controller + node plugin rolled out, CSIDriver registered.'
+echo 'SMB CSI driver acceptance passed: Kustomization Ready, controller + node plugin rolled out, CSIDriver registered.'

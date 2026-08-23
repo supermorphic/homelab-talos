@@ -16,7 +16,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-plex-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$values" "$route" "$cnp" "$base/app/kustomization.yaml" "$oci"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 11 Plex source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Plex source: $f" >&2; exit 1; }
 done
 
 rg -qx '  - ./plex/ks.yaml' kubernetes/apps/media/kustomization.yaml || {

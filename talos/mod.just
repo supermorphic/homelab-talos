@@ -51,7 +51,7 @@ generate: source-validate
 
     just talos validate
 
-# Validate rendered machine configs and the Phase 2 acceptance settings.
+# Validate rendered machine configs and the Talos acceptance settings.
 validate: source-validate
     #!/usr/bin/env bash
     set -euo pipefail
@@ -127,7 +127,7 @@ validate: source-validate
       echo "Rendered node configs differ in more than their hostname documents." >&2
       exit 1
     }
-    echo "All Phase 2 rendered Talos configs passed validation."
+    echo "All rendered Talos configs passed validation."
 
 # Apply one generated machine config from maintenance mode after checking the
 # live node, Secure Boot state, target NVMe identity, and explicit confirmation.

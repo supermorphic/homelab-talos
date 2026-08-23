@@ -125,4 +125,4 @@ assert_equal 'Hubble Relay Cilium errors and warnings' '0' \
 
 just kube cilium-postflight
 
-echo 'Phase 5 read-only verification passed: Cilium 1.19.6, three Ready nodes, healthy DNS and Hubble, expected architecture, Talos, and etcd.'
+echo 'Cilium read-only verification passed: Cilium 1.19.6, three Ready nodes, healthy DNS and Hubble, expected architecture, Talos, and etcd.'

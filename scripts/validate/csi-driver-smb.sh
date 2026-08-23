@@ -11,7 +11,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-csi-smb-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$repo" "$values" "$base/app/namespace.yaml" "$base/app/kustomization.yaml"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 11 csi-driver-smb source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing SMB CSI driver source: $f" >&2; exit 1; }
 done
 
 rg -qx '  - ./csi-driver-smb/ks.yaml' kubernetes/apps/storage/kustomization.yaml || {

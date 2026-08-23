@@ -23,11 +23,11 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: tautulli
-        # Missed by the phase-1 capture; Seerr had zero forwarded flows to Plex.
+        # Missed by the initial capture; Seerr had zero forwarded flows to Plex.
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: seerr
-        # Also missed by the phase-1 capture, for the same reason Seerr was: the capture
+        # Also missed by the initial capture, for the same reason Seerr was: the capture
         # exercised playback clients, not the import pipeline. Each of these has a Plex
         # Media Server connection under Settings -> Connect, which posts a library-update
         # request to 32400 when media is imported or upgraded. That is event-driven, so a

@@ -52,7 +52,7 @@ assert_equal 'Deployment strategy' 'Recreate' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get deployment portainer --output jsonpath='{.spec.strategy.type}')"
 assert_equal 'Deployment ServiceAccount' 'portainer-readonly' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get deployment portainer --output jsonpath='{.spec.template.spec.serviceAccountName}')"
-assert_empty 'Phase 1 AGENT_SECRET environment variable' \
+assert_empty 'read-only Portainer design AGENT_SECRET environment variable' \
   "$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get deployment portainer --output jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AGENT_SECRET")].name}')"
 
 assert_equal 'Service type' 'ClusterIP' \
@@ -105,4 +105,4 @@ curl --silent --show-error --fail --location \
 just kube portainer-validate
 just kube portainer-policy-validate
 
-echo 'Portainer Phase 1 acceptance passed: Ready, retained PVC, internal HTTPS, isolated network paths, rendered policy, and effective read-only Kubernetes authorization.'
+echo 'Read-only Portainer design acceptance passed: Ready, retained PVC, internal HTTPS, isolated network paths, rendered policy, and effective read-only Kubernetes authorization.'
