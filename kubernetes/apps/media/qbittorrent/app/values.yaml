@@ -9,6 +9,12 @@ controllers:
     type: deployment
     strategy: Recreate
     pod:
+      annotations:
+        # Both ProtonVPN Secret consumers load only at Pod startup (environment and
+        # subPath mount). The guarded secret recipe stamps this Git blob revision so
+        # every encrypted Secret rotation changes the Pod template and replaces the Pod.
+        # CI verifies it against protonvpn.sops.yaml; do not edit it independently.
+        sops-hash: "53929f4ebf11da73813a8d6686efddbefd04b44e"
       securityContext:
         fsGroup: 568
         fsGroupChangePolicy: OnRootMismatch

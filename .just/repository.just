@@ -595,6 +595,7 @@ protonvpn-secrets:
 
     expected_confirmation='write:media:protonvpn:sops'
     target='kubernetes/apps/media/qbittorrent/app/protonvpn.sops.yaml'
+    values='kubernetes/apps/media/qbittorrent/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-protonvpn-secrets.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -647,8 +648,18 @@ protonvpn-secrets:
     ! rg -Fq -- "$WIREGUARD_PRIVATE_KEY" "$temp_dir/protonvpn.sops.yaml"
     ! rg -Fq -- "$apikey" "$temp_dir/protonvpn.sops.yaml"
 
+    revision="$(git hash-object "$temp_dir/protonvpn.sops.yaml")"
+    cp -- "$values" "$temp_dir/values.yaml"
+    REV="$revision" yq -i \
+      '.controllers.qbittorrent.pod.annotations."sops-hash" = strenv(REV)' \
+      "$temp_dir/values.yaml"
+    [[ "$(yq -r '.controllers.qbittorrent.pod.annotations."sops-hash"' "$temp_dir/values.yaml")" == "$revision" ]]
+
     mv -- "$temp_dir/protonvpn.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (protonvpn in media). Control-server apikey is embedded in the encrypted config.toml."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(git hash-object "$target")" == "$revision" ]]
+    [[ "$(yq -r '.controllers.qbittorrent.pod.annotations."sops-hash"' "$values")" == "$revision" ]]
+    echo "Wrote SOPS-encrypted $target (protonvpn in media) and stamped its rollout revision in $values. Control-server apikey is embedded in the encrypted config.toml."
 
 # Write only the SOPS-encrypted Grafana admin Secret for kube-prometheus-stack
 # from GRAFANA_ADMIN_USER/GRAFANA_ADMIN_PASSWORD. Never echoes the password.

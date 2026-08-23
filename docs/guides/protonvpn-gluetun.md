@@ -65,16 +65,20 @@ Feed the key to the guarded recipe (in your shell, with your age key loaded):
 read -rs WIREGUARD_PRIVATE_KEY; export WIREGUARD_PRIVATE_KEY   # paste PrivateKey, Enter
 export PROTONVPN_SECRETS_CONFIRM='write:media:protonvpn:sops'
 mise exec -- just repo protonvpn-secrets
-git add kubernetes/apps/media/qbittorrent/app/protonvpn.sops.yaml
-git commit -m "Add SOPS protonvpn secret for qBittorrent+Gluetun" && git push
+unset WIREGUARD_PRIVATE_KEY PROTONVPN_SECRETS_CONFIRM
+mise exec -- just kube qbittorrent-validate
+git add kubernetes/apps/media/qbittorrent/app/protonvpn.sops.yaml \
+  kubernetes/apps/media/qbittorrent/app/values.yaml
 ```
 
 `just repo protonvpn-secrets` also generates the Gluetun control-server API key and bakes
 it into the encrypted `config.toml`. Secret handling is leak-safe by construction: the key
 is passed via environment (never a CLI arg or `echo`), the plaintext intermediate lives
 only in a `umask 077` tempdir cleaned by an `EXIT` trap, and the recipe asserts neither the
-key nor the apikey appears in the ciphertext before moving only the encrypted file into
-place.
+key nor the apikey appears in the ciphertext. It installs only the encrypted Secret and
+the non-secret rollout stamp. The recipe stamps the encrypted Secret's Git blob revision
+into the qBittorrent Pod template. Commit both staged files on a feature branch and
+publish them through the normal pull-request workflow.
 
 ## Server pin: country, not hostname
 
@@ -106,9 +110,87 @@ Downloads stall but nothing leaks. It is a visible outage, not a silent one.
 **Renewal procedure:**
 1. Proton dashboard → **Extend** the WireGuard configuration before the expiry date.
 2. **If Extend keeps the same key** (typical): nothing to change in-cluster.
-3. **If Proton issues a new key** (regenerate): rotate the secret — re-run
-   `just repo protonvpn-secrets` with the new `PrivateKey`, commit the updated
-   `protonvpn.sops.yaml`, and let Flux reconcile (or `just kube qbittorrent-verify`).
+3. **If Proton issues a new key** (regenerate): keep the old configuration active and
+   available for rollback. Record the current qBittorrent Pod UID, then re-run the guarded
+   `just repo protonvpn-secrets` recipe with the new `PrivateKey`. It updates both
+   `protonvpn.sops.yaml` and the `sops-hash` Pod annotation in `values.yaml`.
+4. Run `mise exec -- just kube qbittorrent-validate` and `mise exec -- just ci`. Commit
+   both files on a feature branch and use the normal reviewed pull-request workflow.
+5. After an authorized merge, Flux applies the Secret and watched values ConfigMap. The
+   changed Pod-template annotation makes the `Recreate` Deployment replace the complete
+   Gluetun/qBittorrent Pod, with a brief service outage. Do not patch the live Secret or
+   run an ad hoc `kubectl rollout restart`.
+
+The publication and live checks below are operator-run. The final probe creates and
+removes one short-lived no-VPN Pod to obtain an independent home/WAN egress reference;
+do not run it with read-only agent credentials.
+
+Before merging the rotation, record the current Pod UID in the shell that will perform
+acceptance:
+
+```bash
+old_pod_uid="$(
+  mise exec -- kubectl --kubeconfig .kube/config --namespace media get pods \
+    --selector app.kubernetes.io/name=qbittorrent \
+    --field-selector status.phase=Running \
+    --output jsonpath='{.items[0].metadata.uid}'
+)"
+test -n "$old_pod_uid"
+```
+
+After Flux reconciles the merged commit, verify the replacement and credential uptake
+without printing the private key or either digest:
+
+```bash
+mise exec -- just kube qbittorrent-verify
+
+pod_name="$(
+  mise exec -- kubectl --kubeconfig .kube/config --namespace media get pods \
+    --selector app.kubernetes.io/name=qbittorrent \
+    --field-selector status.phase=Running \
+    --output jsonpath='{.items[0].metadata.name}'
+)"
+new_pod_uid="$(
+  mise exec -- kubectl --kubeconfig .kube/config --namespace media get pod "$pod_name" \
+    --output jsonpath='{.metadata.uid}'
+)"
+expected_revision="$(git hash-object kubernetes/apps/media/qbittorrent/app/protonvpn.sops.yaml)"
+loaded_revision="$(
+  mise exec -- kubectl --kubeconfig .kube/config --namespace media get pod "$pod_name" \
+    --output jsonpath='{.metadata.annotations.sops-hash}'
+)"
+test "$new_pod_uid" != "$old_pod_uid"
+test "$loaded_revision" = "$expected_revision"
+
+set +x
+read -rs WIREGUARD_PRIVATE_KEY; export WIREGUARD_PRIVATE_KEY   # rotated PrivateKey, Enter
+expected_key_digest="$(printf '%s' "$WIREGUARD_PRIVATE_KEY" | mise exec -- openssl dgst -sha256 | awk '{print $NF}')"
+loaded_key_digest="$(
+  mise exec -- kubectl --kubeconfig .kube/config --namespace media exec "$pod_name" \
+    --container gluetun -- sh -c 'printf %s "$WIREGUARD_PRIVATE_KEY" | sha256sum' \
+    | awk '{print $1}'
+)"
+test "$loaded_key_digest" = "$expected_key_digest"
+unset WIREGUARD_PRIVATE_KEY expected_key_digest loaded_key_digest
+
+mise exec -- just test probe qbittorrent
+```
+
+`qbittorrent-verify` proves Flux and Helm readiness, Deployment rollout completion,
+HTTPRoute acceptance, DNS, and WebUI reachability. It does **not** prove credential
+uptake or VPN behavior. The explicit UID, revision, and redacted digest comparisons prove
+that a replacement Pod loaded the rotated key. The specialized probe then independently
+proves that the VPN is running through Sweden, qBittorrent egress matches the VPN address
+and not the home/WAN address, the forwarded port matches qBittorrent's listen port, and
+DNS uses Gluetun's loopback resolver.
+
+If any reconciliation, replacement, digest, or VPN probe check fails, stop. Do not revoke
+the old Proton credential, repeatedly restart the Pod, bypass Gluetun, or accept only the
+WebUI check. Keep the fail-closed outage in place and revert the rotation commit through a
+reviewed Git pull request so Flux restores the previous Secret and Pod-template revision.
+Do not use `kubectl rollout undo` against Flux-managed state. If the previous Proton
+credential is no longer valid, stop and obtain a valid port-forwarding credential before
+another reviewed rotation.
 
 ## Monitoring the expiration — options
 
