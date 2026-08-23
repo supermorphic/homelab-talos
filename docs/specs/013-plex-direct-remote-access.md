@@ -107,7 +107,7 @@ Envoy. The compensating controls are the non-root and capability-free workload, 
 image, read-only media, absent Kubernetes API token, restricted Cilium policy, detection,
 prompt patching, and the ability to remove one DNAT quickly.
 
-![Plex public-port trust boundaries](images/2026-08-02-plex-remote-access-trust-boundaries.png)
+![Plex public-port trust boundaries](images/plex-remote-access-trust-boundaries.png)
 
 ## Detection and response
 

@@ -109,10 +109,10 @@ paths and denied cluster, LAN, multicast, and Kubernetes API paths.
 
 ## Public-port trust boundary
 
-![Plex public-port trust boundaries](images/2026-08-02-plex-remote-access-trust-boundaries.png)
+![Plex public-port trust boundaries](images/plex-remote-access-trust-boundaries.png)
 
 Editable source:
-[2026-08-02-plex-remote-access-trust-boundaries.svg](images/2026-08-02-plex-remote-access-trust-boundaries.svg).
+[plex-remote-access-trust-boundaries.svg](images/plex-remote-access-trust-boundaries.svg).
 
 A single DNAT does not expose every VLAN or the Kubernetes API by itself. It does expose
 Plex's parser and API continuously. Code execution in Plex inherits process memory, the

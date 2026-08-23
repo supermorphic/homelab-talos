@@ -11,10 +11,10 @@ test. It is historical design evidence, not a description of the current remote 
 
 The experiment used split-horizon DNS for `plex.lab.supermorphic.com`.
 
-![Split-horizon data flow](images/2026-08-03-plex-split-horizon-data-flow.png)
+![Split-horizon data flow](images/plex-split-horizon-data-flow.png)
 
 Editable source:
-[2026-08-03-plex-split-horizon-data-flow.svg](images/2026-08-03-plex-split-horizon-data-flow.svg).
+[plex-split-horizon-data-flow.svg](images/plex-split-horizon-data-flow.svg).
 
 The private horizon kept the Pi-hole answer, shared internal Envoy Gateway, internal
 wildcard certificate, and Plex HTTPRoute. The public horizon used a Cloudflare DNS-only
@@ -28,10 +28,10 @@ IPv6 or AAAA record was allowed.
 
 ## Trust boundaries
 
-![Public Envoy trust boundaries](images/2026-08-03-plex-public-envoy-trust-boundaries.png)
+![Public Envoy trust boundaries](images/plex-public-envoy-trust-boundaries.png)
 
 Editable source:
-[2026-08-03-plex-public-envoy-trust-boundaries.svg](images/2026-08-03-plex-public-envoy-trust-boundaries.svg).
+[plex-public-envoy-trust-boundaries.svg](images/plex-public-envoy-trust-boundaries.svg).
 
 The external data plane never used the shared internal Gateway or its wildcard key. Its
 certificate covered only `plex.lab.supermorphic.com`, which limited the value of a key
