@@ -190,7 +190,7 @@ if [[ "$job_state" == 'failed' ]]; then
 			"manifest",
 			"schemaVersion",
 			"mode",
-			"runId",
+			"createdAt",
 			"upstream.diagnostics",
 			"upstream.diagnostics.manifestSchemaVersion",
 			"upstream.diagnostics.resultSchemaVersion",

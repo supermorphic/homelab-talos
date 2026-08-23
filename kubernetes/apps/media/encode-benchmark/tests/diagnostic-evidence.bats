@@ -100,14 +100,35 @@ run_collector() {
 	done
 }
 
-@test "collector rejects evidence whose retained manifest names another run" {
+@test "collector rejects evidence whose retained manifest timestamp names another run" {
 	create_valid_evidence_tree
-	jq '.runId = "20260820T223425Z-deadbeef"' "$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+	jq '.createdAt = "20260820T223426Z"' "$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
 	mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *'manifest'* ]]
+}
+
+@test "collector accepts the producer manifest timestamp for the exact immutable run" {
+	create_valid_evidence_tree
+	jq 'del(.runId) | .createdAt = "20260820T223425Z"' \
+		"$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+	mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 0 ]
+}
+
+@test "collector binds the retained diagnostic summary to the full immutable run id" {
+	create_valid_evidence_tree
+	jq '.runId = "20260820T223425Z-deadbeef"' \
+		"$EVIDENCE_ROOT/diagnostic-summary.json" >"$BATS_TEST_TMPDIR/summary.json"
+	mv "$BATS_TEST_TMPDIR/summary.json" "$EVIDENCE_ROOT/diagnostic-summary.json"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic summary does not bind the approved panel' ]
 }
 
 @test "collector rejects a well-formed manifest digest for a different diagnostic panel" {
@@ -149,7 +170,9 @@ wrong-manifest-type	[]	manifest	wrong-type
 missing-schema-version	del(.schemaVersion)	schemaVersion	missing
 wrong-schema-version-type	.schemaVersion = "2"	schemaVersion	wrong-type
 wrong-mode	.mode = "quality"	mode	mismatch
-wrong-run	.runId = "20260820T223425Z-deadbeef"	runId	mismatch
+missing-created-at	del(.createdAt)	createdAt	missing
+wrong-created-at-type	.createdAt = 7	createdAt	wrong-type
+wrong-created-at	.createdAt = "20260820T223426Z"	createdAt	mismatch
 missing-upstream	del(.upstream)	upstream.diagnostics	missing
 wrong-upstream-type	.upstream = []	upstream.diagnostics	missing
 wrong-diagnostics-type	.upstream.diagnostics = []	upstream.diagnostics	wrong-type
@@ -1264,7 +1287,7 @@ create_valid_evidence_tree() {
 	jq -n --arg run "$RUN_ID" '
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostics",runId:$run,status:"complete",
 		 vmaf:{total:5,entries:[]},hdr:{total:3,entries:[]}}' >"$EVIDENCE_ROOT/diagnostic-summary.json"
-	jq -n --arg run "$RUN_ID" --arg panel_sha "$PANEL_SHA256" '{schemaVersion:2,mode:"diagnostics",runId:$run,upstream:{diagnostics:{manifestSchemaVersion:1,resultSchemaVersion:1,acceptedFindingsSha256:"sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",decisionSha256:"sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",historicalQualityRunId:"20260817T233546Z-debc0498",historicalFindingsRunId:"20260818T214739Z-8bc2de3e",panelSha256:$panel_sha}}}' >"$EVIDENCE_ROOT/manifest.json"
+	jq -n --arg panel_sha "$PANEL_SHA256" '{schemaVersion:2,mode:"diagnostics",createdAt:"20260820T223425Z",upstream:{diagnostics:{manifestSchemaVersion:1,resultSchemaVersion:1,acceptedFindingsSha256:"sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",decisionSha256:"sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",historicalQualityRunId:"20260817T233546Z-debc0498",historicalFindingsRunId:"20260818T214739Z-8bc2de3e",panelSha256:$panel_sha}}}' >"$EVIDENCE_ROOT/manifest.json"
 	while IFS=$'\t' read -r sample clip index; do
 		path="$EVIDENCE_ROOT/vmaf/$sample/$clip"
 		mkdir -p "$path"

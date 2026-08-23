@@ -97,7 +97,7 @@ done
 
 summary="$evidence_root/diagnostic-summary.json"
 manifest="$evidence_root/manifest.json"
-manifest_issues="$(jq -S -c --arg run "$EVIDENCE_RUN_ID" --arg panel_sha "$expected_panel_sha256" '
+manifest_issues="$(jq -S -c --arg created_at "${EVIDENCE_RUN_ID%-*}" --arg panel_sha "$expected_panel_sha256" '
 	def issue($object; $key; $field; $expected_type; $expected):
 		if ($object | has($key) | not) then {field:$field,kind:"missing"}
 		elif ($object[$key] | type) != $expected_type then {field:$field,kind:"wrong-type"}
@@ -109,7 +109,7 @@ manifest_issues="$(jq -S -c --arg run "$EVIDENCE_RUN_ID" --arg panel_sha "$expec
 		[
 			issue(.; "schemaVersion"; "schemaVersion"; "number"; 2),
 			issue(.; "mode"; "mode"; "string"; "diagnostics"),
-			issue(.; "runId"; "runId"; "string"; $run)
+			issue(.; "createdAt"; "createdAt"; "string"; $created_at)
 		] +
 		(if (.upstream | type) != "object" or (.upstream | has("diagnostics") | not) then
 			[{field:"upstream.diagnostics",kind:"missing"}]
