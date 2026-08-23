@@ -2,7 +2,7 @@
 
 Use this guide to restore, change, validate, or remove the external router path to Plex.
 The design and accepted historical evidence are in
-[specification 019](../specs/019-plex-direct-remote-access.md). This procedure changes
+[specification 013](../specs/013-plex-direct-remote-access.md). This procedure changes
 what the Internet can reach and requires an attended operator window.
 
 ## Current path

@@ -28,7 +28,7 @@ MetalLB and Envoy Gateway own LAN address announcement and ingress.
 
 Use only the repository Just workflows documented in
 [`../../../../README.md`](../../../../README.md). The
-[platform specification](../../../../docs/specs/011-talos-flux-platform.md) records the
+[platform specification](../../../../docs/specs/010-talos-flux-platform.md) records the
 bootstrap and adoption rationale.
 Do not run an ad hoc Helm installation because Flux adoption depends on the
 release name, namespace, chart, and values remaining identical.

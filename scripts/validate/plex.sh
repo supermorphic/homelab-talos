@@ -144,7 +144,7 @@ fi
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=lidarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=radarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=seerr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=sonarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
 [[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
 [[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
-# docs/specs/019-plex-direct-remote-access.md accepts `world:32400` as
+# docs/specs/013-plex-direct-remote-access.md accepts `world:32400` as
 # the containment cost of publishing Plex — but only there, and `cluster` never. Cilium's
 # `world` is everything outside the cluster CIDR, so as an observed consequence of that
 # mechanism, this also admits LAN clients to the LoadBalancer address.

@@ -351,7 +351,7 @@ The guarded Talos installation procedure is in [`talos/README.md`](talos/README.
 The Cilium bootstrap and Flux adoption boundary is in the
 [Cilium README](kubernetes/apps/kube-system/cilium/README.md), and the current Flux
 source boundary is in [`kubernetes/README.md`](kubernetes/README.md). The
-[Talos and Flux platform specification](docs/specs/011-talos-flux-platform.md)
+[Talos and Flux platform specification](docs/specs/010-talos-flux-platform.md)
 records the architecture rationale. Current Pi-hole and Portainer procedures are in
 the [Pi-hole guide](docs/guides/pihole-integration.md) and
 [Portainer guide](docs/guides/portainer.md).

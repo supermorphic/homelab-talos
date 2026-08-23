@@ -25,6 +25,6 @@ Talos prerequisites: the `siderolabs/iscsi-tools` and
 
 Use the guarded `just repo storage-secrets` / `just kube storage-validate` /
 `just bootstrap storage` / `just kube storage-verify` workflow. The
-[platform specification](../../../../docs/specs/011-talos-flux-platform.md) records the
+[platform specification](../../../../docs/specs/010-talos-flux-platform.md) records the
 storage design rationale, and the [recovery runbook](../../../../docs/runbooks/recovery.md)
 covers storage failures.

@@ -73,5 +73,5 @@ If mise is not activated in the shell, prefix either invocation with
 `mise exec --`, as described in the root README.
 
 See the root [`README.md`](../README.md) for workstation setup, the
-[platform specification](../docs/specs/011-talos-flux-platform.md) for design rationale,
+[platform specification](../docs/specs/010-talos-flux-platform.md) for design rationale,
 and the [recovery runbook](../docs/runbooks/recovery.md) for failure response.

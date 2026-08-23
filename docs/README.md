@@ -43,17 +43,17 @@
 - [006 — Media Stack Architecture](specs/006-media-stack-architecture.md) — Describes the shared storage, networking, security, and dependency model for media applications.
 - [007 — ntfy Notification Architecture](specs/007-ntfy-notification-architecture.md) — Describes the private notification service and authenticated producer and consumer paths.
 - [008 — Plex Relay and Sonos Integration](specs/008-plex-relay-sonos.md) — Records the retained Relay fallback, Sonos boundary, and Plex workload controls.
-- [010 — Portainer GitOps Observability](specs/010-portainer-gitops-observability.md) — Describes Portainer's read-only observability design within GitOps authority boundaries.
-- [011 — Talos and Flux Platform](specs/011-talos-flux-platform.md) — Describes the implemented three-node Talos, Flux, networking, and storage architecture.
-- [013 — Test Reporting Standard](specs/013-test-reporting-standard.md) — Defines the implemented assurance, evidence, catalog, campaign, and reporting design.
-- [017 — Plex Public Envoy Experiment](specs/017-plex-public-envoy-experiment.md) — Records the retired public Envoy design, failed Sonos result, and reconsideration conditions.
-- [019 — Plex Direct Remote Access](specs/019-plex-direct-remote-access.md) — Describes the current Plex router exposure, identity, containment, and rollback design.
-- [020 — Plex Remote-Access Detection](specs/020-plex-remote-access-detection.md) — Describes Hubble-based aggregate detection for sustained off-cluster Plex traffic.
-- [021 — Alerting Architecture](specs/021-alerting-architecture.md) — Describes rule ownership, validation coverage, routing, and focused workload-policy alerts.
-- [026 — Cert-manager Staging Retirement](specs/026-cert-manager-staging-retirement.md) — Records why permanent staging resources were removed and the production certificate boundary.
-- [027 — FileFlows QSV HEVC ICQ Evaluation](specs/027-fileflows-qsv-hevc-icq-evaluation.md) — Describes the ICQ benchmark design, diagnostics, quality gates, and evidence contract.
-- [028 — Media Integration Health Collector](specs/028-media-integration-health-collector.md) — Records the first unimplemented collector design and its retained assurance model.
-- [029 — Media Integration Health Active Probes](specs/029-media-integration-health-active-probes.md) — Records the unimplemented active-probe revision and why it was replaced.
-- [030 — Media Integration Health with Gatus](specs/030-media-integration-health-gatus.md) — Records the implemented Gatus redesign before its API-success semantics changed.
-- [031 — Media Integration Health API Reachability](specs/031-media-integration-health-api-reachability.md) — Describes the current authenticated Servarr reachability checks and alerts.
+- [009 — Portainer GitOps Observability](specs/009-portainer-gitops-observability.md) — Describes Portainer's read-only observability design within GitOps authority boundaries.
+- [010 — Talos and Flux Platform](specs/010-talos-flux-platform.md) — Describes the implemented three-node Talos, Flux, networking, and storage architecture.
+- [011 — Test Reporting Standard](specs/011-test-reporting-standard.md) — Defines the implemented assurance, evidence, catalog, campaign, and reporting design.
+- [012 — Plex Public Envoy Experiment](specs/012-plex-public-envoy-experiment.md) — Records the retired public Envoy design, failed Sonos result, and reconsideration conditions.
+- [013 — Plex Direct Remote Access](specs/013-plex-direct-remote-access.md) — Describes the current Plex router exposure, identity, containment, and rollback design.
+- [014 — Plex Remote-Access Detection](specs/014-plex-remote-access-detection.md) — Describes Hubble-based aggregate detection for sustained off-cluster Plex traffic.
+- [015 — Alerting Architecture](specs/015-alerting-architecture.md) — Describes rule ownership, validation coverage, routing, and focused workload-policy alerts.
+- [016 — Cert-manager Staging Retirement](specs/016-cert-manager-staging-retirement.md) — Records why permanent staging resources were removed and the production certificate boundary.
+- [017 — FileFlows QSV HEVC ICQ Evaluation](specs/017-fileflows-qsv-hevc-icq-evaluation.md) — Describes the ICQ benchmark design, diagnostics, quality gates, and evidence contract.
+- [018 — Media Integration Health Collector](specs/018-media-integration-health-collector.md) — Records the first unimplemented collector design and its retained assurance model.
+- [019 — Media Integration Health Active Probes](specs/019-media-integration-health-active-probes.md) — Records the unimplemented active-probe revision and why it was replaced.
+- [020 — Media Integration Health with Gatus](specs/020-media-integration-health-gatus.md) — Records the implemented Gatus redesign before its API-success semantics changed.
+- [021 — Media Integration Health API Reachability](specs/021-media-integration-health-api-reachability.md) — Describes the current authenticated Servarr reachability checks and alerts.
 - [022 — Documentation Lifecycle Migration](specs/022-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.

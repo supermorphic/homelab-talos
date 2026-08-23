@@ -184,5 +184,5 @@ notification route, or recovery design. A calendar-based review is not required.
 
 This permanent path is smaller and more compatible than the public Envoy design and
 exposes no operator-controlled TLS key. Its cost is continuous Internet reachability to
-Plex's own listener. The [remote-access detection specification](020-plex-remote-access-detection.md)
+Plex's own listener. The [remote-access detection specification](014-plex-remote-access-detection.md)
 defines the available aggregate signals and their limits.

@@ -20,7 +20,7 @@ Kustomizations and order with `dependsOn`.
 The router must exclude `192.168.90.30-192.168.90.39` from DHCP. Use
 `just bootstrap foundation` for guarded first reconciliation and
 `just kube foundation-status` for inspection. The
-[platform specification](../../../../docs/specs/011-talos-flux-platform.md) records the
+[platform specification](../../../../docs/specs/010-talos-flux-platform.md) records the
 addressing and availability rationale.
 
 All three nodes are schedulable control planes, so the Talos machine config

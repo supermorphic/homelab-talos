@@ -185,8 +185,9 @@ solely to satisfy these style rules.
 
 ## Design lifecycle
 
-- Use monotonically increasing numeric identifiers for durable design specifications,
-  such as `001-<name>.md`.
+- Use consecutive, monotonically increasing three-digit identifiers for durable design
+  specifications, such as `001-<name>.md`. Assign the next number after the highest
+  existing specification. After merge, do not reuse or renumber an identifier.
 - A design specification may evolve while implementation is in progress. When
   implementation findings materially change the design, update the specification to
   reflect the resulting design and rationale.

@@ -15,5 +15,5 @@ resources are added under a separate, explicitly reviewed change.
 Applications attach portable HTTPRoutes from explicitly labeled namespaces.
 They do not receive the wildcard TLS private key. Use the guarded foundation Just
 workflows documented in the [root README](../../../../README.md); the
-[platform specification](../../../../docs/specs/011-talos-flux-platform.md) records the
+[platform specification](../../../../docs/specs/010-talos-flux-platform.md) records the
 Gateway design rationale.

@@ -6,7 +6,7 @@ real SYN load against Plex and is operator-run, disruptive test activity.
 
 This exercise validates aggregate detection. It does not test Plex authentication
 failures, bandwidth saturation, successful low-rate probes, application request shape,
-or source-address retention. See [specification 020](../specs/020-plex-remote-access-detection.md)
+or source-address retention. See [specification 014](../specs/014-plex-remote-access-detection.md)
 for the signal design and limits.
 
 ## Authority and preconditions

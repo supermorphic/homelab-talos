@@ -56,7 +56,7 @@ spec:
             - port: "32400"
               protocol: TCP
     # Off-cluster ingress for the operator-created WAN DNAT. §6 of
-    # docs/specs/019-plex-direct-remote-access.md accepts `world:32400` as
+    # docs/specs/013-plex-direct-remote-access.md accepts `world:32400` as
     # the containment cost of publishing Plex; it does not separately address LAN
     # reachability. `world` is every address outside the cluster CIDR, so as an
     # observed consequence of that mechanism, this also admits LAN clients to the

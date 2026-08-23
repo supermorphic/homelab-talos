@@ -125,7 +125,7 @@ use the documented guarded `mise exec -- just bootstrap …` recipe rather than
 `kubectl apply`.
 
 See the root [`README.md`](../README.md) for guarded bootstrap workflows and the
-[platform specification](../docs/specs/011-talos-flux-platform.md) for the Cilium,
+[platform specification](../docs/specs/010-talos-flux-platform.md) for the Cilium,
 Flux, and internal service foundation rationale. The
 [Pi-hole integration guide](../docs/guides/pihole-integration.md) covers Pi-hole
 reinstall and credential recovery. The [SOPS guide](../docs/guides/sops.md) covers
