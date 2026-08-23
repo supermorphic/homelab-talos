@@ -1672,7 +1672,7 @@ intel-gpu-plugin:
 
     just kube intel-gpu-plugin-verify
     bootstrap_complete=true
-    echo 'Phase 11 intel-gpu-plugin live acceptance passed. Set suspend=false in Git, commit, push. THEN add the gpu.intel.com/i915 request to Plex (PR 11-3b) and confirm HW transcode.'
+    echo 'Intel GPU plugin live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube intel-gpu-plugin-verify. Plex already declares its gpu.intel.com/i915 request.'
 
 # Reconcile the suspended encoding benchmark app after guarded source and live-state
 # checks, then verify its inert resources. On any post-resume failure the child is
@@ -1953,7 +1953,7 @@ portainer:
 
     just kube portainer-verify
     bootstrap_complete=true
-    echo 'Portainer Phase 1 live acceptance passed. Run the guarded persistence test, then change suspend=false and add the Gatus probe in the activation PR.'
+    echo 'Portainer live acceptance passed. Run the guarded persistence test, then set suspend=false in Git, commit, push, and rerun just kube portainer-verify. The active Gatus probe is already declared.'
 
 # Reconcile the suspended persistent test-report host after guarded source/static
 # validation, then run live read-only acceptance. Publication remains a separate,
