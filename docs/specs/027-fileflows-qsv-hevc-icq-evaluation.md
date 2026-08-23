@@ -242,15 +242,38 @@ contains only bounded continuity, metrics, normalized HDR oracles, classificatio
 reason codes. It omits retained commands, source paths, file hashes, runtime details,
 and raw logs.
 
+Manifest-binding failure has a separate bounded, value-redacted contract. The collector
+emits canonical schema-v1 `status: failed` JSON with reason
+`diagnostic-manifest-binding-invalid` and a nonempty `manifestIssues` array, then exits
+with the defined contract exit. Each issue contains only `field` and `kind`; `kind` is
+`missing`, `wrong-type`, or `mismatch`, never the retained or expected value. The field
+allowlist is `manifest`, `schemaVersion`, `mode`, `runId`, `upstream.diagnostics`, and
+`upstream.diagnostics.manifestSchemaVersion`,
+`upstream.diagnostics.resultSchemaVersion`,
+`upstream.diagnostics.acceptedFindingsSha256`,
+`upstream.diagnostics.decisionSha256`,
+`upstream.diagnostics.historicalQualityRunId`,
+`upstream.diagnostics.historicalFindingsRunId`, and
+`upstream.diagnostics.panelSha256`. Issues are unique and emitted in that fixed order. A
+non-object manifest produces only the `manifest` issue; a missing or wrongly typed
+`upstream.diagnostics` parent suppresses child issues. These constraints bound one
+collector result to at most ten issues.
+
 The workstation-side reader authenticates the collector before accepting its log. It
 requires exactly one deterministic Job and one controlled Pod, exact labels and owner
 UIDs, exact command and panel hash, the current scripts ConfigMap, pinned image identity,
 read-only mount shape, resource limits, and an allowed terminal state. A successful
 collector must emit one canonical JSON line that passes the same evidence schemas and
-classifiers again. A collector that terminates with the defined contract exit is also a
-valid result only when its one-line error belongs to the fixed allowlist; the reader
-transports it as canonical structured `status: failed` evidence. Unknown failures,
-ambiguous output, invalid provenance, or invalid schemas fail closed.
+classifiers again. For a manifest-binding failure, the workstation reader independently
+requires the canonical schema, exact top-level keys, reason, nonempty unique issue list,
+field allowlist, kind vocabulary, fixed order, parent-child suppression, and absence of
+value-bearing keys. It then transports the validated issues in canonical structured
+`status: failed` evidence with the strategy, reader mode, and approved run identity.
+Other defined contract-exit failures remain exact one-line fixed strings from a closed
+allowlist; the reader maps each string to its allowlisted sanitized reason code and
+transports that code as structured `status: failed` evidence. Unknown failures,
+ambiguous output, invalid provenance, noncanonical manifest-issue JSON, or invalid
+schemas fail closed.
 
 This reader supplies evidence for a later decision. It does not alter retained files,
 reinterpret the historical quality rows, create a new quality candidate, or authorize
