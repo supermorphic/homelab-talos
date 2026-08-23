@@ -1,16 +1,16 @@
 # Homelab Talos Platform
 
 This private repository is the source of truth for the three-node NUC Talos
-cluster and its Flux-managed Kubernetes platform. The cluster is being rebuilt
-from scratch on new NVMe drives; the old manual Talos layout remains only as a
-reference and rollback record.
+cluster and its Flux-managed Kubernetes platform. Start with the
+[documentation index](docs/README.md), then use the source-adjacent `README.md`
+for the subsystem being changed. Numbered [design specifications](docs/specs/)
+record design rationale. Transient implementation plans, when needed, remain
+uncommitted under `.tmp/plans/`.
 
-The canonical design and rollout order are in
-[`plans/talos-flux-platform-plan.md`](plans/talos-flux-platform-plan.md). Start
-there before enabling a new phase. Physical preflight evidence is in
-[`docs/phase-0-preflight.md`](docs/phase-0-preflight.md).
-Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, and Seerr UI configuration is
-documented in [`docs/arr-stack-startup.md`](docs/arr-stack-startup.md).
+Repository contribution and agent policy is in [`AGENTS.md`](AGENTS.md).
+Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr UI
+configuration is documented in the
+[media automation startup guide](docs/guides/arr-stack-startup.md).
 
 ## Development workflow
 
@@ -46,7 +46,7 @@ Actions `ci` check to pass, and squash as the only merge method. Actions validat
 GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
 has different commit identity but the equivalent source tree. The operator reviews
 and merges, then Flux reconciles the resulting `main`. See the
-[GitHub protection guide](docs/github-protection.md) for the applied settings, GitHub
+[GitHub protection guide](docs/guides/github-protection.md) for the applied settings, GitHub
 inspection locations, complete verification, and guarded recovery.
 
 ### Test cadence and campaigns
@@ -81,7 +81,7 @@ TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
 
 The `weekly` and `full` tokens bind the source and plan digest because both include
 disruptive recovery and a Plex node reboot. Campaigns capture and publish every child
-run automatically. See [`docs/test-campaigns.md`](docs/test-campaigns.md) for focused
+run automatically. See the [test campaign guide](docs/guides/test-campaigns.md) for focused
 campaigns, failure behavior, resume, and exact membership.
 
 AI agents follow the same rules via [`AGENTS.md`](AGENTS.md) (canonical) and
@@ -204,67 +204,67 @@ available for focused developer validation.
 | `just repo tools` | Install locked tools and print versions | — | Available |
 | `just repo versions` | Print the active tool versions | — | Available |
 | `just repo secrets` | Confirm the loaded age identity matches this repository | `SOPS_AGE_KEY`[`_FILE`] | Available |
-| `just repo pihole-status` | Verify Pi-hole HTTPS, tracked CA, and application-session write policy | `p1` SSH access | Enabled in Phase 7; read-only |
-| `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation | `p1` SSH access; `PIHOLE_CA_REFRESH_CONFIRM` | Enabled in Phase 7; mutating tracked public trust source after confirmation |
-| `just repo phase7-secrets` | Validate Phase 7 provider credentials and write only encrypted Secret manifests | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `PHASE7_SECRETS_CONFIRM` | Enabled in Phase 7; mutating tracked ciphertext after confirmation |
+| `just repo pihole-status` | Verify Pi-hole HTTPS, tracked CA, and application-session write policy | `p1` SSH access | Read-only |
+| `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation | `p1` SSH access; `PIHOLE_CA_REFRESH_CONFIRM` | Mutating tracked public trust source after confirmation |
+| `just repo phase7-secrets` | Validate foundation provider credentials and write only encrypted Secret manifests | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `PHASE7_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
 | `just repo verify` | Check policy, Talos sources, and tracked content for secrets | — | Available |
 | `just repo verify-files` | Check ignore boundaries and SOPS policy | — | Available; internal validation |
 | `just repo secret-scan` | Run the repository secret scans directly | — | Available |
 | `just talos generate` | Render and validate machine configs with Talhelper | `SOPS_AGE_KEY`[`_FILE`] | Available |
-| `just talos validate` | Strictly validate rendered Talos configs and Phase 2 policy | — | Available |
+| `just talos validate` | Strictly validate rendered Talos configs and current source policy | — | Available |
 | `just talos source-validate` | Validate trackable Talhelper inputs without decrypting identity | — | Available; internal validation |
-| `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Enabled in Phase 3; destructive after confirmation |
+| `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Destructive after confirmation |
 | `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
 | `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Operator-run on demand; directory-dependent access contract documented below |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
-| `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Enabled in Phase 4; read-only |
-| `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Enabled in Phase 4; destructive after confirmation |
-| `just bootstrap status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Enabled in Phase 4; diagnostic |
-| `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Enabled in Phase 4; mutating after confirmation |
-| `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Historical Phase 4 gate; do not use after Cilium — use `just talos kubeconfig` to fetch a kubeconfig day-2 |
-| `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Enabled in Phase 5; read-only |
-| `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Enabled in Phase 5; read-only |
-| `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Enabled in Phase 5; read-only |
-| `just kube cilium-diagnostics` | Print Talos diagnostics from all cluster nodes | — | Enabled in Phase 5; read-only |
-| `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health | — | Enabled in Phase 5; read-only |
-| `just kube cilium-verify` | Verify live Cilium, node, Hubble, Talos, and etcd state | `.kube/config` | Enabled in Phase 5; operator-only and read-only |
-| `just kube cilium-connectivity-test` | Run Cilium's functional IPv4 connectivity suite and remove its temporary workloads | `.kube/config`; `CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity` | Enabled in Phase 5; operator-only and state-changing |
-| `just bootstrap cilium` | Guard and install or reconcile Cilium `1.19.6` | `CILIUM_BOOTSTRAP_CONFIRM` | Enabled in Phase 5; mutating after confirmation |
-| `just kube flux-validate` | Validate Flux sources, SOPS canary, dependencies, and Cilium adoption guards | — | Enabled in Phase 6; read-only |
-| `just kube flux-preflight` | Verify published Git, Cilium/Talos/etcd health, and Kubernetes compatibility | — | Enabled in Phase 6; read-only |
-| `just bootstrap flux` | Bootstrap Flux `2.9.2` and a read-only GitHub SSH deploy key | `GITHUB_TOKEN`; `FLUX_BOOTSTRAP_CONFIRM` | Enabled in Phase 6; mutating after confirmation |
-| `just bootstrap flux-sops` | Create or verify the matching in-cluster SOPS identity | `SOPS_AGE_KEY`[`_FILE`]; `FLUX_SOPS_CONFIRM` | Enabled in Phase 6; mutating after confirmation |
-| `just bootstrap flux-ssh-known-hosts` | Preserve the deploy key and repair GitHub port-443 host trust | `FLUX_SSH_KNOWN_HOSTS_CONFIRM` | Phase 6 recovery; mutating after confirmation |
-| `just bootstrap flux-adopt-cilium` | Adopt Cilium with guarded workload health and stage the permanent unsuspend | `FLUX_CILIUM_ADOPTION_CONFIRM` | Enabled in Phase 6; mutating after confirmation |
-| `just kube flux-status` | Print Flux controllers and reconciliation state | — | Enabled in Phase 6; read-only |
-| `just kube flux-verify` | Verify Flux source auth, SOPS, canary, Cilium, Talos, and etcd | — | Enabled in Phase 6; read-only |
-| `just kube flux-canary-test` | Prove Flux recreates the guarded noncritical canary Secret | `FLUX_CANARY_CONFIRM` | Enabled in Phase 6; mutating after confirmation |
-| `just kube foundation-validate` | Validate Phase 7 sources, encrypted providers, dependency policy, and pinned chart renders | — | Enabled in Phase 7; read-only |
-| `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Enabled in Phase 7; read-only |
-| `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `PHASE7_NETWORK_CONFIRM`; `PHASE7_BOOTSTRAP_CONFIRM` | Enabled in Phase 7; mutating after confirmation |
-| `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Enabled in Phase 7; read-only |
-| `just bootstrap reboot <node>` | Gate on cluster health, reboot one node, and require full recovery (TPM auto-unlock, etcd, MetalLB failover, Cilium, DNS, HTTPS) | `TALOS_REBOOT_CONFIRM` | Enabled in Phase 8; disruptive after confirmation |
-| `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Enabled in Phase 8; mutating after confirmation |
-| `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Enabled in Phase 9; mutating tracked ciphertext after confirmation |
-| `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Enabled in Phase 9; read-only |
-| `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Enabled in Phase 9; mutating after confirmation |
-| `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, and recurring jobs | `.kube/config` | Enabled in Phase 9; operator-only and read-only |
-| `just kube storage-provisioning-test` | Create a run-scoped Longhorn PVC and prove two-node replica placement before cleanup | `.kube/config`; `STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning` | Enabled in Phase 9; operator-only and state-changing |
+| `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Cluster bootstrap; read-only |
+| `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Cluster bootstrap; destructive after confirmation |
+| `just bootstrap status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
+| `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
+| `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Pre-Cilium bootstrap only; use `just talos kubeconfig` after Cilium |
+| `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Read-only |
+| `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
+| `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Read-only |
+| `just kube cilium-diagnostics` | Print Talos diagnostics from all cluster nodes | — | Read-only |
+| `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health | — | Read-only |
+| `just kube cilium-verify` | Verify live Cilium, node, Hubble, Talos, and etcd state | `.kube/config` | Operator-only and read-only |
+| `just kube cilium-connectivity-test` | Run Cilium's functional IPv4 connectivity suite and remove its temporary workloads | `.kube/config`; `CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity` | Operator-only and state-changing |
+| `just bootstrap cilium` | Guard and install or reconcile Cilium `1.19.6` | `CILIUM_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just kube flux-validate` | Validate Flux sources, SOPS canary, dependencies, and Cilium adoption guards | — | Read-only |
+| `just kube flux-preflight` | Verify published Git, Cilium/Talos/etcd health, and Kubernetes compatibility | — | Read-only |
+| `just bootstrap flux` | Bootstrap Flux `2.9.2` and a read-only GitHub SSH deploy key | `GITHUB_TOKEN`; `FLUX_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just bootstrap flux-sops` | Create or verify the matching in-cluster SOPS identity | `SOPS_AGE_KEY`[`_FILE`]; `FLUX_SOPS_CONFIRM` | Mutating after confirmation |
+| `just bootstrap flux-ssh-known-hosts` | Preserve the deploy key and repair GitHub port-443 host trust | `FLUX_SSH_KNOWN_HOSTS_CONFIRM` | Recovery; mutating after confirmation |
+| `just bootstrap flux-adopt-cilium` | Adopt Cilium with guarded workload health and stage the permanent unsuspend | `FLUX_CILIUM_ADOPTION_CONFIRM` | Mutating after confirmation |
+| `just kube flux-status` | Print Flux controllers and reconciliation state | — | Read-only |
+| `just kube flux-verify` | Verify Flux source auth, SOPS, canary, Cilium, Talos, and etcd | — | Read-only |
+| `just kube flux-canary-test` | Prove Flux recreates the guarded noncritical canary Secret | `FLUX_CANARY_CONFIRM` | State-changing after confirmation |
+| `just kube foundation-validate` | Validate foundation sources, encrypted providers, dependency policy, and pinned chart renders | — | Read-only |
+| `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Read-only |
+| `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `PHASE7_NETWORK_CONFIRM`; `PHASE7_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
+| `just bootstrap reboot <node>` | Gate on cluster health, reboot one node, and require full recovery (TPM auto-unlock, etcd, MetalLB failover, Cilium, DNS, HTTPS) | `TALOS_REBOOT_CONFIRM` | Disruptive after confirmation |
+| `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
+| `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
+| `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Read-only |
+| `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, and recurring jobs | `.kube/config` | Operator-only and read-only |
+| `just kube storage-provisioning-test` | Create a run-scoped Longhorn PVC and prove two-node replica placement before cleanup | `.kube/config`; `STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning` | Operator-only and state-changing |
 | `just repo homepage-tautulli-secrets` | Write only the encrypted Tautulli API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `TAUTULLI_API_KEY`; `HOMEPAGE_TAUTULLI_SECRETS_CONFIRM=write:monitoring:homepage-tautulli:sops` | Tautulli activation; operator-only tracked ciphertext write |
 | `just kube tautulli-validate` | Validate suspended/active Tautulli source, storage, probes, route, integrations, and pinned render | — | Cluster-independent; included in `just ci` |
 | `just kube alerts-validate <domain>` | Validate one domain alerts application's placement and wiring, then run promtool syntax/unit tests | — | Cluster-independent; included in `just ci` |
 | `just kube alerts-coverage-validate` | Require every alert name in the tree to be asserted in a promtool fixture | — | Cluster-independent; included in `just ci` |
 | `just bootstrap media-app tautulli` | Guardedly resume staged Tautulli and run liveness acceptance | `MEDIA_APP_BOOTSTRAP_CONFIRM=bootstrap:media-app:tautulli` | Operator-only; mutating after confirmation |
 | `just kube tautulli-verify` | Verify live Tautulli resources, route, DNS, exact health status, Gatus series, and loaded rules | `.kube/config` | Operator-only and read-only |
-| `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Portainer Phase 1; mutating tracked ciphertext after confirmation |
+| `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
 | `just repo homepage-portainer-secrets` | Write only the encrypted Portainer API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Portainer activation; mutating tracked ciphertext after confirmation |
-| `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Portainer Phase 1; read-only and included in `just ci` |
-| `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Portainer Phase 1; read-only and included in `just ci` |
-| `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Portainer Phase 1; mutating after confirmation |
-| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Portainer Phase 1; operator-only and read-only |
-| `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Portainer Phase 1; operator-only and disruptive after confirmation |
-| `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Portainer Phase 1; operator-only |
+| `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Read-only and included in `just ci` |
+| `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Read-only and included in `just ci` |
+| `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Operator-only and read-only |
+| `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Operator-only and disruptive after confirmation |
+| `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Operator-only |
 | `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Manual local check + authoritative GitHub PR gate; Actions retains the artifact for 90 days |
 | `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
@@ -293,7 +293,7 @@ available for focused developer validation.
 | `just kube metrics-server-validate` | Validate the metrics-server source, insecure-TLS flag, and pinned render | — | Available; read-only |
 | `just bootstrap metrics-server` | Reconcile the staged metrics-server and verify (`kubectl top`, HPA, Homepage widget) | `METRICS_SERVER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube metrics-server-verify` | Verify metrics-server: APIService Available and `kubectl top nodes` returns data | — | Read-only |
-| `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy runbook](docs/ntfy-startup-guide.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
+| `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy guide](docs/guides/ntfy-startup.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
 
 The **Requires from operator** column lists inputs the recipe reads from your
 environment and refuses to run without. `SOPS_AGE_KEY`[`_FILE`] means either the
@@ -301,7 +301,7 @@ key value or a path to it. `*_CONFIRM` values are the exact confirmation strings
 each guarded recipe prints when refused. Secrets and confirmations are never
 stored in `.mise.toml`; recipes fail fast when they are absent.
 
-Future-phase cluster mutations are added only with their validation, guard, and
+New cluster mutations are added only with their validation, guard, and
 documentation boundary. Do not replace a missing workflow with an ad hoc apply.
 
 ### Confirmation safety model
@@ -362,21 +362,14 @@ verify can fail transiently. Force the pull and wait first:
 verify as the tail of `just bootstrap <app>` avoids this (it reconciles
 `--with-source` before verifying).
 
-The Phase 3 apply procedure, including its exact serial-bound confirmation, is
-documented in [`talos/README.md`](talos/README.md) and the installation evidence
-is recorded in [`docs/phase-3-installation.md`](docs/phase-3-installation.md).
-The Cilium ownership boundary, exact confirmation, connectivity test, and Phase 5
-evidence are documented in
-[`docs/phase-5-cilium.md`](docs/phase-5-cilium.md).
-The Flux credential model, staged Cilium adoption, exact confirmations, and
-Phase 6 acceptance gate are in
-[`docs/phase-6-flux.md`](docs/phase-6-flux.md). Phase 7 credentials, rollout,
-failure behavior, and acceptance gates are in
-[`docs/phase-7-foundation.md`](docs/phase-7-foundation.md). Pi-hole fresh-install,
-CA rotation, and application-password recovery are in
-[`docs/pihole-integration.md`](docs/pihole-integration.md). Portainer's read-only
-boundary, staged rollout, credential lifecycle, and recovery procedure are in
-[`docs/portainer.md`](docs/portainer.md).
+The guarded Talos installation procedure is in [`talos/README.md`](talos/README.md).
+The Cilium bootstrap and Flux adoption boundary is in the
+[Cilium README](kubernetes/apps/kube-system/cilium/README.md), and the current Flux
+source boundary is in [`kubernetes/README.md`](kubernetes/README.md). The
+[Talos and Flux platform specification](docs/specs/011-talos-flux-platform.md)
+records the architecture rationale. Current Pi-hole and Portainer procedures are in
+the [Pi-hole guide](docs/guides/pihole-integration.md) and
+[Portainer guide](docs/guides/portainer.md).
 
 ## Daily Cluster Health Check
 
@@ -393,7 +386,7 @@ Begin with the aggregate Flux view:
 mise exec -- just kube flux-status
 ```
 
-After Phase 7 is installed, add the foundation view to the daily check:
+Include the foundation view in the daily check:
 
 ```bash
 mise exec -- just kube foundation-status
@@ -445,7 +438,7 @@ and `just repo verify` validate local declarative sources; they do not establish
 live cluster health.
 
 Do not use `just bootstrap verify` as a routine check after Cilium is installed.
-It is the historical Phase 4 pre-CNI gate and intentionally expects all nodes to
+It is the pre-Cilium bootstrap gate and intentionally expects all nodes to
 be `NotReady`. Do not use `just bootstrap cilium` as a status command because it
 is an installation/reconciliation workflow with a guarded mutation path.
 
@@ -474,24 +467,24 @@ export SOPS_AGE_KEY_FILE=/secure/path/homelab-talos-age.txt
 just repo secrets
 ```
 
-`just repo secrets` derives the public recipient and rejects the wrong identity. See
-[`docs/sops.md`](docs/sops.md) for encryption policy and
-[`docs/recovery.md`](docs/recovery.md) for restoring access.
+`just repo secrets` derives the public recipient and rejects the wrong identity. See the
+[SOPS guide](docs/guides/sops.md) for secret-handling procedures and the
+[recovery runbook](docs/runbooks/recovery.md) for restoring access.
 
 ## Normal Change Workflow
 
-1. Confirm the current phase and its prerequisites in the canonical plan.
+1. Read the source-adjacent README and current documentation for the subsystem.
 2. Run `just repo tools` after pulling a change to `.mise.toml` or `mise.lock`.
 3. Load the SOPS identity only when the change requires encrypted material.
 4. Edit declarative source files, never generated output.
-5. Run the phase-specific generation or validation recipe when it is available.
+5. Run the subsystem's generation or validation recipe when it is available.
 6. Inspect `git status` and confirm no generated config, decrypted secret,
    kubeconfig, talosconfig, or private key is trackable.
 7. Commit on the feature branch, push it, and open a pull request. GitHub's required
    `ci` check supplies the authoritative full validation result.
 
 Do not bypass a disabled recipe with a raw cluster-changing command. Enable and
-test the guarded recipe as part of the phase that owns that operation.
+test the guarded recipe in the subsystem that owns that operation.
 
 ## Updating Tool Versions
 
@@ -508,7 +501,7 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 
 ## Repository Boundaries
 
-- `talos/` holds declarative Talhelper inputs beginning in Phase 2.
+- `talos/` holds declarative Talhelper inputs and its current source documentation.
 - `.talos/config` holds the ignored Talos API client credential: the main clone's
   admin identity is generated from encrypted Talhelper source, while a linked
   worktree receives only an operator-minted `os:reader` identity.
@@ -524,9 +517,10 @@ Use `mise install --locked` when consuming the repository. Use unlocked
 - `talos/mod.just` and `kubernetes/mod.just` colocate domain commands with their
   declarative sources; the root `.justfile` only declares namespaces.
 - `clusterconfig/` holds only the three ignored rendered Talos machine configs.
-- `kubernetes/` holds Flux sources beginning in Phase 5.
-- `docs/` holds inventory, recovery, secret handling, and phase evidence.
-- `plans/` holds architectural decisions and phased acceptance gates.
+- `kubernetes/` holds Flux sources and source-adjacent subsystem documentation.
+- [`docs/`](docs/README.md) links current guides, references, runbooks, and numbered
+  design specifications.
+- `.tmp/plans/` holds uncommitted transient implementation plans when a task needs one.
 
 The repo-local `.talos/config` and `.kube/config` paths intentionally do not rely
 on the CLIs' `$HOME` defaults or ambient current contexts. Guarded recipes always
@@ -548,27 +542,3 @@ copy credentials into Git.
 Generated configs, kubeconfigs, talosconfigs, decrypted secrets, Helm output,
 support bundles, and age private identities must remain outside Git. The private
 repository does not weaken this rule.
-
-## Current Phase
-
-Phase 6 is complete: Flux `2.9.2` reconciles the private repository with a
-read-only deploy key over SSH port 443, decrypts the permanent SOPS canary,
-repairs tested drift, and owns Cilium `1.19.6`. All four Flux Kustomizations are
-Ready and unsuspended; Cilium, Talos, and etcd acceptance gates pass. Phase 7 is
-complete: cert-manager, MetalLB, Envoy Gateway, and ExternalDNS are reconciled by
-Flux, the production wildcard certificate is issued, the internal Gateway is
-Programmed at `192.168.90.30`, Pi-hole resolves the echo hostname, and trusted
-HTTPS returns the echo response; acceptance evidence and the MetalLB control-plane
-label fix are in [`docs/phase-7-foundation.md`](docs/phase-7-foundation.md). Phase 8
-is complete: the rolling-reboot, MetalLB failover, Flux-restart, and echo
-remove/recreate tests passed and the 24-hour soak held with no regressions
-([`docs/phase-8-soak.md`](docs/phase-8-soak.md)) — closing the Phases 0–8
-foundation milestone, so the old SSDs are clear to wipe. Phase 9 is complete:
-Longhorn `1.12.0` replicated block storage is live with a CIFS backup target
-([`docs/phase-9-storage.md`](docs/phase-9-storage.md)); bulk media storage is
-deferred to Phase 11 over SMB. See
-[`docs/phase-3-installation.md`](docs/phase-3-installation.md) for installation
-evidence and [`docs/phase-4-bootstrap.md`](docs/phase-4-bootstrap.md) for the
-bootstrap interface and recovery record. Phase 5 commands and live evidence are
-in [`docs/phase-5-cilium.md`](docs/phase-5-cilium.md); Flux ownership and Phase 6
-acceptance evidence are in [`docs/phase-6-flux.md`](docs/phase-6-flux.md).

@@ -89,4 +89,4 @@ curl --silent --fail --resolve "$host:443:$gateway_ip" "https://$host/identity" 
   echo "Plex /identity is not reachable via the internal gateway." >&2
   exit 1
 }
-echo 'Phase 11 Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, UID 568 plex runtime identity, API token absent, media read-only, config writable, LoadBalancer NodePort allocation disabled with no allocated NodePort, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the node-failure reschedule test in docs/phase-11-media.md.'
+echo 'Plex acceptance passed: Kustomization + HelmRelease Ready, rollout complete, UID 568 plex runtime identity, API token absent, media read-only, config writable, LoadBalancer NodePort allocation disabled with no allocated NodePort, HTTPRoute Accepted, DNS resolves, /identity reachable over TLS. Run the plex-cross-node-reschedule resilience test from the test catalog.'

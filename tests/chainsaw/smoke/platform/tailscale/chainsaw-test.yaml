@@ -11,7 +11,7 @@ spec:
   # the lab subnet router are reconciled, and the Connector ADVERTISES exactly the two /32s.
   # This proves the operator CONFIGURED the routes — NOT that tailnet clients are permitted to
   # use them: route approval is control-plane state outside Kubernetes, validated by the
-  # operator-side/manual acceptance (docs/tailscale-lab-domain.md), not Chainsaw. HA node-spread
+  # operator-side/manual acceptance (docs/guides/tailscale-lab-domain.md), not Chainsaw. HA node-spread
   # and route exposure stay in `just kube tailscale-subnet-router-verify` / the resilience test.
   namespace: flux-system
   concurrent: false

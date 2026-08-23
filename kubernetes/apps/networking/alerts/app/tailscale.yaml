@@ -30,7 +30,7 @@ spec:
               The tailscale operator Deployment has 0 available replicas for over 10
               minutes. Tailnet proxies, the ntfy Ingress, and the lab subnet router are no
               longer reconciled, and new/replaced devices will not be provisioned. Check
-              the operator Deployment and its HelmRelease (docs/tailscale-operator.md).
+              the operator Deployment and its HelmRelease (docs/guides/tailscale-operator.md).
         - alert: TailscaleOperatorMetricsMissing
           expr: absent(kube_deployment_status_replicas_available{namespace="tailscale", deployment="operator"})
           for: 15m
@@ -55,7 +55,7 @@ spec:
               No lab-subnet-router replicas are Ready for over 10 minutes. Remote access to
               *.lab.supermorphic.com over Tailscale is DOWN (no tailnet path to Pi-hole or
               the Envoy gateway VIP). Check the Connector pods in the tailscale namespace
-              and docs/tailscale-lab-domain.md.
+              and docs/guides/tailscale-lab-domain.md.
         - alert: TailscaleSubnetRouterHADegraded
           expr: kube_statefulset_status_replicas_ready{namespace="tailscale", statefulset=~"ts-lab-subnet-router-.*"} == 1
           for: 15m

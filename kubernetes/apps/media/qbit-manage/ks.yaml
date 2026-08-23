@@ -21,8 +21,8 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Active after the staged rollout and hardlink-safety gate. See docs/qbit-manage.md for
-  # the live category-based classification, share-limit, and recycle-bin policy.
+  # The active category-based classification, share-limit, and recycle-bin policy is in
+  # docs/reference/qbit-manage.md.
   suspend: false
   timeout: 10m
   wait: true

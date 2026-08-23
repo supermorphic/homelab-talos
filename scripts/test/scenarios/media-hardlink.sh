@@ -7,8 +7,8 @@
 #
 # Deterministic + safe: it creates a self-generated throwaway file (no external download, no
 # real content, no legal concern), hardlinks it across the two subtrees, asserts both paths
-# report the SAME inode with link count >= 2 (the same-inode proof from
-# docs/phase-11-media.md), then removes the test files. It does NOT touch real media.
+# report the SAME inode with link count >= 2 (the storage contract in
+# docs/specs/006-media-stack-architecture.md), then removes the test files. It does NOT touch real media.
 #
 # This integration target is operator-only + Lease-serialized but needs no chaos token
 # (it is non-destructive to real data). A focused filesystem runner, so it lives under

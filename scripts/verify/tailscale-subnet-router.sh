@@ -110,6 +110,6 @@ echo '     this). Both replicas must be approved for real failover.'
 echo "  2. Ensure the restricted split-DNS nameserver ${HOMELAB_DNS_RESOLVER} is configured for search"
 echo '     domain lab.supermorphic.com.'
 echo '  3. From a tailnet client OFF the home LAN, run the client acceptance probe in'
-echo '     docs/tailscale-lab-domain.md (scutil --dns / tailscale dns status, route -n get'
+echo '     docs/guides/tailscale-lab-domain.md (scutil --dns / tailscale dns status, route -n get'
 echo "     ${HOMELAB_GATEWAY_VIP}, dscacheutil, curl -I without -k), then the Tailscale-off negative"
-echo '     test. See docs/tailscale-lab-domain.md.'
+echo '     test. See docs/guides/tailscale-lab-domain.md.'

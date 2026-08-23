@@ -267,7 +267,7 @@ foundation-ca-expiry: require-bash
     if openssl x509 -in "$pihole_ca" -noout -checkend 2592000 >/dev/null; then
       echo 'Pi-hole CA is valid for at least 30 more days.'
     else
-      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/pihole-integration.md).' >&2
+      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/guides/pihole-integration.md).' >&2
       exit 1
     fi
 
@@ -523,7 +523,7 @@ csi-driver-smb-verify: require-bash
 
 # Verify the live Phase 11 shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)
-# and the documented hardlink proof (docs/phase-11-media.md); binding a static PV is
+# and the media-hardlink integration test; binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(kubeconfig)}}

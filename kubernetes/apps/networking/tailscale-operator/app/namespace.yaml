@@ -8,7 +8,7 @@ metadata:
     # /dev/net/tun and run privileged (NET_ADMIN). Scope this exception to the
     # tailscale namespace only. Prior art: trivy-system runs enforce: privileged
     # for the same class of host-access infrastructure workload. See
-    # docs/tailscale-operator.md for the rationale.
+    # docs/guides/tailscale-operator.md for the current workload boundary.
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/warn: privileged

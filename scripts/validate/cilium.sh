@@ -50,7 +50,7 @@ done
 [[ "$(yq -r '.hubble.relay.enabled' "$values_file")" == 'true' ]]
 [[ "$(yq -r '.hubble.ui.enabled' "$values_file")" == 'false' ]]
 # Hubble is enabled but exports nothing until these are set, which is why no signal
-# exists at 32400 today (docs/decisions/2026-08-12-plex-remote-access-detection.md §3).
+# exists at 32400 today (docs/specs/020-plex-remote-access-detection.md).
 [[ "$(yq -r '.hubble.metrics.enabled | length' "$values_file")" == '3' ]]
 [[ "$(yq -r '[.hubble.metrics.enabled[] | split(":")[0]] | sort | join(",")' "$values_file")" == 'drop,flow,tcp' ]]
 if yq -e '.hubble.metrics.enabled[] | select(test("sourceContext=ip"))' "$values_file" >/dev/null 2>&1; then

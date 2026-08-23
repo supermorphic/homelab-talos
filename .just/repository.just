@@ -1244,7 +1244,7 @@ portainer-secrets:
 # tailscale namespace) from TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET. The chart
 # consumes this pre-created Secret when oauth.clientId/clientSecret are empty. Create the
 # OAuth client in the tailnet admin console first (tagged tag:k8s-operator, scopes
-# Devices/Core + Keys/Auth Keys + Services = write) — see docs/tailscale-operator.md.
+# Devices/Core + Keys/Auth Keys + Services = write) — see docs/guides/tailscale-operator.md.
 # Never echoes the values.
 tailscale-operator-secrets:
     #!/usr/bin/env bash
@@ -1301,7 +1301,7 @@ tailscale-operator-secrets:
 # the mirrored Homepage widget Secret. ensure/reconcile/rotate/finalize preserve existing
 # credentials by default, generate them only for missing or rotated identities, and never
 # print secrets. Guard: NTFY_IDENTITY_CONFIRM='<action>:monitoring:ntfy:<identity>:sops'
-# (reconcile uses 'all' as the identity). See docs/ntfy-startup-guide.md.
+# (reconcile uses 'all' as the identity). See docs/guides/ntfy-startup.md.
 ntfy-identity action identity:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1388,7 +1388,6 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
-    @if rg --files docs/decisions/reviews | rg --pcre2 -q '/([0-9]{4}-[0-9]{2}-[0-9]{2})-\1-'; then echo "decision review filenames must not repeat their ISO date" >&2; exit 1; fi
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

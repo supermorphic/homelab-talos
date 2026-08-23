@@ -5,7 +5,7 @@
 # rotation), GETs Seerr's ntfy settings, enforces the managed fields while preserving
 # operator-owned ones (embedPoster, locale), proves the candidate with Seerr's test
 # endpoint, and saves only after the test succeeds. API responses and credentials are
-# never printed. See docs/ntfy-startup-guide.md.
+# never printed. See docs/guides/ntfy-startup.md.
 set -euo pipefail
 
 consumer="${1:-}"

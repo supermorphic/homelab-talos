@@ -3,7 +3,7 @@
 # generates the bcrypt hash internally, and updates only the password identity's user
 # entry (plus its registry-declared ACLs) in the canonical ntfy Secret. Every other
 # identity's credentials are preserved byte-for-byte. Reconciliation never touches
-# this password. Nothing secret is ever printed. See docs/ntfy-startup-guide.md.
+# this password. Nothing secret is ever printed. See docs/guides/ntfy-startup.md.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

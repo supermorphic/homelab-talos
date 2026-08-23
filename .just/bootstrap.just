@@ -1160,7 +1160,7 @@ media-storage:
 
     just kube media-storage-verify
     bootstrap_complete=true
-    echo 'Phase 11 media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run the hardlink proof in docs/phase-11-media.md.'
+    echo 'Media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run mise exec -- just test integration media-hardlink.'
 
 # Reconcile the suspended Phase 11 Plex after guarded checks, then verify. Requires
 # media-storage already bootstrapped (the shared media-data PVC). On failure the
@@ -1220,7 +1220,7 @@ plex:
 
     just kube plex-verify
     bootstrap_complete=true
-    echo 'Phase 11 Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then do the node-failure reschedule test in docs/phase-11-media.md.'
+    echo 'Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then run the plex-cross-node-reschedule resilience test from the test catalog.'
 
 # Reconcile the suspended Phase 12 qBittorrent+Gluetun after guarded checks, then verify.
 # Requires the protonvpn Secret (just repo protonvpn-secrets) and media-storage already
@@ -1352,7 +1352,7 @@ arr app:
 
     just kube arr-verify "$app"
     bootstrap_complete=true
-    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
+    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/guides/arr-stack-startup.md."
 
 # Reconcile a suspended config-only media app after guarded checks, then verify.
 # Operator-run. The allowlist intentionally contains only Tautulli.
@@ -1612,7 +1612,7 @@ qbit-manage:
 
     just kube qbit-manage-verify
     bootstrap_complete=true
-    echo "qbit-manage live acceptance passed (INERT dry-run: no torrent field or file changed). Set suspend=false in Git, commit, push, rerun just kube qbit-manage-verify. Classification (PR2), share limits (PR3), and cleanup (PR4) are separate reviewed changes — see docs/qbit-manage.md."
+    echo "qbit-manage live acceptance passed (INERT dry-run: no torrent field or file changed). Set suspend=false in Git, commit, push, and rerun just kube qbit-manage-verify. See docs/guides/qbit-manage.md for activation and docs/reference/qbit-manage.md for the active policy."
 
 # Reconcile the suspended Phase 11 Intel GPU device plugin after guarded checks, then
 # verify. Deploy + activate this BEFORE adding the gpu.intel.com/i915 request to Plex
@@ -2150,7 +2150,7 @@ trivy:
 # Reconcile the suspended Tailscale operator after guarded checks, then verify the
 # operator and its ingress ProxyGroup. Requires the operator-oauth Secret committed
 # (just repo tailscale-operator-secrets) and the tailnet-side prerequisites in
-# docs/tailscale-operator.md already in place. On failure the resumed Kustomization is
+# docs/guides/tailscale-operator.md already in place. On failure the resumed Kustomization is
 # re-suspended, preserving its resources.
 tailscale-operator:
     #!/usr/bin/env bash
@@ -2227,7 +2227,7 @@ tailscale-operator:
 # or the operator cannot create the Connector devices. The Connector CRD is installed by the
 # already-active tailscale-operator. On failure the resumed Kustomization is re-suspended,
 # preserving its resources. After success, approve both /32 routes on BOTH devices and
-# configure split DNS per docs/tailscale-lab-domain.md, then open the activation PR.
+# configure split DNS per docs/guides/tailscale-lab-domain.md, then open the activation PR.
 tailscale-subnet-router:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2288,7 +2288,7 @@ tailscale-subnet-router:
 
     just kube tailscale-subnet-router-verify
     bootstrap_complete=true
-    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/tailscale-lab-domain.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
+    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/guides/tailscale-lab-domain.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
 
 # Reconcile the suspended ntfy notification service after guarded checks, then verify.
 # Requires the ntfy-secret committed (just repo ntfy-identity reconcile all) and the

@@ -7,7 +7,7 @@
 # that tag: (a) settings.private_tag auto-tags EVERY private torrent generically, and (b) the
 # tracker: map can tag specific announce hosts. Layer (a) means safety no longer depends on the
 # host mapping being COMPLETE — a private torrent is excluded even from an unmapped tracker.
-# An `other: tracker-public` catch-all therefore remains safe. See docs/qbit-manage.md.
+# An `other: tracker-public` catch-all therefore remains safe. See docs/reference/qbit-manage.md.
 #
 # Command authority lives ONLY in this `commands:` block. Do not also set QBT_* command
 # toggles as env — the config-vs-env precedence is undocumented, so we keep one authority.

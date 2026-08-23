@@ -13,5 +13,7 @@ is reachable — a `public` Gateway only becomes real when its own namespace and
 resources are added under a separate, explicitly reviewed change.
 
 Applications attach portable HTTPRoutes from explicitly labeled namespaces.
-They do not receive the wildcard TLS private key. Use the Phase 7 Just workflows
-documented in [`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md).
+They do not receive the wildcard TLS private key. Use the guarded foundation Just
+workflows documented in the [root README](../../../../README.md); the
+[platform specification](../../../../docs/specs/011-talos-flux-platform.md) records the
+Gateway design rationale.

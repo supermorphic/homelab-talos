@@ -28,7 +28,7 @@ spec:
               Gluetun reports the ProtonVPN tunnel is not running (Gatus health probe of
               the control server failing for >5m). qBittorrent egress is kill-switched
               (fail-closed) and downloads are paused. Check Gluetun logs and the ProtonVPN
-              WireGuard credential (annual Extend / expiry — see docs/protonvpn-gluetun.md).
+              WireGuard credential (annual Extend / expiry — see docs/guides/protonvpn-gluetun.md).
         - alert: QbittorrentGluetunRestartLoop
           # A healthy liveness recovery increments this counter once. Two restarts in the
           # same 15-minute window mean the container-level fallback is repeating; because

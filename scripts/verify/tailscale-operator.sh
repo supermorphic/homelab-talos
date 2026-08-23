@@ -31,5 +31,5 @@ echo
 echo 'MANUAL (mandatory, Cilium compatibility — review #6/#7): from a device on the tailnet,'
 echo 'reach a throwaway Ingress (referencing proxy-group ingress-proxies) that fronts a test'
 echo 'Service, proving tailnet client -> ProxyGroup -> Kubernetes Service on the live Cilium'
-echo 'cluster, then remove it. See docs/tailscale-operator.md. Do not roll out ntfy (PR2) until'
+echo 'cluster, then remove it. See docs/guides/tailscale-operator.md. Do not roll out ntfy until'
 echo 'this passes.'
