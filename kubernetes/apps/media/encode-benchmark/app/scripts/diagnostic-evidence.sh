@@ -97,19 +97,41 @@ done
 
 summary="$evidence_root/diagnostic-summary.json"
 manifest="$evidence_root/manifest.json"
-jq -e --arg run "$EVIDENCE_RUN_ID" --arg panel_sha "$expected_panel_sha256" '
-	type == "object" and .schemaVersion == 2 and .mode == "diagnostics" and .runId == $run and
-	(.upstream.diagnostics | type == "object" and
-	 .manifestSchemaVersion == 1 and .resultSchemaVersion == 1 and
-	 .acceptedFindingsSha256 == "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294" and
-	 .decisionSha256 == "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330" and
-	 .historicalQualityRunId == "20260817T233546Z-debc0498" and
-	 .historicalFindingsRunId == "20260818T214739Z-8bc2de3e" and
-	 .panelSha256 == $panel_sha)
-' "$manifest" >/dev/null || {
-	echo 'diagnostic manifest does not bind the approved immutable run' >&2
+manifest_issues="$(jq -S -c --arg run "$EVIDENCE_RUN_ID" --arg panel_sha "$expected_panel_sha256" '
+	def issue($object; $key; $field; $expected_type; $expected):
+		if ($object | has($key) | not) then {field:$field,kind:"missing"}
+		elif ($object[$key] | type) != $expected_type then {field:$field,kind:"wrong-type"}
+		elif $object[$key] != $expected then {field:$field,kind:"mismatch"}
+		else empty end;
+	if type != "object" then
+		[{field:"manifest",kind:"wrong-type"}]
+	else
+		[
+			issue(.; "schemaVersion"; "schemaVersion"; "number"; 2),
+			issue(.; "mode"; "mode"; "string"; "diagnostics"),
+			issue(.; "runId"; "runId"; "string"; $run)
+		] +
+		(if (.upstream | type) != "object" or (.upstream | has("diagnostics") | not) then
+			[{field:"upstream.diagnostics",kind:"missing"}]
+		 elif (.upstream.diagnostics | type) != "object" then
+			[{field:"upstream.diagnostics",kind:"wrong-type"}]
+		 else
+			[
+				issue(.upstream.diagnostics; "manifestSchemaVersion"; "upstream.diagnostics.manifestSchemaVersion"; "number"; 1),
+				issue(.upstream.diagnostics; "resultSchemaVersion"; "upstream.diagnostics.resultSchemaVersion"; "number"; 1),
+				issue(.upstream.diagnostics; "acceptedFindingsSha256"; "upstream.diagnostics.acceptedFindingsSha256"; "string"; "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294"),
+				issue(.upstream.diagnostics; "decisionSha256"; "upstream.diagnostics.decisionSha256"; "string"; "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330"),
+				issue(.upstream.diagnostics; "historicalQualityRunId"; "upstream.diagnostics.historicalQualityRunId"; "string"; "20260817T233546Z-debc0498"),
+				issue(.upstream.diagnostics; "historicalFindingsRunId"; "upstream.diagnostics.historicalFindingsRunId"; "string"; "20260818T214739Z-8bc2de3e"),
+				issue(.upstream.diagnostics; "panelSha256"; "upstream.diagnostics.panelSha256"; "string"; $panel_sha)
+			]
+		 end)
+	end
+' "$manifest")"
+if [[ "$manifest_issues" != '[]' ]]; then
+	jq -n -S -c --argjson issues "$manifest_issues" '{schemaVersion:1,status:"failed",reason:"diagnostic-manifest-binding-invalid",manifestIssues:$issues}'
 	exit 65
-}
+fi
 jq -e --arg run "$EVIDENCE_RUN_ID" --argjson panel "$expected_evidence_panel" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
 	def status: . == "complete" or . == "failed" or . == "harness-blocked";
 	def exact($expected): type == "object" and (keys | sort) == ($expected | sort);

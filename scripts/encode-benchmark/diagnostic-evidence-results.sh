@@ -31,7 +31,6 @@ failed_collector_reason() {
 	'diagnostic evidence file is unsafe') printf '%s\n' 'diagnostic-evidence-file-unsafe' ;;
 	'diagnostic evidence input exceeds its bounded size') printf '%s\n' 'diagnostic-evidence-input-exceeds-bounded-size' ;;
 	'diagnostic evidence is malformed JSON') printf '%s\n' 'diagnostic-evidence-malformed-json' ;;
-	'diagnostic manifest does not bind the approved immutable run') printf '%s\n' 'diagnostic-manifest-binding-invalid' ;;
 	'diagnostic summary does not bind the approved panel') printf '%s\n' 'diagnostic-summary-binding-invalid' ;;
 	'VMAF diagnostic evidence violates its approved schema') printf '%s\n' 'vmaf-diagnostic-evidence-schema-invalid' ;;
 	'VMAF diagnostic evidence does not match its retained summary') printf '%s\n' 'vmaf-diagnostic-evidence-summary-mismatch' ;;
@@ -183,6 +182,48 @@ payload_bytes="$(printf '%s' "$payload" | LC_ALL=C wc -c | tr -d '[:space:]')"
 	exit 65
 }
 if [[ "$job_state" == 'failed' ]]; then
+	manifest_issues="$(jq -e -S -c '
+		def exact($expected_keys): type == "object" and (keys | sort) == ($expected_keys | sort);
+		def issue_kind: . == "missing" or . == "wrong-type" or . == "mismatch";
+		. as $payload |
+		[
+			"manifest",
+			"schemaVersion",
+			"mode",
+			"runId",
+			"upstream.diagnostics",
+			"upstream.diagnostics.manifestSchemaVersion",
+			"upstream.diagnostics.resultSchemaVersion",
+			"upstream.diagnostics.acceptedFindingsSha256",
+			"upstream.diagnostics.decisionSha256",
+			"upstream.diagnostics.historicalQualityRunId",
+			"upstream.diagnostics.historicalFindingsRunId",
+			"upstream.diagnostics.panelSha256"
+		] as $fields |
+		select(exact(["manifestIssues","reason","schemaVersion","status"]) and
+		.schemaVersion == 1 and .status == "failed" and .reason == "diagnostic-manifest-binding-invalid" and
+		(.manifestIssues | type == "array" and length >= 1 and
+		 all(.[]; exact(["field","kind"]) and (.field as $field | ($field | type) == "string" and ($fields | index($field)) != null) and (.kind | issue_kind)) and
+		 length == (unique_by(.field) | length) and
+		 ([.[].field as $field | $fields | index($field)] | . == sort) and
+		 (if any(.[]; .field == "manifest") then length == 1 else true end) and
+		 (if any(.[]; .field == "upstream.diagnostics") then all(.[]; (.field | startswith("upstream.diagnostics.")) | not) else true end))) |
+		$payload.manifestIssues
+	' <<<"$payload" 2>/dev/null || true)"
+	if [[ -n "$manifest_issues" && "$(jq -S -c . <<<"$payload")" == "$payload" ]]; then
+		jq -n -S -c --arg run "$RUN_ID" --argjson issues "$manifest_issues" '
+			{
+				schemaVersion:1,
+				strategyId:"qsv-hevc-icq-v1",
+				mode:"diagnostic-evidence-reader",
+				runId:$run,
+				status:"failed",
+				reason:"diagnostic-manifest-binding-invalid",
+				manifestIssues:$issues
+			}
+		'
+		exit 0
+	fi
 	failed_reason="$(failed_collector_reason "$payload" || true)"
 	[[ -n "$failed_reason" ]] || {
 		echo 'diagnostic evidence failed result is not allowlisted' >&2

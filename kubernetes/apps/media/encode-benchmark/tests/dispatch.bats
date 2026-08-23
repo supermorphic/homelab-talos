@@ -1068,7 +1068,7 @@ producer_fixed_failed_collector_lines() {
 	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
 	mapfile -t producer_lines < <(producer_fixed_failed_collector_lines)
-	[ "${#producer_lines[@]}" -eq 16 ]
+	[ "${#producer_lines[@]}" -eq 15 ]
 
 	for line in "${producer_lines[@]}"; do
 		printf '%s\n' "$line" >"$STUB_LOGS_FILE"
@@ -1106,6 +1106,63 @@ producer_fixed_failed_collector_lines() {
 	[ "${#seen_reasons[@]}" -eq "${#producer_lines[@]}" ]
 }
 
+@test "diagnostic evidence reader returns bounded manifest issues without retained values" {
+	local run_id
+	run_id='20260820T223425Z-082b3d38'
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+	printf '%s\n' '{"manifestIssues":[{"field":"mode","kind":"mismatch"},{"field":"upstream.diagnostics.panelSha256","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' >"$STUB_LOGS_FILE"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+	[ "$status" -eq 0 ]
+	run jq -e -S -c --arg run "$run_id" '
+		keys == ["manifestIssues","mode","reason","runId","schemaVersion","status","strategyId"] and
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		.mode == "diagnostic-evidence-reader" and .runId == $run and .status == "failed" and
+		.reason == "diagnostic-manifest-binding-invalid" and
+		.manifestIssues == [
+			{field:"mode",kind:"mismatch"},
+			{field:"upstream.diagnostics.panelSha256",kind:"mismatch"}
+		]
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *'sha256:'* ]]
+}
+
+@test "diagnostic evidence reader rejects malformed manifest issue payloads" {
+	local mutation run_id
+	run_id='20260820T223425Z-082b3d38'
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for mutation in unknown-field unknown-kind duplicate reversed empty extra-key root-sibling parent-child noncanonical; do
+		case "$mutation" in
+		unknown-field) payload='{"manifestIssues":[{"field":"upstream.secret","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		unknown-kind) payload='{"manifestIssues":[{"field":"mode","kind":"actual-value"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		duplicate) payload='{"manifestIssues":[{"field":"mode","kind":"mismatch"},{"field":"mode","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		reversed) payload='{"manifestIssues":[{"field":"upstream.diagnostics.panelSha256","kind":"mismatch"},{"field":"mode","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		empty) payload='{"manifestIssues":[],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		extra-key) payload='{"manifestIssues":[{"field":"mode","kind":"mismatch","value":"quality"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		root-sibling) payload='{"manifestIssues":[{"field":"manifest","kind":"wrong-type"},{"field":"mode","kind":"missing"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		parent-child) payload='{"manifestIssues":[{"field":"upstream.diagnostics","kind":"wrong-type"},{"field":"upstream.diagnostics.panelSha256","kind":"missing"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' ;;
+		noncanonical) payload='{ "manifestIssues": [{"field":"mode","kind":"mismatch"}], "reason":"diagnostic-manifest-binding-invalid", "schemaVersion":1, "status":"failed" }' ;;
+		esac
+		printf '%s\n' "$payload" >"$STUB_LOGS_FILE"
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE"
+		[ "$status" -eq 65 ] || {
+			echo "diagnostic evidence results accepted invalid manifest issue payload: $mutation" >&3
+			return 1
+		}
+		[ "$output" = 'diagnostic evidence failed result is not allowlisted' ]
+	done
+}
+
 @test "diagnostic evidence reader rejects failed collector outputs outside the bounded failure contract" {
 	local mutation expected run_id
 	run_id='20260820T223425Z-082b3d38'
@@ -1116,7 +1173,7 @@ producer_fixed_failed_collector_lines() {
 	printf '%s\n' 'VMAF diagnostic evidence violates its approved schema' >"$STUB_LOGS_FILE"
 	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
-	for mutation in complete-condition wrong-failure-reason pod-succeeded wrong-exit-code wrong-terminate-reason restarted usage-line jq-stderr tool-stderr unknown-line empty-line multiline oversized; do
+	for mutation in complete-condition wrong-failure-reason pod-succeeded wrong-exit-code wrong-terminate-reason restarted usage-line generic-manifest-line jq-stderr tool-stderr unknown-line empty-line multiline oversized; do
 		cp "$STUB_JOBS_JSON" "$BATS_TEST_TMPDIR/base-jobs.json"
 		cp "$STUB_BENCHMARK_PODS_JSON" "$BATS_TEST_TMPDIR/base-pods.json"
 		printf '%s\n' 'VMAF diagnostic evidence violates its approved schema' >"$STUB_LOGS_FILE"
@@ -1148,6 +1205,10 @@ producer_fixed_failed_collector_lines() {
 		usage-line)
 			expected='diagnostic evidence failed result is not allowlisted'
 			printf '%s\n' 'usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel>' >"$STUB_LOGS_FILE"
+			;;
+		generic-manifest-line)
+			expected='diagnostic evidence failed result is not allowlisted'
+			printf '%s\n' 'diagnostic manifest does not bind the approved immutable run' >"$STUB_LOGS_FILE"
 			;;
 		jq-stderr)
 			expected='diagnostic evidence failed result is not allowlisted'
