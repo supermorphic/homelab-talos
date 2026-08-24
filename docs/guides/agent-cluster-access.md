@@ -1,42 +1,297 @@
 # Agent cluster access
 
-Agent worktrees start without cluster credentials. When approved live diagnosis needs
-scoped access, run the location-aware installer from that worktree:
+## Purpose and scope
+
+This guide explains how an agent gets limited cluster access from a linked worktree and
+where that access stops. It describes the current operating model; it does not define
+repository policy or executable behavior.
+
+[`AGENTS.md`](../../AGENTS.md) defines the authority boundary. Agents may use approved
+repository workflows to create task-scoped credentials and perform scoped verification
+without asking the operator to run those workflows for them. An agent must not adopt or
+use a write, administrator, elevated, or break-glass credential unless the operator
+explicitly authorizes that credential for the specific task.
+
+Linked worktrees start without cluster credentials. This prevents credentials from being
+copied into every checkout and makes the authority available to a task explicit. Most
+source-only work needs no live access. When approved live verification does need it, the
+agent normally installs its own scoped credentials from inside its assigned worktree:
 
 ```bash
 mise exec -- just talos kubeconfig
 ```
 
-In a linked worktree this writes a 30-day Kubernetes credential pair to `.kube/config`
-and a 90-day Talos `os:reader` credential to `.talos/config`. The kubeconfig's current
-context is `homelab-observer`; `homelab-diagnostic` is present for the named verifiers
-that need `exec` or `port-forward`. In the main clone the same recipe retains its admin
-kubeconfig behavior. Repository policy authorizes use of this approved workflow for
-task-scoped read-only credentials. It does not authorize adopting an administrator,
-write, or break-glass credential.
+This is normally an agent-owned action, not an operator handoff.
 
-Do not copy, symlink, or commit either credential file. Re-run the installer from the
-worktree when a scoped credential expires. Keep SOPS key material out of agent sessions.
+## Mental model
 
-## Access tiers
+The repository workflow, the credential, and Kubernetes role-based access control
+(RBAC) have different jobs:
 
-- **observer** — Kubernetes `view`, pod logs, metrics, and explicit reads of the Flux,
-  Cilium, Gatus, Tailscale, Longhorn, and Trivy resources used here. It cannot read
-  Secret bodies, use interactive pod subresources, or mutate resources.
-- **diagnostic** — observer plus `pods/exec` and `pods/portforward`. This is reduced
-  privilege, not read-only: an exec command can change container state and can inspect
-  data already present in a process. Use it only through the named verifier paths.
-- **operator** — the main clone's admin credential. A verifier stays here when its
-  functional oracle requires data that scoped credentials deliberately cannot read.
-- **Talos reader** — `os:reader`, used only for read-only node inspection.
+```text
+linked worktree
+  ↓
+normal repository work
+  ↓
+live cluster access becomes necessary
+  ↓
+mise exec -- just talos kubeconfig
+  ↓
+worktree-local scoped credentials
+  ↓
+approved verifier or read-oriented workflow
+  ↓
+Kubernetes authentication identifies the scoped user
+  ↓
+RBAC allows or denies each requested verb and resource
+```
 
-The diagnostic verifiers select `homelab-diagnostic` only when that named context is
-present. Therefore an operator admin kubeconfig without renamed contexts can continue to
-run the same recipes using its current context.
+Agent worktrees start without cluster credentials, and most repository work does not
+require them. When an approved task needs live cluster inspection or scoped
+verification, the agent runs `mise exec -- just talos kubeconfig` from that worktree to
+create the scoped credentials locally. Credential creation is demand-driven; it is not
+part of worktree initialization.
+
+`mise exec -- just ...` is the required interface for established repository workflows.
+It selects the pinned tools and repository recipe. It does not grant authority by itself.
+Authority comes from repository policy, the approved workflow, and the permissions of the
+credential used by that workflow.
+
+## What the installer creates
+
+In a linked worktree, `mise exec -- just talos kubeconfig` creates two ignored files with
+mode `0600`:
+
+- `.kube/config` contains 30-day Kubernetes token credentials for exactly two contexts:
+  `homelab-observer` and `homelab-diagnostic`. `homelab-observer` is the current context.
+- `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
+
+The installer uses the approved repository workflow to mint the scoped credentials. It
+does not copy the administrator kubeconfig or Talos identity into the worktree. Do not
+copy, symlink, or commit either credential file. Re-run the installer from the worktree
+when a scoped credential expires. Keep SOPS key material out of agent sessions.
+
+## How RBAC enforces the boundary
+
+Kubernetes first authenticates the token in the selected kubeconfig context. It then
+uses RBAC to decide whether that identity may perform the requested verb on the requested
+resource. For example, a rule can allow `get` on Pods while denying `delete` on
+Deployments. An operation is denied when no applicable RBAC rule grants it.
+
+Both scoped Kubernetes identities inherit the built-in `view` role and the explicit
+read permissions listed in the reference section below. Neither identity can read
+Kubernetes Secret bodies or use ordinary mutation verbs. The diagnostic identity adds
+only `create` on the `pods/exec` and `pods/portforward` subresources.
+
+RBAC is a hard technical boundary, but it is not the complete authority model. A
+credential can have a capability that repository policy permits only through a narrower
+workflow. In particular, possession of `homelab-diagnostic` does not authorize general
+use of `exec` or `port-forward`.
+
+## Observer and diagnostic
+
+The two Kubernetes identities separate routine inspection from the interactive
+capabilities needed by a small number of approved verifiers:
+
+```text
+observer
+  → agent discretion within approved read-oriented workflows
+
+diagnostic
+  → agent discretion only through approved named verifier workflows
+
+anything broader or ad hoc
+  → operator boundary
+```
+
+`homelab-observer` is the default scoped identity. It supports allowed resource reads,
+logs, metrics, and observer-tier verification. It cannot open an exec session or a port
+forward.
+
+`homelab-diagnostic` is reduced privilege, not read-only. It inherits observer access and
+adds `pods/exec` and `pods/portforward`. Approved verifiers select this context explicitly
+when their designed oracle needs one of those operations. Outside those named verifier
+paths, the agent must not use those capabilities without specific operator authorization.
+
+## What an agent may do autonomously
+
+Within an approved task, an agent may:
+
+- Run `mise exec -- just talos kubeconfig` from its linked worktree.
+- Use the worktree-local `homelab-observer` context for approved read-oriented
+  verification and diagnosis.
+- Read the resources, logs, and metrics granted by observer RBAC.
+- Use the worktree-local Talos `os:reader` credential for approved read-only node
+  inspection.
+- Run approved observer-tier verifiers.
+- Run approved named diagnostic verifiers that deliberately select
+  `homelab-diagnostic`.
+- Run the approved scoped verification campaign after reviewing its generated plan and
+  using the exact confirmation that plan prints.
+
+If an approved verifier fails because its scoped identity lacks permission, stop at that
+boundary. Do not switch to an administrator credential or expand RBAC to make the check
+pass.
+
+## When the agent must involve the operator
+
+The autonomous cases above include approved observer reads as well as approved scoped
+verifiers. Before performing any other scoped cluster operation, the agent must stop and
+surface the proposed action to the operator when it would:
+
+- Mutate live cluster state through these scoped credentials or verification workflows.
+- Perform an ad-hoc `kubectl exec`.
+- Perform an ad-hoc `kubectl port-forward`.
+- Expose or inspect sensitive runtime or process data outside an approved verifier.
+- Read Kubernetes Secret bodies.
+- Use a broader, write, administrator, elevated, or break-glass credential.
+- Copy or adopt credentials from another worktree or the primary checkout.
+- Expand RBAC or otherwise increase the agent's authority.
+
+Runtime or sandbox permission does not move this boundary. Using `mise`, `just`, or a
+repository recipe also does not make an otherwise operator-owned action agent-owned.
+`AGENTS.md` separately permits explicitly approved, task-scoped, reversible ephemeral
+actions for testing, benchmarking, verification, diagnostics, and cleanup. This guide
+does not grant that approval or extend it to the scoped verification campaign, which is
+declared non-mutating.
+
+## Observer example
+
+An allowed observer read follows this path:
+
+```text
+Agent
+  ↓
+kubectl --context homelab-observer get kustomizations ...
+  ↓
+Kubernetes authenticates homelab-observer
+  ↓
+RBAC finds an allowed get rule
+  ↓
+read succeeds
+```
+
+The same identity cannot start an exec session. This read-only authorization query shows
+the expected denial without attempting an exec:
+
+```bash
+mise exec -- kubectl --kubeconfig .kube/config \
+  --context homelab-observer --namespace kube-system \
+  auth can-i create pods --subresource=exec
+```
+
+Expected result: `no`.
+
+## Diagnostic example
+
+An approved diagnostic verifier can use its deliberately granted subresource capability:
+
+```text
+Agent
+  ↓
+mise exec -- just kube cilium-verify
+  ↓
+verifier selects homelab-diagnostic
+  ↓
+kubectl exec ... cilium status
+  ↓
+Kubernetes authenticates the scoped identity
+  ↓
+RBAC evaluates the requested operation
+  ↓
+allowed
+```
+
+That does not permit normal cluster mutation. For example, this proposed operation is
+outside the approved verifier path and RBAC does not grant it:
+
+```text
+kubectl --context homelab-diagnostic delete deployment ...
+  ↓
+denied
+```
+
+The agent must not treat a technical ability to exec or port-forward as permission to use
+it ad hoc.
+
+## Verify the access boundary
+
+The agent-access verifier checks both named Kubernetes contexts and the Talos reader
+credential without mutating the cluster:
+
+```bash
+mise exec -- just kube agent-access-verify
+```
+
+It requires observer workload, custom-resource, and log reads to succeed. It requires
+observer Secret, exec, port-forward, create, patch, and delete requests to be denied. It
+requires diagnostic exec and port-forward authorization while Secret and Flux mutations
+remain denied. It also requires read-only Talos version and service inspection to
+succeed.
+
+When both scoped contexts exist, the verifier exercises them directly. In an authorized
+administrator environment without either named context, the same verifier can evaluate
+the scoped ServiceAccount identities through impersonation. A partial one-context layout
+is rejected.
+
+## Plan and run scoped verification
+
+First inspect the current executable campaign:
+
+```bash
+mise exec -- just test scoped-campaign-plan
+```
+
+The plan prints the exact campaign membership, source revision, plan digest, execution
+mode, and required confirmation. Review that output, then run the exact
+`TEST_SCOPED_CAMPAIGN_CONFIRM=... mise exec -- just test scoped-campaign` command it
+prints.
+
+The plan and run fail closed unless all of these conditions hold:
+
+- The checkout is a clean linked Git worktree.
+- `.kube/config` and `.talos/config` are inside that worktree and have mode `0600`.
+- The kubeconfig contains exactly the `homelab-observer` and `homelab-diagnostic`
+  contexts and token users, with `homelab-observer` current and no administrator
+  identity.
+- The Talos credential has exactly the `os:reader` role.
+
+The scoped campaign runs every catalog member assigned to the observer or diagnostic
+tier. Observer is the default identity. A verifier that needs exec or port-forward must
+explicitly select `homelab-diagnostic`. The campaign records and validates canonical
+results locally. It does not acquire the cluster test Lease, publish reports, or run as
+part of the cluster-independent `just ci` gate.
+
+The catalog's `execution_owner: human` metadata distinguishes these interactive live
+suites from shared automation. It does not require the operator to type the command when
+`AGENTS.md` authorizes an agent to run scoped verification.
+
+## Authoritative implementation sources
+
+Use these executable and policy sources when behavior changes or the guide appears to
+disagree with the repository:
+
+- [`AGENTS.md`](../../AGENTS.md) defines agent authority and repository policy.
+- [`tests/catalog.yaml`](../../tests/catalog.yaml) defines current campaign membership,
+  suite commands, and access-tier assignments.
+- [`kubernetes/apps/kube-system/agent-access/app/rbac.yaml`](../../kubernetes/apps/kube-system/agent-access/app/rbac.yaml)
+  defines the deployed Kubernetes permissions.
+- [`talos/mod.just`](../../talos/mod.just) and
+  [`scripts/repository/install-worktree-credentials.sh`](../../scripts/repository/install-worktree-credentials.sh)
+  implement credential installation.
+- [`scripts/test/scoped-campaign-preflight.sh`](../../scripts/test/scoped-campaign-preflight.sh)
+  and [`scripts/test/run-campaign.sh`](../../scripts/test/run-campaign.sh) implement the
+  scoped campaign boundary.
+- Verifier behavior lives under [`scripts/verify/`](../../scripts/verify/).
+
+Current campaign membership is intentionally not duplicated in this guide. Use
+`mise exec -- just test scoped-campaign-plan` to inspect it.
+
+## RBAC resource reference
 
 The observer and diagnostic identities inherit Kubernetes `view`. The supplemental
 ClusterRole adds only these campaign-required resources, each with `get`, `list`, and
-`watch` (plus core `pods/log` with `get`):
+`watch`, plus core `pods/log` with `get`:
 
 | API group | Resources |
 |---|---|
@@ -60,98 +315,8 @@ ClusterRole adds only these campaign-required resources, each with `get`, `list`
 | `storage.k8s.io` | `csidrivers`, `storageclasses` |
 | `tailscale.com` | `connectors`, `dnsconfigs`, `proxyclasses`, `proxygroups` |
 
-Catalog validation compares this exact source RBAC contract with the scoped campaign's
-static requirements. Wildcard resources, missing groups, extra verbs, Secret reads,
-mutations, and hidden calls reached through nested Kubernetes Just recipes fail offline.
-RBAC object reads are intentionally limited to roles and bindings so the Portainer
-verifier can compare its live authorization graph with source and detect alternate direct
-bindings. They expose policy metadata, not Secret bodies, and grant no impersonation,
-`bind`, `escalate`, or write verb.
-
-## Verifier matrix
-
-| Verifier | Tier | Reason |
-|---|---|---|
-| `agent-access` | diagnostic | Exercises both named Kubernetes contexts and the Talos reader boundary. |
-| `metrics-server` | observer | Reads rollout, APIService, and metrics state. |
-| `cilium` | diagnostic | Reads Cilium and Kubernetes health; `cilium status` executes its status command in each agent pod. |
-| `flux` | observer | Reads controller, source, Kustomization, HelmRelease, and reconciliation state. |
-| `foundation` | observer | Reads foundation controllers and routes. |
-| `storage` | observer | Reads storage health and resources. |
-| `csi-driver-smb` | observer | Reads driver rollout and storage state. |
-| `media-storage` | observer | Reads the media storage contract. |
-| `plex` | diagnostic | Executes read-only runtime identity, Kubernetes API-token, and filesystem assertions inside the Plex pod. |
-| `intel-gpu-plugin` | observer | Reads plugin rollout and advertised resources. |
-| `encode-benchmark` | observer | Reads the inert benchmark inputs, including its PriorityClass. |
-| `qbittorrent` | observer | Reads rollout, route, and functional endpoint state. |
-| `prowlarr` | observer | Reads rollout, route, and application state. |
-| `sonarr` | observer | Reads rollout, route, and application state. |
-| `radarr` | observer | Reads rollout, route, and application state. |
-| `lidarr` | observer | Reads rollout, route, and application state. |
-| `seerr` | observer | Reads rollout, route, and application state. |
-| `tautulli` | diagnostic | Executes an exact `/status` request from the workload through Service DNS, then checks the gateway response. |
-| `flaresolverr` | diagnostic | Port-forwards its in-cluster-only Service to preserve the ready-JSON oracle. |
-| `qbit-manage` | observer | Reads controller and job state. |
-| `monitoring` | observer | Reads stack health, Prometheus telemetry, and Alertmanager's loaded receiver/route through `/api/v2/status`. |
-| `gatus` | observer | Reads Gatus endpoint and rollout state. |
-| `portainer` | observer | Reads workload, PVC, route, network policy, and effective RBAC state. |
-| `test-reports` | observer | Reads report service and storage state. |
-| `homepage` | diagnostic | Executes a read-only file-existence check in the running Homepage pod. |
-| `trivy` | observer | Reads operator and report CRDs. |
-| `tailscale-operator` | observer | Reads operator and ProxyGroup state. |
-| `tailscale-subnet-router` | observer | Reads Connector, ProxyGroup, route, and workload state. |
-| `ntfy` | diagnostic | Executes ntfy's runtime ACL query and uses provisioned process credentials for authenticated ACL checks without Secret API reads. |
-| `alertmanager-ntfy` | observer | Reads rollout state and Alertmanager's loaded configuration through `/api/v2/status`. |
-
-## Verification workflow
-
-The access application must be Ready before a scoped credential is useful. Do not run a
-live verifier until the worktree-local credential files exist and the requested tier is
-authorized for the task.
-
-Prove the authorization matrix without mutating the cluster:
-
-```bash
-mise exec -- just kube agent-access-verify
-```
-
-The gate requires observer workload/CRD/log reads to succeed; observer Secret, exec,
-port-forward, create, patch, and delete requests to be denied; diagnostic exec and
-port-forward requests to succeed while Secret and Flux mutations remain denied; and
-Talos version and service inspection to succeed with the reader credential.
-Authorization checks omit `--namespace` for cluster-scoped resources so kubectl does not
-emit misleading ignored-namespace warnings; namespaced checks retain an explicit scope.
-
-When both scoped contexts exist, the gate exercises them directly and never depends on
-impersonation. When neither exists, it treats the current kubeconfig as operator admin
-and evaluates the two ServiceAccounts with their complete Kubernetes identities:
-username, `system:authenticated`, `system:serviceaccounts`, and
-`system:serviceaccounts:kube-system`. A partial one-context layout is rejected.
-
-Plan the scoped live campaign, review its exact membership and confirmation, then run
-only with the confirmation it prints:
-
-```bash
-mise exec -- just test scoped-campaign-plan
-```
-
-Both the plan and run fail closed unless they execute from a linked Git worktree and
-find `.kube/config` and `.talos/config` in that worktree with mode `0600`. The local
-preflight inspects the kubeconfig and requires exactly the `homelab-observer` and
-`homelab-diagnostic` contexts and token users, with `homelab-observer` current and no
-admin identity. It also uses `talosctl config info --output json` to require exactly the
-`os:reader` role before any suite starts. A main clone, credential path override,
-partial context pair, broader identity, or unreadable credential is rejected.
-
-`scoped-verification` contains every observer and diagnostic suite and no operator-only
-suite. Its dedicated linked-worktree runner uses the observer current context, selects
-the named diagnostic context only when required, and uses the Talos reader credential.
-It writes and validates canonical results locally without acquiring the cluster test
-Lease, publishing reports, or streaming child output through the campaign coordinator.
-
-The complete `verification` campaign is a separate operator workflow from the main
-clone with an admin kubeconfig. It retains the normal Lease/publication campaign
-semantics, and its `verification.agent-access` member uses admin impersonation to prove
-the scoped ServiceAccount identities. Run it with `campaign-plan verification` and the
-operator confirmation that command prints. Neither live campaign is part of
-`executions.ci`; CI remains secret-free and cluster-independent.
+Catalog validation compares this RBAC contract with the scoped campaign's static
+requirements. It rejects wildcard resources, missing groups, extra verbs, Secret reads,
+mutations, and undeclared calls reached through nested Kubernetes Just recipes. RBAC
+object reads remain limited to roles and bindings. They expose policy metadata, not
+Secret bodies, and grant no impersonation, `bind`, `escalate`, or write verb.
