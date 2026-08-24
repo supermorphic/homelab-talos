@@ -54,19 +54,18 @@ These labels explain this guide; they do not define new repository policy.
 
 ## Dependency order
 
-The phases below preserve the actual operating dependencies:
+For the user-facing applications configured in this guide, the Flux deployment
+prerequisites and the recommended operator sequence are related but not identical. Flux
+can reconcile independent applications in parallel:
 
 ```text
-media storage
-  -> Plex and qBittorrent
-  -> Prowlarr and the media managers
-  -> each media manager's qBittorrent client
-  -> Prowlarr application connections
-  -> direct imports
-  -> Plex refresh connections
-  -> Seerr request routing
-  -> Homepage, Gatus, and Tautulli acceptance
+media namespace + internal Gateway -> Prowlarr, Seerr, Tautulli
+media storage + internal Gateway   -> qBittorrent, Plex, Sonarr, Radarr, Lidarr
 ```
+
+The phases below serialize the human setup so credentials and functional evidence exist
+before a dependent integration is configured. They do not claim that Prowlarr depends on
+Plex or qBittorrent, or that Plex depends on either application.
 
 Important ordering gates are:
 
@@ -496,7 +495,7 @@ For a genuine empty PVC, keep the source suspended while the operator validates:
 - disabled audio metadata writing;
 - a real metadata search, download, and import;
 - qBittorrent hash integrity after import; and
-- required Prowlarr, Homepage, and Gatus credentials.
+- required Prowlarr and Homepage credentials.
 
 Only after those checks pass may a **Git change** make Lidarr durably active. The current
 deployed application already passed this lifecycle and is active; do not infer that a
@@ -598,6 +597,29 @@ the intended album explicitly during acceptance.
 
 Copy Lidarr's API key from **Settings → General**, in the **Security** area, to the
 password manager. It will be used by Prowlarr, Homepage, and Gatus.
+
+#### Create the pre-activation Homepage credential
+
+**Git change** — a fresh Lidarr deployment must have its independently rotatable
+Homepage credential in Git before durable activation. From the feature worktree, with
+the operator's SOPS age identity loaded, use a non-echoing prompt and the guarded writer:
+
+```bash
+printf 'Lidarr API key: '
+IFS= read -r -s LIDARR_API_KEY
+printf '\n'
+export LIDARR_API_KEY
+export HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'
+mise exec -- just repo homepage-lidarr-secrets
+unset LIDARR_API_KEY HOMEPAGE_LIDARR_SECRETS_CONFIRM
+```
+
+Review and commit only
+`kubernetes/apps/monitoring/homepage/app/homepage-lidarr.sops.yaml`. Never print or
+commit the plaintext key. The guarded bootstrap recipes require a clean checkout, so
+commit this encrypted result before running another bootstrap command. This one
+credential is an explicit Lidarr activation gate; the complete Gatus Secret is created
+later because it also requires the Seerr API key.
 
 **Repository check**
 
@@ -1059,7 +1081,9 @@ writes only its declared encrypted file, and checks that the plaintext input is 
 from the result.
 
 After all application keys and the Plex token exist, the operator can create or rotate
-the complete media widget set in one non-echoing shell session:
+the remaining media widget credentials in one non-echoing shell session. Lidarr is
+intentionally absent: its encrypted Homepage Secret is created before Lidarr activation.
+Rerun the dedicated Lidarr writer above only when that API key changes.
 
 ```bash
 (
@@ -1075,8 +1099,6 @@ the complete media widget set in one non-echoing shell session:
   IFS= read -r -s SONARR_API_KEY
   printf '\nRadarr API key: '
   IFS= read -r -s RADARR_API_KEY
-  printf '\nLidarr API key: '
-  IFS= read -r -s LIDARR_API_KEY
   printf '\nSeerr API key: '
   IFS= read -r -s SEERR_API_KEY
   printf '\nTautulli API key: '
@@ -1086,14 +1108,13 @@ the complete media widget set in one non-echoing shell session:
   printf '\n'
 
   export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
-  export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY
+  export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY
   export SEERR_API_KEY TAUTULLI_API_KEY PLEX_TOKEN
 
   export HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM='write:monitoring:homepage-qbittorrent:sops'
   export HOMEPAGE_PROWLARR_SECRETS_CONFIRM='write:monitoring:homepage-prowlarr:sops'
   export HOMEPAGE_SONARR_SECRETS_CONFIRM='write:monitoring:homepage-sonarr:sops'
   export HOMEPAGE_RADARR_SECRETS_CONFIRM='write:monitoring:homepage-radarr:sops'
-  export HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'
   export HOMEPAGE_SEERR_SECRETS_CONFIRM='write:monitoring:homepage-seerr:sops'
   export HOMEPAGE_TAUTULLI_SECRETS_CONFIRM='write:monitoring:homepage-tautulli:sops'
   export HOMEPAGE_PLEX_SECRETS_CONFIRM='write:monitoring:homepage-plex:sops'
@@ -1102,14 +1123,14 @@ the complete media widget set in one non-echoing shell session:
   mise exec -- just repo homepage-prowlarr-secrets
   mise exec -- just repo homepage-sonarr-secrets
   mise exec -- just repo homepage-radarr-secrets
-  mise exec -- just repo homepage-lidarr-secrets
   mise exec -- just repo homepage-seerr-secrets
   mise exec -- just repo homepage-tautulli-secrets
   mise exec -- just repo homepage-plex-secrets
 )
 ```
 
-Commit only these encrypted outputs:
+Across the dedicated Lidarr writer and the combined session, commit only these encrypted
+outputs:
 
 | Consumer | Encrypted file |
 | --- | --- |
@@ -1143,6 +1164,9 @@ accepted. Open Homepage and require each configured media widget to show live da
 
 Gatus uses a separate SOPS Secret containing exactly the Prowlarr, Sonarr, Radarr,
 Lidarr, and Seerr API keys. Only Gatus consumes this copy.
+
+This complete five-key Secret is a Phase 7 integration step, not a prerequisite for
+activating Lidarr. Seerr's API key does not exist until Seerr has been configured.
 
 **Git change**
 
