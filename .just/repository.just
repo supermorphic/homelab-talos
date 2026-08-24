@@ -8,8 +8,9 @@ tools:
     mise exec -- just repo versions
 
 # Print the tool versions used by this repository.
-versions:
+versions: toolchain-validate
     @bash --version | head -n 1
+    @python3 --version
     @bats --version
     @shfmt --version
     @ffmpeg -version | head -n 1
@@ -34,7 +35,42 @@ versions:
     @promtool --version | head -n 1
     @shellcheck --version
     @uv --version
+    @pre-commit --version
     @sonobuoy version
+
+# Prove that supported repository commands resolve the exact mise-managed Python.
+toolchain-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    expected_version='3.13.14'
+    python_root="$(cd "$(mise where python)" && pwd -P)"
+    python_path="$(command -v python3)"
+    python_version="$(python3 -c 'import platform; print(platform.python_version())')"
+    python_executable="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+    uv_python="$(uv python find --system "$expected_version")"
+    uv_python_executable="$("$uv_python" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+
+    [[ "$python_version" == "$expected_version" ]] || {
+      echo "Expected Python $expected_version, got $python_version from $python_path." >&2
+      exit 1
+    }
+    case "$python_executable" in
+      "$python_root"/*) ;;
+      *)
+        echo "Python must resolve under the mise installation $python_root; got $python_executable." >&2
+        exit 1
+        ;;
+    esac
+    case "$uv_python_executable" in
+      "$python_root"/*) ;;
+      *)
+        echo "uv must resolve Python under the mise installation $python_root; got $uv_python_executable." >&2
+        exit 1
+        ;;
+    esac
+
+    printf 'Python %s: %s (mise-managed)\n' "$python_version" "$python_path"
+    printf 'uv Python: %s (mise-managed)\n' "$uv_python"
 
 # Read GitHub merge settings, the complete Protect main ruleset, and rules effective
 # on main; fail when they differ from the tracked protection contract.
@@ -1302,7 +1338,7 @@ decisions-validate:
     uv run --locked --no-dev python scripts/repository/decisions.py index --check
 
 # Run repository and declarative Talos source validation.
-verify: verify-files verify-shell-scripts
+verify: toolchain-validate verify-files verify-shell-scripts
     just talos source-validate
     just repo secret-scan
     @echo "Repository and Phase 2 Talos source checks passed."

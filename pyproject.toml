@@ -13,6 +13,7 @@ dev = [
 
 [tool.uv]
 package = false
+python-preference = "only-system"
 
 [tool.ruff]
 line-length = 99

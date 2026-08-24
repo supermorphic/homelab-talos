@@ -210,6 +210,17 @@ if ! "$validator" "$untracked_repo" >"$temp_root/untracked.out" 2>&1; then
   exit 1
 fi
 
+deleted_repo="$temp_root/deleted"
+new_repo "$deleted_repo"
+printf 'tracked\n' >"$deleted_repo/source.md"
+git -C "$deleted_repo" add source.md
+rm "$deleted_repo/source.md"
+if ! "$validator" "$deleted_repo" >"$temp_root/deleted.out" 2>&1; then
+  cat "$temp_root/deleted.out" >&2
+  echo 'Expected a deleted tracked file to be ignored.' >&2
+  exit 1
+fi
+
 excluded_repo="$temp_root/excluded"
 new_repo "$excluded_repo"
 superpowers_dir='superpowers'
