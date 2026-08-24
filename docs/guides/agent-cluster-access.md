@@ -59,6 +59,21 @@ credential used by that workflow.
 
 ## What the installer creates
 
+**Location matters.** The recipe selects one of two credential paths from the checkout
+location:
+
+- In a linked worktree, it creates only `homelab-observer`, `homelab-diagnostic`, and a
+  Talos `os:reader` identity.
+- In the main clone, it uses the existing Talos `os:admin` identity to download and
+  replace the ignored Kubernetes administrator kubeconfig. Its current context is
+  `homelab-admin`; the client certificate authenticates the Kubernetes user `admin` in
+  the `system:masters` superuser group.
+
+The main-clone path refreshes `.kube/config`; it does not create scoped worktree
+credentials or replace the main clone's Talos identity. It is outside this guide's
+scoped agent-access model. Thus, the same `mise exec -- just talos kubeconfig` command
+produces different Kubernetes authority depending on where it runs.
+
 In a linked worktree, `mise exec -- just talos kubeconfig` creates two ignored files with
 mode `0600`:
 
@@ -154,6 +169,35 @@ repository recipe also does not make an otherwise operator-owned action agent-ow
 actions for testing, benchmarking, verification, diagnostics, and cleanup. This guide
 does not grant that approval or extend it to the scoped verification campaign, which is
 declared non-mutating.
+
+## When scoped access is insufficient
+
+A permission denial in an approved verifier is not a reason to retry with
+`homelab-admin`, patch live RBAC, or add a broad grant until the check passes. Treat a
+real permission gap as a repository design change:
+
+1. Decide whether the operation belongs in scoped access. A bounded resource read can
+   justify an observer grant. Keep `exec` and port-forward limited to named diagnostic
+   verifiers designed around those operations. Do not silently add Secret reads, broad
+   mutation, impersonation, `bind`, `escalate`, or similar authority.
+2. In the normal feature-worktree workflow, update the affected verifier and its
+   `access.tier` in [`tests/catalog.yaml`](../../tests/catalog.yaml). For a new read,
+   update the scoped campaign's `access.required_core_read_resources` or
+   `access.required_read_rules`, the complete matrix in
+   [`scripts/verify/agent-access.sh`](../../scripts/verify/agent-access.sh), the policy
+   under [`tests/policy/agent-access/`](../../tests/policy/agent-access/), and
+   [`rbac.yaml`](../../kubernetes/apps/kube-system/agent-access/app/rbac.yaml) together.
+3. Run `mise exec -- just test catalog-validate` to compare catalog requirements with
+   the exact observer grants, `mise exec -- just kube validator-tests` for the RBAC
+   policy tests, the affected verifier's focused tests, and `mise exec -- just ci`.
+   These checks reject wildcard resources, extra verbs, Secret reads, unintended
+   mutations, and diagnostic verifiers that do not select `homelab-diagnostic`.
+4. Submit the Git change for review. After it is merged and the Flux `agent-access`
+   Kustomization has reconciled it, rerun `mise exec -- just kube agent-access-verify`
+   and then the affected verifier.
+
+The permission change must be necessary, narrow, reviewed, and deployed through Git.
+Do not use broader credentials as a runtime workaround while that process is pending.
 
 ## Observer example
 
