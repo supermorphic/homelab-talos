@@ -1,113 +1,186 @@
-# Media automation greenfield startup
+# Media automation startup and acceptance
 
-Use this guide after deploying the media applications onto empty configuration
-PVCs. It covers the runtime setup that cannot be expressed by the existing Helm
-values alone: qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr.
+Use this guide to configure or rebuild the media applications whose runtime settings
+live on application-managed persistent volumes. It covers qBittorrent, Prowlarr,
+Sonarr, Radarr, Lidarr, Plex, Seerr, and Tautulli.
 
-The Kubernetes resources remain declarative in Git. These application settings are
-written by their web UIs into configuration files and SQLite databases on retained
-Longhorn PVCs:
+The current repository keeps these applications active. A genuine greenfield rebuild is
+different: start the affected application through the guarded suspended-source workflow
+in [Greenfield PVC bootstrap](#greenfield-pvc-bootstrap), complete the gates required by
+that application's lifecycle, and make the active state durable through Git at the point
+specified by the bootstrap recipe and this guide.
 
-| Service | Public operator URL | In-cluster URL | Persistent configuration |
-|---|---|---|---|
+Do not commit application passwords, API keys, tracker credentials, cookies, tokens, or
+unencrypted configuration exports. Keep operator credentials in the password manager.
+Use a repository SOPS recipe only for a Kubernetes integration Secret that the repository
+already defines.
+
+## Mental model
+
+Git and the applications own different parts of the system:
+
+- Git owns Kubernetes resources, images, storage mounts, security controls, routes,
+  network policy, monitoring configuration, and SOPS-encrypted integration Secrets.
+- qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, Seerr, Plex, and Tautulli store much of
+  their own runtime configuration in files or databases on retained PVCs.
+- This guide records the human-configured state that Helm and Git do not currently
+  express.
+- A Ready Kubernetes workload proves that the process and its declared route are
+  available. It does not prove that an indexer works, a download imports, Plex scans a
+  library, or a Seerr request completes.
+
+The applications use these paths:
+
+| Service | Operator URL | In-cluster URL | Persistent configuration |
+| --- | --- | --- | --- |
 | qBittorrent | `https://qbittorrent.lab.supermorphic.com` | `http://qbittorrent.media.svc.cluster.local:8080` | `/config` |
 | Prowlarr | `https://prowlarr.lab.supermorphic.com` | `http://prowlarr.media.svc.cluster.local:9696` | `/config` |
 | Sonarr | `https://sonarr.lab.supermorphic.com` | `http://sonarr.media.svc.cluster.local:8989` | `/config` |
 | Radarr | `https://radarr.lab.supermorphic.com` | `http://radarr.media.svc.cluster.local:7878` | `/config` |
 | Lidarr | `https://lidarr.lab.supermorphic.com` | `http://lidarr.media.svc.cluster.local:8686` | `/config` |
-| Seerr | `https://seerr.lab.supermorphic.com` | `http://seerr.media.svc.cluster.local:5055` | `/app/config` |
 | Plex | `https://plex.lab.supermorphic.com` | `http://plex.media.svc.cluster.local:32400` | `/config` |
+| Seerr | `https://seerr.lab.supermorphic.com` | `http://seerr.media.svc.cluster.local:5055` | `/app/config` |
+| Tautulli | `https://tautulli.lab.supermorphic.com` | `http://tautulli.media.svc.cluster.local:8181` | `/config` |
 
-Do not commit application passwords, API keys, tracker credentials, cookies, or
-unencrypted configuration exports. Store operator credentials in the password
-manager. Only use a repository SOPS recipe when a specific integration Secret is
-already designed for Git.
+This guide uses four explanatory labels:
 
-## Order of operations
+- **UI step** — make or confirm a setting in the application's web interface.
+- **Repository check** — run a repository-owned verifier against deployed state.
+- **Operator acceptance gate** — exercise real application behavior and judge the result.
+- **Git change** — make durable Flux-managed state or encrypted integration data through
+  the repository.
 
-Configure the stack in this order:
+These labels explain this guide; they do not define new repository policy.
 
-1. qBittorrent download paths, categories, and permanent WebUI credentials.
-2. Prowlarr authentication and indexers.
-3. Sonarr authentication, TV root folder, and qBittorrent client.
-4. Radarr authentication, movie root folder, and qBittorrent client.
-5. Lidarr authentication, media management, music root folder, naming, and
-   qBittorrent client.
-6. Prowlarr application connections to Sonarr, Radarr, and Lidarr.
-7. Verify the existing Plex TV and Movies library paths, then complete a direct
-   Sonarr import and configure and validate its Plex refresh connection.
-8. Complete a direct Radarr import and configure and validate its Plex refresh
-   connection.
-9. Complete the blocking Lidarr authorized real-import acceptance.
-10. Run `mise exec -- just kube arr-verify lidarr` after its setup and import gate pass.
-11. Create the Plex Music library at `/Volumes/Prometheus/media/music` and run
-    its initial manual scan.
-12. Configure and validate the Lidarr Plex refresh connection.
-13. Seerr connections to Plex, Sonarr, and Radarr, followed by a Seerr request
-    test.
+## Dependency order
 
-Work through the steps incrementally. You do not need every application live at once.
-For example, connect Prowlarr to Sonarr as soon as Sonarr is ready, then complete Radarr
-later. For a fresh or deliberately suspended Lidarr deployment, keep it suspended until
-the first-run configuration, Homepage Secret, and authorized import gate pass. Make the
-intended `spec.suspend` state durable through Git after those checks.
+The phases below preserve the actual operating dependencies:
 
-## qBittorrent
-
-Open `https://qbittorrent.lab.supermorphic.com`.
-
-### Authentication
-
-1. On a new PVC, sign in as `admin` with the temporary password qBittorrent emits
-   during its first startup. It is printed once in the qBittorrent container's
-   startup log (the line begins `The WebUI administrator password was not set. A
-   temporary password is provided...`). On an existing PVC, use the saved permanent
-   credential. If the temporary password is unavailable, use qBittorrent's official
-   password-reset procedure; do not disable WebUI authentication.
-2. Open **Tools → Options → Web UI**.
-3. Set a permanent, unique username and password from the password manager.
-4. Keep WebUI authentication enabled.
-5. Enable **Bypass authentication for clients on localhost**. This bypass is only
-   for the Gluetun port-forward hook in the same Pod.
-6. Disable **Bypass authentication for clients in whitelisted IP subnets** and remove
-   any existing subnet entries. In particular, do not whitelist the Kubernetes Pod
-   CIDR, Service CIDR, or RFC1918 ranges. Requests through the internal Gateway arrive
-   from an in-cluster address, so a Pod-CIDR bypass also bypasses the browser login.
-7. Save, sign out, and confirm the permanent credential signs back in.
-
-qBittorrent exposes one WebUI credential to integrations supported here. Sonarr,
-Radarr, Lidarr, and Homepage use it; Prowlarr uses it only if direct Prowlarr searches
-are enabled. Keep the human copy in the password manager and create Homepage's
-independently rotatable SOPS Secret without printing either value:
-
-```bash
-printf 'qBittorrent WebUI username: '
-IFS= read -r QBITTORRENT_USERNAME
-printf 'qBittorrent WebUI password: '
-IFS= read -r -s QBITTORRENT_PASSWORD
-printf '\n'
-export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
-export HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM='write:monitoring:homepage-qbittorrent:sops'
-mise exec -- just repo homepage-qbittorrent-secrets
-unset QBITTORRENT_USERNAME QBITTORRENT_PASSWORD HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM
+```text
+media storage
+  -> Plex and qBittorrent
+  -> Prowlarr and the media managers
+  -> each media manager's qBittorrent client
+  -> Prowlarr application connections
+  -> direct imports
+  -> Plex refresh connections
+  -> Seerr request routing
+  -> Homepage, Gatus, and Tautulli acceptance
 ```
 
-Commit only the resulting encrypted `homepage-qbittorrent.sops.yaml`. Never commit
-the temporary password, plaintext permanent credential, or an unencrypted application
-configuration export.
+Important ordering gates are:
 
-### Download paths
+1. Configure qBittorrent paths, categories, and its permanent credential before adding
+   it to Sonarr, Radarr, or Lidarr.
+2. Configure Prowlarr indexers and create each media manager's API key before connecting
+   Prowlarr to that application.
+3. Prove direct Sonarr and Radarr imports before accepting the Seerr request path.
+4. Complete Lidarr's stricter real-import, hardlink, metadata, and Force Recheck gate
+   before creating the Plex Music library.
+5. Create a Plex library before configuring and accepting the corresponding native
+   media-manager-to-Plex refresh connection.
 
-Open **Tools → Options → Downloads** and set:
+## Greenfield PVC bootstrap
+
+The current manifests have `spec.suspend: false`; do not run these commands as routine
+configuration or recovery shortcuts. Use this section when an application has a genuine
+empty replacement PVC or is deliberately being rebuilt without a trusted backup.
+
+Every guarded bootstrap in this section requires:
+
+1. An assigned feature worktree for the reviewed Git change.
+2. The application's `kubernetes/apps/media/<app>/ks.yaml` set to
+   `spec.suspend: true` through Git.
+3. That suspended change merged and deployed from `origin/main`.
+4. A clean, authorized main clone at the exact deployed `origin/main` revision, with the
+   administrator `.kube/config` described in
+   [Prepare a clone and worktree](operator-bootstrap.md).
+5. The same application suspended in the live cluster.
+6. The exact confirmation variable shown below.
+
+The recipes validate source, reconcile the parent source, confirm the Git/live suspend
+boundary, temporarily resume the child, wait for readiness, and run the matching live
+verifier. On failure they re-suspend the child while preserving any created resources.
+They do not replace the UI or functional acceptance steps in this guide.
+
+| Application | Guarded command | Additional gate before durable activation |
+| --- | --- | --- |
+| Plex | `PLEX_BOOTSTRAP_CONFIRM='bootstrap:phase11:plex' mise exec -- just bootstrap plex` | Run `plex-verify`, activate through Git, then run the cataloged Plex reschedule test when rebuilding the complete service |
+| qBittorrent | `QBITTORRENT_BOOTSTRAP_CONFIRM='bootstrap:phase12:qbittorrent' mise exec -- just bootstrap qbittorrent` | Complete UI setup and the blocking `qbittorrent-vpn-disconnect` resilience test |
+| Prowlarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:prowlarr' mise exec -- just bootstrap arr prowlarr` | Run `arr-verify prowlarr`, activate through Git, then complete UI and indexer acceptance |
+| Sonarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:sonarr' mise exec -- just bootstrap arr sonarr` | Run `arr-verify sonarr`, activate through Git, then complete UI and direct-import acceptance |
+| Radarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:radarr' mise exec -- just bootstrap arr radarr` | Run `arr-verify radarr`, activate through Git, then complete UI and direct-import acceptance |
+| Lidarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr' mise exec -- just bootstrap arr lidarr` | Keep the source suspended through all Lidarr gates in [Lidarr acceptance](#lidarr-acceptance) |
+| FlareSolverr | `FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:phase13:flaresolverr' mise exec -- just bootstrap flaresolverr` | Run `flaresolverr-verify`, activate through Git, then test one actual protected indexer in Prowlarr |
+| Seerr | `SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr' mise exec -- just bootstrap seerr` | Run `seerr-verify`, activate through Git, then complete Plex, Sonarr/Radarr, and request-flow acceptance |
+| Tautulli | `MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:tautulli' mise exec -- just bootstrap media-app tautulli` | Keep the source suspended until authentication, Plex library, exact-status verification, and real playback history all pass |
+
+Run the commands from the authorized main clone, not a linked worktree with observer or
+diagnostic credentials. The qBittorrent bootstrap also requires the encrypted ProtonVPN
+Secret and bootstrapped media storage. Follow
+[ProtonVPN and Gluetun](protonvpn-gluetun.md) for that credential and VPN acceptance.
+
+After an application's required gates pass, set its source to `spec.suspend: false` in a
+separate reviewed **Git change**. After Flux applies that change, rerun its repository
+verifier. Do not use raw `flux resume` or a direct live patch as the durable activation
+path.
+
+## Phase 1 — Download and indexer foundation
+
+### qBittorrent
+
+#### What you are configuring
+
+qBittorrent downloads all media through the Gluetun VPN sidecar. “Done” means that the
+WebUI has a permanent authenticated login, the shared download paths and three category
+paths are correct, and the same credential has been supplied to each intended consumer.
+
+For an empty qBittorrent PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://qbittorrent.lab.supermorphic.com` while the guarded bootstrap leaves the
+workload available for attended setup.
+
+#### Configure authentication
+
+**UI step**
+
+1. On a new PVC, sign in as `admin` with the temporary password written once to the
+   qBittorrent container's startup log. Treat that temporary password as a secret. On an
+   existing PVC, use the permanent credential from the password manager. If the
+   temporary value is unavailable, use qBittorrent's supported password-reset procedure;
+   do not disable authentication.
+2. Open **Tools → Options → Web UI**.
+3. Set a permanent, unique username and password.
+4. Keep WebUI authentication enabled.
+5. Enable **Bypass authentication for clients on localhost**. The Gluetun
+   port-forward hook is the intended localhost consumer in the same Pod.
+6. Disable **Bypass authentication for clients in whitelisted IP subnets** and remove
+   any subnet entries. Do not whitelist Pod, Service, RFC1918, or other broad private
+   ranges. Gateway requests arrive from in-cluster addresses, so such a whitelist would
+   bypass the browser login.
+7. Save, sign out, and confirm that the permanent credential signs in again.
+
+Sonarr, Radarr, and Lidarr store this credential in their own PVC-backed application
+state. Homepage and qbit_manage use separate SOPS-encrypted Kubernetes Secrets. Store the
+credential securely for [Phase 3](#phase-3--connect-applications),
+[Homepage integration credentials](#homepage-integration-credentials), and the
+[qbit_manage credential procedure](qbit-manage.md#author-the-encrypted-credential).
+For a new credential, update qbit_manage through that guide's suspended, reviewed Git
+workflow before allowing its active policy to resume; do not leave the scheduler using a
+stale password.
+
+#### Configure download paths
+
+**UI step** — open **Tools → Options → Downloads** and set:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Default Torrent Management Mode | `Automatic` |
 | Default save path | `/data/downloads` |
 | Keep incomplete torrents in | Enabled |
 | Incomplete torrents path | `/data/downloads/incomplete` |
 
-The media library directories are not download targets:
+The expected shared tree is:
 
 ```text
 /data/
@@ -122,547 +195,345 @@ The media library directories are not download targets:
     └── tv/
 ```
 
-The SMB mount and every media Pod use UID/GID `568`. Create the `media/music`
-directory on the SMB share before adding it in Lidarr; saving a root-folder path
-does not necessarily create a missing directory. The library path is not a
-qBittorrent save path.
+The media library directories are never qBittorrent save paths. The SMB share and media
+Pods use UID/GID `568`. Create `media/music` on the SMB share before adding that root to
+Lidarr; saving a root-folder path does not guarantee that Lidarr creates the directory.
 
-### Categories
+#### Configure categories and cleanup ownership
 
-In the transfer-list sidebar, under **Categories**:
+**UI step** — in the transfer-list sidebar, under **Categories**:
 
-1. Add category `tv` with save path `/data/downloads/tv`.
-2. Add category `movies` with save path `/data/downloads/movies`.
-3. Add category `music` with save path `/data/downloads/music`.
+1. Add `tv` with save path `/data/downloads/tv`.
+2. Add `movies` with save path `/data/downloads/movies`.
+3. Add `music` with save path `/data/downloads/music`.
 
-Sonarr, Radarr, and Lidarr use these exact category names. Automatic Torrent
-Management applies the category save paths. Each application imports from its
-category path under `/data/downloads` into its organized library under
-`/data/media` on the same mounted filesystem, allowing hardlinks instead of
-copies.
+Automatic Torrent Management applies these category paths. Each media manager imports
+from its download category to its organized library on the same mounted filesystem, so
+the import can create a hardlink rather than a duplicate copy.
 
-### Cleanup authority
+For all three media-manager download clients, keep **Remove Completed** disabled,
+**Post-Import Category** blank, and **Initial State** set to `Started`. Where a client
+shows **Remove Failed**, keep it enabled. qbit_manage alone owns successful-torrent
+classification, seeding duration, ratio, stopping, and final download-side cleanup.
 
-For Sonarr, Radarr, and Lidarr, keep **Remove Completed** disabled,
-**Post-Import Category** blank, and **Initial State** set to `Started`. This
-does not disable their normal completed-download monitoring and import. Where a
-client exposes **Remove Failed**, keep it enabled; it is a separate failed-job
-control, not a reason to describe it as Usenet-only.
+#### Before continuing
 
-qbit_manage alone owns successful torrent seeding duration, ratio, maximum seed
-time, and final cleanup. The responsibilities are deliberately separate:
+Confirm in the UI that:
 
-- Sonarr, Radarr, and Lidarr monitor, grab, import, rename, and organize.
-- qBittorrent downloads and seeds.
-- qbit_manage owns torrent lifecycle, seeding policy, and final cleanup.
+- the permanent login works;
+- the default and incomplete paths are under `/data/downloads`;
+- the `tv`, `movies`, and `music` categories have the exact paths above; and
+- authentication bypass is limited to localhost.
 
-### Check
+#### Repository verification
 
-Run the read-only guarded verification:
+**Repository check**
 
 ```bash
 mise exec -- just kube qbittorrent-verify
 ```
 
-Confirm `qbittorrent-vpn` is green in Gatus before testing downloads.
+This read-oriented verifier confirms the Flux Kustomization and HelmRelease are Ready,
+the Deployment rolled out, the HTTPRoute is accepted, DNS points at the internal
+Gateway, and the WebUI is reachable. It does not authenticate to the WebUI or prove VPN
+egress, category settings, download success, hardlinks, or a real media import.
 
-## Prowlarr
+Confirm the `qbittorrent-vpn` endpoint is green in the Gatus UI before downloading. For
+a genuine greenfield qBittorrent activation, also run the exact blocking resilience gate
+printed by the bootstrap recipe:
 
-Open `https://prowlarr.lab.supermorphic.com`.
+```bash
+CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' \
+  mise exec -- just test resilience qbittorrent-vpn-disconnect
+```
 
-### Authentication
+That disruptive, operator-run test proves the VPN path fails closed during an outage and
+recovers. It is not a routine verifier.
 
-On a new PVC, complete the initial authentication screen:
+### Prowlarr
+
+#### What you are configuring
+
+Prowlarr owns indexer definitions and synchronizes them to Sonarr, Radarr, and Lidarr.
+“Done” means its login works, at least one authorized indexer passes its own Test and a
+real search, and its API key is stored securely for downstream connections.
+
+For an empty Prowlarr PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://prowlarr.lab.supermorphic.com`.
+
+#### Configure authentication and indexers
+
+**UI step** — on a new PVC, complete the initial authentication screen:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Authentication Method | `Forms (Login Page)` |
-| Authentication Required | `Enabled` |
+| Authentication Required | Enabled |
 | Username | A unique operator username |
 | Password | A unique password from the password manager |
 
-The account is persisted in `prowlarr.db`. It is not recreated on Pod restarts,
-upgrades, or node rescheduling.
+Add an indexer from **Indexers → Add Indexer**. Do not confuse this catalog with
+**Settings → Indexers → Add Indexer Proxy**. The proxy dialog offers helpers such as
+FlareSolverr, HTTP, SOCKS4, and SOCKS5; those are not indexer definitions.
 
-### Indexers
+For each intended indexer:
 
-The **Settings → Indexers** page has two separate `+` buttons: **Add Indexer**
-(the indexer catalog) and, lower down, **Add Indexer Proxy**. If the `+` you press
-only offers **FlareSolverr**, **Http**, **SOCKS4**, and **SOCKS5**, that is the
-*proxy* dialog — those four are connection proxies, not indexers. Close it and use
-the **Add Indexer** button in the **Indexers** panel instead. See
-[Indexer proxies](#indexer-proxies) for when (and whether) a proxy is needed.
+1. Search for and select its definition.
+2. Enter only the credentials that the indexer requires.
+3. Leave **Redirect** disabled unless that specific indexer requires it.
+4. Use the default sync profile unless you need deliberate per-application policy.
+5. Select **Test**, require success, and then **Save**.
+6. Run a real search and confirm that it returns plausible results.
 
-To add an indexer:
+Indexer choice is an operator decision. Use only sources and content that you are
+authorized to use. Do not add qBittorrent under **Settings → Download Clients** for the
+normal automation flow; Prowlarr download clients apply only to searches initiated in
+Prowlarr. Sonarr, Radarr, and Lidarr use their own clients.
 
-1. Open **Settings → Indexers**.
-2. In the **Indexers** panel, select **Add Indexer** (`+`). Prowlarr opens a
-   searchable catalog of several hundred indexer definitions.
-3. Search for and choose the specific tracker or indexer.
-4. Enter its required API key, cookie, username/password, or other credential.
-5. Leave **Redirect** disabled unless that specific indexer requires it.
-6. Select the default sync profile unless a deliberate per-application policy is
-   needed.
-7. Select **Test**, require a successful result, and then **Save**.
-8. Repeat for every desired indexer.
+#### Optional FlareSolverr proxy
 
-Which indexers to add is a deliberate operator choice and depends on your sources.
-Usenet indexers (Newznab definitions, paired with a paid Usenet provider) are the
-most reliable and lowest-maintenance; public torrent indexers are free but variable
-and some sit behind Cloudflare; private torrent trackers require their own
-membership and credentials. Add only indexers you are entitled to use, and only for
-content you have the right to download. The servarr wiki and the community
-[TRaSH guides](https://trash-guides.info/) track which definitions are currently
-healthy.
+FlareSolverr is an optional, stateless, in-cluster helper for individual indexers that
+require a Cloudflare challenge. It is not a global proxy and it does not put Prowlarr
+behind the qBittorrent VPN.
 
-#### Indexer proxies
+**UI step** — only for an indexer that needs it:
 
-The **Add Indexer Proxy** dialog offers **FlareSolverr**, **Http**, **SOCKS4**, and
-**SOCKS5**. These are optional, and **none are required for the normal flow** —
-leave this section empty unless a specific indexer forces it.
+1. Open **Settings → Indexers → Add Indexer Proxy → FlareSolverr**.
+2. Set **Name** to `FlareSolverr`, **Host** to
+   `http://flaresolverr.media.svc.cluster.local:8191`, and **Tags** to
+   `flaresolverr`.
+3. Select **Test**, require success, and then **Save**.
+4. Add the `flaresolverr` tag only to the protected indexer.
+5. Test that indexer and run a real manual search.
 
-- **FlareSolverr** — a headless-browser helper that solves Cloudflare anti-bot
-  challenges for the few public indexers that still require it (e.g. 1337x, which
-  otherwise fails with "Unable to access 1337x.to, blocked by CloudFlare Protection").
-  It **is deployed in this cluster** as a stateless, in-cluster-only app
-  (`kubernetes/apps/media/flaresolverr/`, ClusterIP `:8191`, no UI, no VPN). Add it as
-  a **per-indexer** proxy — see [FlareSolverr for Cloudflare indexers](#flaresolverr-for-cloudflare-indexers).
-  It is experimental: Cloudflare actively counters FlareSolverr, so it may not unblock
-  every indexer. Prefer indexers that do not need it where you can.
-- **Http / SOCKS4 / SOCKS5** — forward an indexer's traffic through an external
-  proxy. Not needed here: Prowlarr reaches indexers directly, and it is qBittorrent
-  — not Prowlarr — that egresses through the ProtonVPN tunnel.
+Prowlarr and FlareSolverr must use the same direct egress address for the challenge
+session. Do not route FlareSolverr through Gluetun. If an optional indexer still fails
+after testing a supported alternate URL, disable that indexer rather than adding browser
+flags, another proxy, VPN routing, or container privilege.
 
-##### FlareSolverr for Cloudflare indexers
-
-FlareSolverr is a **per-indexer** proxy — attach it only to the indexers that need it,
-never globally. It and Prowlarr must share the same outward-facing IP (both egress
-directly, no VPN), or the Cloudflare session breaks; do not route FlareSolverr through
-Gluetun.
-
-1. **Settings → Indexers → Add Indexer Proxy → FlareSolverr.**
-   - **Name:** `FlareSolverr`
-   - **Host:** `http://flaresolverr.media.svc.cluster.local:8191`
-   - **Tags:** `flaresolverr`
-   - **Test**, require success, **Save**.
-2. Open the Cloudflare-protected indexer (e.g. **1337x**) and add the tag
-   `flaresolverr` to it — **and only to it**. Do not tag indexers that do not need it.
-3. **Test the indexer.** Success requires all three: the proxy Test passes, the 1337x
-   indexer Test passes, **and** a manual 1337x search in Prowlarr returns real results.
-
-If 1337x still fails after confirming the tag, confirming Prowlarr and FlareSolverr share
-one egress IP, and trying the primary plus one current alternate 1337x URL — **stop**.
-Do not escalate to custom Chrome flags, extra proxies, VPN routing, or a privileged
-container to force one optional public indexer. Disable 1337x, leave FlareSolverr for the
-next indexer that needs it, and continue with your other indexers.
-
-Do not add qBittorrent under **Prowlarr → Settings → Download Clients** for the
-normal automation flow. Prowlarr download clients are only used for searches
-initiated directly in Prowlarr; Sonarr, Radarr, and Lidarr use their own clients.
-If direct Prowlarr searches are deliberately enabled, configure the same in-cluster
-qBittorrent URL and permanent WebUI credential used by the downstream apps, with a
-separate category chosen for those searches.
-
-### API key
-
-The Prowlarr API key is under **Settings → General → Security**. Do not paste it
-into documentation or chat.
-
-The Homepage widget uses an independently rotatable SOPS Secret created by:
+**Repository check**
 
 ```bash
-printf 'Prowlarr API key: '
-IFS= read -r -s PROWLARR_API_KEY
-printf '\n'
-export PROWLARR_API_KEY
-export HOMEPAGE_PROWLARR_SECRETS_CONFIRM='write:monitoring:homepage-prowlarr:sops'
-mise exec -- just repo homepage-prowlarr-secrets
-unset PROWLARR_API_KEY HOMEPAGE_PROWLARR_SECRETS_CONFIRM
+mise exec -- just kube flaresolverr-verify
 ```
 
-Run this only when creating or rotating the widget Secret. Commit only the
-resulting encrypted `homepage-prowlarr.sops.yaml`.
+This diagnostic verifier confirms Flux and Helm readiness, the rollout, Service
+endpoints, and FlareSolverr's ready response through an approved port-forward. It does
+not prove that any Cloudflare-protected indexer works; the Prowlarr Test and real search
+are the acceptance gate.
 
-Application connections are completed after the downstream apps have generated
-their API keys; see [Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr).
+#### Before continuing
 
-### Check
+Copy Prowlarr's API key from **Settings → General**, in the **Security** area, to the
+password manager. It is used later by Gatus and Homepage. Do not paste it into
+documentation or chat.
+
+**Repository check**
 
 ```bash
 mise exec -- just kube arr-verify prowlarr
 ```
 
-## Sonarr
+This verifier confirms Ready resources, rollout, route acceptance, DNS, and the
+unauthenticated `/ping` path. It does not authenticate, inspect saved indexers, exercise
+FlareSolverr, or prove a search or grab.
 
-Open `https://sonarr.lab.supermorphic.com`.
+## Phase 2 — Media managers
 
-### Authentication
+Configure each media manager before wiring its external applications. Prowlarr will own
+its synchronized indexers later; do not add duplicate indexers directly in Sonarr,
+Radarr, or Lidarr.
 
-On a new PVC, configure:
+### Sonarr
 
-| Setting | Value |
-|---|---|
-| Authentication Method | `Forms (Login Page)` |
-| Authentication Required | `Enabled` |
-| Username | A unique operator username |
-| Password | A unique password from the password manager |
+#### What you are configuring
 
-### Media management
+Sonarr organizes television downloads below `/data/media/tv`. “Done” means the login,
+naming preview, import safety settings, root folder, and API key are ready for the
+connections in Phase 3.
 
-1. Open **Settings → Media Management**.
-2. Enable **Show Advanced**.
-3. Configure episode naming:
+For an empty Sonarr PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://sonarr.lab.supermorphic.com`.
 
-   | Setting | Value |
-   |---|---|
-   | Rename Episodes | Enabled |
-   | Replace Illegal Characters | Enabled |
-   | Colon Replacement | `Smart Replace` |
-   | Standard Episode Format | `{Series Title} ({Series Year}) - S{season:00}E{episode:00}` |
-   | Daily Episode Format | Leave at the default |
-   | Anime Episode Format | Leave at the default; anime is not currently used |
-   | Series Folder Format | `{Series Title} ({Series Year})` |
-   | Season Folder Format | `Season {season:00}` |
-   | Specials Folder Format | `Specials` |
-   | Multi Episode Style | `Prefixed Range` |
+#### Configure Sonarr
 
-4. Configure folders:
+**UI step** — on a new PVC, enable `Forms (Login Page)` authentication and require it,
+using a unique password-manager credential.
 
-   | Setting | Value |
-   |---|---|
-   | Create Empty Series Folders | Disabled |
-   | Delete Empty Folders | Enabled |
+Open **Settings → Media Management**, enable **Show Advanced**, and set:
 
-5. Configure importing:
+| Area | Setting | Value |
+| --- | --- | --- |
+| Naming | Rename Episodes | Enabled |
+| Naming | Replace Illegal Characters | Enabled |
+| Naming | Colon Replacement | `Smart Replace` |
+| Naming | Standard Episode Format | `{Series Title} ({Series Year}) - S{season:00}E{episode:00}` |
+| Naming | Series Folder Format | `{Series Title} ({Series Year})` |
+| Naming | Season Folder Format | `Season {season:00}` |
+| Naming | Specials Folder Format | `Specials` |
+| Naming | Multi Episode Style | `Prefixed Range` |
+| Folders | Create Empty Series Folders | Disabled |
+| Folders | Delete Empty Folders | Enabled |
+| Importing | Episode Title Required | `Never` |
+| Importing | Skip Free Space Check | Disabled |
+| Importing | Minimum Free Space | `102400 MB` |
+| Importing | Use Hardlinks instead of Copy | Enabled |
+| Importing | Import Using Script | Disabled |
+| Importing | Import Extra Files | Enabled, extension `srt` |
+| File management | Unmonitor Deleted Episodes | Disabled |
+| File management | Propers and Repacks | `Prefer and Upgrade` |
+| File management | Analyse Video Files | Enabled |
+| File management | Rescan Series Folder after Refresh | `After Manual Refresh` |
+| File management | Change File Date | `None` |
+| File management | Recycling Bin | Blank |
+| File management | Set Permissions | Disabled |
 
-   | Setting | Value |
-   |---|---|
-   | Episode Title Required | `Never` |
-   | Skip Free Space Check | Disabled |
-   | Minimum Free Space | `102400 MB` |
-   | Use Hardlinks instead of Copy | Enabled |
-   | Import Using Script | Disabled |
-   | Import Extra Files | Enabled (extensions: `srt`) |
+Leave the Daily and Anime episode formats at their defaults unless the library policy
+later includes those formats. Under **Root Folders**, add `/data/media/tv`. Never use
+`/data/downloads` as a library root.
 
-6. Configure file management:
+Before saving the naming settings, confirm the preview contains the series year, a
+zero-padded folder such as `Season 01`, and `S01E01` episode notation. UI labels can vary
+between Servarr builds; the previewed path is the human oracle for the intended result.
 
-   | Setting | Value |
-   |---|---|
-   | Unmonitor Deleted Episodes | Disabled |
-   | Propers and Repacks | `Prefer and Upgrade` |
-   | Analyse Video Files | Enabled |
-   | Rescan Series Folder after Refresh | `After Manual Refresh` |
-   | Change File Date | `None` |
-   | Recycling Bin | Blank |
-   | Set Permissions | Disabled |
+Copy the API key from **Settings → General**, in the **Security** area, to the password
+manager. It will be used by Prowlarr, Seerr, Homepage, and Gatus.
 
-7. Under **Root Folders**, select **Add Root Folder**.
-8. Enter `/data/media/tv` and save.
+#### Before continuing
 
-The root folder is the organized Plex TV library. Never set it to
-`/data/downloads` or one of its children.
+Confirm the root folder is `/data/media/tv`, hardlinks are enabled, the naming preview is
+correct, and no manually configured indexer duplicates Prowlarr ownership.
 
-Sonarr leaves qBittorrent's release names unchanged and creates the Plex-facing
-library structure during import. For example:
-
-```text
-/data/media/tv/
-└── Better Call Saul (2015)/
-    └── Season 01/
-        ├── Better Call Saul (2015) - S01E01.mkv
-        ├── Better Call Saul (2015) - S01E02.mkv
-        └── ...
-```
-
-After entering the naming tokens, verify that Sonarr's previews show a series
-year, a zero-padded season folder such as `Season 01`, and `S01E01` episode
-notation before saving.
-
-### Indexers
-
-Do not add indexers in Sonarr. Prowlarr owns them and pushes them here during the
-[application connection](#connect-prowlarr-to-sonarr-radarr-and-lidarr) with `Full Sync`.
-After that step, Sonarr's **Settings → Indexers** lists entries ending in
-`(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
-
-### qBittorrent download client
-
-Open **Settings → Download Clients → Add → qBittorrent** and enter:
-
-| Setting | Value |
-|---|---|
-| Name | `qBittorrent` |
-| Enable | Enabled |
-| Host | `qbittorrent.media.svc.cluster.local` |
-| Port | `8080` |
-| Use SSL | Disabled |
-| URL Base | Blank |
-| Username | The permanent qBittorrent WebUI username |
-| Password | The permanent qBittorrent WebUI password |
-| Category | `tv` |
-| Post-Import Category | Blank |
-| Initial State | `Started` |
-| Remove Completed | Disabled |
-
-Select **Test**, require a successful result, and then **Save**. qbit_manage,
-not Sonarr, owns successful-torrent seeding and cleanup; see
-[Cleanup authority](#cleanup-authority).
-
-Do not add a remote path mapping. Sonarr and qBittorrent mount the same PVC at
-the same `/data` path.
-
-### Quality profile
-
-Sonarr ships default quality profiles. The repository does not prescribe a
-release-quality policy; the profile is chosen per series when you add it (and again
-in Seerr's [Sonarr service](#sonarr-service) step). No setup action is required here.
-
-### API key
-
-Sonarr's API key is under **Settings → General → Security**. You do **not** paste it
-into Sonarr — it is entered elsewhere: Prowlarr, in
-[Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr);
-Seerr, in the [Sonarr service](#sonarr-service) step; and the Homepage widget below.
-Copy it only when entering it into those screens; never commit it.
-
-The Homepage Sonarr widget reads the same key from an independently rotatable SOPS
-Secret. Create it without printing the value:
-
-```bash
-printf 'Sonarr API key: '
-IFS= read -r -s SONARR_API_KEY
-printf '\n'
-export SONARR_API_KEY
-export HOMEPAGE_SONARR_SECRETS_CONFIRM='write:monitoring:homepage-sonarr:sops'
-mise exec -- just repo homepage-sonarr-secrets
-unset SONARR_API_KEY HOMEPAGE_SONARR_SECRETS_CONFIRM
-```
-
-Run this only when creating or rotating the widget Secret. Commit only the resulting
-encrypted `homepage-sonarr.sops.yaml`. The widget stays blank until the Secret exists
-and Flux reconciles it.
-
-### Check
+**Repository check**
 
 ```bash
 mise exec -- just kube arr-verify sonarr
 ```
 
-## Radarr
+This verifier proves deployed readiness, rollout, route acceptance, DNS, and `/ping`.
+It does not inspect Sonarr's PVC-backed settings, test qBittorrent or Prowlarr, or prove a
+download and import.
 
-Open `https://radarr.lab.supermorphic.com`.
+### Radarr
 
-### Authentication
+#### What you are configuring
 
-On a new PVC, configure:
+Radarr organizes movies below `/data/media/movies`. “Done” means its login, naming
+preview, import safety settings, root folder, and API key are ready for Phase 3.
 
-| Setting | Value |
-|---|---|
-| Authentication Method | `Forms (Login Page)` |
-| Authentication Required | `Enabled` |
-| Username | A unique operator username |
-| Password | A unique password from the password manager |
+For an empty Radarr PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://radarr.lab.supermorphic.com`.
 
-### Media management
+#### Configure Radarr
 
-1. Open **Settings → Media Management**.
-2. Enable **Show Advanced**.
-3. Configure movie naming:
+**UI step** — on a new PVC, enable `Forms (Login Page)` authentication and require it,
+using a unique password-manager credential.
 
-   | Setting | Value |
-   |---|---|
-   | Rename Movies | Enabled |
-   | Replace Illegal Characters | Enabled |
-   | Colon Replacement | `Smart Replace` |
-   | Standard Movie Format | `{Movie CleanTitle} ({Release Year})` |
-   | Movie Folder Format | `{Movie CleanTitle} ({Release Year})` |
+Open **Settings → Media Management**, enable **Show Advanced**, and set:
 
-4. Configure folders:
+| Area | Setting | Value |
+| --- | --- | --- |
+| Naming | Rename Movies | Enabled |
+| Naming | Replace Illegal Characters | Enabled |
+| Naming | Colon Replacement | `Smart Replace` |
+| Naming | Standard Movie Format | `{Movie CleanTitle} ({Release Year})` |
+| Naming | Movie Folder Format | `{Movie CleanTitle} ({Release Year})` |
+| Folders | Create Empty Movie Folders | Disabled |
+| Folders | Delete Empty Folders | Enabled |
+| Importing | Skip Free Space Check | Disabled |
+| Importing | Minimum Free Space | `102400 MB` |
+| Importing | Use Hardlinks instead of Copy | Enabled |
+| Importing | Import Using Script | Disabled |
+| Importing | Import Extra Files | Enabled, extension `srt` |
+| File management | Unmonitor Deleted Movies | Disabled |
+| File management | Propers and Repacks | `Prefer and Upgrade` |
+| File management | Analyse Video Files | Enabled |
+| File management | Rescan Movie Folder after Refresh | `After Manual Refresh` |
+| File management | Change File Date | `None` |
+| File management | Recycling Bin | Blank |
+| File management | Set Permissions | Disabled |
 
-   | Setting | Value |
-   |---|---|
-   | Create Empty Movie Folders | Disabled |
-   | Delete Empty Folders | Enabled |
+Under **Root Folders**, add `/data/media/movies`. Never use `/data/downloads` as a
+library root. Before saving, confirm the preview shows the movie title followed by the
+release year in parentheses.
 
-5. Configure importing:
+Copy the API key from **Settings → General**, in the **Security** area, to the password
+manager. It will be used by Prowlarr, Seerr, Homepage, and Gatus.
 
-   | Setting | Value |
-   |---|---|
-   | Skip Free Space Check | Disabled |
-   | Minimum Free Space | `102400 MB` |
-   | Use Hardlinks instead of Copy | Enabled |
-   | Import Using Script | Disabled |
-   | Import Extra Files | Enabled (extensions: `srt`) |
+#### Before continuing
 
-6. Configure file management:
+Confirm the root folder is `/data/media/movies`, hardlinks are enabled, the naming
+preview is correct, and no manually configured indexer duplicates Prowlarr ownership.
 
-   | Setting | Value |
-   |---|---|
-   | Unmonitor Deleted Movies | Disabled |
-   | Propers and Repacks | `Prefer and Upgrade` |
-   | Analyse Video Files | Enabled |
-   | Rescan Movie Folder after Refresh | `After Manual Refresh` |
-   | Change File Date | `None` |
-   | Recycling Bin | Blank |
-   | Set Permissions | Disabled |
-
-7. Under **Root Folders**, select **Add Root Folder**.
-8. Enter `/data/media/movies` and save.
-
-The root folder is the organized Plex movie library. Never set it to
-`/data/downloads` or one of its children.
-
-Radarr leaves qBittorrent's release name unchanged and creates the Plex-facing
-movie folder and filename during import. For example:
-
-```text
-/data/media/movies/
-└── The Substance (2024)/
-    └── The Substance (2024).mkv
-```
-
-After entering the naming tokens, verify that Radarr's previews show the movie
-title followed by the release year in parentheses before saving.
-
-### Indexers
-
-Do not add indexers in Radarr. Prowlarr owns them and pushes them here during the
-[application connection](#connect-prowlarr-to-sonarr-radarr-and-lidarr) with `Full Sync`.
-After that step, Radarr's **Settings → Indexers** lists entries ending in
-`(Prowlarr)`; if it is empty, the Prowlarr app connection has not run yet.
-
-### qBittorrent download client
-
-Open **Settings → Download Clients → Add → qBittorrent** and enter:
-
-| Setting | Value |
-|---|---|
-| Name | `qBittorrent` |
-| Enable | Enabled |
-| Host | `qbittorrent.media.svc.cluster.local` |
-| Port | `8080` |
-| Use SSL | Disabled |
-| URL Base | Blank |
-| Username | The permanent qBittorrent WebUI username |
-| Password | The permanent qBittorrent WebUI password |
-| Category | `movies` |
-| Post-Import Category | Blank |
-| Initial State | `Started` |
-| Remove Completed | Disabled |
-
-Select **Test**, require a successful result, and then **Save**. qbit_manage,
-not Radarr, owns successful-torrent seeding and cleanup; see
-[Cleanup authority](#cleanup-authority).
-
-Do not add a remote path mapping. Radarr and qBittorrent mount the same PVC at
-the same `/data` path.
-
-### Quality profile
-
-Radarr ships default quality profiles. The repository does not prescribe a
-release-quality policy; the profile is chosen per movie when you add it (and again in
-Seerr's [Radarr service](#radarr-service) step). No setup action is required here.
-
-### API key
-
-Radarr's API key is under **Settings → General → Security**. You do **not** paste it
-into Radarr — it is entered elsewhere: Prowlarr, in
-[Connect Prowlarr to Sonarr, Radarr, and Lidarr](#connect-prowlarr-to-sonarr-radarr-and-lidarr);
-Seerr, in the [Radarr service](#radarr-service) step; and the Homepage widget below.
-Copy it only when entering it into those screens; never commit it.
-
-The Homepage Radarr widget reads the same key from an independently rotatable SOPS
-Secret. Create it without printing the value:
-
-```bash
-printf 'Radarr API key: '
-IFS= read -r -s RADARR_API_KEY
-printf '\n'
-export RADARR_API_KEY
-export HOMEPAGE_RADARR_SECRETS_CONFIRM='write:monitoring:homepage-radarr:sops'
-mise exec -- just repo homepage-radarr-secrets
-unset RADARR_API_KEY HOMEPAGE_RADARR_SECRETS_CONFIRM
-```
-
-Run this only when creating or rotating the widget Secret. Commit only the resulting
-encrypted `homepage-radarr.sops.yaml`. The widget stays blank until the Secret exists
-and Flux reconciles it.
-
-### Check
+**Repository check**
 
 ```bash
 mise exec -- just kube arr-verify radarr
 ```
 
-## Lidarr
+This verifier proves deployed readiness, rollout, route acceptance, DNS, and `/ping`.
+It does not inspect Radarr's saved configuration or prove an indexer, download, import,
+hardlink, or Plex scan.
 
-Current source keeps Lidarr active with `spec.suspend: false`. For a new empty PVC,
-first set `spec.suspend: true` through Git. From a clean checkout of that exact deployed
-source, the operator performs the guarded bootstrap:
+### Lidarr
 
-```bash
-export ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr'
-mise exec -- just bootstrap arr lidarr
-unset ARR_BOOTSTRAP_CONFIRM
-```
+#### Why Lidarr has a stricter lifecycle
 
-Then open `https://lidarr.lab.supermorphic.com` and configure the new PVC to reach
-every required state below.
+Lidarr imports audio as hardlinks. The download-side and library-side names refer to the
+same inode, so an in-place metadata or tag rewrite can alter the seeded file and make
+qBittorrent's hash check fail. Lidarr also depends on an external metadata service that
+is not exercised by `/ping`.
 
-### Authentication
+For a genuine empty PVC, keep the source suspended while the operator validates:
 
-On a new PVC, configure **Forms (Login Page)** authentication as enabled with a
-unique username and password-manager credential.
+- first-run authentication and configuration;
+- the music root and write permissions;
+- naming previews and conservative monitoring defaults;
+- hardlink behavior;
+- disabled audio metadata writing;
+- a real metadata search, download, and import;
+- qBittorrent hash integrity after import; and
+- required Prowlarr, Homepage, and Gatus credentials.
 
-### SMB music directory
+Only after those checks pass may a **Git change** make Lidarr durably active. The current
+deployed application already passed this lifecycle and is active; do not infer that a
+replacement empty PVC may skip it.
 
-Create the library directory on the SMB share before adding it to Lidarr:
+For an empty Lidarr PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://lidarr.lab.supermorphic.com`.
 
-```text
-media/
-├── movies/
-├── music/
-└── tv/
-```
+#### Configure Lidarr
 
-The paths are two views of the same SMB share:
+**UI step** — enable `Forms (Login Page)` authentication and require it, using a unique
+password-manager credential.
 
-| Consumer | Music-library path |
-|---|---|
-| Lidarr | `/data/media/music` |
-| Future Plex Music library | `/Volumes/Prometheus/media/music` |
+Create `media/music` on the SMB share beside `media/movies` and `media/tv`. Confirm that
+Lidarr sees it as `/data/media/music` and can write it as UID/GID `568`. Plex later sees
+the same directory as `/Volumes/Prometheus/media/music`. If `/data/media` is absent,
+diagnose the mount; if the music directory is visible but not writable, diagnose NAS
+ownership and permissions.
 
-Use this prerequisite sequence:
-
-1. Create `media/music` on the SMB share beside `media/movies` and `media/tv`.
-2. Confirm Lidarr sees it as `/data/media/music`.
-3. Confirm Lidarr can write it using stack UID/GID `568`.
-4. Never use `/data/downloads/music` as the library root.
-5. Keep Plex Music library creation deferred until real-import acceptance passes.
-
-If `/data/media` is absent, diagnose the mount. If `/data/media/music` is visible
-but not writable, diagnose its ownership and permissions. A missing directory can
-produce `Path '/data/media/music' does not exist`; saving the root-folder path does
-not necessarily create it.
-
-### Importing
-
-Under **Settings → Media Management**, keep **Use Hardlinks instead of Copy**
-enabled. The shared `/data` filesystem and the separate download and library
-paths allow this setting to avoid a duplicate copy during import.
-
-### Track naming
+Under **Settings → Media Management**, enable **Use Hardlinks instead of Copy**. The
+download and music-library paths are on the same mounted filesystem; a copy would waste
+bulk storage and would not preserve the accepted seeded-file lifecycle.
 
 Open **Settings → Media Management → Show Advanced → Track Naming** and set:
 
-| Setting | Value |
-|---|---|
+| Setting | Intended value |
+| --- | --- |
 | Rename Tracks | Enabled |
 | Replace Illegal Characters | Enabled |
 | Colon Replacement | `Smart Replace` |
 | Artist Folder Format | `{Artist Name}` |
+| Standard Track Format | `{Album Title}/1{track:00} - {Track Title}` |
+| Multi Disc Track Format | `{Album Title}/{medium:0}{track:00} - {Track Title}` |
 
-The required output is:
+The format strings are operator-recorded PVC settings. Before saving them in the pinned
+Lidarr build, require the live previews to show this result:
 
 ```text
 Artist/
@@ -673,94 +544,47 @@ Artist/
     └── ...
 ```
 
-Do not put a release year in the album folder; do not repeat the artist or album
-in the track filename; and do not create `CD 01`, `Disc 1`, or any other
-per-disc directory. Disc 1 track 1 is `101`, disc 2 track 1 is `201`, and all
-discs stay in one album directory.
+Do not add the release year to the album folder or create a separate disc directory.
+Keep the compilation convention `/data/media/music/Various Artists/{Album}/...`, with
+the embedded album artist set to `Various Artists` and the track artist set to the
+performer.
 
-The completed walkthrough recorded these intended values:
-
-| Setting | Intended value |
-|---|---|
-| Standard Track Format | `{Album Title}/1{track:00} - {Track Title}` |
-| Multi Disc Track Format | `{Album Title}/{medium:0}{track:00} - {Track Title}` |
-
-The repository does not independently prove the deployed Lidarr version's saved
-token strings. The deployed saved value and its preview are authoritative. Do
-not save until previews show all of the following:
-
-- Single-disc: `The Album Title/103 - Track Title`
-- Multi-disc, disc 1: `The Album Title/103 - Track Title`
-- Multi-disc, disc 2: `The Album Title/203 - Track Title`
-
-Keep the compilation output contract: `/data/media/music/Various Artists/{Album}/...`,
-with embedded `Album Artist` equal to `Various Artists` and embedded `Artist`
-equal to the performer.
-
-### Audio metadata writing
-
-Open **Settings → Metadata → Write Metadata to Audio Files** and confirm the
-saved state:
+Under **Settings → Metadata → Write Metadata to Audio Files**, keep:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Tag Audio Files with Metadata | `Never` |
 | Scrub Existing Tags | Disabled |
 | Kodi/Emby metadata consumer | Disabled |
 | Roksbox metadata consumer | Disabled |
 | WDTV metadata consumer | Disabled |
 
-The library file and download file are hardlinks to one inode. Writing or
-scrubbing embedded tags therefore changes the seeded file and can cause a
-qBittorrent hash-check failure.
-
-### Quality profile
-
-Create a new profile; do not modify the built-in **Lossless** profile. Open
-**Settings → Profiles → Quality Profiles → Add** and set:
+Create a separate quality profile under **Settings → Profiles → Quality Profiles**:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Name | `Lossless Preferred` |
 | Upgrades Allowed | Enabled |
 | Lossless group | Enabled |
 | High Quality Lossy group | Enabled as fallback |
-| Upgrade Until/Cutoff | `Lossless`, when exposed |
+| Upgrade Until/Cutoff | `Lossless` if the pinned UI exposes that field |
 | WAV | Disabled |
-| Mid Quality Lossy | Disabled |
-| Low Quality Lossy | Disabled |
-| Poor Quality Lossy | Disabled |
-| Trash Quality Lossy | Disabled |
+| Mid, Low, Poor, and Trash Quality Lossy | Disabled |
 | Unknown | Disabled |
 
-This accepts high-quality lossy as a fallback, prefers acceptable lossless, and
-upgrades later until the Lossless cutoff. Do not claim that FLAC is preferred
-over every codec: without a custom format or group ordering, the built-in
-Lossless group contains multiple codecs.
+Do not modify the built-in **Lossless** profile. This policy accepts a high-quality lossy
+fallback and upgrades to the Lossless group; it does not claim that FLAC outranks every
+other lossless codec.
 
-### Metadata profile
+Reuse the unchanged **Standard** metadata profile for official studio albums. Keep
+**Album**, **Studio**, and **Official** enabled and the other primary types, secondary
+types, and release statuses disabled. Add a separate profile later if compilation or
+other release policy changes.
 
-Reuse the unchanged **Standard** profile at **Settings → Profiles → Metadata
-Profiles → Standard**:
-
-| Group | Enabled | Disabled |
-|---|---|---|
-| Primary Types | Album | Broadcast, EP, Other, Single |
-| Secondary Types | Studio | Spokenword, Soundtrack, Remix, Mixtape/Street, Live, Interview, DJ-mix, Demo, Compilation, Audio drama |
-| Release Statuses | Official | Pseudo-Release, Promotion, Bootleg |
-
-This is a conservative official-studio-album policy. Compilation naming remains
-supported, but this profile excludes compilation releases; add a separate profile
-later if that policy changes.
-
-### Root-folder defaults
-
-After creating `Lossless Preferred` and confirming the unchanged `Standard`
-metadata profile, open **Settings → Media Management → Root Folders → Add Root
-Folder** and set:
+Under **Settings → Media Management → Root Folders**, add:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Name | `Music` |
 | Path | `/data/media/music` |
 | Monitor | `None` |
@@ -769,340 +593,145 @@ Folder** and set:
 | Metadata Profile | `Standard` |
 | Default Lidarr Tags | Blank |
 
-Both monitoring defaults are conservative: detecting or importing an artist must
-not unexpectedly monitor its whole discography. Select albums explicitly.
+These defaults prevent adding an artist from monitoring its entire discography. Select
+the intended album explicitly during acceptance.
 
-### qBittorrent download client
+Copy Lidarr's API key from **Settings → General**, in the **Security** area, to the
+password manager. It will be used by Prowlarr, Homepage, and Gatus.
 
-Open **Settings → Download Clients → Add → qBittorrent** and set:
-
-| Setting | Value |
-|---|---|
-| Name | `qBittorrent` |
-| Enable | Enabled |
-| Host | `qbittorrent.media.svc.cluster.local` |
-| Port | `8080` |
-| Use SSL | Disabled |
-| URL Base | Blank |
-| Username/password | Permanent qBittorrent WebUI credentials |
-| Category | `music` |
-| Post-Import Category | Blank |
-| Recent Priority | `Last` |
-| Older Priority | `Last` |
-| Initial State | `Started` |
-| Sequential Order | Disabled |
-| First and Last First | Disabled |
-| Content Layout | `Default` |
-| Client Priority | `1` |
-| Tags | Blank |
-| Remove Completed | Disabled |
-
-Select **Test**, require a successful result, then **Save**. Do not add a remote
-path mapping: Lidarr and qBittorrent see the same `/data` path. Leaving
-**Post-Import Category** blank preserves `music`; do not use `Forced`. qbit_manage,
-not Lidarr, owns successful-torrent seeding and cleanup; see
-[Cleanup authority](#cleanup-authority).
-
-Lidarr's API key becomes available only after first boot. Once the application is
-configured, create the independently rotatable Homepage Secret without echoing the key:
+**Repository check**
 
 ```bash
-printf 'Lidarr API key: '
-IFS= read -r -s LIDARR_API_KEY
-printf '\n'
-export LIDARR_API_KEY
-export HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'
-mise exec -- just repo homepage-lidarr-secrets
-unset LIDARR_API_KEY HOMEPAGE_LIDARR_SECRETS_CONFIRM
+mise exec -- just kube arr-verify lidarr
 ```
 
-Run this recipe only after first boot. Commit only the resulting SOPS-encrypted
-`homepage-lidarr.sops.yaml`; never commit the plaintext API key. For a fresh deployment,
-keep `kubernetes/apps/media/lidarr/ks.yaml` at `suspend: true` until this Secret, the
-first-run configuration, and the authorized real-import acceptance gate all pass.
+This verifier proves Ready resources, rollout, route acceptance, DNS, and `/ping`. It
+does not exercise `api.lidarr.audio`, inspect naming or metadata settings, test a provider,
+or prove a real import. A green result is necessary but insufficient for Lidarr
+acceptance.
 
-The recipe leaves that encrypted file untracked in the checkout, and every guarded
-`bootstrap` recipe refuses to run from a checkout with any uncommitted change. Commit
-the Secret on the feature branch before attempting another guarded bootstrap.
+## Phase 3 — Connect applications
 
-## Connect Prowlarr to Sonarr, Radarr, and Lidarr
+### Connect Sonarr, Radarr, and Lidarr to qBittorrent
 
-Return to `https://prowlarr.lab.supermorphic.com`. Add each application as soon as it
-is available — you do not need all three at once. Connect **Sonarr** and **Radarr** after
-their endpoints pass the relevant verification. Connect **Lidarr** after its guarded
-bootstrap and first-run configuration, once its endpoint is available.
-For a fresh deployment, leave it Git-suspended until the Prowlarr-backed authorized
-real-import acceptance gate passes. Each app connection is independent, and this is where each
-application's API key is used.
+**UI step** — in each media manager, open
+**Settings → Download Clients → Add → qBittorrent**. Use the shared values below, then
+apply the application-specific category.
 
-### Sonarr application
+| Setting | Sonarr | Radarr | Lidarr |
+| --- | --- | --- | --- |
+| Name | `qBittorrent` | `qBittorrent` | `qBittorrent` |
+| Enable | Enabled | Enabled | Enabled |
+| Host | `qbittorrent.media.svc.cluster.local` | Same | Same |
+| Port | `8080` | `8080` | `8080` |
+| Use SSL | Disabled | Disabled | Disabled |
+| URL Base | Blank | Blank | Blank |
+| Username/password | Permanent qBittorrent credential | Same | Same |
+| Category | `tv` | `movies` | `music` |
+| Post-Import Category | Blank | Blank | Blank |
+| Initial State | `Started` | `Started` | `Started` |
+| Remove Completed | Disabled | Disabled | Disabled |
 
-Open **Settings → Apps → Add → Sonarr**:
+For Lidarr, also keep **Recent Priority** and **Older Priority** at `Last`, **Sequential
+Order** and **First and Last First** disabled, **Content Layout** at `Default`, **Client
+Priority** at `1`, and **Tags** blank if those fields are present.
 
-| Setting | Value |
-|---|---|
-| Name | `Sonarr` |
-| Sync Level | `Full Sync` |
-| Prowlarr Server | `http://prowlarr.media.svc.cluster.local:9696` |
-| Application Server | `http://sonarr.media.svc.cluster.local:8989` |
-| API Key | Sonarr's API key |
-| Tags | Blank |
-| Sync Categories | Defaults |
+Select **Test**, require success, and then **Save** in each application. Do not configure
+a Remote Path Mapping: qBittorrent and all three media managers see the same paths under
+`/data`. qbit_manage, not the media managers, owns successful-torrent cleanup.
 
-Select **Test**, require a successful result, and then **Save**.
+The successful UI Test proves that the application can authenticate to qBittorrent with
+the saved settings. It still does not prove that a real download is categorized,
+hardlinked, renamed, or imported correctly.
 
-### Radarr application
+### Connect Prowlarr to the media managers
 
-Open **Settings → Apps → Add → Radarr**:
+Return to Prowlarr. Add each application independently under
+**Settings → Apps → Add**:
 
-| Setting | Value |
-|---|---|
-| Name | `Radarr` |
-| Sync Level | `Full Sync` |
-| Prowlarr Server | `http://prowlarr.media.svc.cluster.local:9696` |
-| Application Server | `http://radarr.media.svc.cluster.local:7878` |
-| API Key | Radarr's API key |
-| Tags | Blank |
-| Sync Categories | Defaults |
+| Setting | Sonarr | Radarr | Lidarr |
+| --- | --- | --- | --- |
+| Name | `Sonarr` | `Radarr` | `Lidarr` |
+| Sync Level | `Full Sync` | `Full Sync` | `Full Sync` |
+| Prowlarr Server | `http://prowlarr.media.svc.cluster.local:9696` | Same | Same |
+| Application Server | `http://sonarr.media.svc.cluster.local:8989` | `http://radarr.media.svc.cluster.local:7878` | `http://lidarr.media.svc.cluster.local:8686` |
+| API Key | Sonarr API key | Radarr API key | Lidarr API key |
+| Tags | Blank | Blank | Blank |
+| Sync Categories | Defaults | Defaults | Defaults |
 
-Select **Test**, require a successful result, and then **Save**.
+For each connection, select **Test**, require success, and then **Save**. `Full Sync`
+makes Prowlarr authoritative for the indexers it manages. Confirm that each downstream
+application lists synchronized indexers whose names end in `(Prowlarr)`; do not edit
+those generated entries independently.
 
-### Lidarr application
+The Prowlarr Test proves API connectivity and that Prowlarr can synchronize the selected
+application. It does not prove that every indexer can return a usable release for that
+application.
 
-Open **Prowlarr → Settings → Apps → Add → Lidarr**:
+## Phase 4 — Prove direct imports
 
-| Setting | Value |
-|---|---|
-| Name | `Lidarr` |
-| Sync Level | `Full Sync` |
-| Prowlarr Server | `http://prowlarr.media.svc.cluster.local:9696` |
-| Application Server | `http://lidarr.media.svc.cluster.local:8686` |
-| API Key | Lidarr's API key |
-| Tags | Blank |
-| Sync Categories | Defaults |
-
-Select **Test**, require a successful result, and then **Save**.
-
-`Full Sync` makes Prowlarr authoritative for the indexers it manages. Do not edit
-those generated indexers independently in Sonarr, Radarr, or Lidarr. Confirm that each
-application now lists indexers whose names end in `(Prowlarr)`.
-
-## Plex
-
-Plex is the destination for imported media rather than part of the download
-automation path. Open `https://plex.lab.supermorphic.com`.
-
-1. Confirm the existing TV library reads from
-   `/Volumes/Prometheus/media/tv`.
-2. Confirm the existing movie library reads from
-   `/Volumes/Prometheus/media/movies`.
-3. A manual scan belongs to a newly created library only. Do not make routine
-   Sonarr or Radarr imports depend on manually choosing **Scan Library Files**;
-   their direct Plex connections below notify Plex after organized-library changes.
-
-Create the Plex Music library only after the Lidarr real-import acceptance succeeds and
-`mise exec -- just kube arr-verify lidarr` passes. Then create it at
-`/Volumes/Prometheus/media/music`, run one initial manual scan, and only then
-configure the Lidarr connection below.
-
-Plex mounts the same SMB share under `/Volumes/Prometheus`, while qBittorrent,
-Sonarr, Radarr, and Lidarr mount it under `/data`. These are two views of the same
-share; do not change the *arr paths to match the Plex container path.
-
-Run:
+Before using real media, an operator may run the repository's synthetic filesystem gate:
 
 ```bash
-mise exec -- just kube plex-verify
+mise exec -- just test integration media-hardlink
 ```
 
-## Seerr
+**Operator acceptance gate** — this run creates and removes one run-owned test file. It
+proves that `/data/downloads` and `/data/media` on the `media-data` SMB share preserve a
+shared inode and link count across the two trees. It mutates only its temporary test
+paths. It does not prove that Sonarr, Radarr, or Lidarr is configured to import a real
+release correctly.
 
-Current source keeps Seerr active with `spec.suspend: false`. Open
-`https://seerr.lab.supermorphic.com` after `mise exec -- just kube seerr-verify` passes.
+### Sonarr acceptance
 
-### Plex
+**Operator acceptance gate**
 
-1. Sign in with the Plex administrator account.
-2. Open **Settings → Media Server → Plex**.
-3. Select the existing Plex server, or enter it manually:
+1. Search for one authorized TV series in Sonarr.
+2. Start a monitored download.
+3. Confirm qBittorrent receives it in category `tv` below `/data/downloads/tv`.
+4. Confirm Sonarr imports it below `/data/media/tv` with the intended series, season,
+   and episode naming.
+5. Confirm the import is a hardlink rather than a second full copy.
 
-   | Setting | Value |
-   |---|---|
-   | Hostname or IP Address | `plex.media.svc.cluster.local` |
-   | Port | `32400` |
-   | Use SSL | Disabled |
-   | Web App URL | `https://plex.lab.supermorphic.com/web` |
+The Sonarr workflow is not accepted until all five observations pass.
 
-4. Select the TV and movie libraries.
-5. Save, select **Sync Libraries**, and complete Seerr's one-time Plex catalog
-   synchronization/import. This is not Plex **Scan Library Files** and does not
-   replace direct *arr → Plex connector validation.
+### Radarr acceptance
 
-### Sonarr service
+**Operator acceptance gate**
 
-Open **Settings → Services → Sonarr → Add Sonarr Server**:
+1. Search for one authorized movie in Radarr.
+2. Start a monitored download.
+3. Confirm qBittorrent receives it in category `movies` below
+   `/data/downloads/movies`.
+4. Confirm Radarr imports it below `/data/media/movies` with the intended folder and
+   filename.
+5. Confirm the import is a hardlink rather than a second full copy.
 
-| Setting | Value |
-|---|---|
-| Default Server | Enabled |
-| 4K Server | Disabled |
-| Server Name | `Sonarr` |
-| Hostname or IP Address | `sonarr.media.svc.cluster.local` |
-| Port | `8989` |
-| Use SSL | Disabled |
-| API Key | Sonarr's API key |
-| URL Base | Blank |
-| Root Folder | `/data/media/tv` |
-| External URL | `https://sonarr.lab.supermorphic.com` |
-| Enable Scan | Enabled |
-| Enable Automatic Search | Enabled |
+The Radarr workflow is not accepted until all five observations pass.
 
-Select the intended Sonarr quality profile when Seerr loads the available
-profiles. The repository does not prescribe a release-quality policy. Test the
-connection and save.
+### Lidarr acceptance
 
-### Radarr service
+**Operator acceptance gate** — this is the blocking Lidarr activation gate for a fresh
+PVC.
 
-Open **Settings → Services → Radarr → Add Radarr Server**:
+1. Search for a real artist and confirm that artist and album metadata load. `/ping`
+   does not exercise the external Lidarr metadata service.
+2. Add one authorized, uncomplicated release with root `/data/media/music`, quality
+   profile `Lossless Preferred`, metadata profile `Standard`, and only the intended
+   test album monitored. Do not search or monitor the full discography.
+3. Confirm qBittorrent uses category `music` and download root
+   `/data/downloads/music`.
+4. Confirm Lidarr imports the album under `/data/media/music` as
+   `Artist/Album/DiscTrack - Title.ext`.
+5. Confirm **Tag Audio Files with Metadata** remains `Never`.
+6. Using a trusted NAS-side filesystem interface, compare the download-side and
+   library-side file for the same track. Require the same inode and link count `2` on
+   both names. The repository has no dedicated command for inspecting a chosen real
+   media file; do not replace this step with an ad-hoc `kubectl exec`.
+7. In qBittorrent, run **Force Recheck** on the imported torrent and require completion
+   without a hash error.
 
-| Setting | Value |
-|---|---|
-| Default Server | Enabled |
-| 4K Server | Disabled |
-| Server Name | `Radarr` |
-| Hostname or IP Address | `radarr.media.svc.cluster.local` |
-| Port | `7878` |
-| Use SSL | Disabled |
-| API Key | Radarr's API key |
-| URL Base | Blank |
-| Root Folder | `/data/media/movies` |
-| External URL | `https://radarr.lab.supermorphic.com` |
-| Enable Scan | Enabled |
-| Enable Automatic Search | Enabled |
-
-Select the intended Radarr quality profile. Where Seerr requires a minimum
-availability choice, `Released` is a conservative general default; change it only
-as an explicit content policy. Test the connection and save.
-
-At least one Sonarr server and one Radarr server must be marked **Default** or
-Seerr cannot dispatch requests.
-
-### Users
-
-Open **Settings → Users**:
-
-1. Review the default permissions before allowing new Plex sign-ins.
-2. Import Plex users or allow new Plex users to sign in, as desired.
-3. Grant request, auto-approve, and administrative permissions deliberately.
-4. Set request quotas if the household needs them.
-
-### API key (Homepage widget)
-
-Seerr's own API key is under **Settings → General → API Key** (it exists as soon as
-Seerr boots, independent of the Plex/*arr wiring above). The Homepage Seerr widget reads
-it from an independently rotatable SOPS Secret. Create it without printing the value:
-
-```bash
-printf 'Seerr API key: '
-IFS= read -r -s SEERR_API_KEY
-printf '\n'
-export SEERR_API_KEY
-export HOMEPAGE_SEERR_SECRETS_CONFIRM='write:monitoring:homepage-seerr:sops'
-mise exec -- just repo homepage-seerr-secrets
-unset SEERR_API_KEY HOMEPAGE_SEERR_SECRETS_CONFIRM
-```
-
-Run this only when creating or rotating the widget Secret. Commit only the resulting
-encrypted `homepage-seerr.sops.yaml`. The widget stays blank until the Secret exists and
-Flux reconciles it.
-
-### Check
-
-```bash
-mise exec -- just kube seerr-verify
-```
-
-## Tautulli
-
-Tautulli begins with an empty database; watch history starts when setup completes. It reads Plex
-through `http://plex.media.svc.cluster.local:32400` and never mounts Plex or shared-media
-storage. The Tautulli **Plex Logs** viewer is therefore intentionally unavailable.
-
-For a deliberately suspended or fresh deployment, run:
-
-```bash
-export MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:tautulli'
-mise exec -- just bootstrap media-app tautulli
-unset MEDIA_APP_BOOTSTRAP_CONFIRM
-```
-
-In the Tautulli setup wizard, complete these steps in order:
-
-1. On **Welcome!**, continue to **Authentication**.
-2. On **Authentication**, enter a unique HTTP username and a strong password, store the
-   credentials in the password manager, and select **Next**. Do not reuse Plex credentials.
-3. On **Plex Account**, select **Sign In with Plex**, complete the Plex administrator login,
-   require **Authentication successful**, and select **Next**.
-4. On **Plex Media Server**, enter these values manually:
-
-   | Setting | Value |
-   |---|---|
-   | Plex IP Address or Hostname | `plex.media.svc.cluster.local` |
-   | Plex Port | `32400` |
-   | Use Secure Connection | Disabled |
-
-   Enter only the hostname in the first field, not a URL or port. Do not select a transient
-   `10.244.x.x` Pod IP or the gateway hostname. Select **Verify**, require **Server found!**,
-   and select **Next**.
-5. Leave **Activity Logging** at its defaults unless a different retention policy is
-   required. The Plex Logs viewer remains unavailable because this deployment does not
-   mount Plex configuration or logs.
-6. Leave **Notifications** unconfigured; cluster alerting is provided through Prometheus
-   and Alertmanager.
-7. Skip **Database Import** because this is a new database, then finish the wizard.
-8. After the wizard finishes, open **Settings → Web Interface** and scroll to **API**. Do
-   not use **3rd Party APIs**; that page configures metadata providers rather than
-   Tautulli's own API.
-9. Under **API**, enable **Enable API**. Copy the value shown in **API Key**, generating a
-   new key there first if the field is blank, and select **Save**. Treat the key as a secret:
-   do not put it in Git, logs, chat, or command arguments.
-10. Confirm at least one Plex library appears.
-11. Play authorized media and require the session to appear in Tautulli history.
-
-Web authentication is enabled using **Plex OAuth (Plex admin)**.
-With that mode active, GET `/status` returned exact HTTP `200` with redirects disabled both through the `media/tautulli` Service and through `tautulli.lab.supermorphic.com`.
-Run `mise exec -- just kube tautulli-verify` after authentication is enabled.
-
-The operator creates the Homepage Secret only after the API key exists:
-
-```bash
-printf 'Tautulli API key: '
-IFS= read -r -s TAUTULLI_API_KEY
-printf '\n'
-export TAUTULLI_API_KEY
-export HOMEPAGE_TAUTULLI_SECRETS_CONFIRM='write:monitoring:homepage-tautulli:sops'
-mise exec -- just repo homepage-tautulli-secrets
-unset TAUTULLI_API_KEY HOMEPAGE_TAUTULLI_SECRETS_CONFIRM
-```
-
-Commit only the generated encrypted `homepage-tautulli.sops.yaml`; never commit the key.
-Set `suspend: false` through Git only after authentication, exact status, verifier,
-library, and real-playback gates all pass.
-
-## End-to-end acceptance
-
-### Direct Lidarr test — blocking operator gate
-
-Perform this gate at step 9 of [Order of operations](#order-of-operations), after the
-Sonarr and Radarr direct-import and Plex refresh validations. Run
-`mise exec -- just kube arr-verify lidarr` before creating the Plex Music library.
-
-This is an operator acceptance gate, not automated E2E coverage. Before grabbing,
-search for a real artist and confirm
-its artist and album metadata loads. Add it with root `/data/media/music`, quality
-profile `Lossless Preferred`, metadata profile `Standard`, and only the intended test
-album monitored. Do not search or monitor the whole discography. Choose one authorized,
-uncomplicated release and record all of this evidence:
+Record only non-sensitive results:
 
 ```text
 qBittorrent category: music
@@ -1112,151 +741,104 @@ library naming: Artist/Album/DiscTrack - Title.ext
 download-side link count: 2
 library-side link count: 2
 Tag Audio Files with Metadata: Never
-qBittorrent force recheck: completes with no hash error
+qBittorrent Force Recheck: no hash error
 ```
 
-Verify the qBittorrent category is `music`, its download path is
-`/data/downloads/music`, and Lidarr's library is `/data/media/music`. Confirm the
-imported naming is `Artist/Album/DiscTrack - Title.ext`, **Tag Audio Files with
-Metadata** remains `Never`, and the download-side link count is `2`. Run
-qBittorrent's force recheck after import and require it to complete with no hash
-error. Collect both link counts from the download-side and library-side files for
-the same track. If a shell is needed to inspect inode or link counts, use an
-existing guarded recipe or a NAS-side shell; never use raw `kubectl exec`.
-
-Do not make Lidarr active or create the Plex Music library until every item above
-passes. If the deployed saved naming values or labels differ from this recorded
-walkthrough, preserve the authoritative preview output and safety states, then record
-the deployed values for a follow-up guide correction.
-
-The required Lidarr order for a fresh deployment is: guarded bootstrap; create the
-required profiles and root folder; connect Prowlarr while the Git source remains
-suspended; complete authorized acceptance; set `spec.suspend: false` through Git; then run
-the guarded verification:
+Do not activate a fresh Lidarr source or create the Plex Music library until every item
+passes. After the accepted result, make `spec.suspend: false` durable through Git, allow
+Flux to reconcile, and rerun:
 
 ```bash
 mise exec -- just kube arr-verify lidarr
 ```
 
-The `/ping` endpoint used by the Pod probes and later by Gatus does not exercise
-`api.lidarr.audio`. A green Pod or Gatus endpoint therefore does not guarantee that
-artist or album searches work; the real search is verified during first-run acceptance.
+## Phase 5 — Plex integration
 
-### Direct Sonarr test
+### Verify the libraries and Plex runtime
 
-1. Search for one TV series in Sonarr.
-2. Start a monitored download.
-3. Confirm qBittorrent receives it with category `tv`.
-4. Confirm its download path is below `/data/downloads/tv`.
-5. Confirm Sonarr imports it below `/data/media/tv`.
+Plex mounts the same SMB share at `/Volumes/Prometheus` while the media managers use
+`/data`. These different container paths are intentional:
 
-### Direct Radarr test
+| Library | Media-manager path | Plex path |
+| --- | --- | --- |
+| TV | `/data/media/tv` | `/Volumes/Prometheus/media/tv` |
+| Movies | `/data/media/movies` | `/Volumes/Prometheus/media/movies` |
+| Music | `/data/media/music` | `/Volumes/Prometheus/media/music` |
 
-1. Search for one movie in Radarr.
-2. Start a monitored download.
-3. Confirm qBittorrent receives it with category `movies`.
-4. Confirm its download path is below `/data/downloads/movies`.
-5. Confirm Radarr imports it below `/data/media/movies`.
+**UI step** — open `https://plex.lab.supermorphic.com` and confirm that the existing TV
+and Movies libraries use the exact Plex paths above. Do not change a media-manager root
+to `/Volumes/Prometheus`.
 
-The download and imported files must be hardlinks, not duplicate copies. The
-shared-filesystem contract and accepted design are in
-[specification 006](../specs/006-media-stack-architecture.md).
+For an empty Plex PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap) and complete Plex's own
+supported first-run claim and library setup. Do not record the account identity or token.
 
-## Direct Plex library-refresh connections
+**Repository check**
 
-These are post-import library-refresh notifications, not download or import
-configuration:
-
-```text
-Sonarr/Radarr/Lidarr
-        → import or modify organized library files
-        → notify Plex
-        → Plex scans the affected library
+```bash
+mise exec -- just kube plex-verify
 ```
 
-Use each application's native **Settings → Connect → Add → Plex Media Server**
-dialog. Select **Test**, require success, and only then **Save**. Never put a
-username, password, token, screenshot, shell-history value, or example secret in
-this guide or Git. Obtain **Auth Token** through the application's
-**Authenticate with Plex.tv** flow, or enter the existing token securely.
+This diagnostic verifier confirms Flux and Helm readiness, rollout, Plex's UID 568
+runtime identity, absence of a Kubernetes API token, a read-only media mount, writable
+config, the exact LoadBalancer contract, route acceptance, DNS, and `/identity` over
+TLS. It does not inspect Plex's database, library paths, visible media, scan results,
+metadata matching, playback, or user access.
 
-Unless an app-specific section says otherwise, use these deployed values:
+### Configure native Plex refresh connections
+
+These connections notify Plex after a media manager changes an organized library. They
+do not control downloads or imports:
+
+```text
+media-manager import or rename
+  -> organized library changes
+  -> native Plex connection notifies Plex
+  -> Plex scans the matching library
+```
+
+In each media manager, open **Settings → Connect → Add → Plex Media Server**. The exact
+dialog title and some trigger labels are version-sensitive PVC UI details. Use the
+fields present in the pinned application build and do not invent a missing selector.
+
+Use these shared values:
 
 | Setting | Value |
-|---|---|
+| --- | --- |
 | Name | `Plex Media Server` |
 | Host | `plex.media.svc.cluster.local` |
 | Port | `32400` |
 | Use SSL | Disabled |
 | URL Base | Blank |
-| Auth Token | Authenticate with Plex.tv or enter the existing token securely; never document or store it |
+| Auth Token | Use the application's Plex.tv authentication flow or enter the token securely |
 | Update Library | Enabled |
 | Tags | Blank |
-| Map Paths From | Blank |
-| Map Paths To | Blank |
+| Map Paths From / To | Blank if shown |
 
-The applications and Plex view the same SMB-backed media through different
-container paths:
+The blank connector map fields are intentional. They are not qBittorrent Remote Path
+Mappings. Select **Test**, require success, and then **Save**.
 
-| Application | *arr library path | Plex library path |
-|---|---|---|
-| Sonarr | `/data/media/tv` | `/Volumes/Prometheus/media/tv` |
-| Radarr | `/data/media/movies` | `/Volumes/Prometheus/media/movies` |
-| Lidarr | `/data/media/music` | `/Volumes/Prometheus/media/music` |
+Use these operator-recorded trigger states in the pinned Sonarr build:
 
-Do not change an *arr root folder to `/Volumes/Prometheus`. Although the deployed
-connectors expose **Map Paths From** and **Map Paths To**, leave both blank for
-all three connections by operator instruction. These optional Plex connector
-fields are not qBittorrent download-client Remote Path Mapping. Acceptance must
-prove that each connection refreshes its intended Plex library.
-
-### Sonarr → Plex
-
-After the successful direct Sonarr import and Plex TV path verification, open
-**Sonarr → Settings → Connect → Add → Plex Media Server**. The deployed dialog
-title is **Edit Connection - Plex Media Server**. Authenticate, then select the
-deployed Plex server in **Server** without recording account or credential data.
-Use the common values above and set these deployed triggers:
-
-| Trigger | State |
-|---|---|
+| Sonarr trigger | State |
+| --- | --- |
 | On Grab | Disabled |
 | On File Import | Enabled |
 | On File Upgrade | Enabled |
-| On Import Complete | Enabled |
+| On Import Complete | Enabled if shown |
 | On Rename | Enabled |
 | On Series Add | Disabled |
 | On Series Delete | Enabled |
 | On Episode File Delete | Enabled |
 | On Episode File Delete For Upgrade | Enabled |
-| On Health Issue | Disabled |
-| On Health Restored | Disabled |
+| On Health Issue / Restored | Disabled |
 | On Application Update | Disabled |
 | On Manual Interaction Required | Disabled |
 
-**On Grab** is disabled because a grab event itself does not modify organized
-library files. Import, upgrade, rename, and selected delete events are the refresh
-triggers regardless of current library contents. **On Import Complete** was enabled
-in the recorded walkthrough and can overlap file-level import events; use controlled
-acceptance to assess scan frequency. The captured
-walkthrough had **On Series Add** enabled, but leave it disabled for this minimal
-library-changing policy because adding a series does not import a file.
+Use these operator-recorded trigger states in the pinned Radarr build:
 
-Validate with a controlled Sonarr import or Sonarr-managed rename. Confirm a
-successful Plex connection event, a Plex TV scan, and the correct appearance
-without manually choosing **Scan Library Files**.
-
-### Radarr → Plex
-
-After the successful direct Radarr import and Plex Movies path verification, open
-**Radarr → Settings → Connect → Add → Plex Media Server**. The deployed dialog
-title is **Edit Notification - Plex Media Server**. Authenticate using **Start
-OAuth** under **Authenticate with Plex.tv**, then select the deployed Plex server
-in **Server** without recording account or credential data. Use the common values
-above and set these deployed triggers:
-
-| Trigger | State |
-|---|---|
+| Radarr trigger | State |
+| --- | --- |
 | On Grab | Disabled |
 | On File Import | Enabled |
 | On File Upgrade | Enabled |
@@ -1265,49 +847,32 @@ above and set these deployed triggers:
 | On Movie Delete | Enabled |
 | On Movie File Delete | Enabled |
 | On Movie File Delete For Upgrade | Enabled |
-| On Health Issue | Disabled |
-| On Health Restored | Disabled |
+| On Health Issue / Restored | Disabled |
 | On Application Update | Disabled |
 | On Manual Interaction Required | Disabled |
 
-**On Grab** is disabled because a grab event itself does not modify organized
-library files. Import, upgrade, rename, and selected delete events are the refresh
-triggers regardless of current library contents. The deployed help describes
-**Map Paths From** as the Radarr path and
-**Map Paths To** as the Plex path, but leave both blank by operator instruction.
-The captured walkthrough did not use **On Movie Added**; leave it disabled because
-adding a movie does not import a file.
+Grab and entity-add events do not change organized media and therefore do not need a
+Plex scan. Sonarr's **On Import Complete** can overlap file-level import events; use the
+acceptance test to detect excessive duplicate scans.
 
-Validate with a controlled Radarr import or Radarr-managed rename. Confirm a
-successful Plex connection event, a Plex Movies scan, and the correct appearance
-without manually choosing **Scan Library Files**.
+**Operator acceptance gate** — after each direct import, cause one controlled import or
+media-manager rename. Confirm the application's Test succeeds, its event history records
+the connection, Plex scans the intended TV or Movies library, and the item appears
+correctly without manually selecting **Scan Library Files**.
 
-### Create the Plex Music library
+### Create and connect the Music library
 
-Only after the Lidarr authorized real-import acceptance and
-`mise exec -- just kube arr-verify lidarr` pass,
-create the Plex Music library at `/Volumes/Prometheus/media/music` and run its
-initial manual scan. This is the one manual scan for the new library; subsequent
-Lidarr-organized changes use the connection below.
+Only after [Lidarr acceptance](#lidarr-acceptance):
 
-### Lidarr → Plex
+1. **UI step** — create the Plex Music library at
+   `/Volumes/Prometheus/media/music`.
+2. Run the one initial manual scan and confirm the accepted album appears correctly.
+3. In Lidarr, add the native Plex connection using the shared values above.
+4. Apply the operator-recorded trigger states below.
+5. Select **Test**, require success, and then **Save**.
 
-Do not configure this connection until all five conditions are complete:
-
-1. Authorized real-import acceptance passed.
-2. Download/library link counts verified.
-3. Force Recheck completed without hash error.
-4. Plex Music library created at `/Volumes/Prometheus/media/music`.
-5. Initial manual Plex Music scan succeeded.
-
-Then open **Lidarr → Settings → Connect → Add → Plex Media Server**. The deployed
-dialog title is **Edit Connection - Plex Media Server**. Unlike the captured
-Sonarr and Radarr dialogs, the captured Lidarr view did not show a **Server**
-selector; do not invent one. Use the common values above and set these deployed
-triggers:
-
-| Trigger | State |
-|---|---|
+| Lidarr trigger | State |
+| --- | --- |
 | On Grab | Disabled |
 | On Release Import | Enabled |
 | On Upgrade | Enabled |
@@ -1316,82 +881,270 @@ triggers:
 | On Rename | Enabled |
 | On Track Retag | Enabled |
 | On Artist Add | Disabled |
-| On Artist Delete | Enabled when the operator wants stale Plex artist entries removed after a Lidarr-managed deletion |
+| On Artist Delete | Enable only when the operator wants stale Plex artist entries removed after a Lidarr-managed deletion |
 | On Album Delete | Disabled |
 | On Application Update | Disabled |
-| On Health Issue | Disabled |
-| On Health Restored | Disabled |
+| On Health Issue / Restored | Disabled |
 
-**On Grab** is disabled because a grab event itself does not modify organized
-library files. Import, upgrade, rename, retag, and selected delete events are the
-refresh triggers regardless of current library contents. **On Track Retag** is
-enabled because retagging changes organized library files. The captured walkthrough
-had **On Artist Add** enabled, but leave it disabled for this minimal
-library-changing policy because adding an artist does
-not import a file. **On Album Delete** was disabled in the recorded walkthrough;
-enable it only if later controlled testing proves it operationally required.
+Metadata writing remains disabled even though the connection may react to a future
+Lidarr-managed retag event. Do not enable a trigger merely because the pinned UI exposes
+it; use events that can change organized-library state.
 
-Validate with a second small authorized import or a Lidarr-managed rename of the
-acceptance album. Confirm a successful Plex connection event, a Plex Music scan,
-and the album or renamed tracks appear without a manual scan.
+File-delete and entity-delete triggers cover media-manager changes to the organized
+library. qbit_manage cleanup or removing the original torrent changes only
+`/data/downloads`; it does not require a Plex library refresh.
 
-### Delete events and ownership
+**Operator acceptance gate** — perform a second small authorized import or a
+Lidarr-managed rename of the accepted album. Confirm a successful connection event, a
+Plex Music scan, and the album or renamed tracks appearing without another manual scan.
 
-Do not blindly enable every delete event. File-delete events refresh Plex after an
-*arr-managed deletion of an organized-library file. Entity-delete events (artist,
-series, or movie) are useful only when the *arr-managed entity removal also deletes
-organized media or would otherwise leave stale Plex entries. This is distinct from
-removing the original torrent from qBittorrent or qbit_manage cleaning
-`/data/downloads`; neither changes the organized library and neither must trigger
-Plex refresh.
+If a connection Test succeeds but no scan occurs, inspect the relevant media-manager
+events and logs, confirm the change happened below `/data/media`, verify the matching
+Plex library path, and keep both connector map fields blank. Exact native library
+matching is an operator acceptance result, not something the repository verifier can
+derive from PVC state.
 
-### Troubleshooting direct Plex refresh
+## Phase 6 — Request layer
 
-1. **Test fails:** verify Pod reachability to
-   `plex.media.svc.cluster.local:32400`, in-cluster SSL is disabled, the token is
-   valid, and the Plex server is claimed and available.
-2. **Test succeeds but no scan:** verify the relevant exact trigger, inspect
-   *arr **System → Events** and **System → Logs**, confirm an
-   organized-library import rather than a change only in `/data/downloads`, and
-   confirm the Plex library uses the matching `/Volumes/Prometheus/media/...`
-   folder.
-3. **Wrong or no library match:** compare the paths in the table above, retain
-   blank map fields per deployed configuration, and do not add download-client
-   Remote Path Mapping. Exact native matching behavior remains
-   acceptance-tested rather than repository-verifiable.
-4. **Duplicate or excess scans:** use only library-changing events, keep **On
-   Grab** disabled, and avoid redundant broad events unless controlled testing
-   proves they are necessary.
+### Configure Seerr
 
-### Seerr request test
+Seerr is the household request interface. It stores Plex, Sonarr, Radarr, user,
+permission, quota, and request state in its own PVC.
 
-1. Request a TV series in Seerr and confirm it appears in Sonarr.
-2. Request a movie in Seerr and confirm it appears in Radarr.
-3. Confirm both requests progress through qBittorrent.
-4. Confirm the imported media becomes available in Plex and then in Seerr.
+For an empty Seerr PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://seerr.lab.supermorphic.com`.
 
-The video automation setup is not accepted until both direct *arr flows and their
-Plex refresh validations pass. The request workflow is not accepted until the
-Seerr request flow passes.
+#### Connect Plex
 
-## Integration-health operations
+**UI step**
 
-These checks add bounded continuous evidence to the existing availability checks. They
-do not replace the operator acceptance gates in this guide.
+1. Sign in with the Plex administrator account.
+2. Open **Settings → Media Server → Plex**.
+3. Select the intended Plex server, or enter:
 
-- **Level 1** remains the existing unauthenticated `/ping` or status availability
-  checks.
-- **Level 2** is the four authenticated `Media Integration` native-health API
-  endpoints. Success proves that the trusted route, endpoint, and supplied API key
-  returned HTTP 200. Gatus does not evaluate the native health response entries.
-- **Level 3** is the two selected Seerr service reads. They prove only that Seerr can
-  use stored downstream settings to read the selected service.
-- **Level 4** remains operator-run and can mutate durable state. Never schedule it.
+   | Setting | Value |
+   | --- | --- |
+   | Hostname or IP Address | `plex.media.svc.cluster.local` |
+   | Port | `32400` |
+   | Use SSL | Disabled |
+   | Web App URL | `https://plex.lab.supermorphic.com/web` |
 
-The purpose-specific Gatus Secret has exactly five API keys, and only Gatus consumes
-it. The operator creates or rotates it with the guarded recipe below. Enter values
-only from a secure prompt; do not record them in the terminal history, this guide,
-or Git.
+4. Select the TV and Movies libraries. Select Music too only after the Plex Music gate
+   has passed.
+5. Save, select **Sync Libraries**, and complete the one-time Seerr catalog sync. This
+   synchronizes Seerr's view of Plex; it is not Plex **Scan Library Files** and does not
+   replace native media-manager-to-Plex acceptance.
+
+#### Connect Sonarr and Radarr
+
+**UI step** — add one server under **Settings → Services → Sonarr** and one under
+**Settings → Services → Radarr**:
+
+| Setting | Sonarr | Radarr |
+| --- | --- | --- |
+| Default Server | Enabled | Enabled |
+| 4K Server | Disabled | Disabled |
+| Server Name | `Sonarr` | `Radarr` |
+| Hostname or IP Address | `sonarr.media.svc.cluster.local` | `radarr.media.svc.cluster.local` |
+| Port | `8989` | `7878` |
+| Use SSL | Disabled | Disabled |
+| API Key | Sonarr API key | Radarr API key |
+| URL Base | Blank | Blank |
+| Root Folder | `/data/media/tv` | `/data/media/movies` |
+| External URL | `https://sonarr.lab.supermorphic.com` | `https://radarr.lab.supermorphic.com` |
+| Enable Scan | Enabled | Enabled |
+| Enable Automatic Search | Enabled | Enabled |
+
+Select the intended quality profile loaded from each application. For Radarr, choose the
+operator's intended minimum availability; `Released` is the recorded conservative
+default, not a repository-enforced content policy. Select **Test**, require success, and
+then **Save**. At least one Sonarr and one Radarr server must be marked **Default** for
+request dispatch.
+
+Open **Settings → Users**. Deliberately review default permissions, new Plex sign-in,
+request and auto-approval permissions, administrator access, and household request
+quotas. Do not accept application defaults without reviewing their effect on new users.
+
+Copy Seerr's API key from **Settings → General → API Key** to the password manager. It is
+used by Homepage and Gatus.
+
+#### Repository verification
+
+**Repository check**
+
+```bash
+mise exec -- just kube seerr-verify
+```
+
+This verifier proves the Seerr Kustomization and HelmRelease are Ready, the Deployment
+rolled out, the HTTPRoute is accepted, DNS is correct, and `/api/v1/status` is reachable.
+It does not inspect the saved Plex or media-manager services, authenticate a user, or
+submit a request.
+
+#### Request-flow acceptance
+
+**Operator acceptance gate**
+
+1. Request one authorized TV series in Seerr and confirm it appears in Sonarr.
+2. Request one authorized movie and confirm it appears in Radarr.
+3. Confirm both requests use the expected quality profile, root folder, and permissions.
+4. Confirm both progress through the expected qBittorrent category.
+5. Confirm the imports appear in Plex and Seerr reports them available.
+6. Inspect the resulting media naming and confirm it matches the accepted Sonarr and
+   Radarr conventions.
+
+The request layer is not accepted until both paths pass. Gatus's Seerr service reads can
+show that stored downstream services are readable, but they do not prove this workflow.
+
+## Phase 7 — Auxiliary integrations
+
+### Tautulli
+
+Tautulli records Plex session and watch history in its own retained PVC. It does not
+mount the shared media claim or Plex's configuration claim, so its Plex Logs viewer is
+intentionally unavailable.
+
+For an empty Tautulli PVC, first follow the
+[greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
+`https://tautulli.lab.supermorphic.com`.
+
+**UI step** — complete the setup wizard:
+
+1. Create a unique Tautulli HTTP username and password and store them in the password
+   manager.
+2. Use **Sign In with Plex** with the Plex administrator account and require successful
+   authentication.
+3. Configure the Plex server with hostname
+   `plex.media.svc.cluster.local`, port `32400`, and secure connection disabled. Use the
+   hostname only, not a URL, Gateway hostname, or transient Pod address.
+4. Select **Verify** and require the server to be found.
+5. Leave Activity Logging at its defaults unless the operator chooses another retention
+   policy. Leave Tautulli notifications unconfigured; Prometheus and Alertmanager own
+   cluster alert delivery.
+6. Skip database import for a new database and finish the wizard.
+7. Open **Settings → Web Interface**, find Tautulli's own **API** section rather than
+   **3rd Party APIs**, enable the API, create or copy its key, and save.
+8. Confirm that at least one Plex library appears.
+9. Play authorized media and require the session to appear in Tautulli history.
+
+Use Plex OAuth administrator authentication for the web interface. The deployed health
+contract requires `/status` to return exact HTTP `200` without a redirect through both
+the Service and internal Gateway.
+
+**Repository check**
+
+```bash
+mise exec -- just kube tautulli-verify
+```
+
+This diagnostic verifier proves Ready resources, rollout, route acceptance, DNS, exact
+non-redirecting `/status` responses through both paths, the Tautulli Gatus series, and
+the health of six loaded media availability rules. It does not prove the saved Plex
+server, library visibility, authentication usability, playback, or recorded history.
+
+For a fresh suspended deployment, keep the source suspended until the UI steps, exact
+status check, visible library, and real playback history all pass. Then activate it
+through Git and rerun the verifier.
+
+### Homepage integration credentials
+
+Homepage reads media application APIs with per-consumer SOPS Secrets. These copies are
+independently rotatable; they do not make Kubernetes the authority for the upstream
+application credential.
+
+**Git change** — run the writers from the assigned feature worktree with the operator's
+SOPS age identity loaded. Each recipe validates the identity, requires its exact guard,
+writes only its declared encrypted file, and checks that the plaintext input is absent
+from the result.
+
+After all application keys and the Plex token exist, the operator can create or rotate
+the complete media widget set in one non-echoing shell session:
+
+```bash
+(
+  set -euo pipefail
+
+  printf 'qBittorrent WebUI username: '
+  IFS= read -r QBITTORRENT_USERNAME
+  printf 'qBittorrent WebUI password: '
+  IFS= read -r -s QBITTORRENT_PASSWORD
+  printf '\nProwlarr API key: '
+  IFS= read -r -s PROWLARR_API_KEY
+  printf '\nSonarr API key: '
+  IFS= read -r -s SONARR_API_KEY
+  printf '\nRadarr API key: '
+  IFS= read -r -s RADARR_API_KEY
+  printf '\nLidarr API key: '
+  IFS= read -r -s LIDARR_API_KEY
+  printf '\nSeerr API key: '
+  IFS= read -r -s SEERR_API_KEY
+  printf '\nTautulli API key: '
+  IFS= read -r -s TAUTULLI_API_KEY
+  printf '\nPlex server token: '
+  IFS= read -r -s PLEX_TOKEN
+  printf '\n'
+
+  export QBITTORRENT_USERNAME QBITTORRENT_PASSWORD
+  export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY
+  export SEERR_API_KEY TAUTULLI_API_KEY PLEX_TOKEN
+
+  export HOMEPAGE_QBITTORRENT_SECRETS_CONFIRM='write:monitoring:homepage-qbittorrent:sops'
+  export HOMEPAGE_PROWLARR_SECRETS_CONFIRM='write:monitoring:homepage-prowlarr:sops'
+  export HOMEPAGE_SONARR_SECRETS_CONFIRM='write:monitoring:homepage-sonarr:sops'
+  export HOMEPAGE_RADARR_SECRETS_CONFIRM='write:monitoring:homepage-radarr:sops'
+  export HOMEPAGE_LIDARR_SECRETS_CONFIRM='write:monitoring:homepage-lidarr:sops'
+  export HOMEPAGE_SEERR_SECRETS_CONFIRM='write:monitoring:homepage-seerr:sops'
+  export HOMEPAGE_TAUTULLI_SECRETS_CONFIRM='write:monitoring:homepage-tautulli:sops'
+  export HOMEPAGE_PLEX_SECRETS_CONFIRM='write:monitoring:homepage-plex:sops'
+
+  mise exec -- just repo homepage-qbittorrent-secrets
+  mise exec -- just repo homepage-prowlarr-secrets
+  mise exec -- just repo homepage-sonarr-secrets
+  mise exec -- just repo homepage-radarr-secrets
+  mise exec -- just repo homepage-lidarr-secrets
+  mise exec -- just repo homepage-seerr-secrets
+  mise exec -- just repo homepage-tautulli-secrets
+  mise exec -- just repo homepage-plex-secrets
+)
+```
+
+Commit only these encrypted outputs:
+
+| Consumer | Encrypted file |
+| --- | --- |
+| qBittorrent | `kubernetes/apps/monitoring/homepage/app/homepage-qbittorrent.sops.yaml` |
+| Prowlarr | `kubernetes/apps/monitoring/homepage/app/homepage-prowlarr.sops.yaml` |
+| Sonarr | `kubernetes/apps/monitoring/homepage/app/homepage-sonarr.sops.yaml` |
+| Radarr | `kubernetes/apps/monitoring/homepage/app/homepage-radarr.sops.yaml` |
+| Lidarr | `kubernetes/apps/monitoring/homepage/app/homepage-lidarr.sops.yaml` |
+| Seerr | `kubernetes/apps/monitoring/homepage/app/homepage-seerr.sops.yaml` |
+| Tautulli | `kubernetes/apps/monitoring/homepage/app/homepage-tautulli.sops.yaml` |
+| Plex | `kubernetes/apps/monitoring/homepage/app/homepage-plex.sops.yaml` |
+
+Do not print, inspect, or commit plaintext. The current Homepage Deployment consumes
+these values as environment variables but does not stamp a content hash for the media
+widget Secrets. Applying a new or rotated Secret therefore does not by itself reload the
+running process. Arrange an operator-authorized Homepage Pod replacement after Flux has
+applied the reviewed Secret change. This is a current implementation limitation, not a
+reason to patch the live Deployment or copy credentials between checkouts.
+
+**Repository check**
+
+```bash
+mise exec -- just kube homepage-verify
+```
+
+This verifier proves Homepage readiness, rollout, route acceptance, DNS, and dashboard
+reachability. It does not call each media widget or prove that the saved credentials are
+accepted. Open Homepage and require each configured media widget to show live data.
+
+### Gatus media-integration credentials and acceptance
+
+Gatus uses a separate SOPS Secret containing exactly the Prowlarr, Sonarr, Radarr,
+Lidarr, and Seerr API keys. Only Gatus consumes this copy.
+
+**Git change**
 
 ```bash
 (
@@ -1407,123 +1160,75 @@ or Git.
   printf '\nSeerr API key: '
   IFS= read -r -s SEERR_API_KEY
   printf '\n'
+
   export PROWLARR_API_KEY SONARR_API_KEY RADARR_API_KEY LIDARR_API_KEY SEERR_API_KEY
   export GATUS_MEDIA_INTEGRATION_SECRETS_CONFIRM='write:monitoring:gatus-media-integration:sops'
   mise exec -- just repo gatus-media-integration-secrets
 )
 ```
 
-Commit only the resulting encrypted Secret. For rotation, update that encrypted Secret,
-allow Flux to apply it, then restart the Gatus Pod so its environment values reload.
-Do not add a reloader.
+Commit only
+`kubernetes/apps/monitoring/gatus/app/media-integration-api-keys.sops.yaml`. Gatus reads
+the values as environment variables. After Flux applies a new or rotated Secret, an
+operator must replace the Gatus Pod so the process loads them; the current source does
+not contain a Secret-content rollout stamp or reloader for this Secret.
 
-The probes use the existing internal DNS, trusted HTTPS Gateway, HTTPRoutes, and
-Services. If the Gateway does not forward `X-Api-Key`, stop and reassess; do not add
-Service-DNS access or a NetworkPolicy. The twelve Servarr-related inventory edges have
-no continuously evaluated integration-health signal from these probes; their native
-health details remain available for operator inspection. The accepted residuals are
-Seerr-to-Plex, passive or event-driven Servarr latency, no generic provider attribution,
-and no continuous end-to-end workflow proof.
+Gatus evaluates six `Media Integration` endpoints once per minute:
 
-### Post-reconciliation acceptance
+- four authenticated Servarr health API paths, where HTTP `200` is the only success
+  condition; and
+- two stronger Seerr reads that require the selected Sonarr or Radarr server, profiles,
+  and root folders in the response.
 
-Do not treat source validation as runtime evidence. After Flux applies a probe or
-credential change,
-wait for three distinct successful one-minute cycles for each probe. Use this bounded
-Gatus-history check:
+The four Servarr checks do not evaluate native health response entries. The Seerr reads
+do not submit a request. None of the six proves a search, download, import, Plex refresh,
+or end-to-end workflow.
 
-```bash
-gatus_statuses="$(
-  mise exec -- curl --fail --silent --show-error --max-time 15 \
-    https://gatus.lab.supermorphic.com/api/v1/endpoints/statuses
-)"
-integration_probe_names=(
-  prowlarr-native-health
-  sonarr-native-health
-  radarr-native-health
-  lidarr-native-health
-  seerr-sonarr-service-read
-  seerr-radarr-service-read
-)
-for probe_name in "${integration_probe_names[@]}"; do
-  evidence="$(
-    printf '%s' "$gatus_statuses" \
-      | PROBE_NAME="$probe_name" mise exec -- yq -r '
-          .[]
-          | select(.group == "Media Integration" and .name == strenv(PROBE_NAME))
-          | [
-              (.results[-3:] | length),
-              ([.results[-3:][] | select(.success != true)] | length),
-              ([.results[-3:][].timestamp] | unique | length)
-            ]
-          | @tsv
-        '
-  )"
-  [[ "$evidence" == $'3\t0\t3' ]] || {
-    echo "Media Integration/$probe_name does not have three distinct successful cycles." >&2
-    exit 1
-  }
-done
-```
+The current alert contract holds the four `*NativeHealthApiUnavailable` warnings and the
+two Seerr selected-service read warnings for 15 minutes. The separate
+`MediaIntegrationProbeMissing` warning detects an absent required series after five
+minutes. A status-only Servarr probe cannot identify which downstream integration, if
+any, caused an application health entry.
 
-Confirm separately that Prometheus has one green success series for each probe; Gatus
-history cannot substitute for scrape evidence:
+**Operator acceptance gate** — after the Gatus Pod replacement, open
+`https://gatus.lab.supermorphic.com`, find all six entries in the `Media Integration`
+group, and require three consecutive successful one-minute cycles for each. Then confirm
+that the corresponding media-integration alerts are inactive in Prometheus or
+Alertmanager. This preserves the human acceptance criteria without embedding a second
+implementation of the Gatus and Prometheus APIs in this guide.
+
+**Repository check**
 
 ```bash
-prometheus_results="$(
-  mise exec -- curl --fail --silent --show-error --max-time 15 --get \
-    --data-urlencode 'query=gatus_results_endpoint_success{group="Media Integration"}' \
-    https://prometheus.lab.supermorphic.com/api/v1/query
-)"
-series_total="$(printf '%s' "$prometheus_results" | mise exec -- yq -r '.data.result | length')"
-[[ "$series_total" == 6 ]] || {
-  echo "Prometheus does not have exactly six Media Integration success series." >&2
-  exit 1
-}
-for probe_name in "${integration_probe_names[@]}"; do
-  series_count="$(
-    printf '%s' "$prometheus_results" \
-      | PROBE_NAME="$probe_name" mise exec -- yq -r '
-          [.data.result[]
-            | select(.metric.name == strenv(PROBE_NAME) and .value[1] == "1")]
-          | length
-        '
-  )"
-  [[ "$series_count" == 1 ]] || {
-    echo "Prometheus does not have one green Media Integration/$probe_name series." >&2
-    exit 1
-  }
-done
+mise exec -- just kube gatus-verify
 ```
 
-The current media alerts application evaluates four 15-minute
-`*NativeHealthApiUnavailable` warnings, the two 15-minute Seerr selected-service read
-warnings, and `MediaIntegrationProbeMissing` after five minutes without a required
-series. Confirm the rules are loaded and inactive after the six probes are green. A
-Servarr endpoint is green whenever its authenticated API returns HTTP 200, including
-when update notices are present; its body entries are not an alert condition. Compare
-the selected Seerr service settings with the two read-through results. Do not create a
-request or run a native Test action as part of this verification.
+This verifier proves Gatus readiness, rollout, route acceptance, DNS, dashboard health,
+and the independent Platform `echo` metric, then runs the foundation verifier. It does
+not inspect the six media-integration histories or their credentials; use the explicit
+operator acceptance gate above for those results.
 
 ## Recovery and repeat setup
 
-Pod replacement, image upgrades, and node rescheduling reuse the existing PVCs
-and do not require this setup again. An empty replacement PVC is a genuine
-greenfield install.
+Pod replacement, image upgrades, and node rescheduling reuse the retained configuration
+PVCs and normally do not require this guide. Prefer a trusted Longhorn or
+application-native backup when configuration state is lost. An empty replacement PVC is
+a genuine greenfield installation and must use the guarded bootstrap lifecycle before
+the relevant UI and acceptance steps.
 
-Prefer restoring the application configuration PVC or an application-native
-backup. Repeating this guide is the fallback when no trusted backup exists.
-Never reconstruct a service by committing its live SQLite database or plaintext
-configuration directory to Git.
+Never reconstruct an application by committing its live SQLite database or plaintext
+configuration directory. Keep durable Flux-managed state in Git, and use
+[Recovery](../runbooks/recovery.md) for failure-specific procedures.
 
 ## Upstream references
 
+- [Prowlarr quick-start guide](https://wiki.servarr.com/en/prowlarr/quick-start-guide)
 - [Sonarr quick-start guide](https://wiki.servarr.com/en/sonarr/quick-start-guide)
 - [Radarr settings](https://wiki.servarr.com/radarr/settings)
-- [Prowlarr quick-start guide](https://wiki.servarr.com/en/prowlarr/quick-start-guide)
-- [Plex music naming and organization](https://support.plex.tv/articles/200265296-adding-music-media-from-folders/) — authority for the bare album folder, flat disc/track numbering, and `Various Artists` convention
 - [qBittorrent 5.x WebUI API and authentication](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29)
 - [qBittorrent WebUI password recovery](https://github.com/qbittorrent/qBittorrent/wiki/Web-UI-password-locked-on-qBittorrent-NO-X-%28qbittorrent-nox%29)
 - [Seerr media-server settings](https://docs.seerr.dev/using-seerr/settings/mediaserver/)
 - [Seerr Sonarr/Radarr service settings](https://docs.seerr.dev/using-seerr/settings/services/)
+- [Seerr user settings](https://docs.seerr.dev/using-seerr/settings/users/)
 - [Seerr backups](https://docs.seerr.dev/using-seerr/backups/)
+- [Plex music naming and organization](https://support.plex.tv/articles/200265296-adding-music-media-from-folders/)
