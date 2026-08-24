@@ -48,6 +48,24 @@ run_collector() {
 	[ "$status" -eq 0 ]
 }
 
+# Catches an infrastructure-specific run allowlist or an incomplete binding of
+# the retained summary and producer timestamp to the caller-supplied run ID.
+@test "collector accepts a syntactically valid fresh immutable run and rejects cross-run retained bindings" {
+	local fresh_run='20260823T141907Z-9d6f6b71'
+	RUN_ID="$fresh_run"
+	create_valid_evidence_tree
+
+	run "$COLLECTOR_SCRIPT" collect "$fresh_run" "$EVIDENCE_ROOT" "$PANEL_SHA256" "$EVIDENCE_PANEL"
+	[ "$status" -eq 0 ]
+	run jq -e --arg run "$fresh_run" '.runId == $run' <<<"$output"
+	[ "$status" -eq 0 ]
+
+	jq '.runId = "20260823T141907Z-deadbeef"' "$EVIDENCE_ROOT/diagnostic-summary.json" >"$BATS_TEST_TMPDIR/summary.json"
+	mv "$BATS_TEST_TMPDIR/summary.json" "$EVIDENCE_ROOT/diagnostic-summary.json"
+	run "$COLLECTOR_SCRIPT" collect "$fresh_run" "$EVIDENCE_ROOT" "$PANEL_SHA256" "$EVIDENCE_PANEL"
+	[ "$status" -eq 65 ]
+}
+
 @test "collector rejects retained VMAF continuity labels that contradict raw timestamps" {
 	local path mutation
 	for mutation in \
@@ -204,8 +222,6 @@ EOF
 
 @test "rendered scripts ConfigMap includes the collector executable" {
 	run kustomize build "$BATS_TEST_DIRNAME/../app"
-	[ "$status" -eq 0 ]
-	run yq -N -e 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data."diagnostic-evidence.sh" | contains("EVIDENCE_RUN_ID")' <<<"$output"
 	[ "$status" -eq 0 ]
 	run yq -N -e 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data."diagnostic-contract.jq" | contains("def diagnostic_continuity")' <<<"$(kustomize build "$BATS_TEST_DIRNAME/../app")"
 	[ "$status" -eq 0 ]
@@ -1287,7 +1303,7 @@ create_valid_evidence_tree() {
 	jq -n --arg run "$RUN_ID" '
 		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",mode:"diagnostics",runId:$run,status:"complete",
 		 vmaf:{total:5,entries:[]},hdr:{total:3,entries:[]}}' >"$EVIDENCE_ROOT/diagnostic-summary.json"
-	jq -n --arg panel_sha "$PANEL_SHA256" '{schemaVersion:2,mode:"diagnostics",createdAt:"20260820T223425Z",upstream:{diagnostics:{manifestSchemaVersion:1,resultSchemaVersion:1,acceptedFindingsSha256:"sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",decisionSha256:"sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",historicalQualityRunId:"20260817T233546Z-debc0498",historicalFindingsRunId:"20260818T214739Z-8bc2de3e",panelSha256:$panel_sha}}}' >"$EVIDENCE_ROOT/manifest.json"
+	jq -n --arg panel_sha "$PANEL_SHA256" --arg created_at "${RUN_ID%-*}" '{schemaVersion:2,mode:"diagnostics",createdAt:$created_at,upstream:{diagnostics:{manifestSchemaVersion:1,resultSchemaVersion:1,acceptedFindingsSha256:"sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",decisionSha256:"sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",historicalQualityRunId:"20260817T233546Z-debc0498",historicalFindingsRunId:"20260818T214739Z-8bc2de3e",panelSha256:$panel_sha}}}' >"$EVIDENCE_ROOT/manifest.json"
 	while IFS=$'\t' read -r sample clip index; do
 		path="$EVIDENCE_ROOT/vmaf/$sample/$clip"
 		mkdir -p "$path"

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Read and redact the one approved diagnostic run.  This script deliberately
+# Read and redact an explicitly requested immutable diagnostic run. This script deliberately
 # accepts a directory supplied by the Job mount, never an artifact path from a
 # retained summary, so evidence cannot escape the read-only mounted subtree.
 set -euo pipefail
 
-readonly EVIDENCE_RUN_ID='20260820T223425Z-082b3d38'
 readonly EVIDENCE_MAX_BYTES=65536
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -22,6 +21,10 @@ requested_run_id="$2"
 evidence_root="$3"
 expected_panel_sha256="$4"
 expected_evidence_panel="$5"
+contract_is_run_id "$requested_run_id" || {
+	echo "invalid run id: $requested_run_id" >&2
+	exit 64
+}
 [[ "$expected_panel_sha256" =~ ^sha256:[0-9a-f]{64}$ ]] || {
 	echo 'diagnostic evidence reader panel identity is malformed' >&2
 	exit 65
@@ -45,10 +48,6 @@ jq -e -n --argjson actual "$expected_evidence_panel" '
 	}
 ' >/dev/null || {
 	echo 'diagnostic evidence reader panel bounds are malformed' >&2
-	exit 65
-}
-[[ "$requested_run_id" == "$EVIDENCE_RUN_ID" ]] || {
-	echo 'diagnostic evidence reader rejects an unapproved run id' >&2
 	exit 65
 }
 [[ "$evidence_root" == /* && -d "$evidence_root" && ! -L "$evidence_root" ]] || {
@@ -97,7 +96,7 @@ done
 
 summary="$evidence_root/diagnostic-summary.json"
 manifest="$evidence_root/manifest.json"
-manifest_issues="$(jq -S -c --arg created_at "${EVIDENCE_RUN_ID%-*}" --arg panel_sha "$expected_panel_sha256" '
+manifest_issues="$(jq -S -c --arg created_at "${requested_run_id%-*}" --arg panel_sha "$expected_panel_sha256" '
 	def issue($object; $key; $field; $expected_type; $expected):
 		if ($object | has($key) | not) then {field:$field,kind:"missing"}
 		elif ($object[$key] | type) != $expected_type then {field:$field,kind:"wrong-type"}
@@ -132,7 +131,7 @@ if [[ "$manifest_issues" != '[]' ]]; then
 	jq -n -S -c --argjson issues "$manifest_issues" '{schemaVersion:1,status:"failed",reason:"diagnostic-manifest-binding-invalid",manifestIssues:$issues}'
 	exit 65
 fi
-jq -e --arg run "$EVIDENCE_RUN_ID" --argjson panel "$expected_evidence_panel" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
+jq -e --arg run "$requested_run_id" --argjson panel "$expected_evidence_panel" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
 	def status: . == "complete" or . == "failed" or . == "harness-blocked";
 	def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
 	def reasons($classes; $classification):
@@ -493,7 +492,7 @@ for sample in hdr10-clean-ministry hdr10-grain-goodfellas hdr10-motion-john-wick
 	}
 done
 
-canonical="$(jq -n -S -c --arg run "$EVIDENCE_RUN_ID" \
+canonical="$(jq -n -S -c --arg run "$requested_run_id" \
 	--slurpfile summary "$summary" \
 	--slurpfile vmaf0 "$evidence_root/vmaf/avc-clean-coco/motion/evidence.json" \
 	--slurpfile vmaf1 "$evidence_root/vmaf/avc-grain-memento/dark/evidence.json" \

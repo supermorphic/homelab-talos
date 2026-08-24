@@ -2,15 +2,15 @@
 # Read the bounded collector result without opening any retained artifact.
 set -euo pipefail
 
-if (($# != 1)); then
-	echo 'usage: diagnostic-evidence-results.sh <kubeconfig>' >&2
+if (($# != 2)); then
+	echo 'usage: diagnostic-evidence-results.sh <kubeconfig> <run-id>' >&2
 	exit 64
 fi
 
-readonly RUN_ID='20260820T223425Z-082b3d38'
 readonly MODE='diagnostic-evidence-reader'
 readonly MAX_BYTES=65536
 kubeconfig="$1"
+RUN_ID="$2"
 namespace='media'
 expected_api='https://192.168.90.20:6443'
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,12 +19,15 @@ samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samp
 app_directory="$repository_root/kubernetes/apps/media/encode-benchmark/app"
 # shellcheck disable=SC1091
 source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
+contract_is_run_id "$RUN_ID" || {
+	echo "invalid run id: $RUN_ID" >&2
+	exit 64
+}
 
 failed_collector_reason() {
 	case "${1:-}" in
 	'diagnostic evidence reader panel identity is malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-identity-malformed' ;;
 	'diagnostic evidence reader panel bounds are malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-bounds-malformed' ;;
-	'diagnostic evidence reader rejects an unapproved run id') printf '%s\n' 'diagnostic-evidence-reader-unapproved-run-id' ;;
 	'diagnostic evidence root is missing or unsafe') printf '%s\n' 'diagnostic-evidence-root-unsafe' ;;
 	'diagnostic evidence contains a symlink') printf '%s\n' 'diagnostic-evidence-symlink-present' ;;
 	'diagnostic evidence files are missing or unexpected') printf '%s\n' 'diagnostic-evidence-files-unexpected' ;;
@@ -70,9 +73,11 @@ jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs --s
 	exit 1
 }
 job="$(jq -c '.items[0]' <<<"$jobs")"
-name="$(jq -e -r '.metadata.name | select(. == "encode-benchmark-evidence-reader-20260820t223425z-082b3d38")' <<<"$job")" || exit 65
+expected_name="encode-benchmark-evidence-reader-${RUN_ID,,}"
+name="$(jq -e -r --arg name "$expected_name" '.metadata.name | select(. == $name)' <<<"$job")" || exit 65
 uid="$(jq -e -r '.metadata.uid | select(type == "string" and length > 0)' <<<"$job")" || exit 65
-job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
+evidence_subpath="benchmark/runs/$RUN_ID/diagnostics"
+job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" --arg evidence_subpath "$evidence_subpath" '
 	def base_contract:
 		.metadata.name == $name and
 		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
@@ -96,7 +101,7 @@ job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
 		 (.volumeMounts | type == "array" and length == 2 and
 		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
-		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
+		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == $evidence_subpath and .readOnly == true)] | length) == 1)) and
 		(.spec.template.spec.volumes | type == "array" and length == 2 and
 		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 365)] | length) == 1 and
 		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1);
@@ -122,7 +127,7 @@ pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods --s
 	exit 1
 }
 pod="$(jq -c '.items[0]' <<<"$pods")"
-pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg uid "$uid" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" '
+pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" --arg uid "$uid" --arg image "$configured_image" --arg scripts "$expected_scripts_configmap" --arg panel_sha "$expected_panel_sha256" --arg evidence_panel "$expected_evidence_panel" --arg evidence_subpath "$evidence_subpath" '
 	def image_matches:
 		([.status.containerStatuses[] | select(.name == "benchmark") | .imageID | sub("^(docker-pullable|containerd)://"; "")] | .[0]) as $image_id |
 		($image_id == $image or $image_id == ($image | split("@") | .[1]));
@@ -149,7 +154,7 @@ pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
 		 (.volumeMounts | type == "array" and length == 2 and
 		  ([.[] | select(.name == "scripts" and .mountPath == "/scripts" and .readOnly == true)] | length) == 1 and
-		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == "benchmark/runs/20260820T223425Z-082b3d38/diagnostics" and .readOnly == true)] | length) == 1)) and
+		  ([.[] | select(.name == "evidence" and .mountPath == "/evidence" and .subPath == $evidence_subpath and .readOnly == true)] | length) == 1)) and
 		(.spec.volumes | type == "array" and length == 2 and
 		 ([.[] | select(.name == "scripts" and .configMap.name == $scripts and .configMap.defaultMode == 365)] | length) == 1 and
 		 ([.[] | select(.name == "evidence" and .persistentVolumeClaim == {claimName:"media-data",readOnly:true})] | length) == 1) and
