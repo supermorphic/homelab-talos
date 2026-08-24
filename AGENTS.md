@@ -90,15 +90,25 @@ solely to satisfy these style rules.
   for repository-dependent tools whose pinned version matters. Ordinary
   read-only filesystem and Git inspection may use standard shell commands.
   Do not substitute unpinned tools for established pinned repository workflows.
-- Agent-owned workflows should proceed autonomously when permitted by
-  repository policy. Runtime or sandbox approval does not change whether an
-  operation is agent-owned or operator-run. Complete all independent safe work
-  before stopping for required operator action.
-- Agents may use approved repository workflows to mint and use task-scoped
-  read-only cluster credentials and perform scoped verification without operator
-  intervention. Agents may not seek out, copy, adopt, or use elevated, write,
-  administrative, or break-glass credentials unless the operator explicitly
-  authorizes that credential for the specific task.
+- Agent-owned workflows must proceed autonomously when permitted by repository policy.
+  Runtime or sandbox approval does not change whether an operation is agent-owned or
+  operator-run. Complete all independent safe work before stopping for required operator
+  action. Do not ask the operator to perform an agent-owned workflow that the agent can
+  run itself.
+- When an approved task needs scoped cluster access, agents must run
+  `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
+  and use the resulting task-scoped credentials. Do not hand this credential bootstrap
+  off to the operator merely because credentials are involved. Agents may perform
+  approved scoped verification with those credentials without operator intervention.
+  Agents may not seek out, copy, adopt, or use elevated, write, administrative, or
+  break-glass credentials unless the operator explicitly authorizes that credential
+  for the specific task.
+- If an approved scoped workflow cannot proceed because it lacks required authority, stop
+  at that boundary. Do not retry with broader credentials, modify RBAC, or perform an
+  ad-hoc privileged operation as a workaround. Surface the specific required action to the
+  operator when it would require broader credentials, new authorization, live mutation,
+  ad-hoc exec or port-forward, sensitive runtime access, or another operation outside the
+  approved scoped workflow.
 - Persistent changes to Flux-managed state must go through Git. Agents may
   perform task-scoped, reversible ephemeral cluster actions needed for approved
   testing, benchmarking, verification, diagnostics, and cleanup of resources
