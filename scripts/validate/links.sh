@@ -165,6 +165,7 @@ mise exec -C "$validator_root" -- uv run --locked --no-dev python "$validator_ro
 git ls-files -z '*.md' "${exclude_specs[@]}" >"$markdown_paths"
 cat "$changed_decision_paths" >>"$markdown_paths"
 while IFS= read -r -d '' source; do
+  [[ -e "$source" ]] || continue
   scan_markdown "$source"
 done <"$markdown_paths"
 
@@ -172,6 +173,7 @@ bare_pattern='(?<![\w$/{}.-])(?:(?:docs|plans)/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-
 git ls-files -z "${exclude_specs[@]}" >"$bare_paths"
 cat "$changed_decision_paths" >>"$bare_paths"
 while IFS= read -r -d '' source; do
+  [[ -e "$source" ]] || continue
   scan_bare_path "$source"
 done <"$bare_paths"
 
