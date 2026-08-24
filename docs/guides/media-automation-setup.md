@@ -117,7 +117,8 @@ They do not replace the UI or functional acceptance steps in this guide.
 Run the commands from the authorized main clone, not a linked worktree with observer or
 diagnostic credentials. The qBittorrent bootstrap also requires the encrypted ProtonVPN
 Secret and bootstrapped media storage. Follow
-[ProtonVPN and Gluetun](protonvpn-gluetun.md) for that credential and VPN acceptance.
+[qBittorrent VPN operations](qbittorrent-vpn-operations.md) for that credential and VPN
+acceptance.
 
 After an application's required gates pass, set its source to `spec.suspend: false` in a
 separate reviewed **Git change**. After Flux applies that change, rerun its repository
@@ -163,10 +164,10 @@ Sonarr, Radarr, and Lidarr store this credential in their own PVC-backed applica
 state. Homepage and qbit_manage use separate SOPS-encrypted Kubernetes Secrets. Store the
 credential securely for [Phase 3](#phase-3--connect-applications),
 [Homepage integration credentials](#homepage-integration-credentials), and the
-[qbit_manage credential procedure](qbit-manage.md#author-the-encrypted-credential).
-For a new credential, update qbit_manage through that guide's suspended, reviewed Git
-workflow before allowing its active policy to resume; do not leave the scheduler using a
-stale password.
+[qbit_manage credential procedure](qbit-manage-operations.md#create-or-rotate-the-qbittorrent-credential).
+For a new credential, update qbit_manage through that guide's reviewed Git workflow. The
+Secret writer updates the workload rollout stamp so the active scheduler loads the new
+password after Flux reconciliation.
 
 #### Configure download paths
 

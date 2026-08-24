@@ -1,11 +1,12 @@
-# ntfy startup guide
+# Operate ntfy notifications
 
 This guide explains how to start, connect, verify, and maintain the private **ntfy**
 notification service. ntfy runs in the `ntfy` namespace from
 `kubernetes/apps/monitoring/ntfy/`.
 
 The Tailscale foundation must already be complete. See
-[Tailscale single-user setup](tailscale-single-user-setup.md).
+[Tailscale initial setup](tailscale-initial-setup.md) and
+[Tailscale Operator operations](tailscale-operator-operations.md).
 
 ## How notifications flow
 
@@ -63,6 +64,43 @@ login, topic subscriptions, and notification permissions are also client-managed
 
 A green ntfy Pod therefore does not prove phone delivery, Alertmanager delivery, or
 Seerr delivery. Those paths have separate checks and acceptance steps below.
+
+## Authorize the private Tailscale Service
+
+ntfy owns the tailnet policy relationships for its private Tailscale Service. The policy
+is external operator-managed state in the Tailscale Admin Console; it is not an
+executable repository file.
+
+In **Access controls**, merge these fragments into the current policy:
+
+```jsonc
+"tagOwners": {
+  "tag:ntfy": ["tag:k8s-operator"]
+},
+"autoApprovers": {
+  "services": {
+    "tag:ntfy": ["tag:k8s"]
+  }
+},
+"grants": [
+  {
+    "src": ["autogroup:member"],
+    "dst": ["tag:ntfy"],
+    "ip": ["tcp:443"]
+  }
+]
+```
+
+These are fragments, not a complete replacement policy. Preserve unrelated entries and
+review the Admin Console diff before saving. `tag:k8s-operator` owns the application
+tag, the shared `tag:k8s` ProxyGroup may advertise the Service, and the current human
+member may reach it only on HTTPS.
+
+`autogroup:member` is acceptable only for the current single-user tailnet. Replace it
+with a reviewed group before adding another human user. In **Services**, confirm the ntfy
+Service is approved and both shared ingress proxies are healthy. The repository cannot
+verify this external policy or a real client's access; the phone acceptance below is the
+end-to-end proof.
 
 ## Command effects and authority
 
@@ -208,7 +246,7 @@ rather than relying on a historical button name.
 3. Add the canonical self-hosted server exactly as configured by ntfy's `base-url`:
 
    ```text
-   https://ntfy.tail163214.ts.net
+   https://ntfy.<tailnet>.ts.net
    ```
 
 4. Authenticate that server as `subscriber` with the password created during first-time

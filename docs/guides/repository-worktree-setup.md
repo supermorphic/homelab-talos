@@ -88,7 +88,7 @@ operator-held SOPS age identity. Keep the age identity outside the repository.
 
    This read-only check derives the public age recipient from the loaded private
    identity and compares it with `.sops.yaml`. It does not generate or store the private
-   identity. See [SOPS secret handling](sops.md).
+   identity. See [SOPS secret operations](sops-secret-operations.md).
 
 5. Generate and validate the ignored Talos configuration:
 

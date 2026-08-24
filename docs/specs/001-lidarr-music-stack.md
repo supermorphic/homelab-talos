@@ -90,4 +90,4 @@ response does not prove that Lidarr's external metadata service is available, so
 and album discovery can still fail while the workload remains healthy.
 
 Current first-run, credential, naming, and recovery procedure belongs in
-`docs/guides/arr-stack-startup.md`.
+`docs/guides/media-automation-setup.md`.

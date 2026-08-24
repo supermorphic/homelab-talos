@@ -172,6 +172,6 @@ application remains single-active, so failover includes an outage while its Long
 claim reattaches. External metadata providers, trackers, the NAS, and the VPN provider
 remain real dependencies that a healthy Kubernetes Deployment cannot eliminate.
 
-Current application configuration belongs in `docs/guides/arr-stack-startup.md`.
+Current application configuration belongs in `docs/guides/media-automation-setup.md`.
 VPN credential and operating procedure belongs in
-`docs/guides/protonvpn-gluetun.md`.
+`docs/guides/qbittorrent-vpn-operations.md`.

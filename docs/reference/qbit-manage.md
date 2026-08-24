@@ -9,7 +9,7 @@ organized `/data/media` library.
 The SOPS-encrypted `qbit-manage-secret` supplies the qBittorrent Web UI credential as
 `QBT_USER` and `QBT_PASS`. The password manager remains the human source for the same
 credential used by the media applications.
-Use the [qbit_manage deployment guide](../guides/qbit-manage.md) to create that
+Use the [qbit_manage operations guide](../guides/qbit-manage-operations.md) to create that
 ciphertext and perform a guarded bootstrap.
 
 ## Classification contract

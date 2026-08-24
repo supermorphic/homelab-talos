@@ -1185,6 +1185,7 @@ qbit-manage-secrets:
 
     expected_confirmation='write:media:qbit-manage-secret:sops'
     target='kubernetes/apps/media/qbit-manage/app/qbit-manage-secret.sops.yaml'
+    values='kubernetes/apps/media/qbit-manage/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-qbit-manage-secrets.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -1221,9 +1222,14 @@ qbit-manage-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/qbit-manage-secret.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$QBITTORRENT_USERNAME" "$temp_dir/qbit-manage-secret.sops.yaml"
     ! rg -Fq -- "$QBITTORRENT_PASSWORD" "$temp_dir/qbit-manage-secret.sops.yaml"
+    scripts/repository/stamp-qbit-manage-secret.sh \
+      "$temp_dir/qbit-manage-secret.sops.yaml" "$values" "$temp_dir/values.yaml"
 
     mv -- "$temp_dir/qbit-manage-secret.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (qbit-manage-secret in media)."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(yq -r '.controllers."qbit-manage".pod.annotations."sops-hash"' "$values")" == \
+      "$(git hash-object "$target")" ]]
+    echo "Wrote SOPS-encrypted $target and stamped its rollout revision in $values."
 
 # Write only the SOPS-encrypted initial Portainer administrator password. Portainer
 # consumes this on first database initialization; rotating the live administrator
@@ -1276,7 +1282,8 @@ portainer-secrets:
 # tailscale namespace) from TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET. The chart
 # consumes this pre-created Secret when oauth.clientId/clientSecret are empty. Create the
 # OAuth client in the tailnet admin console first (tagged tag:k8s-operator, scopes
-# Devices/Core + Keys/Auth Keys + Services = write) — see docs/guides/tailscale-operator.md.
+# Devices/Core + Keys/Auth Keys + Services = write) — see
+# docs/guides/tailscale-operator-operations.md.
 # Never echoes the values.
 tailscale-operator-secrets:
     #!/usr/bin/env bash
@@ -1284,6 +1291,7 @@ tailscale-operator-secrets:
 
     expected_confirmation='write:networking:tailscale-operator:sops'
     target='kubernetes/apps/networking/tailscale-operator/app/oauth.sops.yaml'
+    values='kubernetes/apps/networking/tailscale-operator/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-tailscale-operator.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -1324,16 +1332,21 @@ tailscale-operator-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/operator-oauth.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$TS_OAUTH_CLIENT_ID" "$temp_dir/operator-oauth.sops.yaml"
     ! rg -Fq -- "$TS_OAUTH_CLIENT_SECRET" "$temp_dir/operator-oauth.sops.yaml"
+    scripts/repository/stamp-tailscale-operator-secret.sh \
+      "$temp_dir/operator-oauth.sops.yaml" "$values" "$temp_dir/values.yaml"
 
     mv -- "$temp_dir/operator-oauth.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (operator-oauth in tailscale)."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(yq -r '.operatorConfig.podAnnotations."sops-hash"' "$values")" == \
+      "$(git hash-object "$target")" ]]
+    echo "Wrote SOPS-encrypted $target and stamped its Operator rollout revision in $values."
 
 # Registry-backed ntfy credential lifecycle over the canonical ntfy Secret (ntfy-secret
 # in the ntfy namespace, carrying the NTFY_AUTH_* lists and the adapter's auth.yml) and
 # the mirrored Homepage widget Secret. ensure/reconcile/rotate/finalize preserve existing
 # credentials by default, generate them only for missing or rotated identities, and never
 # print secrets. Guard: NTFY_IDENTITY_CONFIRM='<action>:monitoring:ntfy:<identity>:sops'
-# (reconcile uses 'all' as the identity). See docs/guides/ntfy-startup.md.
+# (reconcile uses 'all' as the identity). See docs/guides/ntfy-operations.md.
 ntfy-identity action identity:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1422,6 +1435,8 @@ verify-files: require-bash
     @bash --version | head -n 1
     @scripts/test/external-dns-provider-rollout-test.sh
     @scripts/test/homepage-portainer-rollout-test.sh
+    @scripts/test/qbit-manage-secret-rollout-test.sh
+    @scripts/test/tailscale-operator-secret-rollout-test.sh
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

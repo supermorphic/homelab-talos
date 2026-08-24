@@ -46,6 +46,34 @@ case " $* " in
   *' get svc plex '*)
     printf '10.96.9.9'
     ;;
+  *' --namespace media get service plex --output json'*)
+    cat <<'JSON'
+{
+  "spec": {
+    "type": "LoadBalancer",
+    "externalTrafficPolicy": "Local",
+    "allocateLoadBalancerNodePorts": false,
+    "ports": [
+      {
+        "name": "http",
+        "port": 32400,
+        "protocol": "TCP",
+        "targetPort": 32400
+      }
+    ]
+  },
+  "status": {
+    "loadBalancer": {
+      "ingress": [
+        {
+          "ip": "192.168.90.31"
+        }
+      ]
+    }
+  }
+}
+JSON
+    ;;
   *' create --filename '*)
     file="${*: -1}"
     name="$(sed -n 's/^  name: //p' "$file" | head -n 1)"

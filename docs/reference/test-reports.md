@@ -80,7 +80,7 @@ authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
 
 For routine multi-suite publication, use the catalog-backed campaigns documented in
-[`docs/guides/test-campaigns.md`](../guides/test-campaigns.md). Campaign publication requires exact
+[`docs/guides/test-campaign-operations.md`](../guides/test-campaign-operations.md). Campaign publication requires exact
 current-main authority and therefore never uploads candidate children. Standalone
 `just test publish` keeps the historical and candidate workflow above.
 

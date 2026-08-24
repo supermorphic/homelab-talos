@@ -28,8 +28,7 @@ ready="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get statefulset in
 just kube foundation-verify
 echo 'Tailscale operator acceptance passed: Kustomization + HelmRelease Ready, operator rolled out, and both ingress ProxyGroup replicas Ready.'
 echo
-echo 'MANUAL (mandatory, Cilium compatibility — review #6/#7): from a device on the tailnet,'
-echo 'reach a throwaway Ingress (referencing proxy-group ingress-proxies) that fronts a test'
-echo 'Service, proving tailnet client -> ProxyGroup -> Kubernetes Service on the live Cilium'
-echo 'cluster, then remove it. See docs/guides/tailscale-operator.md. Do not roll out ntfy until'
-echo 'this passes.'
+echo 'MANUAL (mandatory for the first application): complete the owning application guide'
+echo 'from a real tailnet client. This proves tailnet client -> Tailscale Service -> shared'
+echo 'ProxyGroup -> Kubernetes Service. Start with docs/guides/ntfy-operations.md; do not create'
+echo 'an ad-hoc production test Ingress.'

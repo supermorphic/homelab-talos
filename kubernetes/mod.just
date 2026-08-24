@@ -267,7 +267,7 @@ foundation-ca-expiry: require-bash
     if openssl x509 -in "$pihole_ca" -noout -checkend 2592000 >/dev/null; then
       echo 'Pi-hole CA is valid for at least 30 more days.'
     else
-      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/guides/pihole-integration.md).' >&2
+      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/guides/pihole-externaldns-operations.md).' >&2
       exit 1
     fi
 

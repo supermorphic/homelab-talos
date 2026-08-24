@@ -10,7 +10,7 @@ uncommitted under `.tmp/plans/`.
 Repository contribution and agent policy is in [`AGENTS.md`](AGENTS.md).
 Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr UI
 configuration is documented in the
-[media automation startup guide](docs/guides/arr-stack-startup.md).
+[media automation startup guide](docs/guides/media-automation-setup.md).
 
 ## Development workflow
 
@@ -46,7 +46,7 @@ Actions `ci` check to pass, and squash as the only merge method. Actions validat
 GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
 has different commit identity but the equivalent source tree. The operator reviews
 and merges, then Flux reconciles the resulting `main`. See the
-[GitHub protection guide](docs/guides/github-protection.md) for the applied settings, GitHub
+[GitHub protection guide](docs/guides/github-main-protection.md) for the applied settings, GitHub
 inspection locations, complete verification, and guarded recovery.
 
 ### Test cadence and campaigns
@@ -81,7 +81,7 @@ TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
 
 The `weekly` and `full` tokens bind the source and plan digest because both include
 disruptive recovery and a Plex node reboot. Campaigns capture and publish every child
-run automatically. See the [test campaign guide](docs/guides/test-campaigns.md) for focused
+run automatically. See the [test campaign guide](docs/guides/test-campaign-operations.md) for focused
 campaigns, failure behavior, resume, and exact membership.
 
 ### Agent workflow
@@ -107,8 +107,9 @@ USB-A-to-USB-C adapter and use the rear USB-C port instead.
   validation assertions would not gate under it. Bash is a platform prerequisite
   because mise has no supported Bash runtime entry; the `require-bash` guard refuses
   to run validation and verification recipes on an older Bash.
-- Access to this private repository
-- The password-manager item `homelab-talos SOPS age key` when working with secrets
+- Access to this repository
+- The repository age identity from the operator's password manager when working with
+  secrets
 - Network access to GitHub and upstream release registries when installing tools
 
 No Kubernetes, Talos, Helm, Flux, or SOPS CLI should be installed manually for
@@ -278,7 +279,7 @@ available for focused developer validation.
 | `just kube metrics-server-validate` | Validate the metrics-server source, insecure-TLS flag, and pinned render | — | Available; read-only |
 | `just bootstrap metrics-server` | Reconcile the staged metrics-server and verify (`kubectl top`, HPA, Homepage widget) | `METRICS_SERVER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube metrics-server-verify` | Verify metrics-server: APIService Available and `kubectl top nodes` returns data | — | Read-only |
-| `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy guide](docs/guides/ntfy-startup.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
+| `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy guide](docs/guides/ntfy-operations.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
 
 The **Requires from operator** column lists inputs the recipe reads from your
 environment and refuses to run without. `SOPS_AGE_KEY`[`_FILE`] means either the
@@ -353,7 +354,7 @@ The Cilium bootstrap and Flux adoption boundary is in the
 source boundary is in [`kubernetes/README.md`](kubernetes/README.md). The
 [Talos and Flux platform specification](docs/specs/010-talos-flux-platform.md)
 records the architecture rationale. Current Pi-hole and Portainer procedures are in
-the [Pi-hole guide](docs/guides/pihole-integration.md) and
+the [Pi-hole guide](docs/guides/pihole-externaldns-operations.md) and
 [Portainer operations guide](docs/guides/portainer-operations.md).
 
 ## Daily Cluster Health Check
@@ -429,8 +430,8 @@ is an installation/reconciliation workflow with a guarded mutation path.
 
 ## Secret Access
 
-Retrieve `homelab-talos SOPS age key` from the password manager and expose it to
-the current shell. Do not create the key file inside this repository.
+Retrieve the repository age identity from the operator's password manager and expose it
+to the current shell. Do not create the key file inside this repository.
 
 For a short session:
 
@@ -439,7 +440,7 @@ printf 'SOPS age private key: '
 read -rs SOPS_AGE_KEY
 printf '\n'
 export SOPS_AGE_KEY
-just repo secrets
+mise exec -- just repo secrets
 ```
 
 `SOPS_AGE_KEY` must be exported: an unexported shell variable is not visible to
@@ -449,11 +450,11 @@ For repeated operations, use an owner-readable file outside the repository:
 
 ```bash
 export SOPS_AGE_KEY_FILE=/secure/path/homelab-talos-age.txt
-just repo secrets
+mise exec -- just repo secrets
 ```
 
 `just repo secrets` derives the public recipient and rejects the wrong identity. See the
-[SOPS guide](docs/guides/sops.md) for secret-handling procedures and the
+[SOPS guide](docs/guides/sops-secret-operations.md) for secret-handling procedures and the
 [recovery runbook](docs/runbooks/recovery.md) for restoring access.
 
 ## Normal Change Workflow

@@ -25,8 +25,8 @@ Recreate them from current Git and approved credential sources.
 
 ## Restore SOPS and generated Talos state
 
-Retrieve the password-manager item `homelab-talos SOPS age key`. Load it for one shell or
-point SOPS to an owner-readable file outside the repository:
+Retrieve the repository age identity from the operator's password manager. Load it for
+one shell or point SOPS to an owner-readable file outside the repository:
 
 ```bash
 export SOPS_AGE_KEY='AGE-SECRET-KEY-...'
@@ -178,7 +178,7 @@ condition as a planned key rotation, not ordinary recovery. Preserve the old key
 design a reviewed re-encryption workflow before changing the live identity.
 
 For Pi-hole or Cloudflare credential recovery, follow
-[Maintain the Pi-hole integration](../guides/pihole-integration.md). For other encrypted
+[Maintain the Pi-hole integration](../guides/pihole-externaldns-operations.md). For other encrypted
 application credentials, use only the application's established SOPS writer.
 
 ## Recover Longhorn and application state
@@ -215,7 +215,7 @@ mise exec -- just kube plex-verify
 ```
 
 For another media application, prefer its trusted Longhorn or application-native backup.
-Use [Media automation greenfield startup](../guides/arr-stack-startup.md) only when no
+Use [Media automation greenfield startup](../guides/media-automation-setup.md) only when no
 trusted configuration backup exists.
 
 ## Recover qBittorrent VPN egress
@@ -477,7 +477,7 @@ remains available to Plex even after the download-side name is removed.
 11. Update the authorized main clone to the exact merged commit. Confirm that
     both `flux-system` and `cluster-apps` are active and the qbit_manage child remains
     suspended, then run the guarded bootstrap in
-    [Configure qbit_manage deployment](../guides/qbit-manage.md). That workflow
+    [Operate qbit_manage](../guides/qbit-manage-operations.md). That workflow
     reconciles the active parent, verifies the child suspension, resumes the child only
     after the corrected merged source is ready, applies the HelmRelease state, recreates
     the Deployment, and runs live verification. Do not directly resume the HelmRelease

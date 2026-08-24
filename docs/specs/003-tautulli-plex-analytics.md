@@ -88,4 +88,4 @@ Plex database. Losing the config claim loses the greenfield history, while losin
 Tautulli itself does not affect Plex playback.
 
 Current setup, authentication, API-key, and acceptance procedure belongs in
-`docs/guides/arr-stack-startup.md`.
+`docs/guides/media-automation-setup.md`.

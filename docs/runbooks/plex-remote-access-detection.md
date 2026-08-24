@@ -32,7 +32,7 @@ For any remote-traffic alert:
 5. Restart Plex only when established-session eviction is required. A restart interrupts
    all local clients because the workload is single-active.
 
-Follow [Configure Plex direct remote access](../guides/plex-direct-remote-access.md) for
+Follow [Operate Plex direct remote access](../guides/plex-remote-access-operations.md) for
 the exposure and rollback procedure.
 
 ## `PlexRemoteConnectionFlood` — critical

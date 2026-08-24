@@ -37,7 +37,7 @@ For routine grouped execution and automatic Allure publication, use
 `mise exec -- just test campaign-plan <name>` followed by its printed
 `mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
 `full` compositions provide nightly, weekly, and complete coverage respectively.
-See `docs/guides/test-campaigns.md` for membership, cadence, safety stops, and resume
+See `docs/guides/test-campaign-operations.md` for campaign selection, cadence, safety stops, and resume
 behavior.
 
 Live commands are operator-only:

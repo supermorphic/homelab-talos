@@ -7,7 +7,7 @@ account linking, player discovery, or speaker reachability.
 
 Plex Relay is limited to 2 Mbps, can require transcoding, does not support downloads,
 and is not supported equally by every client. Direct remote access remains the normal
-path; see [Configure Plex direct remote access](../guides/plex-direct-remote-access.md).
+path; see [Operate Plex direct remote access](../guides/plex-remote-access-operations.md).
 
 ## Authority and safety
 

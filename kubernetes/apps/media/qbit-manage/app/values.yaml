@@ -26,6 +26,10 @@ controllers:
         # edit can never silently fail to deploy. Update it whenever config.yml changes:
         #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
         config-hash: "9f81ba7ba81d5f6c95067527888d94ef3885dbb1"
+        # qbit_manage reads QBT_USER/QBT_PASS from envFrom only when the process starts.
+        # `just repo qbit-manage-secrets` updates this encrypted-Secret blob revision so
+        # credential rotation changes the Pod template and forces a Recreate rollout.
+        sops-hash: "cb4f6f12a08b2ffae4e3b69f7cfc0496d17f133f"
       securityContext:
         runAsNonRoot: true
         runAsUser: 568

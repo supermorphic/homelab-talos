@@ -117,4 +117,4 @@ evaluating alerts. Least-privilege identities limit a compromised producer to it
 topics, and private exposure avoids making the message service an Internet application.
 
 Current credential, client, producer, verification, and rotation procedure belongs in
-`docs/guides/ntfy-startup.md`.
+`docs/guides/ntfy-operations.md`.

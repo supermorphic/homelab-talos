@@ -3,21 +3,21 @@
 ## Guides
 
 - [Agent cluster access](guides/agent-cluster-access.md) — Install task-scoped read-only Kubernetes and Talos credentials in an agent worktree.
-- [Media automation greenfield startup](guides/arr-stack-startup.md) — Configure qBittorrent, the Servarr applications, Lidarr, and Seerr on new persistent volumes.
-- [GitHub main protection](guides/github-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
-- [ntfy startup](guides/ntfy-startup.md) — Configure ntfy credentials, producers, consumers, rotation, and troubleshooting.
+- [Media automation greenfield startup](guides/media-automation-setup.md) — Configure qBittorrent, the Servarr applications, Lidarr, and Seerr on new persistent volumes.
+- [GitHub main protection](guides/github-main-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
+- [ntfy operations](guides/ntfy-operations.md) — Configure ntfy credentials, producers, consumers, rotation, and troubleshooting.
 - [Repository and worktree setup](guides/repository-worktree-setup.md) — Prepare the operator-controlled primary checkout and isolated task worktrees.
-- [Maintain the Pi-hole integration](guides/pihole-integration.md) — Reinstall, rotate, validate, and recover ExternalDNS access to Pi-hole.
-- [Configure Plex direct remote access](guides/plex-direct-remote-access.md) — Operate the attended router path to Plex and validate or remove it safely.
-- [Validate Plex remote-access detection](guides/plex-remote-access-validation.md) — Run the synthetic half-open connection exercise for the Plex alerting path.
+- [Maintain the Pi-hole integration](guides/pihole-externaldns-operations.md) — Reinstall, rotate, validate, and recover ExternalDNS access to Pi-hole.
+- [Plex remote-access operations](guides/plex-remote-access-operations.md) — Establish, validate, change, or remove the production Plex Internet path.
+- [Plex remote-access detection test](guides/plex-remote-access-detection-test.md) — Deliberately generate bounded half-open traffic to prove the security-alert pipeline.
 - [Operate and recover Portainer](guides/portainer-operations.md) — Inspect Portainer, manage its credentials, verify the read-only boundary, and recover retained state.
-- [ProtonVPN WireGuard and Gluetun](guides/protonvpn-gluetun.md) — Configure and operate qBittorrent's fail-closed VPN egress.
-- [Configure qbit_manage deployment](guides/qbit-manage.md) — Create its credential and start or restore the scheduled policy workload.
-- [SOPS secret handling](guides/sops.md) — Create, edit, validate, and recover encrypted repository secrets.
-- [Tailscale access for the lab domain](guides/tailscale-lab-domain.md) — Configure and maintain private access to `*.lab.supermorphic.com`.
-- [Configure the Tailscale Kubernetes Operator](guides/tailscale-operator.md) — Prepare tailnet settings and deploy or roll back the operator and ingress proxy group.
-- [Tailscale single-user setup](guides/tailscale-single-user-setup.md) — Complete the first-time operator and private ntfy access walkthrough.
-- [Test campaigns](guides/test-campaigns.md) — Plan, run, publish, and resume the standard, weekly, and full test campaigns.
+- [qBittorrent VPN operations](guides/qbittorrent-vpn-operations.md) — Configure and operate qBittorrent's fail-closed Proton VPN egress.
+- [qbit_manage operations](guides/qbit-manage-operations.md) — Operate the active policy, rotate credentials, bootstrap safely, and recover mistakes.
+- [SOPS secret operations](guides/sops-secret-operations.md) — Create, validate, and recover encrypted repository secrets.
+- [Tailscale initial setup](guides/tailscale-initial-setup.md) — Establish the tailnet, clients, Operator foundation, and first private service in the correct order.
+- [Tailscale Operator operations](guides/tailscale-operator-operations.md) — Deploy, verify, rotate, and recover the Kubernetes Operator and shared ingress proxy group.
+- [Tailscale lab-domain access](guides/tailscale-lab-domain-access.md) — Configure and maintain private access to `*.lab.supermorphic.com`.
+- [Test campaign operations](guides/test-campaign-operations.md) — Choose, plan, run, publish, and resume test campaigns.
 
 ## Reference
 

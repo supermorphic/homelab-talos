@@ -13,4 +13,4 @@ The Pi-hole application password is stored only as SOPS ciphertext in Git. Use
 then use the guarded foundation Just workflows in
 the [root README](../../../../README.md) to validate or reconcile the controller. Fresh
 Pi-hole installation, CA rotation, and application-password steps are in the
-[Pi-hole integration guide](../../../../docs/guides/pihole-integration.md).
+[Pi-hole integration guide](../../../../docs/guides/pihole-externaldns-operations.md).

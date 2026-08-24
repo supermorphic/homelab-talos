@@ -4,7 +4,7 @@
 # base-url is the canonical Tailscale MagicDNS FQDN and MUST equal the iOS app's Default
 # Server (ntfy's iOS APNs poll derives from base-url). LAN browser/CLI reach the same
 # server via https://ntfy.lab.supermorphic.com, but that is not the canonical URL.
-base-url: "https://ntfy.tail163214.ts.net"
+base-url: "https://ntfy.<tailnet>.ts.net"
 listen-http: ":80"
 behind-proxy: true
 

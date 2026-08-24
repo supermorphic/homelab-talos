@@ -102,7 +102,7 @@ Foundation workflows preserve the same boundary:
 The Gateway owns one wildcard certificate in `networking`; application routes do
 not copy TLS private keys. ExternalDNS publishes only routes carrying
 `external-dns.k8s.io/audience=internal`. Use the
-[Pi-hole integration guide](../docs/guides/pihole-integration.md) for its external DNS
+[Pi-hole integration guide](../docs/guides/pihole-externaldns-operations.md) for its external DNS
 credential and recovery procedures.
 
 Kubernetes Secret manifests use the `*.sops.yaml` suffix. SOPS encrypts only
@@ -127,6 +127,6 @@ use the documented guarded `mise exec -- just bootstrap …` recipe rather than
 See the root [`README.md`](../README.md) for guarded bootstrap workflows and the
 [platform specification](../docs/specs/010-talos-flux-platform.md) for the Cilium,
 Flux, and internal service foundation rationale. The
-[Pi-hole integration guide](../docs/guides/pihole-integration.md) covers Pi-hole
-reinstall and credential recovery. The [SOPS guide](../docs/guides/sops.md) covers
-secret handling.
+[Pi-hole integration guide](../docs/guides/pihole-externaldns-operations.md) covers Pi-hole
+reinstall and credential recovery. The
+[SOPS guide](../docs/guides/sops-secret-operations.md) covers secret handling.
