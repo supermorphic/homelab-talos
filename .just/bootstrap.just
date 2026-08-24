@@ -792,7 +792,7 @@ foundation:
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_network_confirmation='reserve:192.168.90.30-39:gateway:192.168.90.30'
-    expected_bootstrap_confirmation='bootstrap:phase7:internal-foundation:192.168.90.30'
+    expected_bootstrap_confirmation='bootstrap:foundation:internal-gateway:192.168.90.30'
     foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
     foundation_sources=(
       kubernetes/apps/security/cert-manager/ks.yaml
@@ -913,14 +913,14 @@ foundation:
         exit 1
       fi
     done
-    [[ "${PHASE7_NETWORK_CONFIRM:-}" == "$expected_network_confirmation" ]] || {
+    [[ "${FOUNDATION_NETWORK_CONFIRM:-}" == "$expected_network_confirmation" ]] || {
       echo 'Refusing MetalLB rollout without confirmation that 192.168.90.30-39 is excluded from DHCP.' >&2
-      echo "Set PHASE7_NETWORK_CONFIRM='$expected_network_confirmation' after checking the router reservation scope." >&2
+      echo "Set FOUNDATION_NETWORK_CONFIRM='$expected_network_confirmation' after checking the router reservation scope." >&2
       exit 1
     }
-    [[ "${PHASE7_BOOTSTRAP_CONFIRM:-}" == "$expected_bootstrap_confirmation" ]] || {
+    [[ "${FOUNDATION_BOOTSTRAP_CONFIRM:-}" == "$expected_bootstrap_confirmation" ]] || {
       echo 'Refusing to reconcile the internal foundation.' >&2
-      echo "Set PHASE7_BOOTSTRAP_CONFIRM='$expected_bootstrap_confirmation' after reviewing foundation status." >&2
+      echo "Set FOUNDATION_BOOTSTRAP_CONFIRM='$expected_bootstrap_confirmation' after reviewing foundation status." >&2
       exit 1
     }
 
@@ -1173,7 +1173,7 @@ plex:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase11:plex'
+    expected_confirmation='bootstrap:media:plex'
     ks='kubernetes/apps/media/plex/ks.yaml'
     resumed=false
     bootstrap_complete=false
@@ -1235,7 +1235,7 @@ qbittorrent:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase12:qbittorrent'
+    expected_confirmation='bootstrap:media:qbittorrent'
     ks='kubernetes/apps/media/qbittorrent/ks.yaml'
     resumed=false
     bootstrap_complete=false
@@ -1424,7 +1424,7 @@ media-app app:
 
 # Reconcile the suspended Seerr app after guarded checks, then verify. Operator-run.
 # Requires the suspended source to match deployed origin/main and
-# SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr'. On failure the resumed Kustomization is
+# SEERR_BOOTSTRAP_CONFIRM='bootstrap:media:seerr'. On failure the resumed Kustomization is
 # re-suspended while its resources are preserved.
 seerr:
     #!/usr/bin/env bash
@@ -1434,7 +1434,7 @@ seerr:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase14:seerr'
+    expected_confirmation='bootstrap:media:seerr'
     ks='kubernetes/apps/media/seerr/ks.yaml'
     resumed=false
     bootstrap_complete=false
@@ -1485,7 +1485,7 @@ seerr:
 
 # Reconcile the suspended FlareSolverr app (stateless Cloudflare solver for Prowlarr) after
 # guarded checks, then verify. Operator-run. Requires the suspended source to match deployed
-# origin/main and FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:phase13:flaresolverr'. On failure
+# origin/main and FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:media:flaresolverr'. On failure
 # the resumed Kustomization is re-suspended while its resources are preserved. This owns ONLY
 # the FlareSolverr app — the Prowlarr indexer-proxy + 1337x tag stay operator-managed UI.
 flaresolverr:
@@ -1496,7 +1496,7 @@ flaresolverr:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase13:flaresolverr'
+    expected_confirmation='bootstrap:media:flaresolverr'
     ks='kubernetes/apps/media/flaresolverr/ks.yaml'
     resumed=false
     bootstrap_complete=false

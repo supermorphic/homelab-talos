@@ -19,6 +19,9 @@ spec:
         # `git hash-object homepage-ntfy.sops.yaml`, stamped by `just repo ntfy-identity`.
         # (Named sops-hash, not *-secret-*, so gitleaks does not flag the blob hash.)
         sops-hash: "bdc1eae298928f309760b7fef47a15b5f3743f7e"
+        # Roll the pod when the Portainer widget token changes. The guarded
+        # Homepage Portainer Secret writer stamps the encrypted blob revision.
+        homepage-portainer-sops-hash: "58e54581cc4a050be953188b6e56fdcd779cda9f"
       labels:
         app.kubernetes.io/name: homepage
     spec:

@@ -62,6 +62,13 @@ envoy_ready="$(yq -r '.items[] | select(.metadata.labels."gateway.envoyproxy.io/
 
 kubectl --kubeconfig "$kubeconfig" --namespace external-dns rollout status deployment/external-dns-internal --timeout=10m
 dns_deployment="$(kubectl --kubeconfig "$kubeconfig" --namespace external-dns get deployment external-dns-internal --output json)"
+dns_deployment_file="$(mktemp "${TMPDIR:-/tmp}/homelab-talos-external-dns-deployment.XXXXXX")"
+trap 'rm -f -- "$dns_deployment_file"' EXIT
+printf '%s\n' "$dns_deployment" >"$dns_deployment_file"
+scripts/validate/external-dns-provider-revisions.sh \
+  kubernetes/apps/networking/external-dns/app/pihole-ca.crt \
+  kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml \
+  kubernetes/apps/networking/external-dns/app/values.yaml "$dns_deployment_file"
 dns_args="$(yq -r '.spec.template.spec.containers[0].args[]' - <<<"$dns_deployment")"
 for argument in \
   '--source=gateway-httproute' \

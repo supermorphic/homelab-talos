@@ -166,6 +166,11 @@ assert_command_finds_nothing \
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
+[[ "$(yq -r '.spec.template.metadata.annotations["homepage-portainer-sops-hash"]' "$dep")" == \
+  "$(git hash-object "$portainer_secret")" ]] || {
+  echo 'Refusing: the Homepage Portainer rollout stamp must equal git hash-object of homepage-portainer.sops.yaml.' >&2
+  exit 1
+}
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_USERNAME") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-qbittorrent' ]]

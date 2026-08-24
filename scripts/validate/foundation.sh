@@ -47,7 +47,7 @@ for file in \
   "$pihole_secret"; do
   [[ -f "$file" ]] || {
     echo "Missing required internal foundation source: $file" >&2
-    echo 'Run just repo phase7-secrets if a provider Secret is missing.' >&2
+    echo 'Run just repo foundation-provider-secrets if a provider Secret is missing.' >&2
     exit 1
   }
 done
@@ -156,6 +156,8 @@ proxy='kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml'
 [[ "$(yq -r '.spec.provider.kubernetes.envoyService.externalTrafficPolicy' "$proxy")" == 'Local' ]]
 
 dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'
+scripts/validate/external-dns-provider-revisions.sh \
+  "$pihole_ca" "$pihole_secret" "$dns_values"
 [[ "$(yq -r '.provider.name' "$dns_values")" == 'pihole' ]]
 [[ "$(yq -r '.registry' "$dns_values")" == 'noop' ]]
 [[ "$(yq -r '.policy' "$dns_values")" == 'upsert-only' ]]
@@ -236,6 +238,8 @@ helm template external-dns-internal external-dns \
   --version "$external_dns_chart_version" \
   --namespace external-dns \
   --values "$dns_values" >"$temp_dir/external-dns.yaml"
+scripts/validate/external-dns-provider-revisions.sh \
+  "$pihole_ca" "$pihole_secret" "$dns_values" "$temp_dir/external-dns.yaml"
 
 rg -q '^kind: Deployment$' "$temp_dir/cert-manager.yaml"
 rg -q '^  name: cert-manager$' "$temp_dir/cert-manager.yaml"

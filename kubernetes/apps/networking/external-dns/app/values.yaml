@@ -26,6 +26,12 @@ logFormat: json
 managedRecordTypes:
   - A
 policy: upsert-only
+podAnnotations:
+  # ExternalDNS reads the Pi-hole password and CA trust at process startup. The
+  # guarded provider writers update these source revisions so either change
+  # replaces the Pod. Foundation validation verifies both values.
+  pihole-ca-hash: "50fe775bcf42a2ff00ff60f3e2ed6a009c53c287"
+  sops-hash: "8c2ddbf4259f5314a07d50d76ff8a7b6f8147bf4"
 provider:
   name: pihole
 registry: noop

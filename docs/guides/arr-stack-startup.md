@@ -93,7 +93,7 @@ Every guarded bootstrap in this section requires:
 3. That suspended change merged and deployed from `origin/main`.
 4. A clean, authorized main clone at the exact deployed `origin/main` revision, with the
    administrator `.kube/config` described in
-   [Prepare a clone and worktree](operator-bootstrap.md).
+   [Repository and worktree setup](repository-worktree-setup.md).
 5. The same application suspended in the live cluster.
 6. The exact confirmation variable shown below.
 
@@ -104,14 +104,14 @@ They do not replace the UI or functional acceptance steps in this guide.
 
 | Application | Guarded command | Additional gate before durable activation |
 | --- | --- | --- |
-| Plex | `PLEX_BOOTSTRAP_CONFIRM='bootstrap:phase11:plex' mise exec -- just bootstrap plex` | Run `plex-verify`, activate through Git, then run the cataloged Plex reschedule test when rebuilding the complete service |
-| qBittorrent | `QBITTORRENT_BOOTSTRAP_CONFIRM='bootstrap:phase12:qbittorrent' mise exec -- just bootstrap qbittorrent` | Complete UI setup and the blocking `qbittorrent-vpn-disconnect` resilience test |
+| Plex | `PLEX_BOOTSTRAP_CONFIRM='bootstrap:media:plex' mise exec -- just bootstrap plex` | Run `plex-verify`, activate through Git, then run the cataloged Plex reschedule test when rebuilding the complete service |
+| qBittorrent | `QBITTORRENT_BOOTSTRAP_CONFIRM='bootstrap:media:qbittorrent' mise exec -- just bootstrap qbittorrent` | Complete UI setup and the blocking `qbittorrent-vpn-disconnect` resilience test |
 | Prowlarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:prowlarr' mise exec -- just bootstrap arr prowlarr` | Run `arr-verify prowlarr`, activate through Git, then complete UI and indexer acceptance |
 | Sonarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:sonarr' mise exec -- just bootstrap arr sonarr` | Run `arr-verify sonarr`, activate through Git, then complete UI and direct-import acceptance |
 | Radarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:radarr' mise exec -- just bootstrap arr radarr` | Run `arr-verify radarr`, activate through Git, then complete UI and direct-import acceptance |
 | Lidarr | `ARR_BOOTSTRAP_CONFIRM='bootstrap:arr:lidarr' mise exec -- just bootstrap arr lidarr` | Keep the source suspended through all Lidarr gates in [Lidarr acceptance](#lidarr-acceptance) |
-| FlareSolverr | `FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:phase13:flaresolverr' mise exec -- just bootstrap flaresolverr` | Run `flaresolverr-verify`, activate through Git, then test one actual protected indexer in Prowlarr |
-| Seerr | `SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr' mise exec -- just bootstrap seerr` | Run `seerr-verify`, activate through Git, then complete Plex, Sonarr/Radarr, and request-flow acceptance |
+| FlareSolverr | `FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:media:flaresolverr' mise exec -- just bootstrap flaresolverr` | Run `flaresolverr-verify`, activate through Git, then test one actual protected indexer in Prowlarr |
+| Seerr | `SEERR_BOOTSTRAP_CONFIRM='bootstrap:media:seerr' mise exec -- just bootstrap seerr` | Run `seerr-verify`, activate through Git, then complete Plex, Sonarr/Radarr, and request-flow acceptance |
 | Tautulli | `MEDIA_APP_BOOTSTRAP_CONFIRM='bootstrap:media-app:tautulli' mise exec -- just bootstrap media-app tautulli` | Keep the source suspended until authentication, Plex library, exact-status verification, and real playback history all pass |
 
 Run the commands from the authorized main clone, not a linked worktree with observer or

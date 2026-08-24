@@ -78,5 +78,5 @@ SECUREBOOT   true
 BIOS configuration, Secure Boot key enrollment, USB boot, and the confirmed machine
 configuration apply are operator actions. Talhelper renders ignored machine
 configurations from Git. Flux owns Kubernetes desired state after bootstrap. See the
-[operator bootstrap guide](../guides/operator-bootstrap.md) and
+[repository and worktree setup guide](../guides/repository-worktree-setup.md) and
 [Talos source boundary](../../talos/README.md).

@@ -40,7 +40,7 @@ application, or scale the workload.
 
 After the required Git state is merged, the operator updates the authorized main clone
 to that exact `origin/main` commit. The main clone owns the administrator Kubernetes
-kubeconfig described in [Prepare a clone and worktree](operator-bootstrap.md); do not
+kubeconfig described in [Repository and worktree setup](repository-worktree-setup.md); do not
 copy it into the feature worktree. Run the guarded bootstrap and any emergency workload
 stop only from the clean main-clone repository root with `.kube/config` as the authorized
 administrator credential.

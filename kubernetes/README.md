@@ -93,7 +93,7 @@ Foundation workflows preserve the same boundary:
 |---|---|
 | `just repo pihole-status` | Verify the external Pi-hole HTTPS identity, tracked CA, and application-session write policy |
 | `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation |
-| `just repo phase7-secrets` | Validate Cloudflare and Pi-hole credentials and write only SOPS ciphertext |
+| `just repo foundation-provider-secrets` | Validate Cloudflare and Pi-hole credentials, write only SOPS ciphertext, and update the ExternalDNS rollout stamp |
 | `just kube foundation-validate` | Validate the foundation graph, policy, encrypted Secrets, and pinned chart renders |
 | `just kube foundation-status` | Print read-only certificate, MetalLB, Gateway, DNS, route, and workload state |
 | `just bootstrap foundation` | Guard and reconcile the nine suspended foundation units in dependency order |

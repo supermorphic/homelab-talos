@@ -89,4 +89,4 @@ is that some displayed controls fail and Docker-host management is unavailable. 
 single retained database simplifies recovery but makes Portainer itself single-active.
 
 Current credential, acceptance, backup, and recovery procedure belongs in
-`docs/guides/portainer.md`.
+`docs/guides/portainer-operations.md`.

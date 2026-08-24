@@ -6,11 +6,11 @@
 - [Media automation greenfield startup](guides/arr-stack-startup.md) — Configure qBittorrent, the Servarr applications, Lidarr, and Seerr on new persistent volumes.
 - [GitHub main protection](guides/github-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
 - [ntfy startup](guides/ntfy-startup.md) — Configure ntfy credentials, producers, consumers, rotation, and troubleshooting.
-- [Prepare a clone and worktree](guides/operator-bootstrap.md) — Set up the pinned toolchain, linked worktrees, hooks, and scoped credentials.
+- [Repository and worktree setup](guides/repository-worktree-setup.md) — Prepare the operator-controlled primary checkout and isolated task worktrees.
 - [Maintain the Pi-hole integration](guides/pihole-integration.md) — Reinstall, rotate, validate, and recover ExternalDNS access to Pi-hole.
 - [Configure Plex direct remote access](guides/plex-direct-remote-access.md) — Operate the attended router path to Plex and validate or remove it safely.
 - [Validate Plex remote-access detection](guides/plex-remote-access-validation.md) — Run the synthetic half-open connection exercise for the Plex alerting path.
-- [Configure and recover Portainer](guides/portainer.md) — Manage Portainer setup, credentials, acceptance, and recovery within its read-only boundary.
+- [Operate and recover Portainer](guides/portainer-operations.md) — Inspect Portainer, manage its credentials, verify the read-only boundary, and recover retained state.
 - [ProtonVPN WireGuard and Gluetun](guides/protonvpn-gluetun.md) — Configure and operate qBittorrent's fail-closed VPN egress.
 - [Configure qbit_manage deployment](guides/qbit-manage.md) — Create its credential and start or restore the scheduled policy workload.
 - [SOPS secret handling](guides/sops.md) — Create, edit, validate, and recover encrypted repository secrets.

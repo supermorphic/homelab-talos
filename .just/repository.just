@@ -246,6 +246,8 @@ pihole-ca-refresh:
     expected_confirmation='refresh:pihole-ca:p1:pi.hole'
     pihole_host='p1'
     target='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
+    secret='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
+    values='kubernetes/apps/networking/external-dns/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-pihole-ca-refresh.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     [[ "${PIHOLE_CA_REFRESH_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -268,33 +270,41 @@ pihole-ca-refresh:
     openssl x509 -in "$temp_dir/pihole-ca.crt" -noout -text | rg -q 'CA:TRUE'
 
     new_fingerprint="$(openssl x509 -in "$temp_dir/pihole-ca.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
-    if [[ -f "$target" ]] && cmp -s "$target" "$temp_dir/pihole-ca.crt"; then
+    scripts/repository/stamp-external-dns-provider.sh \
+      "$temp_dir/pihole-ca.crt" "$secret" "$values" "$temp_dir/values.yaml"
+    ca_changed=true
+    values_changed=true
+    [[ ! -f "$target" ]] || ! cmp -s "$target" "$temp_dir/pihole-ca.crt" || ca_changed=false
+    cmp -s "$values" "$temp_dir/values.yaml" && values_changed=false
+    if [[ "$ca_changed" == false && "$values_changed" == false ]]; then
       echo "Tracked Pi-hole CA already matches p1 at SHA256=$new_fingerprint."
       exit 0
     fi
-    if [[ -f "$target" ]]; then
+    if [[ "$ca_changed" == true && -f "$target" ]]; then
       old_fingerprint="$(openssl x509 -in "$target" -noout -fingerprint -sha256 | cut -d= -f2)"
       echo "Replacing tracked Pi-hole CA SHA256=$old_fingerprint with SHA256=$new_fingerprint."
-    else
+    elif [[ "$ca_changed" == true ]]; then
       echo "Installing tracked Pi-hole CA SHA256=$new_fingerprint."
     fi
-    install -m 0644 "$temp_dir/pihole-ca.crt" "$target"
-    echo 'Review the certificate diff and fingerprint before committing the trust-anchor rotation.'
+    [[ "$ca_changed" == false ]] || install -m 0644 "$temp_dir/pihole-ca.crt" "$target"
+    [[ "$values_changed" == false ]] || install -m 0644 "$temp_dir/values.yaml" "$values"
+    echo 'Review the certificate, rollout-stamp, and fingerprint changes before committing the trust-anchor rotation.'
 
 # Validate internal foundation provider credentials and write only SOPS-encrypted Secret manifests.
-phase7-secrets:
+foundation-provider-secrets:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    expected_confirmation='write:phase7:cloudflare-and-pihole:sops'
+    expected_confirmation='write:foundation-providers:cloudflare-and-pihole:sops'
     cloudflare_target='kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml'
     pihole_target='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
     pihole_ca='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
+    external_dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'
     pihole_api='https://pi.hole'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-phase7-secrets.XXXXXX)"
+    temp_dir="$(mktemp -d /tmp/homelab-talos-foundation-provider-secrets.XXXXXX)"
     pihole_sid=''
     pihole_record_cleanup_needed=false
-    pihole_test_hostname="phase7-preflight-$$-${RANDOM}.lab.supermorphic.com"
+    pihole_test_hostname="provider-preflight-$$-${RANDOM}.lab.supermorphic.com"
     pihole_test_record="192.0.2.1 $pihole_test_hostname"
     pihole_test_url="$pihole_api/api/config/dns/hosts/192.0.2.1%20$pihole_test_hostname"
     pihole_curl=(
@@ -349,9 +359,9 @@ phase7-secrets:
       echo 'Set PIHOLE_PASSWORD to a dedicated Pi-hole v6 application password.' >&2
       exit 1
     }
-    [[ "${PHASE7_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+    [[ "${FOUNDATION_PROVIDER_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
       echo 'Refusing to write the internal foundation encrypted Secret manifests.' >&2
-      echo "Set PHASE7_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
+      echo "Set FOUNDATION_PROVIDER_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
       exit 1
     }
 
@@ -457,9 +467,14 @@ phase7-secrets:
     ! rg -Fq -- "$CLOUDFLARE_API_TOKEN" "$temp_dir/cloudflare.sops.yaml"
     ! rg -Fq -- "$PIHOLE_PASSWORD" "$temp_dir/pihole.sops.yaml"
 
+    scripts/repository/stamp-external-dns-provider.sh \
+      "$pihole_ca" "$temp_dir/pihole.sops.yaml" "$external_dns_values" \
+      "$temp_dir/external-dns-values.yaml"
+
     mv -- "$temp_dir/cloudflare.sops.yaml" "$cloudflare_target"
     mv -- "$temp_dir/pihole.sops.yaml" "$pihole_target"
-    echo 'Internal foundation provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext was written.'
+    mv -- "$temp_dir/external-dns-values.yaml" "$external_dns_values"
+    echo 'Internal foundation provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext and the ExternalDNS rollout stamp were written.'
 
 # Validate the UNAS CIFS credentials and write only the SOPS-encrypted Longhorn
 # backup Secret (nas-credentials in longhorn-system). Best-effort smbclient auth
@@ -771,6 +786,7 @@ homepage-portainer-secrets:
 
     expected_confirmation='write:monitoring:homepage-portainer:sops'
     target='kubernetes/apps/monitoring/homepage/app/homepage-portainer.sops.yaml'
+    deployment='kubernetes/apps/monitoring/homepage/app/deployment.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-portainer.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -802,8 +818,13 @@ homepage-portainer-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-portainer.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$PORTAINER_API_KEY" "$temp_dir/homepage-portainer.sops.yaml"
 
+    scripts/repository/stamp-homepage-portainer.sh \
+      "$temp_dir/homepage-portainer.sops.yaml" "$deployment" \
+      "$temp_dir/homepage-deployment.yaml"
+
     mv -- "$temp_dir/homepage-portainer.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (homepage-portainer in homepage)."
+    mv -- "$temp_dir/homepage-deployment.yaml" "$deployment"
+    echo "Wrote SOPS-encrypted $target and stamped its revision into $deployment."
 
 # Write ONLY the SOPS-encrypted Homepage Plex widget Secret (homepage-plex in the homepage
 # namespace) from PLEX_TOKEN. Independent of the Grafana Secret. Never echoes the value.
@@ -1399,6 +1420,8 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
+    @scripts/test/external-dns-provider-rollout-test.sh
+    @scripts/test/homepage-portainer-rollout-test.sh
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

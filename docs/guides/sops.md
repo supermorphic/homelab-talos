@@ -46,11 +46,12 @@ overwritten by that workflow. The permanent encrypted `flux-canary` Secret prove
 that in-cluster decryption remains functional.
 
 Foundation provider credentials are created only through
-`just repo phase7-secrets`. The workflow validates a zone-scoped Cloudflare token
+`just repo foundation-provider-secrets`. The workflow validates a zone-scoped Cloudflare token
 and proves a dedicated Pi-hole v6 application password can create and remove a
 temporary record over CA-verified HTTPS. It writes plaintext only inside an
 owner-readable temporary directory, encrypts each Secret for the repository
-recipient, and moves only ciphertext into the tracked application directories.
+recipient, and moves only ciphertext into the tracked application directories. It
+also updates the ExternalDNS rollout stamp when the encrypted Pi-hole Secret changes.
 Exact environment variables and confirmation text are part of the guarded recipe;
 Pi-hole reinstall and trust-anchor rotation are in
 [Maintain the Pi-hole integration](pihole-integration.md).

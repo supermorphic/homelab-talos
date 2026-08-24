@@ -191,7 +191,7 @@ available for focused developer validation.
 | `just repo secrets` | Confirm the loaded age identity matches this repository | `SOPS_AGE_KEY`[`_FILE`] | Available |
 | `just repo pihole-status` | Verify Pi-hole HTTPS, tracked CA, and application-session write policy | `p1` SSH access | Read-only |
 | `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation | `p1` SSH access; `PIHOLE_CA_REFRESH_CONFIRM` | Mutating tracked public trust source after confirmation |
-| `just repo phase7-secrets` | Validate foundation provider credentials and write only encrypted Secret manifests | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `PHASE7_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
+| `just repo foundation-provider-secrets` | Validate foundation provider credentials and write encrypted Secret manifests plus the ExternalDNS rollout stamp | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `FOUNDATION_PROVIDER_SECRETS_CONFIRM` | Temporary external DNS mutation and tracked source mutation after confirmation |
 | `just repo verify` | Check policy, Talos sources, and tracked content for secrets | — | Available |
 | `just repo verify-files` | Check ignore boundaries and SOPS policy | — | Available; internal validation |
 | `just repo secret-scan` | Run the repository secret scans directly | — | Available |
@@ -227,7 +227,7 @@ available for focused developer validation.
 | `just kube flux-canary-test` | Prove Flux recreates the guarded noncritical canary Secret | `FLUX_CANARY_CONFIRM` | State-changing after confirmation |
 | `just kube foundation-validate` | Validate foundation sources, encrypted providers, dependency policy, and pinned chart renders | — | Read-only |
 | `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Read-only |
-| `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `PHASE7_NETWORK_CONFIRM`; `PHASE7_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
+| `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `FOUNDATION_NETWORK_CONFIRM`; `FOUNDATION_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
 | `just bootstrap reboot <node>` | Gate on cluster health, reboot one node, and require full recovery (TPM auto-unlock, etcd, MetalLB failover, Cilium, DNS, HTTPS) | `TALOS_REBOOT_CONFIRM` | Disruptive after confirmation |
 | `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
@@ -243,11 +243,11 @@ available for focused developer validation.
 | `just bootstrap media-app tautulli` | Guardedly resume staged Tautulli and run liveness acceptance | `MEDIA_APP_BOOTSTRAP_CONFIRM=bootstrap:media-app:tautulli` | Operator-only; mutating after confirmation |
 | `just kube tautulli-verify` | Verify live Tautulli resources, route, DNS, exact health status, Gatus series, and loaded rules | `.kube/config` | Operator-only and read-only |
 | `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
-| `just repo homepage-portainer-secrets` | Write only the encrypted Portainer API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Portainer activation; mutating tracked ciphertext after confirmation |
+| `just repo homepage-portainer-secrets` | Write the encrypted Portainer API key used by Homepage and stamp its rollout revision | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Operator-held secret workflow; mutates tracked ciphertext and the Homepage Deployment after confirmation |
 | `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Read-only and included in `just ci` |
 | `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Read-only and included in `just ci` |
 | `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | — | Operator-only and read-only |
+| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | Worktree-local scoped credentials | Approved read-oriented scoped verification |
 | `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Operator-only and disruptive after confirmation |
 | `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Operator-only |
 | `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Manual local check + authoritative GitHub PR gate; Actions retains the artifact for 90 days |
@@ -354,7 +354,7 @@ source boundary is in [`kubernetes/README.md`](kubernetes/README.md). The
 [Talos and Flux platform specification](docs/specs/010-talos-flux-platform.md)
 records the architecture rationale. Current Pi-hole and Portainer procedures are in
 the [Pi-hole guide](docs/guides/pihole-integration.md) and
-[Portainer guide](docs/guides/portainer.md).
+[Portainer operations guide](docs/guides/portainer-operations.md).
 
 ## Daily Cluster Health Check
 
