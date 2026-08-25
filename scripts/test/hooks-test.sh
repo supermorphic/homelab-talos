@@ -4,10 +4,33 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 pre_tool_use="$repo_root/scripts/hooks/pre-tool-use.sh"
 session_start="$repo_root/scripts/hooks/session-start.sh"
+pre_commit_hook="$repo_root/scripts/hooks/pre-commit.sh"
 claude_settings="$repo_root/.claude/settings.json"
 codex_hooks="$repo_root/.codex/hooks.json"
+pre_commit_config="$repo_root/.pre-commit-config.yaml"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-hooks-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
+minimal_path="$fixture/minimal-path"
+mkdir -p "$minimal_path"
+ln -s "$(command -v mise)" "$minimal_path/mise"
+ln -s "$(command -v bash)" "$minimal_path/bash"
+
+verify_recipe="$(mise exec -- just --dry-run repo verify 2>&1)"
+rg -Fq 'scripts/test/hooks-test.sh' <<<"$verify_recipe" || {
+  echo 'repo verify must run the agent and pre-commit hook regression suite.' >&2
+  exit 1
+}
+
+[[ -x "$pre_commit_hook" ]] || {
+  echo 'The tracked pre-commit launcher must exist and be executable.' >&2
+  exit 1
+}
+hooks_recipe="$(mise exec -- just --dry-run repo hooks 2>&1)"
+rg -Fq 'install -m 0755 scripts/hooks/pre-commit.sh "$hooks_dir/pre-commit"' \
+  <<<"$hooks_recipe" || {
+  echo 'repo hooks must install the tracked mise-backed pre-commit launcher.' >&2
+  exit 1
+}
 
 registered_command() {
   local client="$1"
@@ -41,10 +64,14 @@ registered_command() {
   ' "$config"
 }
 
-registered_command Claude "$claude_settings" PreToolUse Bash \
-  'scripts/hooks/pre-tool-use.sh' >/dev/null
-registered_command Claude "$claude_settings" SessionStart '' \
-  'scripts/hooks/session-start.sh' >/dev/null
+claude_pre_tool_command="$(
+  registered_command Claude "$claude_settings" PreToolUse Bash \
+    'scripts/hooks/pre-tool-use.sh'
+)"
+claude_session_command="$(
+  registered_command Claude "$claude_settings" SessionStart '' \
+    'scripts/hooks/session-start.sh'
+)"
 codex_pre_tool_command="$(
   registered_command Codex "$codex_hooks" PreToolUse Bash \
     'scripts/hooks/pre-tool-use.sh'
@@ -53,6 +80,45 @@ codex_session_command="$(
   registered_command Codex "$codex_hooks" SessionStart '' \
     'scripts/hooks/session-start.sh'
 )"
+
+registered_hook_commands=(
+  "$claude_pre_tool_command"
+  "$claude_session_command"
+  "$codex_pre_tool_command"
+  "$codex_session_command"
+)
+for hook_command in "${registered_hook_commands[@]}"; do
+  [[ "$hook_command" == 'mise exec -- '* ]] || {
+    echo 'Registered agent hooks must enter the pinned mise environment.' >&2
+    exit 1
+  }
+done
+
+registered_pre_commit_entry() {
+  local hook_id="$1"
+  local count
+  local entry
+  count="$(HOOK_ID="$hook_id" yq -r '
+    [.repos[].hooks[] | select(.id == strenv(HOOK_ID))] | length
+  ' "$pre_commit_config")"
+  [[ "$count" == '1' ]] || {
+    echo "pre-commit must register exactly one $hook_id hook." >&2
+    return 1
+  }
+  entry="$(HOOK_ID="$hook_id" yq -r '
+    .repos[].hooks[] | select(.id == strenv(HOOK_ID)) | .entry
+  ' "$pre_commit_config")"
+  printf '%s\n' "$entry"
+}
+
+gitleaks_entry="$(registered_pre_commit_entry gitleaks-staged)"
+sops_entry="$(registered_pre_commit_entry sops-encrypted)"
+for pre_commit_entry in "$gitleaks_entry" "$sops_entry"; do
+  [[ "$pre_commit_entry" == 'mise exec -- '* ]] || {
+    echo 'Local pre-commit hooks must enter the pinned mise environment.' >&2
+    exit 1
+  }
+done
 
 blocked=(
   'git reset --hard'
@@ -113,6 +179,46 @@ run_registered_pre_tool_use() {
     | (cd "$working_directory" && bash -c "$hook_command")
 }
 
+run_registered_pre_tool_use_with_minimal_path() {
+  local hook_command="$1"
+  local requested_command="$2"
+  local working_directory="$3"
+  local payload
+  payload="$(COMMAND="$requested_command" yq --null-input --output-format json \
+    '{"tool_name":"Bash","tool_input":{"command":strenv(COMMAND)}}')"
+  printf '%s\n' "$payload" \
+    | (cd "$working_directory" && \
+      PATH="$minimal_path:/usr/bin:/bin" /bin/bash -c "$hook_command")
+}
+
+run_registered_session_with_minimal_path() {
+  local hook_command="$1"
+  local working_directory="$2"
+  (
+    cd "$working_directory"
+    PATH="$minimal_path:/usr/bin:/bin" /bin/bash -c "$hook_command"
+  )
+}
+
+run_pre_commit_entry_with_minimal_path() {
+  local entry="$1"
+  (
+    cd "$repo_root"
+    PATH="$minimal_path:/usr/bin:/bin" /bin/bash -c "$entry"
+  )
+}
+
+run_pre_commit_hook_with_minimal_path() {
+  local test_index="$fixture/pre-commit-index"
+  GIT_INDEX_FILE="$test_index" git read-tree HEAD
+  GIT_INDEX_FILE="$test_index" git add -A
+  (
+    cd "$repo_root"
+    GIT_INDEX_FILE="$test_index" PATH="$minimal_path:/usr/bin:/bin" \
+      "$pre_commit_hook"
+  )
+}
+
 for command in "${blocked[@]}"; do
   output="$fixture/blocked-${RANDOM}.log"
   if run_pre_tool_use "$command" >"$output" 2>&1; then
@@ -154,6 +260,23 @@ fi
 rg -q 'Denied irreversible git command' "$codex_nested_output"
 run_registered_pre_tool_use "$codex_pre_tool_command" 'git status --short' \
   "$repo_root/scripts/test" >/dev/null
+
+for registered_pre_tool_command in \
+  "$claude_pre_tool_command" "$codex_pre_tool_command"; do
+  run_registered_pre_tool_use_with_minimal_path "$registered_pre_tool_command" \
+    'git status --short' "$repo_root/scripts/test" >/dev/null
+done
+
+for registered_session_command in \
+  "$claude_session_command" "$codex_session_command"; do
+  run_registered_session_with_minimal_path "$registered_session_command" \
+    "$repo_root/scripts/test" | rg -q '^(worktree|main clone) · branch .+ · '
+done
+
+
+run_pre_commit_entry_with_minimal_path "$gitleaks_entry"
+run_pre_commit_entry_with_minimal_path "$sops_entry"
+run_pre_commit_hook_with_minimal_path
 
 codex_session_output="$fixture/codex-session.log"
 (
