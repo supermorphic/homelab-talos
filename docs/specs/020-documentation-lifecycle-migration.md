@@ -99,7 +99,7 @@ before it is removed. The ledger is an execution aid, not durable documentation.
 Numbered specifications are assigned according to the chronology of the original design
 lineages. Records that amended or reported findings about an earlier design inherit that
 parent lineage rather than receiving an artificial independent record. The surviving
-lineages are numbered consecutively from `001` through `022`, without gaps. This one-time
+lineages are numbered consecutively from `001` through `020`, without gaps. This one-time
 migration renumbering does not authorize renumbering historical specifications after
 merge. A later material redesign receives the next number after the current maximum.
 
@@ -260,7 +260,7 @@ The migration is complete when:
 - current durable documents are navigable through `docs/README.md` and classified under
   `specs/`, `reference/`, `guides/`, or `runbooks/`;
 - every legacy decision, review, phase document, and plan has a recorded disposition;
-- useful design history is reconciled into 22 consecutively numbered specifications;
+- useful design history is reconciled into 20 consecutively numbered specifications;
 - durable specification images use descriptive names without date or specification
   number prefixes;
 - source-to-document callouts are self-contained and follow the selective-reference

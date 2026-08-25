@@ -368,8 +368,9 @@ For a sustained `running` state without a forwarded port, the deliberately slow
 Kubernetes liveness probe restarts the Gluetun container after about five minutes. A
 container restart keeps the Pod network namespace; whether that always clears the
 partial failure has not been established. Repeated restarts trigger a critical alert.
-Follow [Recover qBittorrent VPN egress](../runbooks/recovery.md#recover-qbittorrent-vpn-egress)
-for the operator-managed recovery path.
+If the alert persists, preserve the fail-closed state and escalate for an attended
+operator-managed Pod replacement. The repository has no separate guarded VPN-recovery
+recipe; do not improvise with repeated restarts or bypass Flux ownership.
 
 ## Monitoring
 

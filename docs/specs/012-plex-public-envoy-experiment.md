@@ -53,6 +53,12 @@ The selected design was safer than direct Plex for pre-authentication parsing an
 scope, but more complex than either Relay or direct publication. Configuration risk was
 therefore treated as a first-order failure mode rather than an incidental cost.
 
+A true hosted off-network probe could have tested public reachability, but this was an
+attended, time-boxed experiment documented in a public repository. A persistent external
+probe would itself create another visible operational surface, so automation was limited
+to internal DDNS-drift detection and true reachability remained an attended off-network
+test.
+
 ## Experiment architecture
 
 The experiment used split-horizon DNS for `plex.lab.supermorphic.com`.
@@ -72,6 +78,13 @@ The public plane had its own namespace, GatewayClass, EnvoyProxy, Deployment, Se
 explicit non-auto-assigned MetalLB address, exact-hostname listener, HTTPRoute, and
 single-host certificate. Its workload shape mirrored the proven internal Envoy plane so
 availability differences would not become another experiment variable.
+
+The shared Envoy Gateway controller initially watched only namespaces labeled for the
+internal plane, so a public Gateway namespace would have been invisible rather than
+merely unready. Widening that selector touched the controller serving every internal
+application and was the only cluster-side experiment change that could cause an internal
+regression before public exposure existed; it was therefore isolated and regression-
+tested first.
 
 ## Trust, safety, and containment boundaries
 
@@ -164,6 +177,12 @@ any unexpected WAN port, any public IPv6 path, an automatic UPnP/NAT-PMP mapping
 dynamic-DNS system requiring a global account key. Success required the
 Plexamp-to-Sonos row and every hard local row. Off-site playback and Relay fallback were
 useful evidence but did not override the primary gate.
+
+The activation and rollback design was deliberately asymmetric: the single UniFi DNAT
+was the complete exposure boundary, so removing it stopped new public exposure while
+DNS, credentials, and public cluster resources could be cleaned up afterward. Proven
+Plex hardening and containment remained in place—rollback removed exposure, not
+containment.
 
 Removing the WAN mapping was expected to block new sessions. Whether established router
 conntrack entries were removed was not proven, so mapping removal was not evidence that

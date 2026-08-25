@@ -140,6 +140,23 @@ service-account token. Jobs used `restartPolicy: Never`, `backoffLimit: 0`, and 
 deadline. Failure therefore left the original intact and could not silently create a
 second attempt.
 
+The design distinguished structural guarantees from bounded operational mitigations.
+The read-only movie mount, absence of TV and downloads, output outside library paths,
+non-root sandbox, dropped capabilities, no automatic retry, and finite deadline remained
+enforced even if harness logic was wrong. Free-space preflight, storage requests and
+limits, node-placement assumptions, and negative scheduler priority instead reduced the
+chance and consequence of node pressure: they did not guarantee free space on the node
+that ultimately ran the Job, and scheduler priority did not guarantee kubelet eviction
+order.
+
+Offline tests existed because the harness made safety-sensitive classification,
+mutation, and evidence decisions around the media library. They encoded the load-bearing
+contracts for classification, run and resume identity, rendered storage boundaries,
+confirmation guards, and result schemas rather than leaving those contracts as
+conventions. The mount-boundary and mutation-confirmation checks were especially
+important because they made source-library protection enforceable in CI. Current source
+and tests remain authoritative for the retained harness.
+
 The runtime image had to be pinned by digest and empirically provide a real QSV encode,
 the required VMAF path, libx265, FFprobe, the shell utilities used by the scripts, and
 non-root execution. The implementation selected a LinuxServer FFmpeg image after this

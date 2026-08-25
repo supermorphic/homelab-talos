@@ -81,6 +81,12 @@ until the WireGuard tunnel and firewall are ready. Gluetun owns `NET_ADMIN`, mou
 `/dev/net/tun`, manages ProtonVPN port forwarding, and denies non-tunnel Internet egress.
 qBittorrent runs as UID/GID `568`, drops all capabilities, and cannot alter routes.
 
+Inside that shared namespace, qBittorrent intentionally resolves through Gluetun's
+resolver rather than node or ISP DNS. The resilience evidence combined that structural
+resolver boundary with DNS-independent IP reachability probes and the observed home-WAN
+address as a hard never-leak oracle. This separation matters because DNS failure alone
+does not prove that Internet egress failed closed.
+
 The Web UI is available through the internal Gateway. Gluetun's control Service is
 ClusterIP-only. Its unauthenticated health route supports Gatus, while mutating control
 routes require the per-consumer API key. The control API has no HTTPRoute or
@@ -169,6 +175,9 @@ race the application's writer. Supported application APIs and attended first-run
 therefore remain the integration boundary. Seerr was selected as the maintained
 successor to the older request interfaces, and the optional FlareSolverr unit remains a
 direct-egress, per-indexer helper rather than a namespace-wide proxy or VPN consumer.
+It follows Prowlarr's direct egress because a Cloudflare-protected indexer session depends
+on the solver and Prowlarr presenting the same effective egress identity; routing the
+solver independently through the VPN can invalidate that session.
 
 ## Security and secrets
 
@@ -199,11 +208,16 @@ Offline checks validate source, rendered charts, storage and security invariants
 wiring, dependency order, network-policy shape, and Prometheus rule behavior. Read-only
 verifiers check the deployed resources and endpoints. Controlled integration and
 resilience tests supply independent evidence for hardlinks, GPU use, VPN fail-closed
-behavior, and recovery. The source and live verifiers establish component paths but do
-not submit media requests. The current operator acceptance gate remains one authorized
-TV request and one movie request through Seerr, their expected Sonarr or Radarr service
-and qBittorrent category, import into Plex, and accepted media naming. No durable record
-yet proves that both request-to-library paths completed.
+behavior, and recovery. Functional acceptance was deliberately split into two levels: a
+direct Sonarr/Radarr to qBittorrent, hardlink-import, and Plex gate was defined to prove
+the acquisition path without Seerr; the household request gate then added Seerr ahead of
+the same pipeline. Keeping those gates separate prevents a request-layer integration
+failure from obscuring whether acquisition and import work. The source and live verifiers
+establish component paths but do not submit media requests. The current operator
+acceptance gate remains one authorized TV request and one movie request through Seerr,
+their expected Sonarr or Radarr service and qBittorrent category, import into Plex, and
+accepted media naming. No durable record yet proves that both request-to-library paths
+completed.
 
 ## Deferred work and reconsideration
 
@@ -216,7 +230,7 @@ offers a supported, idempotent interface with safe credential and rollback behav
 
 Optional dashboards and deeper continuous transactions do not change the architecture.
 The notification delivery spine belongs to the ntfy design, integration-health depth to
-specifications 018–021, and Plex direct exposure and detection to specifications 013 and
+specifications 018–019, and Plex direct exposure and detection to specifications 013 and
 014. Those later lineages must not be inferred from this common storage and application
 design.
 

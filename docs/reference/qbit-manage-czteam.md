@@ -120,5 +120,5 @@ Never:
 
 Changing the qbit_manage Kustomization's `spec.suspend` stops reconciliation, not the
 running policy Deployment. If policy execution must stop, use the
-[recovery runbook's workload-stop procedure](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean).
+[mistaken-clean runbook's workload-stop procedure](../runbooks/qbit-manage-mistaken-clean.md).
 That procedure keeps qBittorrent running so it can continue seeding.

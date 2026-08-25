@@ -455,7 +455,8 @@ mise exec -- just repo secrets
 
 `just repo secrets` derives the public recipient and rejects the wrong identity. See the
 [SOPS guide](docs/guides/sops-secret-operations.md) for secret-handling procedures and the
-[recovery runbook](docs/runbooks/recovery.md) for restoring access.
+[platform disaster-recovery runbook](docs/runbooks/platform-disaster-recovery.md) for
+restoring access after workstation or cluster loss.
 
 ## Normal Change Workflow
 

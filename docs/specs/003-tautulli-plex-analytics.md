@@ -27,6 +27,16 @@ Flux depends on `media` and `internal-gateway`, not `media-storage` or the Plex
 Kustomization. Those dependencies establish the namespace, chart source, and route
 attachment point without treating runtime API availability as deployment ordering.
 
+These boundaries were deliberate choices among broader alternatives. Tautulli reused
+the config-only media-application pattern because it consumes Plex through its API, not
+through media or Plex storage. Alert rules were isolated in `media-alerts` because
+placing Prometheus rules beside each application, or adding monitoring dependencies to
+every media application, would enlarge the monitoring failure domain. One generic
+`MediaEndpointDown` rule avoided hand-maintained per-application down rules, while Plex
+and Tautulli received explicit missing-series coverage because their retained state made
+silent telemetry loss more consequential. Direct ntfy delivery was rejected as a second
+notification-control plane outside Alertmanager lifecycle policy.
+
 ## Security and runtime configuration
 
 The pod and container run as UID and GID `568`. Privilege escalation is disabled and all
@@ -84,6 +94,11 @@ application endpoints have generic down detection but no implied per-endpoint
 disappearance coverage. Later Media Integration monitoring has a separate rule that
 enumerates every expected integration series for missing telemetry.
 
+Ordinary media availability is a `warning`: an outage is operational degradation, not
+by itself a data-loss or privacy event. `critical` remains reserved for materially
+different failure classes involving data or privacy risk, so ordinary Tautulli and media
+availability follows the normal homelab warning path.
+
 Tautulli does not publish directly to ntfy. Direct delivery would bypass Alertmanager's
 grouping, deduplication, inhibition, and silences and would create a second notification
 control plane. This choice can be reconsidered if remote-access reliability or
@@ -124,12 +139,19 @@ be connected, and a real playback session must appear in history.
 The retained config claim preserves watch history across pod replacement and node
 rescheduling. The service gains session awareness without access to media files or the
 Plex database. Losing the config claim loses the greenfield history, while losing
-Tautulli itself does not affect Plex playback.
+Tautulli itself does not affect Plex playback. Tautulli is therefore non-critical to
+media serving, but its accumulated database becomes irreplaceable historical state after
+deployment. That distinction is why the retained claim receives persistence monitoring
+even though a Tautulli workload outage is only an availability warning.
 
 The lineage intentionally excludes watch-history import, newsletters, a stream metrics
-exporter, and broad smoke, resilience, or automated playback tests. Real authentication,
-Plex library visibility, and one recorded playback session remain the functional gate
-because source validation cannot prove them.
+exporter, and broad smoke, resilience, or automated playback tests. Another generic
+smoke test would substantially duplicate the application verifier, while generic
+resilience coverage would mostly retest the existing Longhorn plus `Recreate` behavior
+owned elsewhere. Meaningful Plex/Tautulli end-to-end acceptance requires an actual
+playback session and observation of the resulting history, so real authentication, Plex
+library visibility, and one recorded playback remain a human functional oracle that
+source validation cannot prove.
 
 Reconsider direct ntfy publication only for valuable event-shaped signals that the
 metrics path cannot represent, especially remote-access reliability or account-sharing

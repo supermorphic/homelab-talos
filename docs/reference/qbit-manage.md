@@ -49,7 +49,7 @@ The public and music maximum times are unconditional. Cleanup moves only the
 download-side name into `/data/downloads/.RecycleBin`; the recycle bin retains it for
 seven days. The organized library name remains because the imported file is a hardlink
 on the same SMB filesystem.
-Use the [recovery runbook](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
+Use the [mistaken-clean recovery runbook](../runbooks/qbit-manage-mistaken-clean.md)
 before the seven-day window expires when cleanup targets the wrong torrent.
 
 ## Ownership boundaries
@@ -116,7 +116,7 @@ mise exec -- just kube qbit-manage-verify
 Changing the qbit_manage Kustomization's `spec.suspend` through Git stops Flux
 reconciliation. It does not stop the running Deployment or its 15-minute policy loop.
 For an active policy incident, use the
-[recovery runbook's workload-stop procedure](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean).
+[mistaken-clean runbook's workload-stop procedure](../runbooks/qbit-manage-mistaken-clean.md).
 That procedure leaves qBittorrent running so it can continue seeding. Disable cleanup by
 changing both cleanup-enabled groups to `cleanup: false`; disable all share limits with
 `commands.share_limits: false`. Make these changes through a reviewed pull request.

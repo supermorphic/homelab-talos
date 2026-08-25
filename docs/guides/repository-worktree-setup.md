@@ -262,7 +262,8 @@ or application bootstrap and recovery.
 
 Use [`talos/README.md`](../../talos/README.md),
 [`kubernetes/README.md`](../../kubernetes/README.md), and the
-[platform recovery runbook](../runbooks/recovery.md) for those exceptional workflows.
+[platform disaster-recovery runbook](../runbooks/platform-disaster-recovery.md) for those
+exceptional workflows.
 Use their guarded `mise exec -- just ...` interfaces and stated operator boundaries.
 
 ## Optional editor window identity

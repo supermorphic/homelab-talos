@@ -26,6 +26,10 @@ paths traded different failure modes:
 | Direct Plex listener | Plex-managed name and certificate, supported client behavior, and much less infrastructure | Selected with explicit acceptance that Plex's own parser and API face the Internet and have no rate limiter or edge proxy. |
 | Zero Internet exposure with `hostNetwork` | No public listener | Rejected because moving Plex onto the host network would bypass the existing pod policy. Safe use required a separately designed host firewall around sensitive node services. |
 
+Direct exposure accepted the larger Plex parser risk in exchange for materially reducing
+the configuration and ownership surface that had already proved failure-prone during the
+public Envoy experiment.
+
 `externalTrafficPolicy: Local` was chosen over `Cluster` to preserve real off-cluster
 source identity for Plex, Hubble, and LAN/remote classification. `Cluster` would have
 hidden clients behind a node source address and made attribution weaker. This choice
@@ -49,6 +53,10 @@ companion detector to fire and reach the existing notification path. Only after 
 gates did it add the router mapping and run the full client matrix. The retired public
 Envoy plane remained available until the replacement passed; teardown was not allowed
 to remove the fallback before the direct path was proven.
+
+Attended operation was not a substitute for detection: the listener could not become
+durable merely because an operator watched the experiment; real alerts first had to fire
+through the production ntfy path.
 
 The acceptance contract required:
 
@@ -180,6 +188,11 @@ prompt patching, and the ability to remove one DNAT quickly.
 ![Plex public-port trust boundaries](images/plex-remote-access-trust-boundaries.png)
 
 ## Detection and response
+
+Detection had to be deployable before exposure without requiring a legitimate remote-
+traffic baseline that could exist only after the gated DNAT was created; the companion
+design therefore owns provisional evidence and later tuning without making exposure its
+own prerequisite.
 
 The permanent design retains the Hubble-derived remote-connection alerts, missing-metric
 alerts, workload-policy-denial alert, Prometheus evaluation, Alertmanager route, and

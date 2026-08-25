@@ -6,6 +6,11 @@ Detect when Flux-managed desired state is no longer reconciling. Controller scra
 health proves that a Flux controller process is reachable, but it does not prove that
 each Kustomization, HelmRelease, or source reports `Ready=True`.
 
+Flux is the repository's sole Kubernetes reconciler, so resource readiness and dependency
+state are part of the platform's desired-state control model rather than incidental
+observability metadata. Per-resource readiness is therefore load-bearing: healthy
+controller processes do not prove that the declared platform state is converging.
+
 This specification records the accepted rationale and evidence boundary. Current
 monitoring source, tests, and source-adjacent documentation define operational behavior.
 
@@ -65,6 +70,10 @@ Both warnings follow the existing Alertmanager route to the synchronous
 grouping, deduplication, inhibition, repeat timing, and resolved messages. This design
 does not create a Flux-specific topic or routine Flux event-notification path.
 
+The `warning` severity is deliberate. A reconciliation failure means desired-state
+convergence is degraded; it does not by itself establish the immediate service, data, or
+privacy impact reserved for `critical` alerts.
+
 ## Validation model
 
 Cluster-independent checks validate the custom-resource configuration, unique help
@@ -77,11 +86,14 @@ health, presence of all five resource kinds, rule health, Alertmanager connectiv
 the expected ntfy receiver and route. Live acceptance observed all five kinds and
 healthy inactive rules after adding the required CRD-discovery permission.
 
-A confirmation-guarded firing-and-resolved scenario exercises the implemented webhook
-path and verifies the synthetic alert lifecycle. The inspected evidence establishes the
-software path through Alertmanager, the bridge, and ntfy. It does not establish that a
-person received the notification on a handset, so this specification makes no
-phone-delivery claim.
+The implemented confirmation-guarded firing-and-resolved scenario creates a run-owned
+Flux Kustomization with a deliberately missing source. It is designed to exercise the
+real path from Flux resource failure through `gotk_resource_info`, the production
+15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
+removing the failure. The retained lineage records the scenario's implementation and
+offline validation, but leaves its post-merge live execution pending. It is therefore a
+defined acceptance test, not completed firing-and-resolved evidence. Even a successful
+run would prove synchronous ntfy publication rather than human handset receipt.
 
 ## Rejected alternatives
 

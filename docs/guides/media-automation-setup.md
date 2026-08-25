@@ -125,7 +125,7 @@ separate reviewed **Git change**. After Flux applies that change, rerun its repo
 verifier. Do not use raw `flux resume` or a direct live patch as the durable activation
 path.
 
-## Phase 1 — Download and indexer foundation
+## Download and indexer foundation
 
 ### qBittorrent
 
@@ -162,7 +162,7 @@ workload available for attended setup.
 
 Sonarr, Radarr, and Lidarr store this credential in their own PVC-backed application
 state. Homepage and qbit_manage use separate SOPS-encrypted Kubernetes Secrets. Store the
-credential securely for [Phase 3](#phase-3--connect-applications),
+credential securely for [Connect applications](#connect-applications),
 [Homepage integration credentials](#homepage-integration-credentials), and the
 [qbit_manage credential procedure](qbit-manage-operations.md#create-or-rotate-the-qbittorrent-credential).
 For a new credential, update qbit_manage through that guide's reviewed Git workflow. The
@@ -339,7 +339,7 @@ This verifier confirms Ready resources, rollout, route acceptance, DNS, and the
 unauthenticated `/ping` path. It does not authenticate, inspect saved indexers, exercise
 FlareSolverr, or prove a search or grab.
 
-## Phase 2 — Media managers
+## Configure media managers
 
 Configure each media manager before wiring its external applications. Prowlarr will own
 its synchronized indexers later; do not add duplicate indexers directly in Sonarr,
@@ -351,7 +351,7 @@ Radarr, or Lidarr.
 
 Sonarr organizes television downloads below `/data/media/tv`. “Done” means the login,
 naming preview, import safety settings, root folder, and API key are ready for the
-connections in Phase 3.
+connections in [Connect applications](#connect-applications).
 
 For an empty Sonarr PVC, first follow the
 [greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
@@ -421,7 +421,8 @@ download and import.
 #### What you are configuring
 
 Radarr organizes movies below `/data/media/movies`. “Done” means its login, naming
-preview, import safety settings, root folder, and API key are ready for Phase 3.
+preview, import safety settings, root folder, and API key are ready for
+[Connect applications](#connect-applications).
 
 For an empty Radarr PVC, first follow the
 [greenfield bootstrap prerequisites](#greenfield-pvc-bootstrap). Open
@@ -633,7 +634,7 @@ does not exercise `api.lidarr.audio`, inspect naming or metadata settings, test 
 or prove a real import. A green result is necessary but insufficient for Lidarr
 acceptance.
 
-## Phase 3 — Connect applications
+## Connect applications
 
 ### Connect Sonarr, Radarr, and Lidarr to qBittorrent
 
@@ -691,7 +692,7 @@ The Prowlarr Test proves API connectivity and that Prowlarr can synchronize the 
 application. It does not prove that every indexer can return a usable release for that
 application.
 
-## Phase 4 — Prove direct imports
+## Prove direct imports
 
 Before using real media, an operator may run the repository's synthetic filesystem gate:
 
@@ -775,7 +776,7 @@ Flux to reconcile, and rerun:
 mise exec -- just kube arr-verify lidarr
 ```
 
-## Phase 5 — Plex integration
+## Integrate Plex
 
 ### Verify the libraries and Plex runtime
 
@@ -927,7 +928,7 @@ Plex library path, and keep both connector map fields blank. Exact native librar
 matching is an operator acceptance result, not something the repository verifier can
 derive from PVC state.
 
-## Phase 6 — Request layer
+## Add the request layer
 
 ### Configure Seerr
 
@@ -1020,7 +1021,7 @@ submit a request.
 The request layer is not accepted until both paths pass. Gatus's Seerr service reads can
 show that stored downstream services are readable, but they do not prove this workflow.
 
-## Phase 7 — Auxiliary integrations
+## Configure auxiliary integrations
 
 ### Tautulli
 
@@ -1166,8 +1167,8 @@ accepted. Open Homepage and require each configured media widget to show live da
 Gatus uses a separate SOPS Secret containing exactly the Prowlarr, Sonarr, Radarr,
 Lidarr, and Seerr API keys. Only Gatus consumes this copy.
 
-This complete five-key Secret is a Phase 7 integration step, not a prerequisite for
-activating Lidarr. Seerr's API key does not exist until Seerr has been configured.
+This complete five-key Secret belongs to auxiliary integration, not Lidarr activation.
+Seerr's API key does not exist until Seerr has been configured.
 
 **Git change**
 
@@ -1242,8 +1243,9 @@ a genuine greenfield installation and must use the guarded bootstrap lifecycle b
 the relevant UI and acceptance steps.
 
 Never reconstruct an application by committing its live SQLite database or plaintext
-configuration directory. Keep durable Flux-managed state in Git, and use
-[Recovery](../runbooks/recovery.md) for failure-specific procedures.
+configuration directory. Keep durable Flux-managed state in Git. Use
+[platform disaster recovery](../runbooks/platform-disaster-recovery.md) only when the
+application-state loss is part of broader platform reconstruction.
 
 ## Upstream references
 

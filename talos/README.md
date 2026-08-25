@@ -74,4 +74,5 @@ If mise is not activated in the shell, prefix either invocation with
 
 See the root [`README.md`](../README.md) for workstation setup, the
 [platform specification](../docs/specs/010-talos-flux-platform.md) for design rationale,
-and the [recovery runbook](../docs/runbooks/recovery.md) for failure response.
+and the [platform disaster-recovery runbook](../docs/runbooks/platform-disaster-recovery.md)
+for reconstruction after workstation or cluster loss.

@@ -29,9 +29,11 @@
 
 ## Runbooks
 
-- [Recover Plex Relay or Sonos playback](runbooks/plex-relay-sonos.md) — Diagnose direct-path fallback and restore Plexamp or Sonos playback.
-- [Respond to Plex remote-access alerts](runbooks/plex-remote-access-detection.md) — Diagnose, mitigate, and escalate direct-access alert conditions.
-- [Recover the Talos and Flux platform](runbooks/recovery.md) — Recover repository, credential, node, network, GitOps, storage, and application failures.
+- [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
+- [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.
+- [Respond to Plex network alerts](runbooks/plex-network-alerts.md) — Diagnose, contain, and recover Plex traffic, telemetry, and workload-policy alerts.
+- [Recover a qbit_manage mistaken clean](runbooks/qbit-manage-mistaken-clean.md) — Contain qbit_manage and restore one mistaken cleanup safely.
+- [Recover the platform after workstation or cluster loss](runbooks/platform-disaster-recovery.md) — Restore workstation, identity, node, network, GitOps, storage, and application state in dependency order.
 
 ## Specifications
 
@@ -52,8 +54,6 @@
 - [015 — Alerting Architecture](specs/015-alerting-architecture.md) — Describes rule ownership, validation coverage, routing, and focused workload-policy alerts.
 - [016 — Cert-manager Staging Retirement](specs/016-cert-manager-staging-retirement.md) — Records why permanent staging resources were removed and the production certificate boundary.
 - [017 — FileFlows QSV HEVC ICQ Evaluation](specs/017-fileflows-qsv-hevc-icq-evaluation.md) — Describes the ICQ benchmark design, diagnostics, quality gates, and evidence contract.
-- [018 — Media Integration Health Collector](specs/018-media-integration-health-collector.md) — Records the first unimplemented collector design and its retained assurance model.
-- [019 — Media Integration Health Active Probes](specs/019-media-integration-health-active-probes.md) — Records the unimplemented active-probe revision and why it was replaced.
-- [020 — Media Integration Health with Gatus](specs/020-media-integration-health-gatus.md) — Records the implemented Gatus redesign before its API-success semantics changed.
-- [021 — Media Integration Health API Reachability](specs/021-media-integration-health-api-reachability.md) — Describes the current authenticated Servarr reachability checks and alerts.
-- [022 — Documentation Lifecycle Migration](specs/022-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.
+- [018 — Media Integration Health Collector](specs/018-media-integration-health-collector.md) — Records the unimplemented collector design, its active-probe correction, and why Gatus replaced it.
+- [019 — Media Integration Health with Gatus](specs/019-media-integration-health-gatus.md) — Records the implemented Gatus design and its final authenticated API-reachability semantics.
+- [020 — Documentation Lifecycle Migration](specs/020-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.

@@ -293,7 +293,7 @@ must stop, use the containment runbook.
 
 Changing only the qbit_manage Kustomization to `spec.suspend: true` stops reconciliation;
 it does not stop the running scheduler. Use
-[Recover a qbit_manage mistaken clean](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
+[Recover a qbit_manage mistaken clean](../runbooks/qbit-manage-mistaken-clean.md)
 for the exact containment procedure.
 
 Containment temporarily freezes the ownership chain from the top-level `flux-system`
@@ -308,7 +308,7 @@ its generation, source-revision, zero-replica, empty-Pod, and safe-resume checks
 ## Recover a mistaken clean
 
 Keep qBittorrent and Gluetun running so unrelated torrents continue to seed. Follow the
-[mistaken-clean recovery procedure](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean)
+[mistaken-clean recovery procedure](../runbooks/qbit-manage-mistaken-clean.md)
 before the seven-day `.RecycleBin` retention expires.
 
 The recovery procedure establishes durable containment through Git, identifies the
@@ -333,4 +333,4 @@ operator recovery problem.
 | [`.just/bootstrap.just`](../../.just/bootstrap.just) | Implements guarded suspended-source bootstrap. |
 | [`scripts/validate/qbit-manage.sh`](../../scripts/validate/qbit-manage.sh) | Validates source, policy wiring, rollout stamps, and rendered resources. |
 | [`scripts/verify/qbit-manage.sh`](../../scripts/verify/qbit-manage.sh) | Performs sanitized live readiness and authentication verification. |
-| [`docs/runbooks/recovery.md`](../runbooks/recovery.md#recover-a-qbit_manage-mistaken-clean) | Owns the containment and mistaken-clean recovery commands. |
+| [`docs/runbooks/qbit-manage-mistaken-clean.md`](../runbooks/qbit-manage-mistaken-clean.md) | Owns the containment and mistaken-clean recovery commands. |

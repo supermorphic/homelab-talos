@@ -35,6 +35,14 @@ The active roles are deliberately separate:
 | `seerr` | Write `media` |
 | `homepage` | Read `critical` |
 
+Topics describe notification semantics rather than applications: `critical` is for
+rare infrastructure failures that require prompt attention, `homelab` is for warnings
+and degraded platform state, and `media` is for selected household media events. This
+keeps severity routing meaningful, lets Seerr publish the few selected media events
+directly, and avoids creating a separate notification path for Plex, qBittorrent, each
+`*arr` application, or Tautulli. A new topic should represent a new notification class,
+not merely mirror another application name.
+
 Credentials can rotate or retire independently without widening another consumer. ntfy
 receives only its explicit authentication environment keys. The alert bridge mounts
 only `auth.yml`, and Homepage receives only its own read token.
@@ -55,6 +63,12 @@ LAN clients use the internal Envoy Gateway at `ntfy.lab.supermorphic.com`. Off-s
 clients use a Tailscale Ingress backed by the shared ingress ProxyGroup. The tailnet
 hostname is the canonical `base-url` used by the iOS client. No public Gateway,
 LoadBalancer, or Internet-facing ntfy listener is part of this design.
+
+The platform already had only an internal Gateway and internal DNS path. Publishing
+ntfy directly would therefore have required a new public Gateway, public DNS, and
+Internet trust boundary rather than simply exposing one more application. Tailscale
+met the actual off-site retrieval requirement while keeping ntfy outside the public
+Internet exposure model.
 
 The official iOS client needs ntfy's upstream wake-up service. The self-hosted server
 sends the upstream service the message identifier and hashed topic needed for APNs to
@@ -82,6 +96,12 @@ The stateless `alertmanager-ntfy` bridge converts Alertmanager webhook documents
 ntfy messages. It publishes synchronously to the in-cluster ntfy Service, so an ntfy
 failure returns an error to Alertmanager and remains visible in notification metrics.
 Network policy permits webhook ingress only from the monitoring namespace.
+
+The platform alerting design had already made Prometheus Alertmanager authoritative and
+left Grafana unified alerting unused. That eliminated the earlier conditional option of
+sending a custom Grafana webhook directly to ntfy. Alertmanager's generic webhook body
+is not itself a useful ntfy message, so a transformer became the necessary formatting
+boundary.
 
 Alertmanager owns grouping, deduplication, inhibition, repeat intervals, and resolved
 notifications. The bridge maps firing critical alerts to urgent messages on `critical`,

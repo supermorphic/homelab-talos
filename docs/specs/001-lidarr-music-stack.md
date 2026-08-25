@@ -57,7 +57,9 @@ The quality policy prefers FLAC or another lossless release while allowing a los
 fallback. A lossless-only profile was rejected because it would create unnecessary
 library gaps.
 
-The library follows the Plex-compatible structure
+Because the library was greenfield, the design deliberately adopted Plex's documented
+music organization instead of inheriting an earlier convention or accepting Lidarr's
+defaults. The library therefore follows the Plex-compatible structure
 `Artist/Album/DiscTrack - Title.ext`. Album folders omit the release year, multi-disc
 tracks use a leading disc number in one album directory, and compilations use the
 `Various Artists` album-artist convention.
@@ -67,12 +69,15 @@ active. The download and library paths refer to the same inode, so an in-place t
 would also change the seeded file and could make qBittorrent's piece check fail.
 
 qbit_manage owns successful torrent seeding and cleanup. Its dedicated `music` group
-excludes private-tracker tags, has higher precedence than the general public group, seeds
-for at least seven days, stops at ratio `2.0` after that floor or at 30 days, and moves
-eligible download-side names through the recycle bin. Set-wide validation keeps the
-private-tracker group at highest precedence, requires cleanup-enabled groups to exclude
-private tags, and requires unique priorities. These invariants replaced pairwise checks
-that stopped being sufficient when music became the third share-limit group.
+exists because music intentionally seeds longer than movies and TV. Hardlinked imports
+mean that longer retention primarily costs qBittorrent lifecycle state, not another bulk
+copy of the audio. The group excludes private-tracker tags, has higher precedence than
+the general public group, seeds for at least seven days, stops at ratio `2.0` after that
+floor or at 30 days, and moves eligible download-side names through the recycle bin.
+Set-wide validation keeps the private-tracker group at highest precedence, requires
+cleanup-enabled groups to exclude private tags, and requires unique priorities. These
+invariants replaced pairwise checks that stopped being sufficient when music became the
+third share-limit group.
 
 The precedence and exclusion rules protect different failure classes. A future
 finite-stop group with higher precedence than the private group could stop a private
@@ -124,7 +129,7 @@ integration to later work. The current
 [media automation guide](../guides/media-automation-setup.md) owns Plex Music creation
 and the Lidarr-to-Plex refresh connection. Plexamp and Sonos operations belong in the
 [Plex remote-access guide](../guides/plex-remote-access-operations.md), with failure
-recovery in the [Plex Relay/Sonos runbook](../runbooks/plex-relay-sonos.md). Those
+recovery in the [Plex/Sonos recovery runbook](../runbooks/plex-sonos-recovery.md). Those
 integrations were not evidence for accepting the Lidarr workload itself. Automated
 Chainsaw coverage also remains a deliberate all-`*arr` decision rather than one-off
 Lidarr coverage. A synthetic metadata transaction is still deferred because it would

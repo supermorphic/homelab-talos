@@ -333,7 +333,7 @@ reconciled Portainer
   → verify login, route, RBAC, persistence, and Homepage
 ```
 
-Follow [Recover Longhorn and application state](../runbooks/recovery.md#recover-longhorn-and-application-state)
+Follow [Recover Longhorn and application state](../runbooks/platform-disaster-recovery.md#recover-longhorn-and-application-state)
 for the storage procedure. Longhorn replication is not a backup, and the presence of a
 scheduled backup does not prove that it was recently restored successfully.
 

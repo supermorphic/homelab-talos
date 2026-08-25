@@ -2,11 +2,11 @@
 
 ## Historical boundary
 
-This specification records the first complete design for continuous media-integration
-health. It was not implemented and does not describe the current deployment. The
-[active-probe revision](019-media-integration-health-active-probes.md) replaced two
-passive mechanisms, and the [Gatus design](020-media-integration-health-gatus.md) later
-replaced the collector as a whole.
+This specification records the complete custom-collector design lineage for continuous
+media-integration health, including the active-probe correction made after API research
+invalidated two passive mechanisms. The collector was not implemented and does not
+describe the current deployment. The [Gatus design](019-media-integration-health-gatus.md)
+later replaced it as a whole.
 
 The durable idea was an assurance model: service availability, source access, API
 compatibility, expected configuration, a source-owned integration probe, and collector
@@ -64,7 +64,7 @@ results. The alternatives lost important boundaries:
   changes, or cleanup work. That stateful behavior did not meet the continuous-monitoring
   safety boundary.
 
-## Original signal model
+## Initial signal model
 
 Each adapter would first compare application state with independent expected
 configuration. It would probe only an enabled matching provider.
@@ -80,9 +80,57 @@ configuration. It would probe only an enabled matching provider.
 
 Human health messages were diagnostic text, not identifiers. Provider IDs and structured
 fields were required. An adapter unable to map a structured response had to report API
-incompatibility instead of guessing from human text. The later discovery that structured
-identity was absent for the six Prowlarr-direction signals invalidated those two passive
-mechanisms; it did not invalidate the overall assurance model.
+incompatibility instead of guessing from human text. API research later showed that
+structured identity was absent for the six Prowlarr-direction signals. That invalidated
+the two passive mechanisms but not the overall assurance model.
+
+## Active-probe correction
+
+Release-specific API research found no structured application-status resource in
+Prowlarr and no structured indexer-status resource in Sonarr, Radarr, or Lidarr that
+could attribute the relevant provider. Public health responses supplied a check source,
+result type, localized message, and documentation URL, but the application or indexer
+name existed only inside human text. Parsing that text would have violated the
+compatibility boundary: a translation or wording change could become a false edge
+failure without any schema or integration change.
+
+The same APIs exposed targeted native tests that accepted an existing provider resource
+without saving it. The corrected collector design therefore replaced only those six
+passive signals:
+
+| Edge | Source operation | Supplied resource | Evidence boundary |
+| --- | --- | --- | --- |
+| Prowlarr to Sonarr, Radarr, or Lidarr | `POST /api/v1/applications/test?forceTest=true` | Matched existing `ApplicationResource` | Prowlarr reached the configured application and validated a temporary Prowlarr-backed indexer definition |
+| Sonarr or Radarr to Prowlarr | `POST /api/v3/indexer/test?forceTest=true` | One matched existing `IndexerResource` | The source reached Prowlarr and validated the selected provider capabilities |
+| Lidarr to Prowlarr | `POST /api/v1/indexer/test?forceTest=true` | One matched existing `IndexerResource` | The same source-to-Prowlarr boundary through Lidarr's API version |
+
+The collector would return a source-provided object only to that same source with
+`forceTest=true`. It would not call `testall`, run a search or sync, issue a command, or
+create, update, or delete configuration. With multiple matching Prowlarr-backed
+indexers, it selected the enabled provider with the lowest numeric ID. Configuration
+validation still covered every expected provider; one deterministic active test
+represented the shared path and did not claim that every external indexer was healthy.
+
+The correction added six targeted tests per five-minute poll. They were judged
+non-persisting and safe during bounded `RollingUpdate` overlap. If fixtures or live
+evidence had disproved overlap safety, the affected test had to leave continuous
+monitoring or the collector architecture had to change. POST was not treated as
+inherently unsafe; the safety claim depended on these exact source-owned native test
+contracts.
+
+Provider resources could contain masked or source-held downstream credential fields.
+The collector would keep the selected resource only for the current poll, return it only
+to the source that supplied it, and exclude the request body, headers, query values,
+response, configured URL, and secret-like fields from disk, logs, errors, metrics, and
+snapshots. This opaque round trip added no downstream credential to the collector. It
+still mounted only the five source API keys.
+
+A documented success would have produced a compatible successful probe, while a
+documented provider-validation failure would have remained a compatible negative
+result. A missing endpoint, unsupported API major, or unrecognized validation shape was
+API incompatibility rather than an integration failure. A passed test proved current
+native connectivity validation for one selected provider; it did not prove complete
+configuration, successful sync or search, or every external indexer.
 
 ## API and failure contract
 
@@ -161,44 +209,46 @@ A dedicated Cilium policy would admit only Prometheus to the metrics port and pe
 egress only to DNS and the five source workloads on their service ports. Direct
 qBittorrent, Plex, Internet, and broad namespace egress were outside the design.
 
-## Validation and activation gates
+## Validation model
 
 Independent validation was required before the proposed alerts could carry operational
 meaning:
 
-- Source invariants had to prove one collector and scrape target, the exact fifteen-edge
-  inventory, source-only egress, metrics-only ingress, no public route or PVC, file-
-  mounted Secret references, and correct alert placement. Mutation tests had to show
-  that the important assertions could fail.
-- Sanitized adapter fixtures with hand-written expected metrics had to cover success,
-  documented test failure, absent configuration, unsupported API, absent endpoint,
-  missing or wrong-typed fields, additive fields, source failure, and collector error.
-- Promtool fixtures had to prove silence for a healthy snapshot and isolation of every
-  failure class, hold, freshness gate, and suppression rule.
-- Render validation could inspect Secret metadata and references but not plaintext.
-- Read-only live comparison had to observe the expected inventory and source series,
-  compare selected results with application UIs and native Test actions, and confirm the
-  narrow flow policy. Repository rendering could not prove credentials, application
-  configuration, native test behavior, or live Cilium enforcement.
+- Source and rendered-manifest checks had to enforce the fixed inventory, scrape and
+  workload shape, Secret references, source-only network boundary, and alert placement.
+  Mutation tests had to show that the load-bearing assertions could fail. Rendering
+  could inspect Secret metadata and references, but not plaintext credentials or live
+  network enforcement.
+- Sanitized adapter and independent HTTP fixtures, with hand-written expected results,
+  had to cover each failure class and prove the exact targeted-test behavior. Mutation
+  evidence had to reject forbidden operations, secret leakage, persistent changes, and
+  overlap-dependent classifications.
+- Promtool fixtures had to isolate the six alert classes, their persistence and
+  freshness boundaries, and suppression of downstream interpretation when prerequisite
+  evidence was invalid.
+- Read-only live comparison had to compare collector results with application-native
+  evidence and observe the intended network boundary. Source validation could not prove
+  live credentials, application configuration, native-test behavior, or Cilium
+  enforcement.
 
-The design required the artifact contract to validate before cluster introduction, then
-at least three successful five-minute cycles with rules silent before alert activation.
-Rollback removed inaccurate alerts first and could remove the scrape target and workload
-without changing source configuration. Rotation was required only if credential exposure
-was suspected. These were safety and evidence gates, not proof that deployment occurred.
+The metric and evidence contract was intended to validate before live introduction, and
+alerts would become active only after silent live comparison agreed with application-
+native evidence. This was a safety principle for a proposed system, not proof that its
+planned rollout occurred.
 
 ## Outcome, residual risk, and reconsideration
 
-Implementation research found that the assumed passive structured provider evidence did
-not exist. Relevant identity appeared only in localized health text, which this design
-correctly prohibited as an API contract. Specification 019 replaced only those passive
-mechanisms with attributable, non-persisting POST tests.
+Implementation research corrected the assumed passive evidence with attributable,
+non-persisting POST tests. That refinement removed dependence on localized messages but
+increased recurring authenticated traffic and retained the entire collector product:
+adapters, image, Deployment, scrape target, five keys, policy, compatibility fixtures,
+metrics, and alert classification.
 
-Specification 020 then replaced the complete collector before implementation. The
-custom image, adapters, compatibility surface, workload, scrape target, policy, five
-credentials, and alert family cost more to maintain than the reliable coverage justified.
-That architecture change accepted less attribution; it did not prove the collector's
-failure taxonomy or source-owned-probe principle unsound.
+The Gatus lineage then replaced the complete collector before implementation because
+that product cost more to maintain than its reliable coverage justified. The
+architecture change accepted less attribution; it did not show that the collector's
+failure taxonomy, source-owned-probe principle, or targeted POST contracts were
+intrinsically unsound.
 
 Even if implemented, the collector would not have proved a full Seerr-to-Plex workflow,
 fresh provider behavior between source events, every external dependency, or end-to-end
@@ -206,7 +256,8 @@ request completion. It would also have retained broad source keys, one non-HA re
 uneven upstream API maturity, and runtime discovery of some schema drift.
 
 Candidate-image contract testing was deliberately deferred. It could have been
-reconsidered after upstream churn or false compatibility incidents. High availability
-and the explicitly excluded integrations required separate justification. Reintroducing
-the collector or any of its resources now would be a new design, not execution of this
-historical specification.
+reconsidered after upstream churn or false compatibility incidents. High availability,
+the explicitly excluded integrations, searches, transactions, and full external-indexer
+checks required separate justification. Reintroducing the collector, its targeted POST
+tests, or any of its resources now would be a new design with fresh contract evidence,
+not execution of this historical specification.

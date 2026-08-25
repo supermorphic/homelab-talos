@@ -24,6 +24,11 @@ unavailable. It has important limits:
   or local speaker reachability.
 
 Relay is therefore a fallback, not an alternative source of high-bitrate remote access.
+The original Relay-first sequence was an exposure-minimization strategy: first prove
+whether Plex's outbound-only native mechanism could satisfy the required clients before
+accepting a continuously public Plex parser and API. When that acceptance showed Relay
+could not satisfy the full Sonos and client objective, direct access became a separate
+redesign rather than an incidental widening of this one.
 
 ## Runtime identity repair
 
@@ -123,6 +128,11 @@ its own WAN mapping if router-side UPnP is enabled accidentally. The capture cou
 prove native Sonos reachability when the integration itself was not working, and it
 could not disprove event-driven consumers that happened to be idle. Source-declared
 contracts and positive/negative policy tests therefore supplement observed flows.
+Proceeding without an observable native Sonos flow was deliberately fail-closed: the
+design did not invent a CIDR allowance or widen policy speculatively. If restored Sonos
+traffic used an omitted legitimate path, enforcement would block it and the later Sonos
+acceptance test would fail visibly, so missing capture evidence did not justify granting
+unproven network access.
 
 The original lineage selected Relay as the primary path. That selection was first
 superseded by the retired public-Envoy experiment and then by the validated direct

@@ -101,6 +101,14 @@ checkout kind and recognized credential tier and warns when key material is pres
 the environment. This hook provides visibility; the credential and RBAC scopes provide
 the actual authorization boundary.
 
+The original custody design intentionally gave the scoped credentials finite, unequal
+lifetimes. Kubernetes tokens used the shorter lifetime because worktree capabilities
+should self-expire, diagnostic access includes interactive pod subresources, and most
+feature work was expected to finish within that window. The narrower Talos `os:reader`
+credential used a longer, but still bounded, lifetime to avoid unnecessary renewal while
+allowing stale credentials to expire. Current tooling and operating documentation, not
+this historical rationale, own the exact lifetime values.
+
 This is credential separation by repository location and policy, not isolation between
 operating-system users or processes on the same host. A stronger custody guarantee would
 require a separate enforcing mechanism; a path convention or warning hook cannot provide
@@ -192,6 +200,13 @@ The following alternatives were considered and rejected:
 - Exact rule counts, inline provenance labels, and source-value comparison tests were
   rejected because they freeze presentation or can be changed together with the value
   they claim to verify.
+
+The initial audit proposed labeling every `AGENTS.md` rule inline as an authoritative
+control, operator policy, or gotcha and naming its supporting mechanism. Implementation
+retained the semantic distinction: mechanisms have different strength, operator judgment
+is not enforcement, and policy cannot claim more authority than its actual control.
+Required inline category metadata was dropped so the policy's presentation did not
+become another validation or lifecycle contract.
 
 Implementation exposed several details that became durable design knowledge:
 

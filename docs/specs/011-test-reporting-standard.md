@@ -187,6 +187,12 @@ by `evidence.json`. Native diagnostic JUnit is not ingested a second time. Local
 generation is available for any valid run, but persistent publication is an explicitly
 guarded operator workstation push.
 
+Allure was selected as a presentation layer because it can consume generic JUnit and
+generate static output. Canonical JUnit and the four root metadata documents remain the
+durable evidence interface, so the human report can be regenerated without introducing
+a report database, stateful reporting API, or second result schema; Caddy serves only
+the resulting inert files.
+
 The in-cluster report service is a static Caddy server. It has no upload API,
 credentials, ServiceAccount token, or Kubernetes RBAC. A workstation publisher:
 
@@ -220,6 +226,12 @@ within 90 days and among the newest 200. The newest run for each logical key and
 newest authoritative run for each key remain protected so pruning cannot erase the only
 current comparison point. Publication state keeps monotonic lifetime counters even when
 individual report artifacts age out.
+
+Presentation deliberately separates exact-run evidence from operational summaries.
+Homepage exposes only a small set of latest authoritative categories, while Grafana uses
+low-cardinality rollups keyed by stable dimensions such as tier, target, and scenario.
+Run IDs, Git SHAs, node identities, and report URLs stay out of Prometheus labels; stable
+links lead from the summaries to the exact canonical report when detail is needed.
 
 ## Campaign model
 

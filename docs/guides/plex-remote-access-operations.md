@@ -94,8 +94,8 @@ an operation.
 
 No recurring manual action is required while direct access, local playback, and detector
 health remain normal. Monitor Plex, Gatus, Prometheus, Alertmanager, and ntfy. Use the
-[detection response runbook](../runbooks/plex-remote-access-detection.md) when a Plex
-remote-access rule fires or its telemetry is missing.
+[Plex network-alert runbook](../runbooks/plex-network-alerts.md) when a Plex traffic,
+detection-telemetry, or workload-policy alert fires.
 
 Plex's Remote Access status is useful context, but it is not a routing oracle. Actual
 client paths, Tautulli classification, live Kubernetes state, and off-network checks are
@@ -308,8 +308,8 @@ cluster, but its output can include private source addresses. Run it only as an 
 operator diagnostic and keep raw output out of commits, pull requests, and published test
 artifacts.
 
-Follow [Respond to Plex remote-access alerts](../runbooks/plex-remote-access-detection.md)
-for diagnosis and containment.
+Follow [Respond to Plex network alerts](../runbooks/plex-network-alerts.md) for diagnosis
+and containment.
 
 ## Disable or roll back exposure
 
@@ -334,7 +334,7 @@ Before changing production exposure, confirm scheduled Plex database backups and
 off-cluster Longhorn configuration backup are healthy. Require current evidence that the
 configuration restore has been rehearsed with a throwaway claim and isolated Plex
 validation as described in
-[Recover Longhorn and application state](../runbooks/recovery.md#recover-longhorn-and-application-state).
+[Recover Longhorn and application state](../runbooks/platform-disaster-recovery.md#recover-longhorn-and-application-state).
 
 Bulk media has no independent backup. Recovery after total media loss depends on
 reacquisition. Plex's media mount remains read-only, and **Empty trash automatically after
@@ -345,5 +345,7 @@ entries.
 
 Review the production design after a material change to the gateway mapping, public DNS,
 address families, Plex network or account settings, Service listener, Cilium policy,
-notification route, or recovery design. For Relay or Sonos-specific failure handling,
-use [Recover Plex Relay or Sonos playback](../runbooks/plex-relay-sonos.md).
+notification route, or recovery design. When direct access is unavailable, use
+[Recover Plex remote playback with Relay](../runbooks/plex-relay-fallback.md). For native
+Sonos or Plexamp failures, use
+[Recover Plex and Plexamp Sonos playback](../runbooks/plex-sonos-recovery.md).

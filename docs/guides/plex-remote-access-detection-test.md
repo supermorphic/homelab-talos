@@ -143,7 +143,7 @@ qualify.
 ## Abort immediately if
 
 Stop the generator and follow the
-[detection response runbook](../runbooks/plex-remote-access-detection.md) if:
+[Plex network-alert runbook](../runbooks/plex-network-alerts.md) if:
 
 - Plex health, playback, or responsiveness regresses;
 - unexpected CPU, memory, connection, or network pressure appears;

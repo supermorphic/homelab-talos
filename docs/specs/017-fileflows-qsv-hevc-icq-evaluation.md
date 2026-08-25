@@ -308,16 +308,12 @@ identity, historical input runs, and the digests of the findings and diagnostic 
 After acquisition, the producer rechecks source, clip, and output identities. Drift
 invalidates the affected evidence instead of leaving a stale causal classification.
 
-The diagnostic Job's termination message is a separate, small monitoring interface. It
-contains protocol identity (`schemaVersion`, `strategyId`, and `mode`), run identity,
-artifact location, overall status, bounded category counts, and allowlisted reason
-codes. It contains no raw diagnostic evidence. The message is canonical JSON, has a
-3,072-byte maximum, and limits reason count and length. The ordinary results reader
-queries the matching Pods once, requires exactly one canonical diagnostics Pod, and
-allows beside it only the deterministic reader Pod with matching dispatch and Job
-ownership. Active work produces a terse state line. Terminal work is reported only
-after schema, count, reason, run, and artifact-location validation; raw diagnostic files
-and logs are never printed through this interface.
+The diagnostic Job's termination message is a separate, bounded monitoring interface.
+It carries canonical protocol, run, artifact, status, category, and allowlisted-reason
+metadata, but no raw diagnostic evidence. The ordinary results reader authenticates the
+matching workload and reports terminal work only after validating that summary and its
+provenance. Active work produces only a terse state line; raw diagnostic files and logs
+never cross this interface.
 
 ## Read-only diagnostic evidence reader
 
@@ -325,51 +321,28 @@ The later evidence reader is isolated from diagnostic execution. It accepts only
 single explicitly approved retained diagnostics run and mounts only that run's
 `diagnostics` subtree from the media claim, read-only. The Job has no media-source,
 general output, scratch, samples, image-evidence, GPU, pod identity, or node identity
-input. It has no service-account token, uses the same non-root security boundary, has a
-five-minute deadline, and expires after one hour.
+input. It has no service-account token, uses the same non-root security boundary, and
+has finite execution and retention bounds.
 
-The in-cluster collector rejects symlinks, missing or extra files, unsafe paths,
-malformed JSON, panel mismatch, manifest mismatch, summary mismatch, and any input file
-larger than 65,536 bytes. It validates the exact ten-file allowlist and the producer's
-reachable acquisition shapes. It independently recomputes timestamp continuity,
-VMAF/HDR classifications, exact reason compatibility, summary coupling, and reduced HDR
-rationals. Its one-line canonical JSON projection is also limited to 65,536 bytes and
-contains only bounded continuity, metrics, normalized HDR oracles, classifications, and
-reason codes. It omits retained commands, source paths, file hashes, runtime details,
-and raw logs.
+The in-cluster collector rejects unexpected files, unsafe paths, malformed evidence,
+panel or manifest mismatch, and inconsistent summaries. It independently validates
+provenance, panel completeness, schemas, timestamp continuity, VMAF/HDR classifications,
+reason compatibility, and reduced HDR rationals. Only a bounded canonical projection of
+the validated metrics, oracles, classifications, and sanitized reasons can leave the
+cluster; retained commands, source paths, file hashes, runtime details, and raw logs are
+omitted.
 
 Manifest-binding failure has a separate bounded, value-redacted contract. The collector
-emits canonical schema-v1 `status: failed` JSON with reason
-`diagnostic-manifest-binding-invalid` and a nonempty `manifestIssues` array, then exits
-with the defined contract exit. Each issue contains only `field` and `kind`; `kind` is
-`missing`, `wrong-type`, or `mismatch`, never the retained or expected value. The field
-allowlist is `manifest`, `schemaVersion`, `mode`, `createdAt`, `upstream.diagnostics`, and
-`upstream.diagnostics.manifestSchemaVersion`,
-`upstream.diagnostics.resultSchemaVersion`,
-`upstream.diagnostics.acceptedFindingsSha256`,
-`upstream.diagnostics.decisionSha256`,
-`upstream.diagnostics.historicalQualityRunId`,
-`upstream.diagnostics.historicalFindingsRunId`, and
-`upstream.diagnostics.panelSha256`. Issues are unique and emitted in that fixed order. A
-non-object manifest produces only the `manifest` issue; a missing or wrongly typed
-`upstream.diagnostics` parent suppresses child issues. These constraints bound one
-collector result to at most ten issues.
+reports only an allowlisted field identity and failure kind, never retained or expected
+values. Unknown fields, duplicate or inconsistent issues, ambiguous structure, and
+noncanonical output fail closed rather than expanding the disclosure surface.
 
 The workstation-side reader authenticates the collector before accepting its log. It
-requires exactly one deterministic Job and one controlled Pod, exact labels and owner
-UIDs, exact command and panel hash, the current scripts ConfigMap, pinned image identity,
-read-only mount shape, resource limits, and an allowed terminal state. A successful
-collector must emit one canonical JSON line that passes the same evidence schemas and
-classifiers again. For a manifest-binding failure, the workstation reader independently
-requires the canonical schema, exact top-level keys, reason, nonempty unique issue list,
-field allowlist, kind vocabulary, fixed order, parent-child suppression, and absence of
-value-bearing keys. It then transports the validated issues in canonical structured
-`status: failed` evidence with the strategy, reader mode, and approved run identity.
-Other defined contract-exit failures remain exact one-line fixed strings from a closed
-allowlist; the reader maps each string to its allowlisted sanitized reason code and
-transports that code as structured `status: failed` evidence. Unknown failures,
-ambiguous output, invalid provenance, noncanonical manifest-issue JSON, or invalid
-schemas fail closed.
+checks deterministic workload ownership, command and panel identity, pinned runtime,
+read-only storage, resource bounds, and terminal state. It then revalidates the
+collector's canonical projection with the same evidence schemas and classifiers. Only
+closed, sanitized failure categories are transportable; unknown failures, ambiguous
+output, invalid provenance, or invalid schemas fail closed.
 
 This reader supplies evidence for a later decision. It does not alter retained files,
 reinterpret the historical quality rows, create a new quality candidate, or authorize
@@ -384,16 +357,11 @@ the retained run's result.
 
 ## Validation and consequences
 
-The source validator, rendered-manifest checks, and Bats suites cover the shared ICQ
-contract, mode and schema isolation, exact panel cardinality, classification predicates,
-identity drift, dispatch refusal boundaries, terminal sanitization, collector file and
-size bounds, Job/Pod provenance, and failed-result transport. The cluster-independent
-`encode-benchmark-validate` interface is part of the repository CI catalog. The
-`encode-benchmark-diagnostics` interface owns only bounded diagnostic dispatch,
-`encode-benchmark-results` exposes only the sanitized terminal summary, and the separate
-`encode-benchmark-diagnostic-evidence-reader` and
-`encode-benchmark-diagnostic-evidence-results` interfaces own creation and validation of
-the read-only collector. None of these read interfaces can dispatch diagnostic work.
+Offline validation covers the shared ICQ contract, mode and schema isolation, panel
+cardinality, classification predicates, identity drift, dispatch refusal boundaries,
+terminal sanitization, collector bounds, provenance, and failed-result transport.
+Diagnostic dispatch and read-only evidence transport remain separate authority
+surfaces; no read interface can dispatch diagnostic work.
 
 The live verifier establishes only that the inert application is Ready, its inputs and
 alert rules exist, no persistent benchmark workload is reconciled, and active benchmark

@@ -2021,7 +2021,7 @@ producer_fixed_failed_collector_lines() {
 }
 
 # Catches diagnostics dispatch trusting stale or drifted deployed scope instead of
-# proving the live samples ConfigMap still matches the committed accepted decision.
+# proving the live samples ConfigMap still matches the committed benchmark contract.
 @test "diagnostics requires passing capability evidence and a matching deployed contract before create" {
 	prepare_deployed_diagnostics_contract
 	export ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM='run:encode-benchmark:diagnostics'

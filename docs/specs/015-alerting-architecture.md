@@ -122,9 +122,8 @@ interprets its stable `group` and `name` labels:
 Application-specific Platform and Media alerts remain in their subject files. The
 current production-certificate signal and retirement of permanent staging issuance are
 described in [specification 016](016-cert-manager-staging-retirement.md). Media
-integration signals are described in
-the [Gatus design](020-media-integration-health-gatus.md) and
-[API-reachability design](021-media-integration-health-api-reachability.md).
+integration signals are described in the consolidated
+[Gatus design](019-media-integration-health-gatus.md).
 
 This gap closure does not add native Longhorn volume-health rules or Trivy finding
 alerts. Some workloads have PVC-specific alerts and Longhorn UI reachability coverage,
@@ -136,8 +135,8 @@ signal, no native Longhorn volume-health rules, no Trivy finding alerts, and no 
 media-integration health signal beyond process or endpoint reachability. Gatus and
 production-certificate coverage were accepted and implemented. Longhorn and Trivy
 remained deferred because each needed its own metric survey. Media integration became
-the separate lineages in specifications 018–021; an early estimate involving exporter
-sidecars was not the architecture that ultimately shipped.
+the collector and Gatus lineages in specifications 018–019; an early estimate involving
+exporter sidecars was not the architecture that ultimately shipped.
 
 ## From broad policy-denial proposal to narrow warning
 
@@ -230,7 +229,10 @@ Cilium source identities are not stable, cumulative forwarded-flow presence has 
 wrong recovery semantics, and deliberate containment is not identified by a non-empty
 destination alone. Narrowing the query to the demonstrated Plex failure gives each
 selector an independent exclusion case and avoids presenting mechanism coverage as
-general integration health.
+general integration health. Broader classification therefore requires new evidence or
+a stronger signal model; a more elaborate query over the same metrics would preserve
+the unstable joins and incorrect recovery semantics rather than make the proposed
+`Sustained` and `TotalBlock` states truthful.
 
 Sonarr, Radarr, and Lidarr are current admitted Plex consumers on TCP `32400`, alongside
 the other validated consumers. The alert guards that allow-list but does not authorize

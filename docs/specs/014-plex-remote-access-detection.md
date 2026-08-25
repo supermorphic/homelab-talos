@@ -50,6 +50,10 @@ labels, not only Plex data. This matches the existing Cilium host-port posture b
 remains a real information boundary. Adding TLS would require certificate management and
 matching ServiceMonitor configuration.
 
+This was an explicit accepted boundary, not a risk-free endpoint: Cilium already exposed
+similar node-local observability ports on the LAN, and eliminating that exposure class
+required a broader Talos node-ingress or metrics-TLS design outside this detector.
+
 ## Staged evidence method
 
 The metric contract was observed before alert expressions were written. First, Cilium
@@ -65,6 +69,10 @@ exercise used a host outside Kubernetes so Cilium supplied an off-cluster identi
 proved the selected firing shape and ntfy route, not alert recovery. The current
 detection-test guide separately requires firing and resolved notifications; source
 details remain private.
+
+The live source-matcher test deliberately used an off-cluster LAN host so Cilium would
+classify it as `world`, exercising the same identity contract before any Internet
+exposure or WAN DNAT existed.
 
 The method separated four oracles:
 

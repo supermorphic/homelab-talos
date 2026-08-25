@@ -212,8 +212,8 @@ Talos identity bundle
 
 Regenerating the bundle would create a different Talos cluster identity. If the tracked
 bundle cannot be decrypted or appears inconsistent with the cluster, stop and use the
-[platform recovery runbook](../runbooks/recovery.md). Do not generate a replacement as
-an ordinary repair.
+[platform disaster-recovery runbook](../runbooks/platform-disaster-recovery.md). Do not
+generate a replacement as an ordinary repair.
 
 ### Generate ignored Talos configuration
 
@@ -335,7 +335,7 @@ not ordinary recovery; it requires a separately designed and reviewed key-rotati
 workflow.
 
 For broader platform recovery, follow
-[`docs/runbooks/recovery.md`](../runbooks/recovery.md).
+[`docs/runbooks/platform-disaster-recovery.md`](../runbooks/platform-disaster-recovery.md).
 
 ## Implementation reference
 

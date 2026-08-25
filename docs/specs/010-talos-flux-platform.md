@@ -116,6 +116,11 @@ with pruning disabled and then adopts the existing release through a guarded own
 transfer. This prevents two controllers from owning different Cilium configurations and
 avoids an unnecessary networking rollout during adoption.
 
+The suspension and prune protection were stronger than an ordinary Helm rollout because
+Cilium was the cluster's only CNI. A mistaken ownership reconciliation could remove the
+network that Flux itself needed to recover, so the transfer had to prove non-disruptive
+adoption and an idempotent repeat before normal reconciliation became durable.
+
 Cilium provides IPv4 VXLAN networking, Kubernetes NetworkPolicy enforcement,
 kube-proxy replacement, and Hubble flow visibility. Native routing, BGP, Cilium L2
 announcements, and Cilium Gateway API remain disabled because MetalLB and Envoy Gateway
@@ -171,6 +176,13 @@ three-node cluster can sustain every multi-failure combination. Workloads using 
 single-writer claims use `Recreate`, `ReadWriteOncePod`, or StatefulSet semantics as
 appropriate so rollouts do not contend for the same volume.
 
+The initial machine design allowed the Longhorn XFS volume to grow into most remaining
+NVMe space. Before it held replicas, the design changed to a fixed cap so node-local
+capacity remained available for scratch, transcode, and future local workloads. The
+timing was load-bearing: XFS could grow but not shrink, so delaying the correction until
+after Longhorn stored data would have required disruptive replica evacuation and volume
+recreation.
+
 Bulk media and downloads use SMB instead of Longhorn. These storage systems solve
 different failure models: Longhorn provides replicated low-latency application state,
 while SMB provides shared bulk capacity and cross-application filesystem semantics.
@@ -210,6 +222,11 @@ an explicit stopping condition:
 
 These gates preserve the useful method from the original phased rebuild without making
 old phase names, shell transcripts, or rollout ceremony part of the design.
+The foundation was accepted only after rolling-node recovery, TPM auto-unlock and etcd
+recovery, MetalLB failover, Flux-controller recovery, and Git-driven workload
+remove/recreate tests were followed by a sustained soak. This combined gate recognized
+that isolated rollout success is weaker evidence than recovery followed by stable
+operation over time.
 
 Implementation revealed several non-obvious constraints:
 

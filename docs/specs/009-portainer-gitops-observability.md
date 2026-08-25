@@ -7,6 +7,11 @@ second desired-state or deployment authority. Portainer may inventory resources,
 events and metrics, and read pod logs. Git remains the source of truth and Flux remains
 the reconciler.
 
+Portainer complements the existing observability surfaces: Prometheus and Grafana own
+metrics and alert-oriented analysis, Gatus owns synthetic availability, and Homepage
+owns lightweight navigation and status, while Portainer supplies interactive Kubernetes
+inventory, events, metrics, and logs without becoming another deployment interface.
+
 ## Workload, route, and storage
 
 Portainer CE runs in the `portainer` namespace using the pinned

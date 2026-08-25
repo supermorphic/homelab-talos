@@ -22,7 +22,9 @@ permanent staging `ClusterIssuer`, staging `Certificate`, and their Kustomize re
 
 Current validation rejects the retired issuer name, staging certificate name, and
 staging Secret name anywhere in Kubernetes source. A future staging issuance experiment
-must be temporary and deliberate rather than standing Flux-managed state.
+must be temporary and deliberate rather than standing Flux-managed state. Bounded
+staging issuance remains useful for deliberately testing DNS-01 or certificate changes;
+the rejected design was the recurring canary, not staging as a test mechanism.
 
 ## Decision method and retirement gate
 
@@ -94,6 +96,9 @@ Three rules cover the one production wildcard certificate:
 The warning range excludes the critical range. Normal renewal updates the expiry
 timestamp on the same certificate identity and clears the warning. The missing-metric
 rule does not treat a metric for another namespace or certificate as a substitute.
+Direct monitoring of the production certificate's expiry and metric presence replaced
+staging renewal as the standing assurance signal because it observes the certificate
+that serves traffic rather than a weak proxy on a separate account and endpoint.
 
 Promtool fixtures cover the 14-day and 3-day boundaries, renewed and expired values,
 warning/critical exclusivity, and exact-identity absence. These tests establish rule
