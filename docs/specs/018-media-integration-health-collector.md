@@ -4,22 +4,23 @@
 
 This specification records the first complete design for continuous media-integration
 health. It was not implemented and does not describe the current deployment. The
-[targeted-probe revision](019-media-integration-health-active-probes.md) replaced two
+[active-probe revision](019-media-integration-health-active-probes.md) replaced two
 passive mechanisms, and the [Gatus design](020-media-integration-health-gatus.md) later
-replaced the custom collector as a whole.
+replaced the collector as a whole.
 
-The value retained here is the assurance model: service availability, source access,
-API compatibility, expected configuration, and an integration probe are different
-signals and must not be collapsed into one healthy result.
+The durable idea was an assurance model: service availability, source access, API
+compatibility, expected configuration, a source-owned integration probe, and collector
+correctness are different signals. A green source and target do not prove the directed
+connection between them. A Cilium policy omission had already produced that exact
+failure while ordinary endpoint checks remained green.
 
-## Problem and inventory
+## Problem and directed inventory
 
-The existing Gatus `/ping` and status checks proved that applications served HTTP. They
-did not prove that Prowlarr, Sonarr, Radarr, Lidarr, Seerr, qBittorrent, and Plex could
-perform their configured interactions. A Cilium policy omission had already shown that
-a green source and target could coexist with a broken integration.
+Existing Gatus `/ping` and status checks proved that applications served HTTP through
+their normal route. They did not prove that Prowlarr, Sonarr, Radarr, Lidarr, Seerr,
+qBittorrent, and Plex could perform their configured interactions.
 
-The design mapped fifteen directed edges:
+The design fixed the inventory at fifteen directed edges:
 
 | Integration type | Source | Targets | Count |
 | --- | --- | --- | ---: |
@@ -29,102 +30,183 @@ The design mapped fifteen directed edges:
 | Library notification | Sonarr, Radarr, Lidarr | Plex | 3 |
 | Request and library service | Seerr | Sonarr, Radarr, Plex | 3 |
 
-The two Prowlarr directions were intentionally distinct. Successful Prowlarr
-configuration sync would not prove that an application could later query a configured
-indexer, and a working query path would not prove that later syncs were healthy.
+The two Prowlarr directions were intentionally distinct. Prowlarr can fail to sync an
+application while an already configured indexer still works. Conversely, sync can work
+while an application cannot query Prowlarr. The design excluded Prowlarr-to-external-
+indexer and FlareSolverr paths, Tautulli-to-Plex, and qbit_manage-to-qBittorrent.
 
-## Proposed collector design
+## Proposed architecture and alternatives
 
 The design selected one stateless `media-integration-health` collector in the `media`
-namespace. It would poll the public APIs of Prowlarr, Sonarr, Radarr, Lidarr, and Seerr,
-cache one atomic snapshot, and expose bounded metrics to Prometheus. A scrape would read
-the cache rather than trigger application API traffic.
+namespace. It would poll the public APIs of five source applications every five minutes
+with jitter, publish one atomic cached snapshot, and expose that snapshot to Prometheus
+on a one-minute scrape interval. Scraping would never trigger application traffic.
 
-The collector would contact only the five source applications. Each source application
+The collector would contact only Prowlarr, Sonarr, Radarr, Lidarr, and Seerr. Each source
 would use its own stored downstream configuration and credential to evaluate
-qBittorrent, Plex, or another application. This kept qBittorrent and Plex credentials
-out of the collector and avoided testing a synthetic network path different from the
-one used by the source.
+qBittorrent, Plex, or another application. This avoided giving the collector downstream
+credentials and avoided testing a synthetic network path different from the source-owned
+path. An exact static inventory supplied expected internal targets, so a wrong but
+internally consistent application configuration could not validate itself.
 
-Every edge had separate expected-configuration and probe results. An exact static
-inventory supplied expected internal targets, so a wrong but internally consistent
-configuration could not pass by comparing the application only with itself.
+One collector was plausible because it could expose one bounded metric contract and one
+scrape target while correlating structured provider identifiers with source-owned test
+results. The alternatives lost important boundaries:
 
-## Failure classification
+- Exportarr supported general health for the four Servarr applications, but not Seerr or
+  the complete edge-specific configuration and probe model. Sidecars also multiplied
+  credentials and scrape targets without completing the design.
+- Gatus could prove an HTTP response but could not interpret dynamic configured providers
+  or safely run the native tests assumed by this design.
+- Direct synthetic probes would duplicate downstream credentials and application logic
+  while exercising a new path owned by the monitor rather than the source.
+- Continuous end-to-end transactions would create requests, downloads, imports, library
+  changes, or cleanup work. That stateful behavior did not meet the continuous-monitoring
+  safety boundary.
 
-The design classified a source poll before interpreting an integration result:
+## Original signal model
+
+Each adapter would first compare application state with independent expected
+configuration. It would probe only an enabled matching provider.
+
+| Edge | `configured` evidence | Original `probe_success` evidence | Probe boundary |
+| --- | --- | --- | --- |
+| Prowlarr to Sonarr, Radarr, or Lidarr | Expected enabled application, `FullSync`, and exact internal target | No application-provider failure for that target | Passive and delayed; no `testall` |
+| Sonarr, Radarr, or Lidarr to Prowlarr | Expected enabled Torznab or Newznab provider and exact internal target | No native structured failure for matched Prowlarr-backed providers | Passive recent-use negative evidence, not a search |
+| Sonarr, Radarr, or Lidarr to qBittorrent | Expected enabled client, host, port, and category | Targeted download-client test succeeded | Active, non-persisting source-owned test |
+| Sonarr, Radarr, or Lidarr to Plex | Expected enabled notification, host, port, and events | Targeted notification test succeeded | Active, non-persisting; no library refresh |
+| Seerr to Sonarr or Radarr | Expected selected and enabled service, including intended default | Profiles, roots, and tags returned through Seerr's stored settings | Authenticated read-only GET; no request |
+| Seerr to Plex | Expected selected Plex server | Configured server appeared reachable through discovery | Authenticated read-only GET; no library sync |
+
+Human health messages were diagnostic text, not identifiers. Provider IDs and structured
+fields were required. An adapter unable to map a structured response had to report API
+incompatibility instead of guessing from human text. The later discovery that structured
+identity was absent for the six Prowlarr-direction signals invalidated those two passive
+mechanisms; it did not invalidate the overall assurance model.
+
+## API and failure contract
+
+Adapters would declare a supported API major and minimum endpoint and response schema.
+They would accept additive fields and compatible patch or minor releases. Exact version
+allow-lists were rejected because the main drift risk was semantic change inside generic
+provider `fields` arrays and provider-status representations, not an obvious API-major
+change. Seerr response contracts were judged less mature because its public schema did
+not validate responses or track an application release as tightly.
+
+Each source poll classified its result before interpreting an edge:
 
 | Condition | Classification | Integration result usable |
 | --- | --- | --- |
-| Connection, timeout, TLS, authentication, or generic server failure | Source access failure | No |
-| Unsupported API major, missing endpoint, or incompatible required field | API incompatibility | No |
+| DNS, connection, timeout, TLS, authentication, or generic server failure | Source access failure | No |
+| Unsupported API major, absent endpoint, or missing or incompatible required field | API incompatibility | No |
 | Collector exception, invariant failure, or incomplete inventory | Collector error | No |
 | Compatible API with absent or wrong expected provider | Configuration failure | Configuration only |
 | Compatible documented native test failure | Probe failure | Yes |
 | Compatible documented native test success | Healthy probe | Yes |
 
-This ordering prevented an application upgrade or adapter defect from being reported as
-a broken integration. Human health messages, upstream URLs, provider names, response
-fragments, and secret values were excluded from metric labels. Detailed errors would
-have remained bounded and redacted in logs.
+A documented validation response could be an integration failure. An unrecognized error
+shape was API incompatibility. This ordering prevented application upgrades, stale
+snapshots, and adapter defects from becoming false edge failures.
 
-The proposed metrics separated source access and freshness, configuration compatibility,
-configured state, probe compatibility, probe success, and collector error. The bounded
-`source`, `target`, `integration`, `check`, and `phase` labels came from the fixed
-inventory. No generic `UNKNOWN` integration state was proposed.
+## Proposed metric and alert contract
 
-## Probe model
+The bounded metrics were:
 
-The original design mixed active and passive source-owned evidence:
+```text
+media_integration_expected_info{source,target,integration} 1
+media_integration_source_access_success{source} 0|1
+media_integration_source_last_poll_timestamp_seconds{source} <unix-seconds>
+media_integration_config_compatible{source,target,integration,check="configuration"} 0|1
+media_integration_configured{source,target,integration} 0|1
+media_integration_probe_compatible{source,target,integration,check="probe"} 0|1
+media_integration_probe_success{source,target,integration} 0|1
+media_integration_collector_error{source,phase} 0|1
+media_integration_source_info{source,application_version,api_major,adapter_version} 1
+media_integration_collector_build_info{version} 1
+```
 
-- targeted, non-persisting native tests covered Servarr download-client and Plex
-  notification integrations;
-- Seerr selected-service reads covered Sonarr and Radarr, while Plex discovery supplied
-  a bounded Seerr-to-Plex signal;
-- Prowlarr application status and Servarr indexer status were expected to provide
-  structured passive evidence for the six Prowlarr-direction edges.
+`source`, `target`, and `integration` came only from the fixed inventory. `phase` was a
+bounded enum. Provider names, learned IDs, URLs, health or validation messages, response
+fragments, exceptions, and secrets were forbidden as labels. The model had no generic
+`UNKNOWN` edge state; compatibility and success remained independent.
 
-Continuous end-to-end requests, searches, downloads, imports, library refreshes, and
-configuration writes remained outside the design because they create durable state and
-cleanup obligations. Exportarr sidecars were rejected because they did not cover Seerr
-or the edge-specific configuration and probe distinctions.
+Six proposed warning alerts separated collector absence, collector or stale-poll error,
+source access, API incompatibility, expected-configuration failure, and compatible probe
+failure. Collector absence and error held for 10 minutes. Source, compatibility,
+configuration, and probe failures held for 15 minutes, and a source snapshot older than
+15 minutes was unusable. Fresh source access, compatibility, configured state, and lack
+of collector error gated downstream alerts. The collector design's metrics and alert
+names were never implemented and are not current alert contracts.
 
-## Workload and credential safety model
+## Workload, credentials, and network safety
 
-The collector would have had one replica, no PVC, no public route, no service-account
-token, a read-only filesystem, and a narrow ServiceMonitor. Purpose-specific
-SOPS-encrypted source API keys would have been mounted as read-only projected files and
-reread between poll cycles. They would not have appeared in environment variables,
-arguments, metrics, events, or logs.
+The proposed Deployment had one steady-state replica, no PVC, public route, or service-
+account token, a read-only filesystem, bounded request timeouts, and no overlapping poll
+inside one replica. `RollingUpdate` was acceptable only because every operation was
+required to be non-persisting and safe during bounded two-instance overlap. A probe found
+unsafe under overlap had to leave continuous monitoring or force a successor design.
 
-A dedicated Cilium policy would have admitted Prometheus only to the metrics port and
-allowed egress only to DNS and the five source application Services. It would not have
-allowed direct qBittorrent, Plex, or Internet access.
+Readiness and liveness represented collector operation only: loaded configuration,
+working poll loop, and serviceable metrics. Upstream or integration failures could not
+make the pod unready and create a restart loop.
 
-Six warning alerts were designed to distinguish collector unavailability, collector or
-stale-poll errors, source access, API incompatibility, invalid expected configuration,
-and a compatible native probe failure. Compatibility, source freshness, and collector
-health gated integration alerts so stale or uninterpretable values could not fire as
-edge failures.
+Five purpose-specific source API keys would be created through the operator-managed SOPS
+workflow and mounted as read-only files. The collector would reread files between polls
+so a normal Secret update could take effect without a custom reload mechanism. Keys were
+forbidden from environment variables, arguments, metrics, events, and logs. The
+collector accepted the broad source-key scope as residual risk but would never receive a
+qBittorrent or Plex credential.
 
-## Why the design changed
+A dedicated Cilium policy would admit only Prometheus to the metrics port and permit
+egress only to DNS and the five source workloads on their service ports. Direct
+qBittorrent, Plex, Internet, and broad namespace egress were outside the design.
 
-Implementation research found that the assumed passive structured endpoints did not
-exist for the six Prowlarr-direction edges. Relevant names appeared only in localized
-human health messages, which the design itself prohibited as an API contract. That
-finding produced the
-[active-test revision](019-media-integration-health-active-probes.md).
+## Validation and activation gates
 
-The larger collector design was then replaced before implementation. Its custom image,
-adapter surface, compatibility contract, five source credentials, new workload, scrape
-target, network policy, and alert family were disproportionate to the reliable
-off-the-shelf signals available. The later Gatus design accepted less coverage in return
-for a smaller and already-operated execution and metrics surface.
+Independent validation was required before the proposed alerts could carry operational
+meaning:
 
-## Historical consequences
+- Source invariants had to prove one collector and scrape target, the exact fifteen-edge
+  inventory, source-only egress, metrics-only ingress, no public route or PVC, file-
+  mounted Secret references, and correct alert placement. Mutation tests had to show
+  that the important assertions could fail.
+- Sanitized adapter fixtures with hand-written expected metrics had to cover success,
+  documented test failure, absent configuration, unsupported API, absent endpoint,
+  missing or wrong-typed fields, additive fields, source failure, and collector error.
+- Promtool fixtures had to prove silence for a healthy snapshot and isolation of every
+  failure class, hold, freshness gate, and suppression rule.
+- Render validation could inspect Secret metadata and references but not plaintext.
+- Read-only live comparison had to observe the expected inventory and source series,
+  compare selected results with application UIs and native Test actions, and confirm the
+  narrow flow policy. Repository rendering could not prove credentials, application
+  configuration, native test behavior, or live Cilium enforcement.
 
-The collector would have provided a strong distinction between source, compatibility,
-configuration, probe, and collector failures, plus bounded attribution across all
-fifteen edges. Its cost was a custom integration product whose adapters had to track
-several APIs with uneven contract quality. No current Kubernetes resource, metric, alert,
-credential, or operating procedure should be inferred from this design.
+The design required the artifact contract to validate before cluster introduction, then
+at least three successful five-minute cycles with rules silent before alert activation.
+Rollback removed inaccurate alerts first and could remove the scrape target and workload
+without changing source configuration. Rotation was required only if credential exposure
+was suspected. These were safety and evidence gates, not proof that deployment occurred.
+
+## Outcome, residual risk, and reconsideration
+
+Implementation research found that the assumed passive structured provider evidence did
+not exist. Relevant identity appeared only in localized health text, which this design
+correctly prohibited as an API contract. Specification 019 replaced only those passive
+mechanisms with attributable, non-persisting POST tests.
+
+Specification 020 then replaced the complete collector before implementation. The
+custom image, adapters, compatibility surface, workload, scrape target, policy, five
+credentials, and alert family cost more to maintain than the reliable coverage justified.
+That architecture change accepted less attribution; it did not prove the collector's
+failure taxonomy or source-owned-probe principle unsound.
+
+Even if implemented, the collector would not have proved a full Seerr-to-Plex workflow,
+fresh provider behavior between source events, every external dependency, or end-to-end
+request completion. It would also have retained broad source keys, one non-HA replica,
+uneven upstream API maturity, and runtime discovery of some schema drift.
+
+Candidate-image contract testing was deliberately deferred. It could have been
+reconsidered after upstream churn or false compatibility incidents. High availability
+and the explicitly excluded integrations required separate justification. Reintroducing
+the collector or any of its resources now would be a new design, not execution of this
+historical specification.

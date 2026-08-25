@@ -6,6 +6,22 @@ Define the current self-contained Level 2 contract for authenticated Servarr hea
 checks and the alerts derived from them. The essential boundary is exact: HTTP 200 is
 success, and the response body does not affect Gatus success.
 
+## Scope of supersession and implementation outcome
+
+This post-merge lineage superseded only specification 020's four Servarr success
+conditions, the native-health coverage claims derived from them, their body-dependent
+validation oracle, and the four unimplemented `*NativeHealthIssue` alert definitions.
+It retained the six-endpoint Gatus architecture, one-minute GET cadence, endpoint names,
+headers, purpose-specific Secret, trusted Gateway route, hidden-error behavior, stable
+metric labels, two Seerr body contracts, and live acceptance boundary.
+
+The status-only conditions were implemented in Gatus. The four
+`*NativeHealthApiUnavailable` warnings, two retained Seerr read warnings, and
+`MediaIntegrationProbeMissing` were later implemented in the media alert rules and are
+covered by the current Prometheus fixtures. The obsolete staged instruction to keep
+alerts absent is not part of the final outcome. Current source and operator guidance,
+not this historical chronology, remain authoritative for operation.
+
 ## Exact Servarr probe contract
 
 The existing Gatus workload runs these four endpoints in group `Media Integration` once

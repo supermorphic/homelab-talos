@@ -2,98 +2,131 @@
 
 ## Historical boundary
 
-This specification records a revision to the
-[unimplemented collector](018-media-integration-health-collector.md). It did not become
-the current deployment. The [Gatus design](020-media-integration-health-gatus.md) replaced
-the collector and these active POST probes with six non-mutating GET checks in the existing
+This specification records a focused revision to the
+[unimplemented collector](018-media-integration-health-collector.md). It was also never
+implemented. The [Gatus design](020-media-integration-health-gatus.md) later replaced the
+collector and these active POST probes with six non-mutating GET checks in the existing
 Gatus workload.
 
-The revision retained the fifteen-edge inventory, collector workload, metrics,
-credentials, network policy, failure classification, and alert model from
-the [collector design](018-media-integration-health-collector.md). It changed only the
-unsafe assumption that localized native-health messages could provide structured
-Prowlarr-direction evidence.
+The revision retained the collector's fifteen-edge inventory, source and configuration
+classification, metrics, file-mounted source keys, network policy, five-minute cached
+poll, one-minute scrape, alert gates, validation boundary, and residual limits. It
+changed only the unsafe assumption that localized native-health messages could provide
+structured evidence for the six Prowlarr-direction edges.
 
-## Contract finding
+## Failed passive assumption
 
-Release-specific API research found no structured application-status endpoint in
-Prowlarr and no structured indexer-status endpoint in Sonarr, Radarr, or Lidarr that
-could attribute the relevant provider. Their public health resources exposed the check
-source, result type, localized message, and documentation URL, but the application or
-indexer name existed only inside human text.
+Release-specific public API research found no structured application-status resource in
+Prowlarr and no structured indexer-status resource in Sonarr, Radarr, or Lidarr that
+could attribute the relevant provider. Public health responses supplied a check source,
+result type, localized message, and documentation URL, but the application or indexer
+name existed only inside human text.
 
-Parsing those messages would have violated the collector's compatibility boundary. A
-translation or wording change could become a false integration failure while the API
-schema remained compatible.
+Message parsing would have violated the collector's API-compatibility boundary. A
+translation or wording change could become a false edge failure without any schema or
+integration change. The earlier passive mechanism was therefore not safe to implement.
 
-The public APIs did expose targeted provider-test operations. The source application
-could test an existing resource without saving it, which preserved source-owned
-credentials and gave the result a specific provider boundary.
+The same APIs did expose targeted native tests that accepted an existing provider
+resource without saving it. That contract was plausible because the source retained the
+downstream settings and credentials, the supplied resource bounded attribution to one
+provider, and the operation did not create or modify provider configuration.
 
 ## Revised probe design
 
-The historical design selected these non-persisting calls:
+The historical design selected these operations:
 
 | Edge | Source operation | Supplied resource | Evidence boundary |
 | --- | --- | --- | --- |
 | Prowlarr to Sonarr, Radarr, or Lidarr | `POST /api/v1/applications/test?forceTest=true` | The matched existing `ApplicationResource` | Prowlarr reached the configured application and validated a temporary Prowlarr-backed indexer definition |
-| Sonarr or Radarr to Prowlarr | `POST /api/v3/indexer/test?forceTest=true` | One matched existing `IndexerResource` | The source reached Prowlarr and validated the selected provider's capabilities |
+| Sonarr or Radarr to Prowlarr | `POST /api/v3/indexer/test?forceTest=true` | One matched existing `IndexerResource` | The source reached Prowlarr and validated the selected provider capabilities |
 | Lidarr to Prowlarr | `POST /api/v1/indexer/test?forceTest=true` | One matched existing `IndexerResource` | The same source-to-Prowlarr boundary through Lidarr's API version |
 
-The calls used one source-returned provider object and `forceTest=true`. They would not
-have called `testall`, run a search or sync, or create, update, or delete provider
-configuration. For multiple matching Prowlarr-backed indexers, the design selected the
-enabled provider with the lowest numeric ID so repeated polls were deterministic. That
-single test represented the shared path and did not claim that every external indexer
-worked.
+The collector would return a source-provided object only to that same source with
+`forceTest=true`. It would not call `testall`, run a search or sync, issue a command, or
+create, update, or delete configuration. With multiple matching Prowlarr-backed
+indexers, it selected the enabled provider with the lowest numeric ID. Configuration
+validation still covered every expected provider; the single deterministic active test
+represented the shared path and did not claim every external indexer was healthy.
 
-## Request-body safety
+The revision added six targeted tests per five-minute collector poll. The calls were
+judged non-persisting and safe during the bounded overlap of `RollingUpdate`. If fixture
+or live evidence had disproved overlap safety, the affected probe had to leave continuous
+monitoring or the collector design had to be replaced. POST itself was not the defect;
+these particular POST contracts were designed as safe source-owned native tests.
 
-Provider resources can include masked or source-held downstream credential fields. The
-collector would have treated the selected resource as opaque and short-lived:
+## Request-body and credential safety
 
-- return it only to the same source application that supplied it;
-- keep it only for the current poll;
-- omit the body, headers, query values, response body, URL, and secret-like fields from
-  logs, exceptions, metrics, and disk; and
-- project only a small non-secret field set for the independent configuration check.
+Provider resources can contain masked or source-held downstream credential fields. The
+collector would treat each selected resource as opaque and short-lived:
 
-This round trip did not give the collector a separately mounted downstream credential.
-The source application remained responsible for interpreting and using its stored
-provider settings.
+- return it only to the source application that supplied it;
+- keep it only for the current source poll and never write it to disk;
+- exclude the body, headers, query values, response body, configured URL, and secret-like
+  fields from logs, error values, metrics, and snapshots; and
+- project only the small non-secret field set needed for the separate configuration
+  comparison.
 
-## Result boundary
+This round trip did not add a mounted downstream credential. The source application
+remained responsible for interpreting and using its stored provider settings. The
+collector still held only the five source API keys described in specification 018.
+
+## Result and assurance boundary
 
 A documented compatible success would have produced `probe_success=1`. A documented
-provider-validation failure with the expected schema would have produced a compatible
-probe failure. A missing test endpoint, unsupported API major, or unrecognized response
-shape would have produced API incompatibility instead of an integration failure.
+provider-validation failure with the expected schema would have produced
+`probe_compatible=1, probe_success=0`. A missing test endpoint, unsupported API major, or
+unrecognized validation shape would have produced incompatibility, not a false edge
+failure.
 
 Source transport or authentication failures remained source-access failures. Failure to
-choose exactly one deterministic resource remained a collector error. Absent or invalid
-expected configuration remained a configuration failure and would have skipped the
-active test.
+select exactly one deterministic resource remained a collector error. Absent or invalid
+expected configuration remained a configuration failure and skipped the active test.
+The inherited freshness, compatibility, configuration, and collector-error alert gates
+still controlled whether a probe result was usable.
 
-The proposed validation model required independent HTTP-server fixtures for the exact
-method, path, query, header, and opaque body round trip. It also distinguished documented
-validation errors from incompatible responses and checked that secret-like source fields
-never entered output. These were safeguards for a proposed adapter, not claims about the
-current Gatus configuration.
+A passed test proved current native connectivity validation for one selected provider.
+It did not prove that the provider configuration was complete or current, that sync or a
+search had completed, or that every external indexer worked. Independent configuration
+checks and authorized end-to-end verification remained necessary.
 
-## Why the design was replaced
+## Independent validation model
 
-The revision solved the localized-message defect but increased recurring authenticated
-POST traffic and kept the full custom collector lifecycle. It still required application
-adapters, an image and deployment, a new scrape target, five credentials, a network
-policy, compatibility fixtures, and fifteen-edge classification.
+The proposed adapter needed independent HTTP-server fixtures for each source API major.
+The fixture oracle had to verify the exact method, path, `forceTest=true` query,
+authentication header, and opaque body round trip. It also had to prove:
 
-The later Gatus redesign chose a smaller assurance boundary: four authenticated Servarr
-native-health GETs and two selected Seerr service reads. Its initial Servarr contract
-required both HTTP 200 and an empty response array; the
-[API-reachability design](021-media-integration-health-api-reachability.md) records the later
-reachability-only correction. The Gatus design intentionally gave up continuous
-Prowlarr-direction native tests and most edge attribution to avoid a custom adapter
-product and continuous POST operations.
+- no `testall`, search, command, sync, create, update, or delete path was requested;
+- additive response fields remained compatible;
+- missing or wrong-typed required fields became API incompatibility;
+- a documented validation response became a compatible probe failure;
+- an unrecognized result became API incompatibility;
+- multi-provider selection was deterministic and did not claim per-indexer health;
+- source-returned secret-like fields never entered logs, exceptions, metrics, or disk;
+  and
+- two concurrent collector instances produced no persistent state and no different
+  classification.
 
-No current endpoint, alert, workload, or operator action should be derived from this
-historical active-probe design.
+Read-only live comparison would have used the same targeted Test actions in the source
+UIs. It would not have run a search or changed a provider. The collector's artifact,
+silent-observation, and alert-activation gates remained unchanged; these are historical
+acceptance requirements, not evidence that the proposal was deployed.
+
+## Outcome and reconsideration
+
+This revision removed dependence on localized messages and gave the six Prowlarr-
+direction edges an attributable current test. It also increased recurring authenticated
+traffic and retained the complete custom collector lifecycle: adapters, image,
+Deployment, scrape target, five keys, policy, compatibility fixtures, metrics, and alert
+classification.
+
+Specification 020 judged that cost disproportionate to reliable continuous coverage. It
+chose an existing Gatus surface and a stricter no-POST/no-transaction boundary. That
+later choice does not mean these targeted tests were shown to persist state or were
+intrinsically unsafe; it means their value did not justify the collector product needed
+to operate them continuously.
+
+The final four Servarr Gatus signals now have no provider attribution and do not prove a
+Prowlarr, qBittorrent, Plex, or indexer path. Reintroducing the POST tests, collector, or
+their proposed alerts requires a new design and fresh contract evidence. Searches,
+transactions, full external-indexer checks, candidate-image testing, and other deep
+workflow verification remain outside this historical revision.
