@@ -265,13 +265,48 @@ ensure_run_available() {
 	}
 }
 
-ensure_evidence_reader_available() {
-	local existing
+require_terminal_diagnostics_job() {
+	local run_id="$1" existing expected_name
+	expected_name="encode-benchmark-diagnostics-${run_id,,}"
 	existing="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
-		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=20260820T223425Z-082b3d38,homelab-talos/benchmark-mode=diagnostic-evidence-reader" \
+		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id,homelab-talos/benchmark-mode=diagnostics" \
 		--output json)"
+	jq -e --arg run "$run_id" --arg name "$expected_name" '
+		(.items | type == "array" and length == 1) and (.items[0] |
+		.metadata.name == $name and
+		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+		.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+		.metadata.labels."homelab-talos/benchmark-run" == $run and
+		.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics" and
+		.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
+		((.status.active // 0) == 0) and
+		([.status.conditions[]? | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length == 1))
+	' <<<"$existing" >/dev/null || {
+		echo "diagnostic evidence reader requires one terminal owned diagnostics Job: $run_id" >&2
+		return 65
+	}
+}
+
+ensure_evidence_reader_available() {
+	local run_id="$1" name exact existing
+	name="encode-benchmark-evidence-reader-${run_id,,}"
+	exact="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "job/$name" \
+		--ignore-not-found --output json)" || {
+		echo "diagnostic evidence reader availability query failed: $run_id" >&2
+		return 65
+	}
+	[[ -z "$exact" ]] || {
+		echo "diagnostic evidence reader Job already exists for run: $run_id" >&2
+		return 73
+	}
+	existing="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id,homelab-talos/benchmark-mode=diagnostic-evidence-reader" \
+		--output json)" || {
+		echo "diagnostic evidence reader availability query failed: $run_id" >&2
+		return 65
+	}
 	[[ "$(yq -p=json -r '.items | length' <<<"$existing")" == '0' ]] || {
-		echo 'diagnostic evidence reader Job already exists for the approved run' >&2
+		echo "diagnostic evidence reader Job already exists for run: $run_id" >&2
 		return 73
 	}
 }
@@ -1136,13 +1171,15 @@ dispatch_clean() {
 # mounts only the one immutable run subtree read-only and prints its canonical
 # sanitized value; it never needs media, scratch, a GPU, or pod/node identity.
 dispatch_evidence_reader() {
-	local run_id='20260820T223425Z-082b3d38' expected name job panel_sha256 evidence_panel
-	(($# == 0)) || return 64
+	local run_id="$1" expected name job panel_sha256 evidence_panel
+	(($# == 1)) || return 64
+	validate_run_id "$run_id" || return
 	expected="read:encode-benchmark:diagnostic-evidence:$run_id"
 	require_confirmation ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM "$expected" || return
 	load_source || return
 	require_cluster_target || return
-	ensure_evidence_reader_available || return
+	require_terminal_diagnostics_job "$run_id" || return
+	ensure_evidence_reader_available "$run_id" || return
 	panel_sha256="$(contract_diagnostics_panel_sha256 "$samples_document")" || {
 		echo 'committed diagnostics panel identity is malformed' >&2
 		return 65
@@ -1156,7 +1193,7 @@ dispatch_evidence_reader() {
 	render_job "$job" diagnostic-evidence-reader "$run_id" "$run_id" '' "$name" \
 		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence "$panel_sha256" "$evidence_panel"
 	remove_mounts_and_volumes "$job" media out scratch samples image-evidence
-	yq -i '
+	RUN_ID="$run_id" yq -i '
 		del(.spec.template.spec.containers[0].env) |
 		del(.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915") |
 		del(.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915") |
@@ -1166,7 +1203,7 @@ dispatch_evidence_reader() {
 		.spec.ttlSecondsAfterFinished = 3600 |
 		.spec.template.spec.containers[0].resources.requests = {"cpu":"100m","memory":"128Mi"} |
 		.spec.template.spec.containers[0].resources.limits = {"cpu":"500m","memory":"256Mi"} |
-		.spec.template.spec.containers[0].volumeMounts += [{"name":"evidence","mountPath":"/evidence","subPath":"benchmark/runs/20260820T223425Z-082b3d38/diagnostics","readOnly":true}] |
+		.spec.template.spec.containers[0].volumeMounts += [{"name":"evidence","mountPath":"/evidence","subPath":"benchmark/runs/" + strenv(RUN_ID) + "/diagnostics","readOnly":true}] |
 		.spec.template.spec.volumes += [{"name":"evidence","persistentVolumeClaim":{"claimName":"media-data","readOnly":true}}]
 	' "$job"
 	create_job "$job" >/dev/null
@@ -1279,7 +1316,7 @@ census)
 	dispatch_census
 	;;
 evidence-reader)
-	(($# == 0)) || exit 64
+	(($# == 1)) || exit 64
 	dispatch_evidence_reader "$@"
 	;;
 findings)

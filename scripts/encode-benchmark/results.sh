@@ -118,7 +118,7 @@ diagnostic_sanitize_terminal() {
 
 diagnostic_results() {
 	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal
-	local reader_job='encode-benchmark-evidence-reader-20260820t223425z-082b3d38'
+	local reader_job="encode-benchmark-evidence-reader-${requested_run_id,,}"
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
