@@ -1098,7 +1098,7 @@ set_dispatch_chosen_record() {
 	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 1 ]
 	job="$(job_capture)"
 	assert_hardened_job "$job"
-	[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '14400' ]
+	[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '28800' ]
 	run_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")"
 	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh diagnostics $run_id" ]
 	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$job")" = 'false' ]
