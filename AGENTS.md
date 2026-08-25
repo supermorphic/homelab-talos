@@ -7,12 +7,12 @@ this file.
 
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
 Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its relevant README or runbook and the current
-accepted decisions. This root file is the sole repository-policy surface; supporting
+Before changing a subsystem, inspect its relevant README or runbook and relevant completed
+design specifications. This root file is the sole repository-policy surface; supporting
 documentation supplies procedure, not competing instructions. Use the current repository
-state and accepted decisions as the implementation baseline. Repository policy and
-accepted decisions take precedence over stale plans, prior conversation context, and
-assumptions.
+state and current documentation as the implementation baseline. Repository policy and
+current source state take precedence over historical specifications, transient plans,
+prior conversation context, and assumptions.
 
 ## Communication style
 
@@ -90,15 +90,25 @@ solely to satisfy these style rules.
   for repository-dependent tools whose pinned version matters. Ordinary
   read-only filesystem and Git inspection may use standard shell commands.
   Do not substitute unpinned tools for established pinned repository workflows.
-- Agent-owned workflows should proceed autonomously when permitted by
-  repository policy. Runtime or sandbox approval does not change whether an
-  operation is agent-owned or operator-run. Complete all independent safe work
-  before stopping for required operator action.
-- Agents may use approved repository workflows to mint and use task-scoped
-  read-only cluster credentials and perform scoped verification without operator
-  intervention. Agents may not seek out, copy, adopt, or use elevated, write,
-  administrative, or break-glass credentials unless the operator explicitly
-  authorizes that credential for the specific task.
+- Agent-owned workflows must proceed autonomously when permitted by repository policy.
+  Runtime or sandbox approval does not change whether an operation is agent-owned or
+  operator-run. Complete all independent safe work before stopping for required operator
+  action. Do not ask the operator to perform an agent-owned workflow that the agent can
+  run itself.
+- When an approved task needs scoped cluster access, agents must run
+  `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
+  and use the resulting task-scoped credentials. Do not hand this credential bootstrap
+  off to the operator merely because credentials are involved. Agents may perform
+  approved scoped verification with those credentials without operator intervention.
+  Agents may not seek out, copy, adopt, or use elevated, write, administrative, or
+  break-glass credentials unless the operator explicitly authorizes that credential
+  for the specific task.
+- If an approved scoped workflow cannot proceed because it lacks required authority, stop
+  at that boundary. Do not retry with broader credentials, modify RBAC, or perform an
+  ad-hoc privileged operation as a workaround. Surface the specific required action to the
+  operator when it would require broader credentials, new authorization, live mutation,
+  ad-hoc exec or port-forward, sensitive runtime access, or another operation outside the
+  approved scoped workflow.
 - Persistent changes to Flux-managed state must go through Git. Agents may
   perform task-scoped, reversible ephemeral cluster actions needed for approved
   testing, benchmarking, verification, diagnostics, and cleanup of resources
@@ -175,13 +185,29 @@ solely to satisfy these style rules.
   `kubernetes/README.md`.
 - A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate`, or uses a StatefulSet; it
   must not use `RollingUpdate`.
-- Durable architectural decisions belong in `docs/decisions/`. Accepted decisions are
-  superseded, never revised.
-- Brainstorming specifications and implementation plans remain session-local or
-  otherwise uncommitted. Do not create committed `docs/superpowers/specs/` or
-  `docs/superpowers/plans/` artifacts unless the operator explicitly changes this
-  policy.
+- Durable design specifications belong in `docs/specs/`. Specifications may evolve during
+  implementation and must be reconciled with the implemented and validated result before
+  merge. After merge, treat them as historical records.
+- Implementation plans are transient execution artifacts. Store repository-local plans
+  under `.tmp/plans/`, keep them uncommitted, and use them for execution, task resumption,
+  and agent handoff.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
+
+## Design lifecycle
+
+- Use consecutive, monotonically increasing three-digit identifiers for durable design
+  specifications, such as `001-<name>.md`. Assign the next number after the highest
+  existing specification. After merge, do not reuse or renumber an identifier.
+- A design specification may evolve while implementation is in progress. When
+  implementation findings materially change the design, update the specification to
+  reflect the resulting design and rationale.
+- Before merge, reconcile the specification with the implemented and validated result.
+- After merge, treat the specification as a historical record. A later material redesign
+  uses a new numbered specification rather than rewriting the completed record.
+- When a transient implementation plan corresponds to a numbered specification, use the
+  same numeric identifier and descriptive name where practical.
+- Repository-defined artifact locations override tool or skill defaults. Do not create
+  implementation plans under `docs/` unless the operator explicitly requests it.
 
 ## Validation
 

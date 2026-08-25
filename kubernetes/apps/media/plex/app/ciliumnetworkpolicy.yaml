@@ -1,8 +1,8 @@
 ---
-# Observed containment for Plex. The ingress allow-list is derived from the phase-1
+# Observed containment for Plex. The ingress allow-list is derived from the initial
 # Hubble capture plus the designed identities observation cannot supply; the capture
 # basis and the deliberate SSDP/UPnP multicast block are recorded in
-# docs/decisions/2026-08-03-plex-containment-capture.md.
+# docs/specs/008-plex-relay-sonos.md.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -23,11 +23,11 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: tautulli
-        # Missed by the phase-1 capture; Seerr had zero forwarded flows to Plex.
+        # Missed by the initial capture; Seerr had zero forwarded flows to Plex.
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: media
             app.kubernetes.io/name: seerr
-        # Also missed by the phase-1 capture, for the same reason Seerr was: the capture
+        # Also missed by the initial capture, for the same reason Seerr was: the capture
         # exercised playback clients, not the import pipeline. Each of these has a Plex
         # Media Server connection under Settings -> Connect, which posts a library-update
         # request to 32400 when media is imported or upgraded. That is event-driven, so a
@@ -55,9 +55,9 @@ spec:
         - ports:
             - port: "32400"
               protocol: TCP
-    # Off-cluster ingress for the operator-created WAN DNAT. §6 of
-    # docs/decisions/2026-08-11-plex-direct-remote-access.md accepts `world:32400` as
-    # the containment cost of publishing Plex; it does not separately address LAN
+    # Off-cluster ingress for the operator-created WAN DNAT. The Exposure and
+    # containment design in docs/specs/013-plex-direct-remote-access.md accepts
+    # `world:32400` as the publishing cost; it does not separately address LAN
     # reachability. `world` is every address outside the cluster CIDR, so as an
     # observed consequence of that mechanism, this also admits LAN clients to the
     # LoadBalancer address. Scoped to 32400 alone: no other port is reachable

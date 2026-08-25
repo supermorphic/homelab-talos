@@ -17,4 +17,4 @@ for crd in vulnerabilityreports.aquasecurity.github.io configauditreports.aquase
 done
 
 just kube foundation-verify
-echo 'Phase 10 Trivy Operator acceptance passed: Kustomization and HelmRelease Ready, operator rolled out, and report CRDs installed.'
+echo 'Trivy Operator acceptance passed: Kustomization and HelmRelease Ready, operator rolled out, and report CRDs installed.'

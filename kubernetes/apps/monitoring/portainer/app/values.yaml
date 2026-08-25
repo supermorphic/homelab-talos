@@ -1,4 +1,4 @@
-# Portainer Phase 1: internal, read-only Kubernetes viewing. Git/Flux remain the
+# Read-only Portainer design: internal Kubernetes viewing. Git/Flux remain the
 # deployment authority; Docker Agents and database encryption are deferred.
 replicaCount: 1
 

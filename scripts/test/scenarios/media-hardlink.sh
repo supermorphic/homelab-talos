@@ -7,8 +7,8 @@
 #
 # Deterministic + safe: it creates a self-generated throwaway file (no external download, no
 # real content, no legal concern), hardlinks it across the two subtrees, asserts both paths
-# report the SAME inode with link count >= 2 (the same-inode proof from
-# docs/phase-11-media.md), then removes the test files. It does NOT touch real media.
+# report the SAME inode with link count >= 2 (the storage contract in
+# docs/specs/006-media-stack-architecture.md), then removes the test files. It does NOT touch real media.
 #
 # This integration target is operator-only + Lease-serialized but needs no chaos token
 # (it is non-destructive to real data). A focused filesystem runner, so it lives under
@@ -38,7 +38,7 @@ k() { kubectl --kubeconfig "$kubeconfig" --namespace "$ns" "$@"; }
 app_exec() { k exec "$1" -c app -- sh -c "$2"; }
 
 pod="$(k get pod -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
-[[ -n "$pod" ]] || { echo 'No sonarr pod found (is Phase 13 bootstrapped?).' >&2; write_recovery 'not-required' 'aborted; nothing created'; exit 3; }
+[[ -n "$pod" ]] || { echo 'No sonarr pod found (is Sonarr deployed?).' >&2; write_recovery 'not-required' 'aborted; nothing created'; exit 3; }
 
 cleanup() {
   local cleanup_ok=true

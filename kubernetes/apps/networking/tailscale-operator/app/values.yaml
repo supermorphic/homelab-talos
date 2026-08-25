@@ -10,6 +10,11 @@ operatorConfig:
   hostname: tailscale-operator
   defaultTags:
     - tag:k8s-operator
+  podAnnotations:
+    # The Operator reads its mounted OAuth client ID and secret once at startup.
+    # The guarded Secret writer stamps the ciphertext revision here so Flux rolls
+    # the Deployment whenever those credentials change.
+    sops-hash: 9dd42bcb0cffd3e205637e787e1b227adfbab79d
 
 # Scope guard: this deployment provides operator + ingress ProxyGroup only.
 # The Kubernetes API server proxy is intentionally disabled — exposing the API

@@ -10,7 +10,7 @@ kubeconfig="$1"
 namespace='media'
 expected_api='https://192.168.90.20:6443'
 # 115GiB. The ephemeral partition is 149GiB total, so the previous 200GiB floor
-# could never pass. See docs/decisions/2026-08-06-encode-benchmark-storage-contract-amendment.md.
+# could never pass. See docs/specs/002-movie-encoding-la-icq-evaluation.md.
 minimum_available_bytes=123480309760
 
 [[ -f "$kubeconfig" ]] || {

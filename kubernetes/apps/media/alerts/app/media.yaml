@@ -133,8 +133,8 @@ spec:
     # Detection for Plex's off-cluster port on 32400. Why each expression is shaped the
     # way it is — the flag="SYN" filter, the source regex, the flows-per-connection
     # ratio and its floor, the two absent() companions, and every threshold — is
-    # recorded in docs/runbooks/plex-remote-access-detection.md. Read it before editing
-    # any rule below.
+    # recorded in docs/specs/014-plex-remote-access-detection.md. The operational
+    # response is in docs/runbooks/plex-network-alerts.md.
     - name: plex-remote-access
       rules:
         - alert: PlexRemoteConnectionFlood

@@ -27,7 +27,7 @@ require_equal() {
 }
 
 for f in "$ks" "$values" "$hr" "$repo" "$route" "$ns" "$secret" "$echo_route" "$echo_service" "$internal_gateway" "$base/app/kustomization.yaml"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 10 Gatus source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Gatus source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./gatus/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./gatus/ks.yaml is not listed in kubernetes/apps/monitoring/kustomization.yaml.' >&2
@@ -190,4 +190,4 @@ EOF
 require_equal 'Rendered Gatus container envFrom Secret references' \
   "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .envFrom[]? | select(has("secretRef"))] | length' "$rendered")" '0'
 
-echo 'Phase 10 Gatus source, encrypted media API-key Secret, exact silent media-integration probes, legacy Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'
+echo 'Gatus source, encrypted media API-key Secret, exact silent media-integration probes, legacy Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'

@@ -4,7 +4,7 @@
 # auth.yml; the Homepage widget token is mirrored into Secret/homepage-ntfy because
 # Secrets cannot cross namespaces. Existing bcrypt hashes and tokens are preserved by
 # default; credentials are generated only for missing or explicitly rotated identities.
-# Nothing secret is ever printed. See docs/ntfy-startup-guide.md.
+# Nothing secret is ever printed. See docs/guides/ntfy-operations.md.
 #
 # Actions:
 #   ensure <identity>     Add a missing active identity (surgical; preserves all else).

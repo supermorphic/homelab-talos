@@ -189,11 +189,9 @@ while IFS= read -r -d '' source_path; do
 	}
 	output_path="/media/$relative_path"
 	((source_count += 1))
-	# A file the prober cannot open is a finding about the library, not a crash:
-	# §9 takes the same stance for output validation. Aborting on the first one
-	# would let a single unreadable title block the whole inventory, and cost a
-	# dispatch cycle to discover each subsequent one. The threshold below still
-	# fails loudly when the mount itself is broken.
+	# An unreadable file is a per-library finding, so record it and continue. One
+	# title must not block the inventory, while the threshold below still fails
+	# loudly when the mount itself is broken.
 	probe_status='probed'
 	probe_error=''
 	if metadata="$("$script_directory"/probe.sh "$source_path" 2>"$probe_error_temp")"; then

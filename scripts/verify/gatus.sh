@@ -49,4 +49,4 @@ echo_metric_response="$(
 [[ "$(yq -r '.data.result[0].value[1]' <<<"$echo_metric_response")" == '1' ]]
 
 just kube foundation-verify
-echo 'Phase 10 Gatus acceptance passed: Kustomization and HelmRelease Ready, deployment rolled out (in-memory storage), HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at gatus.lab.supermorphic.com. The deployed echo Gatus result proves ordinary DNS, trusted production wildcard TLS, the internal Gateway, route, Service, and backend.'
+echo 'Gatus acceptance passed: Kustomization and HelmRelease Ready, deployment rolled out (in-memory storage), HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at gatus.lab.supermorphic.com. The deployed echo Gatus result proves ordinary DNS, trusted production wildcard TLS, the internal Gateway, route, Service, and backend.'

@@ -46,8 +46,8 @@ for file in \
   "$cloudflare_secret" \
   "$pihole_secret"; do
   [[ -f "$file" ]] || {
-    echo "Missing required Phase 7 source: $file" >&2
-    echo 'Run just repo phase7-secrets if a provider Secret is missing.' >&2
+    echo "Missing required internal foundation source: $file" >&2
+    echo 'Run just repo foundation-provider-secrets if a provider Secret is missing.' >&2
     exit 1
   }
 done
@@ -76,7 +76,7 @@ openssl verify -CAfile "$pihole_ca" "$pihole_ca" >/dev/null
 # `just kube foundation-ca-expiry`, kept OUT of `just ci` so it cannot turn an
 # unrelated PR red purely because the calendar advanced.
 
-phase7_sources=(
+foundation_sources=(
   kubernetes/apps/security/cert-manager/ks.yaml
   kubernetes/apps/networking/metallb/ks.yaml
   kubernetes/apps/networking/envoy-gateway/ks.yaml
@@ -84,9 +84,9 @@ phase7_sources=(
   kubernetes/apps/networking/external-dns/ks.yaml
   kubernetes/apps/testing/echo/ks.yaml
 )
-suspend_states="$(yq ea -r '[select(.kind == "Kustomization") | (.spec.suspend // false)] | .[]' "${phase7_sources[@]}" | sort -u)"
+suspend_states="$(yq ea -r '[select(.kind == "Kustomization") | (.spec.suspend // false)] | .[]' "${foundation_sources[@]}" | sort -u)"
 [[ "$suspend_states" == 'true' || "$suspend_states" == 'false' ]] || {
-  echo 'Every Phase 7 Kustomization must be staged together: all suspended or all active.' >&2
+  echo 'Every internal foundation Kustomization must be staged together: all suspended or all active.' >&2
   exit 1
 }
 
@@ -156,6 +156,8 @@ proxy='kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml'
 [[ "$(yq -r '.spec.provider.kubernetes.envoyService.externalTrafficPolicy' "$proxy")" == 'Local' ]]
 
 dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'
+scripts/validate/external-dns-provider-revisions.sh \
+  "$pihole_ca" "$pihole_secret" "$dns_values"
 [[ "$(yq -r '.provider.name' "$dns_values")" == 'pihole' ]]
 [[ "$(yq -r '.registry' "$dns_values")" == 'noop' ]]
 [[ "$(yq -r '.policy' "$dns_values")" == 'upsert-only' ]]
@@ -236,6 +238,8 @@ helm template external-dns-internal external-dns \
   --version "$external_dns_chart_version" \
   --namespace external-dns \
   --values "$dns_values" >"$temp_dir/external-dns.yaml"
+scripts/validate/external-dns-provider-revisions.sh \
+  "$pihole_ca" "$pihole_secret" "$dns_values" "$temp_dir/external-dns.yaml"
 
 rg -q '^kind: Deployment$' "$temp_dir/cert-manager.yaml"
 rg -q '^  name: cert-manager$' "$temp_dir/cert-manager.yaml"
@@ -261,4 +265,4 @@ assert_command_finds_nothing \
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.volumes[] | select(.name == "pihole-ca") | .configMap.name' "$temp_dir/external-dns.yaml")" == 'pihole-ca' ]]
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "external-dns-internal") | .spec.template.spec.containers[] | select(.name == "external-dns") | .volumeMounts[] | select(.name == "pihole-ca") | [.mountPath, .readOnly] | join(" ")' "$temp_dir/external-dns.yaml")" == '/etc/ssl/pihole true' ]]
 
-echo 'Phase 7 source, SOPS provider Secrets, dependency graph, policy, and pinned Helm renders passed validation.'
+echo 'Internal foundation source, SOPS provider Secrets, dependency graph, policy, and pinned Helm renders passed validation.'

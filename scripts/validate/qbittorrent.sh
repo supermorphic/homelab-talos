@@ -17,7 +17,7 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$values" "$route" "$secret" "$base/app/kustomization.yaml" "$oci"; do
   [[ -f "$f" ]] || {
-    echo "Missing Phase 12 qBittorrent source: $f" >&2
+    echo "Missing qBittorrent source: $f" >&2
     echo 'Run just repo protonvpn-secrets if the ProtonVPN Secret is missing.' >&2
     exit 1
   }
@@ -38,6 +38,16 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.sops.age[].recipient' "$secret" | sort -u)" == "$expected_recipient" ]]
 [[ "$(yq -r '.metadata.name' "$secret")" == 'protonvpn' ]]
 [[ "$(yq -r '.metadata.namespace' "$secret")" == 'media' ]]
+
+# Both Secret consumers load their values only when the Pod starts: the WireGuard key
+# is an environment variable and config.toml uses a subPath mount. Tie the encrypted
+# Secret revision to the Pod template so a Git-managed rotation replaces the Pod.
+secret_revision="$(git hash-object "$secret")"
+rollout_revision="$(yq -r '.controllers.qbittorrent.pod.annotations."sops-hash" // ""' "$values")"
+[[ "$rollout_revision" == "$secret_revision" ]] || {
+  echo "qbittorrent pod annotation sops-hash ($rollout_revision) must equal git hash-object of protonvpn.sops.yaml ($secret_revision)." >&2
+  exit 1
+}
 
 # Gluetun native sidecar + kill-switch essentials.
 [[ "$(yq -r '.controllers.qbittorrent.initContainers.gluetun.restartPolicy' "$values")" == 'Always' ]]
@@ -115,7 +125,8 @@ chart_tag="$(yq -r '.spec.ref.tag' "$oci")"
 kustomize build "$base/app" >/dev/null
 helm template qbittorrent "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
 [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'qbittorrent' ]]
+[[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.metadata.annotations."sops-hash"' "$temp_dir/render.yaml")" == "$secret_revision" ]]
 [[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .restartPolicy' "$temp_dir/render.yaml")" == 'Always' ]]
 yq -r 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "gluetun") | .livenessProbe.exec.command[]' "$temp_dir/render.yaml" | rg -q '/v1/portforward'
 
-echo 'Phase 12 qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'
+echo 'qBittorrent+Gluetun source, encrypted ProtonVPN Secret, sidecar/kill-switch config, dependency graph, and pinned render passed validation.'

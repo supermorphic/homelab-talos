@@ -12,6 +12,7 @@ ns="$app/namespace.yaml"
 rbac="$app/rbac.yaml"
 policy="$app/ciliumnetworkpolicy.yaml"
 secret="$app/portainer-admin-password.sops.yaml"
+bootstrap='.just/bootstrap.just'
 # The rule lives in the monitoring alerts application; placement and wiring belong to
 # `just kube alerts-validate monitoring`. The content contract stays here.
 rule='kubernetes/apps/monitoring/alerts/app/portainer.yaml'
@@ -40,6 +41,16 @@ rg -Fq "jsonpath='{.metadata.annotations.helm\\.sh/resource-policy}'" "$verify_s
 
 rg -qx '  - ./portainer/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./portainer/ks.yaml is not wired into the monitoring root.' >&2
+  exit 1
+}
+rg -Fq \
+  'activate Portainer in Git by setting suspend=false and adding its Gatus endpoint in the same reviewed change' \
+  "$bootstrap" || {
+  echo 'Portainer bootstrap must describe the activation-time Gatus endpoint change.' >&2
+  exit 1
+}
+! rg -Fq 'The active Gatus probe is already declared.' "$bootstrap" || {
+  echo 'Portainer bootstrap must not claim that suspended source already has its Gatus endpoint.' >&2
   exit 1
 }
 
@@ -171,13 +182,13 @@ role_verbs="$(yq -r 'select(.kind == "ClusterRole" and .metadata.name == "portai
     exit 1
   }
 
-# Cilium Phase-1 isolation: Gateway/health ingress plus API/DNS egress only.
+# Cilium isolation for the read-only Portainer design: Gateway/health ingress plus API/DNS egress only.
 [[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$policy")" == 'portainer' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[].port] | sort | join(",")' "$policy")" == '9000,9443' ]]
 [[ "$(yq -r '.spec.egress[0].toEntities[0]' "$policy")" == 'kube-apiserver' ]]
 [[ "$(yq -r '[.spec.egress[].toPorts[]?.ports[]?.port] | unique | join(",")' "$policy")" == '53' ]]
 ! rg -q '(9001|AGENT_SECRET)' "$policy" "$values" || {
-  echo 'Pi Agent connectivity and AGENT_SECRET must remain deferred in Phase 1.' >&2
+  echo 'Pi Agent connectivity and AGENT_SECRET must remain outside the read-only Portainer design.' >&2
   exit 1
 }
 

@@ -8,6 +8,8 @@ and certificate are intentionally absent. Use a temporary staging resource only 
 a deliberate future issuance experiment.
 
 The Cloudflare token is scoped to Zone Read and DNS Edit for only
-`supermorphic.com`. Its tracked Secret is SOPS encrypted. Use the Phase 7 Just
-workflows in [`docs/phase-7-foundation.md`](../../../../docs/phase-7-foundation.md);
-do not apply issuers or certificates directly.
+`supermorphic.com`. Its tracked Secret is SOPS encrypted. Use the guarded foundation
+Just workflows in the [root README](../../../../README.md); do not apply issuers or
+certificates directly. The
+[certificate specification](../../../../docs/specs/016-cert-manager-staging-retirement.md)
+records the current production boundary.

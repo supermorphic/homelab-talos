@@ -88,6 +88,8 @@ kustomize build "$base/app" >/dev/null
 kustomize build "$base/proxygroup" >/dev/null
 printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
 HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-  helm template tailscale-operator tailscale-operator --repo https://pkgs.tailscale.com/helmcharts --version "$chart_version" --namespace tailscale --values "$values" >/dev/null
+  helm template tailscale-operator tailscale-operator --repo https://pkgs.tailscale.com/helmcharts --version "$chart_version" --namespace tailscale --values "$values" >"$temp_dir/rendered.yaml"
+scripts/validate/tailscale-operator-secret-revision.sh \
+  "$oauth" "$values" "$temp_dir/rendered.yaml"
 
-echo 'Tailscale operator source, split operator/proxygroup Kustomizations, dependency wiring, SOPS decryption, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, PrometheusRule alert coverage (operator + both proxy StatefulSets), and renders passed validation.'
+echo 'Tailscale operator source, split operator/proxygroup Kustomizations, dependency wiring, SOPS decryption and OAuth rollout stamp, pinned chart, privileged-namespace exception, API-proxy scope guard, ingress ProxyGroup, PrometheusRule alert coverage (operator + both proxy StatefulSets), and renders passed validation.'

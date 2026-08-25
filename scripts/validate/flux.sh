@@ -62,7 +62,7 @@ kustomize build kubernetes/apps/kube-system/cilium/app >"$temp_dir/cilium.yaml"
 kustomize build kubernetes/apps/flux-system/flux-canary/app >"$temp_dir/canary.yaml"
 
 # Presence check, not an exact set: adding an app must not require editing this
-# assertion (it broke on every Phase 9/10 addition). Confirm the critical
+# assertion (it broke whenever storage or monitoring was added). Confirm the critical
 # bootstrap Kustomizations build; app churn is caught by each app's *-validate.
 built_kustomizations="$(yq ea -r '[select(.kind == "Kustomization") | .metadata.name] | .[]' "$temp_dir/apps.yaml" | sort -u)"
 for required in cilium flux-canary; do

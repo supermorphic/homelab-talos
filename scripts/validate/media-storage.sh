@@ -15,7 +15,7 @@ for f in "$ns_ks" "$st_ks" "$nsfile" "$oci" "$pv" "$pvc" "$secret" \
   kubernetes/apps/media/storage/app/kustomization.yaml \
   kubernetes/apps/media/kustomization.yaml; do
   [[ -f "$f" ]] || {
-    echo "Missing Phase 11 media storage source: $f" >&2
+    echo "Missing shared media storage source: $f" >&2
     echo 'Run just repo media-smb-secrets if the SMB Secret is missing.' >&2
     exit 1
   }
@@ -64,4 +64,4 @@ oci_tag="$(yq -r '.spec.ref.tag' "$oci")"
 kustomize build kubernetes/apps/media/namespace/app >/dev/null
 kustomize build kubernetes/apps/media/storage/app >/dev/null
 
-echo 'Phase 11 media storage source, encrypted SMB Secret, static RWX SMB PV/PVC, dependency graph, and wiring passed validation.'
+echo 'Shared media storage source, encrypted SMB Secret, static RWX SMB PV/PVC, dependency graph, and wiring passed validation.'

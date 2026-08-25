@@ -3,12 +3,18 @@
 # Gluetun is a native sidecar (restartPolicy: Always) with a startup probe on its control
 # server, so qBittorrent only starts after the tunnel+firewall are up (fail-closed at
 # boot). Only Gluetun holds NET_ADMIN + /dev/net/tun; qBittorrent cannot alter routes.
-# See docs/phase-12-media.md.
+# See docs/guides/qbittorrent-vpn-operations.md for credential rotation and operations.
 controllers:
   qbittorrent:
     type: deployment
     strategy: Recreate
     pod:
+      annotations:
+        # Both ProtonVPN Secret consumers load only at Pod startup (environment and
+        # subPath mount). The guarded secret recipe stamps this Git blob revision so
+        # every encrypted Secret rotation changes the Pod template and replaces the Pod.
+        # CI verifies it against protonvpn.sops.yaml; do not edit it independently.
+        sops-hash: "53929f4ebf11da73813a8d6686efddbefd04b44e"
       securityContext:
         fsGroup: 568
         fsGroupChangePolicy: OnRootMismatch
@@ -78,8 +84,9 @@ controllers:
           # explicitly stopped VPN reports healthy; unreadable, unknown, transitional, and
           # crashed states fail so a hung control server cannot disable the fallback.
           # NOTE: whether a *container* restart clears the DoT cycle (vs needing a fresh
-          # pod/netns) is unvalidated live — see docs/phase-12-media.md; the
-          # QbittorrentGluetunRestartLoop alerts if this fallback repeats without recovery.
+          # pod/netns) is unvalidated live. See
+          # docs/guides/qbittorrent-vpn-operations.md. QbittorrentGluetunRestartLoop
+          # alerts if this fallback repeats without recovery.
           liveness:
             enabled: true
             custom: true

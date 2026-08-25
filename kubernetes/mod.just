@@ -267,7 +267,7 @@ foundation-ca-expiry: require-bash
     if openssl x509 -in "$pihole_ca" -noout -checkend 2592000 >/dev/null; then
       echo 'Pi-hole CA is valid for at least 30 more days.'
     else
-      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/pihole-integration.md).' >&2
+      echo 'WARNING: the committed Pi-hole CA expires within 30 days; rotate it (see docs/guides/pihole-externaldns-operations.md).' >&2
       exit 1
     fi
 
@@ -278,7 +278,7 @@ require-bash:
     source scripts/lib/common.sh
     require_bash
 
-# Verify the live Phase 5 Cilium state without changing cluster resources.
+# Verify the live Cilium state without changing cluster resources.
 cilium-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.cilium -- scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
 
@@ -288,7 +288,7 @@ cilium-verify: require-bash
 cilium-connectivity-test: require-bash
     @scripts/test/run-catalog-suite.sh test.cilium-connectivity -- scripts/test/scenarios/cilium-connectivity.sh {{quote(kubeconfig)}}
 
-# Validate the complete local Phase 6 source and pinned OCI render without mutating the cluster.
+# Validate the complete local Flux source and pinned OCI render without mutating the cluster.
 flux-validate: require-bash
     @scripts/validate/flux.sh
 
@@ -358,15 +358,15 @@ flux-status:
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployments,pods --output wide || status=1
     exit "$status"
 
-# Verify final Phase 6 ownership, source, SOPS, canary, and Cilium health.
+# Verify final Flux ownership, source, SOPS, canary, and Cilium health.
 flux-verify: flux-validate require-bash
     @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
 
-# Validate the complete local Phase 7 graph, encrypted providers, and pinned chart renders.
+# Validate the complete local internal foundation graph, encrypted providers, and pinned chart renders.
 foundation-validate: require-bash
     @scripts/validate/foundation.sh
 
-# Print the read-only Phase 7 controller, certificate, address, Gateway, DNS, and echo state.
+# Print the read-only internal foundation controller, certificate, address, Gateway, DNS, and echo state.
 foundation-status:
     #!/usr/bin/env bash
     set -u
@@ -379,9 +379,9 @@ foundation-status:
       exit 1
     }
 
-    echo '=== Phase 7 Flux Kustomizations ==='
+    echo '=== Internal foundation Flux Kustomizations ==='
     flux get kustomizations --namespace flux-system --show-source --kubeconfig "$kubeconfig" | rg 'NAME|cert-manager|wildcard-certificate|metallb|envoy-gateway|internal-gateway|external-dns-internal|echo' || status=1
-    echo '=== Phase 7 Helm sources and releases ==='
+    echo '=== Internal foundation Helm sources and releases ==='
     flux get sources oci --all-namespaces --kubeconfig "$kubeconfig" || status=1
     flux get sources helm --all-namespaces --kubeconfig "$kubeconfig" || status=1
     flux get helmreleases --all-namespaces --kubeconfig "$kubeconfig" || status=1
@@ -398,7 +398,7 @@ foundation-status:
     dig +short @"$HOMELAB_DNS_RESOLVER" echo.lab.supermorphic.com A || status=1
     exit "$status"
 
-# Verify the complete live Phase 7 internal foundation acceptance gate.
+# Verify the complete live internal foundation acceptance gate.
 foundation-verify: foundation-validate require-bash
     @scripts/test/run-catalog-suite.sh verification.foundation -- scripts/verify/foundation.sh {{quote(kubeconfig)}}
 
@@ -485,21 +485,21 @@ _flux-canary-test-raw: flux-verify
     just kube flux-verify
     echo 'Flux canary recreation passed with a new Secret UID.'
 
-# Validate the Phase 9 storage source: files, encrypted CIFS Secret, dependency
+# Validate the Longhorn storage source: files, encrypted CIFS Secret, dependency
 # graph, staged-suspend uniformity, key values, wiring, and the pinned Longhorn render.
 storage-validate: require-bash
     @scripts/validate/storage.sh
 
-# Validate the Phase 11 SMB CSI driver source, wiring, dependency, and pinned render.
+# Validate the SMB CSI driver source, wiring, dependency, and pinned render.
 csi-driver-smb-validate: require-bash
     @scripts/validate/csi-driver-smb.sh
 
-# Validate the Phase 11 shared media storage: namespace + app-template source,
+# Validate the shared media storage: namespace + app-template source,
 # encrypted SMB Secret, static RWX SMB PV/PVC, dependency graph, and wiring.
 media-storage-validate: require-bash
     @scripts/validate/media-storage.sh
 
-# Validate the Phase 11 Plex source: files, wiring, dependency, app-template chartRef,
+# Validate the Plex source: files, wiring, dependency, app-template chartRef,
 # values (Recreate + RWO config, shared media-data, emptyDir transcode), HTTPRoute,
 # and the pinned app-template render.
 plex-validate: require-bash
@@ -516,19 +516,19 @@ storage-verify: require-bash
 storage-provisioning-test: require-bash
     @scripts/test/run-catalog-suite.sh test.storage-provisioning -- scripts/test/scenarios/storage-provisioning.sh {{quote(kubeconfig)}}
 
-# Verify the live Phase 11 SMB CSI driver: Kustomization Ready, controller +
+# Verify the live SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
 csi-driver-smb-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.csi-driver-smb -- scripts/verify/csi-driver-smb.sh {{quote(kubeconfig)}}
 
-# Verify the live Phase 11 shared media storage: Kustomizations Ready and the
+# Verify the live shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)
-# and the documented hardlink proof (docs/phase-11-media.md); binding a static PV is
+# and the media-hardlink integration test; binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(kubeconfig)}}
 
-# Verify the live Phase 11 Plex: Kustomization + HelmRelease Ready, rollout complete,
+# Verify the live Plex app: Kustomization + HelmRelease Ready, rollout complete,
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.
 plex-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.plex -- scripts/verify/plex.sh {{quote(kubeconfig)}}
@@ -548,22 +548,22 @@ plex-network-observe seconds='300': require-bash
 plex-network-policy-test: require-bash
     @scripts/test/run-catalog-suite.sh test.plex-network-policy -- scripts/test/scenarios/plex-network-policy.sh {{quote(kubeconfig)}}
 
-# Validate the Phase 11 Intel GPU device plugin source: files, wiring, dependency,
+# Validate the Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
 intel-gpu-plugin-validate: require-bash
     @scripts/validate/intel-gpu-plugin.sh
 
-# Verify the live Phase 11 Intel GPU device plugin: Kustomization Ready, DaemonSet
+# Verify the live Intel GPU device plugin: Kustomization Ready, DaemonSet
 # rolled out, and every node advertising gpu.intel.com/i915 (QuickSync capacity).
 intel-gpu-plugin-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.intel-gpu-plugin -- scripts/verify/intel-gpu-plugin.sh {{quote(kubeconfig)}}
 
-# Validate the Phase 12 qBittorrent+Gluetun source: files, wiring, dependency,
+# Validate the qBittorrent+Gluetun source: files, wiring, dependency,
 # encrypted ProtonVPN Secret, the sidecar/kill-switch essentials, and the pinned render.
 qbittorrent-validate: require-bash
     @scripts/validate/qbittorrent.sh
 
-# Verify the live Phase 12 qBittorrent: Kustomization + HelmRelease Ready, rollout,
+# Verify the live qBittorrent: Kustomization + HelmRelease Ready, rollout,
 # HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway.
 qbittorrent-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.qbittorrent -- scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
@@ -581,7 +581,7 @@ arr-validate: require-bash
 arr-verify app: require-bash
     @scripts/test/run-catalog-suite.sh verification.{{app}} -- scripts/verify/arr.sh {{quote(app)}} {{quote(kubeconfig)}}
 
-# Validate the Phase 14 Seerr source: files, wiring, no-secret ks, app-template chartRef,
+# Validate the Seerr source: files, wiring, no-secret ks, app-template chartRef,
 # config-only PVC (Longhorn RWO + Recreate + keep at /app/config), HTTPRoute, Gatus probe,
 # and the pinned app-template render. Cluster-independent — part of `just ci`.
 seerr-validate: require-bash
@@ -603,7 +603,7 @@ alerts-validate domain: require-bash
 alerts-coverage-validate: require-bash
     @scripts/validate/alerts-coverage.sh
 
-# Verify the live Phase 14 Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
+# Verify the live Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(kubeconfig)}}
@@ -898,7 +898,7 @@ qbit-manage-e2e-debug-cleanup run_id: require-bash
     }
     echo "Removed preserved qbit_manage E2E resources for run $run_id."
 
-# Validate the Phase 10 monitoring source: files, encrypted Grafana Secret,
+# Validate the monitoring source: files, encrypted Grafana Secret,
 # dependency graph, staged-suspend uniformity, key values, wiring, HTTPRoutes,
 # and the pinned kube-prometheus-stack render.
 monitoring-validate: require-bash
@@ -946,7 +946,7 @@ grafana-admin-reset: require-bash
     [[ "$ok" == 'yes' ]] || { echo 'Grafana admin creds still fail to authenticate after reset.' >&2; exit 1; }
     echo 'Grafana DB admin password reset to match the grafana-admin Secret; API auth verified. (Sync the homepage-grafana Secret to the same creds via just repo homepage-grafana-secrets + restart homepage for the widget.)'
 
-# Validate the Phase 10 Gatus source: files, wiring, namespace gateway label,
+# Validate the Gatus source: files, wiring, namespace gateway label,
 # staged suspend, key values, HTTPRoute, and the pinned chart render.
 gatus-validate: require-bash
     @scripts/validate/gatus.sh
@@ -956,7 +956,7 @@ gatus-validate: require-bash
 gatus-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.gatus -- scripts/verify/gatus.sh {{quote(kubeconfig)}}
 
-# Validate the staged Portainer Phase 1 source: encrypted bootstrap Secret,
+# Validate the staged read-only Portainer design: encrypted bootstrap Secret,
 # read-only RBAC, Cilium isolation, internal route, retained Longhorn PVC, and
 # exact chart post-render. Cluster-independent; included in `just ci`.
 portainer-validate: require-bash
@@ -1015,7 +1015,7 @@ test-reports-diagnostics: require-bash
 portainer-persistence-test: require-bash
     @scripts/test/run-catalog-suite.sh test.portainer-persistence -- scripts/verify/portainer-persistence.sh {{quote(kubeconfig)}}
 
-# Validate the Phase 10 Homepage source: files, wiring, namespace gateway label,
+# Validate the Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
 homepage-validate: require-bash
     @scripts/validate/homepage.sh
@@ -1025,7 +1025,7 @@ homepage-validate: require-bash
 homepage-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.homepage -- scripts/verify/homepage.sh {{quote(kubeconfig)}}
 
-# Validate the Phase 10 Trivy Operator source: files, wiring, staged suspend,
+# Validate the Trivy Operator source: files, wiring, staged suspend,
 # dependency, pinned chart, key scanner settings, and the render.
 trivy-validate: require-bash
     @scripts/validate/trivy.sh

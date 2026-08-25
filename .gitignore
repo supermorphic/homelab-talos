@@ -25,12 +25,6 @@
 /.test-reports/
 /.test-campaigns/
 /.test-private-results/
-# Local Superpowers visual-companion state includes browser session keys.
-/.superpowers/
-# Brainstorming specs and implementation plans stay uncommitted; durable decisions
-# belong in docs/decisions/ instead.
-/docs/superpowers/specs/
-/docs/superpowers/plans/
 *.dec.yaml
 *.decrypted.yaml
 

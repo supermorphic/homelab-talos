@@ -246,6 +246,8 @@ pihole-ca-refresh:
     expected_confirmation='refresh:pihole-ca:p1:pi.hole'
     pihole_host='p1'
     target='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
+    secret='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
+    values='kubernetes/apps/networking/external-dns/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-pihole-ca-refresh.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     [[ "${PIHOLE_CA_REFRESH_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -268,33 +270,41 @@ pihole-ca-refresh:
     openssl x509 -in "$temp_dir/pihole-ca.crt" -noout -text | rg -q 'CA:TRUE'
 
     new_fingerprint="$(openssl x509 -in "$temp_dir/pihole-ca.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
-    if [[ -f "$target" ]] && cmp -s "$target" "$temp_dir/pihole-ca.crt"; then
+    scripts/repository/stamp-external-dns-provider.sh \
+      "$temp_dir/pihole-ca.crt" "$secret" "$values" "$temp_dir/values.yaml"
+    ca_changed=true
+    values_changed=true
+    [[ ! -f "$target" ]] || ! cmp -s "$target" "$temp_dir/pihole-ca.crt" || ca_changed=false
+    cmp -s "$values" "$temp_dir/values.yaml" && values_changed=false
+    if [[ "$ca_changed" == false && "$values_changed" == false ]]; then
       echo "Tracked Pi-hole CA already matches p1 at SHA256=$new_fingerprint."
       exit 0
     fi
-    if [[ -f "$target" ]]; then
+    if [[ "$ca_changed" == true && -f "$target" ]]; then
       old_fingerprint="$(openssl x509 -in "$target" -noout -fingerprint -sha256 | cut -d= -f2)"
       echo "Replacing tracked Pi-hole CA SHA256=$old_fingerprint with SHA256=$new_fingerprint."
-    else
+    elif [[ "$ca_changed" == true ]]; then
       echo "Installing tracked Pi-hole CA SHA256=$new_fingerprint."
     fi
-    install -m 0644 "$temp_dir/pihole-ca.crt" "$target"
-    echo 'Review the certificate diff and fingerprint before committing the trust-anchor rotation.'
+    [[ "$ca_changed" == false ]] || install -m 0644 "$temp_dir/pihole-ca.crt" "$target"
+    [[ "$values_changed" == false ]] || install -m 0644 "$temp_dir/values.yaml" "$values"
+    echo 'Review the certificate, rollout-stamp, and fingerprint changes before committing the trust-anchor rotation.'
 
-# Validate Phase 7 provider credentials and write only SOPS-encrypted Secret manifests.
-phase7-secrets:
+# Validate internal foundation provider credentials and write only SOPS-encrypted Secret manifests.
+foundation-provider-secrets:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    expected_confirmation='write:phase7:cloudflare-and-pihole:sops'
+    expected_confirmation='write:foundation-providers:cloudflare-and-pihole:sops'
     cloudflare_target='kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml'
     pihole_target='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
     pihole_ca='kubernetes/apps/networking/external-dns/app/pihole-ca.crt'
+    external_dns_values='kubernetes/apps/networking/external-dns/app/values.yaml'
     pihole_api='https://pi.hole'
-    temp_dir="$(mktemp -d /tmp/homelab-talos-phase7-secrets.XXXXXX)"
+    temp_dir="$(mktemp -d /tmp/homelab-talos-foundation-provider-secrets.XXXXXX)"
     pihole_sid=''
     pihole_record_cleanup_needed=false
-    pihole_test_hostname="phase7-preflight-$$-${RANDOM}.lab.supermorphic.com"
+    pihole_test_hostname="provider-preflight-$$-${RANDOM}.lab.supermorphic.com"
     pihole_test_record="192.0.2.1 $pihole_test_hostname"
     pihole_test_url="$pihole_api/api/config/dns/hosts/192.0.2.1%20$pihole_test_hostname"
     pihole_curl=(
@@ -349,9 +359,9 @@ phase7-secrets:
       echo 'Set PIHOLE_PASSWORD to a dedicated Pi-hole v6 application password.' >&2
       exit 1
     }
-    [[ "${PHASE7_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to write the Phase 7 encrypted Secret manifests.' >&2
-      echo "Set PHASE7_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
+    [[ "${FOUNDATION_PROVIDER_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the internal foundation encrypted Secret manifests.' >&2
+      echo "Set FOUNDATION_PROVIDER_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
       exit 1
     }
 
@@ -457,9 +467,14 @@ phase7-secrets:
     ! rg -Fq -- "$CLOUDFLARE_API_TOKEN" "$temp_dir/cloudflare.sops.yaml"
     ! rg -Fq -- "$PIHOLE_PASSWORD" "$temp_dir/pihole.sops.yaml"
 
+    scripts/repository/stamp-external-dns-provider.sh \
+      "$pihole_ca" "$temp_dir/pihole.sops.yaml" "$external_dns_values" \
+      "$temp_dir/external-dns-values.yaml"
+
     mv -- "$temp_dir/cloudflare.sops.yaml" "$cloudflare_target"
     mv -- "$temp_dir/pihole.sops.yaml" "$pihole_target"
-    echo 'Phase 7 provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext was written.'
+    mv -- "$temp_dir/external-dns-values.yaml" "$external_dns_values"
+    echo 'Internal foundation provider credentials passed Cloudflare validation and a trusted-HTTPS Pi-hole create/delete proof; only SOPS ciphertext and the ExternalDNS rollout stamp were written.'
 
 # Validate the UNAS CIFS credentials and write only the SOPS-encrypted Longhorn
 # backup Secret (nas-credentials in longhorn-system). Best-effort smbclient auth
@@ -595,6 +610,7 @@ protonvpn-secrets:
 
     expected_confirmation='write:media:protonvpn:sops'
     target='kubernetes/apps/media/qbittorrent/app/protonvpn.sops.yaml'
+    values='kubernetes/apps/media/qbittorrent/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-protonvpn-secrets.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -647,8 +663,18 @@ protonvpn-secrets:
     ! rg -Fq -- "$WIREGUARD_PRIVATE_KEY" "$temp_dir/protonvpn.sops.yaml"
     ! rg -Fq -- "$apikey" "$temp_dir/protonvpn.sops.yaml"
 
+    revision="$(git hash-object "$temp_dir/protonvpn.sops.yaml")"
+    cp -- "$values" "$temp_dir/values.yaml"
+    REV="$revision" yq -i \
+      '.controllers.qbittorrent.pod.annotations."sops-hash" = strenv(REV)' \
+      "$temp_dir/values.yaml"
+    [[ "$(yq -r '.controllers.qbittorrent.pod.annotations."sops-hash"' "$temp_dir/values.yaml")" == "$revision" ]]
+
     mv -- "$temp_dir/protonvpn.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (protonvpn in media). Control-server apikey is embedded in the encrypted config.toml."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(git hash-object "$target")" == "$revision" ]]
+    [[ "$(yq -r '.controllers.qbittorrent.pod.annotations."sops-hash"' "$values")" == "$revision" ]]
+    echo "Wrote SOPS-encrypted $target (protonvpn in media) and stamped its rollout revision in $values. Control-server apikey is embedded in the encrypted config.toml."
 
 # Write only the SOPS-encrypted Grafana admin Secret for kube-prometheus-stack
 # from GRAFANA_ADMIN_USER/GRAFANA_ADMIN_PASSWORD. Never echoes the password.
@@ -760,6 +786,7 @@ homepage-portainer-secrets:
 
     expected_confirmation='write:monitoring:homepage-portainer:sops'
     target='kubernetes/apps/monitoring/homepage/app/homepage-portainer.sops.yaml'
+    deployment='kubernetes/apps/monitoring/homepage/app/deployment.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-homepage-portainer.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -791,8 +818,13 @@ homepage-portainer-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/homepage-portainer.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$PORTAINER_API_KEY" "$temp_dir/homepage-portainer.sops.yaml"
 
+    scripts/repository/stamp-homepage-portainer.sh \
+      "$temp_dir/homepage-portainer.sops.yaml" "$deployment" \
+      "$temp_dir/homepage-deployment.yaml"
+
     mv -- "$temp_dir/homepage-portainer.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (homepage-portainer in homepage)."
+    mv -- "$temp_dir/homepage-deployment.yaml" "$deployment"
+    echo "Wrote SOPS-encrypted $target and stamped its revision into $deployment."
 
 # Write ONLY the SOPS-encrypted Homepage Plex widget Secret (homepage-plex in the homepage
 # namespace) from PLEX_TOKEN. Independent of the Grafana Secret. Never echoes the value.
@@ -1153,6 +1185,7 @@ qbit-manage-secrets:
 
     expected_confirmation='write:media:qbit-manage-secret:sops'
     target='kubernetes/apps/media/qbit-manage/app/qbit-manage-secret.sops.yaml'
+    values='kubernetes/apps/media/qbit-manage/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-qbit-manage-secrets.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -1189,9 +1222,14 @@ qbit-manage-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/qbit-manage-secret.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$QBITTORRENT_USERNAME" "$temp_dir/qbit-manage-secret.sops.yaml"
     ! rg -Fq -- "$QBITTORRENT_PASSWORD" "$temp_dir/qbit-manage-secret.sops.yaml"
+    scripts/repository/stamp-qbit-manage-secret.sh \
+      "$temp_dir/qbit-manage-secret.sops.yaml" "$values" "$temp_dir/values.yaml"
 
     mv -- "$temp_dir/qbit-manage-secret.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (qbit-manage-secret in media)."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(yq -r '.controllers."qbit-manage".pod.annotations."sops-hash"' "$values")" == \
+      "$(git hash-object "$target")" ]]
+    echo "Wrote SOPS-encrypted $target and stamped its rollout revision in $values."
 
 # Write only the SOPS-encrypted initial Portainer administrator password. Portainer
 # consumes this on first database initialization; rotating the live administrator
@@ -1244,7 +1282,8 @@ portainer-secrets:
 # tailscale namespace) from TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET. The chart
 # consumes this pre-created Secret when oauth.clientId/clientSecret are empty. Create the
 # OAuth client in the tailnet admin console first (tagged tag:k8s-operator, scopes
-# Devices/Core + Keys/Auth Keys + Services = write) — see docs/tailscale-operator.md.
+# Devices/Core + Keys/Auth Keys + Services = write) — see
+# docs/guides/tailscale-operator-operations.md.
 # Never echoes the values.
 tailscale-operator-secrets:
     #!/usr/bin/env bash
@@ -1252,6 +1291,7 @@ tailscale-operator-secrets:
 
     expected_confirmation='write:networking:tailscale-operator:sops'
     target='kubernetes/apps/networking/tailscale-operator/app/oauth.sops.yaml'
+    values='kubernetes/apps/networking/tailscale-operator/app/values.yaml'
     temp_dir="$(mktemp -d /tmp/homelab-talos-tailscale-operator.XXXXXX)"
     trap 'rm -rf -- "$temp_dir"' EXIT
     umask 077
@@ -1292,16 +1332,21 @@ tailscale-operator-secrets:
     [[ "$(yq -r '.sops.age[].recipient' "$temp_dir/operator-oauth.sops.yaml" | sort -u)" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
     ! rg -Fq -- "$TS_OAUTH_CLIENT_ID" "$temp_dir/operator-oauth.sops.yaml"
     ! rg -Fq -- "$TS_OAUTH_CLIENT_SECRET" "$temp_dir/operator-oauth.sops.yaml"
+    scripts/repository/stamp-tailscale-operator-secret.sh \
+      "$temp_dir/operator-oauth.sops.yaml" "$values" "$temp_dir/values.yaml"
 
     mv -- "$temp_dir/operator-oauth.sops.yaml" "$target"
-    echo "Wrote SOPS-encrypted $target (operator-oauth in tailscale)."
+    mv -- "$temp_dir/values.yaml" "$values"
+    [[ "$(yq -r '.operatorConfig.podAnnotations."sops-hash"' "$values")" == \
+      "$(git hash-object "$target")" ]]
+    echo "Wrote SOPS-encrypted $target and stamped its Operator rollout revision in $values."
 
 # Registry-backed ntfy credential lifecycle over the canonical ntfy Secret (ntfy-secret
 # in the ntfy namespace, carrying the NTFY_AUTH_* lists and the adapter's auth.yml) and
 # the mirrored Homepage widget Secret. ensure/reconcile/rotate/finalize preserve existing
 # credentials by default, generate them only for missing or rotated identities, and never
 # print secrets. Guard: NTFY_IDENTITY_CONFIRM='<action>:monitoring:ntfy:<identity>:sops'
-# (reconcile uses 'all' as the identity). See docs/ntfy-startup-guide.md.
+# (reconcile uses 'all' as the identity). See docs/guides/ntfy-operations.md.
 ntfy-identity action identity:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1321,35 +1366,46 @@ ntfy-subscriber-password:
 links-validate:
     scripts/validate/links-test.sh
 
-# Generate the root-level decision index from the lifecycle parser.
-decisions-index:
-    uv run --locked --no-dev python scripts/repository/decisions.py index --write
-
-# Reject decision-record transitions the accepted lifecycle does not permit. An Accepted
-# record is superseded, never revised. Compares against the merge base with origin/main,
-# so a base ref that is already present locally needs no network access.
-decisions-validate:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-      git fetch --quiet origin main
-    fi
-    uv run --locked --no-dev python scripts/repository/decisions.py validate --base origin/main
-    uv run --locked --no-dev python scripts/repository/decisions.py index --check
-
 # Run repository and declarative Talos source validation.
 verify: toolchain-validate verify-files verify-shell-scripts
     just talos source-validate
     just repo secret-scan
-    @echo "Repository and Phase 2 Talos source checks passed."
+    @echo "Repository and Talos source checks passed."
 
 # Fail unless running under bash >= 5. macOS /bin/bash 3.2 does not honor set -e
 # for a failed bare [[ ]] or (( )) mid-recipe, so validation assertions would
 # silently not gate. Recipes use #!/usr/bin/env bash, so a bash >= 5 earlier in
 # PATH (for example brew install bash) is what makes the guards effective.
-# Install the git pre-commit hooks into .git/hooks (idempotent).
+# Install the git pre-commit hooks into the shared Git common directory (idempotent).
 hooks:
-    pre-commit install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+    hooks_dir="$common_dir/hooks"
+    prior_hooks_path=''
+    prior_hooks_path_set=false
+    if prior_hooks_path="$(git config --local --get core.hooksPath)"; then
+      prior_hooks_path_set=true
+    else
+      status="$?"
+      [[ "$status" -eq 1 ]] || exit "$status"
+    fi
+    restore_prior_hooks_path() {
+      local status="$?"
+      trap - EXIT
+      if [[ "$prior_hooks_path_set" == true ]]; then
+        git config --local core.hooksPath "$prior_hooks_path"
+      else
+        git config --local --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
+      fi
+      exit "$status"
+    }
+    trap restore_prior_hooks_path EXIT
+    mkdir -p "$hooks_dir"
+    git config --local --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
+    pre-commit install --install-hooks
+    git config --local core.hooksPath "$hooks_dir"
+    trap - EXIT
 
 # Run every pre-commit hook against the whole tree. Fails if a hook fails or would
 # modify a file. Folded into `just ci` for local fast feedback and CI.
@@ -1377,7 +1433,10 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
-    @if rg --files docs/decisions/reviews | rg --pcre2 -q '/([0-9]{4}-[0-9]{2}-[0-9]{2})-\1-'; then echo "decision review filenames must not repeat their ISO date" >&2; exit 1; fi
+    @scripts/test/external-dns-provider-rollout-test.sh
+    @scripts/test/homepage-portainer-rollout-test.sh
+    @scripts/test/qbit-manage-secret-rollout-test.sh
+    @scripts/test/tailscale-operator-secret-rollout-test.sh
     @git check-ignore -q clusterconfig/nuc1.yaml
     @git check-ignore -q .talos/config
     @git check-ignore -q .kube/config

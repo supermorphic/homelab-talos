@@ -21,7 +21,7 @@ This tree contains declarative, repository-owned test inputs:
   leak sentinel), and `dns/` (active DNS-isolation: DNS resolves only via the
   Gluetun loopback resolver; LAN/home and cluster resolvers stay unreachable).
 
-See `docs/testing-layers.md` for how these layers fit together (Gatus continuous /
+See `docs/reference/testing-layers.md` for how these layers fit together (Gatus continuous /
 Chainsaw smoke routine / Chainsaw resilience controlled-failure / Sonobuoy
 `just kube conformance` on-demand). Sonobuoy is ephemeral — never scheduled or standing.
 
@@ -37,7 +37,7 @@ For routine grouped execution and automatic Allure publication, use
 `mise exec -- just test campaign-plan <name>` followed by its printed
 `mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
 `full` compositions provide nightly, weekly, and complete coverage respectively.
-See `docs/test-campaigns.md` for membership, cadence, safety stops, and resume
+See `docs/guides/test-campaign-operations.md` for campaign selection, cadence, safety stops, and resume
 behavior.
 
 Live commands are operator-only:
@@ -159,7 +159,7 @@ publish <run-id>`. Published reports remain continuously viewable at
 `https://tests.lab.supermorphic.com`; Caddy serves Allure's static output from a
 retained Longhorn PVC, so viewing does not require a local command or a running
 Allure process. GitHub Actions has no cluster path and does not publish there.
-See `docs/test-reports.md` for authority, retention, and activation details.
+See `docs/reference/test-reports.md` for authority, retention, and activation details.
 
 `scripts/test/junit_report.py` owns JUnit XML structure; `junit_tools.py` is its
 thin CLI. The library inspects and merges native reports, creates wrapper cases,

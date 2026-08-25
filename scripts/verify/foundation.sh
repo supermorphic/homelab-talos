@@ -11,14 +11,14 @@ require_bash
 }
 
 kubeconfig="$1"
-phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
+foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
 [[ -f "$kubeconfig" ]] || {
   echo "Missing $kubeconfig; run just talos kubeconfig." >&2
   exit 1
 }
 
 just kube flux-verify
-for name in "${phase7_names[@]}"; do
+for name in "${foundation_names[@]}"; do
   kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
     --for=condition=Ready "kustomization/$name" --timeout=15m
   state="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$name" --output json)"
@@ -62,6 +62,13 @@ envoy_ready="$(yq -r '.items[] | select(.metadata.labels."gateway.envoyproxy.io/
 
 kubectl --kubeconfig "$kubeconfig" --namespace external-dns rollout status deployment/external-dns-internal --timeout=10m
 dns_deployment="$(kubectl --kubeconfig "$kubeconfig" --namespace external-dns get deployment external-dns-internal --output json)"
+dns_deployment_file="$(mktemp "${TMPDIR:-/tmp}/homelab-talos-external-dns-deployment.XXXXXX")"
+trap 'rm -f -- "$dns_deployment_file"' EXIT
+printf '%s\n' "$dns_deployment" >"$dns_deployment_file"
+scripts/validate/external-dns-provider-revisions.sh \
+  kubernetes/apps/networking/external-dns/app/pihole-ca.crt \
+  kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml \
+  kubernetes/apps/networking/external-dns/app/values.yaml "$dns_deployment_file"
 dns_args="$(yq -r '.spec.template.spec.containers[0].args[]' - <<<"$dns_deployment")"
 for argument in \
   '--source=gateway-httproute' \
@@ -107,4 +114,4 @@ response="$(curl --silent --show-error --fail --max-time 15 \
 [[ -n "$response" ]]
 
 just kube cilium-postflight
-echo 'Phase 7 verification passed: certificates, MetalLB, Envoy Gateway, Pi-hole DNS, trusted HTTPS, echo, Talos, and etcd are healthy.'
+echo 'Internal foundation verification passed: certificates, MetalLB, Envoy Gateway, Pi-hole DNS, trusted HTTPS, echo, Talos, and etcd are healthy.'

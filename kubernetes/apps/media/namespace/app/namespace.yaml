@@ -4,7 +4,7 @@ kind: Namespace
 metadata:
   name: media
   labels:
-    # Privileged: the Phase-12 qBittorrent/Gluetun pod needs NET_ADMIN + /dev/net/tun,
+    # Privileged: the qBittorrent/Gluetun pod needs NET_ADMIN + /dev/net/tun,
     # and Plex needs /dev/dri, neither of which is permitted under baseline PSA.
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/enforce: privileged

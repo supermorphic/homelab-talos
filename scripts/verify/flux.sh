@@ -50,4 +50,4 @@ cilium_release="$(kubectl --kubeconfig "$kubeconfig" --namespace kube-system get
 [[ "$(yq -r '.spec.releaseName' - <<<"$cilium_release")" == 'cilium' ]]
 
 just kube cilium-postflight
-echo 'Phase 6 verification passed: Flux source and controller reconciliation, canary readiness, and Cilium ownership are healthy.'
+echo 'Flux verification passed: source and controller reconciliation, canary readiness, and Cilium ownership are healthy.'

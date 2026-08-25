@@ -19,26 +19,26 @@ set -euo pipefail
 
 # check_vpn_running <status>
 check_vpn_running() {
-  [[ "$1" == 'running' ]] || { echo "VPN status is '$1', expected 'running'." >&2; return 1; }
+  [[ "$1" == 'running' ]] || { echo 'VPN is not running.' >&2; return 1; }
 }
 
 # check_country_sweden <country>
 check_country_sweden() {
-  printf '%s' "$1" | grep -qi 'sweden' || { echo "VPN egress country is '$1', not Sweden." >&2; return 1; }
+  printf '%s' "$1" | grep -qi 'sweden' || { echo 'VPN egress country is not Sweden.' >&2; return 1; }
 }
 
 # check_port_agreement <forwarded_port> <listen_port>
 check_port_agreement() {
   local forwarded="$1" listen="$2"
-  [[ -n "$forwarded" && "$forwarded" != '0' ]] || { echo "No active forwarded port ('$forwarded')." >&2; return 1; }
-  [[ "$listen" == "$forwarded" ]] || { echo "qBittorrent listen_port ('$listen') != forwarded port ('$forwarded')." >&2; return 1; }
+  [[ -n "$forwarded" && "$forwarded" != '0' ]] || { echo 'No active forwarded port.' >&2; return 1; }
+  [[ "$listen" == "$forwarded" ]] || { echo 'qBittorrent listen port does not match the forwarded port.' >&2; return 1; }
 }
 
 # check_egress_matches_vpn <app_egress_ip> <vpn_ip>
 check_egress_matches_vpn() {
   local egress="$1" vpn="$2"
   [[ -n "$egress" ]] || { echo 'qBittorrent produced no egress IP.' >&2; return 1; }
-  [[ "$egress" == "$vpn" ]] || { echo "qBittorrent egress ('$egress') != VPN IP ('$vpn')." >&2; return 1; }
+  [[ "$egress" == "$vpn" ]] || { echo 'qBittorrent egress does not match the VPN IP.' >&2; return 1; }
 }
 
 # check_no_home_leak <observed_ip> <home_wan_ip> <context>
@@ -47,7 +47,10 @@ check_egress_matches_vpn() {
 check_no_home_leak() {
   local observed="$1" home="$2" context="$3"
   [[ -n "$home" ]] || { echo "Home/WAN reference IP is empty; cannot evaluate leak ($context)." >&2; return 1; }
-  [[ -z "$observed" || "$observed" != "$home" ]] || { echo "LEAK ($context): observed IP == home WAN IP $home." >&2; return 1; }
+  [[ -z "$observed" || "$observed" != "$home" ]] || {
+    echo "LEAK ($context): observed egress matches the home/WAN reference." >&2
+    return 1
+  }
 }
 
 # check_loopback_resolvers <newline-separated nameservers>
@@ -59,7 +62,7 @@ check_loopback_resolvers() {
   }
   while IFS= read -r resolver; do
     [[ -z "$resolver" || "$resolver" == '127.0.0.1' ]] || {
-      echo "DNS leak risk: qBittorrent resolver '$resolver' is not Gluetun loopback (127.0.0.1)." >&2
+      echo 'DNS leak risk: qBittorrent resolver is not Gluetun loopback.' >&2
       return 1
     }
   done <<<"$resolvers"
@@ -71,7 +74,7 @@ probe_main() {
   local kubeconfig="$1"
   local ns='media' pod
   pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=qbittorrent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
-  [[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is Phase 12 bootstrapped?).' >&2; exit 1; }
+  [[ -n "$pod" ]] || { echo 'No qbittorrent pod found (is qBittorrent deployed?).' >&2; exit 1; }
 
   gx() { kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c gluetun -- "$@"; }
   gapp() { kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c app -- "$@"; }
@@ -98,7 +101,6 @@ probe_main() {
     --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
   [[ -n "$home_ip" ]] || { echo 'Could not determine the node WAN IP (leak reference).' >&2; exit 1; }
 
-  echo "vpn_status=$vpn_status country=$vpn_country vpn_ip=$vpn_ip forwarded_port=$forwarded listen_port=$listen app_egress=$egress home_wan=$home_ip resolvers=$(tr '\n' ',' <<<"$resolvers")"
   check_vpn_running "$vpn_status"
   check_country_sweden "$vpn_country"
   check_no_home_leak "$vpn_ip" "$home_ip" 'vpn-ip'

@@ -19,10 +19,13 @@ workflow — never hand-edited or copied from the legacy repository.
 `config/recurring-jobs.yaml` runs a daily snapshot (retain 7) and a daily backup
 (retain 7) against the built-in `default` group.
 
-Talos prerequisites (Phase 9 Part A): the `siderolabs/iscsi-tools` and
+Talos prerequisites: the `siderolabs/iscsi-tools` and
 `siderolabs/util-linux-tools` extensions, the `/var/mnt/longhorn` user volume, and
 `machine.kubelet.extraMounts` exposing that path with shared propagation.
 
-See [`docs/phase-9-storage.md`](../../../../docs/phase-9-storage.md) and the
-guarded `just repo storage-secrets` / `just kube storage-validate` /
-`just bootstrap storage` / `just kube storage-verify` workflow.
+Use the guarded `just repo storage-secrets` / `just kube storage-validate` /
+`just bootstrap storage` / `just kube storage-verify` workflow. The
+[platform specification](../../../../docs/specs/010-talos-flux-platform.md) records the
+storage design rationale, and the
+[platform disaster-recovery runbook](../../../../docs/runbooks/platform-disaster-recovery.md)
+covers storage recovery during broader platform reconstruction.

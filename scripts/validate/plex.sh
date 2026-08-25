@@ -16,7 +16,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-plex-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$values" "$route" "$cnp" "$base/app/kustomization.yaml" "$oci"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 11 Plex source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Plex source: $f" >&2; exit 1; }
 done
 
 rg -qx '  - ./plex/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
@@ -126,8 +126,8 @@ fi
 [[ "$(yq -r '.spec.rules[0].timeouts.request' "$route")" == '0s' ]]
 
 # Observed containment: the CiliumNetworkPolicy is the hard prerequisite for any
-# off-cluster ingress. Its allow-list comes from the phase-1 Hubble capture plus the
-# designed identities observation cannot supply (docs/decisions/2026-08-03-plex-containment-capture.md).
+# off-cluster ingress. Its allow-list comes from the initial Hubble capture plus the
+# designed identities observation cannot supply (docs/specs/008-plex-relay-sonos.md).
 [[ "$(yq -r '.kind' "$cnp")" == 'CiliumNetworkPolicy' ]]
 [[ "$(yq -r '.metadata.name' "$cnp")" == 'plex' ]]
 [[ "$(yq -r '.metadata.namespace' "$cnp")" == 'media' ]]
@@ -135,7 +135,7 @@ fi
 [[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$cnp")" == 'plex' ]]
 
 # TCP 32400 is the only ingress port. Rules 0-1 are the captured consumer set from the
-# phase-1 Hubble capture; rule 2 (world) is a deliberate later widening, not a captured
+# initial Hubble capture; rule 2 (world) is a deliberate later widening, not a captured
 # consumer.
 [[ "$(yq -r '.spec.ingress | length' "$cnp")" == '3' ]]
 [[ "$(yq -r '[.spec.ingress[].toPorts[].ports[] | .port + "/" + .protocol] | unique | join(",")' "$cnp")" == '32400/TCP' ]]
@@ -144,7 +144,7 @@ fi
 [[ "$(yq -r '[.spec.ingress[0].fromEndpoints[].matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")] | sort | join(";")' "$cnp")" == 'app.kubernetes.io/name=homepage,k8s:io.kubernetes.pod.namespace=homepage;app.kubernetes.io/name=lidarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=radarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=seerr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=sonarr,k8s:io.kubernetes.pod.namespace=media;app.kubernetes.io/name=tautulli,k8s:io.kubernetes.pod.namespace=media;gateway.envoyproxy.io/owning-gateway-name=internal,k8s:io.kubernetes.pod.namespace=envoy-gateway-system' ]]
 [[ "$(yq -r '.spec.ingress[1] | keys | sort | join(",")' "$cnp")" == 'fromEntities,toPorts' ]]
 [[ "$(yq -r '.spec.ingress[1].fromEntities | sort | join(",")' "$cnp")" == 'host,remote-node' ]]
-# §6 of docs/decisions/2026-08-11-plex-direct-remote-access.md accepts `world:32400` as
+# docs/specs/013-plex-direct-remote-access.md accepts `world:32400` as
 # the containment cost of publishing Plex — but only there, and `cluster` never. Cilium's
 # `world` is everything outside the cluster CIDR, so as an observed consequence of that
 # mechanism, this also admits LAN clients to the LoadBalancer address.

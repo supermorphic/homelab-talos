@@ -29,7 +29,7 @@ for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.ya
   "$allure_icon" \
   "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
   "$monitoring_routes" "$portainer_route" "$ntfy_route" "$test_reports_route"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 10 Homepage source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Homepage source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
   echo 'Refusing: ./homepage/ks.yaml is not listed in the monitoring kustomization.' >&2
@@ -166,6 +166,11 @@ assert_command_finds_nothing \
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-portainer' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PORTAINER_API_KEY") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
+[[ "$(yq -r '.spec.template.metadata.annotations["homepage-portainer-sops-hash"]' "$dep")" == \
+  "$(git hash-object "$portainer_secret")" ]] || {
+  echo 'Refusing: the Homepage Portainer rollout stamp must equal git hash-object of homepage-portainer.sops.yaml.' >&2
+  exit 1
+}
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-prowlarr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_PROWLARR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_QBITTORRENT_USERNAME") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-qbittorrent' ]]
@@ -184,4 +189,4 @@ assert_command_finds_nothing \
 
 kustomize build "$base/app" >/dev/null
 
-echo 'Phase 10 Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted widget Secrets passed validation.'
+echo 'Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted widget Secrets passed validation.'

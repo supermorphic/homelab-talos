@@ -1,7 +1,7 @@
 # Kubernetes Source Boundary
 
-This directory holds resources reconciled by Flux. Cilium bootstrap begins in
-Phase 5 and the guarded production Flux entrypoint is implemented in Phase 6.
+This directory holds resources reconciled by Flux. Cilium is bootstrapped before Flux,
+and the guarded production Flux entrypoint then adopts it.
 
 ## Layout Rules
 
@@ -53,9 +53,9 @@ cilium/
 ```
 
 `values.yaml` is the single configuration source. `just bootstrap cilium` passes
-it to Helm during Phase 5. In Phase 6, the app Kustomization publishes the same
-file as a watched ConfigMap and the HelmRelease adopts the existing `cilium`
-release in `kube-system`. Cilium begins suspended and protected from pruning;
+it to Helm before Flux is available. After Flux bootstrap, the app Kustomization
+publishes the same file as a watched ConfigMap and the HelmRelease adopts the existing
+`cilium` release in `kube-system`. Cilium begins suspended and protected from pruning;
 the guarded adoption recipe records pod UIDs and restarts across the transfer
 before staging the permanent Git unsuspend. Do not apply `ks.yaml`,
 `ocirepository.yaml`, or `helmrelease.yaml` manually.
@@ -69,7 +69,7 @@ All supported Cilium workflows are Just recipes:
 | `just kube cilium-status` | Print read-only Helm, node, pod, and Cilium status |
 | `just kube cilium-diagnostics` | Print read-only Talos diagnostics from all cluster nodes |
 | `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health for routine or post-test checks |
-| `just kube cilium-verify` | Run the read-only live Phase 5 acceptance gate |
+| `just kube cilium-verify` | Run the read-only live Cilium acceptance gate |
 | `just kube cilium-connectivity-test` | Run and clean up temporary connectivity workloads |
 | `just bootstrap cilium` | Guard and install or reconcile the bootstrap Helm release |
 
@@ -87,23 +87,23 @@ Flux workflows are also Just-managed:
 | `just kube flux-verify` | Verify source auth, SOPS, canary, Cilium ownership, Talos, and etcd |
 | `just kube flux-canary-test` | Guard deletion and Flux recreation of the noncritical canary Secret |
 
-Phase 7 foundation workflows preserve the same boundary:
+Foundation workflows preserve the same boundary:
 
 | Command | Behavior |
 |---|---|
 | `just repo pihole-status` | Verify the external Pi-hole HTTPS identity, tracked CA, and application-session write policy |
 | `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation |
-| `just repo phase7-secrets` | Validate Cloudflare and Pi-hole credentials and write only SOPS ciphertext |
-| `just kube foundation-validate` | Validate the Phase 7 graph, policy, encrypted Secrets, and pinned chart renders |
+| `just repo foundation-provider-secrets` | Validate Cloudflare and Pi-hole credentials, write only SOPS ciphertext, and update the ExternalDNS rollout stamp |
+| `just kube foundation-validate` | Validate the foundation graph, policy, encrypted Secrets, and pinned chart renders |
 | `just kube foundation-status` | Print read-only certificate, MetalLB, Gateway, DNS, route, and workload state |
-| `just bootstrap foundation` | Guard and reconcile the nine suspended Phase 7 units in dependency order |
+| `just bootstrap foundation` | Guard and reconcile the nine suspended foundation units in dependency order |
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
 The Gateway owns one wildcard certificate in `networking`; application routes do
 not copy TLS private keys. ExternalDNS publishes only routes carrying
-`external-dns.k8s.io/audience=internal`. See
-[`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md) for credentials,
-confirmations, rollout order, failure behavior, and acceptance gates.
+`external-dns.k8s.io/audience=internal`. Use the
+[Pi-hole integration guide](../docs/guides/pihole-externaldns-operations.md) for its external DNS
+credential and recovery procedures.
 
 Kubernetes Secret manifests use the `*.sops.yaml` suffix. SOPS encrypts only
 their `data` and `stringData` fields so metadata remains reviewable by Flux. Load
@@ -124,10 +124,9 @@ Flux-managed changes in Git and let Flux reconcile them. For bootstrap or recove
 use the documented guarded `mise exec -- just bootstrap …` recipe rather than
 `kubectl apply`.
 
-See the root [`README.md`](../README.md) for workstation setup and
-[`docs/phase-6-flux.md`](../docs/phase-6-flux.md) for the staged bootstrap and
-adoption procedure. [`docs/phase-7-foundation.md`](../docs/phase-7-foundation.md)
-defines the internal service foundation, and
-[`docs/pihole-integration.md`](../docs/pihole-integration.md) covers Pi-hole
-reinstall and credential recovery. [`docs/sops.md`](../docs/sops.md) defines the
-encryption policy.
+See the root [`README.md`](../README.md) for guarded bootstrap workflows and the
+[platform specification](../docs/specs/010-talos-flux-platform.md) for the Cilium,
+Flux, and internal service foundation rationale. The
+[Pi-hole integration guide](../docs/guides/pihole-externaldns-operations.md) covers Pi-hole
+reinstall and credential recovery. The
+[SOPS guide](../docs/guides/sops-secret-operations.md) covers secret handling.

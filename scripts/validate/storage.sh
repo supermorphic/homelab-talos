@@ -17,7 +17,7 @@ for f in "$ks" "$secret" "$values" "$hr" "$repo" "$jobs" "$backuptarget" \
   "$base/app/namespace.yaml" "$base/app/kustomization.yaml" \
   "$base/config/kustomization.yaml" kubernetes/apps/storage/kustomization.yaml; do
   [[ -f "$f" ]] || {
-    echo "Missing Phase 9 storage source: $f" >&2
+    echo "Missing Longhorn storage source: $f" >&2
     echo 'Run just repo storage-secrets if the CIFS Secret is missing.' >&2
     exit 1
   }
@@ -63,4 +63,4 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
   helm template longhorn longhorn --repo https://charts.longhorn.io --version "$chart_version" --namespace longhorn-system --values "$values" >"$temp_dir/longhorn.yaml"
 rg -q '^  name: longhorn-manager$' "$temp_dir/longhorn.yaml"
 
-echo 'Phase 9 storage source, encrypted CIFS Secret, dependency graph, values, and pinned Longhorn render passed validation.'
+echo 'Longhorn storage source, encrypted CIFS Secret, dependency graph, values, and pinned render passed validation.'

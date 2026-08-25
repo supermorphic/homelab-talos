@@ -63,6 +63,15 @@ dl="$(yq -r '.persistence.data.advancedMounts."qbit-manage".app[0]' "$values")"
 want_hash="$(git hash-object "$config")"
 have_hash="$(yq -r '.controllers."qbit-manage".pod.annotations."config-hash" // "none"' "$values")"
 [[ "$have_hash" == "$want_hash" ]] || { echo "qbit-manage pod annotation config-hash ($have_hash) must equal git hash-object of config.yml ($want_hash) — update it in values.yaml." >&2; exit 1; }
+# Credentials are loaded through envFrom only when the app process starts. A Secret-only
+# reconcile does not replace the Pod, so bind the encrypted Secret revision into the Pod
+# template and require every credential change to produce a Recreate rollout.
+secret_revision="$(git hash-object "$secret")"
+secret_rollout_revision="$(yq -r '.controllers."qbit-manage".pod.annotations."sops-hash" // "none"' "$values")"
+[[ "$secret_rollout_revision" == "$secret_revision" ]] || {
+  echo "qbit-manage pod annotation sops-hash ($secret_rollout_revision) must equal git hash-object of qbit-manage-secret.sops.yaml ($secret_revision)." >&2
+  exit 1
+}
 # [invariant] qbit_manage rewrites config.yml on startup, so it MUST land on a writable
 # volume. Deliver it via the init-config copy from the read-only ConfigMap onto the writable
 # emptyDir /config — never mount the ConfigMap directly at /config/config.yml (read-only),
@@ -114,6 +123,7 @@ kustomize build "$base/app" >/dev/null
 helm template qbit-manage "$chart_url" --version "$chart_tag" --namespace media --values "$values" >"$temp_dir/render.yaml"
 [[ "$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/render.yaml")" == 'qbit-manage' ]]
 [[ "$(yq -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/render.yaml")" == 'Recreate' ]]
+[[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.metadata.annotations."sops-hash"' "$temp_dir/render.yaml")" == "$secret_revision" ]]
 ! yq -r 'select(.kind == "Service") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains a Service (should be UI-less).' >&2; exit 1; }
 ! yq -r 'select(.kind == "HTTPRoute") | .metadata.name' "$temp_dir/render.yaml" | rg -q . || { echo 'qbit-manage render unexpectedly contains an HTTPRoute.' >&2; exit 1; }
 

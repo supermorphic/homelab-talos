@@ -5,7 +5,7 @@ set working-directory := ".."
 talosconfig := ".talos/config"
 kubeconfig := ".kube/config"
 
-# Verify all Phase 4 prerequisites and refuse if etcd is already initialized.
+# Verify all Talos bootstrap prerequisites and refuse if etcd is already initialized.
 preflight:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -95,7 +95,7 @@ preflight:
       exit 1
     fi
 
-    echo 'Phase 4 preflight passed on nuc1, nuc2, and nuc3; etcd is not initialized.'
+    echo 'Talos bootstrap preflight passed on nuc1, nuc2, and nuc3; etcd is not initialized.'
 
 # Bootstrap etcd exactly once on nuc1 after the full guarded preflight.
 talos: preflight
@@ -225,7 +225,7 @@ retry-join node:
       --talosconfig "$talosconfig" \
       --wait=false
 
-# Verify the Phase 4 cluster and refresh the ignored workstation kubeconfig.
+# Verify the bootstrapped Talos cluster and refresh the ignored workstation kubeconfig.
 verify:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -361,7 +361,7 @@ verify:
       }
     done
 
-    echo 'Phase 4 verification passed: three-member etcd, one leader, no alarms, VIP API, and three expected NotReady nodes.'
+    echo 'Talos cluster verification passed: three-member etcd, one leader, no alarms, VIP API, and three expected NotReady nodes.'
 
 # Install or reconcile Cilium from the canonical app-local values after guarded preflight.
 cilium:
@@ -782,7 +782,7 @@ flux-adopt-cilium:
     fi
     echo "Review $source_file, then commit and push its suspend=false change before running just kube flux-verify."
 
-# Reconcile the suspended Phase 7 foundation in dependency order after guarded preflight.
+# Reconcile the suspended internal foundation in dependency order after guarded preflight.
 foundation:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -792,9 +792,9 @@ foundation:
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
     expected_network_confirmation='reserve:192.168.90.30-39:gateway:192.168.90.30'
-    expected_bootstrap_confirmation='bootstrap:phase7:internal-foundation:192.168.90.30'
-    phase7_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
-    phase7_sources=(
+    expected_bootstrap_confirmation='bootstrap:foundation:internal-gateway:192.168.90.30'
+    foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
+    foundation_sources=(
       kubernetes/apps/security/cert-manager/ks.yaml
       kubernetes/apps/networking/metallb/ks.yaml
       kubernetes/apps/networking/envoy-gateway/ks.yaml
@@ -821,7 +821,7 @@ foundation:
           "$pihole_api/api/auth" >/dev/null 2>&1 || true
       fi
       if [[ "$bootstrap_complete" != 'true' && "${#resumed[@]}" -gt 0 ]]; then
-        echo 'Phase 7 did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
+        echo 'The internal foundation did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
         for name in "${resumed[@]}"; do
           flux suspend kustomization "$name" \
             --namespace flux-system \
@@ -839,7 +839,7 @@ foundation:
     }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]]
     source scripts/lib/rollout.sh
-    require_deployed_source 'Phase 7 bootstrap' \
+    require_deployed_source 'internal foundation bootstrap' \
       .just/bootstrap.just kubernetes/mod.just \
       kubernetes/apps/kustomization.yaml \
       kubernetes/apps/security/kustomization.yaml \
@@ -851,8 +851,8 @@ foundation:
       kubernetes/apps/networking/external-dns \
       kubernetes/apps/testing/kustomization.yaml \
       kubernetes/apps/testing/echo
-    [[ "$(yq ea -r '[select(.kind == "Kustomization") | .spec.suspend] | .[]' "${phase7_sources[@]}" | sort -u)" == 'true' ]] || {
-      echo 'Refusing first Phase 7 bootstrap: all nine child Kustomizations must be staged suspended in Git.' >&2
+    [[ "$(yq ea -r '[select(.kind == "Kustomization") | .spec.suspend] | .[]' "${foundation_sources[@]}" | sort -u)" == 'true' ]] || {
+      echo 'Refusing the first internal foundation bootstrap: all nine child Kustomizations must be staged suspended in Git.' >&2
       exit 1
     }
 
@@ -866,10 +866,10 @@ foundation:
       --with-source \
       --kubeconfig "$kubeconfig" \
       --timeout 10m
-    for name in "${phase7_names[@]}"; do
+    for name in "${foundation_names[@]}"; do
       live_suspend="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$name" --output jsonpath='{.spec.suspend}')"
       [[ "$live_suspend" == 'true' ]] || {
-        echo "Refusing Phase 7 bootstrap: $name is not suspended in the live cluster." >&2
+        echo "Refusing internal foundation bootstrap: $name is not suspended in the live cluster." >&2
         exit 1
       }
     done
@@ -913,19 +913,19 @@ foundation:
         exit 1
       fi
     done
-    [[ "${PHASE7_NETWORK_CONFIRM:-}" == "$expected_network_confirmation" ]] || {
+    [[ "${FOUNDATION_NETWORK_CONFIRM:-}" == "$expected_network_confirmation" ]] || {
       echo 'Refusing MetalLB rollout without confirmation that 192.168.90.30-39 is excluded from DHCP.' >&2
-      echo "Set PHASE7_NETWORK_CONFIRM='$expected_network_confirmation' after checking the router reservation scope." >&2
+      echo "Set FOUNDATION_NETWORK_CONFIRM='$expected_network_confirmation' after checking the router reservation scope." >&2
       exit 1
     }
-    [[ "${PHASE7_BOOTSTRAP_CONFIRM:-}" == "$expected_bootstrap_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 7 foundation.' >&2
-      echo "Set PHASE7_BOOTSTRAP_CONFIRM='$expected_bootstrap_confirmation' after reviewing foundation status." >&2
+    [[ "${FOUNDATION_BOOTSTRAP_CONFIRM:-}" == "$expected_bootstrap_confirmation" ]] || {
+      echo 'Refusing to reconcile the internal foundation.' >&2
+      echo "Set FOUNDATION_BOOTSTRAP_CONFIRM='$expected_bootstrap_confirmation' after reviewing foundation status." >&2
       exit 1
     }
 
-    for name in "${phase7_names[@]}"; do
-      echo "Reconciling Phase 7 Kustomization $name."
+    for name in "${foundation_names[@]}"; do
+      echo "Reconciling internal foundation Kustomization $name."
       resumed+=("$name")
       flux resume kustomization "$name" \
         --namespace flux-system \
@@ -941,9 +941,9 @@ foundation:
 
     just kube foundation-verify
     bootstrap_complete=true
-    echo 'Phase 7 live acceptance passed. Change all Phase 7 Git sources to suspend=false, commit, push, and rerun just kube foundation-verify.'
+    echo 'Internal foundation live acceptance passed. Change all internal foundation Git sources to suspend=false, commit, push, and rerun just kube foundation-verify.'
 
-# Reconcile the suspended Phase 9 storage foundation (Longhorn) after guarded
+# Reconcile the suspended Longhorn storage foundation after guarded
 # checks, in dependency order, then verify. Flux decrypts the CIFS Secret
 # in-cluster, so this needs no operator SOPS key. On failure the resumed
 # Kustomizations are re-suspended while their resources are preserved.
@@ -962,7 +962,7 @@ storage:
     bootstrap_complete=false
     cleanup_storage() {
       if [[ "$bootstrap_complete" != 'true' && "${#resumed[@]}" -gt 0 ]]; then
-        echo 'Phase 9 storage did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
+        echo 'Longhorn storage did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
         for name in "${resumed[@]}"; do
           flux suspend kustomization "$name" \
             --namespace flux-system \
@@ -1005,7 +1005,7 @@ storage:
     done
 
     [[ "${STORAGE_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 9 storage foundation.' >&2
+      echo 'Refusing to reconcile the Longhorn storage foundation.' >&2
       echo "Set STORAGE_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing storage-validate." >&2
       exit 1
     }
@@ -1028,9 +1028,9 @@ storage:
     just kube storage-verify
     STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube storage-provisioning-test
     bootstrap_complete=true
-    echo "Phase 9 storage live acceptance passed. Change both storage Git sources to suspend=false, commit, push, rerun just kube storage-verify, and use STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube storage-provisioning-test when a fresh provisioning proof is required."
+    echo "Longhorn storage live acceptance passed. Change both storage Git sources to suspend=false, commit, push, rerun just kube storage-verify, and use STORAGE_PROVISIONING_CONFIRM='test:storage-provisioning' just kube storage-provisioning-test when a fresh provisioning proof is required."
 
-# Reconcile the suspended Phase 11 SMB CSI driver after guarded checks, then verify.
+# Reconcile the suspended SMB CSI driver after guarded checks, then verify.
 # Run this before media-storage (which depends on it). On failure the resumed
 # Kustomization is re-suspended while its resources are preserved.
 csi-driver-smb:
@@ -1047,7 +1047,7 @@ csi-driver-smb:
     bootstrap_complete=false
     cleanup_csi() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 11 csi-driver-smb did not pass; suspending it while preserving its resources.' >&2
+        echo 'The SMB CSI driver did not pass; suspending it while preserving its resources.' >&2
         flux suspend kustomization csi-driver-smb --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1075,7 +1075,7 @@ csi-driver-smb:
     }
 
     [[ "${CSI_DRIVER_SMB_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 11 SMB CSI driver.' >&2
+      echo 'Refusing to reconcile the SMB CSI driver.' >&2
       echo "Set CSI_DRIVER_SMB_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing csi-driver-smb-validate." >&2
       exit 1
     }
@@ -1087,9 +1087,9 @@ csi-driver-smb:
 
     just kube csi-driver-smb-verify
     bootstrap_complete=true
-    echo 'Phase 11 csi-driver-smb live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube csi-driver-smb-verify.'
+    echo 'SMB CSI driver live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube csi-driver-smb-verify.'
 
-# Reconcile the suspended Phase 11 media namespace + shared SMB storage after guarded
+# Reconcile the suspended media namespace + shared SMB storage after guarded
 # checks, in dependency order (media, then media-storage), then verify. Requires the
 # smb-credentials Secret (just repo media-smb-secrets) and csi-driver-smb already
 # bootstrapped. Flux decrypts the SMB Secret in-cluster, so this needs no operator
@@ -1110,7 +1110,7 @@ media-storage:
     bootstrap_complete=false
     cleanup_media() {
       if [[ "$bootstrap_complete" != 'true' && "${#resumed[@]}" -gt 0 ]]; then
-        echo 'Phase 11 media storage did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
+        echo 'Shared media storage did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
         for name in "${resumed[@]}"; do
           flux suspend kustomization "$name" --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
         done
@@ -1145,7 +1145,7 @@ media-storage:
     done
 
     [[ "${MEDIA_STORAGE_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 11 media storage foundation.' >&2
+      echo 'Refusing to reconcile the shared media storage foundation.' >&2
       echo "Set MEDIA_STORAGE_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing media-storage-validate." >&2
       exit 1
     }
@@ -1160,9 +1160,9 @@ media-storage:
 
     just kube media-storage-verify
     bootstrap_complete=true
-    echo 'Phase 11 media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run the hardlink proof in docs/phase-11-media.md.'
+    echo 'Media storage live acceptance passed. Set both suspend=false in Git, commit, push, and rerun just kube media-storage-verify. Then run mise exec -- just test integration media-hardlink.'
 
-# Reconcile the suspended Phase 11 Plex after guarded checks, then verify. Requires
+# Reconcile the suspended Plex app after guarded checks, then verify. Requires
 # media-storage already bootstrapped (the shared media-data PVC). On failure the
 # resumed Kustomization is re-suspended while its resources are preserved.
 plex:
@@ -1173,13 +1173,13 @@ plex:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase11:plex'
+    expected_confirmation='bootstrap:media:plex'
     ks='kubernetes/apps/media/plex/ks.yaml'
     resumed=false
     bootstrap_complete=false
     cleanup_plex() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 11 Plex did not pass; suspending it while preserving its resources.' >&2
+        echo 'Plex did not pass; suspending it while preserving its resources.' >&2
         flux suspend kustomization plex --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1208,7 +1208,7 @@ plex:
     }
 
     [[ "${PLEX_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile Phase 11 Plex.' >&2
+      echo 'Refusing to reconcile Plex.' >&2
       echo "Set PLEX_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing plex-validate." >&2
       exit 1
     }
@@ -1220,9 +1220,9 @@ plex:
 
     just kube plex-verify
     bootstrap_complete=true
-    echo 'Phase 11 Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then do the node-failure reschedule test in docs/phase-11-media.md.'
+    echo 'Plex live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube plex-verify. Then run the plex-cross-node-reschedule resilience test from the test catalog.'
 
-# Reconcile the suspended Phase 12 qBittorrent+Gluetun after guarded checks, then verify.
+# Reconcile the suspended qBittorrent+Gluetun app after guarded checks, then verify.
 # Requires the protonvpn Secret (just repo protonvpn-secrets) and media-storage already
 # bootstrapped. Flux decrypts the Secret in-cluster. After verify, run the BLOCKING
 # Chainsaw resilience scenario before flipping suspend=false. On failure the resumed
@@ -1235,13 +1235,13 @@ qbittorrent:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase12:qbittorrent'
+    expected_confirmation='bootstrap:media:qbittorrent'
     ks='kubernetes/apps/media/qbittorrent/ks.yaml'
     resumed=false
     bootstrap_complete=false
     cleanup_qbt() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 12 qBittorrent did not pass; suspending it while preserving its resources.' >&2
+        echo 'qBittorrent did not pass; suspending it while preserving its resources.' >&2
         flux suspend kustomization qbittorrent --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1270,7 +1270,7 @@ qbittorrent:
     }
 
     [[ "${QBITTORRENT_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 12 qBittorrent+Gluetun pod.' >&2
+      echo 'Refusing to reconcile the qBittorrent+Gluetun pod.' >&2
       echo "Set QBITTORRENT_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing qbittorrent-validate." >&2
       exit 1
     }
@@ -1282,7 +1282,7 @@ qbittorrent:
 
     just kube qbittorrent-verify
     bootstrap_complete=true
-    echo "Phase 12 qBittorrent live acceptance passed. NOW run the BLOCKING gate: CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' just test resilience qbittorrent-vpn-disconnect. Only after it passes, set suspend=false in Git, commit, push, and rerun just kube qbittorrent-verify."
+    echo "qBittorrent live acceptance passed. NOW run the BLOCKING gate: CLUSTER_CHAOS_CONFIRM='chaos:qbittorrent-vpn-disconnect' just test resilience qbittorrent-vpn-disconnect. Only after it passes, set suspend=false in Git, commit, push, and rerun just kube qbittorrent-verify."
 
 # Reconcile a suspended *arr app after guarded checks, then verify:
 #   just bootstrap arr <prowlarr|sonarr|radarr|lidarr>
@@ -1352,7 +1352,7 @@ arr app:
 
     just kube arr-verify "$app"
     bootstrap_complete=true
-    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/arr-stack-startup.md."
+    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/guides/media-automation-setup.md."
 
 # Reconcile a suspended config-only media app after guarded checks, then verify.
 # Operator-run. The allowlist intentionally contains only Tautulli.
@@ -1422,9 +1422,9 @@ media-app app:
     bootstrap_complete=true
     echo "$app liveness passed. Complete authentication, Plex connection, exact-status, library, and playback gates before activation."
 
-# Reconcile the suspended Phase 14 Seerr app after guarded checks, then verify. Operator-run.
+# Reconcile the suspended Seerr app after guarded checks, then verify. Operator-run.
 # Requires the suspended source to match deployed origin/main and
-# SEERR_BOOTSTRAP_CONFIRM='bootstrap:phase14:seerr'. On failure the resumed Kustomization is
+# SEERR_BOOTSTRAP_CONFIRM='bootstrap:media:seerr'. On failure the resumed Kustomization is
 # re-suspended while its resources are preserved.
 seerr:
     #!/usr/bin/env bash
@@ -1434,13 +1434,13 @@ seerr:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase14:seerr'
+    expected_confirmation='bootstrap:media:seerr'
     ks='kubernetes/apps/media/seerr/ks.yaml'
     resumed=false
     bootstrap_complete=false
     cleanup_seerr() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 14 Seerr did not pass; suspending it while preserving its resources.' >&2
+        echo 'Seerr did not pass; suspending it while preserving its resources.' >&2
         flux suspend kustomization seerr --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1469,7 +1469,7 @@ seerr:
     }
 
     [[ "${SEERR_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 14 Seerr app.' >&2
+      echo 'Refusing to reconcile the Seerr app.' >&2
       echo "Set SEERR_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing seerr-validate." >&2
       exit 1
     }
@@ -1481,11 +1481,11 @@ seerr:
 
     just kube seerr-verify
     bootstrap_complete=true
-    echo "Phase 14 Seerr live acceptance passed. Set suspend=false in Git, commit, push, rerun just kube seerr-verify. First-run: add Plex + Sonarr + Radarr (URLs + API keys) in the Seerr UI."
+    echo "Seerr live acceptance passed. Set suspend=false in Git, commit, push, rerun just kube seerr-verify. First-run: add Plex + Sonarr + Radarr (URLs + API keys) in the Seerr UI."
 
 # Reconcile the suspended FlareSolverr app (stateless Cloudflare solver for Prowlarr) after
 # guarded checks, then verify. Operator-run. Requires the suspended source to match deployed
-# origin/main and FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:phase13:flaresolverr'. On failure
+# origin/main and FLARESOLVERR_BOOTSTRAP_CONFIRM='bootstrap:media:flaresolverr'. On failure
 # the resumed Kustomization is re-suspended while its resources are preserved. This owns ONLY
 # the FlareSolverr app — the Prowlarr indexer-proxy + 1337x tag stay operator-managed UI.
 flaresolverr:
@@ -1496,7 +1496,7 @@ flaresolverr:
     owner='supermorphic'
     repository='homelab-talos'
     expected_origin="https://github.com/${owner}/${repository}.git"
-    expected_confirmation='bootstrap:phase13:flaresolverr'
+    expected_confirmation='bootstrap:media:flaresolverr'
     ks='kubernetes/apps/media/flaresolverr/ks.yaml'
     resumed=false
     bootstrap_complete=false
@@ -1550,8 +1550,8 @@ flaresolverr:
 # `just repo qbit-manage-secrets` (the committed Secret ships as an inert placeholder).
 # Requires the suspended source to match deployed origin/main and
 # QBIT_MANAGE_BOOTSTRAP_CONFIRM='bootstrap:media:qbit-manage'. On failure the resumed
-# Kustomization is re-suspended while its resources are preserved. Lands qbit_manage INERT
-# (dry-run, no tagging/limits/cleanup) — classification/limits/cleanup are later PRs.
+# Kustomization is re-suspended while its resources are preserved. The deployed policy is
+# active, so the operator must attend its first run after the readiness checks pass.
 qbit-manage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1612,12 +1612,13 @@ qbit-manage:
 
     just kube qbit-manage-verify
     bootstrap_complete=true
-    echo "qbit-manage live acceptance passed (INERT dry-run: no torrent field or file changed). Set suspend=false in Git, commit, push, rerun just kube qbit-manage-verify. Classification (PR2), share limits (PR3), and cleanup (PR4) are separate reviewed changes — see docs/qbit-manage.md."
+    echo "qbit-manage live readiness passed; the active classification, share-limit, and cleanup policy is running. Attend the first policy run before setting suspend=false through Git, then rerun just kube qbit-manage-verify. See docs/guides/qbit-manage-operations.md and docs/reference/qbit-manage.md."
 
-# Reconcile the suspended Phase 11 Intel GPU device plugin after guarded checks, then
-# verify. Deploy + activate this BEFORE adding the gpu.intel.com/i915 request to Plex
-# (requesting a resource that is not yet advertised would leave Plex pod Pending). On
-# failure the resumed Kustomization is re-suspended while its resources are preserved.
+# Reconcile the Intel GPU device plugin from source staged with suspend=true, then
+# verify it before the activation change sets suspend=false.
+# Plex already declares its gpu.intel.com/i915 request; reconcile Plex only after the
+# plugin advertises it. On failure, the resumed Kustomization is re-suspended while its
+# resources are preserved.
 intel-gpu-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1632,7 +1633,7 @@ intel-gpu-plugin:
     bootstrap_complete=false
     cleanup_gpu() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 11 intel-gpu-plugin did not pass; suspending it while preserving its resources.' >&2
+        echo 'The Intel GPU plugin did not pass; suspending it while preserving its resources.' >&2
         flux suspend kustomization intel-gpu-plugin --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1660,7 +1661,7 @@ intel-gpu-plugin:
     }
 
     [[ "${INTEL_GPU_PLUGIN_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 11 Intel GPU device plugin.' >&2
+      echo 'Refusing to reconcile the Intel GPU device plugin.' >&2
       echo "Set INTEL_GPU_PLUGIN_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing intel-gpu-plugin-validate." >&2
       exit 1
     }
@@ -1672,7 +1673,7 @@ intel-gpu-plugin:
 
     just kube intel-gpu-plugin-verify
     bootstrap_complete=true
-    echo 'Phase 11 intel-gpu-plugin live acceptance passed. Set suspend=false in Git, commit, push. THEN add the gpu.intel.com/i915 request to Plex (PR 11-3b) and confirm HW transcode.'
+    echo 'Intel GPU plugin live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube intel-gpu-plugin-verify. Plex already declares its gpu.intel.com/i915 request.'
 
 # Reconcile the suspended encoding benchmark app after guarded source and live-state
 # checks, then verify its inert resources. On any post-resume failure the child is
@@ -1742,7 +1743,7 @@ encode-benchmark:
     bootstrap_complete=true
     echo 'Encoding benchmark live acceptance passed with inert resources only. Set suspend=false in Git, commit, push, rerun mise exec -- just kube encode-benchmark-verify, then run mise exec -- just kube encode-benchmark-capabilities.'
 
-# Reconcile the suspended Phase 10 monitoring stack (kube-prometheus-stack) after
+# Reconcile the suspended monitoring stack (kube-prometheus-stack) after
 # guarded checks, in dependency order, then verify. Flux decrypts the Grafana
 # Secret in-cluster, so this needs no operator SOPS key. On failure the resumed
 # Kustomizations are re-suspended while their resources are preserved.
@@ -1761,7 +1762,7 @@ monitoring:
     bootstrap_complete=false
     cleanup_monitoring() {
       if [[ "$bootstrap_complete" != 'true' && "${#resumed[@]}" -gt 0 ]]; then
-        echo 'Phase 10 monitoring did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
+        echo 'Monitoring did not pass; suspending attempted Kustomizations while preserving their resources.' >&2
         for name in "${resumed[@]}"; do
           flux suspend kustomization "$name" \
             --namespace flux-system \
@@ -1804,7 +1805,7 @@ monitoring:
     done
 
     [[ "${MONITORING_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 10 monitoring stack.' >&2
+      echo 'Refusing to reconcile the monitoring stack.' >&2
       echo "Set MONITORING_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing monitoring-validate." >&2
       exit 1
     }
@@ -1826,9 +1827,9 @@ monitoring:
 
     just kube monitoring-verify
     bootstrap_complete=true
-    echo 'Phase 10 monitoring live acceptance passed. Change both monitoring Git sources to suspend=false, commit, push, and rerun just kube monitoring-verify.'
+    echo 'Monitoring live acceptance passed. Change both monitoring Git sources to suspend=false, commit, push, and rerun just kube monitoring-verify.'
 
-# Reconcile the suspended Phase 10 Gatus app after guarded checks, then verify.
+# Reconcile the suspended Gatus app after guarded checks, then verify.
 # On failure the resumed Kustomization is re-suspended, preserving its resources.
 gatus:
     #!/usr/bin/env bash
@@ -1844,7 +1845,7 @@ gatus:
     bootstrap_complete=false
     cleanup_gatus() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 10 Gatus did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        echo 'Gatus did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
         flux suspend kustomization gatus --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -1874,7 +1875,7 @@ gatus:
     }
 
     [[ "${GATUS_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 10 Gatus app.' >&2
+      echo 'Refusing to reconcile the Gatus app.' >&2
       echo "Set GATUS_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing gatus-validate." >&2
       exit 1
     }
@@ -1889,9 +1890,9 @@ gatus:
 
     just kube gatus-verify
     bootstrap_complete=true
-    echo 'Phase 10 Gatus live acceptance passed. Change the Gatus Git source to suspend=false, commit, push, and rerun just kube gatus-verify.'
+    echo 'Gatus live acceptance passed. Change the Gatus Git source to suspend=false, commit, push, and rerun just kube gatus-verify.'
 
-# Reconcile the suspended Portainer Phase 1 app after guarded source and static
+# Reconcile the suspended read-only Portainer design after guarded source and static
 # validation, then run live read-only acceptance. On failure the Kustomization is
 # re-suspended while its PVC and other resources are preserved.
 portainer:
@@ -1953,7 +1954,7 @@ portainer:
 
     just kube portainer-verify
     bootstrap_complete=true
-    echo 'Portainer Phase 1 live acceptance passed. Run the guarded persistence test, then change suspend=false and add the Gatus probe in the activation PR.'
+    echo 'Portainer live acceptance passed. Run the guarded persistence test, then activate Portainer in Git by setting suspend=false and adding its Gatus endpoint in the same reviewed change. Commit, push, wait for Flux, and rerun just kube portainer-verify.'
 
 # Reconcile the suspended persistent test-report host after guarded source/static
 # validation, then run live read-only acceptance. Publication remains a separate,
@@ -2020,7 +2021,7 @@ test-reports:
     bootstrap_complete=true
     echo 'Test-report server acceptance passed. Publish a sanitized current-main run, verify persistence, then activate it and add the Gatus probe in a follow-up PR.'
 
-# Reconcile the suspended Phase 10 Homepage app after guarded checks, then verify.
+# Reconcile the suspended Homepage app after guarded checks, then verify.
 # On failure the resumed Kustomization is re-suspended, preserving its resources.
 homepage:
     #!/usr/bin/env bash
@@ -2036,7 +2037,7 @@ homepage:
     bootstrap_complete=false
     cleanup_homepage() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 10 Homepage did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        echo 'Homepage did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
         flux suspend kustomization homepage --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -2066,7 +2067,7 @@ homepage:
     }
 
     [[ "${HOMEPAGE_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 10 Homepage app.' >&2
+      echo 'Refusing to reconcile the Homepage app.' >&2
       echo "Set HOMEPAGE_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing homepage-validate." >&2
       exit 1
     }
@@ -2081,9 +2082,9 @@ homepage:
 
     just kube homepage-verify
     bootstrap_complete=true
-    echo 'Phase 10 Homepage live acceptance passed. Change the Homepage Git source to suspend=false, commit, push, and rerun just kube homepage-verify.'
+    echo 'Homepage live acceptance passed. Change the Homepage Git source to suspend=false, commit, push, and rerun just kube homepage-verify.'
 
-# Reconcile the suspended Phase 10 Trivy Operator after guarded checks, then
+# Reconcile the suspended Trivy Operator after guarded checks, then
 # verify. On failure the resumed Kustomization is re-suspended, preserving its
 # resources.
 trivy:
@@ -2100,7 +2101,7 @@ trivy:
     bootstrap_complete=false
     cleanup_trivy() {
       if [[ "$bootstrap_complete" != 'true' && "$resumed" == 'true' ]]; then
-        echo 'Phase 10 Trivy did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
+        echo 'Trivy Operator did not pass; suspending the attempted Kustomization while preserving its resources.' >&2
         flux suspend kustomization trivy-operator --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || true
       fi
     }
@@ -2130,7 +2131,7 @@ trivy:
     }
 
     [[ "${TRIVY_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to reconcile the Phase 10 Trivy Operator.' >&2
+      echo 'Refusing to reconcile the Trivy Operator.' >&2
       echo "Set TRIVY_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing trivy-validate." >&2
       exit 1
     }
@@ -2145,12 +2146,12 @@ trivy:
 
     just kube trivy-verify
     bootstrap_complete=true
-    echo 'Phase 10 Trivy Operator live acceptance passed. Change the Trivy Git source to suspend=false, commit, push, and rerun just kube trivy-verify.'
+    echo 'Trivy Operator live acceptance passed. Change the Trivy Git source to suspend=false, commit, push, and rerun just kube trivy-verify.'
 
 # Reconcile the suspended Tailscale operator after guarded checks, then verify the
 # operator and its ingress ProxyGroup. Requires the operator-oauth Secret committed
 # (just repo tailscale-operator-secrets) and the tailnet-side prerequisites in
-# docs/tailscale-operator.md already in place. On failure the resumed Kustomization is
+# docs/guides/tailscale-operator-operations.md already in place. On failure the resumed Kustomization is
 # re-suspended, preserving its resources.
 tailscale-operator:
     #!/usr/bin/env bash
@@ -2227,7 +2228,7 @@ tailscale-operator:
 # or the operator cannot create the Connector devices. The Connector CRD is installed by the
 # already-active tailscale-operator. On failure the resumed Kustomization is re-suspended,
 # preserving its resources. After success, approve both /32 routes on BOTH devices and
-# configure split DNS per docs/tailscale-lab-domain.md, then open the activation PR.
+# configure split DNS per docs/guides/tailscale-lab-domain-access.md, then open the activation PR.
 tailscale-subnet-router:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2288,7 +2289,7 @@ tailscale-subnet-router:
 
     just kube tailscale-subnet-router-verify
     bootstrap_complete=true
-    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/tailscale-lab-domain.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
+    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/guides/tailscale-lab-domain-access.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
 
 # Reconcile the suspended ntfy notification service after guarded checks, then verify.
 # Requires the ntfy-secret committed (just repo ntfy-identity reconcile all) and the
@@ -2557,7 +2558,7 @@ agent-access:
 
 # Guard, reboot one node, and require full recovery before returning. Refuses
 # unless the cluster is already healthy so a rolling reboot never removes a second
-# node while another is degraded. Reused for Phase 8 soak and day-two maintenance.
+# node while another is degraded. Reused for the initial resilience soak and day-two maintenance.
 reboot node:
     #!/usr/bin/env bash
     set -euo pipefail

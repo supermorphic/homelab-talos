@@ -1,14 +1,12 @@
 schema_version: 2
 
-# Stable assurance metadata. Phase 2 makes this catalog authoritative for `just test`
-# dispatch and canonical Chainsaw artifacts. Phase 3 will attach the remaining runners
-# to the same result coordinator.
+# Stable assurance metadata. This catalog is authoritative for `just test` dispatch,
+# execution ownership, confirmation guards, and coordinated result artifacts.
 executions:
   ci:
     - validation.repo-lint
     - validation.repo-verify
     - validation.links
-    - validation.decisions
     - validation.test-harness
     - validation.policy-unit
     - validation.kubeconform
@@ -265,10 +263,6 @@ suites:
   - metadata: {id: validation.links, source: validation, framework: bash, suite: ci, tier: offline, target: documentation, scenario: links, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo links-validate", implementation: scripts/validate/links.sh}
-    native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.decisions, source: validation, framework: python, suite: ci, tier: offline, target: documentation, scenario: lifecycle, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
-    confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just repo decisions-validate", implementation: scripts/repository/decisions.py}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.test-harness, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

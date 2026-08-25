@@ -8,7 +8,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-seerr-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for f in "$ks" "$hr" "$values" "$route" "$base/app/kustomization.yaml" "$oci"; do
-  [[ -f "$f" ]] || { echo "Missing Phase 14 Seerr source: $f" >&2; exit 1; }
+  [[ -f "$f" ]] || { echo "Missing Seerr source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./seerr/ks.yaml' kubernetes/apps/media/kustomization.yaml || {
   echo 'Refusing: ./seerr/ks.yaml is not wired into kubernetes/apps/media/kustomization.yaml.' >&2
