@@ -38,6 +38,13 @@ Portainer UI does not imply that the ServiceAccount can perform the action. Nega
 authorization checks must continue to return `Forbidden` for mutation and sensitive
 reads.
 
+`localMgmt: false` has a non-obvious chart boundary: it suppresses the chart's
+cluster-administrator resources, but it does not disable discovery of the local
+Kubernetes environment. The post-rendered ServiceAccount therefore lets Portainer
+register that environment automatically while the injected identity keeps it
+read-oriented. Initial acceptance required the local environment to appear without an
+Agent, imported kubeconfig, or a second cluster-management identity.
+
 The Cilium policy limits application ingress to internal Envoy on port `9000` and node
 probes on `9443`. Egress is limited to the Kubernetes API and CoreDNS. This prevents the
 server from becoming a general-purpose network pivot even though it has cluster-wide
@@ -54,10 +61,20 @@ The retained database preserves the local environment and UI state. Its Longhorn
 uses the platform snapshot and backup policy. Loss of Portainer or its database does not
 change or remove any Flux-managed workload.
 
+Pod recreation was accepted only after the replacement retained the same claim and
+recovered the local environment and UI state. That test proves ordinary persistence,
+not high availability or the usability of a later backup restore. Portainer remains one
+writer, and loss of its database loses Portainer-owned users, tokens, and UI state while
+leaving the cluster desired state intact.
+
 ## Observability and validation
 
 Homepage discovers the internal route and uses a separate SOPS-encrypted API key for the
-read-only Kubernetes widget. Gatus checks the complete internal HTTPS path. Prometheus
+Kubernetes inventory widget. Separating that token gives it an independent lifecycle;
+it does not make the token least-privilege. A Portainer access token carries the
+authority of the user that created it, and the current CE design has not proved a
+narrower compatible role for all required widget calls. Gatus checks the complete
+internal HTTPS path. Prometheus
 rules cover sustained route failure, missing Gatus telemetry, and an absent or unbound
 Portainer claim.
 
@@ -76,10 +93,17 @@ port-forward actions.
   same reason.
 - Standard Agents on LAN Docker hosts are deferred. Their Docker socket access carries
   host-level authority, and Portainer CE does not provide a genuinely read-only Docker
-  role. Any later integration requires a separate design, bounded network paths, shared
-  agent authentication, and continued Ansible or Compose ownership of desired state.
+  role. Any later integration requires separate approval and design, a disposable Agent
+  measurement from every scheduler location before fixing the egress allowlist, shared
+  agent authentication, wrong-secret rejection, bounded network paths, and continued
+  Ansible or Compose ownership of desired state.
 - Database encryption is not part of the implemented design. Adding it requires a
   separate key lifecycle and recovery design rather than an unreviewed chart toggle.
+
+Material chart upgrades require renewed evidence that `localMgmt: false`, the
+post-rendered ServiceAccount, Service-port pruning, and trusted-origin format still have
+the same effect. A chart version change is not allowed to silently restore cluster-admin
+or another listener.
 
 ## Consequences
 

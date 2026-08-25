@@ -10,6 +10,13 @@ library, and notifies Plex when the library changes.
 The music library began as a greenfield service, so the design did not need to preserve
 an earlier Lidarr database or directory convention.
 
+Lidarr deliberately followed the established Radarr shape rather than introducing a
+fourth media-application pattern. The common Deployment, storage, route, and validation
+structure made differences visible as music-specific policy instead of accidental
+manifest drift. The shared `*arr` validator was converted from repeated branches to a
+table of application contracts for the same reason: adding a peer should add data, not
+another copy of validation logic.
+
 ## Workload and storage
 
 Lidarr runs as one `Recreate` Deployment in the `media` namespace. The pinned
@@ -67,6 +74,29 @@ private-tracker group at highest precedence, requires cleanup-enabled groups to 
 private tags, and requires unique priorities. These invariants replaced pairwise checks
 that stopped being sufficient when music became the third share-limit group.
 
+The precedence and exclusion rules protect different failure classes. A future
+finite-stop group with higher precedence than the private group could stop a private
+torrent early even when it does not clean up files; the strict-minimum rule catches that
+case. A cleanup-enabled group can instead match a generically private torrent that has no
+tracker-specific tag; the exclusion rule catches that case even when priorities are
+correct. Neither check is a substitute for the other.
+
+## Validation evidence and corrected assumptions
+
+The validator restructure was accepted through a differential method. The existing
+three-application result was captured first, the table-driven refactor had to preserve
+that result before Lidarr was added, and the Lidarr row then had to add exactly one peer
+contract. qbit_manage used the same sequence: first prove the generalized checks were
+inert for the existing groups, then add the music policy. This separated confidence in
+the refactor from confidence in the new application and policy.
+
+Offline checks cannot prove the storage behavior that matters most. Functional
+acceptance used the filesystem and qBittorrent as independent oracles: the download and
+library names reported link count two, and a force recheck completed without a hash
+error. The target library layout and the required hardlink and metadata-write states
+were fixed design requirements. Exact Lidarr UI labels and naming-token spelling were
+implementation-time facts and could change without weakening those requirements.
+
 ## Observability and implemented state
 
 The application is active in Git with `spec.suspend: false`. Homepage discovers its
@@ -88,6 +118,17 @@ double bulk storage during import. The longer music seeding window costs torrent
 state rather than another copy of the audio data. A healthy `/ping` or native-health
 response does not prove that Lidarr's external metadata service is available, so artist
 and album discovery can still fail while the workload remains healthy.
+
+The original Lidarr rollout intentionally left Plex Music creation and Plexamp/Sonos
+integration to later work; the current media guide now owns those integration steps.
+They were not evidence for accepting the Lidarr workload itself. Automated Chainsaw
+coverage also remains a deliberate all-`*arr` decision rather than one-off Lidarr
+coverage. A synthetic metadata transaction is still deferred because it would monitor a
+different external dependency than `/ping` or the authenticated native-health API.
+
+Revisit the inherited 1 GiB memory limit when observed metadata refreshes approach it,
+and add an external-metadata monitor only when its failure signal and operating cost are
+defined. Neither change requires a different storage, VPN, or torrent-lifecycle model.
 
 Current first-run, credential, naming, and recovery procedure belongs in
 `docs/guides/media-automation-setup.md`.

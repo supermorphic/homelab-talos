@@ -43,6 +43,12 @@ Git plus the operator-held age identity is the recovery authority for access con
 The ntfy database retains cache and runtime state, but the authorization model does not
 depend on manually recreating users after loss.
 
+The seven-day cache and authentication database normally survive Pod recreation on the
+retained claim. They do not make the service highly available. Loss of the claim can
+discard cached messages, while the declarative users, ACLs, and tokens reconstruct the
+authorization model on a replacement database. Recovery of access control is therefore
+stronger than recovery of message history.
+
 ## Private exposure and wake-up path
 
 LAN clients use the internal Envoy Gateway at `ntfy.lab.supermorphic.com`. Off-site
@@ -58,6 +64,11 @@ permits the internal Gateway, Tailscale proxies, Gatus, every endpoint in the `m
 namespace, Homepage, the alert bridge, and node probes. This grants network reachability,
 not topic-write authority. Required authentication and the token ACLs make Seerr the
 only media workload authorized to write the `media` topic.
+
+The `world:443` rule is a known policy limit. The cluster has no established
+FQDN-egress baseline that can prove a stable ntfy.sh-only rule, so the design prefers a
+clear broad HTTPS allowance to a brittle DNS-proxy policy. It must not be described as
+destination-specific containment.
 
 ## Alertmanager delivery path
 
@@ -98,6 +109,13 @@ and claim readiness, health, authentication and ACL behavior, scrape health, the
 Alertmanager connection, and receiver state. Producer-specific synchronization remains
 separate because it changes application-owned runtime configuration.
 
+These checks establish service health and authorization, not mobile delivery. Positive
+and negative ACL tests prove who can read or publish, and a retained-cache check can
+prove normal persistence. Only a real client test can prove APNs wake-up and retrieval
+while off-site over the private path; an in-cluster HTTP request cannot satisfy that
+acceptance gate. Because monitoring and delivery share the same cluster failure domain,
+independent external or dead-man monitoring also remains outside this design.
+
 ## Rejected alternatives
 
 - A public ntfy endpoint was unnecessary once Tailscale supplied a private off-site
@@ -109,12 +127,25 @@ separate because it changes application-owned runtime configuration.
 - Multiple direct producer integrations were rejected because they bypass Alertmanager
   lifecycle controls and fragment credential and notification policy.
 
+Attachments, email or phone delivery, payments, PostgreSQL, multiple replicas, browser
+push, and an interactive SSO layer that native clients cannot use are intentionally
+outside the current service. Optional direct producers and new topics are also deferred
+until the existing path is quiet and reliable. A new producer must add a signal with
+clear value, preserve credential separation, and account for duplicate delivery,
+silences, and Alertmanager ownership before it is admitted.
+
 ## Consequences
 
 The service has one recoverable writer and is not horizontally available. Failure of
 ntfy interrupts mobile delivery but does not stop Prometheus or Alertmanager from
 evaluating alerts. Least-privilege identities limit a compromised producer to its own
 topics, and private exposure avoids making the message service an Internet application.
+
+Reconsider public access only when private Tailscale retrieval cannot meet an actual
+client requirement and a separately designed Internet trust boundary is justified.
+Reconsider direct application publishing only for event-shaped information whose value
+outweighs the loss of the single Alertmanager lifecycle. Routine health, Flux events,
+and application-status changes remain on the existing Prometheus path.
 
 Current credential, client, producer, verification, and rotation procedure belongs in
 `docs/guides/ntfy-operations.md`.

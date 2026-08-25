@@ -107,6 +107,31 @@ capture: Homepage, Seerr, Sonarr, Radarr, and Lidarr. A capture that sees no imp
 must not remove those declared consumers. Policy verification covers required positive
 paths and denied cluster, LAN, multicast, and Kubernetes API paths.
 
+## Evidence and lineage boundary
+
+The identity repair came from a controlled failure and correction, not from the later
+network capture. The Relay child failed because numeric UID `568` had no passwd entry; a
+raw published Relay key mounted over Plex's cache also proved to be the wrong format. The
+successful experiment changed the identity resolution while leaving Plex's native cache
+and workload privileges unchanged. Relay authentication, port allocation, and cellular
+Plexamp playback then established that narrow result.
+
+The later containment capture answered different questions. It observed the active
+Gateway, Tautulli, host, and public-HTTPS paths and showed Plex attempting SSDP/UPnP
+multicast. Keeping that multicast denied was an explicit defense against Plex creating
+its own WAN mapping if router-side UPnP is enabled accidentally. The capture could not
+prove native Sonos reachability when the integration itself was not working, and it
+could not disprove event-driven consumers that happened to be idle. Source-declared
+contracts and positive/negative policy tests therefore supplement observed flows.
+
+The original lineage selected Relay as the primary path. That selection was first
+superseded by the retired public-Envoy experiment and then by the validated direct
+listener retained in specification 013. Native Sonos playback, Relay transport, and
+Plexamp player linking remain separate claims throughout that evolution. This
+specification owns the Relay fallback, identity repair, read-only media, and containment
+rationale; specifications 012–014 own the public experiment, current direct exposure,
+and detection.
+
 ## Public-port trust boundary
 
 ![Plex public-port trust boundaries](images/plex-remote-access-trust-boundaries.png)
@@ -140,6 +165,10 @@ host, credential, patching, bandwidth, and compromise boundary.
 The identity repair and workload hardening remain useful under every remote-access
 mechanism. Relay supplies a low-capability recovery path without another ingress rule,
 but direct access remains necessary for the validated Sonos and high-bitrate behavior.
+Relay is not reconsidered as the primary path without a new design and client-acceptance
+evidence that removes its bandwidth and compatibility limits. Disabling the direct path
+does not make Relay a control for terminating already established public sessions; that
+response boundary belongs to the direct-access design and runbook.
 The direct path and its detection design are recorded in
 [specification 013](013-plex-direct-remote-access.md) and
 [specification 014](014-plex-remote-access-detection.md).

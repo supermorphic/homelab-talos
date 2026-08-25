@@ -61,6 +61,22 @@ Media alert rules live in the separate `media-alerts` Flux Kustomization, which 
 on `kube-prometheus-stack`. This prevents a missing Prometheus Operator CRD from
 blocking reconciliation of Tautulli or the rest of the media applications.
 
+This placement is a failure-domain boundary, not a directory preference. Flux dry-runs
+the objects in one Kustomization together. Putting a `PrometheusRule` beside an
+application could therefore make an unavailable Prometheus CRD block that application's
+entire reconciliation. Adding `kube-prometheus-stack` as a dependency of every media
+application would avoid the CRD error but couple serving and automation workloads to the
+monitoring release. Isolating the rules lets monitoring fail without preventing the
+media applications from reconciling.
+
+The alert model distinguishes a failed series from a missing series. The generic
+`MediaEndpointDown` expression produces one alert for each reporting endpoint whose
+value is zero. A group-wide `absent()` expression is only a canary for loss of every
+Media series; it cannot detect one silently removed endpoint while another still
+reports. Plex and Tautulli therefore have explicit missing-series rules because their
+retained claims hold the state this design is intended to protect. Other media endpoints
+have down detection but no implied per-endpoint disappearance coverage.
+
 Tautulli does not publish directly to ntfy. Direct delivery would bypass Alertmanager's
 grouping, deduplication, inhibition, and silences and would create a second notification
 control plane. This choice can be reconsidered if remote-access reliability or
@@ -75,6 +91,14 @@ rendered chart output. The media policy rejects any later shared-media or Plex-v
 mount. Prometheus rule tests exercise alert timing and label matchers from the same rule
 source used by the cluster.
 
+The 15-minute availability window was selected from a plausible normal Plex replacement:
+up to two minutes for clean shutdown plus image and startup time made five to eight
+minutes of healthy rollout downtime realistic. A shorter alert would train operators to
+ignore expected deploy noise. Rule tests extract PromQL from the deployed manifest
+instead of copying it into a second rules file, then prove the pre-threshold, firing, and
+recovered states. Exact-status verification and Prometheus rule evaluation are separate
+oracles: kubelet's 200–399 probe success cannot establish either one.
+
 Read-only live verification checks Flux and Helm readiness, rollout, route acceptance,
 DNS, exact Service and Gateway status responses, Gatus series, and loaded rule health.
 Functional acceptance remains separate: authentication must work, a Plex library must
@@ -86,6 +110,18 @@ The retained config claim preserves watch history across pod replacement and nod
 rescheduling. The service gains session awareness without access to media files or the
 Plex database. Losing the config claim loses the greenfield history, while losing
 Tautulli itself does not affect Plex playback.
+
+The lineage intentionally excludes watch-history import, newsletters, a stream metrics
+exporter, and broad smoke, resilience, or automated playback tests. Real authentication,
+Plex library visibility, and one recorded playback session remain the functional gate
+because source validation cannot prove them.
+
+Reconsider direct ntfy publication only for valuable event-shaped signals that the
+metrics path cannot represent, especially remote-access reliability or account-sharing
+events. The value must justify losing Alertmanager's shared grouping, inhibition,
+silences, and resolved lifecycle. Buffering or transcode tuning and informational
+recently-added events do not meet that boundary on their own. Tautulli remains outside
+direct notification delivery unless a later design accepts that second policy surface.
 
 Current setup, authentication, API-key, and acceptance procedure belongs in
 `docs/guides/media-automation-setup.md`.

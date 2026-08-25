@@ -52,6 +52,23 @@ database, while the other application claims use `ReadWriteOnce`. Bulk media doe
 use Longhorn or node-local host paths. This separation gives configuration state
 replication and backup without forcing large shared files through block storage.
 
+The alternatives fail different requirements. Separate download and library shares
+would make hardlinks impossible and double data during import. Longhorn would turn the
+large shared library into replicated block storage, while node-local host paths would
+bind the library to one worker. Multiple active replicas were rejected because these
+applications use single-writer databases and do not supply an active-active state model.
+The static SMB volume accepts NAS availability as an external dependency in exchange for
+one shared, hardlink-capable filesystem.
+
+The hardlink contract was proven rather than inferred from matching paths: a guarded
+test created download and library names that reported the same inode with link count
+two. Plex recovery supplied a separate result. A planned replacement could close the
+database cleanly, while a hard node failure required Longhorn's node-down pod-deletion
+policy before the old `ReadWriteOncePod` attachment stopped blocking replacement. The
+measured recovery was minutes rather than seconds, which is the accepted meaning of
+automatic recovery here. That evidence did not prove a Longhorn restore, a complete NAS
+outage, or service through loss of one volume replica.
+
 ## qBittorrent and Gluetun network namespace
 
 qBittorrent and Gluetun share one Pod and therefore one network namespace. Gluetun is a
@@ -69,6 +86,15 @@ Startup gating and the ongoing firewall are separate safety layers. Live resilie
 acceptance interrupts the VPN and uses the observed public route as an independent
 oracle: traffic must fail closed and must never fall back to the residential path. The
 test also covers recovery and forwarded-port reacquisition.
+
+The live test measured from qBittorrent's own network namespace, not from Gluetun, and
+used both name-independent IP reachability and the observed exit path. It established
+that a stopped or interrupted tunnel produced no fallback egress and that a newly
+created Pod reacquired the tunnel and forwarded port. It also found a bounded recovery
+gap: Gluetun could restore data-plane egress while its DNS health loop and port-forward
+state remained unhealthy. Pod recreation was the known clean recovery. The current slow
+container liveness fallback detects that partial state, but whether a same-namespace
+container restart always clears it remains unproven.
 
 ## Application communication and routing
 
@@ -133,6 +159,13 @@ keys that change independently of Kubernetes manifests. Git remains authoritativ
 workload shape, security, storage, routes, and encrypted integration Secrets; the
 applications retain their own supported runtime settings on Longhorn.
 
+Patching SQLite databases or other application internals from Git was not treated as
+configuration management: it would couple reconciliation to private schemas and could
+race the application's writer. Supported application APIs and attended first-run state
+therefore remain the integration boundary. Seerr was selected as the maintained
+successor to the older request interfaces, and the optional FlareSolverr unit remains a
+direct-egress, per-indexer helper rather than a namespace-wide proxy or VPN consumer.
+
 ## Security and secrets
 
 Only Gluetun receives route-changing capability. Plex receives one GPU device resource.
@@ -163,6 +196,21 @@ wiring, dependency order, network-policy shape, and Prometheus rule behavior. Re
 verifiers check the deployed resources and endpoints. Controlled integration and
 resilience tests supply independent evidence for hardlinks, GPU use, VPN fail-closed
 behavior, recovery, and full request-to-library workflows.
+
+## Deferred work and reconsideration
+
+The original acceptance did not complete a throwaway Longhorn restore, a full NAS-outage
+exercise, or the one-replica-loss case for Plex. Those remain evidence gaps, not claims
+that recovery would fail. Resource values for the media managers and request service are
+inherited starting points; change them when measured scans, history growth, or request
+load justify it. Revisit runtime configuration automation only when an application
+offers a supported, idempotent interface with safe credential and rollback behavior.
+
+Optional dashboards and deeper continuous transactions do not change the architecture.
+The notification delivery spine belongs to the ntfy design, integration-health depth to
+specifications 018–021, and Plex direct exposure and detection to specifications 013 and
+014. Those later lineages must not be inferred from this common storage and application
+design.
 
 ## Consequences
 
