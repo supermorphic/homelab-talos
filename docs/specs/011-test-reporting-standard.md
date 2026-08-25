@@ -31,7 +31,7 @@ The suite class describes what a result proves:
 | Class | Contract |
 | --- | --- |
 | Offline validation | Cluster-independent source, render, schema, policy, lint, and unit checks. |
-| Verification | Read-only live acceptance of a deployed component, with an explicit observer, diagnostic, or operator access tier. |
+| Verification | Read-oriented live acceptance with no declared persistent or test-state mutation, using an explicit observer, diagnostic, or operator access tier. |
 | Smoke | Routine read-only resource readiness and basic application health. |
 | Integration | A focused contract across components or storage/network boundaries; it may create run-owned state. |
 | End to end | A complete controlled user or system workflow with functional assertions. |
@@ -116,11 +116,14 @@ to its intended target; disruptive campaign confirmations additionally bind the 
 revision and resolved campaign plan. Canonical metadata records only the confirmation
 variable name, never the confirmation value.
 
-Read-only smoke and verification may run concurrently. State-changing integration,
-end-to-end, resilience, mutating probe, and conformance suites use a renewable
-Kubernetes Lease. A campaign holds the Lease for its complete ordered sequence, and
-mutating child runners join that holder rather than acquiring or releasing competing
-leases.
+Smoke and verification suites whose catalog metadata declares no cluster mutation may
+run concurrently. This metadata describes the designed suite effect; it does not make
+the diagnostic credential a read-only API identity. Approved diagnostic verifiers may
+use their narrow pod subresource capabilities without declaring test-state mutation.
+State-changing integration, end-to-end, resilience, mutating probe, and conformance
+suites use a renewable Kubernetes Lease. A campaign holds the Lease for its complete
+ordered sequence, and mutating child runners join that holder rather than acquiring or
+releasing competing leases.
 
 Observer and diagnostic credentials are limited to registered verifiers whose catalog
 access tier matches their command behavior. Scoped agent execution, catalog ownership,
@@ -251,9 +254,11 @@ The failure rules deliberately preserve evidence from a valid failed assertion. 
 run may be published and the campaign may continue when cleanup and recovery are safe.
 Broken or invalid evidence, Lease loss, unsafe cleanup or recovery, source drift, and
 publication uncertainty stop the coordinator because later results would no longer have
-a trustworthy execution boundary. A resume retries only the bounded publication step
-and only while catalog membership, source revision, and deployed Flux authority are
-unchanged.
+a trustworthy execution boundary. Only a `publish-failed` journal is resumable. Resume
+validates the frozen catalog and source authority, reacquires the campaign Lease,
+publishes pending finalized children, skips completed suites, and continues unstarted
+members. No other stop reason is resumable, and any catalog, source, or deployed Flux
+drift requires a new campaign.
 
 ## Implementation discoveries
 
@@ -274,6 +279,14 @@ unchanged.
   `NET_BIND_SERVICE` capability even though the configured listener is unprivileged; it
   receives no ServiceAccount token or Kubernetes API authority.
 
+## Deferred assurance coverage
+
+The implemented catalog does not yet provide a controlled media-pipeline end-to-end
+scenario, isolated Longhorn restore and replica-recovery scenarios, or an isolated SMB
+remount and recovery scenario. These remain deliberate gaps: each needs run-owned test
+state and cleanup that cannot affect production application data. Current membership,
+dispatch, and any future execution procedure belong in the catalog and campaign guide.
+
 ## Reconsideration boundaries
 
 A new test framework is justified only when an implemented behavior cannot be expressed
@@ -281,8 +294,9 @@ clearly by the current tools and the new framework can still emit the canonical
 contract. Giving CI cluster credentials, adding an upload service, or moving publication
 into the cluster would create a new trust and authentication surface and requires a
 separate design. Load, performance, and soak campaigns should be added only after their
-service objectives and failure thresholds are defined. Campaign resume must not expand
-beyond unchanged-source publication repair.
+service objectives and failure thresholds are defined. Campaign resume must remain
+limited to a frozen campaign whose only stop was publication failure and whose catalog,
+source, and deployed authority are unchanged.
 
 ## Consequences
 

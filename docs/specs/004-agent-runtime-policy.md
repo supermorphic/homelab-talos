@@ -55,11 +55,13 @@ Authority is based on what an operation can do, not which command spells it.
   workflows.
 - Persistent changes to Flux-managed Kubernetes state go through Git so the desired
   state, review record, and live reconciliation remain aligned.
-- Agents may use approved workflows to mint task-scoped read-only cluster credentials.
-  Seeking or using elevated, write, administrative, or break-glass credentials requires
-  explicit operator authorization for the specific task. Secret creation, privileged
-  platform rollout, and destructive or persistent out-of-band cluster changes remain
-  operator-run.
+- Agents may use approved workflows to mint the task-scoped observer, diagnostic, and
+  Talos reader credential set. Observer and Talos reader operations are read-only.
+  Diagnostic access is reduced privilege and is authorized only through approved named
+  verifiers or separate specific operator authorization. Seeking or using elevated,
+  write, administrative, or break-glass credentials requires explicit operator
+  authorization for the specific task. Secret creation, privileged platform rollout,
+  and destructive or persistent out-of-band cluster changes remain operator-run.
 - Merge and auto-merge always require explicit authorization for that specific merge.
 
 This boundary permits useful read-only and reduced-privilege work without pretending
@@ -79,11 +81,12 @@ Credentials are separated by scope and checkout location.
 - The primary clone may hold the operator's administrative Kubernetes and Talos
   credentials for bootstrap and recovery.
 - A feature worktree begins without cluster credentials. When scoped verification needs
-  read-only access, the agent may use the approved repository workflow to mint
-  task-scoped Kubernetes and Talos reader credentials into that worktree without
-  operator intervention. Diagnostic subresources or any elevated, write,
-  administrative, or break-glass credential require explicit authorization for the
-  specific task.
+  cluster access, the agent may use the approved repository workflow to mint the
+  observer and diagnostic Kubernetes contexts and the Talos reader credential into that
+  worktree without operator intervention. The diagnostic context may be used only by an
+  approved named verifier or with separate specific operator authorization. Any
+  elevated, write, administrative, or break-glass credential requires explicit
+  authorization for the specific task.
 - Observer access covers the bounded resource reads needed by registered verifiers and
   denies Secret reads and mutation. Diagnostic access adds the named pod subresources
   required by specific verifiers. It is reduced privilege, not a claim of read-only
@@ -97,6 +100,11 @@ primary clone's administrative identity by path. The session-start hook reports 
 checkout kind and recognized credential tier and warns when key material is present in
 the environment. This hook provides visibility; the credential and RBAC scopes provide
 the actual authorization boundary.
+
+This is credential separation by repository location and policy, not isolation between
+operating-system users or processes on the same host. A stronger custody guarantee would
+require a separate enforcing mechanism; a path convention or warning hook cannot provide
+it.
 
 ## Git and worktree safety
 

@@ -27,6 +27,16 @@ legacy controllers, credentials, generated machine files, or unverified cipherte
 The platform favors one owner per responsibility and keeps recovery possible from
 reviewed source:
 
+- Proven HomeOps patterns were adopted selectively while local requirements and
+  ownership remained explicit. Adopting a cluster template wholesale would also import
+  its layout, providers, bootstrap assumptions, naming, and release cadence, then make
+  upstream divergence a permanent maintenance concern. Pure DIY would repeat solved
+  work in rendering, dependency ordering, secret delivery, and package layout. Copying
+  legacy deployment artifacts would preserve obsolete controllers, generated output,
+  ciphertext, and implicit discovery rather than the requirements they once served.
+  The chosen approach preserves useful intent and reauthors it in current Talos and Flux
+  source; templates and legacy repositories remain pattern libraries, not generators or
+  deployment inputs.
 - One monorepo was chosen over separate machine and application repositories because a
   bootstrap, networking, or storage change often crosses the Talos and Kubernetes
   boundary and must be reviewed as one compatibility decision.
@@ -74,8 +84,10 @@ label after an ad hoc Kubernetes edit.
 Talos `STATE` and `EPHEMERAL` volumes use LUKS2 encryption with TPM-bound keys tied to
 Secure Boot state. The dedicated Longhorn user volume is XFS and remains outside that
 TPM encryption boundary so storage recovery does not depend on the original node TPM.
-Application credentials on that volume remain independently protected through SOPS and
-application controls.
+SOPS protects secret values committed to Git and their declarative delivery into
+Kubernetes Secrets. It does not encrypt application databases or configuration written
+to a PVC. Data on the Longhorn volume follows each application's own storage controls
+and is not blanket-encrypted by SOPS or the Talos TPM boundary.
 
 ## Source, identity, and generation ownership
 
@@ -260,8 +272,10 @@ acceptance:
   existing Cilium release, and resumed reconciliation after controller restart.
 - The internal path from DNS through trusted TLS, Gateway API, and application routes
   passed as a complete foundation check.
-- Longhorn provisioning, replica placement, claim attachment, snapshot and backup
-  configuration, and recovery behavior passed the storage acceptance checks.
+- Longhorn provisioning, two-node replica placement, claim attachment, backup-target
+  availability, and recurring snapshot and backup configuration passed the storage
+  acceptance checks. The retained acceptance record did not prove a backup restore or a
+  post-reboot replica rebuild.
 
 These outcomes establish architecture, not a promise that the live cluster is currently
 healthy. Current status and recovery use the repository's scoped verification workflows
@@ -272,9 +286,13 @@ and runbooks.
 Cilium L2 or BGP can replace MetalLB only after stable operation and a measurable
 benefit justify moving ownership. A secret controller becomes appropriate when actual
 rotation, external-secret, or multi-cluster pressure outweighs its new credential and
-availability surface. Shared application bases should be introduced only after real
-duplication establishes a stable abstraction. Automated lifecycle management requires
-successful manual upgrade and rollback evidence first.
+availability surface. Shared application bases should be introduced only when the
+deferred Pi staging cluster creates real duplication and establishes a stable
+abstraction. That staging cluster can validate application composition, chart and
+Kustomize behavior, and multi-architecture compatibility. It cannot validate Talos,
+Secure Boot, x86 GPU behavior, or production storage performance and recovery.
+Automated lifecycle management requires successful manual upgrade and rollback evidence
+first.
 
 External or public service exposure, another reconciler, another CNI, and any change to
 the Talos, Kubernetes, or Cilium compatibility set require a new design decision. This
