@@ -24,6 +24,27 @@ Current validation rejects the retired issuer name, staging certificate name, an
 staging Secret name anywhere in Kubernetes source. A future staging issuance experiment
 must be temporary and deliberate rather than standing Flux-managed state.
 
+## Decision method and retirement gate
+
+Three credible choices were considered:
+
+| Choice | Decision and rationale |
+| --- | --- |
+| Keep a permanent staging canary | Rejected. It would continue ACME and DNS challenge work but would exercise neither the production account nor a served production route. |
+| Remove staging immediately from source | Rejected as unsafe without a live inventory. Source inspection could not exclude a live consumer or a CertificateRequest created outside the expected ownership chain. |
+| Retire standing staging state after a bounded inventory, and recreate it temporarily when needed | Chosen. It removed recurring unused state while preserving a deliberate future issuance test path. |
+
+The historical pre-prune safety gate was a read-only inventory of every live
+`Certificate` and `CertificateRequest` that referenced `letsencrypt-staging`. Only the
+expected staging wildcard and CertificateRequests owned by it were admissible. Any
+unrelated consumer stopped removal for review. This gate mattered because the source
+finding was narrower: no source-managed Gateway, Ingress, or workload used the staging
+Secret. Git could not prove that no other live consumer existed.
+
+The repository does not retain proof that this inventory ran. The gate records the
+evidence required to authorize retirement; it is not a claim that the live check or later
+pruning completed.
+
 ## Current production boundary
 
 The cert-manager source has four distinct reconciliation boundaries:
@@ -55,8 +76,9 @@ depends on both cert-manager and kube-prometheus-stack and scrapes the controlle
 `http-metrics` port once per minute.
 
 The ServiceMonitor uses `honorLabels: true` so cert-manager's certificate `name` and
-`namespace` labels remain available. The alerts application depends on that monitoring
-layer and selects the production certificate by the stable object identity
+`namespace` exporter labels are not replaced by scrape-target labels. Those two labels
+are the stable certificate identity used by the rules. The alerts application depends
+on that monitoring layer and selects the production certificate by
 `namespace="networking", name="wildcard-lab-supermorphic-com"`.
 
 ## Production alert contract
@@ -78,15 +100,38 @@ warning/critical exclusivity, and exact-identity absence. These tests establish 
 semantics over synthetic metrics; they do not prove that the live controller completed
 an ACME renewal.
 
+## Evidence model
+
+The design keeps four evidence classes separate:
+
+| Evidence | What it establishes | What it does not establish |
+| --- | --- | --- |
+| Current repository source and source validators | Production identities, monitoring dependencies, alert wiring, and absence of staging desired state | Historical inventory execution, Flux pruning, live resource absence, or Secret cleanup |
+| Promtool fixtures | Alert behavior for synthetic timestamps and exact metric identities | ACME success, certificate renewal, or Gateway reload |
+| Pinned cert-manager API, metrics source, and documentation | The controller model: a `Certificate` maintains its named Secret, renewal updates expiry state, and deletion can leave the Secret when owner references are not enabled | What happened on this cluster |
+| The read-only live verifier, when actually run | Present readiness, target health, one future production expiry series, absence of the exact retired Certificate and ClusterIssuer, and loaded rule health | Every historical CertificateRequest or Secret reference, historical pruning, a natural renewal, or serving the renewed bytes |
+
+The verifier's presence in Git is only proof of its contract. It is not evidence that the
+verifier ran against the current cluster. Likewise, synthetic renewal data proves that a
+newer timestamp on the same identity clears the warning; it is not an observed renewal.
+
 ## State and authority boundary
 
 The repository removed the staging `Certificate` and `ClusterIssuer` from desired state
 so Flux reconciliation and pruning could retire those source-managed resources. Current
 Git proves their source absence, but it does not prove that reconciliation completed or
 that the live resources are absent. Secrets that may have been created by the retired
-certificate are live-state artifacts, not current Git resources. Git cannot prove their
-presence, references, or removal. Current live verification is required for those facts,
-and any orphan cleanup remains an operator-owned action after exact reference checks.
+certificate are live-state artifacts, not current Git resources. Certificate Secret
+owner references were not enabled in the retired design, so documented controller
+behavior permits such a Secret to survive Certificate deletion. Git cannot prove a
+Secret's presence, references, or removal. Any orphan cleanup remains an operator-owned
+action after exact live reference checks and without exposing Secret contents.
+
+The original continuity evidence plan paired a pinned upstream behavior oracle with
+observation of the next natural production renewal. It explicitly rejected forcing a
+renewal only to test alerting. The repository retains the upstream model and synthetic
+alert tests, but not proof that a natural renewal was observed, that ACME succeeded for a
+particular renewal, or that the Gateway reloaded renewed certificate bytes.
 
 Production continuity depends on normal cert-manager renewal plus advance expiry and
 missing-telemetry alerts. The design accepts loss of the permanent staging canary because

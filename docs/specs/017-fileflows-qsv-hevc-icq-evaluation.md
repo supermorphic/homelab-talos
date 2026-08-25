@@ -12,6 +12,12 @@ the output contract, recover useful storage, compare acceptably with x265 at mat
 quality, and coexist with Plex. It produced evaluation and diagnostic evidence only. It
 did not authorize FileFlows deployment, media replacement, or another encoder strategy.
 
+ICQ justified a second-generation evaluation because both eligible nodes had already
+performed hardware-backed ICQ work while failing the earlier experiment's exact LA-ICQ
+predicate. That observation gave ICQ a concrete capability basis, but no quality or
+operational evidence. A separate strategy identity and fresh evidence were therefore
+required instead of weakening or correcting the LA-ICQ result.
+
 ## Historical boundary
 
 The LA-ICQ no-go in specification 002 remains valid. Earlier capability evidence showed
@@ -23,6 +29,26 @@ strategy.
 The ICQ adaptation preserved the harness's storage, mount, run-scoping, validation, and
 failure-safety boundaries while replacing every LA-ICQ command, setting guard, schema,
 resume rule, result reader, and test fixture with an ICQ-only contract.
+
+The earlier initialization schema had required one verbose success phrase. It reported
+initialization failure even when the same executions bound the render device, selected
+ICQ, showed hardware activity and progress, decoded output, and ran VMAF. Those
+observations justified a phrase-independent ICQ capability proof. They did not become
+schema-version-3 capability records or quality rows.
+
+## Alternatives considered
+
+| Approach | Decision and rationale |
+| --- | --- |
+| Deploy FileFlows and evaluate through it | Rejected. It again placed platform work before the evidence that could invalidate the platform. |
+| Build a second ICQ benchmark | Rejected. It would duplicate reviewed mount, scheduling, identity, resume, evidence, and failure controls. |
+| Generalize the harness into a multi-strategy framework | Rejected. The evaluation needed one bounded ICQ contract, not a larger reusable platform. |
+| Reuse or relabel the stopped LA-ICQ run | Rejected. Its strategy, schemas, scripts, telemetry, iteration, decode, and HDR evidence were inadmissible under the corrected contract. |
+| Adapt the inert harness in place with an ICQ-only identity | Chosen. It reused established safety boundaries while keeping the two strategy lineages and their evidence disjoint. |
+
+The candidate range was fixed before the quality outcome. The evaluation did not widen
+it, pool clip scores, lower thresholds, promote visual review ahead of the objective
+gate, extrapolate an x265 curve, or treat later diagnostics as corrected quality data.
 
 ## Strategy identity
 
@@ -81,6 +107,35 @@ Clip sweeps and savings outputs remain temporary. Only a confirmed finalist can 
 durable `encodes/` directory. Resume requires an explicit run ID and exact manifest
 identity. Completed work skips only an exact valid row; failed attempts remain evidence.
 
+The benchmark's safety claim is structural but local to its mounts: its source movie
+subpath is read-only and its output subpath is outside the library paths managed or
+indexed by media applications. Other media containers mount the shared claim at their
+own roots, so the design does not claim that benchmark bytes are invisible to every
+container.
+
+## Inherited corrected evidence model
+
+This evaluation inherited methodological corrections from specification 002 without
+inheriting its LA-ICQ command, settings, or outcome:
+
+- every FFmpeg path uses `-nostdin`, including quality, savings, finalist, contention,
+  and still generation, so a child cannot consume later panel records;
+- decode validation maps only the primary video, while independent probes validate
+  audio, subtitle, chapter, and other stream properties;
+- the full title is the HDR static-metadata oracle and the copied clip is the duration
+  and stream-layout reference;
+- x265 is restricted to the two grain-heavy reference titles and is only a comparator;
+- QSV telemetry follows the encoder's i915 descriptor and missing or malformed telemetry
+  is `harness-blocked`, not a platform failure;
+- capability evidence is evaluated per node, and dispatch re-evaluates its fields rather
+  than trusting a status string; and
+- a synthetic capability encode proves positive progress only. It does not establish a
+  production throughput band.
+
+A missing or malformed independent oracle cannot become an encoder verdict. Correcting
+commands, source identity, evidence semantics, or schemas requires a fresh run identity;
+historical rows remain immutable.
+
 ## Capability proof and dispatch boundary
 
 Capability proof is per node. A passing schema-version-3 record requires all of these:
@@ -117,6 +172,19 @@ failed handoff removes only the exact objects owned by that dispatch.
 
 ## Evaluation stages
 
+The committed quality and savings populations had different purposes. The quality panel
+was a stress panel: VC-1, clean and grain-heavy AVC, and clean, grain-heavy, and
+dark-or-high-motion HDR10 material. Grain was a decisive stressor because HEVC provides
+no film-grain synthesis, and VMAF could reject HDR but could not approve it without
+visual review. A Dolby Vision Profile 7 title was a detection-only exclusion control and
+was never encoded. The seeded, stratified savings panel represented applicable catalog
+cohorts and bitrate bands so difficult quality samples did not bias the storage estimate.
+A new census was not required.
+
+Before a stage, preflight rechecked each committed source path, byte size, and hash. It
+could not substitute a different title or timestamp. Source drift stopped the applicable
+stage until source changes established a new identity.
+
 The fixed quality sweep covers six encoded titles, three clips per title, and all eight
 settings, for 144 unique QSV rows. Each row records ICQ selection and QSV proof, encode
 progress and reduction, primary-video decode, codec and stream properties, HDR
@@ -129,18 +197,39 @@ failure, exact ICQ selection, and passing QSV proof. Qualifying settings are ran
 median clip-size reduction, with the lower `global_quality` value winning a tie.
 
 Visual selection uses one bounded state record per cohort. Objective candidates enter
-crop review in rank order. A crop pass makes the setting provisional; a full-title Plex
-pass makes it final; a failure appends the setting and its evidence identity to the
-rejected prefix before the next candidate is considered. Only a provisional record can
-authorize its finalist, and only a final record can authorize x265, savings, or
-contention evidence.
+1:1 source/output crop review in rank order. A crop pass makes the setting provisional;
+a full-title Plex review then checks Direct Play, HDR behavior, motion, grain retention,
+banding, and blocking. A Plex pass makes the setting final. A failure appends the setting
+and its evidence identity to the rejected prefix before the next candidate is considered.
+The bounded list is exhausted rather than extended after observed failures. Only a
+provisional record can authorize its finalist, and only a final record can authorize
+x265, savings, or contention evidence.
 
 The x265 comparator uses all three clips from the grain-heavy AVC and HDR10 references.
 It starts at CRF `18, 20, 22, 24`, extends in steps of two only as needed, remains within
-CRF 10 through 34, and never extrapolates. Savings uses one validated full-title ICQ
-encode per applicable representative title and reports cohort median, quartiles, and
-interquartile range. Contention retains three seek-bearing baselines and compares every
-applicable case against the worst observed baseline start and seek latencies.
+CRF 10 through 34, and never extrapolates. Each reference uses all three clips and binds
+its CPU, node, runtime, FFmpeg, and libx265 identity. Interpolation is permitted only
+inside a measured bracket; otherwise the result is `no verdict`. An ICQ bitrate premium
+of at most 15 percent over matched-quality x265 favors QSV, more than 15 through 30
+percent is acceptable with a recorded cost, and more than 30 percent is materially worse.
+
+Savings uses one validated full-title ICQ encode per applicable representative title and
+reports cohort median, quartiles, and interquartile range. Applicability is cohort-scoped:
+a cohort without a final setting contributes no rows. Median reduction of at least 25
+percent is GO, 15 to less than 25 percent is MARGINAL and requires an operator decision,
+and less than 15 percent is NO-GO. This full-title stage was necessary because media
+hardlink and torrent lifecycle determine realized savings; clip reduction alone cannot
+establish catalog economics.
+
+Contention fixes one physical playback device and one UHD HDR source in run identity.
+Three 15-minute no-encode baselines use the same one-seek-every-two-minutes sequence as
+the seek case. The cases are direct play with one 4K encode; direct play with two 1080p
+encodes; forced transcode with two 1080p encodes; and the two-worker direct-play case
+with the matching seek sequence. Every run records playback-start latency, buffering
+count and duration, every seek-to-resume latency, NAS throughput at five-second
+intervals, and encode wall time. Comparison uses the worst baseline values, not averages.
+Non-seek cases require zero buffering; every contended start may be no more than two
+seconds worse than baseline; and every seek may be no more than three seconds worse.
 
 ## Quality outcome
 
@@ -165,6 +254,13 @@ The objective gate precedes visual review. Therefore `chosenSettings` remains em
 finalist, x265, savings, and contention results are not applicable. The evidence does
 not define an ICQ production setting, storage-savings distribution, x265 premium, or
 Plex processing window. FileFlows and media replacement remain unauthorized.
+
+The generated findings artifact emitted an HDR10 no-go because it consumed the invalid
+HDR rows. The accepted findings decision did not adopt that conclusion: independent
+probe evidence showed that the source static-metadata oracle was unavailable, so the
+stronger `harness-blocked / unresolved` rule governed. Populated output metadata proved
+neither preservation nor corruption. The generated artifact remains immutable evidence,
+but it does not override the accepted evidence classification.
 
 ## Bounded anomaly diagnostics
 
@@ -279,6 +375,13 @@ This reader supplies evidence for a later decision. It does not alter retained f
 reinterpret the historical quality rows, create a new quality candidate, or authorize
 another evaluation stage.
 
+Current source binds one approved retained diagnostics run and provides guarded readers,
+but it contains no committed terminal diagnostic conclusion. A run binding proves which
+evidence a reader may access; a successful collector would prove only that its bounded
+projection passed the reader contract. Neither fact establishes an actual causal
+classification. Synthetic diagnostic fixtures also test classifiers rather than report
+the retained run's result.
+
 ## Validation and consequences
 
 The source validator, rendered-manifest checks, and Bats suites cover the shared ICQ
@@ -292,8 +395,30 @@ size bounds, Job/Pod provenance, and failed-result transport. The cluster-indepe
 `encode-benchmark-diagnostic-evidence-results` interfaces own creation and validation of
 the read-only collector. None of these read interfaces can dispatch diagnostic work.
 
+The live verifier establishes only that the inert application is Ready, its inputs and
+alert rules exist, no persistent benchmark workload is reconciled, and active benchmark
+Pods remain separated from Plex. Likewise, a completion alert means Kubernetes reported
+Job success. Readiness, Job completion, reader success, and diagnostic transport do not
+establish admissible rows, a quality verdict, a causal diagnosis, a selected setting, or
+a FileFlows decision.
+
 The ICQ design answered the objective quality gate without promoting anomalous or
 harness-blocked rows. Bounded diagnostics can establish a cause without weakening that
 gate, and the evidence reader can expose only validated, sanitized evidence from the
-approved retained run. A fresh quality evaluation, a replacement encoder strategy,
-FileFlows deployment, and media replacement all require separate authority.
+approved retained run.
+
+One admissible terminal diagnostic decision must choose exactly one next direction:
+
+1. recommend fresh `qsv-hevc-icq-v1` quality evidence under a corrected contract;
+2. close `qsv-hevc-icq-v1` and recommend a separate strategy decision; or
+3. record the exact unresolved evidence and required operator input.
+
+No such terminal decision is committed in current source. Even when one exists, it does
+not itself authorize a new quality run or replacement strategy. Reconsidering ICQ needs
+separate authority, fresh run identity, corrected independent oracles, and all applicable
+quality and downstream gates. A distinct strategy remains a new design lineage.
+
+This design also left LA-ICQ relabeling, AV1, production x265, driver, runtime, or
+hardware changes, Talos, Kubernetes, Cilium, or GPU-plugin changes, TV or downloads
+access, FileFlows deployment, media replacement, and cleanup outside exact-run authority
+out of scope.
