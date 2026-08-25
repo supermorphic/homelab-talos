@@ -7,6 +7,9 @@ Kubernetes platform. The design joins machine configuration and cluster desired 
 one repository so changes that cross the operating-system and Kubernetes boundary remain
 reviewable together.
 
+This is a historical architecture record, not an operations manual. Current repository
+policy, pinned source, READMEs, and recovery runbooks define present behavior.
+
 ## Greenfield rebuild
 
 The replacement system drives were introduced before the cluster held workloads or
@@ -18,6 +21,41 @@ evidence, but not as a configuration source.
 
 This choice established a reproducible source of truth and avoided carrying forward
 legacy controllers, credentials, generated machine files, or unverified ciphertext.
+
+## Architectural choices and rejected alternatives
+
+The platform favors one owner per responsibility and keeps recovery possible from
+reviewed source:
+
+- One monorepo was chosen over separate machine and application repositories because a
+  bootstrap, networking, or storage change often crosses the Talos and Kubernetes
+  boundary and must be reviewed as one compatibility decision.
+- Talhelper is the only machine-config renderer. Hand-maintained generated Talos files
+  and mixed rendering paths were rejected because they obscure secret-bearing output
+  and make node configurations diverge.
+- Three uniform, schedulable control-plane machines were chosen over a split
+  control-plane/worker topology. The hardware can perform both roles, three etcd voters
+  preserve quorum, and a second node class would add operational variation without an
+  availability gain at this scale.
+- Cilium was chosen over the bundled CNI because kube-proxy replacement, policy, and
+  Hubble were required as one coherent network layer. A second CNI is unsupported.
+- MetalLB L2 owns service address advertisement. Cilium L2 and BGP were rejected for the
+  initial platform because they would add another ownership path without a demonstrated
+  benefit.
+- Envoy Gateway owns Gateway API. A parallel ingress controller was rejected because it
+  would duplicate routing, certificate, and exposure policy.
+- Flux is the sole Kubernetes reconciler. Argo CD or dual reconciliation was rejected
+  because two controllers cannot safely own the same desired state.
+- SOPS with an operator-held age identity was chosen over plaintext secrets, replicated
+  Secret objects, and additional in-cluster secret controllers. It keeps encrypted
+  desired state reviewable without introducing another authority system before there is
+  a demonstrated rotation or multi-cluster need.
+- Longhorn owns replicated application state while SMB owns shared bulk data. Ceph was
+  too complex for three small nodes, local-only storage did not meet rescheduling goals,
+  and placing all state on the NAS would make ordinary application availability depend
+  on one external system.
+- Manual, observable upgrades were retained until upgrade and rollback behavior was
+  understood. Lifecycle automation was not accepted as a substitute for that evidence.
 
 ## Machine and control-plane design
 
@@ -101,17 +139,16 @@ the Gateway API controller and a replicated internal data plane. Application nam
 must opt into the controller and attach portable HTTPRoutes; applications do not receive
 the Gateway's TLS private key.
 
-Internal and public DNS automation are separate by provider, credential, zone, and
-exposure policy. The implemented internal ExternalDNS controller is constrained to the
+The implemented DNS automation is internal only. ExternalDNS is constrained to the
 internal Gateway, an internal audience annotation, and its permitted DNS zone. It talks
 to the DNS provider through verified HTTPS using a reviewed public CA and does not skip
-certificate validation.
+certificate validation. External or public service exposure is outside this platform
+design and requires a separate threat model and ownership decision.
 
 cert-manager uses ACME DNS-01 with a zone-scoped DNS credential to issue the internal
 wildcard certificate. The issuer and certificate reconcile only after the controller and
 encrypted credential exist. The platform keeps one production issuer for normal service;
-a staging issuer is temporary test material for an explicit issuance experiment, not a
-permanent parallel certificate path.
+temporary issuance experiments do not define a permanent parallel certificate path.
 
 ## Storage roles
 
@@ -128,6 +165,60 @@ while SMB provides shared bulk capacity and cross-application filesystem semanti
 Longhorn backups target the external NAS with an encrypted credential and recurring
 snapshot and backup jobs. The controller package and its configuration are dependency-
 ordered so custom resources are not applied before their CRDs and controller are ready.
+
+Replicas provide availability; they are not backups. Recovery must preserve this
+distinction. Old system drives were a bounded rollback option during installation, but
+they are not a continuing backup or the current recovery source. Current recovery uses
+the tracked Talos inputs, operator-held secret identity, etcd procedures, Longhorn
+snapshots or backups, and the repository runbook.
+
+## Failure boundaries and validation gates
+
+Bootstrap deliberately has a small imperative boundary, but every owner transition has
+an explicit stopping condition:
+
+- Preflight identifies the exact three target machines, verifies firmware and Secure
+  Boot prerequisites, and proves the selected install media before any destructive
+  action.
+- Talos source and every rendered node configuration must pass strict validation before
+  application. Generated output is evidence for the application step, not durable
+  source.
+- Bootstrap succeeds only with exactly three expected etcd members and no alarms. Node
+  operations proceed one at a time so the cluster never intentionally loses quorum.
+- Cilium must make the nodes Ready before Flux is introduced. Its guarded adoption is a
+  one-time ownership transfer; later runs must be idempotent and must not create a
+  second Helm owner.
+- Flux must reconcile the expected revision before foundation controllers and their
+  custom resources advance. Controller/CRD readiness precedes dependent configuration.
+- Networking and certificate foundations must pass before storage and applications.
+  Storage provisioning and replica placement must pass before stateful workloads rely
+  on them.
+- Each disruptive experiment includes cleanup and recovery before the next disruption.
+  A failed cleanup, an etcd alarm, or loss of expected ownership stops progression.
+
+These gates preserve the useful method from the original phased rebuild without making
+old phase names, shell transcripts, or rollout ceremony part of the design.
+
+Implementation revealed several non-obvious constraints:
+
+- One storage bridge did not expose the preferred disk telemetry. A waiver was accepted
+  only after native-drive evidence and repeated I/O checks established the narrower
+  hardware claim; the waiver does not generalize to other devices.
+- Etcd membership had to be asserted as an exact set. Merely observing three healthy
+  endpoints could miss an unintended fourth or stale member.
+- Removing the control-plane load-balancer exclusion belongs in Talos source because an
+  ad hoc Kubernetes label edit would not survive machine reconciliation.
+- Namespace-label changes used by Gateway admission can be delayed by controller cache
+  behavior, so acceptance must observe the resulting attachment rather than assume an
+  immediate label effect.
+- A single-replica application with a `ReadWriteOnce` claim can deadlock under
+  `RollingUpdate`; `Recreate` or StatefulSet ownership is a platform invariant.
+- A node-level vulnerability collector that expects a conventional mutable host cannot
+  be assumed compatible with Talos. The implemented security scanner omits that
+  incompatible collector rather than weakening the host.
+- Applying custom resources before their controller and CRDs are ready creates noisy or
+  failed reconciliation. Package/configuration separation and dependency checks are
+  therefore recovery behavior, not only repository style.
 
 ## Reconciled platform versions
 
@@ -175,6 +266,20 @@ acceptance:
 These outcomes establish architecture, not a promise that the live cluster is currently
 healthy. Current status and recovery use the repository's scoped verification workflows
 and runbooks.
+
+## Reconsideration boundaries
+
+Cilium L2 or BGP can replace MetalLB only after stable operation and a measurable
+benefit justify moving ownership. A secret controller becomes appropriate when actual
+rotation, external-secret, or multi-cluster pressure outweighs its new credential and
+availability surface. Shared application bases should be introduced only after real
+duplication establishes a stable abstraction. Automated lifecycle management requires
+successful manual upgrade and rollback evidence first.
+
+External or public service exposure, another reconciler, another CNI, and any change to
+the Talos, Kubernetes, or Cilium compatibility set require a new design decision. This
+historical specification does not authorize them. Current procedures and compatibility
+constraints remain in the READMEs, runbooks, repository policy, and pinned source.
 
 ## Consequences
 

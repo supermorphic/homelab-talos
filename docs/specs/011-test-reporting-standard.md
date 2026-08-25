@@ -7,6 +7,23 @@ integration, disruption, measurement, and Kubernetes conformance. The standard k
 framework appropriate to each behavior while giving every coordinated run stable
 identity, result semantics, canonical evidence, and clear execution authority.
 
+This specification preserves the design rationale. The current catalog, executable
+source, test-report reference, campaign guide, and repository policy remain authoritative.
+
+## Problem and design choice
+
+Before this standard, result formats varied by runner, CI did not retain a complete
+canonical artifact, shell constructs could hide failures under `set -e`, ShellCheck did
+not cover every executed script, some commands called `verify` changed the cluster, and
+a checkout-local lock could not serialize two worktrees. Chainsaw wrappers also hid
+meaningful assertion and recovery phases for workflows better expressed directly in
+Bash or Python.
+
+One universal test framework was rejected. Framework uniformity would have made the
+hard cases less observable without making their evidence more comparable. The chosen
+design standardizes identity, metadata, JUnit, lifecycle classification, dispatch,
+serialization, and publication while selecting the runner by behavior.
+
 ## Assurance classes
 
 The suite class describes what a result proves:
@@ -67,6 +84,14 @@ Adding a suite does not automatically place it in a campaign. Campaign coverage 
 explicit review decision, and catalog validation fails when a class that requires full
 coverage is not represented correctly.
 
+`execution_owner` records who owns normal interactive execution and the base runner's
+guard contract. It is not a complete statement of credential capability or task-scoped
+agent authorization. Current repository policy authorizes an agent to mint worktree-
+local observer, diagnostic, and Talos reader credentials and run the registered
+`scoped-verification` campaign for an approved task even though its member entries retain
+`execution_owner: human`. That bounded authorization does not grant the agent mutation,
+disruptive execution, persistent publication, or administrative credentials.
+
 ## Framework and dispatch ownership
 
 The framework follows the behavior under test:
@@ -97,10 +122,10 @@ Kubernetes Lease. A campaign holds the Lease for its complete ordered sequence, 
 mutating child runners join that holder rather than acquiring or releasing competing
 leases.
 
-Observer and diagnostic credentials may execute only the registered verifiers whose
-catalog access tier matches their command behavior. Other live suites, publication, and
-disruptive campaigns remain operator-owned even when agents can implement and validate
-their source offline.
+Observer and diagnostic credentials are limited to registered verifiers whose catalog
+access tier matches their command behavior. Scoped agent execution, catalog ownership,
+exact action confirmation, Kubernetes RBAC, and publication authority are independent
+controls. A capability in one layer does not imply authority in another.
 
 ## Canonical evidence bundle
 
@@ -171,6 +196,10 @@ credentials, ServiceAccount token, or Kubernetes RBAC. A workstation publisher:
 6. streams it through a guarded pod execution while holding a dedicated publication
    Lease.
 
+This static push model was chosen over an upload API or CI-to-cluster bridge so the
+report service does not become an authenticated write endpoint and CI does not gain a
+cluster credential.
+
 The server installs exact run paths and switches the active generation atomically. Its
 retained Longhorn `ReadWriteOnce` claim is mounted by a one-replica `Recreate`
 Deployment, and Flux prune protection prevents Kustomization removal from implicitly
@@ -182,6 +211,12 @@ Historical or feature-commit runs may be retained as candidates, but they do not
 stable latest links, Homepage summaries, or last-run metrics. Candidate publications do
 contribute to the lifetime published-run and test-case counters. Republishing the same
 run and digest is idempotent; reusing an ID with different content is rejected.
+
+Retention uses both age and count limits: ordinary entries remain only when they are
+within 90 days and among the newest 200. The newest run for each logical key and the
+newest authoritative run for each key remain protected so pruning cannot erase the only
+current comparison point. Publication state keeps monotonic lifetime counters even when
+individual report artifacts age out.
 
 ## Campaign model
 
@@ -211,6 +246,43 @@ state-changing stages. Invalid canonical output, a broken child, lost Lease, fai
 unclassified cleanup or recovery, bounded publication failure, or source drift also stops
 the campaign. Only publication failure is resumable; source drift requires a new campaign
 against the newly deployed revision.
+
+The failure rules deliberately preserve evidence from a valid failed assertion. Such a
+run may be published and the campaign may continue when cleanup and recovery are safe.
+Broken or invalid evidence, Lease loss, unsafe cleanup or recovery, source drift, and
+publication uncertainty stop the coordinator because later results would no longer have
+a trustworthy execution boundary. A resume retries only the bounded publication step
+and only while catalog membership, source revision, and deployed Flux authority are
+unchanged.
+
+## Implementation discoveries
+
+- Shell `!` around a command under `set -e` can invert status in a way that loses the
+  original exit code. Coordinators now capture command status explicitly.
+- Bash 5 behavior is part of the harness contract, and Python is the sole owner of XML
+  construction and merging. This avoids platform-shell variation and hand-built JUnit.
+- Direct runners replaced script-only Chainsaw cases where filesystem state, an API, or
+  a temporal recovery controller was the real subject. Chainsaw remains valuable when
+  Kubernetes resources and lifecycle steps are the natural model.
+- A renewable, resourceVersion-guarded Kubernetes Lease replaced the local lock.
+  Renewal failure and holder mismatch are result-invalidating events, and campaign
+  children join rather than compete with the campaign holder.
+- Raw Sonobuoy archives can contain sensitive diagnostic data. The canonical bundle
+  retains validated summaries and allowlisted evidence, not the raw archive.
+- Runtime report-service configuration is content-addressed so deployment changes are
+  visible to Flux. The Caddy image startup still needs the narrowly bound
+  `NET_BIND_SERVICE` capability even though the configured listener is unprivileged; it
+  receives no ServiceAccount token or Kubernetes API authority.
+
+## Reconsideration boundaries
+
+A new test framework is justified only when an implemented behavior cannot be expressed
+clearly by the current tools and the new framework can still emit the canonical
+contract. Giving CI cluster credentials, adding an upload service, or moving publication
+into the cluster would create a new trust and authentication surface and requires a
+separate design. Load, performance, and soak campaigns should be added only after their
+service objectives and failure thresholds are defined. Campaign resume must not expand
+beyond unchanged-source publication repair.
 
 ## Consequences
 

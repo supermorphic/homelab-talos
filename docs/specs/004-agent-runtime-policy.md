@@ -11,6 +11,21 @@ The normative runtime contract is [`AGENTS.md`](../../AGENTS.md). This specifica
 records why that contract has its present boundaries. Source, current documentation,
 and the runtime contract remain authoritative when implementation details change.
 
+## Problem and evidence
+
+The policy was redesigned after several broad rewrites landed within days without a
+named defect, acceptance condition, or stopping point. The audit did not find evidence
+that agents were routinely violating the existing rules. It instead found structural
+risks: repeated rules could drift, a nested policy could replace inherited constraints,
+command-name bans did not describe the actual effect being controlled, and some tests
+encoded editable prose or source values instead of an independent safety property.
+
+That distinction shaped the response. The repository did not need more instruction
+files or a larger list of forbidden commands. It needed one durable authority model,
+clear separation between hard authorization and advisory detection, and validators that
+fail when behavior becomes unsafe. Historical audit counts were useful measurements of
+the repository at that time; they are not present-day policy gates.
+
 ## One policy surface
 
 Root `AGENTS.md` is the sole vendor-neutral repository-policy surface. Subtree-specific
@@ -51,6 +66,11 @@ This boundary permits useful read-only and reduced-privilege work without preten
 that every direct invocation of `kubectl`, `talosctl`, `flux`, or another client is
 equally dangerous. Conversely, a guarded wrapper does not make an administrative effect
 agent-safe merely because it uses an approved command name.
+
+Controls are evaluated by strength. Credential custody, RBAC, protected branches, and
+server-side authorization prevent an effect. Policy, CI checks, pre-commit hooks, and
+session warnings detect or discourage unsafe work but can be bypassed. A warning or a
+wrapper is therefore never evidence that the underlying privilege is safe.
 
 ## Credential custody
 
@@ -139,6 +159,64 @@ The hook-test design verifies stable architecture: one tracked `AGENTS.md`, the 
 section order, a thin vendor shim, hook registration, credential visibility, and denial
 of known irreversible Git command forms. It intentionally does not enforce a fixed
 policy size or repeat the normative policy text.
+
+Validation must exercise the form that produces the behavior. Kustomize output does not
+contain workloads rendered later by a Helm controller, so workload policies that stop at
+Kustomize cannot prove Helm-generated security, rollout, or storage invariants. Such
+checks must render the chart or validate another independent representation of the
+effective workload.
+
+## Alternatives and discoveries
+
+The following alternatives were considered and rejected:
+
+- Nested `AGENTS.md` files were rejected because nearest-file precedence can weaken the
+  repository contract and because source-adjacent documentation already carries local
+  procedure.
+- Tool-name prohibitions were rejected because different tools can cause the same
+  effect, while the same tool can perform either bounded inspection or privileged
+  mutation.
+- Shared or ambient scoped credentials were rejected because they erase task and
+  worktree boundaries. Demand-driven installation keeps the capability local and
+  visible.
+- Hooks were rejected as hard controls. They remain useful accident guards, but only
+  credential scope, RBAC, and remote protections enforce the important boundary.
+- Exact rule counts, inline provenance labels, and source-value comparison tests were
+  rejected because they freeze presentation or can be changed together with the value
+  they claim to verify.
+
+Implementation exposed several details that became durable design knowledge:
+
+- policy text needed to state what happens when the remote feature branch contains
+  unexpected commits, when a dirty checkout prevents a required rebase, and when a
+  force-with-lease fails;
+- worktree ownership needed to permit task-owned lifecycle management while protecting
+  another task's or uncertain worktree;
+- the scoped credential workflow needed atomic publication and rollback of the
+  Kubernetes and Talos credential pair; and
+- negative authorization checks were necessary to prove that observer and diagnostic
+  roles could not read Secret objects, mutate Flux resources, bind or escalate RBAC, or
+  impersonate identities.
+
+The Secret API denial is intentionally narrow. It proves that these identities cannot
+request Secret objects. It does not prove that no readable log, status field, process
+environment, or pod execution path can disclose sensitive data. Diagnostic access in
+particular must be treated as interactive reduced privilege, not as passive observation.
+
+## Reconsideration boundaries
+
+A second policy surface is justified only by a demonstrated scoping need and an explicit
+decision about how it can strengthen without replacing the root contract. A safety
+boundary that must resist bypass belongs in credentials, RBAC, branch protection, or
+another enforcing system rather than a stronger-looking hook. Broader verifier access
+requires a policy and RBAC review; failure of a scoped workflow is not authority to seek
+administrative credentials or add permissions ad hoc.
+
+The current credential workflow supersedes the earlier bootstrap rule in which an agent
+stopped and asked the operator to mint worktree credentials. For an approved scoped
+workflow, the agent now runs the repository credential recipe itself. The operator still
+owns the administrative identities from which the bounded credentials are derived and
+any action that current policy reserves to the operator.
 
 ## Consequences
 

@@ -6,6 +6,9 @@ Detect when Flux-managed desired state is no longer reconciling. Controller scra
 health proves that a Flux controller process is reachable, but it does not prove that
 each Kustomization, HelmRelease, or source reports `Ready=True`.
 
+This specification records the accepted rationale and evidence boundary. Current
+monitoring source, tests, and source-adjacent documentation define operational behavior.
+
 ## Metric architecture
 
 The existing Flux PodMonitor remains responsible for controller-runtime and scrape
@@ -39,6 +42,13 @@ CustomResourceDefinitions needed for collector discovery. It cannot read Secrets
 mutate cluster state. The chart's broad RBAC generation is disabled and the repository
 owns the focused ClusterRole and binding.
 
+This last permission came from a useful failure. The exporter target was healthy, its
+configuration was loaded, and its service account could list and watch each configured
+Flux kind, yet it exported no `gotk_resource_info` series. The exporter log identified
+CustomResourceDefinition discovery as the first failing boundary. Adding only that read
+permission restored collection. This diagnosis prevented a misleading conclusion that
+target health or direct access to the five objects was sufficient.
+
 ## Alert semantics
 
 `FluxReconciliationFailure` selects any exported resource that is not suspended and
@@ -67,8 +77,11 @@ health, presence of all five resource kinds, rule health, Alertmanager connectiv
 the expected ntfy receiver and route. Live acceptance observed all five kinds and
 healthy inactive rules after adding the required CRD-discovery permission.
 
-A confirmation-guarded firing-and-resolved delivery experiment remains useful optional
-end-to-end evidence. It is not required to define or retain this architecture.
+A confirmation-guarded firing-and-resolved scenario exercises the implemented webhook
+path and verifies the synthetic alert lifecycle. The inspected evidence establishes the
+software path through Alertmanager, the bridge, and ntfy. It does not establish that a
+person received the notification on a handset, so this specification makes no
+phone-delivery claim.
 
 ## Rejected alternatives
 
@@ -78,6 +91,16 @@ end-to-end evidence. It is not required to define or retain this architecture.
 - Extending the kube-prometheus-stack bundled exporter would re-enter the known upgrade
   failure path.
 - One family-wide absence alert would allow partial collector loss to remain invisible.
+
+## Reconsideration boundaries
+
+The dedicated exporter can be consolidated into kube-prometheus-stack only after its
+upgrade path is no longer wedged and a migration proves parity for all five metric
+families, the scrape target, both alert behaviors, routing, and resolved delivery. A
+future Flux-native signal is a replacement only if it again exposes per-resource Ready
+state with equivalent missing-signal detection. Routine reconciliation events should
+not bypass Alertmanager unless a new design deliberately replaces its grouping,
+deduplication, inhibition, repeat, and resolution semantics.
 
 ## Consequences
 
