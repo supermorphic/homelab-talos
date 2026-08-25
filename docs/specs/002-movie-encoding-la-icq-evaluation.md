@@ -305,6 +305,12 @@ node passed only when all of these independent predicates held:
 - the primary output video decoded; and
 - the configured VMAF comparison completed.
 
+The five-second synthetic proof treated finite positive progress as a capability
+predicate; its speed could not establish a production throughput band because fixed
+initialization cost and synthetic content dominated it. Before dispatching the corrected
+real-content sweep, measured per-variant runtimes had to support a credible worst-case
+range and confirm that the finite Job deadline remained sufficient.
+
 The telemetry sampler followed FFmpeg's render-node descriptor into
 `/proc/<pid>/fdinfo`, required the i915 driver and nanosecond `drm-engine-*` counters,
 and treated temporary counter regression by retaining the largest observed value until a

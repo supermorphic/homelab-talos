@@ -87,6 +87,11 @@ The migration is a full, lineage-first reconciliation rather than a mechanical f
 It uses the current source and current documentation as the implementation baseline, then
 reconstructs the useful rationale from historical records.
 
+Each migrated specification retains the same categories and approximate depth of durable
+design reasoning expected from a new specification. Reconciliation may remove lifecycle
+ceremony, transient history, duplication, and obsolete implementation detail, but it must
+not compress load-bearing rationale or evidence boundaries into an outcome summary.
+
 An uncommitted migration ledger under `.tmp/plans/` records every legacy artifact and its
 disposition. Each artifact must have a destination or an explicit deletion rationale
 before it is removed. The ledger is an execution aid, not durable documentation.
