@@ -164,7 +164,10 @@ host, credential, patching, bandwidth, and compromise boundary.
 
 The identity repair and workload hardening remain useful under every remote-access
 mechanism. Relay supplies a low-capability recovery path without another ingress rule,
-but direct access remains necessary for the validated Sonos and high-bitrate behavior.
+but direct access remains necessary for the validated Sonos behavior. It is also the
+selected architecture for traffic above Relay's 2 Mbps ceiling. The retained off-site
+exercise validated the direct route, but its client remained capped at 2 Mbps, so it did
+not validate remote bitrate above that limit.
 Relay is not reconsidered as the primary path without a new design and client-acceptance
 evidence that removes its bandwidth and compatibility limits. Disabling the direct path
 does not make Relay a control for terminating already established public sessions; that

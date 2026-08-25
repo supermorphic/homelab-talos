@@ -33,6 +33,9 @@ The pod and container run as UID and GID `568`. Privilege escalation is disabled
 Linux capabilities are dropped. The workload requests `25m` CPU and 256 MiB memory,
 limits memory to 1 GiB, and has no CPU limit.
 
+That allocation was inherited from Seerr rather than measured for Tautulli. Revisit the
+memory limit when watch-history growth or observed memory pressure supplies evidence.
+
 The internal Gateway publishes `tautulli.lab.supermorphic.com`. Web authentication is
 required because watch history contains user, device, client-address, and viewing data.
 The implemented Plex OAuth administrator mode preserves exact HTTP `200` responses from
@@ -70,12 +73,16 @@ monitoring release. Isolating the rules lets monitoring fail without preventing 
 media applications from reconciling.
 
 The alert model distinguishes a failed series from a missing series. The generic
-`MediaEndpointDown` expression produces one alert for each reporting endpoint whose
-value is zero. A group-wide `absent()` expression is only a canary for loss of every
-Media series; it cannot detect one silently removed endpoint while another still
-reports. Plex and Tautulli therefore have explicit missing-series rules because their
-retained claims hold the state this design is intended to protect. Other media endpoints
-have down detection but no implied per-endpoint disappearance coverage.
+application `MediaEndpointDown` expression produces one alert for each reporting Media
+endpoint whose value is zero, except `qbittorrent-vpn`. That endpoint has dedicated
+critical down and warning missing-series rules. A group-wide `absent()` expression is
+only a canary for loss of every Media series; it cannot detect one silently removed
+endpoint while another still reports. Within the original application-availability rule
+set, Plex and Tautulli therefore have explicit missing-series rules because their
+retained claims hold the state this design is intended to protect. Other ordinary media
+application endpoints have generic down detection but no implied per-endpoint
+disappearance coverage. Later Media Integration monitoring has a separate rule that
+enumerates every expected integration series for missing telemetry.
 
 Tautulli does not publish directly to ntfy. Direct delivery would bypass Alertmanager's
 grouping, deduplication, inhibition, and silences and would create a second notification
@@ -99,8 +106,16 @@ instead of copying it into a second rules file, then prove the pre-threshold, fi
 recovered states. Exact-status verification and Prometheus rule evaluation are separate
 oracles: kubelet's 200–399 probe success cannot establish either one.
 
+The first rollout also disproved the Kubernetes API server's Service proxy as an
+application oracle. It returned HTTP `503` while the Deployment, backend, HTTPRoute, and
+Gateway path were healthy because it measured the unrelated API-server-to-ClusterIP path
+on this kube-proxy-free Cilium cluster. The corrected verifier measures the in-cluster
+Service-DNS path from the running Tautulli workload and checks the Gateway path
+separately.
+
 Read-only live verification checks Flux and Helm readiness, rollout, route acceptance,
-DNS, exact Service and Gateway status responses, Gatus series, and loaded rule health.
+DNS, those separate exact Service and Gateway status responses, Gatus series, and loaded
+rule health.
 Functional acceptance remains separate: authentication must work, a Plex library must
 be connected, and a real playback session must appear in history.
 

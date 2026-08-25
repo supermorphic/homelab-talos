@@ -120,11 +120,16 @@ response does not prove that Lidarr's external metadata service is available, so
 and album discovery can still fail while the workload remains healthy.
 
 The original Lidarr rollout intentionally left Plex Music creation and Plexamp/Sonos
-integration to later work; the current media guide now owns those integration steps.
-They were not evidence for accepting the Lidarr workload itself. Automated Chainsaw
-coverage also remains a deliberate all-`*arr` decision rather than one-off Lidarr
-coverage. A synthetic metadata transaction is still deferred because it would monitor a
-different external dependency than `/ping` or the authenticated native-health API.
+integration to later work. The current
+[media automation guide](../guides/media-automation-setup.md) owns Plex Music creation
+and the Lidarr-to-Plex refresh connection. Plexamp and Sonos operations belong in the
+[Plex remote-access guide](../guides/plex-remote-access-operations.md), with failure
+recovery in the [Plex Relay/Sonos runbook](../runbooks/plex-relay-sonos.md). Those
+integrations were not evidence for accepting the Lidarr workload itself. Automated
+Chainsaw coverage also remains a deliberate all-`*arr` decision rather than one-off
+Lidarr coverage. A synthetic metadata transaction is still deferred because it would
+monitor a different external dependency than `/ping` or the authenticated native-health
+API.
 
 Revisit the inherited 1 GiB memory limit when observed metadata refreshes approach it,
 and add an external-metadata monitor only when its failure signal and operating cost are

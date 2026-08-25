@@ -65,9 +65,13 @@ test created download and library names that reported the same inode with link c
 two. Plex recovery supplied a separate result. A planned replacement could close the
 database cleanly, while a hard node failure required Longhorn's node-down pod-deletion
 policy before the old `ReadWriteOncePod` attachment stopped blocking replacement. The
-measured recovery was minutes rather than seconds, which is the accepted meaning of
-automatic recovery here. That evidence did not prove a Longhorn restore, a complete NAS
-outage, or service through loss of one volume replica.
+observed hard-node recovery time was approximately eight minutes, fully automatic. The
+default 300-second unreachable toleration dominated that result; Longhorn force-deleted
+the stuck pod after approximately 235 seconds before the replacement attached the
+surviving replica. If faster recovery becomes necessary, lowering the Plex pod's
+unreachable toleration and repeating the hard-node gate is the evidence-based lever.
+That result did not prove a Longhorn restore, a complete NAS outage, or service through
+loss of one volume replica.
 
 ## qBittorrent and Gluetun network namespace
 
@@ -195,7 +199,11 @@ Offline checks validate source, rendered charts, storage and security invariants
 wiring, dependency order, network-policy shape, and Prometheus rule behavior. Read-only
 verifiers check the deployed resources and endpoints. Controlled integration and
 resilience tests supply independent evidence for hardlinks, GPU use, VPN fail-closed
-behavior, recovery, and full request-to-library workflows.
+behavior, and recovery. The source and live verifiers establish component paths but do
+not submit media requests. The current operator acceptance gate remains one authorized
+TV request and one movie request through Seerr, their expected Sonarr or Radarr service
+and qBittorrent category, import into Plex, and accepted media naming. No durable record
+yet proves that both request-to-library paths completed.
 
 ## Deferred work and reconsideration
 
