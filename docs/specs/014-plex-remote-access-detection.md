@@ -58,11 +58,13 @@ emitted metric names and label values then became evidence for the rule selector
 ordering prevented a predicted label schema from being mistaken for an implemented
 signal.
 
-Synthetic promtool fixtures next proved firing, hold, missing-signal, recovery, and
-adjacent exclusion behavior from the exact applied rule expressions. The final live
+The original Stage B synthetic promtool fixtures next proved the firing, hold,
+missing-signal, and adjacent exclusion behavior they asserted from the exact applied
+rule expressions; they did not prove alert recovery. The historical off-cluster
 exercise used a host outside Kubernetes so Cilium supplied an off-cluster identity. It
-required both firing and resolved notification evidence through the established route;
-source details remained private.
+proved the selected firing shape and ntfy route, not alert recovery. The current
+detection-test guide separately requires firing and resolved notifications; source
+details remain private.
 
 The method separated four oracles:
 
