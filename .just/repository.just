@@ -1404,6 +1404,7 @@ hooks:
     mkdir -p "$hooks_dir"
     git config --local --unset-all core.hooksPath || [[ "$?" -eq 5 ]]
     pre-commit install --install-hooks
+    install -m 0755 scripts/hooks/pre-commit.sh "$hooks_dir/pre-commit"
     git config --local core.hooksPath "$hooks_dir"
     trap - EXIT
 
@@ -1433,6 +1434,7 @@ verify-shell-scripts:
 # Verify ignore boundaries and SOPS policy.
 verify-files: require-bash
     @bash --version | head -n 1
+    @scripts/test/hooks-test.sh
     @scripts/test/external-dns-provider-rollout-test.sh
     @scripts/test/homepage-portainer-rollout-test.sh
     @scripts/test/qbit-manage-secret-rollout-test.sh

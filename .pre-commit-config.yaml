@@ -31,14 +31,14 @@ repos:
       # Scan the staged diff for secrets (uses the mise-pinned gitleaks).
       - id: gitleaks-staged
         name: gitleaks (staged changes)
-        entry: bash -c 'git diff --cached --no-ext-diff --binary | gitleaks stdin --redact --no-banner'
+        entry: mise exec -- bash -c 'git diff --cached --no-ext-diff --binary | gitleaks stdin --redact --no-banner'
         language: system
         pass_filenames: false
 
       # Refuse a plaintext *.sops.yaml (validates the staged blob, not the local file).
       - id: sops-encrypted
         name: SOPS files are encrypted (staged)
-        entry: scripts/check-sops-encrypted.sh
-        language: script
+        entry: mise exec -- ./scripts/check-sops-encrypted.sh
+        language: system
         pass_filenames: false
         files: '\.sops\.ya?ml$'
