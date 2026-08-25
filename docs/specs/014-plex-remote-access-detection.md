@@ -7,6 +7,30 @@ direct TCP `32400` path. The design uses aggregate Hubble metrics in Prometheus 
 existing Alertmanager-to-ntfy route. It deliberately keeps source-address attribution
 out of Prometheus.
 
+Detection was a hard gate before durable Internet exposure. At the start, the cluster
+had Hubble Relay but did not export or scrape Hubble metrics, collect Plex request logs,
+or retain any durable signal for the public listener. Operator attendance was not
+accepted as a substitute for a detector that could continue to evaluate after the
+change window closed.
+
+## Signal alternatives
+
+| Signal | Decision |
+| --- | --- |
+| Hubble metrics with identity/workload context | Selected. They existed at the network-policy boundary, could be enabled before exposure, bounded label cardinality, and supported synthetic Prometheus tests. |
+| Per-source-address Prometheus labels | Rejected because an Internet-facing port could create an unbounded series per probing address. Live Hubble remains the bounded attribution tool. |
+| Plex logs or API data | Deferred. They could cover authentication and sessions, but the cluster had no log collector or pre-exposure application exporter. |
+| Tautulli export | Deferred because it observes application sessions rather than all connection attempts and required another authenticated collection path. |
+| Router syslog | Not selected as the durable repository signal. Its schema and retention were external to the cluster, and it did not establish the Hubble policy identity contract. |
+| Chart-generated ServiceMonitor | Rejected because the same Cilium values bootstrap a bare cluster before Prometheus CRDs exist. |
+| In-cluster traffic generator | Rejected for live source-matcher proof because it carries a cluster identity rather than `world`. |
+
+The detector is a companion control for [direct exposure](013-plex-direct-remote-access.md),
+not evidence that the listener is safe by itself. The separate
+`PlexWorkloadPolicyDenied` rule in
+[specification 015](015-alerting-architecture.md) detects an in-cluster allow-list
+regression and is not part of this public-traffic detector.
+
 ## Signal architecture
 
 Cilium exports the `flow`, `tcp`, and `drop` Hubble metric sets with
@@ -25,6 +49,33 @@ The metrics endpoint is unauthenticated on the LAN and exposes aggregate cluster
 labels, not only Plex data. This matches the existing Cilium host-port posture but
 remains a real information boundary. Adding TLS would require certificate management and
 matching ServiceMonitor configuration.
+
+## Staged evidence method
+
+The metric contract was observed before alert expressions were written. First, Cilium
+enabled `flow`, `tcp`, and `drop`, and Prometheus scraped the hand-written monitor. The
+emitted metric names and label values then became evidence for the rule selectors. This
+ordering prevented a predicted label schema from being mistaken for an implemented
+signal.
+
+Synthetic promtool fixtures next proved firing, hold, missing-signal, recovery, and
+adjacent exclusion behavior from the exact applied rule expressions. The final live
+exercise used a host outside Kubernetes so Cilium supplied an off-cluster identity. It
+required both firing and resolved notification evidence through the established route;
+source details remained private.
+
+The method separated four oracles:
+
+- source and rendered validation proved metric contexts, bootstrap-safe monitor wiring,
+  and rule syntax;
+- fixtures proved selected PromQL behavior on controlled counter series;
+- deployed checks proved the rules and scrape targets were loaded and healthy at a
+  point in time; and
+- controlled off-cluster traffic proved one live traffic shape reached Alertmanager and
+  ntfy.
+
+None of these alone proves continuous detector health, every Internet source, a
+completed handshake, authentication behavior, normal playback, or phone display.
 
 ## Alert semantics
 
@@ -75,6 +126,33 @@ roughly twice it, and three flows is one below the minimum seen for a completed
 handshake. These remain household-scale operational boundaries, not a learned Internet
 baseline.
 
+The `0.1` SYN-per-second probe floor is a low margin choice. It was not derived from a
+measured Internet-noise rate. An earlier unsupported background-noise claim was removed
+rather than used to justify a higher `0.5` floor that would hide slower scanners.
+
+## Implementation corrections
+
+The accepted design initially described three alerts: flood, probe surge, and missing
+flow metrics. Review and fixture work exposed three gaps:
+
+1. TCP metrics could disappear while flow metrics remained present, making all
+   connection-rate expressions blind without triggering the flow-missing alert.
+2. Completed-connection abuse between one and five SYNs per second sat below the flood
+   threshold and above the low-flow-per-SYN probe classifier.
+3. The original `0.5` SYN-per-second probe floor hid slower scanning without evidence
+   that such traffic was normal background noise.
+
+The implemented design therefore has five rules: it adds
+`PlexRemoteTcpMetricsMissing`, adds `PlexRemoteConnectionRateElevated`, and lowers the
+probe floor to `0.1`. These changes close the known blind spots without claiming full
+application-layer coverage.
+
+One label assumption also changed. Identity context does not always emit exact
+`reserved:world`; a CIDR policy can produce a compound identity containing that value.
+The current substring matcher is authoritative. Cardinality remains bounded by policy
+identities rather than public hosts, and the fixtures include the compound case so exact
+equality cannot return silently.
+
 ## Missing-signal coverage
 
 Flow and TCP metrics can fail independently. The two `absent()` companions prevent a
@@ -123,6 +201,12 @@ per second. The flood, elevated-rate, and probe-surge alerts fired and reached t
 routes. An in-cluster generator would not prove the source matcher because it would have
 a cluster identity rather than `world`.
 
+That live result proved the chosen half-open traffic shape and the notification route at
+that time. It did not prove TCP handshakes, authentication, every off-cluster identity,
+alert recovery under every rule, or normal remote playback. Current acceptance requires
+resolved notification evidence separately rather than projecting it backward into this
+exercise.
+
 ## Limits
 
 The detector does not cover repeated Plex authentication failures, account abuse,
@@ -136,3 +220,15 @@ traffic. The thresholds can produce household-specific false positives and need 
 before tuning. Alert delivery still depends on the existing Alertmanager and ntfy path.
 These boundaries are explicit so absence of an alert is not treated as proof that the
 public listener is safe.
+
+## Reconsideration boundary
+
+Adding any second Plex ingress port invalidates the workload-name proxy for TCP `32400`
+and requires new metric or policy discrimination. Changing Hubble contexts, scrape
+architecture, source-identity format, public address families, or the front-door proxy
+also requires revalidation of the signal contract.
+
+Threshold tuning requires measured household and remote evidence. A false positive or
+miss is not permission to adjust one constant without rechecking the neighboring flood,
+connection-rate, probe-ratio, and missing-signal cases. Authentication abuse, bandwidth,
+request shape, durable client history, and rate limiting remain separate future designs.

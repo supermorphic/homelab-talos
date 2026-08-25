@@ -7,6 +7,25 @@ alerts. The design consolidates rules by the domain of the component being monit
 keeps every alert expression under promtool coverage, and adds focused signals for the
 monitoring gaps that produced real incidents.
 
+## Problem evidence and scope
+
+This was a slight-to-moderate refactor of an alert estate that had grown one application
+at a time, not a replacement monitoring system. A Plex allow-list omission silently
+broke Seerr integration for weeks. Lidarr later showed the same event-driven failure
+mechanism. The alerts themselves also followed three incompatible placement patterns,
+and qBittorrent shipped a `PrometheusRule` without the bootstrap dependency its
+Kustomization needed.
+
+The pre-refactor audit found 37 alert definitions, 20 names asserted by promtool, and 17
+without a matching assertion. These are historical baseline counts, not a current
+inventory. Current source has four domain alert applications and 47 alert names, with
+all 47 asserted by name.
+
+The design kept the existing Prometheus, Alertmanager, Gatus, ntfy bridge, severity
+routing, and working media-alert pattern. It changed rule ownership, common validation,
+coverage, and specific missing signals. Flux reconciliation semantics and ntfy delivery
+remain the separate lineages in specifications 005 and 007.
+
 ## Rule ownership and placement
 
 Each domain owns one Flux alerts application under
@@ -35,6 +54,26 @@ Current source retains `EncodeBenchmarkJobCompleted` in the media alerts applica
 The earlier proposal to delete or reroute that successful-job notification did not
 become the implemented architecture.
 
+## Architecture alternatives and rationale
+
+| Placement model | Decision |
+| --- | --- |
+| Keep every rule beside the application it watches | Rejected. It coupled ordinary workload bootstrap to Prometheus CRDs, repeated validators, and had already left one dependency incorrect. |
+| One large rule file per domain | Rejected. It reduced Flux objects but mixed unrelated subjects and made rule review harder. |
+| One global alerts application | Rejected. It centralized CRD ownership but erased domain ownership and made every alert change share one reconciliation unit. |
+| One alerts application per monitored domain, with small subject files | Selected. It preserves local subject readability, gives each domain one dependency and validator path, and keeps Prometheus CRDs out of ordinary workload applications. |
+
+The common `monitoring` namespace is organizational, not required for discovery;
+Prometheus selects rules cluster-wide. Domains are defined by the component being
+monitored, which is why certificate rules live in `security/alerts` while Gatus-derived
+rules live in `monitoring/alerts`.
+
+The refactor accepted two constraints. An application that still owns a ServiceMonitor
+keeps its Prometheus dependency even after its rule moves, so dependency decoupling is
+partial. Also, moving a rule between Flux Kustomizations is delete-plus-create, not an
+atomic edit. Ownership moves were therefore kept separate from expression changes so a
+brief rule-absence window did not also carry changed alert semantics.
+
 ## Validation contract
 
 The domain validator extracts `.spec` from the exact `PrometheusRule` files that Flux
@@ -51,6 +90,12 @@ The fixtures use synthetic metrics as independent firing and exclusion oracles. 
 cover hold times, adjacent healthy conditions, missing-series behavior, and important
 selector boundaries. They do not substitute for live target, rule-loading, or delivery
 verification.
+
+Alert-name coverage was selected over file coverage because file association cannot
+detect a new untested alert added to an already-tested `PrometheusRule`. Each synthetic
+fixture must include the intended firing case and adjacent exclusions or missing-series
+conditions that would expose a selector regression. A fixture that merely repeats the
+expression or asserts only a happy path is not an independent oracle.
 
 ## Delivery boundary
 
@@ -84,6 +129,45 @@ the [Gatus design](020-media-integration-health-gatus.md) and
 This gap closure does not add native Longhorn volume-health rules or Trivy finding
 alerts. Some workloads have PVC-specific alerts and Longhorn UI reachability coverage,
 but those are not a general Longhorn health signal.
+
+The gap audit originally found seven Gatus endpoints that were scraped but had no custom
+alert, including the shared Gateway `echo` probe. It also found no certificate-expiry
+signal, no native Longhorn volume-health rules, no Trivy finding alerts, and no durable
+media-integration health signal beyond process or endpoint reachability. Gatus and
+production-certificate coverage were accepted and implemented. Longhorn and Trivy
+remained deferred because each needed its own metric survey. Media integration became
+the separate lineages in specifications 018–021; an early estimate involving exporter
+sidecars was not the architecture that ultimately shipped.
+
+## From broad policy-denial proposal to narrow warning
+
+The first policy-denial design proposed two general rules:
+`PolicyDeniedSustained` and `PolicyDeniedTotalBlock`. The intent was to distinguish
+degraded policy enforcement from an integration that had never forwarded a flow. Live
+Prometheus investigation and review invalidated the general classifier.
+
+The evidence had strict limits. Hubble metrics had existed for only about thirty hours,
+even when queries used longer selectors. That window proved observed bursts and
+missing-series behavior only for the data actually retained; it could not establish a
+long-term traffic baseline or prove that a silent consumer was unconfigured.
+
+The general design failed for several independent reasons:
+
+- both ingress and egress policies can produce `POLICY_DENIED`, so a non-empty
+  destination does not prove an unintended ingress failure;
+- raw Cilium source identities change when namespace labels change, which makes a join
+  on the serialized identity unstable;
+- a never-created forwarded series is absent rather than equal to zero;
+- cumulative forwarded-series presence has the wrong recovery semantics for a
+  previously working integration that later becomes blocked;
+- import-triggered denials occur as short bursts, so a short rate combined with a
+  30-minute hold can miss the whole incident; and
+- a silent event-driven consumer produces no denial evidence at all.
+
+The later narrow amendment and current source win. They retain one Plex-specific
+warning rather than the two broad rules, and they deliberately omit a forwarded-flow
+join. This is distinct from the off-cluster traffic detector in
+[specification 014](014-plex-remote-access-detection.md).
 
 ## Plex workload policy denial signal
 
@@ -119,6 +203,13 @@ the 30-minute hold. The threshold of three catches the measured low-volume failu
 leaving one or two isolated packets below the noise boundary. A burst can therefore keep
 the alert active until it leaves the range; the hold does not mean denials continued for
 30 minutes.
+
+The selected expression was compared with the measured incident shape and a quiet
+post-fix baseline. The threshold was low enough to catch the observed four-event
+six-hour signature while leaving one or two packets silent. Fixtures then encoded the
+exact-three boundary, identity aggregation, deliberate multicast exclusion,
+other-destination exclusion, non-workload exclusion, and eventual resolution. This is a
+bounded regression warning, not general integration-health proof.
 
 ## Policy-denial limits
 
@@ -157,3 +248,22 @@ The additional Gatus, certificate, and Plex-denial signals close demonstrated bl
 spots without claiming complete platform or integration monitoring. Alert delivery
 still depends on Prometheus, Alertmanager, the bridge, ntfy, and their existing
 availability signals.
+
+## Reconsideration and deferred boundaries
+
+Reconsider per-domain ownership if Prometheus CRD bootstrap ordering changes, domains no
+longer represent useful ownership units, or one application's rules need an independent
+failure or delivery boundary. Reconsider alert-name coverage only if a stronger
+independent oracle can detect every untested rule; file-level association remains
+insufficient.
+
+Broaden policy-denial detection only with evidence that separates intended egress
+containment, unstable identities, missing series, silent consumers, and recovery
+semantics. Do not infer general integration health from one Plex warning. Changing the
+delivery architecture, topic mapping, or Alertmanager lifecycle also belongs to the
+notification lineage rather than this rule-placement design.
+
+Native Longhorn volume health and Trivy finding alerts remain deferred. The implemented
+media-integration probes belong to their later specifications and should not be folded
+back into this architecture merely because their rules live in the media alerts
+application.

@@ -7,6 +7,67 @@ objective without regressing local playback. The design publishes Plex's own TLS
 listener through one router rule. It does not recreate the retired public Envoy plane,
 expose another media application, or add a public IPv6 path.
 
+This lineage began as the replacement experiment after the dedicated public Envoy
+design failed. It became permanent only after direct publication, local-client
+discovery, Sonos behavior, containment, detection, rollback, and recovery boundaries
+were reconciled. The [Envoy experiment](012-plex-public-envoy-experiment.md) remains a
+separate failed design; the [remote detector](014-plex-remote-access-detection.md) is a
+separate companion control.
+
+## Decision context and alternatives
+
+The choice was not between a risk-free direct path and a complex proxy. The available
+paths traded different failure modes:
+
+| Approach | Principal benefit | Why it was not selected as the permanent primary path |
+| --- | --- | --- |
+| Relay | No inbound listener and the smallest public attack surface | Its 2 Mbps ceiling and incomplete client support could not satisfy local and Sonos behavior together. It remains fallback. |
+| Dedicated public Envoy | Hardened public parser, isolated hostname and key, and an independent public data plane | It failed the required Sonos playback gate and had the largest configuration surface. The initial exclusive explanation for its failure was later weakened by the publish self-check discovery. |
+| Direct Plex listener | Plex-managed name and certificate, supported client behavior, and much less infrastructure | Selected with explicit acceptance that Plex's own parser and API face the Internet and have no rate limiter or edge proxy. |
+| Zero Internet exposure with `hostNetwork` | No public listener | Rejected because moving Plex onto the host network would bypass the existing pod policy. Safe use required a separately designed host firewall around sensitive node services. |
+
+`externalTrafficPolicy: Local` was chosen over `Cluster` to preserve real off-cluster
+source identity for Plex, Hubble, and LAN/remote classification. `Cluster` would have
+hidden clients behind a node source address and made attribution weaker. This choice
+required the policy to admit `world` on TCP `32400`.
+
+The Service uses an explicit address from the existing non-auto-assigned MetalLB pool.
+A new dedicated pool would not improve target stability and would repeat the earlier
+pool-admission failure mode. The default public port stayed in the experiment because a
+non-standard port was only obscurity and another variable; stronger edge control or a
+different public port remained deferred.
+
+## Experiment method and acceptance gates
+
+The experiment started with an unproved hypothesis: a retained local custom connection
+and a new Plex-published direct connection might serve different clients without the
+custom URL taking precedence for Sonos. Vendor documentation did not establish that
+connection ordering, so measured client behavior was the decision oracle.
+
+The sequence first created the cluster listener without a WAN mapping, then required the
+companion detector to fire and reach the existing notification path. Only after those
+gates did it add the router mapping and run the full client matrix. The retired public
+Envoy plane remained available until the replacement passed; teardown was not allowed
+to remove the fallback before the direct path was proven.
+
+The acceptance contract required:
+
+- forced rediscovery before each client row because cached connection entries had twice
+  produced false passes;
+- Plex's published resource name and the actual client connection URL as routing
+  evidence rather than the Remote Access status indicator;
+- Plexamp-to-Sonos playback without AirPlay and no regression for Apple TV, local
+  Plexamp, Plex iOS, native Sonos, Tautulli, Homepage, Gatus, or the internal route;
+- an off-network scan showing only the intended IPv4 TCP listener and no automatic
+  UPnP/NAT-PMP mapping; and
+- rollback evidence that distinguished blocking new connections from evicting an
+  established session.
+
+The off-site client had its own 2 Mbps quality cap. Its result proved the direct route
+from the reported connection, not throughput above the Relay ceiling. Relay fallback
+was not re-exercised during that acceptance window because doing so would interrupt the
+working household path.
+
 ## Architecture
 
 The public remote path uses the connection Plex derives from the observed WAN address:
@@ -14,7 +75,7 @@ The public remote path uses the connection Plex derives from the observed WAN ad
 ```text
 <wan-address-with-dashes>.<hash>.plex.direct:32400
   -> residential WAN IPv4 resolved from that name
-  -> one UniFi DNAT: WAN TCP 32400 -> 192.168.90.31:32400
+  -> one UniFi DNAT: WAN TCP 32400 -> <plex-load-balancer-address>:32400
   -> Plex LoadBalancer Service
   -> Plex Media Server
 ```
@@ -25,8 +86,8 @@ why the network policy admits that public egress port. Plex owns the `plex.direc
 name and certificate. The remote path needs no operator-managed public DNS record, DDNS
 updater, public Gateway, or Internet-facing operator certificate.
 
-The Plex Service requests the explicit LAN address `192.168.90.31` from MetalLB's
-non-auto-assigned `internal` pool. It exposes only TCP `32400` and uses
+The Plex Service requests one explicit LAN address from MetalLB's non-auto-assigned
+`internal` pool. It exposes only TCP `32400` and uses
 `externalTrafficPolicy: Local` so Plex and Hubble retain the real off-cluster source
 identity instead of a node SNAT address. It sets `allocateLoadBalancerNodePorts: false`
 to prevent future NodePort allocation for a listener form that the design does not use.
@@ -63,8 +124,8 @@ handed it to the Sonos speaker. The Sonos VLAN could not route to the internal G
 address, so the cast failed. Replacing it with the LoadBalancer-derived `plex.direct`
 URL restored Plexamp-to-Sonos playback and did not regress full local Direct Play.
 
-Plex's **LAN Networks** setting includes the trusted client VLANs and the Pod CIDR
-`10.244.0.0/16`, but excludes the cluster VLAN `192.168.90.0/24`. Local application
+Plex's **LAN Networks** setting includes the trusted client VLANs and the current Pod
+CIDR, but excludes the cluster VLAN. Local application
 sessions use the internal Envoy route, so Plex sees an Envoy Pod address rather than the
 original client address. Without the Pod CIDR, Plex classifies those local sessions as
 remote. They can then consume the per-user remote stream allowance and receive remote
@@ -74,10 +135,10 @@ activity view is the independent check that a local session is classified as **L
 The cluster VLAN is deliberately excluded. The current LoadBalancer uses
 `externalTrafficPolicy: Local`, which preserves an off-site client's public source
 address. If that policy changed to `Cluster`, a remote connection could instead reach
-Plex with a node source address from `192.168.90.0/24`. Treating that whole VLAN as LAN
-would then exempt the Internet session from remote limits. The Pod CIDR has no equivalent
-off-cluster source risk because external clients cannot originate with a routable Pod
-address.
+Plex with a node source address from the cluster VLAN. Treating that whole VLAN as LAN
+would then exempt the Internet session from remote limits. The Pod CIDR has no
+equivalent off-cluster source risk because external clients cannot originate with a
+routable Pod address.
 
 Pi-hole must allow the private answer embedded in `plex.direct`; DNS rebind protection
 must not strip it. The Sonos VLAN also needs a router rule to the Plex LoadBalancer on
@@ -92,8 +153,17 @@ public IPv6 or AAAA path is part of this design.
 The Plex Cilium policy admits `world` only on TCP `32400`. This allows the WAN-forwarded
 traffic and, because Cilium classifies addresses outside the cluster as `world`, also
 admits LAN clients to the LoadBalancer address. Other ingress ports remain closed. The
-policy retains the exact in-cluster consumers and the bounded egress described by the
-Relay and hardening specification.
+policy retains the exact in-cluster consumers and public-IPv4 egress on TCP `443` and
+`32400`, with private, shared, loopback, link-local, documentation, multicast, and other
+reserved ranges excluded.
+
+TCP `32400` egress is load-bearing. Plex checks its own WAN-derived
+`plex.direct:32400` endpoint before publishing the connection. The first rollout allowed
+public TCP `443` only, so Cilium denied that check and Plex published no direct resource.
+Because the WAN address is dynamic, policy cannot grant only the current self-address;
+the implemented rule permits any otherwise eligible public IPv4 destination on TCP
+`32400`. This is a broader capability than the early design intended and is an accepted
+containment cost, not a claim that the destination is Plex-only.
 
 Plex Remote Access and authentication remain enabled, the manually specified public port
 matches `32400`, Relay remains enabled as a fallback, and unauthenticated-network
@@ -148,6 +218,34 @@ broken Sonos path. Plex's reported Remote Access reachability state is also not 
 oracle: Sonos had played while that state reported not reachable. The published
 connection name and actual client URL are the useful evidence.
 
+## Material implementation discoveries
+
+The final architecture differs from the first direct-access proposal in several
+load-bearing ways:
+
+- The early experiment retained the internal Envoy hostname as the custom URL with an
+  explicit TCP `443` port. Measured Sonos routing showed that Plex's cloud service could
+  prefer that value and hand the speaker an unreachable internal Gateway address. The
+  permanent list therefore contains exactly one private LoadBalancer-derived
+  `plex.direct:32400` URL. The internal Envoy hostname remains a browser route but is not
+  advertised through Plex discovery.
+- Plex's `LAN Networks` needed the Pod CIDR because local reverse-proxied sessions arrive
+  from Envoy pods. It deliberately excluded the cluster VLAN so a future node-SNAT path
+  cannot misclassify an Internet client as local. Tautulli's LAN/WAN view became the
+  independent classification check.
+- Direct publication required both a Plex-managed connection name and a successful
+  outbound self-check on TCP `32400`. Naming alone did not make the path work. This
+  finding also means the earlier Envoy failure cannot be attributed exclusively to the
+  operator hostname and certificate.
+- Setting `allocateLoadBalancerNodePorts: false` did not remove an already allocated
+  NodePort. The final Helm post-render submits an explicit null port field, and source
+  and live validation treat absence of the second listener form as a separate invariant.
+- Remote Access status remained context only. Published resources, actual client URLs,
+  off-network reachability, and human-visible playback were the useful oracles.
+
+These are design corrections, not operator procedure. Current application and router
+steps remain in the operations guide.
+
 ## Authority and recovery boundary
 
 Git proves the Service, HTTPRoute, workload, and Cilium policy desired state. It cannot
@@ -179,6 +277,20 @@ of removing exposure.
 Review this design after a change to the gateway mapping, public DNS, address-family
 configuration, Plex network or account settings, Service listener shape, Cilium policy,
 notification route, or recovery design. A calendar-based review is not required.
+
+## Deferred and reconsideration boundaries
+
+This design does not provide application-request logging, authentication-failure
+detection, bandwidth-abuse detection, public rate limiting, or a hardened edge parser.
+It also does not select a surgical router conntrack operation. DNAT removal blocks new
+connections; restarting Plex is the available session-eviction action and interrupts all
+local clients.
+
+Reconsider the architecture after a material change in Plex client naming or discovery,
+support for a compatible authenticated proxy, public address-family handling, edge
+filtering, the Service listener shape, the Cilium egress requirement, or detector and
+recovery evidence. A different external port or proxy is a new trade study, not an
+automatic hardening step.
 
 ## Consequences
 
