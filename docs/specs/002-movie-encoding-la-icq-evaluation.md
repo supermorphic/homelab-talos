@@ -52,7 +52,11 @@ lifecycle, not on the source codec alone:
 | Public-awaiting-cleanup | Savings appear only after download cleanup and its recycle interval | Report delayed realization |
 | Unlinked | The original has one library link; savings are immediate | Eligible |
 
-Link count was the authoritative observation. Muxing metadata such as a MakeMKV tag could
+Classification used two evidence stages. A link count of one proved the combined
+`unlinked` state. A linked entry required a credential-redacted torrent inventory:
+current torrent state distinguished active work, and tracker tags distinguished stopped
+private-permanent work from public work awaiting cleanup. A linked entry with no matching
+torrent evidence failed closed as `active`. Muxing metadata such as a MakeMKV tag could
 describe how a file was created but could not prove that the present file was a torrent
 payload. Once a cleaned file and its torrent history were gone, the census could not
 distinguish it from a never-torrented file; both were deliberately classified as
@@ -172,6 +176,16 @@ policy. It was a mitigation with a known failure mode, not a safety guarantee.
 The harness separated samples used to reject poor quality from samples used to estimate
 catalog savings. Combining them would bias the estimate: deliberately difficult material
 is a good rejection instrument and a bad representation of the catalog.
+
+### Measurement limitations and failure hypotheses
+
+The experiment treated three codec and measurement limitations as design inputs. QSV
+could lose HDR10 static metadata, so quality validation compared outputs with the
+title-level metadata oracle rather than assuming that a copied clip retained every SEI
+message. HEVC provides no film-grain synthesis, so grain-heavy stress roles were
+necessary and a grain-caused quality or savings no-go was a legitimate result. VMAF was
+trained for SDR and was weak evidence for HDR approval; each clip's scores could reject a
+setting, but only mandatory visual judgment could approve a candidate.
 
 ### Stage 0: metadata census
 
@@ -405,10 +419,12 @@ any movie.
 
 The no-go arose from an objective strategy predicate rather than an unresolved visual
 judgment. Reconsidering this same LA-ICQ strategy requires a materially different driver,
-runtime, or hardware condition that can plausibly select LA-ICQ. It then requires fresh
-proof on every eligible node under the corrected telemetry and execution contract, a new
-run identity, and all quality, savings, validation, and visual gates above. The stopped
-run remains permanently inadmissible.
+runtime, or hardware condition that can plausibly select LA-ICQ, followed by a new run
+identity and every applicable corrected stage: per-node LA-ICQ capability proof;
+per-clip quality and output validation; mandatory visual approval; a bracketed x265
+matched-quality comparison, with no verdict when its curve does not bracket the QSV
+point; representative full-title savings; and Plex contention measurement. The stopped
+run supplies none of this evidence and remains permanently inadmissible.
 
 ICQ without look-ahead, AV1, software x265 as a production engine, another runtime, or
 new hardware is a distinct strategy and needs its own design lineage. A later ICQ result
