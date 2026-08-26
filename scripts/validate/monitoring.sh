@@ -72,9 +72,10 @@ loki_hr="$loki/app/helmrelease.yaml"
 loki_repo="$loki/app/helmrepository.yaml"
 loki_datasource="$loki/app/datasource.yaml"
 loki_dashboard="$loki/app/dashboards/centralized-logs.json"
+loki_dashboard_validator='scripts/validate/grafana-dashboard.py'
 
 for f in "$loki_ks" "$loki_values" "$loki_hr" "$loki_repo" "$loki_datasource" \
-  "$loki_dashboard" \
+  "$loki_dashboard" "$loki_dashboard_validator" \
   "$loki/app/kustomization.yaml"; do
   [[ -f "$f" ]] || {
     echo "Missing Loki source: $f" >&2
@@ -176,6 +177,7 @@ done
 # checking for marker strings. Every panel uses one of the two declared datasource
 # variables, and the required investigation views must remain independently queryable.
 jq -e '.' "$loki_dashboard" >/dev/null
+python "$loki_dashboard_validator" "$loki_dashboard"
 [[ "$(jq -r '.title' "$loki_dashboard")" == 'Centralized Logs' ]]
 [[ "$(jq -r '.uid' "$loki_dashboard")" == 'centralized-logs' ]]
 [[ "$(jq -r '.schemaVersion >= 41' "$loki_dashboard")" == 'true' ]]
@@ -201,30 +203,6 @@ jq -e '
   any($queries[]; contains("source=\"talos\"") and contains("service!=\"kernel\"") and test("error\\|fail\\|fatal\\|panic")) and
   any($queries[]; contains("source=\"talos\"") and contains("service=\"kernel\"") and test("error\\|fail\\|fatal\\|panic"))
 ' "$loki_dashboard" >/dev/null
-jq -e '
-  [.panels[].targets[]?.expr] | join("\n") as $queries |
-  [
-    "loki_write_dropped_entries_total",
-    "loki_discarded_samples_total",
-    "loki_request_duration_seconds_count",
-    "loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds",
-    "kubelet_volume_stats_available_bytes",
-    "kubelet_volume_stats_capacity_bytes"
-  ] | all(.[]; $queries | contains(.))
-' "$loki_dashboard" >/dev/null
-jq -e '
-  [(.links[]?), (.panels[].links[]?)] |
-  length >= 3 and
-  all(.[];
-    .type == "link" and
-    (.url | contains("/explore?")) and
-    (.url | contains("panes=")) and
-    (.url | contains("schemaVersion=1")) and
-    (.url | contains("${loki}")) and
-    (.url | contains("${__from}")) and
-    (.url | contains("${__to}"))
-  )
-' "$loki_dashboard" >/dev/null
 if rg -qi 'https?://|nuc-cluster|supermorphic|([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-f]{2}:){5}[0-9a-f]{2}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$loki_dashboard"; then
   echo 'Refusing: Centralized Logs dashboard embeds a raw infrastructure identifier.' >&2
   exit 1
@@ -239,6 +217,7 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
   --namespace monitoring --api-versions monitoring.coreos.com/v1/ServiceMonitor \
   --values "$loki_values" >"$temp_dir/loki.yaml"
 [[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.replicas] | join(",")' "$temp_dir/loki.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.template.spec.containers[] | select(.name == "loki") | .image] | join(",")' "$temp_dir/loki.yaml")" == 'docker.io/grafana/loki:3.6.11' ]]
 # The chart omits a StatefulSet retention policy when automatic PVC deletion is disabled.
 # Kubernetes defaults both lifecycle actions to Retain in that case.
 [[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | (.spec.persistentVolumeClaimRetentionPolicy.whenDeleted // "Retain")] | join(",")' "$temp_dir/loki.yaml")" == 'Retain' ]]

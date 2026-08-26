@@ -524,7 +524,7 @@ tests:
   - name: Loki build telemetry recovery clears the missing alert
     interval: 1m
     input_series:
-      - series: 'loki_build_info{namespace="monitoring",job="monitoring/loki",version="3.6.12"}'
+      - series: 'loki_build_info{namespace="monitoring",job="monitoring/loki"}'
         values: '_x12 1x5'
     alert_rule_test:
       - eval_time: 11m

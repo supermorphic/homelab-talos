@@ -112,6 +112,7 @@ counters. This best-effort behavior matches the decision not to back up Loki.
 Loki runs as one monolithic instance in `monitoring`. This topology is appropriate for
 the estimated ingest rate and avoids the operational cost of distributed Loki services.
 The service is internal; Grafana and the two Alloy workloads are its expected clients.
+The pinned Loki chart version is `7.3.0`, which renders the `grafana/loki:3.6.11` image.
 
 Loki uses TSDB schema v13 with a 24-hour index period and filesystem-backed chunk, index,
 WAL, and compactor data on one 50 GiB Longhorn `ReadWriteOnce` claim. The workload uses a
