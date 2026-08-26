@@ -169,24 +169,15 @@ campaign_has_suite() {
   catalog_campaign_ids "$catalog" "$campaign" | rg -qx --fixed-strings "$suite_id"
 }
 
-expected_confirmation() {
-  if [[ "$scoped_mode" == 'true' ]]; then
-    printf 'run-local:%s\n' "$campaign"
-    return
-  fi
-  if campaign_has_suite test.resilience.plex-node-reboot; then
-    printf 'run-publish:%s:%s:%s\n' \
-      "$campaign" "${source_sha:0:12}" "$plan_digest"
-  else
-    printf 'run-publish:%s\n' "$campaign"
-  fi
+expected_published_confirmation() {
+  printf 'run-publish:%s:%s:%s\n' \
+    "$campaign" "${source_sha:0:12}" "$plan_digest"
 }
 
-print_plan() {
-  local campaign_entry confirmation count
+print_frozen_inputs() {
+  local campaign_entry count
 
   campaign_entry="$(catalog_campaign_entry "$catalog" "$campaign")"
-  confirmation="$(expected_confirmation)"
   count="$(catalog_campaign_ids "$catalog" "$campaign" | wc -l | tr -d ' ')"
   echo "Campaign: $campaign"
   echo "Description: $(yq -r '.description' - <<<"$campaign_entry")"
@@ -206,12 +197,18 @@ print_plan() {
   fi
   echo
   catalog_campaign_ids "$catalog" "$campaign" | nl -w2 -s'. '
+}
+
+print_plan() {
+  local confirmation
+
+  print_frozen_inputs
   echo
   echo 'Run with:'
   if [[ "$scoped_mode" == 'true' ]]; then
-    printf "TEST_SCOPED_CAMPAIGN_CONFIRM='%s' mise exec -- just test scoped-campaign\n" \
-      "$confirmation"
+    echo 'mise exec -- just test scoped-campaign'
   else
+    confirmation="$(expected_published_confirmation)"
     printf "TEST_CAMPAIGN_CONFIRM='%s' mise exec -- just test campaign %s\n" \
       "$confirmation" "$campaign"
   fi
@@ -623,7 +620,7 @@ execute_remaining_members() {
 }
 
 prepare_new_campaign() {
-  local state confirmation execution_mode confirmation_value confirmation_variable
+  local state confirmation execution_mode
 
   campaign="$requested"
   execution_mode="$(yq -r '.execution_mode // "operator-published"' \
@@ -648,22 +645,20 @@ prepare_new_campaign() {
     echo 'Campaign source check did not return two full Git SHAs.' >&2
     exit 1
   }
-  confirmation="$(expected_confirmation)"
   if [[ "$action" == 'plan' || "$action" == 'scoped-plan' ]]; then
     print_plan
     exit 0
   fi
-  confirmation_value="${TEST_CAMPAIGN_CONFIRM:-}"
-  confirmation_variable='TEST_CAMPAIGN_CONFIRM'
   if [[ "$scoped_mode" == 'true' ]]; then
-    confirmation_value="${TEST_SCOPED_CAMPAIGN_CONFIRM:-}"
-    confirmation_variable='TEST_SCOPED_CAMPAIGN_CONFIRM'
+    print_frozen_inputs
+  else
+    confirmation="$(expected_published_confirmation)"
+    [[ "${TEST_CAMPAIGN_CONFIRM:-}" == "$confirmation" ]] || {
+      echo "Refusing campaign $campaign." >&2
+      echo 'Run its plan recipe and set TEST_CAMPAIGN_CONFIRM to the exact value.' >&2
+      exit 1
+    }
   fi
-  [[ "$confirmation_value" == "$confirmation" ]] || {
-    echo "Refusing campaign $campaign." >&2
-    echo "Run its plan recipe and set $confirmation_variable to the exact value." >&2
-    exit 1
-  }
   initialize_manifest
 }
 

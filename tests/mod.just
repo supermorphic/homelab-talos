@@ -31,12 +31,12 @@ report-open run:
 publish run:
     @scripts/test/publish-report.sh {{quote(run)}}
 
-# Preview an ordered campaign and print its exact run-and-publish confirmation.
+# Preview an ordered campaign and print its exact plan-bound confirmation.
 campaign-plan campaign:
     @scripts/test/run-campaign.sh plan {{quote(campaign)}}
 
-# Preview the read-only worktree campaign. This mode never acquires the cluster test
-# Lease or publishes reports.
+# Optionally preview the read-only worktree campaign. This mode never acquires the
+# cluster test Lease or publishes reports.
 scoped-campaign-plan:
     @scripts/test/run-campaign.sh scoped-plan scoped-verification
 
