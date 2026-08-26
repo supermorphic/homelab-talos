@@ -48,6 +48,23 @@ def require_query_panel(
     return panel
 
 
+def validate_warning_events_panel(dashboard: dict[str, Any]) -> None:
+    title = "Recent Kubernetes Warning Events"
+    panel = panel_by_title(dashboard, title)
+    require(
+        panel.get("datasource") == {"type": "loki", "uid": "${loki}"},
+        f"{title}: must use the Loki datasource variable",
+    )
+    targets = panel.get("targets", [])
+    require(len(targets) == 1, f"{title}: must contain exactly one query")
+    require(targets[0].get("refId") == "A", f"{title}: query refId must be A")
+    require(
+        normalized(targets[0].get("expr", ""))
+        == '{source="kubernetes_event",event_type="Warning"}',
+        f"{title}: query must select Warning only",
+    )
+
+
 def validate_operational_panels(dashboard: dict[str, Any]) -> None:
     require_query_panel(
         dashboard,
@@ -114,7 +131,7 @@ def validate_explore_links(dashboard: dict[str, Any]) -> None:
     expected_queries = {
         "Explore all logs": '{source=~".+"}',
         "Investigate Events in Explore": (
-            '{source="kubernetes_event",event_type=~"Warning|Error"}'
+            '{source="kubernetes_event",event_type="Warning"}'
         ),
         "Investigate Talos services in Explore": (
             '{source="talos",service!="kernel"} |~ "(?i)(error|fail|fatal|panic)"'
@@ -197,6 +214,7 @@ def validate(path: Path) -> None:
     except (OSError, json.JSONDecodeError) as error:
         raise ValidationError(f"cannot load dashboard JSON: {error}") from error
     require(isinstance(dashboard, dict), "dashboard root must be a JSON object")
+    validate_warning_events_panel(dashboard)
     validate_operational_panels(dashboard)
     validate_explore_links(dashboard)
 

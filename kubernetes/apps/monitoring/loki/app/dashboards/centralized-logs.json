@@ -241,7 +241,7 @@
           "targetBlank": true,
           "title": "Investigate Events in Explore",
           "type": "link",
-          "url": "/explore?panes=%7B%22A%22%3A%7B%22datasource%22%3A%22${loki}%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22uid%22%3A%22${loki}%22%2C%22type%22%3A%22loki%22%7D%2C%22expr%22%3A%22%7Bsource%3D%5C%22kubernetes_event%5C%22%2Cevent_type%3D~%5C%22Warning%7CError%5C%22%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D&schemaVersion=1&orgId=1"
+          "url": "/explore?panes=%7B%22A%22%3A%7B%22datasource%22%3A%22${loki}%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22uid%22%3A%22${loki}%22%2C%22type%22%3A%22loki%22%7D%2C%22expr%22%3A%22%7Bsource%3D%5C%22kubernetes_event%5C%22%2Cevent_type%3D%5C%22Warning%5C%22%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D&schemaVersion=1&orgId=1"
         }
       ],
       "options": {
@@ -257,12 +257,12 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "{source=\"kubernetes_event\",event_type=~\"Warning|Error\"}",
+          "expr": "{source=\"kubernetes_event\",event_type=\"Warning\"}",
           "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "Recent Warning and Error Kubernetes Events",
+      "title": "Recent Kubernetes Warning Events",
       "type": "logs"
     },
     {

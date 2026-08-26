@@ -399,6 +399,7 @@ def validate_events(config_path: Path) -> None:
         [
             "stage.json",
             "stage.labels",
+            "stage.match",
             "stage.static_labels",
             "stage.replace",
             "stage.replace",
@@ -407,7 +408,7 @@ def validate_events(config_path: Path) -> None:
         ],
         ["cluster", "source", "namespace", "event_type"],
         "Events",
-        3,
+        4,
     )
     if not re.fullmatch(
         r'\s*expressions\s*=\s*\{\s*event_type\s*=\s*"type",?\s*\}\s*',
@@ -422,8 +423,18 @@ def validate_events(config_path: Path) -> None:
     ):
         refuse("Alloy Events dynamic labels must contain only event_type.")
     if not re.fullmatch(
-        r'\s*values\s*=\s*\{\s*cluster\s*=\s*"nuc-cluster",\s*source\s*=\s*"kubernetes_event",?\s*\}\s*',
+        r'\s*selector\s*=\s*`\{event_type!~"\^\(Normal\|Warning\)\$"\}`\s*'
+        r'action\s*=\s*"drop"\s*'
+        r'drop_counter_reason\s*=\s*"unexpected_event_type"\s*',
         stages[2].body,
+        flags=re.DOTALL,
+    ):
+        refuse(
+            "Alloy Events must drop every event_type other than Normal or Warning before delivery."
+        )
+    if not re.fullmatch(
+        r'\s*values\s*=\s*\{\s*cluster\s*=\s*"nuc-cluster",\s*source\s*=\s*"kubernetes_event",?\s*\}\s*',
+        stages[3].body,
         flags=re.DOTALL,
     ):
         refuse("Alloy Events static labels must contain only cluster and source.")

@@ -199,7 +199,7 @@ jq -e '
   any($queries[]; test("sum by \\(namespace\\).*count_over_time")) and
   any($queries[]; test("sum by \\(app\\).*count_over_time")) and
   any($queries[]; test("sum by \\(node\\).*count_over_time")) and
-  any($queries[]; contains("source=\"kubernetes_event\"") and contains("event_type=~\"Warning|Error\"")) and
+  any($queries[]; contains("source=\"kubernetes_event\"") and contains("event_type=\"Warning\"")) and
   any($queries[]; contains("source=\"talos\"") and contains("service!=\"kernel\"") and test("error\\|fail\\|fatal\\|panic")) and
   any($queries[]; contains("source=\"talos\"") and contains("service=\"kernel\"") and test("error\\|fail\\|fatal\\|panic"))
 ' "$loki_dashboard" >/dev/null
@@ -407,13 +407,25 @@ rg -qx '  - ./alloy-events/ks.yaml' kubernetes/apps/monitoring/kustomization.yam
 [[ "$(yq -r '.alloy.stabilityLevel' "$alloy_events_values")" == 'generally-available' ]]
 [[ "$(yq -r '.alloy.storagePath' "$alloy_events_values")" == '/tmp/alloy' ]]
 [[ "$(yq -r '.alloy.mounts.varlog' "$alloy_events_values")" == 'false' ]]
-[[ "$(yq -r '.alloy.resources.requests.cpu' "$alloy_events_values")" == '25m' ]]
-[[ "$(yq -r '.alloy.resources.requests.memory' "$alloy_events_values")" == '64Mi' ]]
-[[ "$(yq -r '.alloy.resources.limits.cpu' "$alloy_events_values")" == '250m' ]]
-[[ "$(yq -r '.alloy.resources.limits.memory' "$alloy_events_values")" == '256Mi' ]]
-[[ "$(yq -r '.controller.type' "$alloy_events_values")" == 'deployment' ]]
-[[ "$(yq -r '.controller.replicas' "$alloy_events_values")" == '1' ]]
-[[ "$(yq -r '.controller.updateStrategy.type' "$alloy_events_values")" == 'Recreate' ]]
+[[ "$(yq -r '.alloy.resources.requests.cpu' "$alloy_events_values")" == '25m' &&
+  "$(yq -r '.alloy.resources.requests.memory' "$alloy_events_values")" == '64Mi' &&
+  "$(yq -r '.alloy.resources.limits.cpu' "$alloy_events_values")" == '250m' &&
+  "$(yq -r '.alloy.resources.limits.memory' "$alloy_events_values")" == '256Mi' ]] || {
+  echo 'Refusing: Alloy Events resource envelope drifted.' >&2
+  exit 1
+}
+[[ "$(yq -r '.controller.type' "$alloy_events_values")" == 'deployment' ]] || {
+  echo 'Refusing: Alloy Events controller must remain a Deployment.' >&2
+  exit 1
+}
+[[ "$(yq -r '.controller.replicas' "$alloy_events_values")" == '1' ]] || {
+  echo 'Refusing: Alloy Events controller must have exactly one replica.' >&2
+  exit 1
+}
+[[ "$(yq -r '.controller.updateStrategy.type' "$alloy_events_values")" == 'Recreate' ]] || {
+  echo 'Refusing: Alloy Events controller must use Recreate.' >&2
+  exit 1
+}
 [[ "$(yq -r '.serviceMonitor.enabled' "$alloy_events_values")" == 'true' ]]
 [[ "$(yq -r '.ingress.enabled' "$alloy_events_values")" == 'false' ]]
 [[ "$(yq -r '.crds.create' "$alloy_events_values")" == 'false' ]]
