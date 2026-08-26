@@ -225,6 +225,79 @@ retry-join node:
       --talosconfig "$talosconfig" \
       --wait=false
 
+    expected_names=$'nuc1\nnuc2\nnuc3'
+    recovery_complete=false
+    member_summary='<unavailable>'
+    for attempt in {1..60}; do
+      members=''
+      member_names=''
+      if members="$(talosctl etcd members \
+        --nodes 192.168.90.10 \
+        --endpoints "$nodes_csv" \
+        --talosconfig "$talosconfig" 2>/dev/null)"; then
+        member_names="$(awk 'NR > 1 && NF {print $3}' <<<"$members" | sort)"
+        if [[ -n "$member_names" ]]; then
+          member_summary="$(awk 'BEGIN {separator=""} NF {printf "%s%s", separator, $0; separator=","} END {print ""}' <<<"$member_names")"
+        else
+          member_summary='<none>'
+        fi
+      fi
+
+      service_ready=false
+      status_ready=false
+      alarms_clear=false
+      if [[ "$member_names" == "$expected_names" ]]; then
+        service_status=''
+        if service_status="$(talosctl service etcd \
+          --nodes "$node_ip" \
+          --endpoints "$nodes_csv" \
+          --talosconfig "$talosconfig" 2>/dev/null)"; then
+          etcd_state="$(awk '$1 == "STATE" {print $2}' <<<"$service_status")"
+          etcd_health="$(awk '$1 == "HEALTH" {print $2}' <<<"$service_status")"
+          if [[ "$etcd_state" == 'Running' && "$etcd_health" =~ ^(Healthy|OK)$ ]]; then
+            service_ready=true
+          fi
+        fi
+
+        etcd_status=''
+        if etcd_status="$(talosctl etcd status \
+          --nodes "$nodes_csv" \
+          --endpoints "$nodes_csv" \
+          --talosconfig "$talosconfig" 2>/dev/null)"; then
+          status_rows="$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$etcd_status")"
+          member_ids="$(awk 'BEGIN {FS="[[:space:]][[:space:]]+"} NR > 1 && NF {print $2}' <<<"$etcd_status" | sort -u)"
+          leader_ids="$(awk 'BEGIN {FS="[[:space:]][[:space:]]+"} NR > 1 && NF {print $5}' <<<"$etcd_status" | sort -u)"
+          leader_count="$(awk 'NF {count++} END {print count + 0}' <<<"$leader_ids")"
+          if [[ "$status_rows" == '3' && "$leader_count" == '1' ]] && rg -Fqx "$leader_ids" <<<"$member_ids"; then
+            status_ready=true
+          fi
+        fi
+
+        alarm_status=''
+        if alarm_status="$(talosctl etcd alarm list \
+          --nodes "$nodes_csv" \
+          --endpoints "$nodes_csv" \
+          --talosconfig "$talosconfig" 2>/dev/null)"; then
+          alarm_rows="$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarm_status")"
+          if [[ "$alarm_rows" == '0' ]]; then
+            alarms_clear=true
+          fi
+        fi
+      fi
+
+      if [[ "$service_ready" == 'true' && "$status_ready" == 'true' && "$alarms_clear" == 'true' ]]; then
+        recovery_complete=true
+        break
+      fi
+      sleep 5
+    done
+
+    [[ "$recovery_complete" == 'true' ]] || {
+      echo "Join retry for $node did not reach verified healthy etcd membership; last observed members: $member_summary." >&2
+      exit 1
+    }
+    echo "Verified $node joined the healthy three-member etcd cluster without alarms."
+
 # Verify the bootstrapped Talos cluster and refresh the ignored workstation kubeconfig.
 verify:
     #!/usr/bin/env bash
@@ -707,12 +780,25 @@ flux-adopt-cilium:
     after_pods="$(mktemp /tmp/homelab-talos-adopt-cilium-after.XXXXXX)"
     source_backup="$(mktemp /tmp/homelab-talos-adopt-cilium-source.XXXXXX)"
     cp -- "$source_file" "$source_backup"
+    resumed=false
     adoption_complete=false
     cleanup_adoption() {
+      original_status="$?"
+      set +e
+      recovery_status=0
+      if [[ "$adoption_complete" != 'true' && "$resumed" == 'true' ]]; then
+        flux suspend kustomization cilium \
+          --namespace flux-system --kubeconfig "$kubeconfig" >/dev/null 2>&1 || recovery_status=1
+      fi
       if [[ "$adoption_complete" != 'true' ]]; then
-        cp -- "$source_backup" "$source_file"
+        cp -- "$source_backup" "$source_file" || recovery_status=1
       fi
       rm -f -- "$live_key" "$before_pods" "$after_pods" "$source_backup"
+      if (( recovery_status != 0 )); then
+        echo 'Cilium adoption recovery did not fully restore the suspended transaction boundary.' >&2
+        exit 1
+      fi
+      exit "$original_status"
     }
     trap cleanup_adoption EXIT
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret sops-age \
@@ -738,6 +824,7 @@ flux-adopt-cilium:
 
     yq --inplace '.spec.suspend = false' "$source_file"
     flux resume kustomization cilium --namespace flux-system --kubeconfig "$kubeconfig"
+    resumed=true
     flux reconcile kustomization cilium \
       --namespace flux-system \
       --with-source \
