@@ -911,6 +911,10 @@ monitoring-validate: require-bash
 monitoring-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(kubeconfig)}}
 
+# Verify centralized logging without printing raw log content.
+logging-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.logging -- scripts/verify/logging.sh {{quote(kubeconfig)}}
+
 # Verify the live cert-manager scrape target, production expiry metric identity,
 # security alert-rule health, and staging-resource pruning. Read-only; not in ci.
 security-alerts-verify: require-bash

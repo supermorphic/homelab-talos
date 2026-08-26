@@ -47,6 +47,8 @@ done
 for j in daily-snapshot daily-backup; do
   kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io "$j" >/dev/null
 done
+# This proves the maintenance job definition only. verification.logging owns the
+# release-blocking check against the actual Loki Longhorn Volume assignment.
 [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io loki-filesystem-trim --output jsonpath='{.spec.task}')" == 'filesystem-trim' ]] || {
   echo 'RecurringJob loki-filesystem-trim is missing or is not a filesystem-trim job.' >&2
   exit 1
