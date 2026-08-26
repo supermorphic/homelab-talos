@@ -200,7 +200,7 @@ available for focused developer validation.
 | `just talos validate` | Strictly validate rendered Talos configs and current source policy | — | Available |
 | `just talos source-validate` | Validate trackable Talhelper inputs without decrypting identity | — | Available; internal validation |
 | `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Destructive after confirmation |
-| `just talos apply-live <node>` | Guard, dry-run, and apply a config change to an already-running node in no-reboot mode (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
+| `just talos apply-live <node>` | Guard, preview by dry-run, apply a no-reboot change to a running node, and require a second dry-run with no remaining diff (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
 | `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Location-aware credential installation |
 | `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
