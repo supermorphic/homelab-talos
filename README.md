@@ -57,7 +57,7 @@ Use this cadence so "full test suite" has one unambiguous meaning:
 | --- | --- | --- |
 | Every PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
 | Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
-| Weekly | `weekly` campaign | Nightly coverage plus verification, integration (including three explicit ntfy test notifications), probes, and disruptive resilience |
+| Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
 | Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
 
 Preview the desired campaign from clean, deployed `origin/main`:
