@@ -187,13 +187,16 @@ case " $* " in
   *' http://127.0.0.1:23100/ready '*) printf 'ready\n' ;;
   *' http://127.0.0.1:23100/config/tenant/v1/limits '*)
     case "$FAKE_LAYOUT" in
-      wrong-runtime-retention) printf 'retention_period: 13d\nretention_stream: []\ndiscover_service_name: []\n' ;;
-      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\nretention_stream: []\ndiscover_service_name: []\n' ;;
-      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\ndiscover_service_name: []\n' ;;
-      runtime-discover-service-name-nonempty) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: [service]\n' ;;
-      runtime-discover-service-name-missing) printf 'retention_period: 2w\nretention_stream: []\n' ;;
-      runtime-discover-service-name-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: service\n' ;;
-      *) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      wrong-runtime-retention) printf 'retention_period: 13d\nretention_stream: []\ndiscover_service_name: []\nshard_streams:\n  enabled: false\n' ;;
+      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\nretention_stream: []\ndiscover_service_name: []\nshard_streams:\n  enabled: false\n' ;;
+      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\ndiscover_service_name: []\nshard_streams:\n  enabled: false\n' ;;
+      runtime-discover-service-name-nonempty) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: [service]\nshard_streams:\n  enabled: false\n' ;;
+      runtime-discover-service-name-missing) printf 'retention_period: 2w\nretention_stream: []\nshard_streams:\n  enabled: false\n' ;;
+      runtime-discover-service-name-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: service\nshard_streams:\n  enabled: false\n' ;;
+      runtime-shard-streams-enabled) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\nshard_streams:\n  enabled: true\n' ;;
+      runtime-shard-streams-missing) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      runtime-shard-streams-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\nshard_streams: disabled\n' ;;
+      *) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\nshard_streams:\n  enabled: false\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/loki/api/v1/labels '*)
@@ -390,6 +393,9 @@ case_selected runtime-retention-stream-override && run_case runtime-retention-st
 case_selected runtime-discover-service-name-nonempty && run_case runtime-discover-service-name-nonempty 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
 case_selected runtime-discover-service-name-missing && run_case runtime-discover-service-name-missing 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
 case_selected runtime-discover-service-name-malformed && run_case runtime-discover-service-name-malformed 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
+case_selected runtime-shard-streams-enabled && run_case runtime-shard-streams-enabled 1 'Loki effective runtime automatic stream sharding is not disabled.' 2 2
+case_selected runtime-shard-streams-missing && run_case runtime-shard-streams-missing 1 'Loki effective runtime automatic stream sharding is not disabled.' 2 2
+case_selected runtime-shard-streams-malformed && run_case runtime-shard-streams-malformed 1 'Loki effective runtime automatic stream sharding is not disabled.' 2 2
 case_selected forbidden-label && run_case forbidden-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2
 case_selected ip-label && run_case ip-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2
 case_selected missing-container-label && run_case missing-container-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2

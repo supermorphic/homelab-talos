@@ -178,6 +178,9 @@ Initial resource envelopes are deliberately small but leave room for bursts:
 Loki initially allows 2 MiB/s sustained ingestion with a 4 MiB burst, 1 MiB/s per stream,
 256 KiB per log line, and 5,000 active streams for the single tenant. These values are
 guardrails against event storms, runaway debug logging, and unintended label expansion.
+Automatic stream sharding is explicitly disabled because this low-volume, single-binary
+deployment does not need it and its reserved `__stream_shard__` label would expand the
+approved indexed-label sets.
 Any rejected entries increment metrics that Prometheus monitors. Limits and resources may
 be adjusted after measurement without changing the architecture.
 

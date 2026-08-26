@@ -130,6 +130,13 @@ yq -e '
   echo 'Refusing: Loki source must disable automatic service-name discovery.' >&2
   exit 1
 }
+yq -e '
+  ((.loki.limits_config.shard_streams | type) == "!!map") and
+  (.loki.limits_config.shard_streams.enabled == false)
+' "$loki_values" >/dev/null || {
+  echo 'Refusing: Loki source must explicitly disable automatic stream sharding.' >&2
+  exit 1
+}
 [[ "$(yq -r '.loki.limits_config.ingestion_rate_mb' "$loki_values")" == '2' ]]
 [[ "$(yq -r '.loki.limits_config.ingestion_burst_size_mb' "$loki_values")" == '4' ]]
 [[ "$(yq -r '.loki.limits_config.per_stream_rate_limit' "$loki_values")" == '1MB' ]]
@@ -256,6 +263,17 @@ rendered_discover_service_name="$(yq ea --output-format json --indent 0 '
 ' "$temp_dir/loki.yaml")"
 [[ "$rendered_discover_service_name" == '[]' ]] || {
   echo 'Refusing: rendered Loki must disable automatic service-name discovery.' >&2
+  exit 1
+}
+rendered_shard_streams="$(yq ea --output-format json --indent 0 '
+  select(.kind == "ConfigMap" and .metadata.name == "loki") |
+  (.data."config.yaml" | from_yaml).limits_config.shard_streams
+' "$temp_dir/loki.yaml")"
+yq -e '
+  (. | type) == "!!map" and
+  .enabled == false
+' >/dev/null 2>&1 <<<"$rendered_shard_streams" || {
+  echo 'Refusing: rendered Loki must explicitly disable automatic stream sharding.' >&2
   exit 1
 }
 [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "loki") | (.data."config.yaml" | from_yaml).limits_config.ingestion_rate_mb] | join(",")' "$temp_dir/loki.yaml")" == '2' ]]

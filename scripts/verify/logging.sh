@@ -435,6 +435,13 @@ yq -e '
   echo 'Loki effective runtime service-name discovery is not disabled.' >&2
   exit 1
 }
+yq -e '
+  ((.shard_streams | type) == "!!map") and
+  (.shard_streams.enabled == false)
+' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+  echo 'Loki effective runtime automatic stream sharding is not disabled.' >&2
+  exit 1
+}
 
 end_seconds="$(date -u +%s)"
 start_seconds="$((end_seconds - 1800))"
