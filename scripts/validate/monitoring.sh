@@ -203,6 +203,121 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name | test("canary"))] | length' "$temp_dir/loki.yaml")" == '0' ]]
 [[ "$(yq ea -r '[select(.kind == "Deployment" or .kind == "StatefulSet") | .metadata.name | select(test("gateway|results-cache|chunks-cache"))] | length' "$temp_dir/loki.yaml")" == '0' ]]
 
+# --- Alloy logs: node-local Kubernetes CRI and Talos file collection ---
+alloy_logs='kubernetes/apps/monitoring/alloy-logs'
+alloy_logs_ks="$alloy_logs/ks.yaml"
+alloy_logs_values="$alloy_logs/app/values.yaml"
+alloy_logs_hr="$alloy_logs/app/helmrelease.yaml"
+alloy_logs_config="$alloy_logs/app/config.alloy"
+alloy_logs_kustomization="$alloy_logs/app/kustomization.yaml"
+
+for f in "$alloy_logs_ks" "$alloy_logs_values" "$alloy_logs_hr" \
+  "$alloy_logs_config" "$alloy_logs_kustomization"; do
+  [[ -f "$f" ]] || {
+    echo "Missing Alloy logs source: $f" >&2
+    exit 1
+  }
+done
+
+rg -qx '  - ./alloy-logs/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
+  echo 'Refusing: alloy-logs is not wired into monitoring/kustomization.yaml.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.metadata.name' "$alloy_logs_ks")" == 'alloy-logs' ]]
+[[ "$(yq -r '.metadata.namespace' "$alloy_logs_ks")" == 'flux-system' ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$alloy_logs_ks")" == 'loki' ]]
+[[ "$(yq -r '.spec.path' "$alloy_logs_ks")" == './kubernetes/apps/monitoring/alloy-logs/app' ]]
+[[ "$(yq -r '.spec.prune' "$alloy_logs_ks")" == 'true' ]]
+[[ "$(yq -r '.spec.wait' "$alloy_logs_ks")" == 'true' ]]
+
+[[ "$(yq -r '.metadata.name' "$alloy_logs_hr")" == 'alloy-logs' ]]
+[[ "$(yq -r '.metadata.namespace' "$alloy_logs_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.chart.spec.chart' "$alloy_logs_hr")" == 'alloy' ]]
+[[ "$(yq -r '.spec.chart.spec.version' "$alloy_logs_hr")" == '1.12.0' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.kind' "$alloy_logs_hr")" == 'HelmRepository' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.name' "$alloy_logs_hr")" == 'grafana' ]]
+[[ "$(yq -r '.spec.targetNamespace' "$alloy_logs_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].kind' "$alloy_logs_hr")" == 'ConfigMap' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].name' "$alloy_logs_hr")" == 'alloy-logs-values' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].valuesKey' "$alloy_logs_hr")" == 'values.yaml' ]]
+
+[[ "$(yq -r '.alloy.configMap.create' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.configMap.name' "$alloy_logs_values")" == 'alloy-logs-config' ]]
+[[ "$(yq -r '.alloy.configMap.key' "$alloy_logs_values")" == 'config.alloy' ]]
+[[ "$(yq -r '.alloy.clustering.enabled' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.enableReporting' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.stabilityLevel' "$alloy_logs_values")" == 'generally-available' ]]
+[[ "$(yq -r '.alloy.storagePath' "$alloy_logs_values")" == '/var/lib/alloy' ]]
+[[ "$(yq -r '.alloy.mounts.varlog' "$alloy_logs_values")" == 'true' ]]
+[[ "$(yq -r '.alloy.resources.requests.cpu' "$alloy_logs_values")" == '100m' ]]
+[[ "$(yq -r '.alloy.resources.requests.memory' "$alloy_logs_values")" == '128Mi' ]]
+[[ "$(yq -r '.alloy.resources.limits.cpu' "$alloy_logs_values")" == '1' ]]
+[[ "$(yq -r '.alloy.resources.limits.memory' "$alloy_logs_values")" == '512Mi' ]]
+[[ "$(yq -r '.alloy.securityContext.allowPrivilegeEscalation' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.securityContext.privileged' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.securityContext.capabilities.drop | join(",")' "$alloy_logs_values")" == 'ALL' ]]
+[[ "$(yq -r '.controller.type' "$alloy_logs_values")" == 'daemonset' ]]
+[[ "$(yq -r '.controller.tolerations[] | select(.key == "node-role.kubernetes.io/control-plane") | .operator + ":" + .effect' "$alloy_logs_values")" == 'Exists:NoSchedule' ]]
+[[ "$(yq -r '.serviceMonitor.enabled' "$alloy_logs_values")" == 'true' ]]
+[[ "$(yq -r '.ingress.enabled' "$alloy_logs_values")" == 'false' ]]
+[[ "$(yq -r '.crds.create' "$alloy_logs_values")" == 'false' ]]
+
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].apiGroups[]] | unique | sort | join(",")' "$alloy_logs_values")" == '' ]]
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].resources[]] | unique | sort | join(",")' "$alloy_logs_values")" == 'pods' ]]
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].verbs[]] | unique | sort | join(",")' "$alloy_logs_values")" == 'get,list,watch' ]]
+if yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].resources[]] | .[]' "$alloy_logs_values" | rg -q '^(secrets|pods/log)$'; then
+  echo 'Refusing: alloy-logs RBAC must not read Secrets or pods/log.' >&2
+  exit 1
+fi
+
+# River behavior invariants. The exact Alloy v1.19.0 parser is run separately as an
+# independent syntax oracle; these checks keep the collection, filtering, and label
+# contracts reviewable in the repository validation gate.
+rg -Fq 'field = "spec.nodeName=" + env("NODE_NAME")' "$alloy_logs_config"
+rg -Fq '__meta_kubernetes_pod_annotation_observability_supermorphic_com_logs' "$alloy_logs_config"
+rg -Fq 'regex         = `^;(.+?)(?:-[a-z0-9]{8,10})?$`' "$alloy_logs_config"
+rg -q 'replacement[[:space:]]*=[[:space:]]*"/var/log/pods/\*\$1/\$2/\*\.log"' "$alloy_logs_config"
+rg -Fq '__path__ = "/var/log/*.log"' "$alloy_logs_config"
+rg -Fq '__path__ = "/var/log/audit/kmsg.log"' "$alloy_logs_config"
+rg -Fq 'url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"' "$alloy_logs_config"
+[[ "$(rg -c '^[[:space:]]*stage\.cri \{[[:space:]]*\}$' "$alloy_logs_config")" == '1' ]]
+[[ "$(rg -Fc 'expression = `(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+([^\s,;]+)`' "$alloy_logs_config")" == '2' ]]
+[[ "$(rg -Fc "expression = \`(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*[\"']?([^\s\"',;]+)\`" "$alloy_logs_config")" == '2' ]]
+[[ "$(rg -Fc 'expression          = `(?i)temporary password.*session`' "$alloy_logs_config")" == '2' ]]
+[[ "$(rg -Fc 'drop_counter_reason = "temporary_password"' "$alloy_logs_config")" == '2' ]]
+rg -Fq 'values = ["cluster", "source", "namespace", "app", "container", "node", "stream"]' "$alloy_logs_config"
+rg -Fq 'values = ["cluster", "source", "node", "service"]' "$alloy_logs_config"
+
+kustomize build "$alloy_logs/app" >"$temp_dir/alloy-logs-package.yaml"
+[[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "alloy-logs-values") | (.data | has("values.yaml"))' "$temp_dir/alloy-logs-package.yaml")" == 'true' ]]
+[[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "alloy-logs-config") | (.data | has("config.alloy"))' "$temp_dir/alloy-logs-package.yaml")" == 'true' ]]
+
+HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
+  helm template alloy-logs alloy --repo https://grafana.github.io/helm-charts --version 1.12.0 \
+  --namespace monitoring --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+  --values "$alloy_logs_values" >"$temp_dir/alloy-logs.yaml"
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs")] | length' "$temp_dir/alloy-logs.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" or .kind == "StatefulSet")] | length' "$temp_dir/alloy-logs.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$temp_dir/alloy-logs.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Ingress" or .kind == "HTTPRoute")] | length' "$temp_dir/alloy-logs.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.nodeSelector // {} | length] | join(",")' "$temp_dir/alloy-logs.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.tolerations[] | select(.key == "node-role.kubernetes.io/control-plane") | .operator + ":" + .effect] | join(",")' "$temp_dir/alloy-logs.yaml")" == 'Exists:NoSchedule' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .env[] | select(.name == "NODE_NAME") | .valueFrom.fieldRef.fieldPath] | join(",")' "$temp_dir/alloy-logs.yaml")" == 'spec.nodeName' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.volumes[] | select(.name == "alloy-storage") | .hostPath.path + ":" + .hostPath.type] | join(",")' "$temp_dir/alloy-logs.yaml")" == '/var/mnt/alloy-logs:DirectoryOrCreate' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .volumeMounts[] | select(.name == "alloy-storage") | .mountPath] | join(",")' "$temp_dir/alloy-logs.yaml")" == '/var/lib/alloy' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .volumeMounts[] | select(.name == "varlog") | .mountPath + ":" + (.readOnly | tostring)] | join(",")' "$temp_dir/alloy-logs.yaml")" == '/var/log:true' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.volumes[] | select(has("hostPath")) | .hostPath.path] | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == '/var/log,/var/mnt/alloy-logs' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.requests.cpu] | join(",")' "$temp_dir/alloy-logs.yaml")" == '100m' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.requests.memory] | join(",")' "$temp_dir/alloy-logs.yaml")" == '128Mi' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.limits.cpu] | join(",")' "$temp_dir/alloy-logs.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.limits.memory] | join(",")' "$temp_dir/alloy-logs.yaml")" == '512Mi' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(. == "--disable-reporting")] | length' "$temp_dir/alloy-logs.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" and .metadata.name == "alloy-logs") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(test("^--cluster\\."))] | length' "$temp_dir/alloy-logs.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].apiGroups[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == '' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].resources[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == 'pods' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].verbs[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == 'get,list,watch' ]]
+
 # --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
 fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 cfg="$base/config"
@@ -353,4 +468,4 @@ yq -e '
 bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics"
 shellcheck --external-sources "$flux_alerts_lib" "$flux_alerts_diagnostics"
 
-echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack and Loki renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
+echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, and Alloy logs renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'

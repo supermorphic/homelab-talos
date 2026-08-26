@@ -1,0 +1,18 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./helmrelease.yaml
+configMapGenerator:
+  - name: alloy-logs-values
+    namespace: monitoring
+    files:
+      - values.yaml=values.yaml
+  - name: alloy-logs-config
+    namespace: monitoring
+    files:
+      - config.alloy=config.alloy
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
