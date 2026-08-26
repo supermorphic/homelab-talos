@@ -36,7 +36,10 @@ catalog-validate` runs only the catalog checks.
 For routine grouped execution and automatic Allure publication, use
 `mise exec -- just test campaign-plan <name>` followed by its printed
 `mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
-`full` compositions provide nightly, weekly, and complete coverage respectively.
+`full` compositions provide nightly, weekly, and complete coverage respectively. Every
+published command binds its campaign, source revision, and plan digest. Approved scoped
+verification runs directly with `mise exec -- just test scoped-campaign`; its separate
+plan is optional, and the run repeats preflight and displays its frozen inputs.
 The integration campaign includes the exact-confirmed `test.ntfy-publish` suite. Therefore,
 the weekly and full campaigns send three explicit ntfy test notifications to `media`,
 `critical`, and `homelab` after the suite's observational preflight.

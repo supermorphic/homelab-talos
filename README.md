@@ -71,7 +71,7 @@ mise exec -- just test campaign-plan full
 Then run the exact confirmation command printed by its plan:
 
 ```bash
-TEST_CAMPAIGN_CONFIRM=run-publish:standard \
+TEST_CAMPAIGN_CONFIRM='<standard token printed by campaign-plan>' \
   mise exec -- just test campaign standard
 TEST_CAMPAIGN_CONFIRM='<weekly token printed by campaign-plan>' \
   mise exec -- just test campaign weekly
@@ -79,10 +79,10 @@ TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
   mise exec -- just test campaign full
 ```
 
-The `weekly` and `full` tokens bind the source and plan digest because both include
-disruptive recovery and a Plex node reboot. Campaigns capture and publish every child
-run automatically. See the [test campaign guide](docs/guides/test-campaign-operations.md) for focused
-campaigns, failure behavior, resume, and exact membership.
+Every published campaign token binds the campaign, source revision, and plan digest.
+Campaigns capture and publish every child run automatically. See the
+[test campaign guide](docs/guides/test-campaign-operations.md) for focused campaigns,
+failure behavior, resume, and exact membership.
 
 ### Agent workflow
 
@@ -258,8 +258,8 @@ available for focused developer validation.
 | `just test report <run-id>` | Validate a canonical run and generate its static Allure Awesome report | `.test-results/<run-id>` | Writes `.test-reports/<run-id>/awesome/` |
 | `just test report-latest` | Generate the report with the latest finalized `summary.json` end time | `.test-results/` | Does not use filesystem modification time |
 | `just test report-open <run-id>` | Generate, serve, and open one Allure report locally | `.test-results/<run-id>`; interactive browser | Runs until interrupted with Ctrl+C |
-| `just test campaign-plan <name>` | Preview explicit campaign membership, source authority, mutation scope, and the exact confirmation | Clean deployed `origin/main`; `.kube/config` | Operator-only and read-only |
-| `just test campaign <name>` | Run an ordered catalog campaign and automatically publish every canonical child report | `TEST_CAMPAIGN_CONFIRM`; `.kube/config` | Operator-only; may be disruptive according to campaign |
+| `just test campaign-plan <name>` | Preview explicit campaign membership, source authority, mutation scope, and the exact plan-bound confirmation | Clean deployed `origin/main`; `.kube/config` | Operator-only and read-only |
+| `just test campaign <name>` | Run an ordered catalog campaign and automatically publish every canonical child report | Exact `TEST_CAMPAIGN_CONFIRM` printed by the plan; `.kube/config` | Operator-only; may be disruptive according to campaign |
 | `just test campaign-resume <campaign-run-id>` | Retry failed publication and continue unstarted campaign members without rerunning completed suites | `TEST_CAMPAIGN_CONFIRM=resume-publish:<campaign-run-id>` | Only publication-failed campaigns are resumable |
 | `just kube test-reports-validate` | Validate the suspended persistent Caddy report host, RWO/Recreate storage, isolation, metrics, and atomic installer | — | Cluster-independent; included in `just ci` |
 | `just bootstrap test-reports` | Guardedly resume the staged report host and run live acceptance | `TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports` | Operator-only; mutating after confirmation |

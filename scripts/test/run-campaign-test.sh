@@ -40,10 +40,18 @@ TEST_CAMPAIGNS_ROOT="$fixture/plan-campaigns" \
 KUBECONFIG="$fixture/kubeconfig" \
   "$repo_root/scripts/test/run-campaign.sh" plan fixture >"$plan_output"
 rg -q '^ 1\. verification.metrics-server$' "$plan_output"
-rg -q "^TEST_CAMPAIGN_CONFIRM='run-publish:fixture'" "$plan_output"
+published_source="$(sed -n 's/^Source: //p' "$plan_output")"
+published_digest="$(sed -n 's/^Plan digest: //p' "$plan_output")"
+[[ "$published_source" =~ ^[0-9a-f]{40}$ ]]
+[[ "$published_digest" =~ ^[0-9a-f]{64}$ ]]
+published_confirmation="run-publish:fixture:${published_source:0:12}:$published_digest"
+rg -Fqx \
+  "TEST_CAMPAIGN_CONFIRM='$published_confirmation' mise exec -- just test campaign fixture" \
+  "$plan_output"
 
 run_fixture_campaign() {
   local root="$1"
+  local confirmation_value="${TEST_CAMPAIGN_CONFIRM:-$published_confirmation}"
   shift
   mkdir -p "$root"
   touch "$root/commands" "$root/publishes"
@@ -63,9 +71,34 @@ run_fixture_campaign() {
   TEST_CAMPAIGN_RETRY_DELAY_SECONDS=0 \
   TEST_EXECUTION_ORIGIN=agent \
   KUBECONFIG="$fixture/kubeconfig" \
-  TEST_CAMPAIGN_CONFIRM=run-publish:fixture \
+  TEST_CAMPAIGN_CONFIRM="$confirmation_value" \
     "$@" "$repo_root/scripts/test/run-campaign.sh" run fixture
 }
+
+assert_published_confirmation_refused() {
+  local name="$1"
+  local confirmation="$2"
+  local root="$fixture/$name"
+  local status
+
+  set +e
+  TEST_CAMPAIGN_CONFIRM="$confirmation" \
+    run_fixture_campaign "$root" env >"$root.log" 2>&1
+  status="$?"
+  set -e
+  [[ "$status" -eq 1 ]]
+  [[ ! -s "$root/commands" ]]
+  [[ ! -s "$root/publishes" ]]
+  [[ ! -d "$root/campaigns" ]] ||
+    [[ -z "$(find "$root/campaigns" -name campaign.json -print -quit)" ]]
+}
+
+wrong_source_confirmation="run-publish:fixture:bbbbbbbbbbbb:$published_digest"
+wrong_digest="$(printf '0%.0s' {1..64})"
+[[ "$wrong_digest" != "$published_digest" ]]
+wrong_digest_confirmation="run-publish:fixture:${published_source:0:12}:$wrong_digest"
+assert_published_confirmation_refused wrong-source "$wrong_source_confirmation"
+assert_published_confirmation_refused wrong-digest "$wrong_digest_confirmation"
 
 complete_root="$fixture/complete"
 set +e
@@ -172,8 +205,14 @@ TEST_EXECUTION_ORIGIN=agent \
 KUBECONFIG="$fixture/kubeconfig" \
   "$repo_root/scripts/test/run-campaign.sh" scoped-plan scoped-verification \
   >"$scoped_plan"
-rg -q "TEST_SCOPED_CAMPAIGN_CONFIRM='run-local:scoped-verification'" "$scoped_plan"
+rg -Fqx 'mise exec -- just test scoped-campaign' "$scoped_plan"
+if rg -q 'TEST_SCOPED_CAMPAIGN_CONFIRM' "$scoped_plan"; then
+  echo 'Scoped campaign plan still prints a confirmation variable.' >&2
+  exit 1
+fi
 rg -q '^Mode: scoped local-only$' "$scoped_plan"
+scoped_source="$(sed -n 's/^Source: //p' "$scoped_plan")"
+scoped_digest="$(sed -n 's/^Plan digest: //p' "$scoped_plan")"
 
 set +e
 PATH="$fixture/bin:$PATH" \
@@ -193,7 +232,7 @@ TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/forbidden-sou
 FORBIDDEN_SOURCE_CALLS="$scoped_root/source-calls" \
 TEST_EXECUTION_ORIGIN=agent \
 KUBECONFIG="$fixture/kubeconfig" \
-TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+  env -u TEST_SCOPED_CAMPAIGN_CONFIRM \
   "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
   >"$scoped_root/run.log" 2>&1
 scoped_exit="$?"
@@ -210,6 +249,16 @@ scoped_manifest="$(find "$scoped_root/campaigns" -name campaign.json -print)"
 [[ ! -s "$scoped_root/lease-calls" ]]
 [[ ! -s "$scoped_root/source-calls" ]]
 [[ "$(wc -l <"$scoped_root/preflight-calls" | tr -d ' ')" == '2' ]]
+rg -Fqx 'Campaign: scoped-verification' "$scoped_root/run.log"
+rg -Fqx "Source: $scoped_source" "$scoped_root/run.log"
+rg -Fqx "Plan digest: $scoped_digest" "$scoped_root/run.log"
+rg -Fqx 'Mutates cluster: false' "$scoped_root/run.log"
+rg -Fqx 'Disruptive: false' "$scoped_root/run.log"
+rg -Fqx ' 1. verification.metrics-server' "$scoped_root/run.log"
+rg -Fqx ' 2. verification.cilium' "$scoped_root/run.log"
+last_frozen_line="$(rg -n '^ 2\. verification\.cilium$' "$scoped_root/run.log" | cut -d: -f1)"
+first_suite_line="$(rg -n '^=== campaign scoped-verification:' "$scoped_root/run.log" | head -1 | cut -d: -f1)"
+[[ "$last_frozen_line" -lt "$first_suite_line" ]]
 if rg -q 'SCOPED_CHILD_OUTPUT' "$scoped_root/run.log"; then
   echo 'Scoped campaign streamed child output to the terminal.' >&2
   exit 1
@@ -246,7 +295,7 @@ TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/forbidden-sou
 FORBIDDEN_SOURCE_CALLS="$nested_root/source-calls" \
 TEST_EXECUTION_ORIGIN=agent \
 KUBECONFIG="$fixture/kubeconfig" \
-TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+  env -u TEST_SCOPED_CAMPAIGN_CONFIRM \
   "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
   >"$nested_root/run.log" 2>&1
 nested_exit="$?"
@@ -310,7 +359,7 @@ run_scoped_mismatch() {
   TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
   TEST_EXECUTION_ORIGIN=agent \
   KUBECONFIG="$fixture/kubeconfig" \
-  TEST_SCOPED_CAMPAIGN_CONFIRM=run-local:scoped-verification \
+    env -u TEST_SCOPED_CAMPAIGN_CONFIRM \
     "$repo_root/scripts/test/run-campaign.sh" scoped-run scoped-verification \
     >"$root/run.out" 2>&1
   local status="$?"
@@ -338,5 +387,12 @@ if TEST_CATALOG_PATH="$catalog" TEST_CAMPAIGN_TEST_MODE=true \
   exit 1
 fi
 rg -q 'scoped-verification requires scoped local-only mode' "$fixture/wrong-mode.out"
+
+if rg -n 'TEST_SCOPED_CAMPAIGN_CONFIRM' \
+  scripts/test/run-campaign.sh tests/mod.just README.md tests/README.md \
+  docs/guides/test-campaign-operations.md docs/guides/agent-cluster-access.md; then
+  echo 'Current campaign implementation or documentation still requires scoped confirmation.' >&2
+  exit 1
+fi
 
 echo 'Catalog-backed campaign coordinator tests passed.'

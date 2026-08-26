@@ -74,7 +74,7 @@ Then inspect one campaign's exact ordered membership with `campaign-plan`.
 
 | Command | What it does | Effect and authority |
 | --- | --- | --- |
-| `mise exec -- just test scoped-campaign-plan` | Shows the current scoped-verification membership and local confirmation | Read-only; agent-autonomous |
+| `mise exec -- just test scoped-campaign-plan` | Optionally previews the current scoped-verification inputs and membership | Read-only; agent-autonomous |
 | `mise exec -- just test scoped-campaign` | Runs approved scoped verifiers and retains results locally | Read-oriented live campaign; agent-autonomous with worktree-scoped credentials |
 | `mise exec -- just test campaign-plan <name>` | Resolves source, ordered membership, plan digest, effects, and the required confirmation | Read-only operator preflight |
 | `mise exec -- just test campaign <name>` | Holds the shared test Lease, runs children, publishes each report, and journals progress | Operator-run live and publication workflow |
@@ -92,23 +92,25 @@ intervention.
 
 Scoped verification is the normal grouped live check for an agent working in a linked
 worktree. First mint credentials on demand as described in
-[Agent cluster access](agent-cluster-access.md), then inspect the current plan:
+[Agent cluster access](agent-cluster-access.md), then run it directly:
+
+```bash
+mise exec -- just test scoped-campaign
+```
+
+The run performs scoped preflight, freezes and displays its source revision, plan digest,
+effects, and ordered members, and then starts the first verifier. The separate plan is an
+optional read-only preview of the same inputs:
 
 ```bash
 mise exec -- just test scoped-campaign-plan
 ```
 
-The plan checks the scoped preconditions, displays the ordered members, and prints the
-exact local confirmation. Run it with:
-
-```bash
-TEST_SCOPED_CAMPAIGN_CONFIRM='run-local:scoped-verification' \
-  mise exec -- just test scoped-campaign
-```
-
-This mode retains canonical child runs on the local host. It does not acquire the shared
-campaign Lease, query `origin/main` or the Flux source revision, publish reports, or create
-a resumable published-campaign journal. Observer is the default identity. Approved
+No confirmation is required because the scoped workflow is authorized, observational,
+and local-only. This mode retains canonical child runs on the local host. It does not
+acquire the shared campaign Lease, query `origin/main` or the Flux source revision,
+publish reports, or create a resumable published-campaign journal. Observer is the
+default identity. Approved
 verifiers that need their narrow `exec` or `port-forward` capability explicitly select
 `homelab-diagnostic`.
 
@@ -134,27 +136,24 @@ authorize execution. Review the plan before deciding whether to run it.
 
 ### Understand the confirmation
 
-For a non-disruptive published campaign, the current confirmation is static and names the
-campaign:
+Every new published campaign confirmation binds the campaign name, current source SHA,
+and resolved plan digest:
 
 ```bash
-TEST_CAMPAIGN_CONFIRM='run-publish:standard' \
+TEST_CAMPAIGN_CONFIRM='run-publish:standard:<source-sha12>:<plan-digest>' \
   mise exec -- just test campaign standard
 ```
 
-This is an accidental-execution and target guard. It is not bound to the source SHA or
-campaign digest, and merely seeing or running `campaign-plan` does not authorize `campaign`.
-
-Campaigns containing the Plex node-reboot scenario use a stronger confirmation that binds
-the campaign name, current source, and resolved plan digest. Always copy the exact command
-printed by the plan rather than reconstructing it:
+Always copy the exact command printed by the plan rather than reconstructing it:
 
 ```bash
 mise exec -- just test campaign-plan weekly
 # Review the ordered disruptions, then use the exact printed command.
 ```
 
-The coordinator resolves the Plex node and IP immediately before the reboot. An earlier
+The confirmation proves deliberate intent to execute the displayed frozen plan. It does
+not grant operator authority. The coordinator resolves the Plex node and IP immediately
+before the reboot. An earlier
 cross-node resilience scenario may legitimately move Plex, so an earlier target could be
 stale. The campaign confirmation authorizes the reviewed sequence; the reboot primitive
 still requires its separate exact-node `TALOS_REBOOT_CONFIRM` guard.
@@ -165,6 +164,8 @@ The coordinator follows this sequence:
 
 ```text
 freeze membership and source
+        ↓
+validate the exact plan-bound confirmation
         ↓
 acquire the campaign test Lease
         ↓
@@ -298,7 +299,7 @@ campaigns do not publish and cannot resume.
 
 ## Safety rules
 
-- Use the exact plan-produced command for a disruptive campaign.
+- Use the exact plan-produced command for every published campaign.
 - Do not manually reconstruct a source- and digest-bound confirmation.
 - Do not bypass either cluster Lease.
 - Do not publish campaign evidence after source authority drifts.

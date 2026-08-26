@@ -141,8 +141,8 @@ Within an approved task, an agent may:
 - Run approved observer-tier verifiers.
 - Run approved named diagnostic verifiers that deliberately select
   `homelab-diagnostic`.
-- Run the approved scoped verification campaign after reviewing its generated plan and
-  using the exact confirmation that plan prints.
+- Run the approved scoped verification campaign directly after its required preflight;
+  the separate plan is an optional preview.
 
 If an approved verifier fails because its scoped identity lacks permission, stop at that
 boundary. Do not switch to an administrator credential or expand RBAC to make the check
@@ -280,16 +280,19 @@ is rejected.
 
 ## Plan and run scoped verification
 
-First inspect the current executable campaign:
+Run the current executable campaign directly:
+
+```bash
+mise exec -- just test scoped-campaign
+```
+
+The run repeats scoped preflight, freezes and displays the campaign membership, source
+revision, plan digest, and effects, then starts the first verifier. To inspect those
+inputs without starting the campaign, use the optional read-only preview:
 
 ```bash
 mise exec -- just test scoped-campaign-plan
 ```
-
-The plan prints the exact campaign membership, source revision, plan digest, execution
-mode, and required confirmation. Review that output, then run the exact
-`TEST_SCOPED_CAMPAIGN_CONFIRM=... mise exec -- just test scoped-campaign` command it
-prints.
 
 The plan and run fail closed unless all of these conditions hold:
 
@@ -328,8 +331,8 @@ disagree with the repository:
   scoped campaign boundary.
 - Verifier behavior lives under [`scripts/verify/`](../../scripts/verify/).
 
-Current campaign membership is intentionally not duplicated in this guide. Use
-`mise exec -- just test scoped-campaign-plan` to inspect it.
+Current campaign membership is intentionally not duplicated in this guide. Use the
+optional `mise exec -- just test scoped-campaign-plan` preview to inspect it.
 
 ## RBAC resource reference
 
