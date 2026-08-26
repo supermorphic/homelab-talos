@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate binding invariants in the Alloy node-log River configuration."""
+"""Validate binding invariants in the approved Alloy River configurations."""
 
 from __future__ import annotations
 
@@ -204,6 +204,7 @@ def validate_protection_stages(
     expected_kinds: list[str],
     expected_labels: list[str],
     source_name: str,
+    protected_start: int,
 ) -> None:
     stages = direct_blocks(process.body)
     if any(stage.kind.startswith("stage.structured_metadata") for stage in stages):
@@ -211,18 +212,7 @@ def validate_protection_stages(
     if [stage.kind for stage in stages] != expected_kinds:
         refuse(f"Alloy {source_name} processing stages must end with the exact label allowlist.")
 
-    if source_name == "Kubernetes":
-        if stages[0].body.strip():
-            refuse("Alloy Kubernetes CRI parsing stage must remain empty and first.")
-        if not re.fullmatch(
-            r'\s*values\s*=\s*\{\s*stream\s*=\s*"stream",?\s*\}\s*',
-            stages[1].body,
-            flags=re.DOTALL,
-        ):
-            refuse("Alloy Kubernetes CRI stream mapping must create only the stream label.")
-        protected = stages[2:5]
-    else:
-        protected = stages[0:3]
+    protected = stages[protected_start : protected_start + 3]
 
     expected_expressions = [
         r"`(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+([^\s,;]+)`",
@@ -247,7 +237,7 @@ def validate_protection_stages(
         refuse(f"Alloy {source_name} processing must route only to loki.write.default.")
 
 
-def validate(config_path: Path) -> None:
+def validate_node_logs(config_path: Path) -> None:
     text = strip_comments(config_path.read_text())
     components = direct_blocks(text)
     actual_components = Counter((block.kind, block.label) for block in components)
@@ -313,6 +303,15 @@ def validate(config_path: Path) -> None:
             refuse("every Alloy Talos source must route only through loki.process.talos.")
 
     kubernetes_process = one_component(components, "loki.process", "kubernetes")
+    kubernetes_stages = direct_blocks(kubernetes_process.body)
+    if kubernetes_stages[0].body.strip():
+        refuse("Alloy Kubernetes CRI parsing stage must remain empty and first.")
+    if not re.fullmatch(
+        r'\s*values\s*=\s*\{\s*stream\s*=\s*"stream",?\s*\}\s*',
+        kubernetes_stages[1].body,
+        flags=re.DOTALL,
+    ):
+        refuse("Alloy Kubernetes CRI stream mapping must create only the stream label.")
     validate_protection_stages(
         kubernetes_process,
         [
@@ -325,6 +324,7 @@ def validate(config_path: Path) -> None:
         ],
         ["cluster", "source", "namespace", "app", "container", "node", "stream"],
         "Kubernetes",
+        2,
     )
 
     talos_process = one_component(components, "loki.process", "talos")
@@ -333,8 +333,13 @@ def validate(config_path: Path) -> None:
         ["stage.replace", "stage.replace", "stage.drop", "stage.label_keep"],
         ["cluster", "source", "node", "service"],
         "Talos",
+        0,
     )
 
+    validate_writer(components)
+
+
+def validate_writer(components: list[Block]) -> None:
     writer = one_component(components, "loki.write", "default")
     writer_blocks = direct_blocks(writer.body)
     if any(block.kind == "wal" for block in writer_blocks):
@@ -347,11 +352,87 @@ def validate(config_path: Path) -> None:
         refuse("Alloy Loki delivery endpoint drifted.")
 
 
+def validate_events(config_path: Path) -> None:
+    text = strip_comments(config_path.read_text())
+    components = direct_blocks(text)
+    actual_components = Counter((block.kind, block.label) for block in components)
+    expected_components = Counter(
+        {
+            ("loki.source.kubernetes_events", "events"): 1,
+            ("loki.process", "events"): 1,
+            ("loki.write", "default"): 1,
+        }
+    )
+    if actual_components != expected_components:
+        refuse("Alloy River component set must contain only the approved Events flow.")
+
+    source = one_component(components, "loki.source.kubernetes_events", "events")
+    if direct_blocks(source.body):
+        refuse("Alloy Events source must not override its in-cluster client or clustering.")
+    source_assignments = direct_assignment_view(source.body)
+    assignment_names = re.findall(
+        r"(?m)^[\t ]*([A-Za-z_][A-Za-z0-9_]*)[\t ]*=", source_assignments
+    )
+    if assignment_names != ["namespaces", "log_format", "forward_to"]:
+        refuse(
+            "Alloy Events source must define only all-namespace JSON collection and its protected route."
+        )
+    if assignment(source.body, "namespaces") != "[]":
+        refuse("Alloy Events source must watch all namespaces.")
+    if assignment(source.body, "log_format") != '"json"':
+        refuse("Alloy Events source must emit JSON log lines.")
+    if assignment(source.body, "forward_to") != "[loki.process.events.receiver]":
+        refuse("Alloy Events source must route only through loki.process.events.")
+
+    process = one_component(components, "loki.process", "events")
+    stages = direct_blocks(process.body)
+    validate_protection_stages(
+        process,
+        [
+            "stage.json",
+            "stage.labels",
+            "stage.static_labels",
+            "stage.replace",
+            "stage.replace",
+            "stage.drop",
+            "stage.label_keep",
+        ],
+        ["cluster", "source", "namespace", "event_type"],
+        "Events",
+        3,
+    )
+    if not re.fullmatch(
+        r'\s*expressions\s*=\s*\{\s*event_type\s*=\s*"type",?\s*\}\s*',
+        stages[0].body,
+        flags=re.DOTALL,
+    ):
+        refuse("Alloy Events JSON parsing must extract only Event type.")
+    if not re.fullmatch(
+        r'\s*values\s*=\s*\{\s*event_type\s*=\s*"event_type",?\s*\}\s*',
+        stages[1].body,
+        flags=re.DOTALL,
+    ):
+        refuse("Alloy Events dynamic labels must contain only event_type.")
+    if not re.fullmatch(
+        r'\s*values\s*=\s*\{\s*cluster\s*=\s*"nuc-cluster",\s*source\s*=\s*"kubernetes_event",?\s*\}\s*',
+        stages[2].body,
+        flags=re.DOTALL,
+    ):
+        refuse("Alloy Events static labels must contain only cluster and source.")
+
+    validate_writer(components)
+
+
 def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit(f"usage: {Path(sys.argv[0]).name} CONFIG_ALLOY")
-    validate(Path(sys.argv[1]))
-    print("Alloy node-log River structure passed validation.")
+    if len(sys.argv) == 2:
+        validate_node_logs(Path(sys.argv[1]))
+        print("Alloy node-log River structure passed validation.")
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--events":
+        validate_events(Path(sys.argv[2]))
+        print("Alloy Events River structure passed validation.")
+        return
+    raise SystemExit(f"usage: {Path(sys.argv[0]).name} [--events] CONFIG_ALLOY")
 
 
 if __name__ == "__main__":

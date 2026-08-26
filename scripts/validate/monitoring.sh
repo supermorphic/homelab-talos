@@ -318,6 +318,102 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 [[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].verbs[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == 'get,list,watch' ]]
 bash "$alloy_logs_render_validator" "$temp_dir/alloy-logs.yaml"
 
+# --- Alloy Events: one cluster-wide, disposable Kubernetes Event reader ---
+alloy_events='kubernetes/apps/monitoring/alloy-events'
+alloy_events_ks="$alloy_events/ks.yaml"
+alloy_events_values="$alloy_events/app/values.yaml"
+alloy_events_hr="$alloy_events/app/helmrelease.yaml"
+alloy_events_config="$alloy_events/app/config.alloy"
+alloy_events_kustomization="$alloy_events/app/kustomization.yaml"
+
+for f in "$alloy_events_ks" "$alloy_events_values" "$alloy_events_hr" \
+  "$alloy_events_config" "$alloy_events_kustomization"; do
+  [[ -f "$f" ]] || {
+    echo "Missing Alloy Events source: $f" >&2
+    exit 1
+  }
+done
+
+rg -qx '  - ./alloy-events/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
+  echo 'Refusing: alloy-events is not wired into monitoring/kustomization.yaml.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.metadata.name' "$alloy_events_ks")" == 'alloy-events' ]]
+[[ "$(yq -r '.metadata.namespace' "$alloy_events_ks")" == 'flux-system' ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$alloy_events_ks")" == 'loki' ]]
+[[ "$(yq -r '.spec.path' "$alloy_events_ks")" == './kubernetes/apps/monitoring/alloy-events/app' ]]
+[[ "$(yq -r '.spec.prune' "$alloy_events_ks")" == 'true' ]]
+[[ "$(yq -r '.spec.wait' "$alloy_events_ks")" == 'true' ]]
+
+[[ "$(yq -r '.metadata.name' "$alloy_events_hr")" == 'alloy-events' ]]
+[[ "$(yq -r '.metadata.namespace' "$alloy_events_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.chart.spec.chart' "$alloy_events_hr")" == 'alloy' ]]
+[[ "$(yq -r '.spec.chart.spec.version' "$alloy_events_hr")" == '1.12.0' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.kind' "$alloy_events_hr")" == 'HelmRepository' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.name' "$alloy_events_hr")" == 'grafana' ]]
+[[ "$(yq -r '.spec.targetNamespace' "$alloy_events_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].kind' "$alloy_events_hr")" == 'ConfigMap' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].name' "$alloy_events_hr")" == 'alloy-events-values' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].valuesKey' "$alloy_events_hr")" == 'values.yaml' ]]
+
+[[ "$(yq -r '.alloy.configMap.create' "$alloy_events_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.configMap.name' "$alloy_events_values")" == 'alloy-events-config' ]]
+[[ "$(yq -r '.alloy.configMap.key' "$alloy_events_values")" == 'config.alloy' ]]
+[[ "$(yq -r '.alloy.clustering.enabled' "$alloy_events_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.enableReporting' "$alloy_events_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.stabilityLevel' "$alloy_events_values")" == 'generally-available' ]]
+[[ "$(yq -r '.alloy.storagePath' "$alloy_events_values")" == '/tmp/alloy' ]]
+[[ "$(yq -r '.alloy.mounts.varlog' "$alloy_events_values")" == 'false' ]]
+[[ "$(yq -r '.alloy.resources.requests.cpu' "$alloy_events_values")" == '25m' ]]
+[[ "$(yq -r '.alloy.resources.requests.memory' "$alloy_events_values")" == '64Mi' ]]
+[[ "$(yq -r '.alloy.resources.limits.cpu' "$alloy_events_values")" == '250m' ]]
+[[ "$(yq -r '.alloy.resources.limits.memory' "$alloy_events_values")" == '256Mi' ]]
+[[ "$(yq -r '.controller.type' "$alloy_events_values")" == 'deployment' ]]
+[[ "$(yq -r '.controller.replicas' "$alloy_events_values")" == '1' ]]
+[[ "$(yq -r '.controller.updateStrategy.type' "$alloy_events_values")" == 'Recreate' ]]
+[[ "$(yq -r '.serviceMonitor.enabled' "$alloy_events_values")" == 'true' ]]
+[[ "$(yq -r '.ingress.enabled' "$alloy_events_values")" == 'false' ]]
+[[ "$(yq -r '.crds.create' "$alloy_events_values")" == 'false' ]]
+
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].apiGroups[]] | unique | sort | join(",")' "$alloy_events_values")" == '' ]]
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].resources[]] | unique | sort | join(",")' "$alloy_events_values")" == 'events' ]]
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].verbs[]] | unique | sort | join(",")' "$alloy_events_values")" == 'get,list,watch' ]]
+
+# The structural validator proves all-namespace collection, the protected route,
+# redaction, exact label allowlist, and absence of alternate source, metadata, and WAL paths.
+python "$alloy_logs_river_validator" --events "$alloy_events_config"
+
+kustomize build "$alloy_events/app" >"$temp_dir/alloy-events-package.yaml"
+[[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "alloy-events-values") | (.data | has("values.yaml"))' "$temp_dir/alloy-events-package.yaml")" == 'true' ]]
+[[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "alloy-events-config") | (.data | has("config.alloy"))' "$temp_dir/alloy-events-package.yaml")" == 'true' ]]
+[[ "$(yq ea -r '[select(.kind == "PersistentVolumeClaim" or .kind == "PrometheusRule" or .kind == "AlertmanagerConfig")] | length' "$temp_dir/alloy-events-package.yaml")" == '0' ]]
+
+HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
+  helm template alloy-events alloy --repo https://grafana.github.io/helm-charts --version 1.12.0 \
+  --namespace monitoring --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+  --values "$alloy_events_values" >"$temp_dir/alloy-events.yaml"
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events")] | length' "$temp_dir/alloy-events.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.replicas] | join(",")' "$temp_dir/alloy-events.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.strategy.type] | join(",")' "$temp_dir/alloy-events.yaml")" == 'Recreate' ]]
+[[ "$(yq ea -r '[select(.kind == "DaemonSet" or .kind == "StatefulSet" or .kind == "HorizontalPodAutoscaler")] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$temp_dir/alloy-events.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Ingress" or .kind == "HTTPRoute" or .kind == "PersistentVolumeClaim" or .kind == "PrometheusRule" or .kind == "AlertmanagerConfig")] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.volumes[] | select(has("persistentVolumeClaim"))] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.volumes[] | select(.name == "alloy-storage") | has("emptyDir")] | join(",")' "$temp_dir/alloy-events.yaml")" == 'true' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .volumeMounts[] | select(.name == "alloy-storage") | .mountPath] | join(",")' "$temp_dir/alloy-events.yaml")" == '/tmp/alloy' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.volumes[] | select(has("hostPath") or has("persistentVolumeClaim"))] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.requests.cpu] | join(",")' "$temp_dir/alloy-events.yaml")" == '25m' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.requests.memory] | join(",")' "$temp_dir/alloy-events.yaml")" == '64Mi' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.limits.cpu] | join(",")' "$temp_dir/alloy-events.yaml")" == '250m' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.limits.memory] | join(",")' "$temp_dir/alloy-events.yaml")" == '256Mi' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(. == "--disable-reporting")] | length' "$temp_dir/alloy-events.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(test("^--cluster\\."))] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].apiGroups[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == '' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].resources[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == 'events' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].verbs[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == 'get,list,watch' ]]
+bash "$alloy_logs_render_validator" "$temp_dir/alloy-events.yaml" Deployment alloy-events 473
+
 # --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
 fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 cfg="$base/config"
@@ -468,4 +564,4 @@ yq -e '
 bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics"
 shellcheck --external-sources "$flux_alerts_lib" "$flux_alerts_diagnostics"
 
-echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, and Alloy logs renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
+echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, Alloy logs, and Alloy Events renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'

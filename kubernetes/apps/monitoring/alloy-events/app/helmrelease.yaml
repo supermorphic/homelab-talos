@@ -1,0 +1,34 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/helm.toolkit.fluxcd.io/helmrelease_v2.json
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: alloy-events
+  namespace: monitoring
+spec:
+  chart:
+    spec:
+      chart: alloy
+      interval: 15m
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+      version: 1.12.0
+  driftDetection:
+    mode: enabled
+  install:
+    remediation:
+      retries: 3
+  interval: 1h
+  releaseName: alloy-events
+  targetNamespace: monitoring
+  timeout: 10m
+  upgrade:
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+      strategy: rollback
+  valuesFrom:
+    - kind: ConfigMap
+      name: alloy-events-values
+      valuesKey: values.yaml
