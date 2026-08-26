@@ -58,3 +58,4 @@
 - [019 — Media Integration Health with Gatus](specs/019-media-integration-health-gatus.md) — Records the implemented Gatus design and its final authenticated API-reachability semantics.
 - [020 — Documentation Lifecycle Migration](specs/020-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.
 - [021 — Repository Command Lifecycle](specs/021-repository-command-lifecycle.md) — Defines command semantics, safeguards, authority separation, and the approved targeted harmonization.
+- [022 — Grafana Alloy and Loki Centralized Logging](specs/022-grafana-alloy-loki.md) — Defines centralized Kubernetes, Talos, and Event logging through Alloy, Loki, and Grafana.

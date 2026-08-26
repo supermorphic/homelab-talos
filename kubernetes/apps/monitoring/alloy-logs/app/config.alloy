@@ -1,0 +1,197 @@
+discovery.kubernetes "pods" {
+	role = "pod"
+
+	selectors {
+		role  = "pod"
+		field = "spec.nodeName=" + env("NODE_NAME")
+	}
+}
+
+discovery.relabel "kubernetes_pods" {
+	targets = discovery.kubernetes.pods.targets
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_annotation_observability_supermorphic_com_logs"]
+		action        = "drop"
+		regex         = `^disabled$`
+	}
+
+	rule {
+		target_label = "cluster"
+		replacement  = "nuc-cluster"
+	}
+
+	rule {
+		target_label = "source"
+		replacement  = "kubernetes"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_namespace"]
+		target_label  = "namespace"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+		target_label  = "app"
+	}
+
+	rule {
+		source_labels = ["app", "__meta_kubernetes_pod_controller_name"]
+		separator     = ";"
+		regex         = `^;(.+?)(?:-[a-z0-9]{8,10})?$`
+		target_label  = "app"
+		replacement   = "$1"
+	}
+
+	rule {
+		source_labels = ["app"]
+		regex         = `^$`
+		target_label  = "app"
+		replacement   = "unknown"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_container_name"]
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_node_name"]
+		target_label  = "node"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+		separator     = "/"
+		target_label  = "__path__"
+		replacement   = "/var/log/pods/*$1/$2/*.log"
+	}
+
+	rule {
+		action = "labelkeep"
+		regex  = `^(__path__|cluster|source|namespace|app|container|node)$`
+	}
+}
+
+loki.source.file "kubernetes" {
+	targets    = discovery.relabel.kubernetes_pods.output
+	forward_to = [loki.process.kubernetes.receiver]
+}
+
+loki.process "kubernetes" {
+	stage.cri { }
+
+	stage.labels {
+		values = {
+			stream = "stream",
+		}
+	}
+
+	stage.replace {
+		expression = `(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+([^\s,;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = `(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?([^\s"',;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.drop {
+		expression          = `(?i)temporary password.*session`
+		drop_counter_reason = "temporary_password"
+	}
+
+	stage.label_keep {
+		values = ["cluster", "source", "namespace", "app", "container", "node", "stream"]
+	}
+
+	forward_to = [loki.write.default.receiver]
+}
+
+local.file_match "talos_services" {
+	path_targets = [{
+		__path__ = "/var/log/*.log",
+	}]
+}
+
+discovery.relabel "talos_services" {
+	targets = local.file_match.talos_services.targets
+
+	rule {
+		target_label = "cluster"
+		replacement  = "nuc-cluster"
+	}
+
+	rule {
+		target_label = "source"
+		replacement  = "talos"
+	}
+
+	rule {
+		target_label = "node"
+		replacement  = env("NODE_NAME")
+	}
+
+	rule {
+		source_labels = ["__path__"]
+		regex         = `/var/log/([^/]+)\.log$`
+		target_label  = "service"
+		replacement   = "$1"
+	}
+
+	rule {
+		action = "labelkeep"
+		regex  = `^(__path__|cluster|source|node|service)$`
+	}
+}
+
+local.file_match "talos_kernel" {
+	path_targets = [{
+		__path__ = "/var/log/audit/kmsg.log",
+		cluster  = "nuc-cluster",
+		source   = "talos",
+		node     = env("NODE_NAME"),
+		service  = "kernel",
+	}]
+}
+
+loki.source.file "talos_services" {
+	targets    = discovery.relabel.talos_services.output
+	forward_to = [loki.process.talos.receiver]
+}
+
+loki.source.file "talos_kernel" {
+	targets    = local.file_match.talos_kernel.targets
+	forward_to = [loki.process.talos.receiver]
+}
+
+loki.process "talos" {
+	stage.replace {
+		expression = `(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+([^\s,;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = `(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?([^\s"',;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.drop {
+		expression          = `(?i)temporary password.*session`
+		drop_counter_reason = "temporary_password"
+	}
+
+	stage.label_keep {
+		values = ["cluster", "source", "node", "service"]
+	}
+
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+	}
+}

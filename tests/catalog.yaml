@@ -77,6 +77,7 @@ campaigns:
       - verification.flaresolverr
       - verification.qbit-manage
       - verification.monitoring
+      - verification.logging
       - verification.security-alerts
       - verification.gatus
       - verification.portainer
@@ -135,6 +136,7 @@ campaigns:
       - verification.flaresolverr
       - verification.qbit-manage
       - verification.monitoring
+      - verification.logging
       - verification.security-alerts
       - verification.gatus
       - verification.portainer
@@ -509,6 +511,11 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube monitoring-verify", implementation: scripts/verify/monitoring.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.logging, source: verification, framework: bash, suite: platform, tier: verification, target: logging, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube logging-verify", implementation: scripts/verify/logging.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.security-alerts, source: verification, framework: bash, suite: platform, tier: verification, target: security-alerts, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

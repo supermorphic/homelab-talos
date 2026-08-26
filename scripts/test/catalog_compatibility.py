@@ -80,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=108.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=109.\n"
     assert completed.stderr == ""
 
 
@@ -610,6 +610,14 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert canonical["campaigns"]["verification"].get("execution_mode") == (
         "operator-published"
     ), "verification does not declare operator-published execution"
+    logging = suite(canonical, "verification.logging")
+    assert logging.get("access", {}).get("tier") == "diagnostic", (
+        "verification.logging is not diagnostic-tier"
+    )
+    for campaign_name in ("verification", "scoped-verification"):
+        assert "verification.logging" in canonical["campaigns"][campaign_name]["members"], (
+            f"verification.logging is absent from {campaign_name}"
+        )
     analyze = catalog_validator.forbidden_kubernetes_operations
     forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
@@ -932,7 +940,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=108.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=109.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

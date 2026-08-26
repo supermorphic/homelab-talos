@@ -135,7 +135,14 @@ run_shell_case agent-access-verifier scripts/test/agent-access-verify-test.sh
 run_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
 run_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.sh
 run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
+run_shell_case logging-verifier scripts/test/logging-verify-test.sh
 run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
+run_shell_case monitoring-alloy-logs-validator \
+  scripts/test/monitoring-alloy-logs-validator-test.sh
+run_shell_case monitoring-loki-validator \
+  scripts/test/monitoring-loki-validator-test.sh
+run_shell_case monitoring-alloy-events-validator \
+  scripts/test/monitoring-alloy-events-validator-test.sh
 run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
 run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
 run_shell_case security-alerts-verifier scripts/test/security-alerts-verify-test.sh

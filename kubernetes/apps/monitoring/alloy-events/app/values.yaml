@@ -1,0 +1,72 @@
+---
+crds:
+  create: false
+alloy:
+  configMap:
+    create: false
+    name: alloy-events-config
+    key: config.alloy
+  clustering:
+    enabled: false
+  enableReporting: false
+  stabilityLevel: generally-available
+  storagePath: /tmp/alloy
+  mounts:
+    varlog: false
+    extra:
+      - name: alloy-storage
+        mountPath: /tmp/alloy
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    privileged: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 473
+    runAsGroup: 473
+    seccompProfile:
+      type: RuntimeDefault
+controller:
+  type: deployment
+  replicas: 1
+  updateStrategy:
+    type: Recreate
+  volumes:
+    extra:
+      - name: alloy-storage
+        emptyDir: {}
+rbac:
+  create: true
+  rules:
+    - apiGroups:
+        - ""
+      resources:
+        - events
+      verbs:
+        - get
+        - list
+        - watch
+  # Chart 1.12.0 concatenates these lists. Repeat the same bounded permission
+  # to avoid the invalid empty list item that the chart otherwise renders.
+  clusterRules:
+    - apiGroups:
+        - ""
+      resources:
+        - events
+      verbs:
+        - get
+        - list
+        - watch
+serviceMonitor:
+  enabled: true
+ingress:
+  enabled: false

@@ -1,6 +1,7 @@
 rule_files:
   - flux.yaml
   - gatus.yaml
+  - logging.yaml
   - ntfy.yaml
   - portainer.yaml
   - test-reports.yaml
@@ -492,4 +493,336 @@ tests:
               description: The External/letsencrypt-acme Gatus success series has been absent for more than five minutes.
       - eval_time: 8m
         alertname: GatusProbeMissing
+        exp_alerts: []
+
+  # --- centralized logging platform health ---
+
+  - name: Loki build telemetry is absent across the ten minute boundary
+    interval: 1m
+    input_series:
+      - series: 'loki_build_info{namespace="other",job="monitoring/loki"}'
+        values: 1x14
+      - series: 'loki_build_info{namespace="monitoring",job="other"}'
+        values: 1x14
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LokiMetricsMissing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LokiMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              job: monitoring/loki
+            exp_annotations:
+              summary: Loki metrics are missing
+              description: >-
+                loki_build_info has been absent for more than ten minutes. Check the Loki
+                StatefulSet, Service, ServiceMonitor, and Prometheus target.
+
+  - name: Loki build telemetry recovery clears the missing alert
+    interval: 1m
+    input_series:
+      - series: 'loki_build_info{namespace="monitoring",job="monitoring/loki"}'
+        values: '_x12 1x5'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: LokiMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              job: monitoring/loki
+            exp_annotations:
+              summary: Loki metrics are missing
+              description: >-
+                loki_build_info has been absent for more than ten minutes. Check the Loki
+                StatefulSet, Service, ServiceMonitor, and Prometheus target.
+      - eval_time: 13m
+        alertname: LokiMetricsMissing
+        exp_alerts: []
+
+  - name: each Alloy collector role reports its own instance deficit
+    interval: 1m
+    input_series:
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-logs",instance="node-a"}'
+        values: 1x14
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-logs",instance="node-b"}'
+        values: 1x14
+      - series: 'alloy_build_info{namespace="monitoring",service="unrelated",instance="extra-a"}'
+        values: 1x14
+      - series: 'alloy_build_info{namespace="monitoring",service="unrelated",instance="extra-b"}'
+        values: 1x14
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: AlloyInstanceCountLow
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: AlloyInstanceCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: alloy-events
+            exp_annotations:
+              summary: Alloy alloy-events has fewer than its required instances
+              description: >-
+                Alloy alloy-events has fewer than the required one instance for more than
+                ten minutes. Log or Event coverage is incomplete.
+          - exp_labels:
+              severity: warning
+              service: alloy-logs
+            exp_annotations:
+              summary: Alloy alloy-logs has fewer than its required instances
+              description: >-
+                Alloy alloy-logs has fewer than the required three instances for more than
+                ten minutes. Log or Event coverage is incomplete.
+
+  - name: Alloy collector deficits recover independently when both roles reach topology
+    interval: 1m
+    input_series:
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-logs",instance="node-a"}'
+        values: 1x16
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-logs",instance="node-b"}'
+        values: 1x16
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-logs",instance="node-c"}'
+        values: '_x12 1x4'
+      - series: 'alloy_build_info{namespace="monitoring",service="alloy-events",instance="events"}'
+        values: '_x12 1x4'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: AlloyInstanceCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: alloy-events
+            exp_annotations:
+              summary: Alloy alloy-events has fewer than its required instances
+              description: >-
+                Alloy alloy-events has fewer than the required one instance for more than
+                ten minutes. Log or Event coverage is incomplete.
+          - exp_labels:
+              severity: warning
+              service: alloy-logs
+            exp_annotations:
+              summary: Alloy alloy-logs has fewer than its required instances
+              description: >-
+                Alloy alloy-logs has fewer than the required three instances for more than
+                ten minutes. Log or Event coverage is incomplete.
+      - eval_time: 13m
+        alertname: AlloyInstanceCountLow
+        exp_alerts: []
+
+  - name: Alloy delivery drops fire per collector and reason then recover
+    interval: 1m
+    input_series:
+      - series: 'loki_write_dropped_entries_total{namespace="monitoring",service="alloy-logs",component_id="loki.write.default",reason="ingester_error"}'
+        values: '0+1x9 9x10'
+      - series: 'loki_write_dropped_entries_total{namespace="monitoring",service="alloy-events",component_id="loki.write.default",reason="rate_limited"}'
+        values: '0+2x9 18x10'
+      - series: 'loki_write_dropped_entries_total{namespace="monitoring",service="alloy-logs",component_id="loki.write.default",reason="line_too_long"}'
+        values: 0x19
+      - series: 'loki_write_dropped_entries_total{namespace="monitoring",service="other",component_id="loki.write.default",reason="ingester_error"}'
+        values: '0+3x19'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AlloyLogDeliveryDrops
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: AlloyLogDeliveryDrops
+        exp_alerts:
+          - exp_labels: {severity: warning, service: alloy-events, reason: rate_limited}
+            exp_annotations:
+              summary: Alloy alloy-events is dropping log entries
+              description: >-
+                Alloy dropped entries after exhausting delivery retries. Inspect the
+                rate_limited reason, the collector, and Loki ingestion health.
+          - exp_labels: {severity: warning, service: alloy-logs, reason: ingester_error}
+            exp_annotations:
+              summary: Alloy alloy-logs is dropping log entries
+              description: >-
+                Alloy dropped entries after exhausting delivery retries. Inspect the
+                ingester_error reason, the collector, and Loki ingestion health.
+      - eval_time: 15m
+        alertname: AlloyLogDeliveryDrops
+        exp_alerts: []
+
+  - name: Loki discarded entries fire per rejection reason then recover
+    interval: 1m
+    input_series:
+      - series: 'loki_discarded_samples_total{namespace="monitoring",job="monitoring/loki",reason="rate_limited",tenant="fake"}'
+        values: '0+1x9 9x10'
+      - series: 'loki_discarded_samples_total{namespace="monitoring",job="monitoring/loki",reason="line_too_long",tenant="fake"}'
+        values: '0+2x9 18x10'
+      - series: 'loki_discarded_samples_total{namespace="monitoring",job="monitoring/loki",reason="stream_limit",tenant="fake"}'
+        values: 0x19
+      - series: 'loki_discarded_samples_total{namespace="other",job="monitoring/loki",reason="rate_limited",tenant="fake"}'
+        values: '0+3x19'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LokiLogEntriesDiscarded
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LokiLogEntriesDiscarded
+        exp_alerts:
+          - exp_labels: {severity: warning, reason: line_too_long}
+            exp_annotations:
+              summary: Loki is discarding log entries
+              description: >-
+                Loki rejected entries for reason line_too_long. Inspect ingestion limits,
+                collector traffic, and Loki capacity.
+          - exp_labels: {severity: warning, reason: rate_limited}
+            exp_annotations:
+              summary: Loki is discarding log entries
+              description: >-
+                Loki rejected entries for reason rate_limited. Inspect ingestion limits,
+                collector traffic, and Loki capacity.
+      - eval_time: 15m
+        alertname: LokiLogEntriesDiscarded
+        exp_alerts: []
+
+  - name: Loki request errors cross the ten percent boundary per route and recover
+    interval: 1m
+    input_series:
+      - series: 'loki_request_duration_seconds_count{namespace="monitoring",job="monitoring/loki",route="loki_api_v1_push",status_code="500"}'
+        values: '0+2x20 40x12'
+      - series: 'loki_request_duration_seconds_count{namespace="monitoring",job="monitoring/loki",route="loki_api_v1_push",status_code="204"}'
+        values: '0+8x32'
+      - series: 'loki_request_duration_seconds_count{namespace="monitoring",job="monitoring/loki",route="loki_api_v1_query_range",status_code="503"}'
+        values: '0+1x32'
+      - series: 'loki_request_duration_seconds_count{namespace="monitoring",job="monitoring/loki",route="loki_api_v1_query_range",status_code="200"}'
+        values: '0+10x32'
+      - series: 'loki_request_duration_seconds_count{namespace="other",job="monitoring/loki",route="loki_api_v1_push",status_code="500"}'
+        values: '0+10x32'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LokiRequestErrors
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: LokiRequestErrors
+        exp_alerts:
+          - exp_labels: {severity: critical, route: loki_api_v1_push}
+            exp_annotations:
+              summary: Loki request error rate is high
+              description: >-
+                More than 10 percent of Loki requests on route loki_api_v1_push returned a
+                5xx response for more than 15 minutes.
+      - eval_time: 27m
+        alertname: LokiRequestErrors
+        exp_alerts: []
+
+  - name: an absent Loki compactor progress metric crosses the one hour boundary
+    interval: 1m
+    input_series:
+      - series: 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="other",job="monitoring/loki"}'
+        values: 1x64
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: LokiCompactorStalled
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: LokiCompactorStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              job: monitoring/loki
+            exp_annotations:
+              summary: Loki compactor progress is absent or stale
+              description: >-
+                Loki has not reported a successful compaction within the expected window.
+                Check the compactor configuration, filesystem, and Loki process health.
+
+  - name: stale Loki compactor progress fires after three hours plus for and recovers
+    interval: 1m
+    input_series:
+      - series: 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki",cluster="logging"}'
+        values: '600x252 15120x10'
+    alert_rule_test:
+      - eval_time: 189m
+        alertname: LokiCompactorStalled
+        exp_alerts: []
+      - eval_time: 251m
+        alertname: LokiCompactorStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              job: monitoring/loki
+              cluster: logging
+            exp_annotations:
+              summary: Loki compactor progress is absent or stale
+              description: >-
+                Loki has not reported a successful compaction within the expected window.
+                Check the compactor configuration, filesystem, and Loki process health.
+      - eval_time: 253m
+        alertname: LokiCompactorStalled
+        exp_alerts: []
+
+  - name: Loki storage warning is strict above seventy percent and recovers
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="monitoring",persistentvolumeclaim="storage-loki-0"}'
+        values: '30x3 29x18 40x6'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="monitoring",persistentvolumeclaim="storage-loki-0"}'
+        values: 100x27
+      - series: 'kubelet_volume_stats_available_bytes{namespace="monitoring",persistentvolumeclaim="unrelated"}'
+        values: 1x27
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="monitoring",persistentvolumeclaim="unrelated"}'
+        values: 100x27
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LokiStorageUsageHigh
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: LokiStorageUsageHigh
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: LokiStorageUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring
+              persistentvolumeclaim: storage-loki-0
+            exp_annotations:
+              summary: Loki storage use is above 70 percent
+              description: >-
+                The Loki claim has remained above 70 percent used for more than 15 minutes.
+                Review stored-data growth, retention, and Longhorn capacity.
+      - eval_time: 24m
+        alertname: LokiStorageUsageHigh
+        exp_alerts: []
+
+  - name: Loki storage critical is strict above eighty five percent and recovers
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="monitoring",persistentvolumeclaim="storage-loki-0"}'
+        values: '15x3 14x8 25x5'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="monitoring",persistentvolumeclaim="storage-loki-0"}'
+        values: 100x16
+      - series: 'kubelet_volume_stats_available_bytes{namespace="other",persistentvolumeclaim="storage-loki-0"}'
+        values: 1x16
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="other",persistentvolumeclaim="storage-loki-0"}'
+        values: 100x16
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LokiStorageUsageCritical
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LokiStorageUsageCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: LokiStorageUsageCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring
+              persistentvolumeclaim: storage-loki-0
+            exp_annotations:
+              summary: Loki storage use is above 85 percent
+              description: >-
+                The Loki claim has remained above 85 percent used for more than five
+                minutes. Retention and ingestion are at immediate risk.
+      - eval_time: 14m
+        alertname: LokiStorageUsageCritical
         exp_alerts: []

@@ -1,0 +1,81 @@
+---
+crds:
+  create: false
+alloy:
+  configMap:
+    create: false
+    name: alloy-logs-config
+    key: config.alloy
+  clustering:
+    enabled: false
+  enableReporting: false
+  stabilityLevel: generally-available
+  storagePath: /var/lib/alloy
+  mounts:
+    varlog: true
+    extra:
+      - name: alloy-storage
+        mountPath: /var/lib/alloy
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    privileged: false
+    readOnlyRootFilesystem: true
+    # Talos persists service logs as root-owned mode 0640 files. UID 0 is used
+    # only to read the host /var/log mount; the container remains unprivileged.
+    runAsUser: 0
+    seccompProfile:
+      type: RuntimeDefault
+controller:
+  type: daemonset
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  volumes:
+    extra:
+      - name: alloy-storage
+        hostPath:
+          path: /var/mnt/alloy-logs
+          type: DirectoryOrCreate
+rbac:
+  create: true
+  rules:
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
+  # Chart 1.12.0 concatenates rules and clusterRules as YAML. An empty one of
+  # these two lists renders an invalid list item, so repeat the same bounded
+  # Pod permission in clusterRules. This does not add any permission.
+  clusterRules:
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
+serviceMonitor:
+  enabled: true
+ingress:
+  enabled: false

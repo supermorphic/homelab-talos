@@ -1,0 +1,59 @@
+loki.source.kubernetes_events "events" {
+	namespaces = []
+	log_format = "json"
+	forward_to = [loki.process.events.receiver]
+}
+
+loki.process "events" {
+	stage.json {
+		expressions = {
+			event_type = "type",
+		}
+	}
+
+	stage.labels {
+		values = {
+			event_type = "event_type",
+		}
+	}
+
+	stage.match {
+		selector            = `{event_type!~"^(Normal|Warning)$"}`
+		action              = "drop"
+		drop_counter_reason = "unexpected_event_type"
+	}
+
+	stage.static_labels {
+		values = {
+			cluster = "nuc-cluster",
+			source  = "kubernetes_event",
+		}
+	}
+
+	stage.replace {
+		expression = `(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+([^\s,;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.replace {
+		expression = `(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?([^\s"',;]+)`
+		replace    = "[REDACTED]"
+	}
+
+	stage.drop {
+		expression          = `(?i)temporary password.*session`
+		drop_counter_reason = "temporary_password"
+	}
+
+	stage.label_keep {
+		values = ["cluster", "source", "namespace", "event_type"]
+	}
+
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+	}
+}
