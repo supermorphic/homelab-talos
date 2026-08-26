@@ -939,6 +939,13 @@ grafana-admin-reset: require-bash
     pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
     [[ -n "$pod" ]] || { echo 'No grafana pod found in monitoring.' >&2; exit 1; }
 
+    expected_confirmation='reset:monitoring:grafana:admin-password'
+    [[ "${GRAFANA_ADMIN_RESET_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reset Grafana database administrator credentials.' >&2
+      echo "Set GRAFANA_ADMIN_RESET_CONFIRM='$expected_confirmation' after reviewing the monitoring/grafana target." >&2
+      exit 1
+    }
+
     kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$pod" -c grafana -- \
       sh -c 'grafana cli --homepath /usr/share/grafana admin reset-admin-password "$GF_SECURITY_ADMIN_PASSWORD" >/dev/null 2>&1 && echo ok' | grep -qx ok || {
         echo 'grafana cli reset-admin-password failed.' >&2; exit 1; }
