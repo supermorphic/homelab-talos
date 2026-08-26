@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ./flux.yaml
   - ./gatus.yaml
+  - ./logging.yaml
   - ./ntfy.yaml
   - ./portainer.yaml
   - ./test-reports.yaml

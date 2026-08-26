@@ -71,8 +71,10 @@ loki_values="$loki/app/values.yaml"
 loki_hr="$loki/app/helmrelease.yaml"
 loki_repo="$loki/app/helmrepository.yaml"
 loki_datasource="$loki/app/datasource.yaml"
+loki_dashboard="$loki/app/dashboards/centralized-logs.json"
 
 for f in "$loki_ks" "$loki_values" "$loki_hr" "$loki_repo" "$loki_datasource" \
+  "$loki_dashboard" \
   "$loki/app/kustomization.yaml"; do
   [[ -f "$f" ]] || {
     echo "Missing Loki source: $f" >&2
@@ -170,7 +172,68 @@ done
 [[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].editable' "$loki_datasource")" == 'false' ]]
 [[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].jsonData.maxLines' "$loki_datasource")" == '1000' ]]
 
-kustomize build "$loki/app" >/dev/null
+# The dashboard is executable configuration, so validate its query behavior rather than
+# checking for marker strings. Every panel uses one of the two declared datasource
+# variables, and the required investigation views must remain independently queryable.
+jq -e '.' "$loki_dashboard" >/dev/null
+[[ "$(jq -r '.title' "$loki_dashboard")" == 'Centralized Logs' ]]
+[[ "$(jq -r '.uid' "$loki_dashboard")" == 'centralized-logs' ]]
+[[ "$(jq -r '.schemaVersion >= 41' "$loki_dashboard")" == 'true' ]]
+jq -e '
+  [.templating.list[] | select(.type == "datasource") | [.name, .query]] | sort ==
+    [["loki", "loki"], ["prometheus", "prometheus"]]
+' "$loki_dashboard" >/dev/null
+jq -e '
+  [.panels[].datasource] | length > 0 and
+  all(.[];
+    (.type == "loki" and .uid == "${loki}") or
+    (.type == "prometheus" and .uid == "${prometheus}")
+  )
+' "$loki_dashboard" >/dev/null
+jq -e '
+  [.panels[].targets[]?.expr] as $queries |
+  ([ $queries[] | select(test("count_over_time")) ] | length) >= 4 and
+  any($queries[]; test("sum by \\(source\\).*count_over_time")) and
+  any($queries[]; test("sum by \\(namespace\\).*count_over_time")) and
+  any($queries[]; test("sum by \\(app\\).*count_over_time")) and
+  any($queries[]; test("sum by \\(node\\).*count_over_time")) and
+  any($queries[]; contains("source=\"kubernetes_event\"") and contains("event_type=~\"Warning|Error\"")) and
+  any($queries[]; contains("source=\"talos\"") and contains("service!=\"kernel\"") and test("error\\|fail\\|fatal\\|panic")) and
+  any($queries[]; contains("source=\"talos\"") and contains("service=\"kernel\"") and test("error\\|fail\\|fatal\\|panic"))
+' "$loki_dashboard" >/dev/null
+jq -e '
+  [.panels[].targets[]?.expr] | join("\n") as $queries |
+  [
+    "loki_write_dropped_entries_total",
+    "loki_discarded_samples_total",
+    "loki_request_duration_seconds_count",
+    "loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds",
+    "kubelet_volume_stats_available_bytes",
+    "kubelet_volume_stats_capacity_bytes"
+  ] | all(.[]; $queries | contains(.))
+' "$loki_dashboard" >/dev/null
+jq -e '
+  [(.links[]?), (.panels[].links[]?)] |
+  length >= 3 and
+  all(.[];
+    .type == "link" and
+    (.url | contains("/explore?")) and
+    (.url | contains("panes=")) and
+    (.url | contains("schemaVersion=1")) and
+    (.url | contains("${loki}")) and
+    (.url | contains("${__from}")) and
+    (.url | contains("${__to}"))
+  )
+' "$loki_dashboard" >/dev/null
+if rg -qi 'https?://|nuc-cluster|supermorphic|([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-f]{2}:){5}[0-9a-f]{2}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$loki_dashboard"; then
+  echo 'Refusing: Centralized Logs dashboard embeds a raw infrastructure identifier.' >&2
+  exit 1
+fi
+
+kustomize build "$loki/app" >"$temp_dir/loki-package.yaml"
+[[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "centralized-logs-dashboard") | .metadata.namespace] | join(",")' "$temp_dir/loki-package.yaml")" == 'monitoring' ]]
+[[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "centralized-logs-dashboard") | .metadata.labels.grafana_dashboard] | join(",")' "$temp_dir/loki-package.yaml")" == '1' ]]
+[[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "centralized-logs-dashboard") | (.data | has("centralized-logs.json"))] | join(",")' "$temp_dir/loki-package.yaml")" == 'true' ]]
 HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
   helm template loki loki --repo https://grafana.github.io/helm-charts --version 7.3.0 \
   --namespace monitoring --api-versions monitoring.coreos.com/v1/ServiceMonitor \

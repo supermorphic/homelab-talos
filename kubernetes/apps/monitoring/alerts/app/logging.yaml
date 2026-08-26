@@ -1,0 +1,190 @@
+---
+# Centralized logging platform health. These rules use Prometheus-scraped operational
+# metrics only. They do not query Loki and do not create log-content alerts.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: logging
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: logging
+spec:
+  groups:
+    - name: centralized-logging
+      rules:
+        - alert: LokiMetricsMissing
+          expr: >-
+            absent(loki_build_info{namespace="monitoring",job="monitoring/loki"})
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Loki metrics are missing
+            description: >-
+              loki_build_info has been absent for more than ten minutes. Check the Loki
+              StatefulSet, Service, ServiceMonitor, and Prometheus target.
+        - alert: AlloyInstanceCountLow
+          expr: >-
+            sum by (service) (
+              absent(alloy_build_info{namespace="monitoring",service="alloy-logs"})
+            )
+            or count by (service) (
+              alloy_build_info{namespace="monitoring",service="alloy-logs"}
+            ) < 3
+            or sum by (service) (
+              absent(alloy_build_info{namespace="monitoring",service="alloy-events"})
+            )
+            or count by (service) (
+              alloy_build_info{namespace="monitoring",service="alloy-events"}
+            ) < 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Alloy {{ $labels.service }} has fewer than its required instances'
+            description: >-
+              Alloy {{ $labels.service }} has fewer than the required
+              {{ if eq $labels.service "alloy-logs" }}three instances{{ else }}one instance{{ end }}
+              for more than ten minutes. Log or Event coverage is incomplete.
+        - alert: AlloyLogDeliveryDrops
+          expr: >-
+            sum by (service, reason) (
+              increase(
+                loki_write_dropped_entries_total{
+                  namespace="monitoring",
+                  service=~"alloy-logs|alloy-events"
+                }[5m]
+              )
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Alloy {{ $labels.service }} is dropping log entries'
+            description: >-
+              Alloy dropped entries after exhausting delivery retries. Inspect the
+              {{ $labels.reason }} reason, the collector, and Loki ingestion health.
+        - alert: LokiLogEntriesDiscarded
+          expr: >-
+            sum by (reason) (
+              increase(
+                loki_discarded_samples_total{
+                  namespace="monitoring",
+                  job="monitoring/loki"
+                }[5m]
+              )
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Loki is discarding log entries
+            description: >-
+              Loki rejected entries for reason {{ $labels.reason }}. Inspect ingestion
+              limits, collector traffic, and Loki capacity.
+        - alert: LokiRequestErrors
+          expr: >-
+            100 * sum by (route) (
+              rate(
+                loki_request_duration_seconds_count{
+                  namespace="monitoring",
+                  job="monitoring/loki",
+                  status_code=~"5.."
+                }[5m]
+              )
+            )
+            /
+            sum by (route) (
+              rate(
+                loki_request_duration_seconds_count{
+                  namespace="monitoring",
+                  job="monitoring/loki"
+                }[5m]
+              )
+            ) > 10
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Loki request error rate is high
+            description: >-
+              More than 10 percent of Loki requests on route {{ $labels.route }} returned a
+              5xx response for more than 15 minutes.
+        - alert: LokiCompactorStalled
+          expr: >-
+            time() -
+            loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{
+              namespace="monitoring",
+              job="monitoring/loki"
+            } > 10800
+            or absent(
+              loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{
+                namespace="monitoring",
+                job="monitoring/loki"
+              }
+            )
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: Loki compactor progress is absent or stale
+            description: >-
+              Loki has not reported a successful compaction within the expected window.
+              Check the compactor configuration, filesystem, and Loki process health.
+        - alert: LokiStorageUsageHigh
+          expr: >-
+            (
+              1 -
+              kubelet_volume_stats_available_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+              /
+              kubelet_volume_stats_capacity_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+            ) > 0.70
+            and
+            (
+              1 -
+              kubelet_volume_stats_available_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+              /
+              kubelet_volume_stats_capacity_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+            ) <= 0.85
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Loki storage use is above 70 percent
+            description: >-
+              The Loki claim has remained above 70 percent used for more than 15 minutes.
+              Review stored-data growth, retention, and Longhorn capacity.
+        - alert: LokiStorageUsageCritical
+          expr: >-
+            (
+              1 -
+              kubelet_volume_stats_available_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+              /
+              kubelet_volume_stats_capacity_bytes{
+                namespace="monitoring",
+                persistentvolumeclaim="storage-loki-0"
+              }
+            ) > 0.85
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Loki storage use is above 85 percent
+            description: >-
+              The Loki claim has remained above 85 percent used for more than five
+              minutes. Retention and ingestion are at immediate risk.

@@ -10,6 +10,13 @@ configMapGenerator:
     namespace: monitoring
     files:
       - values.yaml=values.yaml
+  - name: centralized-logs-dashboard
+    namespace: monitoring
+    files:
+      - centralized-logs.json=dashboards/centralized-logs.json
+    options:
+      labels:
+        grafana_dashboard: "1"
 generatorOptions:
   disableNameSuffixHash: true
   labels:
