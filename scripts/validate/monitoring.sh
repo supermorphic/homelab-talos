@@ -210,9 +210,12 @@ alloy_logs_values="$alloy_logs/app/values.yaml"
 alloy_logs_hr="$alloy_logs/app/helmrelease.yaml"
 alloy_logs_config="$alloy_logs/app/config.alloy"
 alloy_logs_kustomization="$alloy_logs/app/kustomization.yaml"
+alloy_logs_river_validator='scripts/validate/alloy-logs-river.py'
+alloy_logs_render_validator='scripts/validate/alloy-logs-render.sh'
 
 for f in "$alloy_logs_ks" "$alloy_logs_values" "$alloy_logs_hr" \
-  "$alloy_logs_config" "$alloy_logs_kustomization"; do
+  "$alloy_logs_config" "$alloy_logs_kustomization" "$alloy_logs_river_validator" \
+  "$alloy_logs_render_validator"; do
   [[ -f "$f" ]] || {
     echo "Missing Alloy logs source: $f" >&2
     exit 1
@@ -254,9 +257,6 @@ rg -qx '  - ./alloy-logs/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml 
 [[ "$(yq -r '.alloy.resources.requests.memory' "$alloy_logs_values")" == '128Mi' ]]
 [[ "$(yq -r '.alloy.resources.limits.cpu' "$alloy_logs_values")" == '1' ]]
 [[ "$(yq -r '.alloy.resources.limits.memory' "$alloy_logs_values")" == '512Mi' ]]
-[[ "$(yq -r '.alloy.securityContext.allowPrivilegeEscalation' "$alloy_logs_values")" == 'false' ]]
-[[ "$(yq -r '.alloy.securityContext.privileged' "$alloy_logs_values")" == 'false' ]]
-[[ "$(yq -r '.alloy.securityContext.capabilities.drop | join(",")' "$alloy_logs_values")" == 'ALL' ]]
 [[ "$(yq -r '.controller.type' "$alloy_logs_values")" == 'daemonset' ]]
 [[ "$(yq -r '.controller.tolerations[] | select(.key == "node-role.kubernetes.io/control-plane") | .operator + ":" + .effect' "$alloy_logs_values")" == 'Exists:NoSchedule' ]]
 [[ "$(yq -r '.serviceMonitor.enabled' "$alloy_logs_values")" == 'true' ]]
@@ -286,8 +286,7 @@ rg -Fq 'url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"' 
 [[ "$(rg -Fc "expression = \`(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*[\"']?([^\s\"',;]+)\`" "$alloy_logs_config")" == '2' ]]
 [[ "$(rg -Fc 'expression          = `(?i)temporary password.*session`' "$alloy_logs_config")" == '2' ]]
 [[ "$(rg -Fc 'drop_counter_reason = "temporary_password"' "$alloy_logs_config")" == '2' ]]
-rg -Fq 'values = ["cluster", "source", "namespace", "app", "container", "node", "stream"]' "$alloy_logs_config"
-rg -Fq 'values = ["cluster", "source", "node", "service"]' "$alloy_logs_config"
+python "$alloy_logs_river_validator" "$alloy_logs_config"
 
 kustomize build "$alloy_logs/app" >"$temp_dir/alloy-logs-package.yaml"
 [[ "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "alloy-logs-values") | (.data | has("values.yaml"))' "$temp_dir/alloy-logs-package.yaml")" == 'true' ]]
@@ -317,6 +316,7 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 [[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].apiGroups[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == '' ]]
 [[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].resources[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == 'pods' ]]
 [[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-logs") | .rules[].verbs[]] | unique | sort | join(",")' "$temp_dir/alloy-logs.yaml")" == 'get,list,watch' ]]
+bash "$alloy_logs_render_validator" "$temp_dir/alloy-logs.yaml"
 
 # --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
 fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
