@@ -72,6 +72,23 @@ value. The recipe applies machine configuration only and never runs
 If mise is not activated in the shell, prefix either invocation with
 `mise exec --`, as described in the root README.
 
+## Live Configuration Workflow
+
+Use `just talos apply-live <node>` only for a machine-configuration change that Talos
+accepts in `no-reboot` mode. An unconfirmed invocation validates the generated configs,
+confirms the target hostname over the secure Talos API, prints the real no-reboot dry-run
+diff, and refuses the write. Review that preview and rerun with the exact target-bound
+`TALOS_APPLY_LIVE_CONFIRM` value that the command prints.
+
+The confirmed invocation repeats those checks, applies the config without wiping or
+rebooting, and then performs the same secure dry-run again as an independent read-back.
+It returns success only when the pinned Talos response reports `Config diff:` followed by
+`No changes.`. A failed second dry-run or any remaining diff makes the command fail.
+
+Maintenance-mode `just talos apply <node>` remains a separate destructive installation
+workflow. Its complete cluster verification is deferred until all nodes have rebooted
+and the bootstrap preflight can check them together.
+
 See the root [`README.md`](../README.md) for workstation setup, the
 [platform specification](../docs/specs/010-talos-flux-platform.md) for design rationale,
 and the [platform disaster-recovery runbook](../docs/runbooks/platform-disaster-recovery.md)
