@@ -94,7 +94,7 @@ workflow uses.
 | `mise exec -- just repo pihole-ca-refresh` | Retrieves the public CA, validates it, and updates the tracked CA and rollout stamp. | Mutates repository files and changes a security-sensitive trust decision; operator-run. |
 | `mise exec -- just repo foundation-provider-secrets` | Validates both providers, temporarily creates and removes one Pi-hole DNS record, and writes encrypted Secrets plus the rollout stamp. | Uses operator-held plaintext credentials and the SOPS age identity, mutates external Pi-hole state temporarily, and mutates repository files; operator-run. |
 | `mise exec -- just kube foundation-validate` | Validates local source, encrypted Secret shape, CA policy, rollout stamps, dependencies, and pinned Helm renders. | Cluster-independent and read-only; agent-owned when relevant. |
-| `mise exec -- just repo verify` | Runs repository, Talos-source, and secret-leak checks. | Cluster-independent and read-only; agent-owned. |
+| `mise exec -- just repo validate` | Runs repository, Talos-source, and secret-leak checks. | Cluster-independent and read-only; agent-owned. |
 | `mise exec -- just kube foundation-status` | Prints live Flux, controller, certificate, Gateway, DNS, and workload state. | Read-only scoped cluster observation; agent-owned for an approved task. |
 | `mise exec -- just kube foundation-verify` | Runs the complete live foundation acceptance gate, including the deployed ExternalDNS rollout stamps. | Read-only scoped verification; agent-owned for an approved task. |
 
@@ -306,7 +306,7 @@ Run the local gates:
 
 ```bash
 mise exec -- just kube foundation-validate
-mise exec -- just repo verify
+mise exec -- just repo validate
 git diff -- \
   kubernetes/apps/networking/external-dns/app/pihole-ca.crt \
   kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml \

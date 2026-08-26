@@ -11,11 +11,19 @@ mkdir -p "$minimal_path"
 ln -s "$(command -v mise)" "$minimal_path/mise"
 ln -s "$(command -v bash)" "$minimal_path/bash"
 
-verify_recipe="$(mise exec -- just --dry-run repo verify 2>&1)"
-rg -Fq 'scripts/test/hooks-test.sh' <<<"$verify_recipe" || {
-  echo 'repo verify must run the repository hook and policy regression suite.' >&2
+validate_recipe="$(mise exec -- just --dry-run repo validate 2>&1)"
+rg -Fq 'scripts/test/hooks-test.sh' <<<"$validate_recipe" || {
+  echo 'repo validate must run the repository hook and policy regression suite.' >&2
   exit 1
 }
+if mise exec -- just --dry-run repo verify >/dev/null 2>&1; then
+  echo 'Deprecated repo verify command still exists.' >&2
+  exit 1
+fi
+if mise exec -- just --dry-run repo verify-files >/dev/null 2>&1; then
+  echo 'Deprecated repo verify-files command still exists.' >&2
+  exit 1
+fi
 
 unsupported_agent_hooks=(
   "$repo_root/.claude/settings.json"
