@@ -47,6 +47,10 @@ done
 for j in daily-snapshot daily-backup; do
   kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io "$j" >/dev/null
 done
+[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get recurringjobs.longhorn.io loki-filesystem-trim --output jsonpath='{.spec.task}')" == 'filesystem-trim' ]] || {
+  echo 'RecurringJob loki-filesystem-trim is missing or is not a filesystem-trim job.' >&2
+  exit 1
+}
 
 just kube foundation-verify
 echo 'Longhorn read-only storage verification passed: Longhorn is healthy on three nodes (disks at /var/mnt/longhorn), the default StorageClass has two replicas, the backup target is available, and recurring jobs are present.'

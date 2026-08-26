@@ -53,7 +53,13 @@ chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 [[ "$(yq -r '.metadata.name' "$backuptarget")" == 'default' ]]
 [[ "$(yq -r '.spec.backupTargetURL' "$backuptarget")" == 'cifs://192.168.0.3/Longhorn' ]]
 [[ "$(yq -r '.spec.credentialSecret' "$backuptarget")" == 'nas-credentials' ]]
-[[ "$(yq ea -r '[select(.kind == "RecurringJob") | .spec.task] | .[]' "$jobs" | sort | tr '\n' ' ')" == 'backup snapshot ' ]]
+[[ "$(yq ea -r '[select(.kind == "RecurringJob") | .metadata.name] | sort | join(" ")' "$jobs")" == 'daily-backup daily-snapshot loki-filesystem-trim' ]]
+[[ "$(yq ea -r '[select(.kind == "RecurringJob") | .spec.task] | .[]' "$jobs" | sort | tr '\n' ' ')" == 'backup filesystem-trim snapshot ' ]]
+[[ "$(yq ea -r 'select(.kind == "RecurringJob" and .metadata.name == "loki-filesystem-trim") | .spec.cron' "$jobs")" == '0 4 * * 0' ]]
+[[ "$(yq ea -r 'select(.kind == "RecurringJob" and .metadata.name == "loki-filesystem-trim") | .spec.task' "$jobs")" == 'filesystem-trim' ]]
+[[ "$(yq ea -r 'select(.kind == "RecurringJob" and .metadata.name == "loki-filesystem-trim") | .spec.retain' "$jobs")" == '0' ]]
+[[ "$(yq ea -r 'select(.kind == "RecurringJob" and .metadata.name == "loki-filesystem-trim") | .spec.concurrency' "$jobs")" == '1' ]]
+[[ "$(yq ea -r 'select(.kind == "RecurringJob" and .metadata.name == "loki-filesystem-trim") | [.spec.groups[]?] | contains(["default"]) | not' "$jobs")" == 'true' ]]
 
 kustomize build "$base/app" >/dev/null
 kustomize build "$base/config" >/dev/null
