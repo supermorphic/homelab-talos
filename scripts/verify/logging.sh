@@ -322,9 +322,14 @@ targets_response="$(
   echo 'Prometheus targets API did not return status=success.' >&2
   exit 1
 }
+declare -A prometheus_jobs=(
+  [loki]='monitoring/loki'
+  [alloy-logs]='alloy-logs'
+  [alloy-events]='alloy-events'
+)
 for service_name in loki alloy-logs alloy-events; do
   scrape_pool="serviceMonitor/$ns/$service_name/0"
-  prometheus_job="$ns/$service_name"
+  prometheus_job="${prometheus_jobs[$service_name]}"
   mapfile -t exact_target_rows < <(
     SERVICE_NAME="$service_name" SCRAPE_POOL="$scrape_pool" \
       PROMETHEUS_JOB="$prometheus_job" yq -r '

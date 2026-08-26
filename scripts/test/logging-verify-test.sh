@@ -151,25 +151,31 @@ case " $* " in
     loki_job='monitoring/loki'
     alloy_logs_service='alloy-logs'
     alloy_logs_pool='serviceMonitor/monitoring/alloy-logs/0'
-    alloy_logs_job='monitoring/alloy-logs'
+    alloy_logs_job='alloy-logs'
     alloy_events_service='alloy-events'
     alloy_events_pool='serviceMonitor/monitoring/alloy-events/0'
-    alloy_events_job='monitoring/alloy-events'
+    alloy_events_job='alloy-events'
     case "$FAKE_LAYOUT" in
       unrelated-loki-target)
-        loki_service='unrelated'
+        loki_service='unrelated-loki'
         loki_pool='serviceMonitor/monitoring/unrelated-loki/0'
-        loki_job='monitoring/unrelated-loki'
+        loki_job='unrelated-loki'
         ;;
       unrelated-alloy-logs-target)
-        alloy_logs_service='unrelated'
+        alloy_logs_service='unrelated-alloy-logs'
         alloy_logs_pool='serviceMonitor/monitoring/unrelated-alloy-logs/0'
-        alloy_logs_job='monitoring/unrelated-alloy-logs'
+        alloy_logs_job='unrelated-alloy-logs'
         ;;
       unrelated-alloy-events-target)
-        alloy_events_service='unrelated'
+        alloy_events_service='unrelated-alloy-events'
         alloy_events_pool='serviceMonitor/monitoring/unrelated-alloy-events/0'
-        alloy_events_job='monitoring/unrelated-alloy-events'
+        alloy_events_job='unrelated-alloy-events'
+        ;;
+      wrong-alloy-logs-job)
+        alloy_logs_job='monitoring/alloy-logs'
+        ;;
+      wrong-alloy-events-job)
+        alloy_events_job='monitoring/alloy-events'
         ;;
     esac
     printf '{"status":"success","data":{"activeTargets":[{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.10:3100"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.11:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.12:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""}]}}\n' \
@@ -314,5 +320,9 @@ case_selected unrelated-alloy-logs-target && \
   run_case unrelated-alloy-logs-target 1 'Prometheus does not have an exact up alloy-logs ServiceMonitor target.' 2
 case_selected unrelated-alloy-events-target && \
   run_case unrelated-alloy-events-target 1 'Prometheus does not have an exact up alloy-events ServiceMonitor target.' 2
+case_selected wrong-alloy-logs-job && \
+  run_case wrong-alloy-logs-job 1 'Prometheus does not have an exact up alloy-logs ServiceMonitor target.' 2
+case_selected wrong-alloy-events-job && \
+  run_case wrong-alloy-events-job 1 'Prometheus does not have an exact up alloy-events ServiceMonitor target.' 2
 
 echo 'Logging live-acceptance verifier fixture tests passed.'
