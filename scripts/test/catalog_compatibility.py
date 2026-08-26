@@ -80,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=109.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=110.\n"
     assert completed.stderr == ""
 
 
@@ -282,6 +282,24 @@ def entry_contract(root: Path, canonical: dict[str, Any]) -> None:
         "invalid-confirmation-type",
         lambda data: suite(data, entry_id)["confirmation"].__setitem__("type", "other"),
         f"Catalog entry {entry_id} has invalid confirmation type 'other'.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "mutating-verification",
+        lambda data: suite(data, "verification.metrics-server")["metadata"].__setitem__(
+            "mutates_cluster", True
+        ),
+        "Verification entry verification.metrics-server must be observational.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "confirmed-verification",
+        lambda data: suite(data, "verification.metrics-server")["confirmation"].update(
+            {"type": "exact", "variable": "VERIFY_CONFIRM", "expected": "verify:metrics"}
+        ),
+        "Verification entry verification.metrics-server must not require confirmation.\n",
     )
 
     exact_id = "test.cilium-connectivity"
@@ -940,7 +958,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=109.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=110.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

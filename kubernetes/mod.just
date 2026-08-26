@@ -1076,6 +1076,11 @@ ntfy-validate: require-bash
 ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(kubeconfig)}}
 
+# Send three real positive-path ntfy ACL test messages after observational preflight.
+# Guard: NTFY_PUBLISH_TEST_CONFIRM='test:ntfy:publish:media-critical-homelab'.
+ntfy-publish-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.ntfy-publish -- scripts/test/scenarios/ntfy-publish.sh {{quote(kubeconfig)}}
+
 # Validate the alertmanager-ntfy adapter source: files, wiring, staged suspend, dependency
 # graph, SOPS decryption, pinned image, hardened pod, split config (dynamic topic/priority),
 # CNP, rollout annotations, the Alertmanager receiver/route in kube-prometheus-stack, and

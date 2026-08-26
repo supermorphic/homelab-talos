@@ -76,19 +76,9 @@ homepage_token="$("${kc[@]}" --namespace homepage exec deployment/homepage -c ho
 [[ "$(code -H "Authorization: Bearer $homepage_token" "$base_url/homelab/json?poll=1")" == '403' ]] || { echo 'Homepage token could read homelab (should be denied).' >&2; exit 1; }
 [[ "$(code -H "Authorization: Bearer $homepage_token" "$base_url/media/json?poll=1")" == '403' ]] || { echo 'Homepage token could read media (should be denied).' >&2; exit 1; }
 
-# Optional positive publish tests actually deliver a notification, so they are guarded.
-if [[ "${NTFY_VERIFY_PUBLISH_CONFIRM:-}" == 'publish:ntfy-verify' ]]; then
-  [[ "$(code -X POST -H "Authorization: Bearer $seerr_token" -H 'Title: ntfy-verify' -d 'seerr->media ok' "$base_url/media")" == '200' ]] || { echo 'seerr token could not publish to media (should be allowed).' >&2; exit 1; }
-  [[ "$(code -X POST -H "Authorization: Bearer $am_token" -H 'Title: ntfy-verify' -d 'alertmanager->critical ok' "$base_url/critical")" == '200' ]] || { echo 'alertmanager token could not publish to critical (should be allowed).' >&2; exit 1; }
-  # The adapter publishes warnings to homelab with the same alertmanager token.
-  [[ "$(code -X POST -H "Authorization: Bearer $am_token" -H 'Title: ntfy-verify' -d 'alertmanager->homelab ok' "$base_url/homelab")" == '200' ]] || { echo 'alertmanager token could not publish to homelab (should be allowed).' >&2; exit 1; }
-  echo 'Positive publish ACLs passed (test notifications delivered to media + critical + homelab).'
-fi
-
 just kube foundation-verify
 echo 'ntfy acceptance passed: Flux + HelmRelease Ready, rollout complete, PVC Bound, gateway /v1/health healthy, anonymous access denied, and subscriber/producer/Homepage least-privilege ACLs enforced.'
 echo
 echo 'MANUAL (human acceptance, not automatable here):'
 echo '  - a unique marker survives a Pod recreation via the persistent cache.'
 echo '  - iPhone receives a push on Wi-Fi and off-site via Tailscale VPN On Demand.'
-echo '  - re-run with NTFY_VERIFY_PUBLISH_CONFIRM=publish:ntfy-verify to send positive-path test notifications.'

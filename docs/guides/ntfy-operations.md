@@ -112,8 +112,8 @@ the action.
 | --- | --- | --- |
 | `ntfy-subscriber-password` | Prompts for the human password and writes its bcrypt hash into encrypted repository state | Operator-run: requires plaintext password input and the operator-held age identity |
 | `ntfy-identity` | Creates, reconciles, rotates, or finalizes encrypted repository credentials and rollout stamps | Operator-run: requires the operator-held age identity |
-| `ntfy-verify` | Uses the approved diagnostic verifier to inspect live readiness, health, and ACL boundaries | Agent-autonomous when an approved task needs scoped verification; default run is non-mutating and sends no notification |
-| `ntfy-verify` with the publish confirmation | Performs the same checks, then publishes three real test messages | Deliberate positive verifier path; the confirmation acknowledges that clients will receive messages |
+| `ntfy-verify` | Uses the approved diagnostic verifier to inspect live readiness, health, and ACL boundaries | Agent-autonomous when an approved task needs scoped verification; always observational and sends no notification |
+| `ntfy-publish-test` | Runs `ntfy-verify`, then publishes three real positive ACL test messages | Operator-run mutating test; exact confirmation acknowledges that clients will receive messages |
 | `alertmanager-ntfy-verify` | Uses observer access to check the adapter and Alertmanager's loaded receiver/route | Agent-autonomous when an approved task needs scoped verification; sends no notification |
 | `ntfy-consumer-sync seerr` | Decrypts repository credentials, sends a Seerr test notification, then changes Seerr's stored ntfy settings | Operator-run: requires the age identity and changes application-owned state |
 | `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object to prove firing and resolved delivery | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
@@ -188,7 +188,7 @@ Then configure the iPhone and synchronize Seerr as described below.
 
 ## Verify ntfy itself
 
-The default verifier is read-oriented. It deliberately selects the worktree-local
+The verifier is always observational. It deliberately selects the worktree-local
 `homelab-diagnostic` context because its approved implementation needs named `exec`
 access to inspect ntfy's runtime ACLs and the already-provisioned process environments.
 It does not read Kubernetes Secret bodies or print credential values.
@@ -224,16 +224,19 @@ notification.
 
 ### Send positive ACL test messages
 
-Use the optional confirmation when the task requires real positive publishing:
+Use the separate exact-confirmed test when the task requires real positive publishing:
 
 ```bash
-NTFY_VERIFY_PUBLISH_CONFIRM='publish:ntfy-verify' \
-  mise exec -- just kube ntfy-verify
+NTFY_PUBLISH_TEST_CONFIRM='test:ntfy:publish:media-critical-homelab' \
+  mise exec -- just kube ntfy-publish-test
 ```
 
-This sends one test message to each topic: Seerr's token to `media`, and Alertmanager's
-token to `critical` and `homelab`. It proves those tokens can publish to their intended
-topics. It does not exercise the Seerr API or Alertmanager adapter.
+This operator-run command first requires the observational verifier to pass. It then sends
+one test message to each topic: Seerr's token to `media`, and Alertmanager's token to
+`critical` and `homelab`. It proves those tokens can publish to their intended topics. It
+does not exercise the Seerr API or Alertmanager adapter. The cataloged `test.ntfy-publish`
+suite is part of the integration campaign, so the weekly and full campaigns also send
+these three explicit test notifications.
 
 ## Configure the iPhone
 
@@ -353,7 +356,7 @@ ntfy-verify
 alertmanager-ntfy-verify
   → observes adapter readiness and Alertmanager's loaded ntfy route
 
-ntfy-verify with publish confirmation
+ntfy-publish-test
   → sends direct token-authenticated test messages to all three topics
 
 ntfy-consumer-sync seerr
@@ -567,7 +570,7 @@ Work from the client toward the producer so each step isolates one boundary:
      guarded delivery test when actual firing/resolved proof is needed.
    - Seerr: review the managed fields and rerun the guarded consumer sync. A failed test
      leaves the stored settings unchanged.
-6. **Positive publish:** Run the guarded positive `ntfy-verify` mode. If direct publishing
+6. **Positive publish:** Run the guarded `ntfy-publish-test`. If direct publishing
    succeeds but an integration fails, the fault is before ntfy in that producer path.
 7. **iOS wake-up:** Confirm ntfy can reach `ntfy.sh` over HTTPS. The Cilium policy permits
    this specific architectural need through world TCP port 443.

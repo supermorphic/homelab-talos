@@ -1144,6 +1144,10 @@ class CatalogValidator:
             fail(
                 f"Catalog entry {suite_id} has invalid confirmation type '{confirmation_type}'.\n"
             )
+        if tier == "verification" and mutates != "false":
+            fail(f"Verification entry {suite_id} must be observational.\n")
+        if tier == "verification" and confirmation_type != "none":
+            fail(f"Verification entry {suite_id} must not require confirmation.\n")
         if mutates == "true" and confirmation_type == "none":
             fail(
                 f"Mutating catalog entry {suite_id} must declare command or exact confirmation.\n"
