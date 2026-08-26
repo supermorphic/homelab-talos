@@ -57,7 +57,7 @@ Use this cadence so "full test suite" has one unambiguous meaning:
 | --- | --- | --- |
 | Every PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
 | Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
-| Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
+| Weekly | `weekly` campaign | Nightly coverage plus verification, integration (including three explicit ntfy test notifications), probes, and disruptive resilience |
 | Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
 
 Preview the desired campaign from clean, deployed `origin/main`:
@@ -280,6 +280,8 @@ available for focused developer validation.
 | `just bootstrap metrics-server` | Reconcile the staged metrics-server and verify (`kubectl top`, HPA, Homepage widget) | `METRICS_SERVER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube metrics-server-verify` | Verify metrics-server: APIService Available and `kubectl top nodes` returns data | — | Read-only |
 | `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy guide](docs/guides/ntfy-operations.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
+| `just kube ntfy-verify` | Observe live ntfy readiness, health, authentication, and least-privilege ACL boundaries | Worktree-local diagnostic credentials | Approved scoped verification; always observational and sends no notification |
+| `just kube ntfy-publish-test` | Run the observational ntfy preflight, then send one positive ACL test message to `media`, `critical`, and `homelab` | `.kube/config`; `NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab` | Operator-only; sends exactly three real notifications after confirmation |
 
 The **Requires from operator** column lists inputs the recipe reads from your
 environment and refuses to run without. `SOPS_AGE_KEY`[`_FILE`] means either the

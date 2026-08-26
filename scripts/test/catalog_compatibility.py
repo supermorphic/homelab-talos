@@ -283,6 +283,24 @@ def entry_contract(root: Path, canonical: dict[str, Any]) -> None:
         lambda data: suite(data, entry_id)["confirmation"].__setitem__("type", "other"),
         f"Catalog entry {entry_id} has invalid confirmation type 'other'.\n",
     )
+    expect_rejection(
+        root,
+        canonical,
+        "mutating-verification",
+        lambda data: suite(data, "verification.metrics-server")["metadata"].__setitem__(
+            "mutates_cluster", True
+        ),
+        "Verification entry verification.metrics-server must be observational.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "confirmed-verification",
+        lambda data: suite(data, "verification.metrics-server")["confirmation"].update(
+            {"type": "exact", "variable": "VERIFY_CONFIRM", "expected": "verify:metrics"}
+        ),
+        "Verification entry verification.metrics-server must not require confirmation.\n",
+    )
 
     exact_id = "test.cilium-connectivity"
     expect_rejection(

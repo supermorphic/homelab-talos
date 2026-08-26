@@ -105,6 +105,14 @@ rg -q '^ntfy-consumer-sync consumer:' kubernetes/mod.just || {
   echo 'Refusing: the ntfy-consumer-sync recipe is missing from kubernetes/mod.just.' >&2
   exit 1
 }
+rg -q '^ntfy-publish-test:' kubernetes/mod.just || {
+  echo 'Refusing: the ntfy-publish-test recipe is missing from kubernetes/mod.just.' >&2
+  exit 1
+}
+if rg -q 'NTFY_VERIFY_PUBLISH_CONFIRM' scripts/verify/ntfy.sh; then
+  echo 'Refusing: ntfy-verify must remain observational; use ntfy-publish-test.' >&2
+  exit 1
+fi
 ntfy_sync_recipe="$(sed -n '/^ntfy-consumer-sync consumer:/,/^[^[:space:]#]/p' kubernetes/mod.just)"
 for required_guard in \
   "require_deployed_source 'ntfy consumer sync'" \

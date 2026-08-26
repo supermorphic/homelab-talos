@@ -37,6 +37,9 @@ For routine grouped execution and automatic Allure publication, use
 `mise exec -- just test campaign-plan <name>` followed by its printed
 `mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
 `full` compositions provide nightly, weekly, and complete coverage respectively.
+The integration campaign includes the exact-confirmed `test.ntfy-publish` suite. Therefore,
+the weekly and full campaigns send three explicit ntfy test notifications to `media`,
+`critical`, and `homelab` after the suite's observational preflight.
 See `docs/guides/test-campaign-operations.md` for campaign selection, cadence, safety stops, and resume
 behavior.
 
@@ -60,6 +63,9 @@ Live commands are operator-only:
   share preserves hardlinks across `/data/downloads` ↔ `/data/media` — the filesystem
   contract every *arr "hardlink not copy" import depends on — using a throwaway test file,
   no external download; cleans up after itself)
+- `NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test`
+  (runs the observational ntfy verifier first, then sends exactly three positive ACL test
+  notifications to `media`, `critical`, and `homelab`; included in integration and weekly)
 - `CLUSTER_E2E_CONFIRM=e2e:qbit-manage-policy mise exec -- just test e2e qbit-manage-policy`
   (up to 60 minutes; downloads WebTorrent's legal Sintel fixture through qBittorrent's VPN
   egress, observes the deployed public classification, proves private-tag exclusion, applies
@@ -93,7 +99,8 @@ Live commands are operator-only:
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario
-names are not interchangeable. Integration registers `media-hardlink`; E2E registers the
+names are not interchangeable. Integration includes `media-hardlink` and the cataloged
+`test.ntfy-publish` command; E2E registers the
 exact-confirmation-gated `qbit-manage-policy`; resilience targets are explicitly registered.
 The Flux alert E2E is exposed as a guarded `just kube` recipe because it exercises the
 production alert duration rather than the generic direct-test dispatcher. Unknown targets

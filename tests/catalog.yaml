@@ -182,6 +182,7 @@ campaigns:
       - test.flux-canary
       - test.integration.media-hardlink
       - test.plex-network-policy
+      - test.ntfy-publish
   e2e:
     description: State-changing end-to-end functional tests.
     mutates_cluster: true
@@ -584,6 +585,10 @@ suites:
   - metadata: {id: test.flux-canary, source: test, framework: just, suite: platform, tier: integration, target: flux, scenario: canary-recreation, scope: cluster, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: FLUX_CANARY_CONFIRM, expected: "recreate:flux-system:flux-canary"}
     runner: {command: "FLUX_CANARY_CONFIRM=recreate:flux-system:flux-canary mise exec -- just kube flux-canary-test", implementation: kubernetes/mod.just}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
+    runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: test.flux-restart, source: test, framework: just, suite: platform, tier: resilience, target: flux, scenario: controller-restart, scope: cluster, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: FLUX_RESTART_CONFIRM, expected: "restart:flux-system:controllers"}
