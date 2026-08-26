@@ -139,6 +139,8 @@ run_shell_case logging-verifier scripts/test/logging-verify-test.sh
 run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
 run_shell_case monitoring-alloy-logs-validator \
   scripts/test/monitoring-alloy-logs-validator-test.sh
+run_shell_case monitoring-loki-validator \
+  scripts/test/monitoring-loki-validator-test.sh
 run_shell_case monitoring-alloy-events-validator \
   scripts/test/monitoring-alloy-events-validator-test.sh
 run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh

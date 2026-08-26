@@ -61,8 +61,13 @@ JSON
     ;;
   *' --namespace monitoring get statefulset loki --output json '*)
     if [[ "$FAKE_LAYOUT" == 'two-loki-pods' ]]; then replicas=2; else replicas=1; fi
-    printf '{"metadata":{"generation":9},"spec":{"replicas":%s},"status":{"observedGeneration":9,"replicas":%s,"currentReplicas":%s,"updatedReplicas":%s,"readyReplicas":%s,"availableReplicas":%s,"currentRevision":"private-revision","updateRevision":"private-revision"}}\n' \
-      "$replicas" "$replicas" "$replicas" "$replicas" "$replicas" "$replicas"
+    if [[ "$FAKE_LAYOUT" == 'ambiguous-mounted-claim' ]]; then
+      claim_templates='[{"metadata":{"name":"storage"}},{"metadata":{"name":"archive"}}]'
+    else
+      claim_templates='[{"metadata":{"name":"storage"}}]'
+    fi
+    printf '{"metadata":{"name":"loki","uid":"private-loki-statefulset-uid","generation":9},"spec":{"replicas":%s,"volumeClaimTemplates":%s},"status":{"observedGeneration":9,"replicas":%s,"currentReplicas":%s,"updatedReplicas":%s,"readyReplicas":%s,"availableReplicas":%s,"currentRevision":"private-revision","updateRevision":"private-revision"}}\n' \
+      "$replicas" "$claim_templates" "$replicas" "$replicas" "$replicas" "$replicas" "$replicas"
     ;;
   *' --namespace monitoring get pods --selector app.kubernetes.io/instance=alloy-logs,app.kubernetes.io/name=alloy --output json '*)
     if [[ "$FAKE_LAYOUT" == 'healthy-two-pod-daemonset' ]]; then
@@ -96,15 +101,29 @@ JSON
 {"items":[{"metadata":{"name":"private-loki-pod-a"},"spec":{"nodeName":"private-node-identity-a"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"private-loki-pod-b"},"spec":{"nodeName":"private-node-identity-b"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}
 JSON
     else
-      cat <<'JSON'
-{"items":[{"metadata":{"name":"private-loki-pod-a"},"spec":{"nodeName":"private-node-identity-a"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}
-JSON
+      owner_uid='private-loki-statefulset-uid'
+      [[ "$FAKE_LAYOUT" != 'loki-pod-owner-mismatch' ]] || owner_uid='private-other-statefulset-uid'
+      case "$FAKE_LAYOUT" in
+        missing-mounted-claim) volumes='[]' ;;
+        ambiguous-mounted-claim) volumes='[{"name":"storage","persistentVolumeClaim":{"claimName":"private-telemetry-claim"}},{"name":"archive","persistentVolumeClaim":{"claimName":"private-archive-claim"}}]' ;;
+        mismatched-mounted-claim) volumes='[{"name":"foreign-storage","persistentVolumeClaim":{"claimName":"private-telemetry-claim"}}]' ;;
+        stale-trim-labeled-pvc) volumes='[{"name":"storage","persistentVolumeClaim":{"claimName":"private-active-claim"}}]' ;;
+        *) volumes='[{"name":"storage","persistentVolumeClaim":{"claimName":"private-telemetry-claim"}}]' ;;
+      esac
+      printf '{"items":[{"metadata":{"name":"private-loki-pod-a","ownerReferences":[{"apiVersion":"apps/v1","kind":"StatefulSet","name":"loki","uid":"%s","controller":true}]},"spec":{"nodeName":"private-node-identity-a","volumes":%s},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}\n' \
+        "$owner_uid" "$volumes"
     fi
     ;;
   *' --namespace monitoring get pvc --output json '*)
-    cat <<'JSON'
+    if [[ "$FAKE_LAYOUT" == 'stale-trim-labeled-pvc' ]]; then
+      cat <<'JSON'
+{"items":[{"metadata":{"name":"private-active-claim","labels":{"app.kubernetes.io/name":"loki"}},"spec":{"resources":{"requests":{"storage":"50Gi"}},"volumeName":"private-active-pv"},"status":{"phase":"Bound"}},{"metadata":{"name":"private-telemetry-claim","labels":{"recurring-job.longhorn.io/source":"enabled","recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"spec":{"resources":{"requests":{"storage":"50Gi"}},"volumeName":"private-pv-identity"},"status":{"phase":"Bound"}}]}
+JSON
+    else
+      cat <<'JSON'
 {"items":[{"metadata":{"name":"unrelated-claim","labels":{"app.kubernetes.io/name":"other"}},"spec":{"resources":{"requests":{"storage":"1Gi"}},"volumeName":"unrelated-pv"},"status":{"phase":"Bound"}},{"metadata":{"name":"private-telemetry-claim","labels":{"recurring-job.longhorn.io/source":"enabled","recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"spec":{"resources":{"requests":{"storage":"50Gi"}},"volumeName":"private-pv-identity"},"status":{"phase":"Bound"}}]}
 JSON
+    fi
     ;;
   *' get persistentvolume private-pv-identity --output jsonpath={.spec.csi.volumeHandle} '*)
     echo 'PersistentVolume reads are forbidden in the diagnostic verifier.' >&2
@@ -168,10 +187,13 @@ case " $* " in
   *' http://127.0.0.1:23100/ready '*) printf 'ready\n' ;;
   *' http://127.0.0.1:23100/config/tenant/v1/limits '*)
     case "$FAKE_LAYOUT" in
-      wrong-runtime-retention) printf 'retention_period: 13d\n' ;;
-      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\n' ;;
-      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\n' ;;
-      *) printf 'retention_period: 2w\nretention_stream: []\n' ;;
+      wrong-runtime-retention) printf 'retention_period: 13d\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\ndiscover_service_name: []\n' ;;
+      runtime-discover-service-name-nonempty) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: [service]\n' ;;
+      runtime-discover-service-name-missing) printf 'retention_period: 2w\nretention_stream: []\n' ;;
+      runtime-discover-service-name-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: service\n' ;;
+      *) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/loki/api/v1/labels '*)
@@ -208,7 +230,9 @@ case " $* " in
     count=7
     case "$FAKE_LAYOUT:$*" in
       missing-kubernetes:*'query=sum(count_over_time({source="kubernetes"}[30m]))'*) count=0 ;;
+      missing-talos-service:*'query=sum(count_over_time({source="talos",service=~".+",service!="kernel"}[30m]))'*) count=0 ;;
       missing-talos-service:*'query=sum(count_over_time({source="talos",service!="kernel"}[30m]))'*) count=0 ;;
+      unlabeled-and-kernel-only:*'query=sum(count_over_time({source="talos",service=~".+",service!="kernel"}[30m]))'*) count=0 ;;
       missing-kernel:*'query=sum(count_over_time({source="talos",service="kernel"}[30m]))'*) count=0 ;;
       missing-events:*'query=sum(count_over_time({source="kubernetes_event"}[30m]))'*) count=0 ;;
     esac
@@ -232,17 +256,45 @@ case " $* " in
     loki_service='loki'; loki_pool='serviceMonitor/monitoring/loki/0'; loki_job='monitoring/loki'
     alloy_logs_service='alloy-logs'; alloy_logs_pool='serviceMonitor/monitoring/alloy-logs/0'; alloy_logs_job='alloy-logs'
     alloy_events_service='alloy-events'; alloy_events_pool='serviceMonitor/monitoring/alloy-events/0'; alloy_events_job='alloy-events'
+    loki_count=1; alloy_logs_count=3; alloy_events_count=1
     case "$FAKE_LAYOUT" in
       unrelated-loki-target) loki_service='unrelated-loki'; loki_pool='serviceMonitor/monitoring/unrelated-loki/0'; loki_job='unrelated-loki' ;;
       unrelated-alloy-logs-target) alloy_logs_service='unrelated-alloy-logs'; alloy_logs_pool='serviceMonitor/monitoring/unrelated-alloy-logs/0'; alloy_logs_job='unrelated-alloy-logs' ;;
       unrelated-alloy-events-target) alloy_events_service='unrelated-alloy-events'; alloy_events_pool='serviceMonitor/monitoring/unrelated-alloy-events/0'; alloy_events_job='unrelated-alloy-events' ;;
       wrong-alloy-logs-job) alloy_logs_job='monitoring/alloy-logs' ;;
       wrong-alloy-events-job) alloy_events_job='monitoring/alloy-events' ;;
+      missing-loki-target) loki_count=0 ;;
+      extra-loki-target) loki_count=2 ;;
+      one-alloy-logs-target) alloy_logs_count=1 ;;
+      two-alloy-logs-target) alloy_logs_count=2 ;;
+      excess-alloy-logs-target) alloy_logs_count=4 ;;
+      missing-alloy-events-target) alloy_events_count=0 ;;
+      extra-alloy-events-target) alloy_events_count=2 ;;
     esac
-    printf '{"status":"success","data":{"activeTargets":[{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.10:3100"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.11:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.12:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""}]}}\n' \
-      "$loki_service" "$loki_service" "$loki_job" "$loki_pool" \
-      "$alloy_logs_service" "$alloy_logs_service" "$alloy_logs_job" "$alloy_logs_pool" \
-      "$alloy_events_service" "$alloy_events_service" "$alloy_events_job" "$alloy_events_pool"
+    targets=''
+    append_target() {
+      local service_name="$1" job="$2" pool="$3" address="$4" health="$5" last_error="$6"
+      local target
+      printf -v target '{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"%s"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"%s","lastError":"%s"}' \
+        "$service_name" "$address" "$service_name" "$job" "$pool" "$health" "$last_error"
+      targets+="${targets:+,}$target"
+    }
+    for ((index = 0; index < loki_count; index++)); do
+      append_target "$loki_service" "$loki_job" "$loki_pool" "192.0.2.$((10 + index)):3100" up ''
+    done
+    for ((index = 0; index < alloy_logs_count; index++)); do
+      health='up'; last_error=''
+      if [[ "$FAKE_LAYOUT" == 'unhealthy-alloy-logs-target' && "$index" -eq 2 ]]; then
+        health='down'; last_error='fixture scrape failure'
+      fi
+      append_target "$alloy_logs_service" "$alloy_logs_job" "$alloy_logs_pool" \
+        "192.0.2.$((20 + index)):12345" "$health" "$last_error"
+    done
+    for ((index = 0; index < alloy_events_count; index++)); do
+      append_target "$alloy_events_service" "$alloy_events_job" "$alloy_events_pool" \
+        "192.0.2.$((30 + index)):12345" up ''
+    done
+    printf '{"status":"success","data":{"activeTargets":[%s]}}\n' "$targets"
     ;;
   *' http://127.0.0.1:29090/api/v1/rules?type=alert '*)
     cat <<'JSON'
@@ -280,7 +332,7 @@ run_case() {
   [[ "$(rg -c ' start ' "$case_root/process.log" || true)" -eq "$expected_starts" ]]
   [[ "$(rg -c ' stop ' "$case_root/process.log" || true)" -eq "$expected_stops" ]]
   [[ -z "$(find "$fixture/tmp" -mindepth 1 -print -quit)" ]] || { echo "$layout: verifier left temporary files behind" >&2; exit 1; }
-  for private_identity in private-telemetry-claim private-pv-identity private-longhorn-volume private-node-identity private-alloy-log-pod private-alloy-event-pod private-loki-pod private-revision private-volume-object-value; do
+  for private_identity in private-telemetry-claim private-active-claim private-pv-identity private-longhorn-volume private-node-identity private-alloy-log-pod private-alloy-event-pod private-loki-pod private-loki-statefulset-uid private-revision private-volume-object-value; do
     if rg -F -q -- "$private_identity" "$output"; then echo "$layout: verifier printed a private infrastructure identity" >&2; exit 1; fi
   done
 }
@@ -298,7 +350,7 @@ fi
 
 if case_selected all-evidence-present; then
   run_case all-evidence-present 0 'Logging acceptance passed' 2 2
-  for query in 'sum(count_over_time({source="kubernetes"}[30m]))' 'sum(count_over_time({source="talos",service!="kernel"}[30m]))' 'sum(count_over_time({source="talos",service="kernel"}[30m]))' 'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
+  for query in 'sum(count_over_time({source="kubernetes"}[30m]))' 'sum(count_over_time({source="talos",service=~".+",service!="kernel"}[30m]))' 'sum(count_over_time({source="talos",service="kernel"}[30m]))' 'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
     rg -F -q -- "query=$query" "$fixture/all-evidence-present/curl.log"
   done
   for selector in '{source="kubernetes"}' '{source="talos"}' '{source="kubernetes_event"}'; do
@@ -308,8 +360,8 @@ if case_selected all-evidence-present; then
   rg -F -q -- 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}' "$fixture/all-evidence-present/curl.log"
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/labels$' "$fixture/all-evidence-present/curl.log")" -eq 3 ]]
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/query$' "$fixture/all-evidence-present/curl.log")" -eq 4 ]]
-  if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$' "$fixture/all-evidence-present/curl.log"; then
-    echo 'Verifier requested raw Loki entries or used the kernel-inclusive Talos selector.' >&2; exit 1
+  if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$|query=sum\(count_over_time\(\{source="talos",service!="kernel"\}' "$fixture/all-evidence-present/curl.log"; then
+    echo 'Verifier requested raw Loki entries or used an unlabeled or kernel-inclusive Talos selector.' >&2; exit 1
   fi
 fi
 
@@ -318,6 +370,11 @@ case_selected healthy-two-pod-daemonset && run_case healthy-two-pod-daemonset 1 
 case_selected duplicate-alloy-log-node && run_case duplicate-alloy-log-node 1 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' 0 0
 case_selected two-alloy-events-pods && run_case two-alloy-events-pods 1 'Alloy Events topology does not have exactly one fully available instance.' 0 0
 case_selected two-loki-pods && run_case two-loki-pods 1 'Loki topology does not have exactly one fully available instance.' 0 0
+case_selected loki-pod-owner-mismatch && run_case loki-pod-owner-mismatch 1 'Loki Ready pod is not controlled by the verified StatefulSet.' 0 0
+case_selected missing-mounted-claim && run_case missing-mounted-claim 1 'Loki Ready pod does not mount exactly one claim from the verified StatefulSet.' 0 0
+case_selected ambiguous-mounted-claim && run_case ambiguous-mounted-claim 1 'Loki Ready pod does not mount exactly one claim from the verified StatefulSet.' 0 0
+case_selected mismatched-mounted-claim && run_case mismatched-mounted-claim 1 'Loki Ready pod does not mount exactly one claim from the verified StatefulSet.' 0 0
+case_selected stale-trim-labeled-pvc && run_case stale-trim-labeled-pvc 1 'The mounted Loki claim does not have the exact recurring-job intent labels.' 0 0
 case_selected longhorn-status-missing && run_case longhorn-status-missing 1 'Expected exactly one actual Longhorn Volume with complete bound-claim identity; found 0.' 0 0
 case_selected longhorn-status-mismatch && run_case longhorn-status-mismatch 1 'Expected exactly one actual Longhorn Volume with complete bound-claim identity; found 0.' 0 0
 case_selected longhorn-status-ambiguous && run_case longhorn-status-ambiguous 1 'Expected exactly one actual Longhorn Volume with complete bound-claim identity; found 2.' 0 0
@@ -330,6 +387,9 @@ case_selected prometheus-port-forward-fails && run_case prometheus-port-forward-
 case_selected wrong-runtime-retention && run_case wrong-runtime-retention 1 'Loki effective runtime retention is not exactly 336h with no stream override.' 2 2
 case_selected malformed-runtime-retention && run_case malformed-runtime-retention 1 'Loki effective runtime retention is not exactly 336h with no stream override.' 2 2
 case_selected runtime-retention-stream-override && run_case runtime-retention-stream-override 1 'Loki effective runtime retention is not exactly 336h with no stream override.' 2 2
+case_selected runtime-discover-service-name-nonempty && run_case runtime-discover-service-name-nonempty 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
+case_selected runtime-discover-service-name-missing && run_case runtime-discover-service-name-missing 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
+case_selected runtime-discover-service-name-malformed && run_case runtime-discover-service-name-malformed 1 'Loki effective runtime service-name discovery is not disabled.' 2 2
 case_selected forbidden-label && run_case forbidden-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2
 case_selected ip-label && run_case ip-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2
 case_selected missing-container-label && run_case missing-container-label 1 'Kubernetes container indexed-label names do not exactly match the approved set.' 2 2
@@ -343,16 +403,25 @@ case_selected global-union-only && run_case global-union-only 1 'Kubernetes cont
 case_selected malformed-label-response && run_case malformed-label-response 1 'Kubernetes container label-name API response is malformed.' 2 2
 case_selected missing-kubernetes && run_case missing-kubernetes 1 'Missing nonzero Loki aggregate count: Kubernetes containers.' 2 2
 case_selected missing-talos-service && run_case missing-talos-service 1 'Missing nonzero Loki aggregate count: Talos non-kernel services.' 2 2
+case_selected unlabeled-and-kernel-only && run_case unlabeled-and-kernel-only 1 'Missing nonzero Loki aggregate count: Talos non-kernel services.' 2 2
 case_selected missing-kernel && run_case missing-kernel 1 'Missing nonzero Loki aggregate count: Talos kernel.' 2 2
 case_selected missing-events && run_case missing-events 1 'Missing nonzero Loki aggregate count: Kubernetes Events.' 2 2
 case_selected missing-compaction && run_case missing-compaction 1 'Loki does not report exactly one fresh successful compaction timestamp.' 2 2
 case_selected stale-compaction && run_case stale-compaction 1 'Loki does not report exactly one fresh successful compaction timestamp.' 2 2
 case_selected future-compaction && run_case future-compaction 1 'Loki does not report exactly one fresh successful compaction timestamp.' 2 2
 case_selected malformed-compaction && run_case malformed-compaction 1 'Loki does not report exactly one fresh successful compaction timestamp.' 2 2
-case_selected unrelated-loki-target && run_case unrelated-loki-target 1 'Prometheus does not have an exact up loki ServiceMonitor target.' 2 2
-case_selected unrelated-alloy-logs-target && run_case unrelated-alloy-logs-target 1 'Prometheus does not have an exact up alloy-logs ServiceMonitor target.' 2 2
-case_selected unrelated-alloy-events-target && run_case unrelated-alloy-events-target 1 'Prometheus does not have an exact up alloy-events ServiceMonitor target.' 2 2
-case_selected wrong-alloy-logs-job && run_case wrong-alloy-logs-job 1 'Prometheus does not have an exact up alloy-logs ServiceMonitor target.' 2 2
-case_selected wrong-alloy-events-job && run_case wrong-alloy-events-job 1 'Prometheus does not have an exact up alloy-events ServiceMonitor target.' 2 2
+case_selected unrelated-loki-target && run_case unrelated-loki-target 1 'Prometheus does not have exactly 1 healthy loki ServiceMonitor target.' 2 2
+case_selected unrelated-alloy-logs-target && run_case unrelated-alloy-logs-target 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected unrelated-alloy-events-target && run_case unrelated-alloy-events-target 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
+case_selected wrong-alloy-logs-job && run_case wrong-alloy-logs-job 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected wrong-alloy-events-job && run_case wrong-alloy-events-job 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
+case_selected missing-loki-target && run_case missing-loki-target 1 'Prometheus does not have exactly 1 healthy loki ServiceMonitor target.' 2 2
+case_selected extra-loki-target && run_case extra-loki-target 1 'Prometheus does not have exactly 1 healthy loki ServiceMonitor target.' 2 2
+case_selected one-alloy-logs-target && run_case one-alloy-logs-target 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected two-alloy-logs-target && run_case two-alloy-logs-target 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected excess-alloy-logs-target && run_case excess-alloy-logs-target 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected unhealthy-alloy-logs-target && run_case unhealthy-alloy-logs-target 1 'Prometheus does not have exactly 3 healthy alloy-logs ServiceMonitor targets.' 2 2
+case_selected missing-alloy-events-target && run_case missing-alloy-events-target 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
+case_selected extra-alloy-events-target && run_case extra-alloy-events-target 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
 
 echo 'Logging live-acceptance verifier fixture tests passed.'

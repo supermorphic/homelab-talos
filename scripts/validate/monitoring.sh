@@ -123,6 +123,13 @@ rg -qx '  - ./loki/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
 [[ "$(yq -r '.loki.schemaConfig.configs[0].index.period' "$loki_values")" == '24h' ]]
 [[ "$(yq -r '.loki.storage.type' "$loki_values")" == 'filesystem' ]]
 [[ "$(yq -r '.loki.limits_config.allow_structured_metadata' "$loki_values")" == 'false' ]]
+yq -e '
+  ((.loki.limits_config.discover_service_name | type) == "!!seq") and
+  (.loki.limits_config.discover_service_name | length) == 0
+' "$loki_values" >/dev/null || {
+  echo 'Refusing: Loki source must disable automatic service-name discovery.' >&2
+  exit 1
+}
 [[ "$(yq -r '.loki.limits_config.ingestion_rate_mb' "$loki_values")" == '2' ]]
 [[ "$(yq -r '.loki.limits_config.ingestion_burst_size_mb' "$loki_values")" == '4' ]]
 [[ "$(yq -r '.loki.limits_config.per_stream_rate_limit' "$loki_values")" == '1MB' ]]
@@ -151,10 +158,17 @@ done
 [[ "$(yq -r '.singleBinary.persistence.labels."recurring-job.longhorn.io/source"' "$loki_values")" == 'enabled' ]]
 [[ "$(yq -r '.singleBinary.persistence.labels."recurring-job.longhorn.io/loki-filesystem-trim"' "$loki_values")" == 'enabled' ]]
 expected_loki_recurring_labels='recurring-job.longhorn.io/loki-filesystem-trim=enabled,recurring-job.longhorn.io/source=enabled'
-[[ "$(yq -r '[.singleBinary.persistence.labels | to_entries[] | select(.key | test("^recurring-job\\.longhorn\\.io/")) | "\(.key)=\(.value)"] | sort | join(",")' "$loki_values")" == "$expected_loki_recurring_labels" ]]
-for label in daily-snapshot daily-backup default; do
+[[ "$(yq -r '[.singleBinary.persistence.labels | to_entries[] | select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/")) | "\(.key)=\(.value)"] | sort | join(",")' "$loki_values")" == "$expected_loki_recurring_labels" ]] || {
+  echo 'Refusing: Loki source PVC labels must contain only source and filesystem-trim assignments.' >&2
+  exit 1
+}
+for label in daily-snapshot daily-backup; do
   [[ "$(yq -r ".singleBinary.persistence.labels.\"recurring-job.longhorn.io/${label}\" // \"absent\"" "$loki_values")" == 'absent' ]]
 done
+[[ "$(yq -r '.singleBinary.persistence.labels."recurring-job-group.longhorn.io/default" // "absent"' "$loki_values")" == 'absent' ]] || {
+  echo 'Refusing: Loki source PVC labels must contain only source and filesystem-trim assignments.' >&2
+  exit 1
+}
 for component in gateway lokiCanary resultsCache chunksCache; do
   [[ "$(yq -r ".${component}.enabled" "$loki_values")" == 'false' ]]
 done
@@ -227,8 +241,23 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 [[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .spec.storageClassName] | join(",")' "$temp_dir/loki.yaml")" == 'longhorn' ]]
 [[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels."recurring-job.longhorn.io/source"] | join(",")' "$temp_dir/loki.yaml")" == 'enabled' ]]
 [[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels."recurring-job.longhorn.io/loki-filesystem-trim"] | join(",")' "$temp_dir/loki.yaml")" == 'enabled' ]]
-[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels | to_entries | map(select(.key | test("^recurring-job\\.longhorn\\.io/"))) | map("\(.key)=\(.value)") | sort | join(",")] | join(",")' "$temp_dir/loki.yaml")" == "$expected_loki_recurring_labels" ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels | to_entries | map(select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/"))) | map("\(.key)=\(.value)") | sort | join(",")] | join(",")' "$temp_dir/loki.yaml")" == "$expected_loki_recurring_labels" ]] || {
+  echo 'Refusing: rendered Loki PVC labels must contain only source and filesystem-trim assignments.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels."recurring-job-group.longhorn.io/default" // "absent"] | join(",")' "$temp_dir/loki.yaml")" == 'absent' ]] || {
+  echo 'Refusing: rendered Loki PVC labels must contain only source and filesystem-trim assignments.' >&2
+  exit 1
+}
 [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "loki") | (.data."config.yaml" | from_yaml).limits_config.allow_structured_metadata] | join(",")' "$temp_dir/loki.yaml")" == 'false' ]]
+rendered_discover_service_name="$(yq ea --output-format json --indent 0 '
+  select(.kind == "ConfigMap" and .metadata.name == "loki") |
+  (.data."config.yaml" | from_yaml).limits_config.discover_service_name
+' "$temp_dir/loki.yaml")"
+[[ "$rendered_discover_service_name" == '[]' ]] || {
+  echo 'Refusing: rendered Loki must disable automatic service-name discovery.' >&2
+  exit 1
+}
 [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "loki") | (.data."config.yaml" | from_yaml).limits_config.ingestion_rate_mb] | join(",")' "$temp_dir/loki.yaml")" == '2' ]]
 [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "loki") | (.data."config.yaml" | from_yaml).limits_config.ingestion_burst_size_mb] | join(",")' "$temp_dir/loki.yaml")" == '4' ]]
 [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "loki") | (.data."config.yaml" | from_yaml).limits_config.per_stream_rate_limit] | join(",")' "$temp_dir/loki.yaml")" == '1MB' ]]

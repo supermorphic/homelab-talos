@@ -166,20 +166,78 @@ yq -e '
   exit 1
 }
 
-pvc_json="$("${kc[@]}" --namespace "$ns" get pvc --output json)"
-mapfile -t loki_pvcs < <(
-  yq -r '
-    .items[] |
-    select(.metadata.labels."recurring-job.longhorn.io/source" == "enabled") |
-    select(.metadata.labels."recurring-job.longhorn.io/loki-filesystem-trim" == "enabled") |
-    .metadata.name
-  ' <<<"$pvc_json"
-)
-[[ "${#loki_pvcs[@]}" -eq 1 ]] || {
-  echo "Expected exactly one Loki PVC selected by its recurring-job intent labels; found ${#loki_pvcs[@]}." >&2
+# Bind storage verification to the sole Ready Pod and the StatefulSet that owns it.
+# Identities stay internal and are never included in diagnostics.
+loki_statefulset_name="$(yq -r '.metadata.name // ""' <<<"$loki_statefulset_json")"
+loki_statefulset_uid="$(yq -r '.metadata.uid // ""' <<<"$loki_statefulset_json")"
+[[ -n "$loki_statefulset_name" && -n "$loki_statefulset_uid" ]] || {
+  echo 'Verified Loki StatefulSet identity is incomplete.' >&2
   exit 1
 }
-loki_pvc="${loki_pvcs[0]}"
+STS_NAME="$loki_statefulset_name" STS_UID="$loki_statefulset_uid" yq -e '
+  [
+    .items[0].metadata.ownerReferences[]? |
+    select(.apiVersion == "apps/v1") |
+    select(.kind == "StatefulSet") |
+    select(.name == strenv(STS_NAME)) |
+    select(.uid == strenv(STS_UID)) |
+    select(.controller == true)
+  ] | length == 1
+' >/dev/null 2>&1 <<<"$loki_pods_json" || {
+  echo 'Loki Ready pod is not controlled by the verified StatefulSet.' >&2
+  exit 1
+}
+mapfile -t loki_claim_template_names < <(
+  yq -r '.spec.volumeClaimTemplates[]?.metadata.name // ""' \
+    <<<"$loki_statefulset_json"
+)
+mapfile -t loki_pvc_mount_rows < <(
+  yq -r '
+    .items[0].spec.volumes[]? |
+    select((.persistentVolumeClaim.claimName // "") != "") |
+    [(.name // ""), .persistentVolumeClaim.claimName] |
+    @tsv
+  ' <<<"$loki_pods_json"
+)
+[[ "${#loki_claim_template_names[@]}" -eq 1 &&
+  "${#loki_pvc_mount_rows[@]}" -eq 1 ]] || {
+  echo 'Loki Ready pod does not mount exactly one claim from the verified StatefulSet.' >&2
+  exit 1
+}
+IFS=$'\t' read -r loki_pvc_volume_name loki_pvc \
+  <<<"${loki_pvc_mount_rows[0]}"
+[[ -n "$loki_pvc" &&
+  "$loki_pvc_volume_name" == "${loki_claim_template_names[0]}" ]] || {
+  echo 'Loki Ready pod does not mount exactly one claim from the verified StatefulSet.' >&2
+  exit 1
+}
+
+pvc_json="$("${kc[@]}" --namespace "$ns" get pvc --output json)"
+pvc_match_count="$(PVC_NAME="$loki_pvc" yq -r '
+  [
+    .items[]? |
+    select(.metadata.name == strenv(PVC_NAME)) |
+    select((.metadata.deletionTimestamp // "") == "")
+  ] | length
+' <<<"$pvc_json")"
+[[ "$pvc_match_count" == '1' ]] || {
+  echo "The mounted Loki claim does not resolve to exactly one current PVC; found $pvc_match_count." >&2
+  exit 1
+}
+mounted_pvc_recurring_labels="$(PVC_NAME="$loki_pvc" yq -r '
+  [
+    .items[] |
+    select(.metadata.name == strenv(PVC_NAME)) |
+    (.metadata.labels // {}) | to_entries[] |
+    select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/")) |
+    "\(.key)=\(.value)"
+  ] | sort | join(",")
+' <<<"$pvc_json")"
+[[ "$mounted_pvc_recurring_labels" == \
+  'recurring-job.longhorn.io/loki-filesystem-trim=enabled,recurring-job.longhorn.io/source=enabled' ]] || {
+  echo 'The mounted Loki claim does not have the exact recurring-job intent labels.' >&2
+  exit 1
+}
 pvc_phase="$(PVC_NAME="$loki_pvc" yq -r '
   .items[] | select(.metadata.name == strenv(PVC_NAME)) | .status.phase // ""
 ' <<<"$pvc_json")"
@@ -370,6 +428,13 @@ yq -e '
   echo 'Loki effective runtime retention is not exactly 336h with no stream override.' >&2
   exit 1
 }
+yq -e '
+  ((.discover_service_name | type) == "!!seq") and
+  (.discover_service_name | length) == 0
+' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+  echo 'Loki effective runtime service-name discovery is not disabled.' >&2
+  exit 1
+}
 
 end_seconds="$(date -u +%s)"
 start_seconds="$((end_seconds - 1800))"
@@ -435,7 +500,7 @@ loki_count_nonzero() {
 
 count_selectors=(
   '{source="kubernetes"}'
-  '{source="talos",service!="kernel"}'
+  '{source="talos",service=~".+",service!="kernel"}'
   '{source="talos",service="kernel"}'
   '{source="kubernetes_event"}'
 )
@@ -481,9 +546,15 @@ declare -A prometheus_jobs=(
   [alloy-logs]='alloy-logs'
   [alloy-events]='alloy-events'
 )
+declare -A prometheus_target_counts=(
+  [loki]=1
+  [alloy-logs]=3
+  [alloy-events]=1
+)
 for service_name in loki alloy-logs alloy-events; do
   scrape_pool="serviceMonitor/$ns/$service_name/0"
   prometheus_job="${prometheus_jobs[$service_name]}"
+  expected_target_count="${prometheus_target_counts[$service_name]}"
   mapfile -t exact_target_rows < <(
     SERVICE_NAME="$service_name" SCRAPE_POOL="$scrape_pool" \
       PROMETHEUS_JOB="$prometheus_job" yq -r '
@@ -499,14 +570,16 @@ for service_name in loki alloy-logs alloy-events; do
         @tsv
       ' <<<"$targets_response"
   )
-  [[ "${#exact_target_rows[@]}" -gt 0 ]] || {
-    echo "Prometheus does not have an exact up $service_name ServiceMonitor target." >&2
+  target_noun='targets'
+  [[ "$expected_target_count" -ne 1 ]] || target_noun='target'
+  [[ "${#exact_target_rows[@]}" -eq "$expected_target_count" ]] || {
+    echo "Prometheus does not have exactly $expected_target_count healthy $service_name ServiceMonitor $target_noun." >&2
     exit 1
   }
   for target_row in "${exact_target_rows[@]}"; do
     IFS=$'\t' read -r target_health target_error <<<"$target_row"
     [[ "$target_health" == 'up' && -z "$target_error" ]] || {
-      echo "Prometheus does not have an exact up $service_name ServiceMonitor target." >&2
+      echo "Prometheus does not have exactly $expected_target_count healthy $service_name ServiceMonitor $target_noun." >&2
       exit 1
     }
   done
