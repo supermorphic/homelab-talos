@@ -64,6 +64,120 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanager") | .kind] | .[]' "$temp_dir/kps.yaml" | sort -u | tr '\n' ' ')"
 [[ "$render_kinds" == 'Alertmanager Prometheus ' ]]
 
+# --- Loki: single-binary, filesystem-backed internal log store ---
+loki='kubernetes/apps/monitoring/loki'
+loki_ks="$loki/ks.yaml"
+loki_values="$loki/app/values.yaml"
+loki_hr="$loki/app/helmrelease.yaml"
+loki_repo="$loki/app/helmrepository.yaml"
+loki_datasource="$loki/app/datasource.yaml"
+
+for f in "$loki_ks" "$loki_values" "$loki_hr" "$loki_repo" "$loki_datasource" \
+  "$loki/app/kustomization.yaml"; do
+  [[ -f "$f" ]] || {
+    echo "Missing Loki source: $f" >&2
+    exit 1
+  }
+done
+
+rg -qx '  - ./loki/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
+  echo 'Refusing: loki is not wired into monitoring/kustomization.yaml.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.metadata.name' "$loki_ks")" == 'loki' ]]
+[[ "$(yq -r '.metadata.namespace' "$loki_ks")" == 'flux-system' ]]
+[[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$loki_ks")" == 'kube-prometheus-stack,longhorn' ]]
+[[ "$(yq -r '.spec.path' "$loki_ks")" == './kubernetes/apps/monitoring/loki/app' ]]
+[[ "$(yq -r '.spec.prune' "$loki_ks")" == 'true' ]]
+[[ "$(yq -r '.spec.wait' "$loki_ks")" == 'true' ]]
+
+[[ "$(yq -r '.metadata.name' "$loki_repo")" == 'grafana' ]]
+[[ "$(yq -r '.metadata.namespace' "$loki_repo")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.url' "$loki_repo")" == 'https://grafana.github.io/helm-charts' ]]
+[[ "$(yq -r '.metadata.name' "$loki_hr")" == 'loki' ]]
+[[ "$(yq -r '.metadata.namespace' "$loki_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.chart.spec.chart' "$loki_hr")" == 'loki' ]]
+[[ "$(yq -r '.spec.chart.spec.version' "$loki_hr")" == '7.3.0' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.kind' "$loki_hr")" == 'HelmRepository' ]]
+[[ "$(yq -r '.spec.chart.spec.sourceRef.name' "$loki_hr")" == 'grafana' ]]
+[[ "$(yq -r '.spec.targetNamespace' "$loki_hr")" == 'monitoring' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].kind' "$loki_hr")" == 'ConfigMap' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].name' "$loki_hr")" == 'loki-values' ]]
+[[ "$(yq -r '.spec.valuesFrom[0].valuesKey' "$loki_hr")" == 'values.yaml' ]]
+[[ "$(yq -r '.spec.install.remediation.retries' "$loki_hr")" == '3' ]]
+[[ "$(yq -r '.spec.upgrade.cleanupOnFail' "$loki_hr")" == 'true' ]]
+[[ "$(yq -r '.spec.upgrade.remediation.retries' "$loki_hr")" == '3' ]]
+[[ "$(yq -r '.spec.upgrade.remediation.strategy' "$loki_hr")" == 'rollback' ]]
+
+[[ "$(yq -r '.deploymentMode' "$loki_values")" == 'SingleBinary' ]]
+[[ "$(yq -r '.loki.auth_enabled' "$loki_values")" == 'false' ]]
+[[ "$(yq -r '.loki.commonConfig.replication_factor' "$loki_values")" == '1' ]]
+[[ "$(yq -r '.loki.schemaConfig.configs[0].store' "$loki_values")" == 'tsdb' ]]
+[[ "$(yq -r '.loki.schemaConfig.configs[0].object_store' "$loki_values")" == 'filesystem' ]]
+[[ "$(yq -r '.loki.schemaConfig.configs[0].schema' "$loki_values")" == 'v13' ]]
+[[ "$(yq -r '.loki.schemaConfig.configs[0].index.prefix' "$loki_values")" == 'index_' ]]
+[[ "$(yq -r '.loki.schemaConfig.configs[0].index.period' "$loki_values")" == '24h' ]]
+[[ "$(yq -r '.loki.storage.type' "$loki_values")" == 'filesystem' ]]
+[[ "$(yq -r '.loki.limits_config.retention_period' "$loki_values")" == '336h' ]]
+[[ "$(yq -r '.loki.limits_config.max_query_lookback' "$loki_values")" == '336h' ]]
+[[ "$(yq -r '.loki.compactor.retention_enabled' "$loki_values")" == 'true' ]]
+[[ "$(yq -r '.loki.compactor.delete_request_store' "$loki_values")" == 'filesystem' ]]
+[[ "$(yq -r '.singleBinary.replicas' "$loki_values")" == '1' ]]
+for component in read write backend; do
+  [[ "$(yq -r ".${component}.replicas" "$loki_values")" == '0' ]]
+done
+[[ "$(yq -r '.singleBinary.persistence.enabled' "$loki_values")" == 'true' ]]
+[[ "$(yq -r '.singleBinary.persistence.accessModes | join(",")' "$loki_values")" == 'ReadWriteOnce' ]]
+[[ "$(yq -r '.singleBinary.persistence.size' "$loki_values")" == '50Gi' ]]
+[[ "$(yq -r '.singleBinary.persistence.storageClass' "$loki_values")" == 'longhorn' ]]
+[[ "$(yq -r '.singleBinary.persistence.whenScaled' "$loki_values")" == 'Retain' ]]
+[[ "$(yq -r '.singleBinary.persistence.whenDeleted' "$loki_values")" == 'Retain' ]]
+[[ "$(yq -r '.singleBinary.persistence.enableStatefulSetAutoDeletePVC' "$loki_values")" == 'false' ]]
+[[ "$(yq -r '.singleBinary.persistence.labels."recurring-job.longhorn.io/source"' "$loki_values")" == 'enabled' ]]
+[[ "$(yq -r '.singleBinary.persistence.labels."recurring-job.longhorn.io/loki-filesystem-trim"' "$loki_values")" == 'enabled' ]]
+for label in daily-snapshot daily-backup default; do
+  [[ "$(yq -r ".singleBinary.persistence.labels.\"recurring-job.longhorn.io/${label}\" // \"absent\"" "$loki_values")" == 'absent' ]]
+done
+for component in gateway lokiCanary resultsCache chunksCache; do
+  [[ "$(yq -r ".${component}.enabled" "$loki_values")" == 'false' ]]
+done
+[[ "$(yq -r '.test.enabled' "$loki_values")" == 'false' ]]
+[[ "$(yq -r '.monitoring.serviceMonitor.enabled' "$loki_values")" == 'true' ]]
+
+[[ "$(yq -r '.kind' "$loki_datasource")" == 'ConfigMap' ]]
+[[ "$(yq -r '.metadata.namespace' "$loki_datasource")" == 'monitoring' ]]
+[[ "$(yq -r '.metadata.labels.grafana_datasource' "$loki_datasource")" == '1' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources | length' "$loki_datasource")" == '1' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].name' "$loki_datasource")" == 'Loki' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].type' "$loki_datasource")" == 'loki' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].access' "$loki_datasource")" == 'proxy' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].url' "$loki_datasource")" == 'http://loki.monitoring.svc.cluster.local:3100' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].isDefault' "$loki_datasource")" == 'false' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].editable' "$loki_datasource")" == 'false' ]]
+[[ "$(yq -r '(.data."loki.yaml" | from_yaml).datasources[0].jsonData.maxLines' "$loki_datasource")" == '1000' ]]
+
+kustomize build "$loki/app" >/dev/null
+HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
+  helm template loki loki --repo https://grafana.github.io/helm-charts --version 7.3.0 \
+  --namespace monitoring --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+  --values "$loki_values" >"$temp_dir/loki.yaml"
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.replicas] | join(",")' "$temp_dir/loki.yaml")" == '1' ]]
+# The chart omits a StatefulSet retention policy when automatic PVC deletion is disabled.
+# Kubernetes defaults both lifecycle actions to Retain in that case.
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | (.spec.persistentVolumeClaimRetentionPolicy.whenDeleted // "Retain")] | join(",")' "$temp_dir/loki.yaml")" == 'Retain' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | (.spec.persistentVolumeClaimRetentionPolicy.whenScaled // "Retain")] | join(",")' "$temp_dir/loki.yaml")" == 'Retain' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .spec.accessModes | join(",") ] | join(",")' "$temp_dir/loki.yaml")" == 'ReadWriteOnce' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .spec.resources.requests.storage] | join(",")' "$temp_dir/loki.yaml")" == '50Gi' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .spec.storageClassName] | join(",")' "$temp_dir/loki.yaml")" == 'longhorn' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels."recurring-job.longhorn.io/source"] | join(",")' "$temp_dir/loki.yaml")" == 'enabled' ]]
+[[ "$(yq ea -r '[select(.kind == "StatefulSet" and .metadata.name == "loki") | .spec.volumeClaimTemplates[] | select(.metadata.name == "storage") | .metadata.labels."recurring-job.longhorn.io/loki-filesystem-trim"] | join(",")' "$temp_dir/loki.yaml")" == 'enabled' ]]
+[[ "$(yq ea -r '[select(.kind == "Service" and .metadata.name == "loki") | .spec.type] | join(",")' "$temp_dir/loki.yaml")" == 'ClusterIP' ]]
+[[ "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$temp_dir/loki.yaml")" -ge 1 ]]
+[[ "$(yq ea -r '[select(.kind == "Ingress" or .kind == "HTTPRoute")] | length' "$temp_dir/loki.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name | test("canary"))] | length' "$temp_dir/loki.yaml")" == '0' ]]
+[[ "$(yq ea -r '[select(.kind == "Deployment" or .kind == "StatefulSet") | .metadata.name | select(test("gateway|results-cache|chunks-cache"))] | length' "$temp_dir/loki.yaml")" == '0' ]]
+
 # --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
 fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 cfg="$base/config"
@@ -214,4 +328,4 @@ yq -e '
 bash -n "$flux_alerts_lib" "$flux_alerts_diagnostics"
 shellcheck --external-sources "$flux_alerts_lib" "$flux_alerts_diagnostics"
 
-echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack render, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
+echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack and Loki renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'

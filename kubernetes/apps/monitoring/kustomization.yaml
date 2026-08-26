@@ -8,6 +8,7 @@ resources:
   - ./gatus/ks.yaml
   - ./homepage/ks.yaml
   - ./kube-prometheus-stack/ks.yaml
+  - ./loki/ks.yaml
   - ./ntfy/ks.yaml
   - ./portainer/ks.yaml
   - ./test-reports/ks.yaml

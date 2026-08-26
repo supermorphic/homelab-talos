@@ -124,6 +124,9 @@ the persistent Loki filesystem for its working and marker data, and applies a gl
 does not delete data in response to free-space pressure, so Prometheus alerts provide the
 capacity safety boundary.
 
+The Loki chart's Helm test is disabled because it requires the intentionally disabled
+Loki Canary. Prometheus instead scrapes the monolith through its ServiceMonitor.
+
 ## Retention and capacity
 
 Repository workload count and expected source volume support a planning envelope of
