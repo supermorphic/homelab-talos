@@ -131,43 +131,90 @@ replace_once "$config" \
   $'loki.write "default" {\n\twal {\n\t\tenabled = true\n\t}'
 expect_fail 'Alloy WAL enabled' 'Refusing: Alloy Loki delivery must not enable a WAL.'
 
-echo '8. Rendering an Alloy image other than v1.19.0 is rejected.'
+echo '8. Commenting out the complete Pod annotation opt-out rule is rejected.'
+reset_tree
+replace_once "$config" \
+  $'\trule {\n\t\tsource_labels = ["__meta_kubernetes_pod_annotation_observability_supermorphic_com_logs"]\n\t\taction        = "drop"\n\t\tregex         = `^disabled$`\n\t}' \
+  $'\t/*\n\trule {\n\t\tsource_labels = ["__meta_kubernetes_pod_annotation_observability_supermorphic_com_logs"]\n\t\taction        = "drop"\n\t\tregex         = `^disabled$`\n\t}\n\t*/'
+expect_fail 'Pod annotation opt-out rule commented out' \
+  'Refusing: Alloy Kubernetes Pod opt-out rule must drop only disabled targets.'
+
+echo '9. A dynamic label block with an intervening block comment is rejected.'
+reset_tree
+replace_once "$config" \
+  $'\tforward_to = [loki.write.default.receiver]\n}' \
+  $'\tstage.static_labels /* validator gap */ {\n\t\tvalues = {\n\t\t\tpod_uid = "synthetic",\n\t\t}\n\t}\n\n\tforward_to = [loki.write.default.receiver]\n}'
+expect_fail 'comment-separated dynamic Kubernetes label added after allowlist' \
+  'Refusing: Alloy Kubernetes processing stages must end with the exact label allowlist.'
+
+echo '10. A WAL block with an intervening block comment is rejected.'
+reset_tree
+replace_once "$config" \
+  $'loki.write "default" {' \
+  $'loki.write "default" {\n\twal /* validator gap */ {\n\t\tenabled = true\n\t}'
+expect_fail 'comment-separated Alloy WAL enabled' \
+  'Refusing: Alloy Loki delivery must not enable a WAL.'
+
+echo '11. A bypass source with comments between its block tokens is rejected.'
+reset_tree
+replace_once "$config" \
+  $'loki.write "default" {' \
+  $'loki.source.file /* validator gap */ "bypass" {\n\ttargets    = local.file_match.talos_kernel.targets\n\tforward_to = [loki.write.default.receiver]\n}\n\nloki.write "default" {'
+expect_fail 'comment-separated bypass source added' \
+  'Refusing: Alloy River component set must contain only the approved node-log flow.'
+
+echo '12. An unterminated block comment is rejected.'
+reset_tree
+replace_once "$config" \
+  $'\t\turl = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"' \
+  $'\t\turl = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"\n\t\t/* no closing delimiter'
+expect_fail 'unterminated Alloy block comment added' \
+  'Refusing: Alloy River contains an unterminated block comment.'
+
+echo '13. Line comments containing block-comment tokens remain valid.'
+reset_tree
+replace_once "$config" \
+  $'discovery.kubernetes "pods" {' \
+  $'// Line comment with inert /* block */ and wal { } tokens.\ndiscovery.kubernetes "pods" {'
+expect_pass 'Alloy line comments with block-comment tokens'
+
+echo '14. Rendering an Alloy image other than v1.19.0 is rejected.'
 reset_tree
 yq -i '.image.tag = "v1.18.0"' "$values"
 expect_fail 'Alloy image version drifted' \
   'Refusing: rendered Alloy image must be docker.io/grafana/alloy:v1.19.0.'
 
-echo '9. Rendered privilege escalation is rejected.'
+echo '15. Rendered privilege escalation is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.allowPrivilegeEscalation = true' "$values"
 expect_fail 'Alloy privilege escalation enabled' \
   'Refusing: rendered Alloy must disable privilege escalation.'
 
-echo '10. Rendered privileged mode is rejected.'
+echo '16. Rendered privileged mode is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.privileged = true' "$values"
 expect_fail 'Alloy privileged mode enabled' \
   'Refusing: rendered Alloy must disable privileged mode.'
 
-echo '11. Rendered Linux capabilities are rejected.'
+echo '17. Rendered Linux capabilities are rejected.'
 reset_tree
 yq -i '.alloy.securityContext.capabilities.drop = []' "$values"
 expect_fail 'Alloy retained Linux capabilities' \
   'Refusing: rendered Alloy must drop every Linux capability.'
 
-echo '12. A writable rendered root filesystem is rejected.'
+echo '18. A writable rendered root filesystem is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.readOnlyRootFilesystem = false' "$values"
 expect_fail 'Alloy root filesystem became writable' \
   'Refusing: rendered Alloy root filesystem must be read-only.'
 
-echo '13. Changing the bounded rendered UID is rejected.'
+echo '19. Changing the bounded rendered UID is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.runAsUser = 65534' "$values"
 expect_fail 'Alloy UID drifted' \
   'Refusing: rendered Alloy UID must remain 0 for Talos mode-0640 logs.'
 
-echo '14. Removing the rendered RuntimeDefault seccomp profile is rejected.'
+echo '20. Removing the rendered RuntimeDefault seccomp profile is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.seccompProfile.type = "Unconfined"' "$values"
 expect_fail 'Alloy seccomp profile weakened' \

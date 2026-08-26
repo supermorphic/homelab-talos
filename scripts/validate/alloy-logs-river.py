@@ -34,6 +34,35 @@ def skip_quoted(text: str, start: int, quote: str) -> int:
     refuse("Alloy River contains an unterminated string.")
 
 
+def strip_comments(text: str) -> str:
+    """Replace Alloy comments with whitespace without changing token positions."""
+    output = list(text)
+    index = 0
+    while index < len(text):
+        if text[index] in {'"', "`"}:
+            index = skip_quoted(text, index, text[index])
+            continue
+        if text.startswith("//", index) or text[index] == "#":
+            newline = text.find("\n", index + 1)
+            end = len(text) if newline < 0 else newline
+            for position in range(index, end):
+                output[position] = " "
+            index = end
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            if close < 0:
+                refuse("Alloy River contains an unterminated block comment.")
+            end = close + 2
+            for position in range(index, end):
+                if text[position] != "\n":
+                    output[position] = " "
+            index = end
+            continue
+        index += 1
+    return "".join(output)
+
+
 def matching_brace(text: str, start: int) -> int:
     depth = 1
     index = start + 1
@@ -219,7 +248,7 @@ def validate_protection_stages(
 
 
 def validate(config_path: Path) -> None:
-    text = config_path.read_text()
+    text = strip_comments(config_path.read_text())
     components = direct_blocks(text)
     actual_components = Counter((block.kind, block.label) for block in components)
     expected_components = Counter(
