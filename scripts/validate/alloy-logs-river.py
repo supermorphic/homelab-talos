@@ -189,6 +189,10 @@ def assignment(body: str, name: str) -> str:
     return value
 
 
+def direct_assignment_names(body: str) -> list[str]:
+    return re.findall(r"(?m)^[\t ]*([A-Za-z_][A-Za-z0-9_]*)[\t ]*=", direct_assignment_view(body))
+
+
 def string_list(value: str) -> list[str]:
     try:
         parsed = json.loads(value)
@@ -219,12 +223,18 @@ def validate_protection_stages(
         r"""`(?i)(?:password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?([^\s"',;]+)`""",
     ]
     for stage, expression in zip(protected[:2], expected_expressions, strict=True):
+        if Counter(direct_assignment_names(stage.body)) != Counter(["expression", "replace"]):
+            refuse(f"Alloy {source_name} credential redaction stage assignments drifted.")
         if assignment(stage.body, "expression") != expression:
             refuse(f"Alloy {source_name} credential redaction expression drifted.")
         if assignment(stage.body, "replace") != '"[REDACTED]"':
             refuse(f"Alloy {source_name} credential redaction replacement drifted.")
 
     drop = protected[2]
+    if Counter(direct_assignment_names(drop.body)) != Counter(
+        ["expression", "drop_counter_reason"]
+    ):
+        refuse(f"Alloy {source_name} temporary-password stage assignments drifted.")
     if assignment(drop.body, "expression") != "`(?i)temporary password.*session`":
         refuse(f"Alloy {source_name} temporary-password filter drifted.")
     if assignment(drop.body, "drop_counter_reason") != '"temporary_password"':
@@ -341,6 +351,8 @@ def validate_node_logs(config_path: Path) -> None:
 
 def validate_writer(components: list[Block]) -> None:
     writer = one_component(components, "loki.write", "default")
+    if direct_assignment_names(writer.body):
+        refuse("Alloy Loki delivery must not define direct assignments.")
     writer_blocks = direct_blocks(writer.body)
     if any(block.kind == "wal" for block in writer_blocks):
         refuse("Alloy Loki delivery must not enable a WAL.")
@@ -369,11 +381,7 @@ def validate_events(config_path: Path) -> None:
     source = one_component(components, "loki.source.kubernetes_events", "events")
     if direct_blocks(source.body):
         refuse("Alloy Events source must not override its in-cluster client or clustering.")
-    source_assignments = direct_assignment_view(source.body)
-    assignment_names = re.findall(
-        r"(?m)^[\t ]*([A-Za-z_][A-Za-z0-9_]*)[\t ]*=", source_assignments
-    )
-    if assignment_names != ["namespaces", "log_format", "forward_to"]:
+    if direct_assignment_names(source.body) != ["namespaces", "log_format", "forward_to"]:
         refuse(
             "Alloy Events source must define only all-namespace JSON collection and its protected route."
         )

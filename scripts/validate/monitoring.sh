@@ -376,9 +376,18 @@ rg -qx '  - ./alloy-events/ks.yaml' kubernetes/apps/monitoring/kustomization.yam
 [[ "$(yq -r '.ingress.enabled' "$alloy_events_values")" == 'false' ]]
 [[ "$(yq -r '.crds.create' "$alloy_events_values")" == 'false' ]]
 
-[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].apiGroups[]] | unique | sort | join(",")' "$alloy_events_values")" == '' ]]
-[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].resources[]] | unique | sort | join(",")' "$alloy_events_values")" == 'events' ]]
-[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[].verbs[]] | unique | sort | join(",")' "$alloy_events_values")" == 'get,list,watch' ]]
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[]] | length' "$alloy_events_values")" == '2' ]] || {
+  echo 'Refusing: Alloy Events source RBAC must contain exactly the two chart-compatible Event rules.' >&2
+  exit 1
+}
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[] | (keys | sort | join(","))] | unique | join(";")' "$alloy_events_values")" == 'apiGroups,resources,verbs' ]] || {
+  echo 'Refusing: Alloy Events source RBAC rules must not contain non-resource permissions or unexpected fields.' >&2
+  exit 1
+}
+[[ "$(yq -r '[((.rbac.rules // []) + (.rbac.clusterRules // []))[] | ((.apiGroups | sort | join(",")) + "|" + (.resources | sort | join(",")) + "|" + (.verbs | sort | join(",")))] | unique | join(";")' "$alloy_events_values")" == '|events|get,list,watch' ]] || {
+  echo 'Refusing: every Alloy Events source RBAC rule must grant only core Events get, list, and watch.' >&2
+  exit 1
+}
 
 # The structural validator proves all-namespace collection, the protected route,
 # redaction, exact label allowlist, and absence of alternate source, metadata, and WAL paths.
@@ -409,9 +418,18 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
 [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .resources.limits.memory] | join(",")' "$temp_dir/alloy-events.yaml")" == '256Mi' ]]
 [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(. == "--disable-reporting")] | length' "$temp_dir/alloy-events.yaml")" == '1' ]]
 [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "alloy-events") | .spec.template.spec.containers[] | select(.name == "alloy") | .args[] | select(test("^--cluster\\."))] | length' "$temp_dir/alloy-events.yaml")" == '0' ]]
-[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].apiGroups[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == '' ]]
-[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].resources[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == 'events' ]]
-[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[].verbs[]] | unique | sort | join(",")' "$temp_dir/alloy-events.yaml")" == 'get,list,watch' ]]
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[]] | length' "$temp_dir/alloy-events.yaml")" == '2' ]] || {
+  echo 'Refusing: rendered Alloy Events ClusterRole must contain exactly the two chart-compatible Event rules.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[] | (keys | sort | join(","))] | unique | join(";")' "$temp_dir/alloy-events.yaml")" == 'apiGroups,resources,verbs' ]] || {
+  echo 'Refusing: rendered Alloy Events RBAC rules must not contain non-resource permissions or unexpected fields.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "ClusterRole" and .metadata.name == "alloy-events") | .rules[] | ((.apiGroups | sort | join(",")) + "|" + (.resources | sort | join(",")) + "|" + (.verbs | sort | join(",")))] | unique | join(";")' "$temp_dir/alloy-events.yaml")" == '|events|get,list,watch' ]] || {
+  echo 'Refusing: every rendered Alloy Events RBAC rule must grant only core Events get, list, and watch.' >&2
+  exit 1
+}
 bash "$alloy_logs_render_validator" "$temp_dir/alloy-events.yaml" Deployment alloy-events 473
 
 # --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---

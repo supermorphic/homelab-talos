@@ -62,6 +62,7 @@ expect_river_fail() {
 
 expect_monitoring_fail() {
   local description="$1"
+  local expected_message="${2:-}"
   local output status
   set +e
   output="$(cd "$tree_root" && "$monitoring_validator" 2>&1)"
@@ -72,6 +73,13 @@ expect_monitoring_fail() {
     echo "$output" >&2
     exit 1
   }
+  if [[ -n "$expected_message" ]]; then
+    rg -Fq "$expected_message" <<<"$output" || {
+      echo "$description: missing expected failure message: $expected_message" >&2
+      echo "$output" >&2
+      exit 1
+    }
+  fi
 }
 
 reset_tree
@@ -159,5 +167,27 @@ echo '13. Weakening the Event reader container hardening is rejected.'
 reset_tree
 yq -i '.alloy.securityContext.allowPrivilegeEscalation = true' "$values"
 expect_monitoring_fail 'Alloy Events privilege escalation enabled'
+
+echo '14. Redirecting credential redaction away from the raw Event line is rejected.'
+reset_tree
+replace_once "$config" \
+  $'\t\treplace    = "[REDACTED]"' \
+  $'\t\treplace    = "[REDACTED]"\n\t\tsource     = "event_type"'
+expect_river_fail 'Event credential redaction source redirected' \
+  'Refusing: Alloy Events credential redaction stage assignments drifted.'
+
+echo '15. Adding forbidden labels at the Loki writer is rejected.'
+reset_tree
+replace_once "$config" \
+  $'loki.write "default" {' \
+  $'loki.write "default" {\n\texternal_labels = { event_name = "forbidden" }'
+expect_river_fail 'Event writer external label added' \
+  'Refusing: Alloy Loki delivery must not define direct assignments.'
+
+echo '16. Adding a non-resource permission to Events-only RBAC is rejected.'
+reset_tree
+yq -i '.rbac.rules[0].nonResourceURLs = ["/metrics"]' "$values"
+expect_monitoring_fail 'Alloy Events non-resource RBAC added' \
+  'Refusing: Alloy Events source RBAC rules must not contain non-resource permissions or unexpected fields.'
 
 echo 'Alloy Events validator mutation tests passed.'
