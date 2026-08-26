@@ -21,6 +21,7 @@
 
 ## Reference
 
+- [Repository command lifecycle](reference/repository-command-lifecycle.md) — Classify command semantics, workflow profiles, safeguards, confirmation, and execution authority.
 - [NUC Talos cluster](reference/nuc-cluster.md) — Look up the current synthetic hardware, network, and Talos image inputs.
 - [qbit_manage CZTeam policy](reference/qbit-manage-czteam.md) — Look up the tracker-specific CZTeam classification and share-limit contract.
 - [qbit_manage seeding policy](reference/qbit-manage.md) — Look up the active classification, seeding, cleanup, and safety contract.

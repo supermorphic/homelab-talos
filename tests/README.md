@@ -24,6 +24,10 @@ This tree contains declarative, repository-owned test inputs:
 See `docs/reference/testing-layers.md` for how these layers fit together (Gatus continuous /
 Chainsaw smoke routine / Chainsaw resilience controlled-failure / Sonobuoy
 `just kube conformance` on-demand). Sonobuoy is ephemeral — never scheduled or standing.
+The [repository command lifecycle](../docs/reference/repository-command-lifecycle.md)
+defines the shared semantic boundary: verification remains observational toward its
+target, while deliberate temporary mutation uses a controlled test and its ownership,
+confirmation, evidence, cleanup, and recovery controls.
 
 `mise exec -- just test validate` is the complete cluster-independent command in
 this module. It validates `catalog.yaml`, lints Chainsaw configuration and tests,
