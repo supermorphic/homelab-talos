@@ -1468,8 +1468,9 @@ diagnostic_vmaf_setting() {
 	done
 	timeline='{"zeroOffsetAligned":false,"discontinuity":null}'
 	if [[ "$status" == 'complete' ]]; then
-		timeline="$(jq -n -c --argjson source "$source_window" --argjson output "$output_window" \
+		timeline="$(jq -n -c -L "$script_directory" --argjson source "$source_window" --argjson output "$output_window" \
 			--argjson offsets "$offsets" --argjson observed "$observed" '
+			include "diagnostic-contract";
 			def unique_best($metric):
 				def rank:
 					if $metric == "psnr" then
@@ -1481,14 +1482,8 @@ diagnostic_vmaf_setting() {
 				if ($matches | length) == 1 then $matches[0] else null end;
 			(unique_best("ssim")) as $ssim_offset |
 			(unique_best("psnr")) as $psnr_offset |
-			($source.frames | map({frameIndex,bestEffortTimestamp,packetDuration})) as $source_timeline |
-			($output.frames | map({frameIndex,bestEffortTimestamp,packetDuration})) as $output_timeline |
 			{
-				zeroOffsetAligned:(
-					$source.decodedFrameCount == $output.decodedFrameCount and
-					$source.stream.averageFrameRate == $output.stream.averageFrameRate and
-					$source_timeline == $output_timeline
-				),
+				zeroOffsetAligned:diagnostic_local_alignment($source; $output),
 				discontinuity:(
 					if $ssim_offset != null and $ssim_offset == $psnr_offset and $ssim_offset != 0 then
 						([$source.frames[] | select(.frameIndex == $observed)][0].bestEffortTimestamp) as $source_pts |

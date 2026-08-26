@@ -64,7 +64,8 @@ diagnostic_window() {
 					pictureType:.value.pict_type
 				} else error("incomplete diagnostic frame") end
 			] as $window |
-			if ($window | length) != 5 then error("incomplete diagnostic frame window") else {
+			if ($window | length) != 5 then error("incomplete diagnostic frame window") else
+				(.streams[0].time_base) as $time_base | {
 				decodedFrameCount:($frames | length),
 				stream:{
 					startTime:(.streams[0].start_time // .format.start_time),
@@ -73,8 +74,8 @@ diagnostic_window() {
 					averageFrameRate:.streams[0].avg_frame_rate
 				},
 				frames:$window,
-				sourceWindow:($window | diagnostic_continuity)
-			} end
+				sourceWindow:($window | diagnostic_continuity($time_base))
+				} end
 		else error("incomplete diagnostic stream") end
 	' <<<"$probe_json"
 }

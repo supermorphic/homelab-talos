@@ -764,12 +764,17 @@ media="${!#}"
 target="$(sed -n -E 's/^.*frame-([0-9]+).*$/\1/p' <<<"$media")"
 [[ -n "$target" ]] || target=2
 count="$((target + 3))"
+time_offset=0
+if [[ "$media" == *'-qsv-'* ]]; then
+	time_offset="${BENCHMARK_DIAGNOSTIC_OUTPUT_TIME_OFFSET:-0}"
+	count="$((count + ${BENCHMARK_DIAGNOSTIC_OUTPUT_FRAME_COUNT_DELTA:-0}))"
+fi
 if [[ "${BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW:-0}" == '1' && "$media" == *'/diagnostic-'* ]]; then
 	count="$((target + 2))"
 fi
-jq -n --argjson count "$count" '{
+jq -n --argjson count "$count" --argjson time_offset "$time_offset" '{
 	streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],
-	frames:[range(0;$count) | {best_effort_timestamp_time:(. / 24 | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
+	frames:[range(0;$count) | {best_effort_timestamp_time:(($time_offset + (((. / 24 * 1000000) | floor) / 1000000)) | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
 }'
 EOF
 	cat >"$stub_bin/id" <<'EOF'
@@ -1812,6 +1817,69 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		"$FIXTURES/metrics/probe-source.json"
 	[ "$status" -eq 0 ]
 	[ "$(jq -r '.validation_hdr' <<<"$output")" = 'passed' ]
+}
+
+@test "diagnostic local alignment ignores whole-clip counts and absolute starts" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_OUTPUT_TIME_OFFSET=10
+	export BENCHMARK_DIAGNOSTIC_OUTPUT_FRAME_COUNT_DELTA=7
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$(tail -n 1 <<<"$output" | jq -r '.runId')"
+	run jq -e '
+		.vmaf.entries | length == 5 and
+		all(.[]; .status == "complete")
+	' "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
+	for evidence in "$BENCHMARK_OUT/runs/$run_id"/diagnostics/vmaf/*/*/evidence.json; do
+		run jq -e 'all(.settings[]; .timeline.zeroOffsetAligned == true)' "$evidence"
+		[ "$status" -eq 0 ]
+	done
+}
+
+@test "diagnostic local alignment requires matching clean local windows within the larger tick" {
+	source="$BATS_TEST_TMPDIR/source-window.json"
+	output_window="$BATS_TEST_TMPDIR/output-window.json"
+	jq -n '
+		def window($start; $count; $time_base; $frame_rate): {
+			decodedFrameCount:$count,
+			stream:{startTime:"0",duration:"90",timeBase:$time_base,averageFrameRate:$frame_rate},
+			frames:[range(0;5) | {frameIndex:(40 + .),bestEffortTimestamp:($start + (["0.000","0.041","0.083","0.124","0.166"][.])),packetDuration:"0.041",keyFrame:false,pictureType:"P"}],
+			sourceWindow:{status:"clean",issue:null}
+		};
+		window("0"; 45; "1/1000"; "24/1")
+	' >"$source"
+	jq -n '
+		def window($start; $count; $time_base; $frame_rate): {
+			decodedFrameCount:$count,
+			stream:{startTime:"90",duration:"90",timeBase:$time_base,averageFrameRate:$frame_rate},
+			frames:[range(0;5) | {frameIndex:(40 + .),bestEffortTimestamp:($start + (["0.000","0.0419","0.083","0.124","0.166"][.])),packetDuration:"0.0419",keyFrame:false,pictureType:"P"}],
+			sourceWindow:{status:"clean",issue:null}
+		};
+		window("10"; 500; "1/90000"; "24/1")
+	' >"$output_window"
+
+	run jq -n -L "$SCRIPTS" --slurpfile source "$source" --slurpfile output "$output_window" '
+		include "diagnostic-contract";
+		diagnostic_local_alignment($source[0]; $output[0])
+	'
+	[ "$status" -eq 0 ]
+	[ "$output" = 'true' ]
+
+	for mutation in \
+		'.frames[4].frameIndex = 46' \
+		'.sourceWindow = {status:"discontinuity",issue:{kind:"gap",afterFrameIndex:40}}' \
+		'.stream.averageFrameRate = "30000/1001"' \
+		'.frames[2].bestEffortTimestamp = "10.100"'; do
+		jq "$mutation" "$output_window" >"$output_window.mutated"
+		run jq -n -L "$SCRIPTS" --slurpfile source "$source" --slurpfile output "$output_window.mutated" '
+			include "diagnostic-contract";
+			diagnostic_local_alignment($source[0]; $output[0])
+		'
+		[ "$status" -eq 0 ]
+		[ "$output" = 'false' ]
+	done
 }
 
 @test "diagnostic VMAF classifier returns the documented verdicts" {
