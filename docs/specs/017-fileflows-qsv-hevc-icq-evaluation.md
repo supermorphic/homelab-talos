@@ -297,7 +297,21 @@ confirmation, a complete committed diagnostics object, digest agreement for the
 historical findings and diagnostic design, exact historical run references, matching
 committed and deployed panel hashes, and a passing diagnostic-capable ICQ node. A new or
 explicit run ID cannot reuse either historical input run ID. The one diagnostic Job is
-node-bound, has a four-hour deadline, and keeps media outputs in scratch.
+node-bound, has an eight-hour deadline, and keeps media outputs in scratch.
+
+The initial four-hour bound proved insufficient. Diagnostic run
+`20260825T134041Z-00bdae00` reached the exact 14,400-second Kubernetes deadline before
+controlled finalization and terminated with `DeadlineExceeded`. The ordinary sanitized
+results interface had no termination summary, and the bounded evidence reader rejected
+the incomplete retained file census as `diagnostic-evidence-files-unexpected`. This is a
+harness timeout, not an encoder, VMAF, timeline, or HDR metadata verdict. The immutable
+run cannot be resumed, repaired, or interpreted as partial diagnostic evidence.
+
+Future diagnostic Jobs use `activeDeadlineSeconds: 28800`. The eight-hour bound keeps
+execution finite without changing the panel, commands, settings, metrics, classifiers,
+output schemas, or artifact paths. It does not authorize automatic retries or further
+deadline increases. If a fresh run reaches this deadline, stop and first distinguish
+cumulative execution time from a stuck operation before changing the bound again.
 
 ## Diagnostic artifacts and sanitized results
 
@@ -317,12 +331,13 @@ never cross this interface.
 
 ## Read-only diagnostic evidence reader
 
-The later evidence reader is isolated from diagnostic execution. It accepts only the
-single explicitly approved retained diagnostics run and mounts only that run's
-`diagnostics` subtree from the media claim, read-only. The Job has no media-source,
-general output, scratch, samples, image-evidence, GPU, pod identity, or node identity
-input. It has no service-account token, uses the same non-root security boundary, and
-has finite execution and retention bounds.
+The later evidence reader is isolated from diagnostic execution. It accepts one
+explicitly supplied valid immutable run ID only after proving the exact terminal owned
+diagnostics Job, then mounts only that run's `diagnostics` subtree from the media claim,
+read-only. The reader Job has no media-source, general output, scratch, samples,
+image-evidence, GPU, pod identity, or node identity input. It has no service-account
+token, uses the same non-root security boundary, and has finite execution and retention
+bounds.
 
 The in-cluster collector rejects unexpected files, unsafe paths, malformed evidence,
 panel or manifest mismatch, and inconsistent summaries. It independently validates

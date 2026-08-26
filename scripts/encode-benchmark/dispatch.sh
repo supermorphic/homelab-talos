@@ -1091,7 +1091,7 @@ dispatch_run() {
 	elif [[ "$mode" == 'diagnostics' ]]; then
 		render_job "$job" "$mode" "$run_id" "$dispatch_id" '' "$name" /scripts/benchmark.sh diagnostics "$run_id"
 		NODE_NAME="$diagnostic_node" yq -i '
-			.spec.activeDeadlineSeconds = 14400 |
+			.spec.activeDeadlineSeconds = 28800 |
 			.spec.template.spec.nodeSelector."kubernetes.io/hostname" = strenv(NODE_NAME)
 		' "$job"
 	elif [[ "$mode" == 'x265' ]]; then

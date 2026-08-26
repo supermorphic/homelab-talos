@@ -259,8 +259,8 @@ jq -e '
 diagnostics_confirmation='run:encode-benchmark:diagnostics'
 assert_eq "$(rg -F -o "$diagnostics_confirmation" "$dispatch_helper" | wc -l | tr -d ' ')" '1' \
 	'diagnostics dispatch confirmation literal count'
-assert_eq "$(rg -F -o '.spec.activeDeadlineSeconds = 14400' "$dispatch_helper" | wc -l | tr -d ' ')" '1' \
-	'diagnostics four-hour deadline override count'
+assert_eq "$(rg -F -o '.spec.activeDeadlineSeconds = 28800' "$dispatch_helper" | wc -l | tr -d ' ')" '1' \
+	'diagnostics eight-hour deadline override count'
 
 diagnostics_test_run='20260819T120000Z-feedbeef'
 diagnostics_test_artifact="/out/runs/$diagnostics_test_run/diagnostics"
