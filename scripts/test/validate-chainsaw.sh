@@ -143,6 +143,7 @@ run_shell_case monitoring-loki-validator \
   scripts/test/monitoring-loki-validator-test.sh
 run_shell_case monitoring-alloy-events-validator \
   scripts/test/monitoring-alloy-events-validator-test.sh
+run_shell_case grafana-admin-reset scripts/test/grafana-admin-reset-test.sh
 run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
 run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
 run_shell_case ntfy-publish scripts/test/ntfy-publish-test.sh
