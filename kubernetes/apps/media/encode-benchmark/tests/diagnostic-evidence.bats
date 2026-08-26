@@ -498,16 +498,40 @@ EOF
 	[ "$status" -eq 0 ]
 }
 
-@test "collector projects a producer-shaped VMAF source failure as null continuity" {
+@test "collector projects legacy and corrected VMAF source preparation reasons as null continuity" {
+	for reason in source-clip-unavailable source-clip-create-failed source-clip-identity-unavailable source-frame-window-unavailable; do
+		create_valid_evidence_tree
+		path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
+		jq --arg reason "$reason" '
+			.status = "harness-blocked" |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]} |
+			.sourceClip.identity = null | .sourceClip.frameWindow = null |
+			.settings |= map(
+				.status = "harness-blocked" | .reason = $reason |
+				.sourceIdentity = null | .sourceFrameWindow = null |
+				.outputIdentity = null | .outputFrameWindow = null |
+				.vmaf.current = [] | .vmaf.reset = [] |
+				.offsets |= map(.ssim.value = null | .psnr.value = null) |
+				.timeline = {zeroOffsetAligned:false,discontinuity:null})
+		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+		set_vmaf_summary_partial harness-blocked
+
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 0 ]
+		run jq -e --arg reason "$reason" '.vmaf[0].status == "harness-blocked" and .vmaf[0].sourceContinuity == null and all(.vmaf[0].settings[]; .reason == $reason)' <<<"$output"
+		[ "$status" -eq 0 ]
+	done
+}
+
+@test "collector projects prepared VMAF sources aborted by another preparation failure" {
 	create_valid_evidence_tree
 	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
 	jq '
 		.status = "harness-blocked" |
 		.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]} |
-		.sourceClip.identity = null | .sourceClip.frameWindow = null |
 		.settings |= map(
-			.status = "harness-blocked" | .reason = "source-clip-unavailable" |
-			.sourceIdentity = null | .sourceFrameWindow = null |
+			.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" |
 			.outputIdentity = null | .outputFrameWindow = null |
 			.vmaf.current = [] | .vmaf.reset = [] |
 			.offsets |= map(.ssim.value = null | .psnr.value = null) |
@@ -518,7 +542,7 @@ EOF
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
 	[ "$status" -eq 0 ]
-	run jq -e '.vmaf[0].status == "harness-blocked" and .vmaf[0].sourceContinuity == null' <<<"$output"
+	run jq -e '.vmaf[0].sourceContinuity != null and all(.vmaf[0].settings[]; .reason == "source-panel-preparation-aborted")' <<<"$output"
 	[ "$status" -eq 0 ]
 }
 

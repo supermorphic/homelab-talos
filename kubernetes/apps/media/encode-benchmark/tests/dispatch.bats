@@ -1689,7 +1689,7 @@ producer_fixed_failed_collector_lines() {
 }
 
 @test "diagnostic evidence reader accepts the reachable acquisition projection matrix" {
-	local case_name run_id collector_json
+	local case_name reason run_id collector_json
 	run_id='20260820T223425Z-082b3d38'
 	collector_json="$BATS_TEST_TMPDIR/collector.json"
 	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
@@ -1698,11 +1698,22 @@ producer_fixed_failed_collector_lines() {
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
 	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
-	for case_name in vmaf-source-null vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
+	for case_name in vmaf-source-null vmaf-source-create vmaf-source-identity vmaf-source-window vmaf-preparation-aborted vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-preparation-aborted hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
 		write_canonical_collector_json "$collector_json" "$run_id"
 		case "$case_name" in
 		vmaf-source-null)
 			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = "source-clip-unavailable" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-source-create | vmaf-source-identity | vmaf-source-window)
+			case "$case_name" in
+			vmaf-source-create) reason='source-clip-create-failed' ;;
+			vmaf-source-identity) reason='source-clip-identity-unavailable' ;;
+			*) reason='source-frame-window-unavailable' ;;
+			esac
+			jq -S -c --arg reason "$reason" '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = $reason | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-preparation-aborted)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
 		vmaf-current)
 			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-current-vmaf" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
@@ -1727,6 +1738,9 @@ producer_fixed_failed_collector_lines() {
 			;;
 		hdr-failed)
 			jq -S -c '.hdr[0] |= (.status = "failed" | .reason = "decode-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-preparation-aborted)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
 		hdr-normalization)
 			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "HDR-oracle-normalization-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
@@ -3677,6 +3691,10 @@ unresolved|["post-run-identity-drift"]|post-run-identity-drift|vmaf_encoder_outp
 unresolved|["runmeta-create-failed"]|runmeta-create-failed|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 unresolved|["running-image-evidence-rejected"]|running-image-evidence-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 unresolved|["runtime-pre-encode-gate-rejected"]|runtime-pre-encode-gate-rejected|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["source-clip-create-failed"]|source-clip-create-failed|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["source-clip-identity-unavailable"]|source-clip-identity-unavailable|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["source-frame-window-unavailable"]|source-frame-window-unavailable|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
+unresolved|["source-panel-preparation-aborted"]|source-panel-preparation-aborted|vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0
 EOF
 	contract_vmaf_reasons="$(bash -c '
 		source "$1"
@@ -3723,6 +3741,10 @@ unresolved-oracle|["post-run-identity-drift"]|post-run-identity-drift|hdr_clip_b
 unresolved-oracle|["runmeta-create-failed"]|runmeta-create-failed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["running-image-evidence-rejected"]|running-image-evidence-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["runtime-pre-encode-gate-rejected"]|runtime-pre-encode-gate-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-clip-create-failed"]|source-clip-create-failed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-clip-identity-unavailable"]|source-clip-identity-unavailable|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-frame-window-unavailable"]|source-frame-window-unavailable|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
+unresolved-oracle|["source-panel-preparation-aborted"]|source-panel-preparation-aborted|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 EOF
 	contract_hdr_reasons="$(bash -c '
 		source "$1"

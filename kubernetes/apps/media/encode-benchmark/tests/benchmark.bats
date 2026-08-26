@@ -721,6 +721,11 @@ if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
 	fi
 fi
 
+if [[ "$arguments" == *'-c copy'* && "$last" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' &&
+	"${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'clip-create' ]]; then
+	exit 87
+fi
+
 if [[ "$arguments" == *'-f null -'* && "$arguments" != *'libvmaf='* &&
 	"$arguments" != *']ssim='* && "$arguments" != *']psnr='* &&
 	"$arguments" == *'/diagnostic-'* && "${BENCHMARK_DIAGNOSTIC_FAIL_DECODE:-0}" == '1' ]]; then
@@ -761,6 +766,11 @@ if [[ "$arguments" == *'frame=side_data_list'* ]]; then
 	exit 0
 fi
 media="${!#}"
+if [[ "${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'frame-window' &&
+	"$media" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' ]]; then
+	jq -n '{streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],frames:[]}'
+	exit 0
+fi
 target="$(sed -n -E 's/^.*frame-([0-9]+).*$/\1/p' <<<"$media")"
 [[ -n "$target" ]] || target=2
 count="$((target + 3))"
@@ -787,6 +797,10 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+if [[ "${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'clip-identity' &&
+	"${!#}" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' ]]; then
+	exit 87
+fi
 exec "$REAL_SHA256SUM" "$@"
 EOF
 	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
@@ -2186,6 +2200,14 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	run awk '/diagnostic-vmaf-.*-source[.]mkv$/ && /-c copy/ {count += 1} END {print count + 0}' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	[ "$output" -eq 5 ]
+	run awk '
+		/-c:v hevc_qsv/ && first_encode == 0 { first_encode = NR }
+		/diagnostic-(vmaf|hdr)-.*-source[.]mkv$/ && /-c copy/ { copies += 1; last_preparation = NR }
+		/^sha256sum .*\/diagnostic-(vmaf|hdr)-.*-source[.]mkv$/ { identities += 1; last_preparation = NR }
+		/^ffprobe .*\/diagnostic-vmaf-.*-source[.]mkv$/ { windows += 1; last_preparation = NR }
+		END { exit !(first_encode > last_preparation && copies == 8 && identities == 8 && windows == 5) }
+	' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
 
 	run jq -e -s --argjson manifest "$manifest_commands" '
 		def bound($command): $command as $needle | any($manifest[]; . == $needle);
@@ -2613,8 +2635,60 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
-# Catches incomplete or missing normalized oracle data being dropped with
-# scratch media or silently promoted to a cause classification.
+# Catches a source-preparation failure allowing another panel entry to consume
+# QSV, or hiding which bounded preparation stage failed.
+@test "diagnostics preparation failures block all encodes and retain exact reasons" {
+	for case_data in \
+		'clip-create|source-clip-create-failed' \
+		'clip-identity|source-clip-identity-unavailable' \
+		'frame-window|source-frame-window-unavailable'; do
+		IFS='|' read -r failure expected_reason <<<"$case_data"
+		prepare_diagnostic_execution_run
+		export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE="$failure"
+
+		run "$SCRIPTS/benchmark.sh" diagnostics
+		[ "$status" -eq 2 ]
+		terminal="$(tail -n 1 <<<"$output")"
+		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
+		run_id="$(jq -r '.runId' <<<"$terminal")"
+		diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+		[ -f "$diagnostic_root/manifest.json" ]
+		[ -f "$diagnostic_root/diagnostic-summary.json" ]
+		[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
+		[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
+		run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+		[ "$status" -eq 0 ]
+		run jq -e '
+			.status == "harness-blocked" and
+			all(.vmaf.entries[]; .status == "harness-blocked" and .classification == "unresolved") and
+			all(.hdr.entries[]; .status == "harness-blocked" and .classification == "unresolved-oracle")
+		' "$diagnostic_root/diagnostic-summary.json"
+		[ "$status" -eq 0 ]
+		run jq -e -s --arg reason "$expected_reason" '
+			length == 5 and
+			all(.[];
+				if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+					.status == "harness-blocked" and all(.settings[]; .reason == $reason)
+				else .status == "harness-blocked" and all(.settings[]; .reason == "source-panel-preparation-aborted")
+				end)
+		' "$diagnostic_root"/vmaf/*/*/evidence.json
+		[ "$status" -eq 0 ]
+		run jq -e -s '
+			length == 3 and all(.[];
+				.status == "harness-blocked" and .reason == "source-panel-preparation-aborted" and
+				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})
+		' "$diagnostic_root"/hdr/*/evidence.json
+		[ "$status" -eq 0 ]
+		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+
+		unset BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	done
+}
+
+# Catches incomplete metric evidence and post-encode identity drift being
+# dropped with scratch media or promoted to a cause classification.
 @test "diagnostics retains harness-blocked evidence for incomplete windows missing metrics and source or image drift" {
 	for failure in incomplete-window libvmaf ssim psnr source-drift image-drift; do
 		prepare_diagnostic_execution_run

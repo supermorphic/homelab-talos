@@ -174,7 +174,7 @@ validate_vmaf() {
 		def offset: exact(["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"]) and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and .sourceFrameIndex == $index and .encodedFrameIndex == ($index + .offset) and (.ssim | recorded_metric(. == null or type == "number")) and (.psnr | recorded_metric(psnr_value));
 		def offsets: type == "array" and length <= 5 and all(.[]; offset);
 		def complete_offsets: offsets and length == 5 and ([.[].offset] | sort) == [-2,-1,0,1,2];
-		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "timeline-evidence-invalid";
+		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "timeline-evidence-invalid";
 		def empty_metrics: (.vmaf.current | length == 0) and (.vmaf.reset | length == 0);
 		def current_metrics_only: (.vmaf.current | length == 5) and (.vmaf.reset | length == 0);
 		def complete_metrics: (.vmaf.current | length == 5) and (.vmaf.reset | length == 5);
@@ -211,8 +211,10 @@ validate_vmaf() {
 				.reason == null and source_ready and output_ready and complete_metrics and offset_metric_count == 10
 			elif .status == "failed" then
 				(.reason == "encode-failed" or .reason == "decode-failed") and source_ready and output_absent and no_metric_evidence
-			elif .reason == "source-clip-unavailable" then
+			elif .reason == "source-clip-unavailable" or .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-frame-window-unavailable" then
 				(source_ready | not) and output_absent and no_metric_evidence
+			elif .reason == "source-panel-preparation-aborted" then
+				source_ready and output_absent and no_metric_evidence
 			elif .reason == "output-identity-unavailable" then
 				source_ready and output_absent and no_metric_evidence
 			elif .reason == "incomplete-output-frame-window" then
@@ -309,7 +311,8 @@ validate_hdr() {
 				(.status == "harness-blocked" and .reason == "trace-headers-oracle-failed" and (.trace.oracle | malformed_oracle) and ((.decoded.oracle | successful_pair_oracle) or (.decoded.oracle | malformed_oracle)))
 			);
 		def unavailable_pair:
-			raw_pair_fields and .status == "harness-blocked" and .reason == "source-clip-unavailable" and
+			raw_pair_fields and .status == "harness-blocked" and
+			(.reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-clip-unavailable" or .reason == "source-frame-window-unavailable" or .reason == "source-panel-preparation-aborted") and
 			.decoded == {command:[],oracle:{status:"malformed"}} and .trace == {command:[],oracle:{status:"malformed"}};
 		def failed_pair:
 			raw_pair_fields and .status == "failed" and .reason == "encoded-output-unavailable" and
@@ -376,7 +379,7 @@ validate_hdr() {
 				.normalizedOracle.clip.authoritative.reasons[]?,
 				.normalizedOracle.encoded.authoritative.reasons[]?
 			] | any(. == "decoded-trace-disagreement" or . == "source-window-conflict");
-		def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
+		def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
 		def identities_ready: (.source.identity | identity) and (.clip.identity | identity) and (.encoded.identity | identity);
 		def encoded_dynamic: (del(.encoded.identity).encoded | dynamic_pair);
 		def encoded_unavailable: (del(.encoded.identity).encoded | unavailable_pair);
@@ -398,7 +401,7 @@ validate_hdr() {
 				.reason == null and normalization_ready and (.normalizedOracle | normalized) and (normalized_conflict | not)
 			elif .status == "failed" then
 				(.reason == "encode-failed" or .reason == "decode-failed") and encoded_failed and .normalizedOracle == null
-			elif .reason == "source-clip-unavailable" then
+			elif .reason == "source-clip-unavailable" or .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-frame-window-unavailable" or .reason == "source-panel-preparation-aborted" then
 				encoded_unavailable and .normalizedOracle == null
 			elif .reason == "source-identity-unavailable" then
 				.source.identity == null and (.clip.identity | identity) and encoded_dynamic and

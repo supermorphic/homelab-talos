@@ -286,7 +286,7 @@ jq -e -c -L "$app_directory/scripts" --arg run "$RUN_ID" --argjson panel "$expec
 	def psnr: . == null or type == "number" or (exact(["kind"]) and .kind == "positive-infinity") or (exact(["kind","value"]) and .kind == "finite" and (.value | type == "number"));
 	def vmaf_frame: exact(["frameIndex","vmaf"]) and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
 	def partial_vmaf_frames($observed): type == "array" and all(.[]; vmaf_frame) and (length == 0 or (length == 5 and ([.[].frameIndex] | sort) == [range($observed - 2; $observed + 3)]));
-	def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "timeline-evidence-invalid";
+	def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "timeline-evidence-invalid";
 	def empty_metrics: (.vmaf.current | length == 0) and (.vmaf.reset | length == 0);
 	def current_metrics_only: (.vmaf.current | length == 5) and (.vmaf.reset | length == 0);
 	def complete_metrics: (.vmaf.current | length == 5) and (.vmaf.reset | length == 5);
@@ -314,8 +314,10 @@ jq -e -c -L "$app_directory/scripts" --arg run "$RUN_ID" --argjson panel "$expec
 			.reason == null and $source != null and complete_metrics and offset_metric_count == 10
 		elif .status == "failed" then
 			(.reason == "encode-failed" or .reason == "decode-failed") and $source != null and empty_metrics and offset_metric_count == 0 and baseline_timeline
-		elif .reason == "source-clip-unavailable" then
+		elif .reason == "source-clip-unavailable" or .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-frame-window-unavailable" then
 			empty_metrics and offset_metric_count == 0 and baseline_timeline
+		elif .reason == "source-panel-preparation-aborted" then
+			$source != null and empty_metrics and offset_metric_count == 0 and baseline_timeline
 		elif .reason == "output-identity-unavailable" or .reason == "incomplete-output-frame-window" or .reason == "missing-current-vmaf" then
 			$source != null and empty_metrics and offset_metric_count == 0 and baseline_timeline
 		elif .reason == "missing-reset-vmaf" then
@@ -335,7 +337,7 @@ jq -e -c -L "$app_directory/scripts" --arg run "$RUN_ID" --argjson panel "$expec
 	def continuity: exact(["issue","status"]) and (.status == "clean" and .issue == null or .status == "discontinuity" and (.issue | exact(["afterFrameIndex","kind"]) and (.afterFrameIndex | type == "number" and floor == .) and (.kind == "gap" or .kind == "inconsistent-duration" or .kind == "non-monotonic-timestamp" or .kind == "repeat")));
 	def source_object($observed): . as $source | exact(["decodedFrameCount","frames","sourceWindow","stream"]) and (.decodedFrameCount | type == "number" and floor == . and . >= 0) and (.stream | exact(["averageFrameRate","duration","startTime","timeBase"]) and (.startTime | numeric_string) and (.duration | numeric_string) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length == 5 and all(.[]; exact(["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string) and (.keyFrame | type == "boolean") and (.pictureType == "I" or .pictureType == "P" or .pictureType == "B")) and ([.[].frameIndex] | sort) == [range($observed - 2; $observed + 3)]) and (.sourceWindow | continuity) and .sourceWindow == ($source.frames | diagnostic_continuity($source.stream.timeBase));
 	def source($observed): . == null or source_object($observed);
-	def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-unavailable" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
+	def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
 	def classifier_setting($observed; $source):
 		. as $setting |
 		{
