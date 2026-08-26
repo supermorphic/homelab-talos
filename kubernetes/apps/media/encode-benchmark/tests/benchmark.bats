@@ -1867,6 +1867,15 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 	[ "$output" = 'true' ]
 
+	jq '.frames |= map(.frameIndex = [40,41,43,44,45][.frameIndex - 40])' "$source" >"$source.nonconsecutive"
+	jq '.frames |= map(.frameIndex = [40,41,43,44,45][.frameIndex - 40])' "$output_window" >"$output_window.nonconsecutive"
+	run jq -n -L "$SCRIPTS" --slurpfile source "$source.nonconsecutive" --slurpfile output "$output_window.nonconsecutive" '
+		include "diagnostic-contract";
+		diagnostic_local_alignment($source[0]; $output[0])
+	'
+	[ "$status" -eq 0 ]
+	[ "$output" = 'false' ]
+
 	for mutation in \
 		'.frames[4].frameIndex = 46' \
 		'.sourceWindow = {status:"discontinuity",issue:{kind:"gap",afterFrameIndex:40}}' \

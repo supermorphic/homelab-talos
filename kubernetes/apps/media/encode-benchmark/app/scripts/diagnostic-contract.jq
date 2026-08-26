@@ -48,6 +48,7 @@ def diagnostic_local_alignment($source; $output):
 		($source.frames | length) == 5 and
 		($output.frames | length) == 5 and
 		($source.frames | map(.frameIndex)) == ($output.frames | map(.frameIndex)) and
+		($source.frames | map(.frameIndex)) == [range($source.frames[0].frameIndex; $source.frames[0].frameIndex + 5)] and
 		$source.sourceWindow.status == "clean" and
 		$output.sourceWindow.status == "clean" and
 		$source.stream.averageFrameRate == $output.stream.averageFrameRate
