@@ -34,6 +34,138 @@ done
 "${kc[@]}" --namespace "$ns" rollout status daemonset/alloy-logs --timeout=5m >/dev/null
 "${kc[@]}" --namespace "$ns" rollout status deployment/alloy-events --timeout=5m >/dev/null
 
+# Rollout status alone does not prove the required topology. Verify exact controller
+# counters and exact Ready Pod placement without emitting Pod or node identities.
+nodes_json="$("${kc[@]}" get nodes --output json)"
+mapfile -t production_nodes < <(
+  yq -r '
+    .items[]? |
+    select((.spec.unschedulable // false) == false) |
+    select([
+      .status.conditions[]? |
+      select(.type == "Ready" and .status == "True")
+    ] | length == 1) |
+    .metadata.name
+  ' <<<"$nodes_json" | LC_ALL=C sort
+)
+[[ "${#production_nodes[@]}" -eq 3 ]] || {
+  echo 'Production topology does not contain exactly three Ready schedulable nodes.' >&2
+  exit 1
+}
+
+alloy_logs_daemonset_json="$("${kc[@]}" --namespace "$ns" \
+  get daemonset alloy-logs --output json)"
+yq -e '
+  .metadata.generation == .status.observedGeneration and
+  .status.desiredNumberScheduled == 3 and
+  .status.currentNumberScheduled == 3 and
+  .status.updatedNumberScheduled == 3 and
+  .status.numberReady == 3 and
+  .status.numberAvailable == 3 and
+  (.status.numberMisscheduled // 0) == 0 and
+  (.status.numberUnavailable // 0) == 0
+' >/dev/null 2>&1 <<<"$alloy_logs_daemonset_json" || {
+  echo 'Alloy Logs topology does not have exactly three fully available scheduled instances.' >&2
+  exit 1
+}
+alloy_logs_pods_json="$("${kc[@]}" --namespace "$ns" get pods \
+  --selector app.kubernetes.io/instance=alloy-logs,app.kubernetes.io/name=alloy \
+  --output json)"
+yq -e '
+  ((.items | type) == "!!seq" and (.items | length) == 3) and
+  ([
+    .items[] |
+    select((.metadata.deletionTimestamp // "") == "") |
+    select(.status.phase == "Running") |
+    select((.spec.nodeName // "") != "") |
+    select([
+      .status.conditions[]? |
+      select(.type == "Ready" and .status == "True")
+    ] | length == 1)
+  ] | length == 3) and
+  ([.items[].spec.nodeName] | unique | length) == 3
+' >/dev/null 2>&1 <<<"$alloy_logs_pods_json" || {
+  echo 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' >&2
+  exit 1
+}
+alloy_logs_nodes="$(yq -r '.items[].spec.nodeName' <<<"$alloy_logs_pods_json" | LC_ALL=C sort)"
+production_node_set="$(printf '%s\n' "${production_nodes[@]}" | LC_ALL=C sort)"
+[[ "$alloy_logs_nodes" == "$production_node_set" ]] || {
+  echo 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' >&2
+  exit 1
+}
+
+alloy_events_deployment_json="$("${kc[@]}" --namespace "$ns" \
+  get deployment alloy-events --output json)"
+yq -e '
+  .metadata.generation == .status.observedGeneration and
+  .spec.replicas == 1 and
+  .status.replicas == 1 and
+  .status.updatedReplicas == 1 and
+  .status.readyReplicas == 1 and
+  .status.availableReplicas == 1 and
+  (.status.unavailableReplicas // 0) == 0
+' >/dev/null 2>&1 <<<"$alloy_events_deployment_json" || {
+  echo 'Alloy Events topology does not have exactly one fully available instance.' >&2
+  exit 1
+}
+alloy_events_pods_json="$("${kc[@]}" --namespace "$ns" get pods \
+  --selector app.kubernetes.io/instance=alloy-events,app.kubernetes.io/name=alloy \
+  --output json)"
+yq -e '
+  ((.items | type) == "!!seq" and (.items | length) == 1) and
+  ([
+    .items[] |
+    select((.metadata.deletionTimestamp // "") == "") |
+    select(.status.phase == "Running") |
+    select((.spec.nodeName // "") != "") |
+    select([
+      .status.conditions[]? |
+      select(.type == "Ready" and .status == "True")
+    ] | length == 1)
+  ] | length == 1)
+' >/dev/null 2>&1 <<<"$alloy_events_pods_json" || {
+  echo 'Alloy Events does not have exactly one Ready pod.' >&2
+  exit 1
+}
+
+loki_statefulset_json="$("${kc[@]}" --namespace "$ns" \
+  get statefulset loki --output json)"
+yq -e '
+  .metadata.generation == .status.observedGeneration and
+  .spec.replicas == 1 and
+  .status.replicas == 1 and
+  .status.currentReplicas == 1 and
+  .status.updatedReplicas == 1 and
+  .status.readyReplicas == 1 and
+  .status.availableReplicas == 1 and
+  ((.status.currentRevision | type) == "!!str" and
+    (.status.currentRevision | length) > 0) and
+  .status.currentRevision == .status.updateRevision
+' >/dev/null 2>&1 <<<"$loki_statefulset_json" || {
+  echo 'Loki topology does not have exactly one fully available instance.' >&2
+  exit 1
+}
+loki_pods_json="$("${kc[@]}" --namespace "$ns" get pods \
+  --selector app.kubernetes.io/instance=loki,app.kubernetes.io/name=loki \
+  --output json)"
+yq -e '
+  ((.items | type) == "!!seq" and (.items | length) == 1) and
+  ([
+    .items[] |
+    select((.metadata.deletionTimestamp // "") == "") |
+    select(.status.phase == "Running") |
+    select((.spec.nodeName // "") != "") |
+    select([
+      .status.conditions[]? |
+      select(.type == "Ready" and .status == "True")
+    ] | length == 1)
+  ] | length == 1)
+' >/dev/null 2>&1 <<<"$loki_pods_json" || {
+  echo 'Loki does not have exactly one Ready pod.' >&2
+  exit 1
+}
+
 pvc_json="$("${kc[@]}" --namespace "$ns" get pvc --output json)"
 mapfile -t loki_pvcs < <(
   yq -r '
@@ -52,7 +184,7 @@ pvc_phase="$(PVC_NAME="$loki_pvc" yq -r '
   .items[] | select(.metadata.name == strenv(PVC_NAME)) | .status.phase // ""
 ' <<<"$pvc_json")"
 [[ "$pvc_phase" == 'Bound' ]] || {
-  echo "Loki PVC $loki_pvc is not Bound." >&2
+  echo 'The selected Loki claim is not Bound.' >&2
   exit 1
 }
 pvc_request="$(PVC_NAME="$loki_pvc" yq -r '
@@ -60,14 +192,14 @@ pvc_request="$(PVC_NAME="$loki_pvc" yq -r '
   .spec.resources.requests.storage // ""
 ' <<<"$pvc_json")"
 [[ "$pvc_request" == '50Gi' ]] || {
-  echo "Loki PVC $loki_pvc does not request 50 GiB." >&2
+  echo 'The selected Loki claim does not request 50 GiB.' >&2
   exit 1
 }
 pv_name="$(PVC_NAME="$loki_pvc" yq -r '
   .items[] | select(.metadata.name == strenv(PVC_NAME)) | .spec.volumeName // ""
 ' <<<"$pvc_json")"
 [[ -n "$pv_name" ]] || {
-  echo "Bound Loki PVC $loki_pvc has no PersistentVolume name." >&2
+  echo 'The bound Loki claim has no PersistentVolume identity.' >&2
   exit 1
 }
 longhorn_volumes_json="$("${kc[@]}" --namespace "$longhorn_ns" \
@@ -82,7 +214,7 @@ mapfile -t matching_longhorn_volumes < <(
   ' <<<"$longhorn_volumes_json"
 )
 [[ "${#matching_longhorn_volumes[@]}" -eq 1 ]] || {
-  echo "Expected exactly one actual Longhorn Volume matching PersistentVolume $pv_name and PVC $ns/$loki_pvc with complete status.kubernetesStatus identity; found ${#matching_longhorn_volumes[@]}." >&2
+  echo "Expected exactly one actual Longhorn Volume with complete bound-claim identity; found ${#matching_longhorn_volumes[@]}." >&2
   exit 1
 }
 longhorn_volume="${matching_longhorn_volumes[0]}"
@@ -110,7 +242,7 @@ if [[ "$volume_labels_synchronized" != 'true' ]] && ! \
   TRIM_LABEL="$trim_label" yq -e '
     (.metadata.labels // {})[strenv(TRIM_LABEL)] == "enabled"
   ' >/dev/null 2>&1 <<<"$volume_json"; then
-  echo "Longhorn Volume $longhorn_volume does not have the required filesystem-trim assignment after synchronization retries." >&2
+  echo 'Actual Longhorn Volume does not have the required filesystem-trim assignment after synchronization retries.' >&2
   exit 1
 fi
 
@@ -121,7 +253,7 @@ for forbidden_label in \
   if LABEL_KEY="$forbidden_label" yq -e '
     (.metadata.labels // {}) | has(strenv(LABEL_KEY))
   ' >/dev/null 2>&1 <<<"$volume_json"; then
-    echo "Longhorn Volume $longhorn_volume has forbidden recurring-job assignment $forbidden_label." >&2
+    echo "Actual Longhorn Volume has forbidden recurring-job assignment $forbidden_label." >&2
     exit 1
   fi
 done
@@ -136,7 +268,7 @@ actual_recurring_labels="$(yq -r '
   join(",")
 ' <<<"$volume_json")"
 [[ "$actual_recurring_labels" == "$trim_label=enabled" ]] || {
-  echo "Longhorn Volume $longhorn_volume has an unexpected recurring-job assignment after synchronization retries." >&2
+  echo 'Actual Longhorn Volume has an unexpected recurring-job assignment after synchronization retries.' >&2
   exit 1
 }
 
@@ -219,50 +351,72 @@ done
   exit 1
 }
 
-end_seconds="$(date -u +%s)"
-start_seconds="$((end_seconds - 1800))"
-labels_response="$(curl --silent --show-error --fail --max-time 20 \
-  --get \
-  --data-urlencode "start=${start_seconds}000000000" \
-  --data-urlencode "end=${end_seconds}000000000" \
-  "$loki_base_url/loki/api/v1/labels")"
-yq -e '.status == "success" and (.data | type == "!!seq")' \
-  >/dev/null 2>&1 <<<"$labels_response" || {
-  echo 'Loki label-name API did not return a successful label-name list.' >&2
+# Loki 3.6.11 publishes the resolved per-tenant limits at this endpoint. The
+# prometheus/common duration serializer reports 336h canonically as 2w. Checking this
+# surface, rather than only the rendered ConfigMap, includes any runtime override.
+runtime_limits_response=''
+if ! runtime_limits_response="$(curl --silent --show-error --fail --max-time 20 \
+  --header 'X-Scope-OrgID: fake' \
+  "$loki_base_url/config/tenant/v1/limits")"; then
+  echo 'Loki effective runtime limits endpoint was unavailable.' >&2
+  exit 1
+fi
+yq -e '
+  (. | type == "!!map") and
+  .retention_period == "2w" and
+  (((.retention_stream // []) | type) == "!!seq" and
+    ((.retention_stream // []) | length) == 0)
+' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+  echo 'Loki effective runtime retention is not exactly 336h with no stream override.' >&2
   exit 1
 }
-mapfile -t indexed_labels < <(yq -r '.data[]' <<<"$labels_response" | LC_ALL=C sort -u)
-declare -A allowed_labels=(
-  [app]=1
-  [cluster]=1
-  [container]=1
-  [event_type]=1
-  [namespace]=1
-  [node]=1
-  [service]=1
-  [source]=1
-  [stream]=1
-)
-forbidden_labels=(
-  pod pod_name pod_uid
-  container_id image_digest path filename
-  ip pod_ip client_ip source_ip host_ip
-  name uid event_name event_uid reason reporting_instance
-  request request_id user user_id session session_id
-  torrent torrent_id trace trace_id
-)
-for label in "${indexed_labels[@]}"; do
-  for forbidden_label in "${forbidden_labels[@]}"; do
-    [[ "$label" != "$forbidden_label" ]] || {
-      echo "Loki returned forbidden indexed label $label." >&2
-      exit 1
-    }
-  done
-  [[ -n "${allowed_labels[$label]:-}" ]] || {
-    echo "Loki returned indexed label $label outside the bounded allowlist." >&2
-    exit 1
+
+end_seconds="$(date -u +%s)"
+start_seconds="$((end_seconds - 1800))"
+
+verify_exact_label_names() {
+  local selector="$1"
+  local description="$2"
+  local expected_csv="$3"
+  local response actual_csv
+
+  if ! response="$(curl --silent --show-error --fail --max-time 20 \
+    --get \
+    --data-urlencode "start=${start_seconds}000000000" \
+    --data-urlencode "end=${end_seconds}000000000" \
+    --data-urlencode "query=$selector" \
+    "$loki_base_url/loki/api/v1/labels")"; then
+    echo "$description label-name API request failed." >&2
+    return 1
+  fi
+  yq -e '
+    .status == "success" and
+    ((.data | type) == "!!seq" and (.data | length) > 0) and
+    ([.data[] | select(type != "!!str" or length == 0)] | length == 0) and
+    (.data | length) == (.data | unique | length)
+  ' >/dev/null 2>&1 <<<"$response" || {
+    echo "$description label-name API response is malformed." >&2
+    return 1
   }
-done
+  actual_csv="$(yq -r '.data | sort | join(",")' <<<"$response")"
+  [[ "$actual_csv" == "$expected_csv" ]] || {
+    echo "$description indexed-label names do not exactly match the approved set." >&2
+    return 1
+  }
+}
+
+verify_exact_label_names \
+  '{source="kubernetes"}' \
+  'Kubernetes container' \
+  'app,cluster,container,namespace,node,source,stream'
+verify_exact_label_names \
+  '{source="talos"}' \
+  'Talos' \
+  'cluster,node,service,source'
+verify_exact_label_names \
+  '{source="kubernetes_event"}' \
+  'Kubernetes Event' \
+  'cluster,event_type,namespace,source'
 
 loki_count_nonzero() {
   local selector="$1"
@@ -281,13 +435,13 @@ loki_count_nonzero() {
 
 count_selectors=(
   '{source="kubernetes"}'
-  '{source="talos"}'
+  '{source="talos",service!="kernel"}'
   '{source="talos",service="kernel"}'
   '{source="kubernetes_event"}'
 )
 count_descriptions=(
   'Kubernetes containers'
-  'Talos services'
+  'Talos non-kernel services'
   'Talos kernel'
   'Kubernetes Events'
 )
@@ -358,6 +512,26 @@ for service_name in loki alloy-logs alloy-events; do
   done
 done
 
+compaction_query='time() - loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}'
+compaction_response=''
+if ! compaction_response="$(flux_alerts_prometheus_query \
+  "$prometheus_base_url" "$prometheus_resolve" "$compaction_query")"; then
+  echo 'Prometheus compaction-freshness query failed.' >&2
+  exit 1
+fi
+yq -e '
+  .status == "success" and
+  .data.resultType == "vector" and
+  (.data.result | length == 1) and
+  ((.data.result[0].value | type) == "!!seq" and
+    (.data.result[0].value | length) == 2) and
+  ((.data.result[0].value[1] | tonumber) >= 0) and
+  ((.data.result[0].value[1] | tonumber) <= 10800)
+' >/dev/null 2>&1 <<<"$compaction_response" || {
+  echo 'Loki does not report exactly one fresh successful compaction timestamp.' >&2
+  exit 1
+}
+
 expected_rules=(
   LokiMetricsMissing
   AlloyInstanceCountLow
@@ -404,4 +578,4 @@ for row in "${logging_rule_rows[@]}"; do
   }
 done
 
-echo "Logging acceptance passed: workloads are Ready; Loki PVC $loki_pvc, PersistentVolume $pv_name, Longhorn Volume $longhorn_volume, and RecurringJob loki-filesystem-trim satisfy storage acceptance; bounded label-name and aggregate-count checks passed; Prometheus sees up Loki and Alloy targets and eight healthy logging alert rules."
+echo 'Logging acceptance passed: exact three-node Alloy Logs, single Alloy Events, and single Loki topology is Ready; one bound 50 GiB claim has trim-only labels on its actual Longhorn Volume; effective retention is 336h and compaction is fresh; exact source-specific label names and bounded aggregate counts passed; Prometheus sees exact up Loki and Alloy targets and eight healthy logging alert rules.'
