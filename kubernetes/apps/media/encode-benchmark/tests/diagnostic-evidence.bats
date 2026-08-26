@@ -498,8 +498,8 @@ EOF
 	[ "$status" -eq 0 ]
 }
 
-@test "collector projects legacy and corrected VMAF source preparation reasons as null continuity" {
-	for reason in source-clip-unavailable source-clip-create-failed source-clip-identity-unavailable source-frame-window-unavailable; do
+@test "collector projects corrected VMAF source preparation reasons as null continuity" {
+	for reason in source-clip-create-failed source-clip-identity-unavailable source-frame-window-unavailable; do
 		create_valid_evidence_tree
 		path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
 		jq --arg reason "$reason" '
@@ -522,6 +522,47 @@ EOF
 		run jq -e --arg reason "$reason" '.vmaf[0].status == "harness-blocked" and .vmaf[0].sourceContinuity == null and all(.vmaf[0].settings[]; .reason == $reason)' <<<"$output"
 		[ "$status" -eq 0 ]
 	done
+}
+
+@test "collector admits legacy source-clip-unavailable only for its immutable producer identity" {
+	local historical_run='20260826T014246Z-373a665e'
+	local historical_digest='sha256:8bc91c7ca04168c648509eb778dcd384e9af50d05ee6e2a6dd3c2553be6022b4'
+	local corrected_digest="sha256:$(sha256sum "$SCRIPTS/benchmark.sh" | awk '{print $1}')"
+	local case_name expected run_id digest path
+	while IFS='|' read -r case_name expected run_id digest; do
+		RUN_ID="$run_id"
+		create_valid_evidence_tree
+		path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
+		jq '
+			.status = "harness-blocked" |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]} |
+			.sourceClip.identity = null | .sourceClip.frameWindow = null |
+			.settings |= map(
+				.status = "harness-blocked" | .reason = "source-clip-unavailable" |
+				.sourceIdentity = null | .sourceFrameWindow = null |
+				.outputIdentity = null | .outputFrameWindow = null |
+				.vmaf.current = [] | .vmaf.reset = [] |
+				.offsets |= map(.ssim.value = null | .psnr.value = null) |
+				.timeline = {zeroOffsetAligned:false,discontinuity:null})
+		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+		jq --arg digest "$digest" '.scriptDigests = {"benchmark.sh":$digest}' \
+			"$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+		mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+		set_vmaf_summary_partial harness-blocked
+
+		run "$COLLECTOR_SCRIPT" collect "$run_id" "$EVIDENCE_ROOT" "$PANEL_SHA256" "$EVIDENCE_PANEL"
+		if [[ "$expected" == 'accept' ]]; then
+			[ "$status" -eq 0 ]
+		else
+			[ "$status" -eq 65 ]
+		fi
+		done <<EOF
+historical|accept|$historical_run|$historical_digest
+wrong-run|reject|20260820T223425Z-082b3d38|$historical_digest
+wrong-digest|reject|$historical_run|sha256:$(printf 'f%.0s' {1..64})
+corrected-producer|reject|$historical_run|$corrected_digest
+EOF
 }
 
 @test "collector projects prepared VMAF sources aborted by another preparation failure" {
@@ -652,7 +693,7 @@ EOF
 		.status = "harness-blocked" |
 		.sourceClip.identity = null |
 		.settings |= map(
-			.status = "harness-blocked" | .reason = "source-clip-unavailable" |
+			.status = "harness-blocked" | .reason = "source-clip-identity-unavailable" |
 			.sourceIdentity = null |
 			.outputIdentity = null | .outputFrameWindow = null |
 			.vmaf = {current:[],reset:[]} |
@@ -665,7 +706,7 @@ EOF
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
 	[ "$status" -eq 0 ]
-	run jq -e '.vmaf[0].sourceContinuity != null and all(.vmaf[0].settings[]; .reason == "source-clip-unavailable")' <<<"$output"
+	run jq -e '.vmaf[0].sourceContinuity != null and all(.vmaf[0].settings[]; .reason == "source-clip-identity-unavailable")' <<<"$output"
 	[ "$status" -eq 0 ]
 }
 
@@ -921,16 +962,18 @@ EOF
 	[ "$status" -eq 0 ]
 }
 
-@test "collector projects producer-shaped null HDR identities for a source failure" {
+@test "collector projects a preparation-blocked HDR source identity failure" {
 	create_valid_evidence_tree
 	path="$EVIDENCE_ROOT/hdr/hdr10-clean-ministry/evidence.json"
 	jq '
-		def clip_probe_failure:
-			{start:"01:04:15.000",durationSeconds:10,status:"harness-blocked",reason:"trace-headers-oracle-failed",identity:null,decoded:{command:["raw-command-secret"],oracle:{status:"malformed"}},trace:{command:["raw-command-secret"],oracle:{status:"malformed"}}};
-		def unavailable_output:
-			{start:"01:04:15.000",durationSeconds:10,status:"harness-blocked",reason:"source-clip-unavailable",identity:null,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}};
-		.status = "harness-blocked" | .reason = "source-clip-unavailable" |
-		.source.identity = null | .clip = clip_probe_failure | .encoded = unavailable_output |
+		def unavailable($start):
+			{start:$start,durationSeconds:10,status:"harness-blocked",reason:"source-clip-identity-unavailable",decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}};
+		.status = "harness-blocked" | .reason = "source-clip-identity-unavailable" |
+		.source.identity = null |
+		.source.streamProbe = {command:[],oracle:{status:"malformed"}} |
+		.source.windows = {beginning:unavailable("0"),detail:unavailable("01:04:15.000"),end:unavailable("<end-start>")} |
+		.clip = (unavailable("01:04:15.000") + {identity:null}) |
+		.encoded = (unavailable("01:04:15.000") + {identity:null}) |
 		.normalizedOracle = null |
 		.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]}
 	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"

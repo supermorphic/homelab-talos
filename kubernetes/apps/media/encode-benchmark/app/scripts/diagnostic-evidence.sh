@@ -131,6 +131,13 @@ if [[ "$manifest_issues" != '[]' ]]; then
 	jq -n -S -c --argjson issues "$manifest_issues" '{schemaVersion:1,status:"failed",reason:"diagnostic-manifest-binding-invalid",manifestIssues:$issues}'
 	exit 65
 fi
+legacy_source_clip_unavailable_allowed=false
+if [[ "$requested_run_id" == '20260826T014246Z-373a665e' ]] && jq -e '
+	.scriptDigests | type == "object" and
+	.["benchmark.sh"] == "sha256:8bc91c7ca04168c648509eb778dcd384e9af50d05ee6e2a6dd3c2553be6022b4"
+' "$manifest" >/dev/null; then
+	legacy_source_clip_unavailable_allowed=true
+fi
 jq -e --arg run "$requested_run_id" --argjson panel "$expected_evidence_panel" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
 	def status: . == "complete" or . == "failed" or . == "harness-blocked";
 	def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
@@ -150,8 +157,8 @@ jq -e --arg run "$requested_run_id" --argjson panel "$expected_evidence_panel" -
 }
 
 validate_vmaf() {
-	local sample="$1" clip="$2" index="$3" path="$4"
-	jq -e -L "$script_directory" --arg sample "$sample" --arg clip "$clip" --argjson index "$index" --argjson reason_classes "$vmaf_reason_classes" '
+	local sample="$1" clip="$2" index="$3" path="$4" legacy_source_clip_unavailable_allowed="$5"
+	jq -e -L "$script_directory" --arg sample "$sample" --arg clip "$clip" --argjson index "$index" --argjson reason_classes "$vmaf_reason_classes" --argjson legacy_source_clip_unavailable_allowed "$legacy_source_clip_unavailable_allowed" '
 		include "diagnostic-contract";
 		def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
@@ -174,7 +181,9 @@ validate_vmaf() {
 		def offset: exact(["encodedFrameIndex","offset","psnr","sourceFrameIndex","ssim"]) and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and .sourceFrameIndex == $index and .encodedFrameIndex == ($index + .offset) and (.ssim | recorded_metric(. == null or type == "number")) and (.psnr | recorded_metric(psnr_value));
 		def offsets: type == "array" and length <= 5 and all(.[]; offset);
 		def complete_offsets: offsets and length == 5 and ([.[].offset] | sort) == [-2,-1,0,1,2];
-		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "timeline-evidence-invalid";
+		def legacy_source_clip_reason: . == "source-clip-unavailable" and $legacy_source_clip_unavailable_allowed;
+		def preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or legacy_source_clip_reason;
+		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or preparation_reason or . == "timeline-evidence-invalid";
 		def empty_metrics: (.vmaf.current | length == 0) and (.vmaf.reset | length == 0);
 		def current_metrics_only: (.vmaf.current | length == 5) and (.vmaf.reset | length == 0);
 		def complete_metrics: (.vmaf.current | length == 5) and (.vmaf.reset | length == 5);
@@ -211,7 +220,7 @@ validate_vmaf() {
 				.reason == null and source_ready and output_ready and complete_metrics and offset_metric_count == 10
 			elif .status == "failed" then
 				(.reason == "encode-failed" or .reason == "decode-failed") and source_ready and output_absent and no_metric_evidence
-			elif .reason == "source-clip-unavailable" or .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-frame-window-unavailable" then
+			elif (.reason | preparation_reason) and .reason != "source-panel-preparation-aborted" then
 				(source_ready | not) and output_absent and no_metric_evidence
 			elif .reason == "source-panel-preparation-aborted" then
 				source_ready and output_absent and no_metric_evidence
@@ -276,8 +285,8 @@ validate_vmaf() {
 }
 
 validate_hdr() {
-	local sample="$1" path="$2"
-	jq -e -L "$script_directory" --arg sample "$sample" --argjson panel "$expected_evidence_panel" --argjson reason_classes "$hdr_reason_classes" '
+	local sample="$1" path="$2" legacy_source_clip_unavailable_allowed="$3"
+	jq -e -L "$script_directory" --arg sample "$sample" --argjson panel "$expected_evidence_panel" --argjson reason_classes "$hdr_reason_classes" --argjson legacy_source_clip_unavailable_allowed "$legacy_source_clip_unavailable_allowed" '
 		include "diagnostic-contract";
 		def status: . == "complete" or . == "failed" or . == "harness-blocked";
 		def exact($expected): type == "object" and (keys | sort) == ($expected | sort);
@@ -310,9 +319,11 @@ validate_hdr() {
 				(.status == "harness-blocked" and .reason == "decoded-frame-oracle-failed" and (.decoded.oracle | malformed_oracle) and (.trace.oracle | successful_pair_oracle)) or
 				(.status == "harness-blocked" and .reason == "trace-headers-oracle-failed" and (.trace.oracle | malformed_oracle) and ((.decoded.oracle | successful_pair_oracle) or (.decoded.oracle | malformed_oracle)))
 			);
+		def legacy_source_clip_reason: . == "source-clip-unavailable" and $legacy_source_clip_unavailable_allowed;
+		def preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or legacy_source_clip_reason;
 		def unavailable_pair:
 			raw_pair_fields and .status == "harness-blocked" and
-			(.reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-clip-unavailable" or .reason == "source-frame-window-unavailable" or .reason == "source-panel-preparation-aborted") and
+			(.reason | preparation_reason) and
 			.decoded == {command:[],oracle:{status:"malformed"}} and .trace == {command:[],oracle:{status:"malformed"}};
 		def failed_pair:
 			raw_pair_fields and .status == "failed" and .reason == "encoded-output-unavailable" and
@@ -379,15 +390,23 @@ validate_hdr() {
 				.normalizedOracle.clip.authoritative.reasons[]?,
 				.normalizedOracle.encoded.authoritative.reasons[]?
 			] | any(. == "decoded-trace-disagreement" or . == "source-window-conflict");
-		def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-clip-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
+		def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or preparation_reason or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
 		def identities_ready: (.source.identity | identity) and (.clip.identity | identity) and (.encoded.identity | identity);
 		def encoded_dynamic: (del(.encoded.identity).encoded | dynamic_pair);
 		def encoded_unavailable: (del(.encoded.identity).encoded | unavailable_pair);
 		def encoded_failed: (del(.encoded.identity).encoded | failed_pair);
+		def preparation_blocked:
+			. as $evidence |
+			.status == "harness-blocked" and (.reason | preparation_reason) and .normalizedOracle == null and
+			.source.streamProbe == {command:[],oracle:{status:"malformed"}} and
+			all(.source.windows[]; unavailable_pair and .reason == $evidence.reason) and
+			(del(.clip.identity).clip | unavailable_pair) and .clip.reason == $evidence.reason and
+			encoded_unavailable and .encoded.reason == $evidence.reason;
 		def raw_pairs_ready: all(.source.windows[]; .status == "complete") and .clip.status == "complete" and .encoded.status == "complete";
 		def any_pair_blocked: any(.source.windows[]; .status == "harness-blocked") or .clip.status == "harness-blocked" or .encoded.status == "harness-blocked";
 		def normalization_ready: identities_ready and (.source.streamProbe.oracle | successful_stream_oracle) and encoded_dynamic and raw_pairs_ready;
 		def encoded_acquisition_shape:
+			preparation_blocked or
 			(encoded_dynamic and (.encoded.identity | optional_identity)) or
 			(encoded_unavailable and .clip.identity == null and .encoded.identity == null) or
 			(encoded_failed and .encoded.identity == null);
@@ -401,8 +420,8 @@ validate_hdr() {
 				.reason == null and normalization_ready and (.normalizedOracle | normalized) and (normalized_conflict | not)
 			elif .status == "failed" then
 				(.reason == "encode-failed" or .reason == "decode-failed") and encoded_failed and .normalizedOracle == null
-			elif .reason == "source-clip-unavailable" or .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or .reason == "source-frame-window-unavailable" or .reason == "source-panel-preparation-aborted" then
-				encoded_unavailable and .normalizedOracle == null
+			elif (.reason | preparation_reason) then
+				preparation_blocked
 			elif .reason == "source-identity-unavailable" then
 				.source.identity == null and (.clip.identity | identity) and encoded_dynamic and
 				(.encoded.identity | identity) and .normalizedOracle == null
@@ -435,8 +454,8 @@ validate_hdr() {
 		. as $evidence |
 		exact(["classification","clip","clipId","commands","encoded","globalQuality","normalizedOracle","reason","sampleId","schemaVersion","source","status","strategyId"]) and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == "detail" and .globalQuality == 16 and (.status|status) and (if .status == "complete" then .reason == null else .reason == null or (.reason | evidence_reason) end) and
 		(.commands | exact(["clip","decode","encode"]) and all(.[]; command)) and
-		(.source | exact(["identity","streamProbe","windows"]) and (.identity | optional_identity) and (.streamProbe | stream_probe) and (.windows | exact(["beginning","detail","end"]) and all(.[]; dynamic_pair) and .beginning.start == $binding.starts.beginning and .detail.start == $binding.starts.detail and .end.start == $binding.starts.end)) and
-		(.clip | exact(["decoded","durationSeconds","identity","reason","start","status","trace"]) and .start == $binding.starts.clip and (.identity | optional_identity) and (del(.identity) | dynamic_pair)) and
+		(.source | exact(["identity","streamProbe","windows"]) and (.identity | optional_identity) and (.streamProbe | stream_probe) and (.windows | exact(["beginning","detail","end"]) and all(.[]; dynamic_pair or unavailable_pair) and .beginning.start == $binding.starts.beginning and .detail.start == $binding.starts.detail and .end.start == $binding.starts.end)) and
+		(.clip | exact(["decoded","durationSeconds","identity","reason","start","status","trace"]) and .start == $binding.starts.clip and (.identity | optional_identity) and (del(.identity) | dynamic_pair or unavailable_pair)) and
 		(.encoded | exact(["decoded","durationSeconds","identity","reason","start","status","trace"]) and (.identity | optional_identity)) and
 		.encoded.start == $binding.starts.encoded and
 		reachable_hdr_shape and
@@ -462,7 +481,7 @@ vmaf_rows=(
 for row in "${vmaf_rows[@]}"; do
 	read -r sample clip index <<<"$row"
 	evidence_path="$evidence_root/vmaf/$sample/$clip/evidence.json"
-	validate_vmaf "$sample" "$clip" "$index" "$evidence_path" || {
+	validate_vmaf "$sample" "$clip" "$index" "$evidence_path" "$legacy_source_clip_unavailable_allowed" || {
 		echo 'VMAF diagnostic evidence violates its approved schema' >&2
 		exit 65
 	}
@@ -479,7 +498,7 @@ for row in "${vmaf_rows[@]}"; do
 done
 for sample in hdr10-clean-ministry hdr10-grain-goodfellas hdr10-motion-john-wick-2; do
 	evidence_path="$evidence_root/hdr/$sample/evidence.json"
-	validate_hdr "$sample" "$evidence_path" || {
+	validate_hdr "$sample" "$evidence_path" "$legacy_source_clip_unavailable_allowed" || {
 		echo 'HDR diagnostic evidence violates its approved schema' >&2
 		exit 65
 	}

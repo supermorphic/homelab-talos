@@ -1584,6 +1584,26 @@ diagnostic_hdr_evidence() {
 	if [[ "$clip_ready" != '1' ]]; then
 		status='harness-blocked'
 		reason="${preparation_reason:-source-panel-preparation-aborted}"
+		beginning="$(jq -n -c --arg reason "$reason" '{start:"0",durationSeconds:10,status:"harness-blocked",reason:$reason,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}}')"
+		detail="$(jq -n -c --arg start "$timestamp" --arg reason "$reason" '{start:$start,durationSeconds:10,status:"harness-blocked",reason:$reason,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}}')"
+		ending="$(jq -n -c --arg reason "$reason" '{start:"<end-start>",durationSeconds:10,status:"harness-blocked",reason:$reason,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}}')"
+		clip_pair="$detail"
+		encoded_pair="$detail"
+		jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg sample "$sample_id" --arg clip_id "$clip_id" \
+			--arg status "$status" --arg reason "$reason" --argjson source_identity "$source_identity" \
+			--argjson clip_identity "$prepared_clip_identity" --argjson beginning "$beginning" --argjson detail "$detail" \
+			--argjson ending "$ending" --argjson clip_pair "$clip_pair" --argjson encoded_pair "$encoded_pair" \
+			--argjson clip_command "$clip_command" --argjson encode "$encode_command" --argjson decode "$decode_command" '
+			{
+				schemaVersion:1,strategyId:$strategy,sampleId:$sample,clipId:$clip_id,globalQuality:16,
+				status:$status,reason:$reason,commands:{clip:$clip_command,encode:$encode,decode:$decode},
+				source:{identity:$source_identity,streamProbe:{command:[],oracle:{status:"malformed"}},windows:{beginning:$beginning,detail:$detail,end:$ending}},
+				clip:($clip_pair + {identity:$clip_identity}),
+				encoded:($encoded_pair + {identity:null}),
+				normalizedOracle:null,
+				classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]}
+			}'
+		return
 	elif [[ -n "$prepared_clip_identity" ]]; then
 		clip_identity="$prepared_clip_identity"
 	else

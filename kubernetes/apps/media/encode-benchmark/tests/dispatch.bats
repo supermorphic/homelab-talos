@@ -1294,6 +1294,49 @@ producer_fixed_failed_collector_lines() {
 	[ "$output" = "$(cat "$collector_json")" ]
 }
 
+@test "diagnostic evidence results admit legacy source reason only for the historical run" {
+	local historical_run='20260826T014246Z-373a665e'
+	local collector_json="$BATS_TEST_TMPDIR/historical-collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/historical-reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/historical-reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_canonical_collector_json "$collector_json" "$historical_run"
+	jq -S -c '
+		.vmaf[0] |= (
+			.status = "harness-blocked" | .sourceContinuity = null |
+			.settings |= map(.status = "harness-blocked" | .reason = "source-clip-unavailable" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})
+	' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+	mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+	write_collector_runtime_fixtures "$historical_run" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$historical_run"
+	[ "$status" -eq 0 ]
+}
+
+@test "diagnostic evidence results reject a legacy source reason for a corrected run" {
+	local run_id='20260820T223425Z-082b3d38'
+	local collector_json="$BATS_TEST_TMPDIR/corrected-collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/corrected-reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/corrected-reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_canonical_collector_json "$collector_json" "$run_id"
+		jq -S -c '
+			.vmaf[0] |= (
+				.status = "harness-blocked" | .sourceContinuity = null |
+				.settings |= map(.status = "harness-blocked" | .reason = "source-clip-unavailable" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) |
+				.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})
+		' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+	mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic evidence result schema rejected' ]
+}
+
 @test "diagnostic evidence reader results derive fresh-run Job Pod command and mount provenance" {
 	run_id='20260823T141907Z-9d6f6b71'
 	collector_json="$BATS_TEST_TMPDIR/fresh-collector.json"
@@ -1698,12 +1741,9 @@ producer_fixed_failed_collector_lines() {
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
 	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
-	for case_name in vmaf-source-null vmaf-source-create vmaf-source-identity vmaf-source-window vmaf-preparation-aborted vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-preparation-aborted hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
+	for case_name in vmaf-source-create vmaf-source-identity vmaf-source-window vmaf-preparation-aborted vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-preparation-aborted hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
 		write_canonical_collector_json "$collector_json" "$run_id"
 		case "$case_name" in
-		vmaf-source-null)
-			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = "source-clip-unavailable" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
-			;;
 		vmaf-source-create | vmaf-source-identity | vmaf-source-window)
 			case "$case_name" in
 			vmaf-source-create) reason='source-clip-create-failed' ;;

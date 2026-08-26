@@ -752,11 +752,17 @@ if [[ "${BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS:-}" == 'missing' ]]; then
 	exit 0
 fi
 if [[ "$arguments" == *'stream_side_data'* ]]; then
+	if [[ "${BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE:-0}" == '1' ]]; then
+		exit 87
+	fi
 	jq -n '{streams:[{side_data_list:[
 		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
 		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
 	]}]}'
 	exit 0
+fi
+if [[ "$arguments" == *'format=duration'* && "${BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE:-0}" == '1' ]]; then
+	exit 87
 fi
 if [[ "$arguments" == *'frame=side_data_list'* ]]; then
 	jq -n '{frames:[{side_data_list:[
@@ -2685,6 +2691,38 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
+}
+
+@test "diagnostics preparation reasons survive blocked HDR scientific probe failures" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE=clip-create
+	export BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE=1
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 2 ]
+	run_id="$(jq -r '.runId' <<<"$(tail -n 1 <<<"$output")")"
+	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run jq -e -s '
+		length == 5 and
+		all(.[];
+			if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+				all(.settings[]; .reason == "source-clip-create-failed")
+			else all(.settings[]; .reason == "source-panel-preparation-aborted")
+			end)
+	' "$diagnostic_root"/vmaf/*/*/evidence.json
+	[ "$status" -eq 0 ]
+	run jq -e -s '
+		length == 3 and all(.[];
+			.status == "harness-blocked" and
+			.reason == "source-panel-preparation-aborted" and
+			.source.streamProbe == {command:[],oracle:{status:"malformed"}} and
+			all(.source.windows[]; .decoded.command == [] and .trace.command == []) and
+			.clip.decoded.command == [] and .clip.trace.command == [] and
+			.encoded.decoded.command == [] and .encoded.trace.command == [])
+	' "$diagnostic_root"/hdr/*/evidence.json
+	[ "$status" -eq 0 ]
 }
 
 # Catches incomplete metric evidence and post-encode identity drift being
