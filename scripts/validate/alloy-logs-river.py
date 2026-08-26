@@ -255,6 +255,7 @@ def validate_node_logs(config_path: Path) -> None:
         {
             ("discovery.kubernetes", "pods"): 1,
             ("discovery.relabel", "kubernetes_pods"): 1,
+            ("local.file_match", "kubernetes"): 1,
             ("loki.source.file", "kubernetes"): 1,
             ("loki.process", "kubernetes"): 1,
             ("local.file_match", "talos_services"): 1,
@@ -266,6 +267,8 @@ def validate_node_logs(config_path: Path) -> None:
             ("loki.write", "default"): 1,
         }
     )
+    if actual_components[("local.file_match", "kubernetes")] != 1:
+        refuse("Alloy Kubernetes file matcher must expand the approved Pod path targets.")
     if actual_components != expected_components:
         refuse("Alloy River component set must contain only the approved node-log flow.")
 
@@ -314,8 +317,17 @@ def validate_node_logs(config_path: Path) -> None:
     ):
         refuse("Alloy Kubernetes Pod path must use the complete UID/container capture.")
 
+    kubernetes_matcher = one_component(components, "local.file_match", "kubernetes")
+    if (
+        direct_assignment_names(kubernetes_matcher.body) != ["path_targets"]
+        or assignment(kubernetes_matcher.body, "path_targets")
+        != "discovery.relabel.kubernetes_pods.output"
+        or direct_blocks(kubernetes_matcher.body)
+    ):
+        refuse("Alloy Kubernetes file matcher must expand only the approved Pod targets.")
+
     kubernetes_source = one_component(components, "loki.source.file", "kubernetes")
-    if assignment(kubernetes_source.body, "targets") != "discovery.relabel.kubernetes_pods.output":
+    if assignment(kubernetes_source.body, "targets") != "local.file_match.kubernetes.targets":
         refuse("Alloy Kubernetes source must use the approved Pod file targets.")
     if assignment(kubernetes_source.body, "forward_to") != "[loki.process.kubernetes.receiver]":
         refuse("Alloy Kubernetes source must route only through loki.process.kubernetes.")

@@ -75,6 +75,15 @@ path.write_text(text.replace(old, new, 1))
 PY
 }
 
+configure_kubernetes_direct_flow() {
+  if ! rg -Fq 'local.file_match "kubernetes"' "$config"; then
+    return
+  fi
+  replace_once "$config" \
+    $'local.file_match "kubernetes" {\n\tpath_targets = discovery.relabel.kubernetes_pods.output\n}\n\nloki.source.file "kubernetes" {\n\ttargets    = local.file_match.kubernetes.targets' \
+    $'loki.source.file "kubernetes" {\n\ttargets    = discovery.relabel.kubernetes_pods.output'
+}
+
 reset_tree
 expect_pass 'production monitoring source'
 
@@ -235,5 +244,19 @@ replace_once "$config" \
   $'\t\t// replacement = "/var/log/pods/*$1/*.log"\n\t\treplacement   = "/var/log/pods/*$1/$2/*.log"'
 expect_fail 'comment-hidden invalid Kubernetes Pod path capture' \
   'Refusing: Alloy Kubernetes Pod path must use the complete UID/container capture.'
+
+echo '23. Sending wildcard Pod paths directly to loki.source.file is rejected.'
+reset_tree
+configure_kubernetes_direct_flow
+expect_fail 'Kubernetes source bypasses file discovery' \
+  'Refusing: Alloy Kubernetes file matcher must expand the approved Pod path targets.'
+
+echo '24. Keeping an unused matcher while the source bypasses it is rejected.'
+reset_tree
+replace_once "$config" \
+  'targets    = local.file_match.kubernetes.targets' \
+  'targets    = discovery.relabel.kubernetes_pods.output'
+expect_fail 'Kubernetes source bypasses its configured file matcher' \
+  'Refusing: Alloy Kubernetes source must use the approved Pod file targets.'
 
 echo 'Alloy logs validator mutation tests passed.'
