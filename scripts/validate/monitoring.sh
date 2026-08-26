@@ -348,7 +348,6 @@ fi
 rg -Fq 'field = "spec.nodeName=" + env("NODE_NAME")' "$alloy_logs_config"
 rg -Fq '__meta_kubernetes_pod_annotation_observability_supermorphic_com_logs' "$alloy_logs_config"
 rg -Fq 'regex         = `^;(.+?)(?:-[a-z0-9]{8,10})?$`' "$alloy_logs_config"
-rg -q 'replacement[[:space:]]*=[[:space:]]*"/var/log/pods/\*\$1/\$2/\*\.log"' "$alloy_logs_config"
 rg -Fq '__path__ = "/var/log/*.log"' "$alloy_logs_config"
 rg -Fq '__path__ = "/var/log/audit/kmsg.log"' "$alloy_logs_config"
 rg -Fq 'url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"' "$alloy_logs_config"

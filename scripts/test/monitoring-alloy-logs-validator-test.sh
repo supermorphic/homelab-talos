@@ -220,4 +220,20 @@ yq -i '.alloy.securityContext.seccompProfile.type = "Unconfined"' "$values"
 expect_fail 'Alloy seccomp profile weakened' \
   'Refusing: rendered Alloy must use the RuntimeDefault seccomp profile.'
 
+echo '21. Referencing a nonexistent second capture in the Kubernetes Pod path is rejected.'
+reset_tree
+replace_once "$config" \
+  "/var/log/pods/*\$1/*.log" \
+  "/var/log/pods/*\$1/\$2/*.log"
+expect_fail 'nonexistent Kubernetes Pod path capture' \
+  'Refusing: Alloy Kubernetes Pod path must use the complete UID/container capture.'
+
+echo '22. A valid Kubernetes Pod path in a comment cannot hide an invalid active path.'
+reset_tree
+replace_once "$config" \
+  $'\t\treplacement   = "/var/log/pods/*$1/*.log"' \
+  $'\t\t// replacement = "/var/log/pods/*$1/*.log"\n\t\treplacement   = "/var/log/pods/*$1/$2/*.log"'
+expect_fail 'comment-hidden invalid Kubernetes Pod path capture' \
+  'Refusing: Alloy Kubernetes Pod path must use the complete UID/container capture.'
+
 echo 'Alloy logs validator mutation tests passed.'

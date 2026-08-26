@@ -296,6 +296,24 @@ def validate_node_logs(config_path: Path) -> None:
     ):
         refuse("Alloy Kubernetes Pod opt-out rule must drop only disabled targets.")
 
+    pod_paths = [
+        rule
+        for rule in rules
+        if optional_assignment(rule.body, "target_label") == '"__path__"'
+    ]
+    if len(pod_paths) != 1:
+        refuse("Alloy Kubernetes Pod path must use the complete UID/container capture.")
+    pod_path = pod_paths[0]
+    if (
+        Counter(direct_assignment_names(pod_path.body))
+        != Counter(["source_labels", "separator", "target_label", "replacement"])
+        or string_list(assignment(pod_path.body, "source_labels"))
+        != ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+        or assignment(pod_path.body, "separator") != '"/"'
+        or assignment(pod_path.body, "replacement") != '"/var/log/pods/*$1/*.log"'
+    ):
+        refuse("Alloy Kubernetes Pod path must use the complete UID/container capture.")
+
     kubernetes_source = one_component(components, "loki.source.file", "kubernetes")
     if assignment(kubernetes_source.body, "targets") != "discovery.relabel.kubernetes_pods.output":
         refuse("Alloy Kubernetes source must use the approved Pod file targets.")
