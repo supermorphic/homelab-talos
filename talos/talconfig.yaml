@@ -66,6 +66,11 @@ controlPlane:
               checkSecurebootStatusOnEnroll: true
             lockToState: true
   userVolumes:
+    # Alloy file positions need a node-local writable path. Talos creates this
+    # directory on the encrypted EPHEMERAL volume and exposes it to kubelet at
+    # /var/mnt/alloy-logs.
+    - name: alloy-logs
+      volumeType: directory
     - name: longhorn
       provisioning:
         diskSelector:
