@@ -18,6 +18,7 @@ printf ' %s' "$@" >>"$FAKE_KUBECTL_LOG"
 printf '\n' >>"$FAKE_KUBECTL_LOG"
 
 if [[ " $* " == *' config get-contexts homelab-diagnostic --no-headers '* ]]; then
+  [[ "$FAKE_LAYOUT" != 'missing-diagnostic-context' ]] || exit 1
   printf 'homelab-diagnostic\n'
   exit 0
 fi
@@ -50,7 +51,32 @@ case " $* " in
 JSON
     ;;
   *' get persistentvolume synthetic-pv-name --output jsonpath={.spec.csi.volumeHandle} '*)
-    printf 'synthetic-longhorn-volume'
+    echo 'PersistentVolume reads are forbidden in the diagnostic verifier.' >&2
+    exit 65
+    ;;
+  *' --namespace longhorn-system get volumes.longhorn.io --output json '*)
+    case "$FAKE_LAYOUT" in
+      longhorn-status-missing)
+        cat <<'JSON'
+{"items":[{"metadata":{"name":"synthetic-longhorn-volume","labels":{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"status":{"kubernetesStatus":{"pvName":"synthetic-pv-name","pvcName":"telemetry-claim-synthetic"}}},{"metadata":{"name":"unrelated-volume"},"status":{"kubernetesStatus":{"pvName":"unrelated-pv","pvcName":"unrelated-claim","namespace":"other"}}}]}
+JSON
+        ;;
+      longhorn-status-mismatch)
+        cat <<'JSON'
+{"items":[{"metadata":{"name":"synthetic-longhorn-volume","labels":{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"status":{"kubernetesStatus":{"pvName":"different-pv","pvcName":"telemetry-claim-synthetic","namespace":"monitoring"}}},{"metadata":{"name":"unrelated-volume"},"status":{"kubernetesStatus":{"pvName":"unrelated-pv","pvcName":"unrelated-claim","namespace":"other"}}}]}
+JSON
+        ;;
+      longhorn-status-ambiguous)
+        cat <<'JSON'
+{"items":[{"metadata":{"name":"synthetic-longhorn-volume","labels":{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"status":{"kubernetesStatus":{"pvName":"synthetic-pv-name","pvcName":"telemetry-claim-synthetic","namespace":"monitoring"}}},{"metadata":{"name":"duplicate-synthetic-volume","labels":{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}},"status":{"kubernetesStatus":{"pvName":"synthetic-pv-name","pvcName":"telemetry-claim-synthetic","namespace":"monitoring"}}}]}
+JSON
+        ;;
+      *)
+        cat <<'JSON'
+{"items":[{"metadata":{"name":"synthetic-longhorn-volume","labels":{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"},"annotations":{"fixture-canary":"private-volume-object-value"}},"status":{"kubernetesStatus":{"pvName":"synthetic-pv-name","pvcName":"telemetry-claim-synthetic","namespace":"monitoring"}}},{"metadata":{"name":"unrelated-volume"},"status":{"kubernetesStatus":{"pvName":"unrelated-pv","pvcName":"unrelated-claim","namespace":"other"}}}]}
+JSON
+        ;;
+    esac
     ;;
   *' --namespace longhorn-system get volumes.longhorn.io synthetic-longhorn-volume --output json '*)
     case "$FAKE_LAYOUT" in
@@ -65,6 +91,9 @@ JSON
         ;;
       trim-missing)
         labels='{"longhornvolume":"synthetic-longhorn-volume"}'
+        ;;
+      extra-recurring-job)
+        labels='{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled","recurring-job.longhorn.io/invented-maintenance":"enabled"}'
         ;;
       *)
         labels='{"recurring-job.longhorn.io/loki-filesystem-trim":"enabled"}'
@@ -117,9 +146,36 @@ case " $* " in
     fi
     ;;
   *' http://127.0.0.1:29090/api/v1/targets?state=active '*)
-    cat <<'JSON'
-{"status":"success","data":{"activeTargets":[{"discoveredLabels":{"__meta_kubernetes_service_name":"loki","__address__":"192.0.2.10:3100"},"scrapePool":"serviceMonitor/monitoring/loki/0","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"alloy-logs","__address__":"192.0.2.11:12345"},"scrapePool":"serviceMonitor/monitoring/alloy-logs/0","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"alloy-events","__address__":"192.0.2.12:12345"},"scrapePool":"serviceMonitor/monitoring/alloy-events/0","health":"up","lastError":""}]}}
-JSON
+    loki_service='loki'
+    loki_pool='serviceMonitor/monitoring/loki/0'
+    loki_job='monitoring/loki'
+    alloy_logs_service='alloy-logs'
+    alloy_logs_pool='serviceMonitor/monitoring/alloy-logs/0'
+    alloy_logs_job='monitoring/alloy-logs'
+    alloy_events_service='alloy-events'
+    alloy_events_pool='serviceMonitor/monitoring/alloy-events/0'
+    alloy_events_job='monitoring/alloy-events'
+    case "$FAKE_LAYOUT" in
+      unrelated-loki-target)
+        loki_service='unrelated'
+        loki_pool='serviceMonitor/monitoring/unrelated-loki/0'
+        loki_job='monitoring/unrelated-loki'
+        ;;
+      unrelated-alloy-logs-target)
+        alloy_logs_service='unrelated'
+        alloy_logs_pool='serviceMonitor/monitoring/unrelated-alloy-logs/0'
+        alloy_logs_job='monitoring/unrelated-alloy-logs'
+        ;;
+      unrelated-alloy-events-target)
+        alloy_events_service='unrelated'
+        alloy_events_pool='serviceMonitor/monitoring/unrelated-alloy-events/0'
+        alloy_events_job='monitoring/unrelated-alloy-events'
+        ;;
+    esac
+    printf '{"status":"success","data":{"activeTargets":[{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.10:3100"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.11:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""},{"discoveredLabels":{"__meta_kubernetes_service_name":"%s","__address__":"192.0.2.12:12345"},"labels":{"service":"%s","job":"%s"},"scrapePool":"%s","health":"up","lastError":""}]}}\n' \
+      "$loki_service" "$loki_service" "$loki_job" "$loki_pool" \
+      "$alloy_logs_service" "$alloy_logs_service" "$alloy_logs_job" "$alloy_logs_pool" \
+      "$alloy_events_service" "$alloy_events_service" "$alloy_events_job" "$alloy_events_pool"
     ;;
   *' http://127.0.0.1:29090/api/v1/rules?type=alert '*)
     cat <<'JSON'
@@ -188,38 +244,75 @@ run_case() {
   fi
 }
 
-run_case trim-only 0 'Logging acceptance passed' 2
-rg -F -q -- '--context homelab-diagnostic' "$fixture/trim-only/kubectl.log"
-rg -F -q -- 'get persistentvolume synthetic-pv-name --output jsonpath={.spec.csi.volumeHandle}' "$fixture/trim-only/kubectl.log"
-rg -F -q -- 'get volumes.longhorn.io synthetic-longhorn-volume --output json' "$fixture/trim-only/kubectl.log"
-if rg -F -q -- 'storage-loki-0' "$fixture/trim-only/kubectl.log"; then
-  echo 'Verifier assumed the generated Loki PVC name.' >&2
-  exit 1
+selected_case="${1:-all}"
+case_selected() {
+  [[ "$selected_case" == 'all' || "$selected_case" == "$1" ]]
+}
+
+if case_selected trim-only; then
+  run_case trim-only 0 'Logging acceptance passed' 2
+  rg -F -q -- '--context homelab-diagnostic' "$fixture/trim-only/kubectl.log"
+  rg -F -q -- 'get volumes.longhorn.io --output json' "$fixture/trim-only/kubectl.log"
+  if rg -q -- ' get persistentvolume(s)? ' "$fixture/trim-only/kubectl.log"; then
+    echo 'Verifier attempted a forbidden PersistentVolume read.' >&2
+    exit 1
+  fi
+  if rg -F -q -- 'storage-loki-0' "$fixture/trim-only/kubectl.log"; then
+    echo 'Verifier assumed the generated Loki PVC name.' >&2
+    exit 1
+  fi
 fi
 
-run_case all-counts-present 0 'Logging acceptance passed' 2
-for query in \
-  'sum(count_over_time({source="kubernetes"}[30m]))' \
-  'sum(count_over_time({source="talos"}[30m]))' \
-  'sum(count_over_time({source="talos",service="kernel"}[30m]))' \
-  'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
-  rg -F -q -- "query=$query" "$fixture/all-counts-present/curl.log"
-done
-[[ "$(rg -c '/loki/api/v1/query$' "$fixture/all-counts-present/curl.log")" -eq 4 ]]
-if rg -q '/loki/api/v1/(query_range|tail)| query=\{source=' \
-  "$fixture/all-counts-present/curl.log"; then
-  echo 'Verifier requested raw Loki entries instead of bounded aggregate counts.' >&2
-  exit 1
+if case_selected all-counts-present; then
+  run_case all-counts-present 0 'Logging acceptance passed' 2
+  for query in \
+    'sum(count_over_time({source="kubernetes"}[30m]))' \
+    'sum(count_over_time({source="talos"}[30m]))' \
+    'sum(count_over_time({source="talos",service="kernel"}[30m]))' \
+    'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
+    rg -F -q -- "query=$query" "$fixture/all-counts-present/curl.log"
+  done
+  [[ "$(rg -c '/loki/api/v1/query$' "$fixture/all-counts-present/curl.log")" -eq 4 ]]
+  if rg -q '/loki/api/v1/(query_range|tail)| query=\{source=' \
+    "$fixture/all-counts-present/curl.log"; then
+    echo 'Verifier requested raw Loki entries instead of bounded aggregate counts.' >&2
+    exit 1
+  fi
 fi
 
-run_case default-group 1 'forbidden recurring-job assignment recurring-job-group.longhorn.io/default' 0
-run_case daily-snapshot 1 'forbidden recurring-job assignment recurring-job.longhorn.io/daily-snapshot' 0
-run_case daily-backup 1 'forbidden recurring-job assignment recurring-job.longhorn.io/daily-backup' 0
-run_case trim-missing 1 'does not have the required filesystem-trim assignment' 0
-run_case forbidden-label 1 'forbidden indexed label pod_uid' 2
-run_case missing-kubernetes 1 'Missing nonzero Loki aggregate count: Kubernetes containers.' 2
-run_case missing-talos 1 'Missing nonzero Loki aggregate count: Talos services.' 2
-run_case missing-kernel 1 'Missing nonzero Loki aggregate count: Talos kernel.' 2
-run_case missing-events 1 'Missing nonzero Loki aggregate count: Kubernetes Events.' 2
+case_selected missing-diagnostic-context && \
+  run_case missing-diagnostic-context 2 'Logging verification requires kubeconfig context homelab-diagnostic.' 0
+case_selected longhorn-status-missing && \
+  run_case longhorn-status-missing 1 'with complete status.kubernetesStatus identity; found 0.' 0
+case_selected longhorn-status-mismatch && \
+  run_case longhorn-status-mismatch 1 'with complete status.kubernetesStatus identity; found 0.' 0
+case_selected longhorn-status-ambiguous && \
+  run_case longhorn-status-ambiguous 1 'with complete status.kubernetesStatus identity; found 2.' 0
+case_selected default-group && \
+  run_case default-group 1 'forbidden recurring-job assignment recurring-job-group.longhorn.io/default' 0
+case_selected daily-snapshot && \
+  run_case daily-snapshot 1 'forbidden recurring-job assignment recurring-job.longhorn.io/daily-snapshot' 0
+case_selected daily-backup && \
+  run_case daily-backup 1 'forbidden recurring-job assignment recurring-job.longhorn.io/daily-backup' 0
+case_selected trim-missing && \
+  run_case trim-missing 1 'does not have the required filesystem-trim assignment' 0
+case_selected extra-recurring-job && \
+  run_case extra-recurring-job 1 'has an unexpected recurring-job assignment after synchronization retries' 0
+case_selected forbidden-label && \
+  run_case forbidden-label 1 'forbidden indexed label pod_uid' 2
+case_selected missing-kubernetes && \
+  run_case missing-kubernetes 1 'Missing nonzero Loki aggregate count: Kubernetes containers.' 2
+case_selected missing-talos && \
+  run_case missing-talos 1 'Missing nonzero Loki aggregate count: Talos services.' 2
+case_selected missing-kernel && \
+  run_case missing-kernel 1 'Missing nonzero Loki aggregate count: Talos kernel.' 2
+case_selected missing-events && \
+  run_case missing-events 1 'Missing nonzero Loki aggregate count: Kubernetes Events.' 2
+case_selected unrelated-loki-target && \
+  run_case unrelated-loki-target 1 'Prometheus does not have an exact up loki ServiceMonitor target.' 2
+case_selected unrelated-alloy-logs-target && \
+  run_case unrelated-alloy-logs-target 1 'Prometheus does not have an exact up alloy-logs ServiceMonitor target.' 2
+case_selected unrelated-alloy-events-target && \
+  run_case unrelated-alloy-events-target 1 'Prometheus does not have an exact up alloy-events ServiceMonitor target.' 2
 
 echo 'Logging live-acceptance verifier fixture tests passed.'

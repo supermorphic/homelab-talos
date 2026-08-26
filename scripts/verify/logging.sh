@@ -17,9 +17,11 @@ kubeconfig="$1"
 ns='monitoring'
 longhorn_ns='longhorn-system'
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+"${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1 || {
+  echo 'Logging verification requires kubeconfig context homelab-diagnostic.' >&2
+  exit 2
+}
+kc+=(--context homelab-diagnostic)
 
 for resource in loki alloy-logs alloy-events; do
   "${kc[@]}" --namespace flux-system wait \
@@ -68,12 +70,22 @@ pv_name="$(PVC_NAME="$loki_pvc" yq -r '
   echo "Bound Loki PVC $loki_pvc has no PersistentVolume name." >&2
   exit 1
 }
-longhorn_volume="$("${kc[@]}" get persistentvolume "$pv_name" \
-  --output jsonpath='{.spec.csi.volumeHandle}')"
-[[ -n "$longhorn_volume" ]] || {
-  echo "PersistentVolume $pv_name has no Longhorn CSI volume handle." >&2
+longhorn_volumes_json="$("${kc[@]}" --namespace "$longhorn_ns" \
+  get volumes.longhorn.io --output json)"
+mapfile -t matching_longhorn_volumes < <(
+  PV_NAME="$pv_name" PVC_NAME="$loki_pvc" PVC_NAMESPACE="$ns" yq -r '
+    .items[]? |
+    select((.status.kubernetesStatus.pvName // "") == strenv(PV_NAME)) |
+    select((.status.kubernetesStatus.pvcName // "") == strenv(PVC_NAME)) |
+    select((.status.kubernetesStatus.namespace // "") == strenv(PVC_NAMESPACE)) |
+    .metadata.name
+  ' <<<"$longhorn_volumes_json"
+)
+[[ "${#matching_longhorn_volumes[@]}" -eq 1 ]] || {
+  echo "Expected exactly one actual Longhorn Volume matching PersistentVolume $pv_name and PVC $ns/$loki_pvc with complete status.kubernetesStatus identity; found ${#matching_longhorn_volumes[@]}." >&2
   exit 1
 }
+longhorn_volume="${matching_longhorn_volumes[0]}"
 
 trim_label='recurring-job.longhorn.io/loki-filesystem-trim'
 volume_json=''
@@ -311,12 +323,34 @@ targets_response="$(
   exit 1
 }
 for service_name in loki alloy-logs alloy-events; do
-  target_count="$(flux_alerts_target_count "$service_name" <<<"$targets_response")"
-  target_healths="$(flux_alerts_target_healths "$service_name" <<<"$targets_response")"
-  [[ "$target_count" -gt 0 && "$target_healths" == 'up' ]] || {
-    echo "Prometheus does not have an up $service_name ServiceMonitor target." >&2
+  scrape_pool="serviceMonitor/$ns/$service_name/0"
+  prometheus_job="$ns/$service_name"
+  mapfile -t exact_target_rows < <(
+    SERVICE_NAME="$service_name" SCRAPE_POOL="$scrape_pool" \
+      PROMETHEUS_JOB="$prometheus_job" yq -r '
+        .data.activeTargets[]? |
+        select((.scrapePool // "") == strenv(SCRAPE_POOL)) |
+        select(
+          (.discoveredLabels.__meta_kubernetes_service_name // "") ==
+          strenv(SERVICE_NAME)
+        ) |
+        select((.labels.service // "") == strenv(SERVICE_NAME)) |
+        select((.labels.job // "") == strenv(PROMETHEUS_JOB)) |
+        [(.health // "unknown"), (.lastError // "")] |
+        @tsv
+      ' <<<"$targets_response"
+  )
+  [[ "${#exact_target_rows[@]}" -gt 0 ]] || {
+    echo "Prometheus does not have an exact up $service_name ServiceMonitor target." >&2
     exit 1
   }
+  for target_row in "${exact_target_rows[@]}"; do
+    IFS=$'\t' read -r target_health target_error <<<"$target_row"
+    [[ "$target_health" == 'up' && -z "$target_error" ]] || {
+      echo "Prometheus does not have an exact up $service_name ServiceMonitor target." >&2
+      exit 1
+    }
+  done
 done
 
 expected_rules=(
