@@ -95,6 +95,9 @@ solely to satisfy these style rules.
   operator-run. Complete all independent safe work before stopping for required operator
   action. Do not ask the operator to perform an agent-owned workflow that the agent can
   run itself.
+- Treat confirmation as an execution-intent guard, not as operator authorization.
+- Treat repository `verify` and `check` workflows as observational toward their target. Use a
+  registered `test` workflow when evidence requires deliberate temporary mutation.
 - When an approved task needs scoped cluster access, agents must run
   `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
   and use the resulting task-scoped credentials. Do not hand this credential bootstrap
@@ -192,6 +195,8 @@ solely to satisfy these style rules.
   under `.tmp/plans/`, keep them uncommitted, and use them for execution, task resumption,
   and agent handoff.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
+- Repeat safety-critical live preconditions immediately before consequential mutation.
+  Do not rely on an earlier plan or preflight as proof that target state is unchanged.
 
 ## Design lifecycle
 

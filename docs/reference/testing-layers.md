@@ -13,6 +13,10 @@ other — nothing here replaces the production monitoring.
 Offline correctness (source/render validation, Conftest policy, ShellCheck, probe unit
 tests) is the `just ci` contract and gates every PR; it needs no cluster.
 
+The [repository command lifecycle](repository-command-lifecycle.md) defines the semantic
+boundary: verification is observational toward its target, while deliberate temporary
+mutation belongs to a controlled test with explicit ownership, evidence, and cleanup.
+
 ## Conformance (Sonobuoy) — on demand, ephemeral, never scheduled
 
 Sonobuoy is **not** deployed or scheduled as a standing cluster workload. It is run on
