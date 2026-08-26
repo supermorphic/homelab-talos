@@ -96,9 +96,8 @@ solely to satisfy these style rules.
   action. Do not ask the operator to perform an agent-owned workflow that the agent can
   run itself.
 - Treat confirmation as an execution-intent guard, not as operator authorization.
-- Treat repository `verify` and `check` workflows as observational toward their target.
-  When approved evidence requires deliberate temporary mutation, use the registered test
-  workflow and its ownership, confirmation, cleanup, and recovery controls.
+- Treat repository `verify` and `check` workflows as observational toward their target. Use a
+  registered `test` workflow when evidence requires deliberate temporary mutation.
 - When an approved task needs scoped cluster access, agents must run
   `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
   and use the resulting task-scoped credentials. Do not hand this credential bootstrap
