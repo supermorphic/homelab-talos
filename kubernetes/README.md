@@ -57,7 +57,9 @@ it to Helm before Flux is available. After Flux bootstrap, the app Kustomization
 publishes the same file as a watched ConfigMap and the HelmRelease adopts the existing
 `cilium` release in `kube-system`. Cilium begins suspended and protected from pruning;
 the guarded adoption recipe records pod UIDs and restarts across the transfer
-before staging the permanent Git unsuspend. Do not apply `ks.yaml`,
+before staging the permanent Git unsuspend. If acceptance fails after the recipe resumes
+the live Kustomization, the recipe re-suspends it and restores the source edit while
+preserving existing resources. Do not apply `ks.yaml`,
 `ocirepository.yaml`, or `helmrelease.yaml` manually.
 
 All supported Cilium workflows are Just recipes:

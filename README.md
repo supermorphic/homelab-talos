@@ -207,7 +207,7 @@ available for focused developer validation.
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Cluster bootstrap; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Cluster bootstrap; destructive after confirmation |
 | `just bootstrap status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
-| `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
+| `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join, then require healthy three-member convergence without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
 | `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Pre-Cilium bootstrap only; use `just talos kubeconfig` after Cilium |
 | `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Read-only |
 | `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
@@ -222,7 +222,7 @@ available for focused developer validation.
 | `just bootstrap flux` | Bootstrap Flux `2.9.2` and a read-only GitHub SSH deploy key | `GITHUB_TOKEN`; `FLUX_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just bootstrap flux-sops` | Create or verify the matching in-cluster SOPS identity | `SOPS_AGE_KEY`[`_FILE`]; `FLUX_SOPS_CONFIRM` | Mutating after confirmation |
 | `just bootstrap flux-ssh-known-hosts` | Preserve the deploy key and repair GitHub port-443 host trust | `FLUX_SSH_KNOWN_HOSTS_CONFIRM` | Recovery; mutating after confirmation |
-| `just bootstrap flux-adopt-cilium` | Adopt Cilium with guarded workload health and stage the permanent unsuspend | `FLUX_CILIUM_ADOPTION_CONFIRM` | Mutating after confirmation |
+| `just bootstrap flux-adopt-cilium` | Adopt Cilium with guarded workload health and stage the permanent unsuspend; a failed adoption restores source and live suspension | `FLUX_CILIUM_ADOPTION_CONFIRM` | Mutating after confirmation |
 | `just kube flux-status` | Print Flux controllers and reconciliation state | — | Read-only |
 | `just kube flux-verify` | Verify Flux source auth, SOPS, canary, Cilium, Talos, and etcd | — | Read-only |
 | `just kube flux-canary-test` | Prove Flux recreates the guarded noncritical canary Secret | `FLUX_CANARY_CONFIRM` | State-changing after confirmation |

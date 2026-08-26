@@ -57,7 +57,7 @@ linked worktree.
 | Load the SOPS identity | Uses an operator-held private identity outside the repository. |
 | `repo secrets`, `talos generate`, and `talos kubeconfig` | Validate identity and regenerate ignored local configuration; operator-run where the age identity or administrator credential is required. |
 | Status and verifier commands | Read-oriented diagnosis; credential requirements vary by verifier. |
-| `bootstrap retry-join` | Guarded reboot of one failed non-bootstrap etcd join; operator live mutation. |
+| `bootstrap retry-join` | Guarded reboot and verified recovery of one failed non-bootstrap etcd join; operator live mutation. |
 | `talos apply <node>` | Destructive, target-bound reinstall of one maintenance-mode node; operator action. |
 | `bootstrap cilium` before Flux ownership | Guarded bootstrap mutation from the canonical tracked values. |
 | Cilium repair after Flux ownership | Reviewed Git change and Flux reconciliation; the bootstrap workflow refuses parallel ownership. |
@@ -191,8 +191,10 @@ mise exec -- just bootstrap retry-join <node>
 
 Then rerun it with the printed `TALOS_ETCD_RETRY_CONFIRM` value. The confirmed action
 reboots only that failed non-bootstrap node so Talos can retry its normal join. It does
-not bootstrap etcd or remove a member. After the node returns, rerun `bootstrap status`
-and require the exact three-member set.
+not bootstrap etcd or remove a member. It returns only after the member names are exactly
+`nuc1`, `nuc2`, and `nuc3`, the target etcd service is running and healthy, all three
+status rows agree on one member leader, and the alarm list is empty. A timeout or failed
+gate returns an error with the last observed logical member names.
 
 ### Reinstall one failed Talos node
 
@@ -243,6 +245,10 @@ review the exact confirmation it prints, and authorize only that canonical boots
 Once the Cilium HelmRelease exists, the bootstrap recipe intentionally refuses to act as
 a second reconciler. Repair source through reviewed Git and let Flux reconcile it. Do
 not uninstall a functioning CNI or install a second CNI as a workaround.
+
+During the initial ownership transfer, a failed `bootstrap flux-adopt-cilium` run restores
+the staged source edit. If that run already resumed the live Cilium Kustomization, it also
+re-suspends the Kustomization while preserving the existing Cilium resources.
 
 If Flux-owned Cilium is too unhealthy for Flux itself to recover, stop. The repository
 has no supported parallel-owner shortcut for that circular failure.
