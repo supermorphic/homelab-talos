@@ -15,6 +15,10 @@ source-validate:
     expected_extensions=$'siderolabs/intel-ucode\nsiderolabs/i915\nsiderolabs/iscsi-tools\nsiderolabs/util-linux-tools'
     actual_extensions="$(yq -r '.controlPlane.schematic.customization.systemExtensions.officialExtensions[]' talconfig.yaml)"
     [[ "$actual_extensions" == "$expected_extensions" ]]
+    [[ "$(yq -r '.controlPlane.userVolumes[] | select(.name == "alloy-logs") | .volumeType' talconfig.yaml)" == 'directory' ]] || {
+      echo 'alloy-logs must be a Talos directory user volume backed by EPHEMERAL storage.' >&2
+      exit 1
+    }
 
 # Decrypt the tracked identity in memory and render ignored machine configs.
 generate: source-validate

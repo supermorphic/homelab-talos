@@ -73,9 +73,12 @@ traffic caused by tailing every container through the Kubernetes API.
 The DaemonSet also reads Talos service and kernel log files exposed in the host `/var/log`
 tree. Container and Talos file matches remain separate so their processing rules and
 labels cannot be confused. The host log tree is mounted read-only. A dedicated writable
-host path on Talos EPHEMERAL storage holds Alloy's local read positions so ordinary pod
-restarts do not replay previously consumed files. Position data is local to a node and is
-not backed up.
+Talos directory user volume named `alloy-logs` holds Alloy's local read positions at
+`/var/mnt/alloy-logs`. Its `volumeType: directory` contract makes Talos create the path on
+encrypted EPHEMERAL storage and expose it to kubelet. The DaemonSet must not rely on
+kubelet creating an unconfigured child below Talos's `/var/mnt` mount namespace because
+that parent is read-only. Ordinary pod restarts retain the node-local position data, which
+is not backed up.
 
 The DaemonSet uses only the host access needed to read those files and write its position
 state. It does not receive Talos API credentials, Kubernetes Secrets access, or a public
