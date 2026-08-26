@@ -112,7 +112,7 @@ and validate the repository identity before editing an encrypted manifest:
 ```bash
 just repo secrets
 mise exec -- sops kubernetes/path/to/secret.sops.yaml
-just repo verify
+just repo validate
 ```
 
 There is not yet a Just recipe for interactive SOPS editing, so this is an

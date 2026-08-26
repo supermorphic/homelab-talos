@@ -24,7 +24,7 @@ The developer workflow is:
 just repo secrets
 just talos generate
 just talos validate
-just repo verify
+just repo validate
 ```
 
 Generation is local and non-mutating. Applying a rendered config is a separate
@@ -38,7 +38,7 @@ all three configs in strict metal mode and asserts the current endpoint, network
 Secure Boot installer, CNI, kube-proxy, encryption, and volume decisions.
 
 `just talos source-validate` is the focused source-only check used internally by
-`generate`, `validate`, and `just repo verify`. Developers may run it directly
+`generate`, `validate`, and `just repo validate`. Developers may run it directly
 when changing only trackable Talhelper inputs.
 
 ## Installation Workflow

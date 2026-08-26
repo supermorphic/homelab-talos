@@ -1367,7 +1367,7 @@ links-validate:
     scripts/validate/links-test.sh
 
 # Run repository and declarative Talos source validation.
-verify: toolchain-validate verify-files verify-shell-scripts
+validate: toolchain-validate validate-files validate-shell-scripts
     just talos source-validate
     just repo secret-scan
     @echo "Repository and Talos source checks passed."
@@ -1423,7 +1423,7 @@ require-bash:
 # Parse and ShellCheck every Bash validation, verification, test, and probe
 # entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
-verify-shell-scripts:
+validate-shell-scripts:
     @for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
     @for script in $(find scripts/hooks scripts/repository scripts/secrets scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
       bash -n "$script"; \
@@ -1432,7 +1432,7 @@ verify-shell-scripts:
     @if rg -n 'shellcheck disable=SC2251' scripts/validate scripts/verify; then echo 'SC2251 suppressions can hide non-gating absence assertions.' >&2; exit 1; fi
 
 # Verify ignore boundaries and SOPS policy.
-verify-files: require-bash
+validate-files: require-bash
     @bash --version | head -n 1
     @scripts/test/hooks-test.sh
     @scripts/test/external-dns-provider-rollout-test.sh

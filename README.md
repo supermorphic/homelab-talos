@@ -125,7 +125,7 @@ tools, and validate the checkout:
 brew install mise bash
 mise trust
 mise install --locked
-mise exec -- just repo verify
+mise exec -- just repo validate
 ```
 
 `mise install --locked` is required on the first clone because `just` is itself a
@@ -139,13 +139,13 @@ Activate mise, then call Just directly:
 
 ```bash
 eval "$(mise activate zsh)"
-just repo verify
+just repo validate
 ```
 
 Or leave the shell unchanged and execute Just inside the mise environment:
 
 ```bash
-mise exec -- just repo verify
+mise exec -- just repo validate
 ```
 
 Run `just` or `mise exec -- just` to list the command namespaces. Run a namespace
@@ -193,8 +193,8 @@ available for focused developer validation.
 | `just repo pihole-status` | Verify Pi-hole HTTPS, tracked CA, and application-session write policy | `p1` SSH access | Read-only |
 | `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation | `p1` SSH access; `PIHOLE_CA_REFRESH_CONFIRM` | Mutating tracked public trust source after confirmation |
 | `just repo foundation-provider-secrets` | Validate foundation provider credentials and write encrypted Secret manifests plus the ExternalDNS rollout stamp | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `FOUNDATION_PROVIDER_SECRETS_CONFIRM` | Temporary external DNS mutation and tracked source mutation after confirmation |
-| `just repo verify` | Check policy, Talos sources, and tracked content for secrets | — | Available |
-| `just repo verify-files` | Check ignore boundaries and SOPS policy | — | Available; internal validation |
+| `just repo validate` | Check policy, Talos sources, and tracked content for secrets | — | Available |
+| `just repo validate-files` | Check ignore boundaries and SOPS policy | — | Available; internal validation |
 | `just repo secret-scan` | Run the repository secret scans directly | — | Available |
 | `just talos generate` | Render and validate machine configs with Talhelper | `SOPS_AGE_KEY`[`_FILE`] | Available |
 | `just talos validate` | Strictly validate rendered Talos configs and current source policy | — | Available |
@@ -420,7 +420,7 @@ CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity' \
 The connectivity test takes approximately 15–20 minutes. It creates temporary test
 workloads, exercises DNS, services, policy, FQDN, L7, pod, node, and cross-node
 traffic, and removes the test resources afterward. `just kube cilium-validate`
-and `just repo verify` validate local declarative sources; they do not establish
+and `just repo validate` validate local declarative sources; they do not establish
 live cluster health.
 
 Do not use `just bootstrap verify` as a routine check after Cilium is installed.
@@ -480,7 +480,7 @@ Tool upgrades are deliberate repository changes:
 1. Edit the version in `.mise.toml`.
 2. Run `mise install` to install the new version.
 3. Run `mise lock` to refresh cross-platform URLs, checksums, and provenance.
-4. Run `just repo versions` and `just repo verify`.
+4. Run `just repo versions` and `just repo validate`.
 5. Review and commit `.mise.toml` and `mise.lock` together.
 
 Use `mise install --locked` when consuming the repository. Use unlocked
