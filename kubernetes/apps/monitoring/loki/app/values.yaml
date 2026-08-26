@@ -24,6 +24,8 @@ loki:
     per_stream_rate_limit_burst: 2MB
     max_line_size: 256KB
     max_global_streams_per_user: 5000
+    shard_streams:
+      enabled: false
     retention_period: 336h
     max_query_lookback: 336h
   compactor:

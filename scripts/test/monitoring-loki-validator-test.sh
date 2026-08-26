@@ -79,6 +79,26 @@ case "${HELM_RENDER_MUTATION:-}" in
       )
     ' "$render_file"
     ;;
+  shard-streams-enabled)
+    yq ea '
+      (select(.kind == "ConfigMap" and .metadata.name == "loki") |
+        .data."config.yaml") |= (
+          from_yaml |
+          .limits_config.shard_streams.enabled = true |
+          to_yaml
+      )
+    ' "$render_file"
+    ;;
+  shard-streams-missing)
+    yq ea '
+      (select(.kind == "ConfigMap" and .metadata.name == "loki") |
+        .data."config.yaml") |= (
+          from_yaml |
+          del(.limits_config.shard_streams) |
+          to_yaml
+      )
+    ' "$render_file"
+    ;;
   default-recurring-group)
     yq ea '
       (select(.kind == "StatefulSet" and .metadata.name == "loki") |
@@ -109,13 +129,37 @@ HELM_RENDER_MUTATION=discover-service-name \
   expect_fail 'rendered service-name discovery enabled' \
     'Refusing: rendered Loki must disable automatic service-name discovery.'
 
-echo '3. Assigning the default recurring-job group in source values is rejected.'
+echo '3. Omitting the automatic stream-sharding setting from source values is rejected.'
+reset_tree
+yq -i 'del(.loki.limits_config.shard_streams)' "$values"
+expect_fail 'source stream sharding setting missing' \
+  'Refusing: Loki source must explicitly disable automatic stream sharding.'
+
+echo '4. Enabling automatic stream sharding in source values is rejected.'
+reset_tree
+yq -i '.loki.limits_config.shard_streams.enabled = true' "$values"
+expect_fail 'source stream sharding enabled' \
+  'Refusing: Loki source must explicitly disable automatic stream sharding.'
+
+echo '5. Omitting automatic stream sharding only in the pinned render is rejected.'
+reset_tree
+HELM_RENDER_MUTATION=shard-streams-missing \
+  expect_fail 'rendered stream sharding setting missing' \
+    'Refusing: rendered Loki must explicitly disable automatic stream sharding.'
+
+echo '6. Enabling automatic stream sharding only in the pinned render is rejected.'
+reset_tree
+HELM_RENDER_MUTATION=shard-streams-enabled \
+  expect_fail 'rendered stream sharding enabled' \
+    'Refusing: rendered Loki must explicitly disable automatic stream sharding.'
+
+echo '7. Assigning the default recurring-job group in source values is rejected.'
 reset_tree
 yq -i '.singleBinary.persistence.labels."recurring-job-group.longhorn.io/default" = "enabled"' "$values"
 expect_fail 'source default recurring-job group enabled' \
   'Refusing: Loki source PVC labels must contain only source and filesystem-trim assignments.'
 
-echo '4. Assigning the default recurring-job group only in the pinned render is rejected.'
+echo '8. Assigning the default recurring-job group only in the pinned render is rejected.'
 reset_tree
 HELM_RENDER_MUTATION=default-recurring-group \
   expect_fail 'rendered default recurring-job group enabled' \
