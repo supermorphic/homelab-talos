@@ -721,6 +721,11 @@ if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
 	fi
 fi
 
+if [[ "$arguments" == *'-c copy'* && "$last" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' &&
+	"${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'clip-create' ]]; then
+	exit 87
+fi
+
 if [[ "$arguments" == *'-f null -'* && "$arguments" != *'libvmaf='* &&
 	"$arguments" != *']ssim='* && "$arguments" != *']psnr='* &&
 	"$arguments" == *'/diagnostic-'* && "${BENCHMARK_DIAGNOSTIC_FAIL_DECODE:-0}" == '1' ]]; then
@@ -747,11 +752,17 @@ if [[ "${BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS:-}" == 'missing' ]]; then
 	exit 0
 fi
 if [[ "$arguments" == *'stream_side_data'* ]]; then
+	if [[ "${BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE:-0}" == '1' ]]; then
+		exit 87
+	fi
 	jq -n '{streams:[{side_data_list:[
 		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
 		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
 	]}]}'
 	exit 0
+fi
+if [[ "$arguments" == *'format=duration'* && "${BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE:-0}" == '1' ]]; then
+	exit 87
 fi
 if [[ "$arguments" == *'frame=side_data_list'* ]]; then
 	jq -n '{frames:[{side_data_list:[
@@ -761,15 +772,25 @@ if [[ "$arguments" == *'frame=side_data_list'* ]]; then
 	exit 0
 fi
 media="${!#}"
+if [[ "${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'frame-window' &&
+	"$media" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' ]]; then
+	jq -n '{streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],frames:[]}'
+	exit 0
+fi
 target="$(sed -n -E 's/^.*frame-([0-9]+).*$/\1/p' <<<"$media")"
 [[ -n "$target" ]] || target=2
 count="$((target + 3))"
+time_offset=0
+if [[ "$media" == *'-qsv-'* ]]; then
+	time_offset="${BENCHMARK_DIAGNOSTIC_OUTPUT_TIME_OFFSET:-0}"
+	count="$((count + ${BENCHMARK_DIAGNOSTIC_OUTPUT_FRAME_COUNT_DELTA:-0}))"
+fi
 if [[ "${BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW:-0}" == '1' && "$media" == *'/diagnostic-'* ]]; then
 	count="$((target + 2))"
 fi
-jq -n --argjson count "$count" '{
+jq -n --argjson count "$count" --argjson time_offset "$time_offset" '{
 	streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],
-	frames:[range(0;$count) | {best_effort_timestamp_time:(. / 24 | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
+	frames:[range(0;$count) | {best_effort_timestamp_time:(($time_offset + (((. / 24 * 1000000) | floor) / 1000000)) | tostring),pkt_duration_time:"0.041667",key_frame:(if . == 0 then 1 else 0 end),pict_type:(if . == 0 then "I" else "P" end)}]
 }'
 EOF
 	cat >"$stub_bin/id" <<'EOF'
@@ -782,6 +803,10 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
+if [[ "${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'clip-identity' &&
+	"${!#}" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' ]]; then
+	exit 87
+fi
 exec "$REAL_SHA256SUM" "$@"
 EOF
 	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
@@ -878,8 +903,8 @@ EOF
 		RESULTS_STUB_CALLS="$stub_calls" \
 		RESULTS_STUB_PODS_JSON="$pods_json" \
 		"$results_script" "$kubeconfig" "$run_id"
-	[ "$status" -eq 0 ]
-	[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=$expected_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=$expected_reason hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3 hdr_reasons=$expected_reason" ]
+	[ "$status" -ne 0 ]
+	[ "$output" = "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $run_id" ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$stub_calls")" -eq 1 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
@@ -1814,6 +1839,78 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$(jq -r '.validation_hdr' <<<"$output")" = 'passed' ]
 }
 
+@test "diagnostic local alignment ignores whole-clip counts and absolute starts" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_OUTPUT_TIME_OFFSET=10
+	export BENCHMARK_DIAGNOSTIC_OUTPUT_FRAME_COUNT_DELTA=7
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$(tail -n 1 <<<"$output" | jq -r '.runId')"
+	run jq -e '
+		.vmaf.entries | length == 5 and
+		all(.[]; .status == "complete")
+	' "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
+	for evidence in "$BENCHMARK_OUT/runs/$run_id"/diagnostics/vmaf/*/*/evidence.json; do
+		run jq -e 'all(.settings[]; .timeline.zeroOffsetAligned == true)' "$evidence"
+		[ "$status" -eq 0 ]
+	done
+}
+
+@test "diagnostic local alignment requires matching clean local windows within the larger tick" {
+	source="$BATS_TEST_TMPDIR/source-window.json"
+	output_window="$BATS_TEST_TMPDIR/output-window.json"
+	jq -n '
+		def window($start; $count; $time_base; $frame_rate): {
+			decodedFrameCount:$count,
+			stream:{startTime:"0",duration:"90",timeBase:$time_base,averageFrameRate:$frame_rate},
+			frames:[range(0;5) | {frameIndex:(40 + .),bestEffortTimestamp:($start + (["0.000","0.041","0.083","0.124","0.166"][.])),packetDuration:"0.041",keyFrame:false,pictureType:"P"}],
+			sourceWindow:{status:"clean",issue:null}
+		};
+		window("0"; 45; "1/1000"; "24/1")
+	' >"$source"
+	jq -n '
+		def window($start; $count; $time_base; $frame_rate): {
+			decodedFrameCount:$count,
+			stream:{startTime:"90",duration:"90",timeBase:$time_base,averageFrameRate:$frame_rate},
+			frames:[range(0;5) | {frameIndex:(40 + .),bestEffortTimestamp:($start + (["0.000","0.0419","0.083","0.124","0.166"][.])),packetDuration:"0.0419",keyFrame:false,pictureType:"P"}],
+			sourceWindow:{status:"clean",issue:null}
+		};
+		window("10"; 500; "1/90000"; "24/1")
+	' >"$output_window"
+
+	run jq -n -L "$SCRIPTS" --slurpfile source "$source" --slurpfile output "$output_window" '
+		include "diagnostic-contract";
+		diagnostic_local_alignment($source[0]; $output[0])
+	'
+	[ "$status" -eq 0 ]
+	[ "$output" = 'true' ]
+
+	jq '.frames |= map(.frameIndex = [40,41,43,44,45][.frameIndex - 40])' "$source" >"$source.nonconsecutive"
+	jq '.frames |= map(.frameIndex = [40,41,43,44,45][.frameIndex - 40])' "$output_window" >"$output_window.nonconsecutive"
+	run jq -n -L "$SCRIPTS" --slurpfile source "$source.nonconsecutive" --slurpfile output "$output_window.nonconsecutive" '
+		include "diagnostic-contract";
+		diagnostic_local_alignment($source[0]; $output[0])
+	'
+	[ "$status" -eq 0 ]
+	[ "$output" = 'false' ]
+
+	for mutation in \
+		'.frames[4].frameIndex = 46' \
+		'.sourceWindow = {status:"discontinuity",issue:{kind:"gap",afterFrameIndex:40}}' \
+		'.stream.averageFrameRate = "30000/1001"' \
+		'.frames[2].bestEffortTimestamp = "10.100"'; do
+		jq "$mutation" "$output_window" >"$output_window.mutated"
+		run jq -n -L "$SCRIPTS" --slurpfile source "$source" --slurpfile output "$output_window.mutated" '
+			include "diagnostic-contract";
+			diagnostic_local_alignment($source[0]; $output[0])
+		'
+		[ "$status" -eq 0 ]
+		[ "$output" = 'false' ]
+	done
+}
+
 @test "diagnostic VMAF classifier returns the documented verdicts" {
 	fixture="$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json"
 	for case_id in \
@@ -2109,6 +2206,14 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	run awk '/diagnostic-vmaf-.*-source[.]mkv$/ && /-c copy/ {count += 1} END {print count + 0}' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	[ "$output" -eq 5 ]
+	run awk '
+		/-c:v hevc_qsv/ && first_encode == 0 { first_encode = NR }
+		/diagnostic-(vmaf|hdr)-.*-source[.]mkv$/ && /-c copy/ { copies += 1; last_preparation = NR }
+		/^sha256sum .*\/diagnostic-(vmaf|hdr)-.*-source[.]mkv$/ { identities += 1; last_preparation = NR }
+		/^ffprobe .*\/diagnostic-vmaf-.*-source[.]mkv$/ { windows += 1; last_preparation = NR }
+		END { exit !(first_encode > last_preparation && copies == 8 && identities == 8 && windows == 5) }
+	' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
 
 	run jq -e -s --argjson manifest "$manifest_commands" '
 		def bound($command): $command as $needle | any($manifest[]; . == $needle);
@@ -2536,8 +2641,107 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
-# Catches incomplete or missing normalized oracle data being dropped with
-# scratch media or silently promoted to a cause classification.
+# Catches a source-preparation failure allowing another panel entry to consume
+# QSV, or hiding which bounded preparation stage failed.
+@test "diagnostics preparation failures block all encodes and retain exact reasons" {
+	for case_data in \
+		'clip-create|source-clip-create-failed' \
+		'clip-identity|source-clip-identity-unavailable' \
+		'frame-window|source-frame-window-unavailable'; do
+		IFS='|' read -r failure expected_reason <<<"$case_data"
+		prepare_diagnostic_execution_run
+		export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE="$failure"
+
+		run "$SCRIPTS/benchmark.sh" diagnostics
+		[ "$status" -eq 0 ]
+		terminal="$(tail -n 1 <<<"$output")"
+		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
+		run_id="$(jq -r '.runId' <<<"$terminal")"
+		diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+		[ -f "$diagnostic_root/manifest.json" ]
+		[ -f "$diagnostic_root/diagnostic-summary.json" ]
+		[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
+		[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
+		run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+		[ "$status" -eq 0 ]
+		run jq -e --arg reason "$expected_reason" '
+			.status == "harness-blocked" and
+			all(.vmaf.entries[];
+				.status == "harness-blocked" and .classification == "unresolved" and
+				(if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+					.reasons == [$reason]
+				else .reasons == ["source-panel-preparation-aborted"] end)) and
+			all(.hdr.entries[];
+				.status == "harness-blocked" and .classification == "unresolved-oracle" and
+				.reasons == ["source-panel-preparation-aborted"])
+		' "$diagnostic_root/diagnostic-summary.json"
+		[ "$status" -eq 0 ]
+		run jq -e -s --arg reason "$expected_reason" '
+			length == 5 and
+			all(.[];
+				if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+					.status == "harness-blocked" and all(.settings[]; .reason == $reason) and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:[$reason]}
+				else
+					.status == "harness-blocked" and
+					all(.settings[]; .reason == "source-panel-preparation-aborted") and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]}
+				end)
+		' "$diagnostic_root"/vmaf/*/*/evidence.json
+		[ "$status" -eq 0 ]
+		run jq -e -s '
+			length == 3 and all(.[];
+				.status == "harness-blocked" and .reason == "source-panel-preparation-aborted" and
+				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["source-panel-preparation-aborted"]})
+		' "$diagnostic_root"/hdr/*/evidence.json
+		[ "$status" -eq 0 ]
+		run jq -e --arg reason "$expected_reason" '
+			(.vmaf.reasons | sort) == ([$reason,"source-panel-preparation-aborted"] | sort) and
+			.hdr.reasons == ["source-panel-preparation-aborted"]
+		' <<<"$terminal"
+		[ "$status" -eq 0 ]
+		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+
+		unset BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE
+		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	done
+}
+
+@test "diagnostics preparation reasons survive blocked HDR scientific probe failures" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE=clip-create
+	export BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE=1
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	run_id="$(jq -r '.runId' <<<"$(tail -n 1 <<<"$output")")"
+	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run jq -e -s '
+		length == 5 and
+		all(.[];
+			if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+				all(.settings[]; .reason == "source-clip-create-failed")
+			else all(.settings[]; .reason == "source-panel-preparation-aborted")
+			end)
+	' "$diagnostic_root"/vmaf/*/*/evidence.json
+	[ "$status" -eq 0 ]
+	run jq -e -s '
+		length == 3 and all(.[];
+			.status == "harness-blocked" and
+			.reason == "source-panel-preparation-aborted" and
+			.source.streamProbe == {command:[],oracle:{status:"malformed"}} and
+			all(.source.windows[]; .decoded.command == [] and .trace.command == []) and
+			.clip.decoded.command == [] and .clip.trace.command == [] and
+			.encoded.decoded.command == [] and .encoded.trace.command == [])
+	' "$diagnostic_root"/hdr/*/evidence.json
+	[ "$status" -eq 0 ]
+}
+
+# Catches incomplete metric evidence and post-encode identity drift being
+# dropped with scratch media or promoted to a cause classification.
 @test "diagnostics retains harness-blocked evidence for incomplete windows missing metrics and source or image drift" {
 	for failure in incomplete-window libvmaf ssim psnr source-drift image-drift; do
 		prepare_diagnostic_execution_run
@@ -2551,7 +2755,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		esac
 
 		run "$SCRIPTS/benchmark.sh" diagnostics
-		[ "$status" -eq 2 ]
+		[ "$status" -eq 0 ]
 		terminal="$(tail -n 1 <<<"$output")"
 		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
 		run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2603,7 +2807,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 			export BENCHMARK_DIAGNOSTIC_FAIL_DECODE=1
 		fi
 		run "$SCRIPTS/benchmark.sh" diagnostics
-		[ "$status" -eq 1 ]
+		[ "$status" -eq 0 ]
 		terminal="$(tail -n 1 <<<"$output")"
 		[ "$(jq -r '.status' <<<"$terminal")" = 'failed' ]
 		run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2621,6 +2825,37 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
+}
+
+# A published canonical summary is scientific evidence; failure to emit its
+# bounded termination transport is still a protocol failure and must not make
+# the Job Complete.
+@test "diagnostics returns nonzero when terminal publication fails after summary publication" {
+	prepare_diagnostic_execution_run
+	termination_directory="$BATS_TEST_TMPDIR/diagnostic-termination-directory"
+	mkdir -p "$termination_directory"
+	export BENCHMARK_TERMINATION_LOG_PATH="$termination_directory"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -ne 0 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	[ -n "$run_id" ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json" ]
+	[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+}
+
+@test "diagnostics returns nonzero when summary publication fails before terminal emission" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_PUBLISH_FAILURE=summary
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -ne 0 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	[ -n "$run_id" ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json" ]
+	[ -e "$BENCHMARK_SCRATCH/$run_id" ]
+	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
 @test "quality passes title HDR metadata through orchestration and rejects missing output metadata" {

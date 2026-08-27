@@ -7,7 +7,17 @@ def diagnostic_decimal_units:
 	((.whole | tonumber) * 1000000000 + $fraction) as $units |
 	if .sign == "-" then -$units else $units end;
 
-def diagnostic_continuity:
+def diagnostic_time_base:
+	capture("^(?<numerator>[0-9]+)/(?<denominator>[1-9][0-9]*)$") |
+	{numerator:(.numerator | tonumber),denominator:(.denominator | tonumber)} |
+	select(.numerator > 0);
+
+def diagnostic_within_tick($delta_units; $time_base):
+	($time_base | diagnostic_time_base) as $tick |
+	(if $delta_units < 0 then -$delta_units else $delta_units end) as $absolute |
+	($absolute * $tick.denominator) <= ($tick.numerator * 1000000000);
+
+def diagnostic_continuity($time_base):
 	. as $window |
 	reduce range(1; ($window | length)) as $index
 		({status:"clean",issue:null};
@@ -18,18 +28,46 @@ def diagnostic_continuity:
 			($previous.bestEffortTimestamp | diagnostic_decimal_units) as $previous_timestamp |
 			($current.bestEffortTimestamp | diagnostic_decimal_units) as $current_timestamp |
 			($previous.packetDuration | diagnostic_decimal_units) as $previous_duration |
-			if $previous_duration <= 0 then
-				{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
-			elif $current_timestamp == $previous_timestamp then
+			($current_timestamp - ($previous_timestamp + $previous_duration)) as $difference |
+			if $current_timestamp == $previous_timestamp then
 				{status:"discontinuity",issue:{kind:"repeat",afterFrameIndex:$previous.frameIndex}}
 			elif $current_timestamp < $previous_timestamp then
 				{status:"discontinuity",issue:{kind:"non-monotonic-timestamp",afterFrameIndex:$previous.frameIndex}}
-			elif $current_timestamp > ($previous_timestamp + $previous_duration) then
-				{status:"discontinuity",issue:{kind:"gap",afterFrameIndex:$previous.frameIndex}}
-			elif $current_timestamp < ($previous_timestamp + $previous_duration) then
+			elif $previous_duration <= 0 then
 				{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
-			else . end
+			elif diagnostic_within_tick($difference; $time_base) then .
+			elif $difference > 0 then
+				{status:"discontinuity",issue:{kind:"gap",afterFrameIndex:$previous.frameIndex}}
+			else
+				{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
+			end
 		 end);
+
+def diagnostic_local_alignment($source; $output):
+	if
+		($source.frames | length) == 5 and
+		($output.frames | length) == 5 and
+		($source.frames | map(.frameIndex)) == ($output.frames | map(.frameIndex)) and
+		($source.frames | map(.frameIndex)) == [range($source.frames[0].frameIndex; $source.frames[0].frameIndex + 5)] and
+		$source.sourceWindow.status == "clean" and
+		$output.sourceWindow.status == "clean" and
+		$source.stream.averageFrameRate == $output.stream.averageFrameRate
+	then
+		($source.stream.timeBase | diagnostic_time_base) as $source_tick |
+		($output.stream.timeBase | diagnostic_time_base) as $output_tick |
+		(if $source_tick.numerator * $output_tick.denominator >= $output_tick.numerator * $source_tick.denominator
+		 then $source.stream.timeBase else $output.stream.timeBase end) as $larger_time_base |
+		($source.frames[0].bestEffortTimestamp | diagnostic_decimal_units) as $source_start |
+		($output.frames[0].bestEffortTimestamp | diagnostic_decimal_units) as $output_start |
+		all(range(0; 5); . as $index |
+			($source.frames[$index].bestEffortTimestamp | diagnostic_decimal_units) as $source_timestamp |
+			($output.frames[$index].bestEffortTimestamp | diagnostic_decimal_units) as $output_timestamp |
+			($source.frames[$index].packetDuration | diagnostic_decimal_units) as $source_duration |
+			($output.frames[$index].packetDuration | diagnostic_decimal_units) as $output_duration |
+			diagnostic_within_tick((($source_timestamp - $source_start) - ($output_timestamp - $output_start)); $larger_time_base) and
+			diagnostic_within_tick(($source_duration - $output_duration); $larger_time_base)
+		)
+	else false end;
 
 def diagnostic_exact_keys($keys):
 	type == "object" and ((keys | sort) == ($keys | sort));
@@ -96,6 +134,28 @@ def diagnostic_unique_metric_offset($metric):
 		if ($best_offsets | length) == 1 then {state: "unique", offset: $best_offsets[0]}
 		else {state: "tie"} end
 	end;
+
+# Derive the only timeline facts that can affect the VMAF classifier. Callers
+# supply the five redacted offset values, so this predicate is usable by the
+# producer and by both read-only evidence readers.
+def diagnostic_vmaf_timeline($source; $output; $offsets; $observed):
+	({offsets:$offsets} | diagnostic_unique_metric_offset("ssim")) as $ssim_best |
+	({offsets:$offsets} | diagnostic_unique_metric_offset("psnr")) as $psnr_best |
+	{
+		zeroOffsetAligned:diagnostic_local_alignment($source; $output),
+		discontinuity:(
+			if
+				$ssim_best.state == "unique" and $psnr_best.state == "unique" and
+				$ssim_best.offset == $psnr_best.offset and $ssim_best.offset != 0
+			then
+				([$source.frames[] | select(.frameIndex == $observed)][0].bestEffortTimestamp) as $source_timestamp |
+				([$output.frames[] | select(.frameIndex == ($observed + $ssim_best.offset))][0].bestEffortTimestamp) as $output_timestamp |
+				if $source_timestamp == $output_timestamp then
+					{kind:"timestamp-discontinuity",offset:$ssim_best.offset}
+				else null end
+			else null end
+		)
+	};
 
 def diagnostic_unique_target_minimum($metric):
 	([.offsets[] | select(.[$metric] != null) | .[$metric]] | length) == 5 and

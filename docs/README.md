@@ -54,7 +54,7 @@
 - [014 — Plex Remote-Access Detection](specs/014-plex-remote-access-detection.md) — Describes Hubble-based aggregate detection for sustained off-cluster Plex traffic.
 - [015 — Alerting Architecture](specs/015-alerting-architecture.md) — Describes rule ownership, validation coverage, routing, and focused workload-policy alerts.
 - [016 — Cert-manager Staging Retirement](specs/016-cert-manager-staging-retirement.md) — Records why permanent staging resources were removed and the production certificate boundary.
-- [017 — FileFlows QSV HEVC ICQ Evaluation](specs/017-fileflows-qsv-hevc-icq-evaluation.md) — Describes the ICQ benchmark design, diagnostics, quality gates, and evidence contract.
+- [017 — FileFlows QSV HEVC ICQ Evaluation](specs/017-fileflows-qsv-hevc-icq-evaluation.md) — Describes the ICQ benchmark design, diagnostics, quality gates, evidence contract, and dated corrective amendments.
 - [018 — Media Integration Health Collector](specs/018-media-integration-health-collector.md) — Records the unimplemented collector design, its active-probe correction, and why Gatus replaced it.
 - [019 — Media Integration Health with Gatus](specs/019-media-integration-health-gatus.md) — Records the implemented Gatus design and its final authenticated API-reachability semantics.
 - [020 — Documentation Lifecycle Migration](specs/020-documentation-lifecycle-migration.md) — Describes the migration from legacy lifecycle records to the current documentation structure.

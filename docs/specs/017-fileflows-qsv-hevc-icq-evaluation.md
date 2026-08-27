@@ -405,3 +405,188 @@ This design also left LA-ICQ relabeling, AV1, production x265, driver, runtime, 
 hardware changes, Talos, Kubernetes, Cilium, or GPU-plugin changes, TV or downloads
 access, FileFlows deployment, media replacement, and cleanup outside exact-run authority
 out of scope.
+
+## Corrective amendment — 2026-08-26 diagnostic preparation and completion
+
+This amendment corrects the bounded `qsv-hevc-icq-v1` diagnostic harness after run
+`20260826T014246Z-373a665e`. It preserves the original evaluation purpose, fixed panel,
+authority boundaries, evidence lineage, and downstream consequences. It does not
+reinterpret the retained run, weaken the quality gate, select an ICQ setting, authorize a
+quality benchmark, or authorize FileFlows deployment or media replacement.
+
+### Defects and evidence
+
+The bounded reader validated the retained run's complete schema-version-1 evidence set.
+Four VMAF cases completed both settings. For each case, SSIM and PSNR selected offset zero
+uniquely, while the source window was marked discontinuous because a 42-millisecond
+timestamp step followed a recorded 41-millisecond packet duration in a stream with a
+`1/1000` time base. The exact continuity predicate treated the one-tick representation
+difference as a gap. Exact comparison of whole-clip frame counts and absolute source and
+output timelines also made `zeroOffsetAligned` false despite the bounded offset-zero
+metric agreement.
+
+The fifth VMAF case stopped before QSV encoding. Its retained reason,
+`source-clip-unavailable`, cannot distinguish stream-copy creation failure, clip-identity
+failure, and frame-window failure. The producer began other panel encodes before it had
+validated every source input, so one preparation failure still consumed most of the GPU
+panel.
+
+The producer successfully published the complete diagnostic summary and termination
+payload with scientific status `harness-blocked`, then deliberately returned process
+status 2. Because the Job has `backoffLimit: 0` and `restartPolicy: Never`, Kubernetes
+immediately reported the generic terminal reason `BackoffLimitExceeded`. No retry
+occurred. That reason described the container exit policy, not missing evidence or an
+encoder result.
+
+All three HDR rows completed. Their authoritative bounded frame and trace evidence,
+stream-copy clip evidence, and encoded-output evidence agreed. The separate stream-level
+ffprobe oracle returned null, so the accepted classification remains
+`source-probe-defect`. This amendment does not change the HDR classification predicate.
+
+### Preserved diagnostic contract
+
+The correction preserves:
+
+- one immutable diagnostics run directory with no resume or replacement;
+- the exact five VMAF cases at ICQ 16 and ICQ 30;
+- the exact three HDR cases at ICQ 16;
+- exactly ten VMAF plus three HDR QSV encodes when source preparation succeeds;
+- no fourteenth QSV encode or exploratory encoder setting;
+- the existing mounts, run-scoped output, scratch-only media, security context, GPU
+  request, Plex anti-affinity, finite deadline, and redaction boundaries;
+- producer and reader validation through the same pure diagnostic predicates; and
+- isolation from quality, selected settings, savings, contention, findings, and
+  production media.
+
+The result document shape and diagnostic schema-version-1 identity remain unchanged. The
+manifest's script digests distinguish the corrected producer and readers from earlier
+runs. New reasons remain closed enumerations in the producer, in-cluster collector,
+workstation reader, termination projection, and tests.
+
+### Source-preparation gate
+
+The producer creates and validates all fixed source inputs before the first QSV encode.
+For each of the five VMAF cases it must:
+
+1. create the 90-second stream-copy source clip;
+2. record the clip identity; and
+3. record the exact five-frame source window around the fixed observed frame.
+
+For each of the three HDR cases it must create the 90-second stream-copy source clip and
+record the identities needed by the existing HDR evidence path. HDR metadata oracle
+outcomes remain scientific evidence and do not become preparation failures.
+
+The gate records one specific reason at a failing boundary:
+
+- `source-clip-create-failed`;
+- `source-clip-identity-unavailable`; or
+- `source-frame-window-unavailable`.
+
+If any fixed input fails preparation, the producer performs zero QSV encodes and
+publishes a complete canonical eight-entry summary. The failed input retains its specific
+reason. Inputs whose own preparation succeeded use
+`source-panel-preparation-aborted`. All affected evidence remains `harness-blocked` and
+unresolved. This correction does not retry extraction, change seek placement, transcode
+the source, or select a nearby window.
+
+If all source inputs pass, the producer executes the unchanged census: ten VMAF encodes
+and three HDR encodes. Later encoder, decoder, metric, oracle, or identity failures keep
+their existing evidence behavior and do not trigger an automatic second run.
+
+### Timestamp continuity correction
+
+Continuity remains derived only from each consecutive pair in the five recorded frame
+timestamps, the preceding packet duration, and the declared stream time base. The
+producer and both readers convert the values exactly before comparison.
+
+For each pair, `expected` is the previous timestamp plus the previous packet duration,
+and `tick` is one positive unit of the stream time base. The predicate:
+
+- reports `repeat` when the current timestamp equals the previous timestamp;
+- reports `non-monotonic-timestamp` when the current timestamp is earlier;
+- reports `inconsistent-duration` when the preceding duration is not positive;
+- accepts the relationship when the absolute difference between `current` and
+  `expected` is no greater than `tick`;
+- otherwise reports `gap` when `current` is later than `expected`; and
+- otherwise reports `inconsistent-duration` when `current` is earlier than `expected`.
+
+The one-tick tolerance accounts only for timestamp representation quantization. It does
+not hide repeated frames, non-monotonic timestamps, nonpositive durations, or a
+difference larger than one tick. A real fixture must prove that a difference larger than
+one tick remains discontinuous.
+
+### Bounded zero-offset alignment correction
+
+`zeroOffsetAligned` becomes a local five-frame predicate instead of an equality check on
+whole-clip decoded-frame count and absolute timestamp values. It is true only when:
+
+- source and output windows contain the same five consecutive frame indices;
+- both windows have clean continuity under the one-tick rule;
+- their average frame rates are equal;
+- after subtracting the first timestamp in each window, each corresponding timestamp
+  differs by no more than the larger of the two stream time-base ticks; and
+- each corresponding packet duration differs by no more than that same bound.
+
+Absolute start timestamps and whole-clip decoded-frame counts are not local alignment
+oracles. SSIM and PSNR stay independent content oracles used by classification; they do
+not make the timeline predicate true by themselves.
+
+The accepted VMAF classifier rules remain in force. Temporal classification does not
+require reset-PTS VMAF to clear zero. Encoder/output classification excludes a nonzero
+SSIM/PSNR pairing only when bounded timeline evidence corroborates that pairing.
+Reset-PTS VMAF remains supporting evidence. Positive-infinity PSNR remains explicit
+`{"kind":"positive-infinity"}` evidence, ranks above every finite value, is unique-best
+only when one offset is infinite, and is a tie when two or more offsets are infinite. No
+finite surrogate is permitted.
+
+### Job and evidence completion correction
+
+The diagnostic summary's `status` remains the scientific and harness outcome:
+`complete`, `failed`, or `harness-blocked`. The termination payload retains that status
+and its allowlisted reasons.
+
+The container returns success only after it publishes the complete canonical manifest,
+five VMAF evidence documents, three HDR evidence documents, and diagnostic summary, then
+emits a valid termination payload. This applies when the summary status is `failed` or
+`harness-blocked`. Kubernetes Job `Complete` therefore means only that the bounded
+evidence protocol completed.
+
+The container returns nonzero when it cannot create, validate, finalize, or publish that
+canonical evidence set, or cannot emit its valid termination payload. With
+`backoffLimit: 0`, Kubernetes can report such a producer failure as
+`BackoffLimitExceeded`. Readers determine scientific status from the authenticated
+termination payload and summary, never from the Job condition alone.
+
+The ordinary results reader and bounded evidence reader accept a terminal owned Job only
+when Job state, termination payload, run identity, artifact identity, and summary
+provenance agree. They continue to reject active, ambiguous, foreign, noncanonical, or
+incomplete evidence.
+
+### Validation and next pass
+
+Independent fixtures and executable tests must prove:
+
+- all source preparation occurs before the first QSV encode;
+- one failed source preparation produces zero QSV encodes and a complete eight-entry
+  summary with the specific failing reason;
+- successful preparation performs exactly ten VMAF and three HDR encodes;
+- 41/42-millisecond cadence in a `1/1000` time base is clean;
+- repeat, non-monotonic, nonpositive-duration, and differences greater than one tick
+  remain discontinuous;
+- bounded relative source/output timelines align despite different absolute starts;
+- a nonzero timeline-correlated metric pairing does not become encoder/output defect;
+- one positive-infinity PSNR value is uniquely best while multiple infinities tie;
+- a published `harness-blocked` or `failed` summary completes the Job protocol; and
+- missing or invalid canonical publication still returns nonzero.
+
+Focused source-contract, runmeta, benchmark, dispatch, diagnostic-evidence, and census
+suites and the offline benchmark validator must pass. The
+`mise exec -- just kube encode-benchmark-validate` and `mise exec -- just ci` gates must
+also pass before publication.
+
+After merge and natural Flux reconciliation, the next pass requires a fresh preflight and
+new immutable run ID. If preparation succeeds, it performs the unchanged 13-encode panel.
+If preparation fails, it stops before GPU work and the specific bounded reason determines
+the next correction. No monitoring schedule is created before a live Job exists. A
+diagnostic result still requires a separate accepted decision before any fresh quality
+benchmark or encoding deployment.

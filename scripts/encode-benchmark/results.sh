@@ -13,8 +13,11 @@ expected_api='https://192.168.90.20:6443'
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "$script_directory/../.." && pwd)"
 samples_source="$repository_root/kubernetes/apps/media/encode-benchmark/app/samples.yaml"
+app_directory="$repository_root/kubernetes/apps/media/encode-benchmark/app"
 # shellcheck disable=SC1091
 source "$repository_root/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh"
+# shellcheck disable=SC1091
+source "$script_directory/diagnostic-producer-contract.sh"
 samples_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-samples.XXXXXX")"
 diagnostic_terminal_document="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-results-terminal.XXXXXX")"
 trap 'rm -f -- "$samples_document" "$diagnostic_terminal_document"' EXIT
@@ -38,6 +41,18 @@ api_server="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 
 configured_image="$(yq -e -r '.runtime.image | select(test("^[^@[:space:]]+@sha256:[0-9a-f]{64}$"))' "$samples_document")"
 configured_digest="${configured_image##*@}"
+rendered_source="$(kustomize build "$app_directory")"
+diagnostic_scripts_count="$(yq -N -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$"))) | .metadata.name' <<<"$rendered_source" | wc -l | tr -d '[:space:]')"
+[[ "$diagnostic_scripts_count" == '1' ]] || {
+	echo 'diagnostic result provenance rejected: rendered scripts identity is ambiguous' >&2
+	exit 65
+}
+diagnostic_scripts_configmap="$(yq -N -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$"))) | .metadata.name' <<<"$rendered_source")"
+diagnostic_expected_node="$(contract_passing_diagnostic_nodes "$samples_document" | sed -n '1p')"
+[[ -n "$diagnostic_expected_node" ]] || {
+	echo 'diagnostic result provenance rejected: committed capability evidence is unavailable' >&2
+	exit 65
+}
 selector="app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id"
 diagnostic_terminal_max_bytes="$CONTRACT_DIAGNOSTIC_TERMINAL_MAX_BYTES"
 
@@ -117,8 +132,10 @@ diagnostic_sanitize_terminal() {
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal diagnostic_jobs_json
+	local diagnostic_pods_document producer_payload expected_image_configmap name_hash
 	local reader_job="encode-benchmark-evidence-reader-${requested_run_id,,}"
+	local diagnostic_job="encode-benchmark-diagnostics-${requested_run_id,,}"
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
@@ -184,20 +201,36 @@ diagnostic_results() {
 		return 0
 		;;
 	Succeeded | Failed)
-		jq -j '
-			[
-				.status.containerStatuses[]?
-				| select(.name == "benchmark")
-				| (.state.terminated.message // .lastState.terminated.message // "")
-			] |
-			if length == 1 then .[0]
-			elif length == 0 then ""
-			else error("ambiguous diagnostic terminal message")
-			end
-		' <<<"$pod_json" >"$diagnostic_terminal_document" 2>/dev/null || {
-			printf '%s\n' "$(diagnostic_terminal_schema_error ambiguous-terminal-message)" >&2
+		if [[ "$pod_phase" == 'Failed' ]] && ! diagnostic_producer_failed_phase_supported "$requested_run_id"; then
+			echo "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $requested_run_id" >&2
 			return 1
-		}
+		fi
+		if ! diagnostic_jobs_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+			--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-dispatch=$requested_run_id,homelab-talos/benchmark-run=$requested_run_id,homelab-talos/benchmark-mode=diagnostics" \
+			--output json)"; then
+			echo "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $requested_run_id" >&2
+			return 1
+		fi
+		diagnostic_pods_document="$(jq -n -c --argjson items "$diagnostic_pods" '{items:$items}')" || return 1
+		name_hash="$(printf '%s\n' "$diagnostic_job" | sha256sum | awk '{print substr($1, 1, 12)}')"
+		expected_image_configmap="encode-benchmark-image-$name_hash"
+		if ! producer_payload="$(diagnostic_producer_validate "$diagnostic_jobs_json" "$diagnostic_pods_document" \
+			"$requested_run_id" "$diagnostic_expected_node" "$configured_image" \
+			"$diagnostic_scripts_configmap" "$expected_image_configmap")"; then
+			if [[ "$producer_payload" == 'termination-invalid' ]] &&
+				jq -e -j '.items[0].status.containerStatuses[0].state.terminated.message' \
+					<<<"$diagnostic_pods_document" >"$diagnostic_terminal_document" 2>/dev/null; then
+				if sanitized_terminal="$(diagnostic_sanitize_terminal "$diagnostic_terminal_document" "$requested_run_id")"; then
+					diagnostic_terminal_schema_error 'noncanonical' >&2
+				else
+					printf '%s\n' "$sanitized_terminal" >&2
+				fi
+				return 1
+			fi
+			echo "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $requested_run_id" >&2
+			return 1
+		fi
+		printf '%s' "$producer_payload" >"$diagnostic_terminal_document"
 		sanitized_terminal="$(diagnostic_sanitize_terminal "$diagnostic_terminal_document" "$requested_run_id")" || {
 			printf '%s\n' "$sanitized_terminal" >&2
 			return 1

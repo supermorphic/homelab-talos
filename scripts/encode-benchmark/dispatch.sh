@@ -38,6 +38,8 @@ fi
 }
 # shellcheck disable=SC1091
 source "$app_directory/scripts/contract.sh"
+# shellcheck disable=SC1091
+source "$script_directory/diagnostic-producer-contract.sh"
 
 temp_directory=''
 remote_cleanup_armed=0
@@ -266,23 +268,19 @@ ensure_run_available() {
 }
 
 require_terminal_diagnostics_job() {
-	local run_id="$1" existing expected_name
+	local run_id="$1" expected_name expected_node expected_image_configmap jobs pods
 	expected_name="encode-benchmark-diagnostics-${run_id,,}"
-	existing="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+	expected_node="$(require_diagnostic_capability_evidence)" || return
+	expected_image_configmap="$(image_evidence_configmap_name "$expected_name")" || return
+	jobs="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
 		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id,homelab-talos/benchmark-mode=diagnostics" \
-		--output json)"
-	jq -e --arg run "$run_id" --arg name "$expected_name" '
-		(.items | type == "array" and length == 1) and (.items[0] |
-		.metadata.name == $name and
-		.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
-		.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
-		.metadata.labels."homelab-talos/benchmark-run" == $run and
-		.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics" and
-		.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
-		((.status.active // 0) == 0) and
-		([.status.conditions[]? | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length == 1))
-	' <<<"$existing" >/dev/null || {
-		echo "diagnostic evidence reader requires one terminal owned diagnostics Job: $run_id" >&2
+		--output json)" || return
+	pods="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
+		--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-run=$run_id,homelab-talos/benchmark-mode=diagnostics" \
+		--output json)" || return
+	diagnostic_producer_validate "$jobs" "$pods" "$run_id" "$expected_node" \
+		"$configured_image" "$scripts_configmap" "$expected_image_configmap" >/dev/null || {
+		echo "diagnostic evidence reader requires authenticated terminal diagnostics provenance: $run_id" >&2
 		return 65
 	}
 }
@@ -1191,7 +1189,7 @@ dispatch_evidence_reader() {
 	name="encode-benchmark-evidence-reader-${run_id,,}"
 	job="$temp_directory/evidence-reader.yaml"
 	render_job "$job" diagnostic-evidence-reader "$run_id" "$run_id" '' "$name" \
-		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence "$panel_sha256" "$evidence_panel"
+		/scripts/diagnostic-evidence.sh collect "$run_id" /evidence "$panel_sha256" "$evidence_panel" "$configured_image"
 	remove_mounts_and_volumes "$job" media out scratch samples image-evidence
 	RUN_ID="$run_id" yq -i '
 		del(.spec.template.spec.containers[0].env) |
@@ -1206,6 +1204,9 @@ dispatch_evidence_reader() {
 		.spec.template.spec.containers[0].volumeMounts += [{"name":"evidence","mountPath":"/evidence","subPath":"benchmark/runs/" + strenv(RUN_ID) + "/diagnostics","readOnly":true}] |
 		.spec.template.spec.volumes += [{"name":"evidence","persistentVolumeClaim":{"claimName":"media-data","readOnly":true}}]
 	' "$job"
+	# Repeat the authenticated producer observation immediately before the only
+	# consequential mutation in this workflow.
+	require_terminal_diagnostics_job "$run_id" || return
 	create_job "$job" >/dev/null
 	printf 'run_id=%s collector_job=%s\n' "$run_id" "$name"
 }

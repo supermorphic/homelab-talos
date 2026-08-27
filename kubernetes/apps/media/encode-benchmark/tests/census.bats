@@ -408,12 +408,12 @@ EOF
 # non-monotonic timestamp sequence clean.  The fixture is ffprobe-shaped and
 # includes a packet-duration relationship that cannot be recovered by display
 # rounding.
-@test "diagnostic window marks timestamp gaps and non-monotonic frames as discontinuities" {
+@test "diagnostic window accepts one-tick timestamp quantization and preserves discontinuity kinds" {
 	create_diagnostic_probe_stubs
 	export PATH="$stub_bin:$PATH"
 	media="$BATS_TEST_TMPDIR/Diagnostic Source.mkv"
 	printf 'diagnostic probe bytes' >"$media"
-	fixture="$SOURCE_FIXTURES/ffprobe/diagnostic-window-discontinuity.json"
+	fixture="$SOURCE_FIXTURES/ffprobe/diagnostic-window-quantized.json"
 	cat >"$stub_bin/ffprobe" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -424,10 +424,48 @@ EOF
 	run "$SCRIPTS/probe.sh" diagnostic-window "$media" 0 90 40 44
 	[ "$status" -eq 0 ]
 	run jq -e '
-		.sourceWindow.status == "discontinuity" and
-		.sourceWindow.issue.kind == "gap" and
-		.sourceWindow.issue.afterFrameIndex == 41 and
+		.sourceWindow == {status:"clean",issue:null} and
 		(.frames | map(.frameIndex)) == [40,41,42,43,44]
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+
+	while IFS=$'\t' read -r expected_kind mutation; do
+		fixture="$BATS_TEST_TMPDIR/mutated-window-$expected_kind.json"
+		jq "$mutation" "$SOURCE_FIXTURES/ffprobe/diagnostic-window-quantized.json" >"$fixture"
+		cat >"$stub_bin/ffprobe" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec jq -c . "$fixture"
+EOF
+		chmod +x "$stub_bin/ffprobe"
+		run "$SCRIPTS/probe.sh" diagnostic-window "$media" 0 90 40 44
+		[ "$status" -eq 0 ]
+		run jq -e --arg kind "$expected_kind" '
+			.sourceWindow.status == "discontinuity" and
+			.sourceWindow.issue.afterFrameIndex == 40 and
+			.sourceWindow.issue.kind == $kind
+		' <<<"$output"
+		[ "$status" -eq 0 ]
+	done <<'EOF'
+repeat	.frames[41].best_effort_timestamp_time = .frames[40].best_effort_timestamp_time
+non-monotonic-timestamp	.frames[41].best_effort_timestamp_time = "1.659"
+inconsistent-duration	.frames[40].pkt_duration_time = "0"
+repeat	.frames[40].pkt_duration_time = "0" | .frames[41].best_effort_timestamp_time = .frames[40].best_effort_timestamp_time
+non-monotonic-timestamp	.frames[40].pkt_duration_time = "0" | .frames[41].best_effort_timestamp_time = "1.659"
+EOF
+
+	fixture="$SOURCE_FIXTURES/ffprobe/diagnostic-window-discontinuity.json"
+	cat >"$stub_bin/ffprobe" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec jq -c . "$fixture"
+EOF
+	chmod +x "$stub_bin/ffprobe"
+	run "$SCRIPTS/probe.sh" diagnostic-window "$media" 0 90 40 44
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.sourceWindow.status == "discontinuity" and
+		.sourceWindow.issue == {kind:"gap",afterFrameIndex:41}
 	' <<<"$output"
 	[ "$status" -eq 0 ]
 }

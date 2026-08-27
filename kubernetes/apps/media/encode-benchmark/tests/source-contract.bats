@@ -8,7 +8,7 @@ setup() {
 	yq -r '.data."samples.json"' "$samples" >"$samples_json"
 }
 
-@test "canonical shell validation includes the diagnostic evidence results helper" {
+@test "canonical shell validation includes diagnostic evidence helper sources" {
 	validator='scripts/validate/encode-benchmark.sh'
 	run awk '
 		/^shell_sources[+]=[(]/ { in_inventory = 1 }
@@ -17,6 +17,7 @@ setup() {
 	' "$validator"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"$diagnostic_evidence_results_helper"'* ]]
+	[[ "$output" == *'"$diagnostic_producer_contract_helper"'* ]]
 }
 
 # Catches the source contract reverting to the older schema or a partial ICQ
