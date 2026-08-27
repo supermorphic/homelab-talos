@@ -1,0 +1,45 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: public-webhook-gateway
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager-config
+    - name: envoy-gateway
+    - name: metallb-config
+  interval: 1h
+  path: ./kubernetes/apps/networking/public-webhook-gateway/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  suspend: false
+  timeout: 15m
+  wait: true
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: public-webhook-route
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: public-webhook-gateway
+    - name: n8n
+  interval: 1h
+  path: ./kubernetes/apps/networking/public-webhook-gateway/route
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  suspend: true
+  timeout: 5m
+  wait: true
