@@ -14,6 +14,9 @@ configMapGenerator:
   - name: n8n-values
     files:
       - values.yaml=values.yaml
+  - name: n8n-workflow-templates
+    files:
+      - platform-canary.json=workflows/platform-canary.json
 generatorOptions:
   disableNameSuffixHash: true
   labels:

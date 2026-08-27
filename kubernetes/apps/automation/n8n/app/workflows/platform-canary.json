@@ -1,0 +1,78 @@
+{
+  "name": "Platform Canary",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "platform-canary",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        0
+      ],
+      "id": "a5f8bb7a-f36a-46de-b979-68fd7018e7cd",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4d0212e8-76d8-4af1-b27f-e384c2dff9a4",
+              "name": "status",
+              "value": "ok",
+              "type": "string"
+            },
+            {
+              "id": "dcb396bd-4e92-42f9-b0e7-40c987dc2a59",
+              "name": "correlation",
+              "value": "={{ $json.body.correlation }}",
+              "type": "string"
+            },
+            {
+              "id": "41ef4b89-eebd-4aa5-ae45-1cd37d81d5cb",
+              "name": "executionId",
+              "value": "={{ $execution.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        40,
+        0
+      ],
+      "id": "b41a8f0f-fcf5-42d5-951c-c46b38f67b7a",
+      "name": "Edit Fields"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": []
+}

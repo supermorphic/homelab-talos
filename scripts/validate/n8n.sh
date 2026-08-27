@@ -37,6 +37,7 @@ n8n_route="$n8n_app/httproute.yaml"
 n8n_grant="$n8n_app/referencegrant.yaml"
 n8n_monitor="$n8n_app/servicemonitor.yaml"
 n8n_policy="$n8n_app/ciliumnetworkpolicy.yaml"
+n8n_workflow="$n8n_app/workflows/platform-canary.json"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -147,6 +148,10 @@ for file in "$n8n_ks" "$n8n_kustomization" "$n8n_source" "$n8n_release" \
   "$n8n_policy"; do
   [[ -f "$file" ]] || { echo "Missing n8n chart source: $file" >&2; exit 1; }
 done
+[[ -f "$n8n_workflow" ]] || {
+  echo "Missing n8n Platform Canary workflow template: $n8n_workflow" >&2
+  exit 1
+}
 yq -e '.resources[] | select(. == "./automation")' kubernetes/apps/kustomization.yaml >/dev/null
 yq -e '.resources[] | select(. == "./public-webhook-gateway/ks.yaml")' \
   kubernetes/apps/networking/kustomization.yaml >/dev/null
@@ -578,11 +583,79 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
+expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
+actual_n8n_configmaps="$(yq -o=json -I=0 '
+  [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
+' "$n8n_kustomization")"
 [[ "${n8n_resource_counts[n8n-runtime.sops.yaml]:-0}" -le 1 && \
-  "$(yq -r '[.configMapGenerator[].name] | join(",")' "$n8n_kustomization")" == \
-    'n8n-values' && \
+  "$actual_n8n_configmaps" == "$expected_n8n_configmaps" && \
   "$(yq -r '.generatorOptions.disableNameSuffixHash' "$n8n_kustomization")" == 'true' ]] || {
-  echo 'The n8n app must generate one stable values ConfigMap and select runtime ciphertext at most once.' >&2
+  echo 'The n8n app must package the stable values and inactive Platform Canary template ConfigMaps.' >&2
+  exit 1
+}
+
+jq -e . "$n8n_workflow" >/dev/null || {
+  echo 'Platform Canary must be valid importable workflow JSON.' >&2
+  exit 1
+}
+jq -e '
+  .name == "Platform Canary" and
+  .active == false and
+  (.nodes | type == "array" and length == 2) and
+  ([.nodes[] | .type] | sort) == ["n8n-nodes-base.set", "n8n-nodes-base.webhook"] and
+  ([.nodes[] | select(
+    .type == "n8n-nodes-base.webhook" and
+    .name == "Webhook" and
+    .parameters.responseMode == "lastNode" and
+    .parameters.authentication == "headerAuth"
+  )] | length) == 1 and
+  ([.nodes[] | select(
+    .type == "n8n-nodes-base.set" and .name == "Edit Fields"
+  )] | length) == 1 and
+  .connections == {
+    "Webhook": {
+      "main": [[{"node": "Edit Fields", "type": "main", "index": 0}]]
+    }
+  } and
+  ([.. | objects | select(has("credentials"))] | length) == 0
+' "$n8n_workflow" >/dev/null || {
+  echo 'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.' >&2
+  exit 1
+}
+# shellcheck disable=SC2016 # The expected n8n expressions are literal workflow JSON.
+expected_canary_fields='[{"name":"correlation","type":"string","value":"={{ $json.body.correlation }}"},{"name":"executionId","type":"string","value":"={{ $execution.id }}"},{"name":"status","type":"string","value":"ok"}]'
+actual_canary_fields="$(jq -c '
+  [.nodes[] | select(.type == "n8n-nodes-base.set") |
+    .parameters.assignments.assignments[] | {name, type, value}] | sort_by(.name)
+' "$n8n_workflow")"
+[[ "$actual_canary_fields" == "$expected_canary_fields" ]] || {
+  echo 'Platform Canary must return only the required status, correlation, and executionId fields.' >&2
+  exit 1
+}
+[[ "$(jq -r '[.settings.saveDataErrorExecution, .settings.saveDataSuccessExecution] | join(",")' \
+  "$n8n_workflow")" == 'all,all' ]] || {
+  echo 'Platform Canary must save successful and failed executions.' >&2
+  exit 1
+}
+workflow_path="$(jq -r '.nodes[] | select(.type == "n8n-nodes-base.webhook") | .parameters.path' \
+  "$n8n_workflow")"
+mapfile -t public_webhook_matches < <(
+  find kubernetes/apps -type f \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print0 |
+    xargs -0 yq ea -r '
+      select(type == "!!map") |
+      select(.kind == "HTTPRoute") |
+      select(.spec.parentRefs[]? | .name == "public-webhooks") |
+      .spec.rules[]?.matches[]?.path? | [.type, .value] | join(",")
+    '
+)
+[[ "${#public_webhook_matches[@]}" == '1' && \
+  "${public_webhook_matches[0]}" == 'Exact,/webhook/platform-canary' ]] || {
+  echo 'The only public production webhook path under kubernetes/apps must be /webhook/platform-canary.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")" == \
+  "/webhook/$workflow_path" ]] || {
+  echo 'The public route and Platform Canary Webhook must use the same production path.' >&2
   exit 1
 }
 

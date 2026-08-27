@@ -63,6 +63,86 @@ expect_fail() {
 reset_tree
 expect_pass
 
+workflow="$tree_root/kubernetes/apps/automation/n8n/app/workflows/platform-canary.json"
+
+reset_tree
+rm -f -- "$workflow"
+expect_fail 'missing Platform Canary workflow template' \
+  'Missing n8n Platform Canary workflow template:'
+
+reset_tree
+yq -i 'del(.configMapGenerator[] | select(.name == "n8n-workflow-templates"))' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/kustomization.yaml"
+expect_fail 'unpackaged Platform Canary workflow template' \
+  'The n8n app must package the stable values and inactive Platform Canary template ConfigMaps.'
+
+reset_tree
+jq '.nodes[0].parameters.path = "route-drift"' "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary route/workflow path drift' \
+  'The public route and Platform Canary Webhook must use the same production path.'
+
+reset_tree
+jq '.nodes += [{"name":"Respond to Webhook","type":"n8n-nodes-base.respondToWebhook"}]' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'prohibited Respond to Webhook node' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
+jq '(.nodes[] | select(.name == "Edit Fields") | .type) = "n8n-nodes-base.postgres"' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'prohibited SQL node' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
+jq '.nodes[0].credentials = {"httpHeaderAuth": {"id": "credential-id", "name": "Platform Canary Header"}}' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary credential binding' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
+jq '(.nodes[] | select(.name == "Webhook") | .parameters.responseMode) = "onReceived"' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary immediate Webhook response' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
+jq '(.nodes[] | select(.name == "Edit Fields") | .parameters.assignments.assignments[] |
+  select(.name == "status") | .value) = "not-ok"' "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary response status drift' \
+  'Platform Canary must return only the required status, correlation, and executionId fields.'
+
+reset_tree
+jq '.settings.saveDataSuccessExecution = "none"' "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary success execution retention' \
+  'Platform Canary must save successful and failed executions.'
+
+reset_tree
+mkdir -p "$tree_root/kubernetes/apps/automation/unapproved-public-route"
+apply_patch_file="$tree_root/kubernetes/apps/automation/unapproved-public-route/httproute.yaml"
+printf '%s\n' \
+  'apiVersion: gateway.networking.k8s.io/v1' \
+  'kind: HTTPRoute' \
+  'metadata:' \
+  '  name: unapproved-public-webhook' \
+  '  namespace: networking-public' \
+  'spec:' \
+  '  parentRefs:' \
+  '    - name: public-webhooks' \
+  '  rules:' \
+  '    - matches:' \
+  '        - path:' \
+  '            type: Exact' \
+  '            value: /webhook/unapproved' >"$apply_patch_file"
+expect_fail 'additional public production webhook path' \
+  'The only public production webhook path under kubernetes/apps must be /webhook/platform-canary.'
+
 reset_tree
 yq -i '(.spec.postRenderers[0].kustomize.patches[] |
   select(.target.kind == "Deployment") | .target.group) = "wrong.example.io"' \
