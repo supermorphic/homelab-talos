@@ -29,12 +29,12 @@ def diagnostic_continuity($time_base):
 			($current.bestEffortTimestamp | diagnostic_decimal_units) as $current_timestamp |
 			($previous.packetDuration | diagnostic_decimal_units) as $previous_duration |
 			($current_timestamp - ($previous_timestamp + $previous_duration)) as $difference |
-			if $previous_duration <= 0 then
-				{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
-			elif $current_timestamp == $previous_timestamp then
+			if $current_timestamp == $previous_timestamp then
 				{status:"discontinuity",issue:{kind:"repeat",afterFrameIndex:$previous.frameIndex}}
 			elif $current_timestamp < $previous_timestamp then
 				{status:"discontinuity",issue:{kind:"non-monotonic-timestamp",afterFrameIndex:$previous.frameIndex}}
+			elif $previous_duration <= 0 then
+				{status:"discontinuity",issue:{kind:"inconsistent-duration",afterFrameIndex:$previous.frameIndex}}
 			elif diagnostic_within_tick($difference; $time_base) then .
 			elif $difference > 0 then
 				{status:"discontinuity",issue:{kind:"gap",afterFrameIndex:$previous.frameIndex}}

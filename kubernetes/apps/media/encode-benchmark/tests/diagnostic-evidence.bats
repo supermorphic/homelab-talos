@@ -498,30 +498,69 @@ EOF
 	[ "$status" -eq 0 ]
 }
 
-@test "collector projects corrected VMAF source preparation reasons as null continuity" {
+@test "collector accepts reachable corrected VMAF preparation reasons with exact classifications" {
 	for reason in source-clip-create-failed source-clip-identity-unavailable source-frame-window-unavailable; do
 		create_valid_evidence_tree
 		path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
-		jq --arg reason "$reason" '
+		jq --arg reason "$reason" --arg retain_identity "$(if [[ "$reason" == 'source-frame-window-unavailable' ]]; then printf true; else printf false; fi)" '
 			.status = "harness-blocked" |
-			.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]} |
-			.sourceClip.identity = null | .sourceClip.frameWindow = null |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:[$reason]} |
+			(if $retain_identity == "true" then .sourceClip.frameWindow = null
+			 else .sourceClip.identity = null | .sourceClip.frameWindow = null end) |
 			.settings |= map(
 				.status = "harness-blocked" | .reason = $reason |
-				.sourceIdentity = null | .sourceFrameWindow = null |
+				(if $retain_identity == "true" then .sourceFrameWindow = null
+				 else .sourceIdentity = null | .sourceFrameWindow = null end) |
 				.outputIdentity = null | .outputFrameWindow = null |
 				.vmaf.current = [] | .vmaf.reset = [] |
 				.offsets |= map(.ssim.value = null | .psnr.value = null) |
 				.timeline = {zeroOffsetAligned:false,discontinuity:null})
 		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
 		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-		set_vmaf_summary_partial harness-blocked
+		set_vmaf_summary_partial harness-blocked "$reason"
 
 		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
 		[ "$status" -eq 0 ]
 		run jq -e --arg reason "$reason" '.vmaf[0].status == "harness-blocked" and .vmaf[0].sourceContinuity == null and all(.vmaf[0].settings[]; .reason == $reason)' <<<"$output"
 		[ "$status" -eq 0 ]
 	done
+}
+
+@test "collector rejects unreachable corrected VMAF preparation prefixes" {
+	local case_name reason prefix path
+	while IFS='|' read -r case_name reason prefix; do
+		create_valid_evidence_tree
+		path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
+		jq --arg reason "$reason" --arg prefix "$prefix" '
+			.status = "harness-blocked" |
+			.classification = {schemaVersion:1,classification:"unresolved",reasons:[$reason]} |
+			(if $prefix == "identity-only" then .sourceClip.frameWindow = null
+			 elif $prefix == "window-only" then .sourceClip.identity = null
+			 else .sourceClip.identity = null | .sourceClip.frameWindow = null end) |
+			.settings |= map(
+				.status = "harness-blocked" | .reason = $reason |
+				(if $prefix == "identity-only" then .sourceFrameWindow = null
+				 elif $prefix == "window-only" then .sourceIdentity = null
+				 else .sourceIdentity = null | .sourceFrameWindow = null end) |
+				.outputIdentity = null | .outputFrameWindow = null |
+				.vmaf.current = [] | .vmaf.reset = [] |
+				.offsets |= map(.ssim.value = null | .psnr.value = null) |
+				.timeline = {zeroOffsetAligned:false,discontinuity:null})
+		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+		set_vmaf_summary_partial harness-blocked "$reason"
+
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 65 ] || {
+			echo "collector accepted unreachable VMAF preparation prefix: $case_name" >&3
+			return 1
+		}
+	done <<'EOF'
+create-retained-identity|source-clip-create-failed|identity-only
+identity-retained-window|source-clip-identity-unavailable|window-only
+window-missing-identity|source-frame-window-unavailable|none
+abort-missing-source|source-panel-preparation-aborted|none
+EOF
 }
 
 @test "collector admits legacy source-clip-unavailable only for its immutable producer identity" {
@@ -570,7 +609,7 @@ EOF
 	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
 	jq '
 		.status = "harness-blocked" |
-		.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]} |
+		.classification = {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]} |
 		.settings |= map(
 			.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" |
 			.outputIdentity = null | .outputFrameWindow = null |
@@ -579,7 +618,7 @@ EOF
 			.timeline = {zeroOffsetAligned:false,discontinuity:null})
 	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
 	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-	set_vmaf_summary_partial harness-blocked
+	set_vmaf_summary_partial harness-blocked source-panel-preparation-aborted
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
 	[ "$status" -eq 0 ]
@@ -686,7 +725,7 @@ EOF
 	[ "$output" = 'VMAF diagnostic evidence violates its approved schema' ]
 }
 
-@test "collector accepts a retained VMAF window after an independent identity probe failure" {
+@test "collector rejects a retained VMAF window after clip identity failure" {
 	create_valid_evidence_tree
 	path="$EVIDENCE_ROOT/vmaf/avc-clean-coco/motion/evidence.json"
 	jq '
@@ -699,15 +738,14 @@ EOF
 			.vmaf = {current:[],reset:[]} |
 			.offsets |= map(.ssim.value = null | .psnr.value = null) |
 			.timeline = {zeroOffsetAligned:false,discontinuity:null}) |
-		.classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]}
+		.classification = {schemaVersion:1,classification:"unresolved",reasons:["source-clip-identity-unavailable"]}
 	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
 	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-	set_vmaf_summary_partial harness-blocked incomplete-setting-evidence
+	set_vmaf_summary_partial harness-blocked source-clip-identity-unavailable
 
 	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
-	[ "$status" -eq 0 ]
-	run jq -e '.vmaf[0].sourceContinuity != null and all(.vmaf[0].settings[]; .reason == "source-clip-identity-unavailable")' <<<"$output"
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 65 ]
+	[ "$output" = 'VMAF diagnostic evidence violates its approved schema' ]
 }
 
 # Each row is a hand-built producer state. The expected result does not call or
@@ -962,28 +1000,70 @@ EOF
 	[ "$status" -eq 0 ]
 }
 
-@test "collector projects a preparation-blocked HDR source identity failure" {
-	create_valid_evidence_tree
-	path="$EVIDENCE_ROOT/hdr/hdr10-clean-ministry/evidence.json"
-	jq '
-		def unavailable($start):
-			{start:$start,durationSeconds:10,status:"harness-blocked",reason:"source-clip-identity-unavailable",decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}};
-		.status = "harness-blocked" | .reason = "source-clip-identity-unavailable" |
-		.source.identity = null |
-		.source.streamProbe = {command:[],oracle:{status:"malformed"}} |
-		.source.windows = {beginning:unavailable("0"),detail:unavailable("01:04:15.000"),end:unavailable("<end-start>")} |
-		.clip = (unavailable("01:04:15.000") + {identity:null}) |
-		.encoded = (unavailable("01:04:15.000") + {identity:null}) |
-		.normalizedOracle = null |
-		.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]}
-	' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
-	mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
-	set_hdr_summary_partial harness-blocked
+@test "collector accepts reachable corrected HDR preparation prefixes" {
+	local case_name reason prefix path
+	while IFS='|' read -r case_name reason prefix; do
+		create_valid_evidence_tree
+		path="$EVIDENCE_ROOT/hdr/hdr10-clean-ministry/evidence.json"
+		jq --arg reason "$reason" --arg prefix "$prefix" '
+			def unavailable($start):
+				{start:$start,durationSeconds:10,status:"harness-blocked",reason:$reason,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}};
+			.status = "harness-blocked" | .reason = $reason |
+			.source.streamProbe = {command:[],oracle:{status:"malformed"}} |
+			.source.windows = {beginning:unavailable("0"),detail:unavailable("01:04:15.000"),end:unavailable("<end-start>")} |
+			.clip = (unavailable("01:04:15.000") + {identity:(if $prefix == "both" then .clip.identity else null end)}) |
+			.encoded = (unavailable("01:04:15.000") + {identity:null}) |
+			(if $prefix == "none" then .source.identity = null else . end) |
+			.normalizedOracle = null |
+			.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:[$reason]}
+		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+		set_hdr_summary_partial harness-blocked "$reason"
 
-	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
-	[ "$status" -eq 0 ]
-	run jq -e '.hdr[0].status == "harness-blocked" and .hdr[0].normalizedOracle == null' <<<"$output"
-	[ "$status" -eq 0 ]
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 0 ] || {
+			echo "collector rejected reachable HDR preparation prefix: $case_name" >&3
+			return 1
+		}
+	done <<'EOF'
+create-failed|source-clip-create-failed|none
+source-identity-failed|source-clip-identity-unavailable|none
+clip-identity-failed|source-clip-identity-unavailable|source
+peer-aborted|source-panel-preparation-aborted|both
+EOF
+}
+
+@test "collector rejects unreachable corrected HDR preparation prefixes and reasons" {
+	local case_name reason prefix path
+	while IFS='|' read -r case_name reason prefix; do
+		create_valid_evidence_tree
+		path="$EVIDENCE_ROOT/hdr/hdr10-clean-ministry/evidence.json"
+		jq --arg reason "$reason" --arg prefix "$prefix" '
+			def unavailable($start):
+				{start:$start,durationSeconds:10,status:"harness-blocked",reason:$reason,decoded:{command:[],oracle:{status:"malformed"}},trace:{command:[],oracle:{status:"malformed"}}};
+			.status = "harness-blocked" | .reason = $reason |
+			.source.streamProbe = {command:[],oracle:{status:"malformed"}} |
+			.source.windows = {beginning:unavailable("0"),detail:unavailable("01:04:15.000"),end:unavailable("<end-start>")} |
+			.clip = (unavailable("01:04:15.000") + {identity:(if $prefix == "both" then .clip.identity else null end)}) |
+			.encoded = (unavailable("01:04:15.000") + {identity:null}) |
+			(if $prefix == "none" then .source.identity = null else . end) |
+			.normalizedOracle = null |
+			.classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:[$reason]}
+		' "$path" >"$BATS_TEST_TMPDIR/evidence.json"
+		mv "$BATS_TEST_TMPDIR/evidence.json" "$path"
+		set_hdr_summary_partial harness-blocked "$reason"
+
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 65 ] || {
+			echo "collector accepted unreachable HDR preparation state: $case_name" >&3
+			return 1
+		}
+	done <<'EOF'
+create-retained-identities|source-clip-create-failed|both
+identity-retained-clip|source-clip-identity-unavailable|both
+vmaf-window-reason|source-frame-window-unavailable|none
+abort-missing-identities|source-panel-preparation-aborted|none
+EOF
 }
 
 @test "collector projects a producer-shaped HDR oracle failure as null" {

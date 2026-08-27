@@ -450,6 +450,8 @@ EOF
 repeat	.frames[41].best_effort_timestamp_time = .frames[40].best_effort_timestamp_time
 non-monotonic-timestamp	.frames[41].best_effort_timestamp_time = "1.659"
 inconsistent-duration	.frames[40].pkt_duration_time = "0"
+repeat	.frames[40].pkt_duration_time = "0" | .frames[41].best_effort_timestamp_time = .frames[40].best_effort_timestamp_time
+non-monotonic-timestamp	.frames[40].pkt_duration_time = "0" | .frames[41].best_effort_timestamp_time = "1.659"
 EOF
 
 	fixture="$SOURCE_FIXTURES/ffprobe/diagnostic-window-discontinuity.json"

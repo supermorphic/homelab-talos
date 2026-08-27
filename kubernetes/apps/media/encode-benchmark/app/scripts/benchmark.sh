@@ -1606,7 +1606,7 @@ diagnostic_hdr_evidence() {
 				clip:($clip_pair + {identity:$clip_identity}),
 				encoded:($encoded_pair + {identity:null}),
 				normalizedOracle:null,
-				classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]}
+				classification:{schemaVersion:1,classification:"unresolved-oracle",reasons:[$reason]}
 			}'
 		return
 	elif [[ -n "$prepared_clip_identity" ]]; then
@@ -1879,10 +1879,15 @@ diagnostics_mode() {
 		jq -n -c --arg sample "$sample_id" --arg clip "$clip_id" --argjson observed "$observed" \
 			--argjson settings "$settings" '{schemaVersion:1,sampleId:$sample,clipId:$clip,
 			observedFrameIndex:$observed,settings:[$settings[].classifierInput]}' >"$classifier_file"
-		classification="$(diagnostic_vmaf_classify "$classifier_file")" || {
-			entry_status='harness-blocked'
-			classification='{"schemaVersion":1,"classification":"unresolved","reasons":["classification-failed"]}'
-		}
+		if [[ -n "$preparation_reason" ]]; then
+			classification="$(jq -n -c --arg reason "$preparation_reason" \
+				'{schemaVersion:1,classification:"unresolved",reasons:[$reason]}')" || return
+		else
+			classification="$(diagnostic_vmaf_classify "$classifier_file")" || {
+				entry_status='harness-blocked'
+				classification='{"schemaVersion":1,"classification":"unresolved","reasons":["classification-failed"]}'
+			}
+		fi
 		evidence="$(jq -n -c --arg strategy "$CONTRACT_STRATEGY_ID" --arg sample "$sample_id" --arg clip "$clip_id" \
 			--argjson observed "$observed" --arg status "$entry_status" --argjson clip_command "$clip_command" \
 			--argjson source_frame_command "$source_frame_command" \

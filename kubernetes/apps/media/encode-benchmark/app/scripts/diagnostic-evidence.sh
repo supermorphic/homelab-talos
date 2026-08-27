@@ -182,12 +182,15 @@ validate_vmaf() {
 		def offsets: type == "array" and length <= 5 and all(.[]; offset);
 		def complete_offsets: offsets and length == 5 and ([.[].offset] | sort) == [-2,-1,0,1,2];
 		def legacy_source_clip_reason: . == "source-clip-unavailable" and $legacy_source_clip_unavailable_allowed;
-		def preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or legacy_source_clip_reason;
+		def corrected_preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted";
+		def preparation_reason: corrected_preparation_reason or legacy_source_clip_reason;
 		def setting_reason: . == "decode-failed" or . == "encode-failed" or . == "incomplete-output-frame-window" or . == "missing-current-vmaf" or . == "missing-psnr-metric" or . == "missing-reset-vmaf" or . == "missing-ssim-metric" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or preparation_reason or . == "timeline-evidence-invalid";
 		def empty_metrics: (.vmaf.current | length == 0) and (.vmaf.reset | length == 0);
 		def current_metrics_only: (.vmaf.current | length == 5) and (.vmaf.reset | length == 0);
 		def complete_metrics: (.vmaf.current | length == 5) and (.vmaf.reset | length == 5);
 		def baseline_timeline: .timeline.zeroOffsetAligned == false and .timeline.discontinuity == null;
+		def source_absent: .sourceIdentity == null and .sourceFrameWindow == null;
+		def source_identity_only: (.sourceIdentity | identity) and .sourceFrameWindow == null;
 		def source_ready: (.sourceIdentity | identity) and (.sourceFrameWindow | complete_window($index));
 		def output_absent: .outputIdentity == null and .outputFrameWindow == null;
 		def output_identity_only: (.outputIdentity | identity) and .outputFrameWindow == null;
@@ -220,8 +223,10 @@ validate_vmaf() {
 				.reason == null and source_ready and output_ready and complete_metrics and offset_metric_count == 10
 			elif .status == "failed" then
 				(.reason == "encode-failed" or .reason == "decode-failed") and source_ready and output_absent and no_metric_evidence
-			elif (.reason | preparation_reason) and .reason != "source-panel-preparation-aborted" then
-				(source_ready | not) and output_absent and no_metric_evidence
+			elif .reason == "source-clip-create-failed" or .reason == "source-clip-identity-unavailable" or (.reason | legacy_source_clip_reason) then
+				source_absent and output_absent and no_metric_evidence
+			elif .reason == "source-frame-window-unavailable" then
+				source_identity_only and output_absent and no_metric_evidence
 			elif .reason == "source-panel-preparation-aborted" then
 				source_ready and output_absent and no_metric_evidence
 			elif .reason == "output-identity-unavailable" then
@@ -258,8 +263,16 @@ validate_vmaf() {
 				offsets:[$setting.offsets[] | {offset,ssim:.ssim.value,psnr:.psnr.value}]
 			};
 		def expected_classification:
-			{schemaVersion:1,sampleId:.sampleId,clipId:.clipId,observedFrameIndex:.observedFrameIndex,settings:[.settings[] | classifier_setting]} |
-			diagnostic_vmaf_classify;
+			.settings[0].reason as $reason |
+			if
+				.status == "harness-blocked" and
+				($reason | corrected_preparation_reason) and
+				all(.settings[]; .reason == $reason)
+			then {schemaVersion:1,classification:"unresolved",reasons:[$reason]}
+			else
+				{schemaVersion:1,sampleId:.sampleId,clipId:.clipId,observedFrameIndex:.observedFrameIndex,settings:[.settings[] | classifier_setting]} |
+				diagnostic_vmaf_classify
+			end;
 		def classifier_failure_override:
 			.status == "harness-blocked" and (has("reason") | not) and
 			all(.settings[]; .status == "complete" and .reason == null) and
@@ -320,7 +333,8 @@ validate_hdr() {
 				(.status == "harness-blocked" and .reason == "trace-headers-oracle-failed" and (.trace.oracle | malformed_oracle) and ((.decoded.oracle | successful_pair_oracle) or (.decoded.oracle | malformed_oracle)))
 			);
 		def legacy_source_clip_reason: . == "source-clip-unavailable" and $legacy_source_clip_unavailable_allowed;
-		def preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-frame-window-unavailable" or . == "source-panel-preparation-aborted" or legacy_source_clip_reason;
+		def corrected_preparation_reason: . == "source-clip-create-failed" or . == "source-clip-identity-unavailable" or . == "source-panel-preparation-aborted";
+		def preparation_reason: corrected_preparation_reason or legacy_source_clip_reason;
 		def unavailable_pair:
 			raw_pair_fields and .status == "harness-blocked" and
 			(.reason | preparation_reason) and
@@ -398,6 +412,13 @@ validate_hdr() {
 		def preparation_blocked:
 			. as $evidence |
 			.status == "harness-blocked" and (.reason | preparation_reason) and .normalizedOracle == null and
+			(if .reason == "source-clip-create-failed" or (.reason | legacy_source_clip_reason) then
+				.source.identity == null and .clip.identity == null
+			 elif .reason == "source-clip-identity-unavailable" then
+				(.source.identity == null or (.source.identity | identity)) and .clip.identity == null
+			 elif .reason == "source-panel-preparation-aborted" then
+				(.source.identity | identity) and (.clip.identity | identity)
+			 else false end) and
 			.source.streamProbe == {command:[],oracle:{status:"malformed"}} and
 			all(.source.windows[]; unavailable_pair and .reason == $evidence.reason) and
 			(del(.clip.identity).clip | unavailable_pair) and .clip.reason == $evidence.reason and
@@ -445,6 +466,7 @@ validate_hdr() {
 		def classification($evidence_status): . as $class | exact(["classification","reasons","schemaVersion"]) and .schemaVersion == 1 and (.classification == "clip-boundary-defect" or .classification == "encoder-output-defect" or .classification == "preserved" or .classification == "source-probe-defect" or .classification == "unresolved-oracle") and (if $evidence_status == "complete" then true else .classification == "unresolved-oracle" end) and (.reasons | type == "array" and length >= 1 and length <= 16 and length == (unique | length) and all(.[]; type == "string" and ($reason_classes[.] | type == "array") and ($reason_classes[.] | index($class.classification)) != null));
 		def expected_classification:
 			if .status == "complete" then (.normalizedOracle | diagnostic_hdr_classify_normalized)
+			elif (.reason | corrected_preparation_reason) then {schemaVersion:1,classification:"unresolved-oracle",reasons:[.reason]}
 			else {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]} end;
 		def classifier_failure_override:
 			.status == "harness-blocked" and .reason == "HDR-classification-failed" and

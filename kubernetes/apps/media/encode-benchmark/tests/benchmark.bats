@@ -2664,26 +2664,41 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
 		run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
 		[ "$status" -eq 0 ]
-		run jq -e '
+		run jq -e --arg reason "$expected_reason" '
 			.status == "harness-blocked" and
-			all(.vmaf.entries[]; .status == "harness-blocked" and .classification == "unresolved") and
-			all(.hdr.entries[]; .status == "harness-blocked" and .classification == "unresolved-oracle")
+			all(.vmaf.entries[];
+				.status == "harness-blocked" and .classification == "unresolved" and
+				(if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+					.reasons == [$reason]
+				else .reasons == ["source-panel-preparation-aborted"] end)) and
+			all(.hdr.entries[];
+				.status == "harness-blocked" and .classification == "unresolved-oracle" and
+				.reasons == ["source-panel-preparation-aborted"])
 		' "$diagnostic_root/diagnostic-summary.json"
 		[ "$status" -eq 0 ]
 		run jq -e -s --arg reason "$expected_reason" '
 			length == 5 and
 			all(.[];
 				if .sampleId == "avc-clean-coco" and .clipId == "motion" then
-					.status == "harness-blocked" and all(.settings[]; .reason == $reason)
-				else .status == "harness-blocked" and all(.settings[]; .reason == "source-panel-preparation-aborted")
+					.status == "harness-blocked" and all(.settings[]; .reason == $reason) and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:[$reason]}
+				else
+					.status == "harness-blocked" and
+					all(.settings[]; .reason == "source-panel-preparation-aborted") and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]}
 				end)
 		' "$diagnostic_root"/vmaf/*/*/evidence.json
 		[ "$status" -eq 0 ]
 		run jq -e -s '
 			length == 3 and all(.[];
 				.status == "harness-blocked" and .reason == "source-panel-preparation-aborted" and
-				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})
+				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["source-panel-preparation-aborted"]})
 		' "$diagnostic_root"/hdr/*/evidence.json
+		[ "$status" -eq 0 ]
+		run jq -e --arg reason "$expected_reason" '
+			(.vmaf.reasons | sort) == ([$reason,"source-panel-preparation-aborted"] | sort) and
+			.hdr.reasons == ["source-panel-preparation-aborted"]
+		' <<<"$terminal"
 		[ "$status" -eq 0 ]
 		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
 

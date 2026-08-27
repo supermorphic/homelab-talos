@@ -385,12 +385,7 @@ EOF
 # that is not scoped to the requested run.
 @test "diagnostic evidence reader dispatch binds the fresh run to its terminal diagnostic Job" {
 	local run_id='20260823T141907Z-9d6f6b71'
-	STUB_DIAGNOSTIC_JOBS_JSON="$BATS_TEST_TMPDIR/terminal-diagnostics.json"
-	export STUB_DIAGNOSTIC_JOBS_JSON
-	jq -n --arg run "$run_id" '{items:[{
-		metadata:{name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"diagnostic-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
-	}]}' >"$STUB_DIAGNOSTIC_JOBS_JSON"
+	prepare_terminal_diagnostics_job "$run_id"
 
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
 	run_dispatch evidence-reader "$run_id"
@@ -425,6 +420,53 @@ EOF
 	' <<<"$job_json"
 	[ "$status" -eq 0 ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | .subPath' "$job")" = "benchmark/runs/$run_id/diagnostics" ]
+}
+
+@test "diagnostic evidence reader authenticates the exact corrected producer protocol before mutation" {
+	local run_id='20260823T141907Z-9d6f6b71' case_name
+	local base_jobs base_pods
+	prepare_terminal_diagnostics_job "$run_id"
+	base_jobs="$BATS_TEST_TMPDIR/terminal-diagnostics-base.json"
+	base_pods="$BATS_TEST_TMPDIR/terminal-diagnostics-pods-base.json"
+	cp "$STUB_DIAGNOSTIC_JOBS_JSON" "$base_jobs"
+	cp "$STUB_BENCHMARK_PODS_JSON" "$base_pods"
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+
+	for case_name in job-uid job-image job-scripts job-command job-security pod-absent pod-duplicate pod-owner pod-label pod-command pod-scripts pod-phase pod-status-count pod-exit pod-reason pod-image termination-malformed termination-noncanonical termination-oversized termination-run termination-artifact; do
+		cp "$base_jobs" "$STUB_DIAGNOSTIC_JOBS_JSON"
+		cp "$base_pods" "$STUB_BENCHMARK_PODS_JSON"
+		case "$case_name" in
+		job-uid) jq 'del(.items[0].metadata.uid)' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-image) jq '.items[0].spec.template.spec.containers[0].image = "example.invalid/benchmark@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-scripts) jq '.items[0].metadata.annotations."homelab-talos/scripts-configmap" = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-command) jq '.items[0].spec.template.spec.containers[0].command = ["/scripts/benchmark.sh","diagnostics","20260823T141907Z-deadbeef"]' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-security) jq '.items[0].spec.template.spec.automountServiceAccountToken = true' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		pod-absent) jq '.items = []' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-duplicate) jq '.items += [.items[0]]' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-owner) jq '.items[0].metadata.ownerReferences[0].uid = "spoofed-job-uid"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-label) jq '.items[0].metadata.labels."homelab-talos/benchmark-run" = "20260823T141907Z-deadbeef"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-command) jq '.items[0].spec.containers[0].command = ["/bin/true"]' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-scripts) jq '(.items[0].spec.volumes[] | select(.name == "scripts")).configMap.name = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-phase) jq '.items[0].status.phase = "Failed"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-status-count) jq '.items[0].status.containerStatuses += [.items[0].status.containerStatuses[0]]' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-exit) jq '.items[0].status.containerStatuses[0].state.terminated.exitCode = 1' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-reason) jq '.items[0].status.containerStatuses[0].state.terminated.reason = "Error"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-image) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-malformed) jq '.items[0].status.containerStatuses[0].state.terminated.message = "not-json"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-noncanonical) jq '.items[0].status.containerStatuses[0].state.terminated.message |= (" " + .)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-oversized) jq '.items[0].status.containerStatuses[0].state.terminated.message = ("x" * 3073)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-run) jq '.items[0].status.containerStatuses[0].state.terminated.message |= (fromjson | .runId = "20260823T141907Z-deadbeef" | tojson)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-artifact) jq '.items[0].status.containerStatuses[0].state.terminated.message |= (fromjson | .artifactLocation = "/out/runs/20260823T141907Z-deadbeef/diagnostics" | tojson)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		esac
+		: >"$STUB_CALLS"
+
+		run_dispatch evidence-reader "$run_id"
+		[ "$status" -eq 65 ] || {
+			echo "reader dispatch accepted invalid producer protocol: $case_name" >&3
+			return 1
+		}
+		assert_no_mutations
+	done
 }
 
 @test "diagnostic evidence reader dispatch rejects absent failed active malformed and colliding fresh-run provenance before mutation" {
@@ -640,13 +682,75 @@ prepare_deployed_diagnostics_contract() {
 }
 
 prepare_terminal_diagnostics_job() {
-	local run_id="$1"
+	local run_id="$1" name scripts_configmap configured_image image_configmap producer_job
+	local job_json pod_spec summary termination terminal_message
+	name="encode-benchmark-diagnostics-${run_id,,}"
 	STUB_DIAGNOSTIC_JOBS_JSON="$BATS_TEST_TMPDIR/terminal-diagnostics-$run_id.json"
-	export STUB_DIAGNOSTIC_JOBS_JSON
-	jq -n --arg run "$run_id" '{items:[{
-		metadata:{name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
-	}]}' >"$STUB_DIAGNOSTIC_JOBS_JSON"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/terminal-diagnostics-pods-$run_id.json"
+	export STUB_DIAGNOSTIC_JOBS_JSON STUB_BENCHMARK_PODS_JSON
+	scripts_configmap="$(kustomize build "$evidence_app" | yq -N -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$"))) | .metadata.name')"
+	configured_image="$(yq -e -r '.data."samples.json"' "$evidence_app/samples.yaml" | jq -e -r '.runtime.image')"
+	image_configmap="encode-benchmark-image-$(printf '%s\n' "$name" | sha256sum | awk '{print substr($1, 1, 12)}')"
+	producer_job="$BATS_TEST_TMPDIR/terminal-diagnostics-job-$run_id.yaml"
+	cp "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/templates/job.yaml" "$producer_job"
+	JOB_NAME="$name" RUN_ID="$run_id" IMAGE="$configured_image" SCRIPTS_CONFIGMAP="$scripts_configmap" IMAGE_CONFIGMAP="$image_configmap" yq -i '
+		.metadata.name = strenv(JOB_NAME) |
+		.metadata.labels."app.kubernetes.io/name" = "encode-benchmark" |
+		.metadata.labels."homelab-talos/benchmark-dispatch" = strenv(RUN_ID) |
+		.metadata.labels."homelab-talos/benchmark-run" = strenv(RUN_ID) |
+		.metadata.labels."homelab-talos/benchmark-mode" = "diagnostics" |
+		.metadata.annotations."homelab-talos/benchmark-owned" = "true" |
+		.metadata.annotations."homelab-talos/scripts-configmap" = strenv(SCRIPTS_CONFIGMAP) |
+		.metadata.annotations."homelab-talos/image-evidence-configmap" = strenv(IMAGE_CONFIGMAP) |
+		.spec.activeDeadlineSeconds = 28800 |
+		.spec.template.metadata.labels = .metadata.labels |
+		.spec.template.spec.nodeSelector."kubernetes.io/hostname" = "nuc1" |
+		.spec.template.spec.containers[0].image = strenv(IMAGE) |
+		.spec.template.spec.containers[0].command = ["/scripts/benchmark.sh","diagnostics",strenv(RUN_ID)] |
+		.spec.template.spec.containers[0].env += [{"name":"BENCHMARK_DISPATCH_IMAGE","value":strenv(IMAGE)}] |
+		.spec.template.spec.containers[0].resources.requests.cpu = "2" |
+		.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" = "1" |
+		.spec.template.spec.containers[0].resources.limits.cpu = "8" |
+		.spec.template.spec.containers[0].resources.limits."gpu.intel.com/i915" = "1" |
+		(.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name) = strenv(SCRIPTS_CONFIGMAP) |
+		(.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.defaultMode) = 365 |
+		(.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.name) = strenv(IMAGE_CONFIGMAP)
+	' "$producer_job"
+	job_json="$(yq -o=json -I=0 '
+		.metadata.uid = "diagnostic-job-uid" |
+		.status = {"conditions": [{"type": "Complete", "status": "True"}], "active": 0, "succeeded": 1, "failed": 0}
+	' "$producer_job")"
+	jq -n --argjson job "$job_json" '{apiVersion:"v1",items:[$job]}' >"$STUB_DIAGNOSTIC_JOBS_JSON"
+
+	summary="$BATS_TEST_TMPDIR/terminal-diagnostics-summary-$run_id.json"
+	termination="$BATS_TEST_TMPDIR/terminal-diagnostics-termination-$run_id.json"
+	write_diagnostics_summary_fixture "$run_id" complete "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
+	pod_spec="$(yq -o=json -I=0 '.spec.template.spec | .nodeName = "nuc1"' "$producer_job")"
+	jq -n --arg run "$run_id" --arg name "$name" --arg uid "diagnostic-job-uid" \
+		--arg image "$configured_image" --arg message "$terminal_message" --argjson spec "$pod_spec" '{
+		apiVersion:"v1",items:[{
+			metadata:{
+				name:($name + "-fixture-pod"),
+				labels:{
+					"app.kubernetes.io/name":"encode-benchmark",
+					"homelab-talos/benchmark-dispatch":$run,
+					"homelab-talos/benchmark-run":$run,
+					"homelab-talos/benchmark-mode":"diagnostics",
+					"job-name":$name
+				},
+				ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:$uid,controller:true,blockOwnerDeletion:true}]
+			},
+			spec:$spec,
+			status:{
+				phase:"Succeeded",
+				containerStatuses:[{
+					name:"benchmark",image:$image,imageID:("containerd://" + $image),ready:false,restartCount:0,lastState:{},
+					state:{terminated:{exitCode:0,reason:"Completed",message:$message}}
+				}]
+			}
+		}]}
+	' >"$STUB_BENCHMARK_PODS_JSON"
 }
 
 tamper_deployed_diagnostics_contract() {
@@ -1193,6 +1297,8 @@ write_collector_runtime_fixtures() {
 	pod_spec="$(API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) | .spec.template.spec' "$job")"
 	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
 		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}]}' >"$pods_path"
+	STUB_BENCHMARK_PODS_JSON="$pods_path"
+	export STUB_BENCHMARK_PODS_JSON
 }
 
 # Keep fresh-reader consumer provenance fixtures independent from dispatcher
@@ -1255,6 +1361,8 @@ write_failed_collector_runtime_fixtures() {
 	pod_spec="$(API_SCRIPTS_MODE="$api_scripts_mode" yq -o=json -I=0 '(.spec.template.spec.volumes[] | select(.name == "scripts").configMap.defaultMode) = (strenv(API_SCRIPTS_MODE) | tonumber) | .spec.template.spec' "$job")"
 	jq -n --arg name "$name" --arg run "$run_id" --argjson spec "$pod_spec" '
 		{items:[{metadata:{name:($name + "-pod"),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader","job-name":$name},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$name,uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true}]},spec:$spec,status:{phase:"Failed",containerStatuses:[{name:"benchmark",imageID:"containerd://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",ready:false,restartCount:0,state:{terminated:{exitCode:65,reason:"Error"}}}]}}]}' >"$pods_path"
+	STUB_BENCHMARK_PODS_JSON="$pods_path"
+	export STUB_BENCHMARK_PODS_JSON
 }
 
 producer_fixed_failed_collector_lines() {
@@ -1742,7 +1850,7 @@ producer_fixed_failed_collector_lines() {
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
 	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
-	for case_name in vmaf-source-create vmaf-source-identity vmaf-source-window vmaf-preparation-aborted vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-preparation-aborted hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
+	for case_name in vmaf-source-create vmaf-source-identity vmaf-source-window vmaf-preparation-aborted vmaf-current vmaf-reset vmaf-first-ssim vmaf-final-psnr vmaf-failed-dominates vmaf-post-reset vmaf-post-final-psnr hdr-source-create hdr-source-identity hdr-preparation-aborted hdr-failed hdr-normalization hdr-conflict hdr-ok-rationals hdr-post-null hdr-post-complete; do
 		write_canonical_collector_json "$collector_json" "$run_id"
 		case "$case_name" in
 		vmaf-source-create | vmaf-source-identity | vmaf-source-window)
@@ -1751,10 +1859,10 @@ producer_fixed_failed_collector_lines() {
 			vmaf-source-identity) reason='source-clip-identity-unavailable' ;;
 			*) reason='source-frame-window-unavailable' ;;
 			esac
-			jq -S -c --arg reason "$reason" '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = $reason | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			jq -S -c --arg reason "$reason" '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = $reason | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:[$reason]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
 		vmaf-preparation-aborted)
-			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
 		vmaf-current)
 			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = "missing-current-vmaf" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["incomplete-setting-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
@@ -1780,8 +1888,13 @@ producer_fixed_failed_collector_lines() {
 		hdr-failed)
 			jq -S -c '.hdr[0] |= (.status = "failed" | .reason = "decode-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
-		hdr-preparation-aborted)
-			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+		hdr-source-create | hdr-source-identity | hdr-preparation-aborted)
+			case "$case_name" in
+			hdr-source-create) reason='source-clip-create-failed' ;;
+			hdr-source-identity) reason='source-clip-identity-unavailable' ;;
+			*) reason='source-panel-preparation-aborted' ;;
+			esac
+			jq -S -c --arg reason "$reason" '.hdr[0] |= (.status = "harness-blocked" | .reason = $reason | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:[$reason]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
 			;;
 		hdr-normalization)
 			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "HDR-oracle-normalization-failed" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
@@ -1828,6 +1941,44 @@ producer_fixed_failed_collector_lines() {
 		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -eq 0 ] || {
 			echo "diagnostic evidence results rejected reachable acquisition projection: $case_name" >&3
+			return 1
+		}
+	done
+}
+
+@test "diagnostic evidence reader rejects unreachable preparation projections" {
+	local case_name reason run_id collector_json
+	run_id='20260820T223425Z-082b3d38'
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for case_name in vmaf-create-retained-source vmaf-identity-retained-source vmaf-window-retained-source vmaf-abort-null-source hdr-window-reason; do
+		write_canonical_collector_json "$collector_json" "$run_id"
+		case "$case_name" in
+		vmaf-create-retained-source | vmaf-identity-retained-source | vmaf-window-retained-source)
+			case "$case_name" in
+			vmaf-create-retained-source) reason='source-clip-create-failed' ;;
+			vmaf-identity-retained-source) reason='source-clip-identity-unavailable' ;;
+			*) reason='source-frame-window-unavailable' ;;
+			esac
+			jq -S -c --arg reason "$reason" '.vmaf[0] |= (.status = "harness-blocked" | .settings |= map(.status = "harness-blocked" | .reason = $reason | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:[$reason]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		vmaf-abort-null-source)
+			jq -S -c '.vmaf[0] |= (.status = "harness-blocked" | .sourceContinuity = null | .settings |= map(.status = "harness-blocked" | .reason = "source-panel-preparation-aborted" | .vmaf = {current:[],reset:[]} | .offsets |= map(.ssim = null | .psnr = null) | .timeline = {zeroOffsetAligned:false,discontinuity:null}) | .classification = {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		hdr-window-reason)
+			jq -S -c '.hdr[0] |= (.status = "harness-blocked" | .reason = "source-frame-window-unavailable" | .normalizedOracle = null | .classification = {schemaVersion:1,classification:"unresolved-oracle",reasons:["source-frame-window-unavailable"]})' "$collector_json" >"$BATS_TEST_TMPDIR/projected.json"
+			;;
+		esac
+		mv "$BATS_TEST_TMPDIR/projected.json" "$collector_json"
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 65 ] || {
+			echo "diagnostic evidence results accepted unreachable preparation projection: $case_name" >&3
 			return 1
 		}
 	done
@@ -3833,7 +3984,6 @@ unresolved-oracle|["running-image-evidence-rejected"]|running-image-evidence-rej
 unresolved-oracle|["runtime-pre-encode-gate-rejected"]|runtime-pre-encode-gate-rejected|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["source-clip-create-failed"]|source-clip-create-failed|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["source-clip-identity-unavailable"]|source-clip-identity-unavailable|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
-unresolved-oracle|["source-frame-window-unavailable"]|source-frame-window-unavailable|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 unresolved-oracle|["source-panel-preparation-aborted"]|source-panel-preparation-aborted|hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3
 EOF
 	contract_hdr_reasons="$(bash -c '
