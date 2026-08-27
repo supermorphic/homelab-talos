@@ -77,6 +77,26 @@ expect_fail 'unpackaged Platform Canary workflow template' \
   'The n8n app must package the stable values and inactive Platform Canary template ConfigMaps.'
 
 reset_tree
+jq '(.nodes[] | select(.name == "Webhook") | .typeVersion) = 2.2' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'unsupported Platform Canary Webhook version' \
+  'Platform Canary must use the pinned Webhook 2.1 and Edit Fields 3.4 node versions.'
+
+reset_tree
+jq '(.nodes[] | select(.name == "Edit Fields") | .typeVersion) = 3.5' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'unsupported Platform Canary Edit Fields version' \
+  'Platform Canary must use the pinned Webhook 2.1 and Edit Fields 3.4 node versions.'
+
+reset_tree
+jq '.active = true' "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'active Platform Canary import' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
 jq '.nodes[0].parameters.path = "route-drift"' "$workflow" >"$workflow.tmp"
 mv -- "$workflow.tmp" "$workflow"
 expect_fail 'Platform Canary route/workflow path drift' \
@@ -111,6 +131,13 @@ expect_fail 'Platform Canary immediate Webhook response' \
   'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
 
 reset_tree
+jq '.connections["Edit Fields"] = {"main": [[{"node": "Webhook", "type": "main", "index": 0}]]}' \
+  "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary additive workflow edge' \
+  'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.'
+
+reset_tree
 jq '(.nodes[] | select(.name == "Edit Fields") | .parameters.assignments.assignments[] |
   select(.name == "status") | .value) = "not-ok"' "$workflow" >"$workflow.tmp"
 mv -- "$workflow.tmp" "$workflow"
@@ -121,6 +148,12 @@ reset_tree
 jq '.settings.saveDataSuccessExecution = "none"' "$workflow" >"$workflow.tmp"
 mv -- "$workflow.tmp" "$workflow"
 expect_fail 'Platform Canary success execution retention' \
+  'Platform Canary must save successful and failed executions.'
+
+reset_tree
+jq '.settings.saveDataErrorExecution = "none"' "$workflow" >"$workflow.tmp"
+mv -- "$workflow.tmp" "$workflow"
+expect_fail 'Platform Canary error execution retention' \
   'Platform Canary must save successful and failed executions.'
 
 reset_tree
@@ -141,7 +174,39 @@ printf '%s\n' \
   '            type: Exact' \
   '            value: /webhook/unapproved' >"$apply_patch_file"
 expect_fail 'additional public production webhook path' \
-  'The only public production webhook path under kubernetes/apps must be /webhook/platform-canary.'
+  'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.'
+
+reset_tree
+yq -i '.spec.parentRefs[0].group = "wrong.example.io"' \
+  "$tree_root/kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml"
+expect_fail 'alternate public Gateway parent identity' \
+  'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.'
+
+reset_tree
+mkdir -p "$tree_root/kubernetes/apps/automation/unapproved-public-catch-all"
+catch_all_route="$tree_root/kubernetes/apps/automation/unapproved-public-catch-all/httproute.yaml"
+printf '%s\n' \
+  'apiVersion: gateway.networking.k8s.io/v1' \
+  'kind: HTTPRoute' \
+  'metadata:' \
+  '  name: unapproved-public-catch-all' \
+  '  namespace: networking-public' \
+  'spec:' \
+  '  parentRefs:' \
+  '    - group: gateway.networking.k8s.io' \
+  '      kind: Gateway' \
+  '      name: public-webhooks' \
+  '      namespace: networking-public' \
+  '      sectionName: https' \
+  '  rules:' \
+  '    - backendRefs:' \
+  '        - group: ""' \
+  '          kind: Service' \
+  '          name: n8n' \
+  '          namespace: automation' \
+  '          port: 5678' >"$catch_all_route"
+expect_fail 'matcher-less public catch-all' \
+  'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.'
 
 reset_tree
 yq -i '(.spec.postRenderers[0].kustomize.patches[] |

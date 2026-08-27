@@ -622,6 +622,12 @@ jq -e '
   echo 'Platform Canary must be a secret-free inactive two-node Webhook and Edit Fields template.' >&2
   exit 1
 }
+[[ "$(jq -r '[
+  .nodes[] | select(.name == "Webhook" or .name == "Edit Fields") | .typeVersion
+] | join(",")' "$n8n_workflow")" == '2.1,3.4' ]] || {
+  echo 'Platform Canary must use the pinned Webhook 2.1 and Edit Fields 3.4 node versions.' >&2
+  exit 1
+}
 # shellcheck disable=SC2016 # The expected n8n expressions are literal workflow JSON.
 expected_canary_fields='[{"name":"correlation","type":"string","value":"={{ $json.body.correlation }}"},{"name":"executionId","type":"string","value":"={{ $execution.id }}"},{"name":"status","type":"string","value":"ok"}]'
 actual_canary_fields="$(jq -c '
@@ -639,18 +645,34 @@ actual_canary_fields="$(jq -c '
 }
 workflow_path="$(jq -r '.nodes[] | select(.type == "n8n-nodes-base.webhook") | .parameters.path' \
   "$n8n_workflow")"
-mapfile -t public_webhook_matches < <(
-  find kubernetes/apps -type f \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print0 |
-    xargs -0 yq ea -r '
+expected_public_route_contract='{"metadata":{"name":"n8n-platform-canary","namespace":"networking-public"},"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"public-webhooks","namespace":"networking-public","sectionName":"https"}],"rules":[{"backendRefs":[{"group":"","kind":"Service","name":"n8n","namespace":"automation","port":5678}],"matches":[{"path":{"type":"Exact","value":"/webhook/platform-canary"}}]}]}'
+mapfile -t public_route_contracts < <(
+  while IFS= read -r -d '' manifest; do
+    # shellcheck disable=SC2016 # yq evaluates $route_namespace, not the shell.
+    yq -o=json -I=0 '
       select(type == "!!map") |
       select(.kind == "HTTPRoute") |
-      select(.spec.parentRefs[]? | .name == "public-webhooks") |
-      .spec.rules[]?.matches[]?.path? | [.type, .value] | join(",")
-    '
+      .metadata.namespace as $route_namespace |
+      select([
+        .spec.parentRefs[]? |
+        select(.name == "public-webhooks" and
+          (.namespace // $route_namespace) == "networking-public")
+      ] | length > 0) |
+      {
+        "metadata": {"name": .metadata.name, "namespace": .metadata.namespace},
+        "parentRefs": .spec.parentRefs,
+        "rules": [
+          .spec.rules[]? |
+          {"backendRefs": (.backendRefs // []), "matches": (.matches // [])}
+        ]
+      }
+    ' "$manifest" | jq -cS 'select(.metadata != null)'
+  done < <(find kubernetes/apps -type f \
+    \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print0)
 )
-[[ "${#public_webhook_matches[@]}" == '1' && \
-  "${public_webhook_matches[0]}" == 'Exact,/webhook/platform-canary' ]] || {
-  echo 'The only public production webhook path under kubernetes/apps must be /webhook/platform-canary.' >&2
+[[ "${#public_route_contracts[@]}" == '1' && \
+  "${public_route_contracts[0]}" == "$expected_public_route_contract" ]] || {
+  echo 'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.' >&2
   exit 1
 }
 [[ "$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")" == \
