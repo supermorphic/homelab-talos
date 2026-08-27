@@ -137,6 +137,7 @@ run_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.s
 run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
 run_shell_case logging-verifier scripts/test/logging-verify-test.sh
 run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
+run_shell_case n8n-validator scripts/test/n8n-validator-test.sh
 run_shell_case monitoring-alloy-logs-validator \
   scripts/test/monitoring-alloy-logs-validator-test.sh
 run_shell_case monitoring-loki-validator \

@@ -21,6 +21,11 @@ cilium-render:
 cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
+# Validate specification 023 source, rendered n8n chart, database, backup, routes,
+# containment, monitoring, and secret structure. Cluster-independent; part of just ci.
+n8n-validate: require-bash
+    @scripts/validate/n8n.sh
+
 # Print read-only live Cilium and Kubernetes status.
 cilium-status:
     #!/usr/bin/env bash
