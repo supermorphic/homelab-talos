@@ -542,7 +542,12 @@ actual_postrender_contract="$(yq -o=json -I=0 '
     "patch": (.patch | from_yaml)
   }] | sort_by(.target.kind)
 ' "$n8n_release")"
-[[ "$(yq -r '[.spec.postRenderers[0].kustomize.patches[].target |
+[[ "$(yq -r '.spec.postRenderers | length' "$n8n_release")" == '1' && \
+  "$(yq -r '.spec.postRenderers[0] | keys | sort | join(",")' "$n8n_release")" == \
+    'kustomize' && \
+  "$(yq -r '.spec.postRenderers[0].kustomize | keys | sort | join(",")' \
+    "$n8n_release")" == 'patches' && \
+  "$(yq -r '[.spec.postRenderers[0].kustomize.patches[].target |
     keys | sort | join(",")] | sort | join(";")' "$n8n_release")" == \
     'group,kind,name,version;group,kind,name,version' && \
   "$actual_postrender_contract" == "$expected_postrender_contract" ]] || {

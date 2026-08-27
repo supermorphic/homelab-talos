@@ -78,6 +78,20 @@ expect_fail 'non-matching n8n post-render selector' \
   'The Helm post-renderer must expose the one main Deployment and Service as n8n.'
 
 reset_tree
+yq -i '.spec.postRenderers[0].kustomize.images = [{
+  "name": "does-not-exist",
+  "newTag": "ignored"
+}]' "$tree_root/kubernetes/apps/automation/n8n/app/helmrelease.yaml"
+expect_fail 'additional n8n post-render image transform' \
+  'The Helm post-renderer must expose the one main Deployment and Service as n8n.'
+
+reset_tree
+yq -i '.spec.postRenderers += [{"kustomize": {"patches": []}}]' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/helmrelease.yaml"
+expect_fail 'additional n8n post-renderer' \
+  'The Helm post-renderer must expose the one main Deployment and Service as n8n.'
+
+reset_tree
 yq -i '.metadata.labels."gateway.supermorphic.com/access" = "public"' \
   "$tree_root/kubernetes/apps/automation/namespace/app/namespace.yaml"
 expect_fail 'public Gateway access' 'n8n automation namespace Gateway access must be internal.'
