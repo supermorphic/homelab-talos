@@ -11,6 +11,22 @@ public_gateway="$public_base/app/gateway.yaml"
 public_route="$public_base/route/httproute.yaml"
 public_ks="$public_base/ks.yaml"
 external_dns='kubernetes/apps/networking/external-dns/app/values.yaml'
+postgresql_base="$base/n8n-postgresql"
+postgresql_app="$postgresql_base/app"
+postgresql_ks="$postgresql_base/ks.yaml"
+postgresql_kustomization="$postgresql_app/kustomization.yaml"
+postgresql_pvcs="$postgresql_app/persistentvolumeclaims.yaml"
+postgresql_service="$postgresql_app/service.yaml"
+postgresql_statefulset="$postgresql_app/statefulset.yaml"
+postgresql_cronjob="$postgresql_app/cronjob.yaml"
+postgresql_monitor="$postgresql_app/servicemonitor.yaml"
+postgresql_policy="$postgresql_app/ciliumnetworkpolicy.yaml"
+postgresql_init="$postgresql_app/scripts/init-database.sh"
+postgresql_backup="$postgresql_app/scripts/backup.sh"
+postgresql_status_sql="$postgresql_app/scripts/update-backup-status.sql"
+postgresql_exporter="$postgresql_app/sql-exporter.yml"
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
+trap 'rm -rf -- "$temp_dir"' EXIT
 
 normalise_resource_path() {
   local path="$1"
@@ -92,6 +108,12 @@ for file in "$public_namespace" "$public_pool" "$public_certificate" "$public_ga
   "$public_base/route/kustomization.yaml" "$external_dns"; do
   [[ -f "$file" ]] || { echo "Missing n8n platform source: $file" >&2; exit 1; }
 done
+for file in "$postgresql_ks" "$postgresql_kustomization" "$postgresql_pvcs" \
+  "$postgresql_service" "$postgresql_statefulset" "$postgresql_cronjob" \
+  "$postgresql_monitor" "$postgresql_policy" "$postgresql_init" \
+  "$postgresql_backup" "$postgresql_status_sql" "$postgresql_exporter"; do
+  [[ -f "$file" ]] || { echo "Missing n8n PostgreSQL source: $file" >&2; exit 1; }
+done
 yq -e '.resources[] | select(. == "./automation")' kubernetes/apps/kustomization.yaml >/dev/null
 yq -e '.resources[] | select(. == "./public-webhook-gateway/ks.yaml")' \
   kubernetes/apps/networking/kustomization.yaml >/dev/null
@@ -170,4 +192,271 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The internal ExternalDNS controller must not publish the public webhook name.' >&2
   exit 1
 }
-echo 'n8n automation namespace source passed validation.'
+
+yq -e '.resources[] | select(. == "./n8n-postgresql/ks.yaml")' \
+  "$base/kustomization.yaml" >/dev/null || {
+  echo 'The automation root must select n8n-postgresql/ks.yaml.' >&2
+  exit 1
+}
+[[ "$(yq -r '.metadata.name' "$postgresql_ks")" == 'n8n-postgresql' && \
+  "$(yq -r '.metadata.namespace' "$postgresql_ks")" == 'flux-system' && \
+  "$(yq -r '.spec.path' "$postgresql_ks")" == './kubernetes/apps/automation/n8n-postgresql/app' && \
+  "$(yq -r '.spec.suspend' "$postgresql_ks")" == 'true' && \
+  "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$postgresql_ks")" == \
+    'automation,cilium,kube-prometheus-stack,longhorn' ]] || {
+  echo 'n8n-postgresql must remain suspended with its complete foundation dependency graph.' >&2
+  exit 1
+}
+declare -A postgresql_resource_counts=()
+while IFS= read -r resource; do
+  resource="$(normalise_resource_path "$resource")"
+  case "$resource" in
+    ciliumnetworkpolicy.yaml | cronjob.yaml | persistentvolumeclaims.yaml | service.yaml | \
+      servicemonitor.yaml | statefulset.yaml | postgresql-credentials.sops.yaml)
+      postgresql_resource_counts["$resource"]=$((
+        ${postgresql_resource_counts["$resource"]:-0} + 1
+      ))
+      ;;
+    *)
+      echo "The PostgreSQL app Kustomization selects an unexpected resource: $resource" >&2
+      exit 1
+      ;;
+  esac
+done < <(yq -r '.resources[]' "$postgresql_kustomization")
+for resource in ciliumnetworkpolicy.yaml cronjob.yaml persistentvolumeclaims.yaml \
+  service.yaml servicemonitor.yaml statefulset.yaml; do
+  [[ "${postgresql_resource_counts["$resource"]:-0}" == '1' ]] || {
+    echo "The PostgreSQL app must select $resource exactly once." >&2
+    exit 1
+  }
+done
+[[ "${postgresql_resource_counts[postgresql-credentials.sops.yaml]:-0}" -le 1 ]] || {
+  echo 'The PostgreSQL app must not select its credential Secret more than once.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.configMapGenerator[].name] | sort | join(",")' \
+  "$postgresql_kustomization")" == \
+  'n8n-postgresql-backup,n8n-postgresql-init,n8n-postgresql-sql-exporter' ]] || {
+  echo 'The PostgreSQL app must render init, backup, and SQL Exporter ConfigMaps.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "PersistentVolumeClaim") | .metadata.name] | sort | join(",")' \
+  "$postgresql_pvcs")" == 'n8n-postgresql-backups,n8n-postgresql-data' && \
+  "$(yq ea -r '[select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage] | unique | join(",")' \
+  "$postgresql_pvcs")" == '10Gi' && \
+  "$(yq ea -r '[select(.kind == "PersistentVolumeClaim") | .spec.accessModes[]] | unique | join(",")' \
+  "$postgresql_pvcs")" == 'ReadWriteOnce' && \
+  "$(yq ea -r '[select(.kind == "PersistentVolumeClaim") | .spec.storageClassName] | unique | join(",")' \
+  "$postgresql_pvcs")" == 'longhorn' && \
+  "$(yq ea -r '[select(.kind == "PersistentVolumeClaim") | .metadata.annotations."kustomize.toolkit.fluxcd.io/prune"] | unique | join(",")' \
+  "$postgresql_pvcs")" == 'disabled' ]] || {
+  echo 'PostgreSQL data and backup claims must be retained 10Gi Longhorn RWO claims.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.spec.type' "$postgresql_service")" == 'ClusterIP' && \
+  "$(yq -r '[.spec.ports[] | .name + ":" + (.port | tostring)] | sort | join(",")' \
+  "$postgresql_service")" == 'metrics:9399,postgresql:5432' ]] || {
+  echo 'PostgreSQL must expose only its internal database and exporter Service ports.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.spec.replicas' "$postgresql_statefulset")" == '1' && \
+  "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$postgresql_statefulset")" == 'false' && \
+  "$(yq -r '.spec.template.spec.securityContext.seccompProfile.type' "$postgresql_statefulset")" == 'RuntimeDefault' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .image' \
+  "$postgresql_statefulset")" == 'postgres:17.11-alpine3.24' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "sql-exporter") | .image' \
+  "$postgresql_statefulset")" == 'burningalchemist/sql_exporter:0.24.6' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .securityContext.runAsUser' \
+  "$postgresql_statefulset")" == '70' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .securityContext.runAsGroup' \
+  "$postgresql_statefulset")" == '70' && \
+  "$(yq -r '[.spec.template.spec.containers[].securityContext.capabilities.drop[]] | unique | join(",")' \
+  "$postgresql_statefulset")" == 'ALL' ]] || {
+  echo 'The PostgreSQL pod must use one hardened replica with the exact database and exporter images.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .env[] | select(.name == "PGDATA") | .value' \
+  "$postgresql_statefulset")" == '/var/lib/postgresql/data/pgdata' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | [.startupProbe.exec.command[0], .readinessProbe.exec.command[0], .livenessProbe.exec.command[0]] | unique | join(",")' \
+  "$postgresql_statefulset")" == 'pg_isready' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .volumeMounts[] | select(.mountPath == "/docker-entrypoint-initdb.d") | .readOnly' \
+  "$postgresql_statefulset")" == 'true' && \
+  "$(yq -r '.spec.template.spec.volumes[] | select(.name == "data") | .persistentVolumeClaim.claimName' \
+  "$postgresql_statefulset")" == 'n8n-postgresql-data' ]] || {
+  echo 'The PostgreSQL container must mount retained data and read-only initialization with exec probes.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | [.resources.requests.cpu, .resources.requests.memory, .resources.limits.memory] | join(",")' \
+  "$postgresql_statefulset")" == '50m,256Mi,1Gi' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .resources.limits | has("cpu") | not' \
+  "$postgresql_statefulset")" == 'true' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "sql-exporter") | [.resources.requests.cpu, .resources.requests.memory, .resources.limits.memory] | join(",")' \
+  "$postgresql_statefulset")" == '10m,32Mi,128Mi' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "sql-exporter") | .resources.limits | has("cpu") | not' \
+  "$postgresql_statefulset")" == 'true' ]] || {
+  echo 'PostgreSQL and SQL Exporter resource envelopes do not match the capacity design.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.template.spec.containers[] | select(.name == "sql-exporter") | .securityContext.runAsNonRoot' \
+  "$postgresql_statefulset")" == 'true' && \
+  "$(yq -r '.spec.template.spec.containers[] | select(.name == "sql-exporter") | [.env[] | select(has("valueFrom")) | .valueFrom.secretKeyRef.key] | join(",")' \
+  "$postgresql_statefulset")" == 'exporter-dsn' ]] || {
+  echo 'SQL Exporter must run non-root and consume only exporter-dsn.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.spec.schedule' "$postgresql_cronjob")" == '0 1 * * *' && \
+  "$(yq -r '.spec.timeZone' "$postgresql_cronjob")" == 'Etc/UTC' && \
+  "$(yq -r '.spec.concurrencyPolicy' "$postgresql_cronjob")" == 'Forbid' && \
+  "$(yq -r '.spec.successfulJobsHistoryLimit' "$postgresql_cronjob")" == '1' && \
+  "$(yq -r '.spec.failedJobsHistoryLimit' "$postgresql_cronjob")" == '1' && \
+  "$(yq -r '.spec.jobTemplate.spec.activeDeadlineSeconds' "$postgresql_cronjob")" == '1800' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | .image' \
+  "$postgresql_cronjob")" == 'postgres:17.11-alpine3.24' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | [.resources.requests.cpu, .resources.requests.memory, .resources.limits.memory] | join(",")' \
+  "$postgresql_cronjob")" == '50m,64Mi,512Mi' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | .resources.limits | has("cpu") | not' \
+  "$postgresql_cronjob")" == 'true' ]] || {
+  echo 'The logical backup CronJob schedule, history, deadline, image, or resources are incorrect.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.jobTemplate.spec.template.metadata.labels."app.kubernetes.io/name"' \
+  "$postgresql_cronjob")" == 'n8n-postgresql-backup' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.securityContext | [.runAsUser, .runAsGroup] | join(",")' \
+  "$postgresql_cronjob")" == '70,70' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.securityContext.seccompProfile.type' \
+  "$postgresql_cronjob")" == 'RuntimeDefault' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | .securityContext.capabilities.drop | join(",")' \
+  "$postgresql_cronjob")" == 'ALL' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | .securityContext.readOnlyRootFilesystem' \
+  "$postgresql_cronjob")" == 'true' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | [.env[] | select(has("valueFrom")) | .valueFrom.secretKeyRef.key] | join(",")' \
+  "$postgresql_cronjob")" == 'backup-password' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[] | select(.name == "backup") | .volumeMounts[] | select(.mountPath == "/scripts/update-backup-status.sql") | .readOnly' \
+  "$postgresql_cronjob")" == 'true' && \
+  "$(yq -r '.spec.jobTemplate.spec.template.spec.volumes[] | select(.name == "backups") | .persistentVolumeClaim.claimName' \
+  "$postgresql_cronjob")" == 'n8n-postgresql-backups' ]] || {
+  echo 'The backup Job identity, least-privileged credential, scripts, or retained claim are incorrect.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.spec.selector.matchLabels."app.kubernetes.io/name"' "$postgresql_monitor")" == \
+  'n8n-postgresql' && \
+  "$(yq -r '[.spec.endpoints[] | .port + ":" + .path] | join(",")' \
+  "$postgresql_monitor")" == 'metrics:/metrics' ]] || {
+  echo 'The PostgreSQL ServiceMonitor must scrape only the named metrics port.' >&2
+  exit 1
+}
+[[ "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].toPorts[].ports[].port] | sort | join(",")' \
+  "$postgresql_policy")" == '5432,9399' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].fromEndpoints[].matchLabels."app.kubernetes.io/name"] | map(select(. != null)) | sort | join(",")' \
+  "$postgresql_policy")" == 'n8n,n8n-postgresql-backup' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].fromEndpoints[].matchLabels."k8s:io.kubernetes.pod.namespace"] | sort | join(",")' \
+  "$postgresql_policy")" == 'automation,automation,monitoring' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | .spec.egress | length' \
+  "$postgresql_policy")" == '0' ]] || {
+  echo 'PostgreSQL ingress identities or no-egress containment are incorrect.' >&2
+  exit 1
+}
+[[ "$(yq ea -r 'select(.metadata.name == "n8n-postgresql-backup") | [.spec.egress[].toPorts[].ports[].port] | sort | join(",")' \
+  "$postgresql_policy")" == '53,53,5432' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql-backup") | [.spec.egress[].toEndpoints[].matchLabels."app.kubernetes.io/name"] | map(select(. != null)) | join(",")' \
+  "$postgresql_policy")" == 'n8n-postgresql' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql-backup") | [.spec.egress[].toEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "n8n-postgresql") | .matchLabels."k8s:io.kubernetes.pod.namespace"] | join(",")' \
+  "$postgresql_policy")" == 'automation' && \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql-backup") | [.spec.egress[].toEndpoints[].matchLabels."k8s:k8s-app"] | map(select(. != null)) | join(",")' \
+  "$postgresql_policy")" == 'kube-dns' ]] || {
+  echo 'The backup Job must reach only cluster DNS and PostgreSQL.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '[.collectors[].metrics[].metric_name] | sort | join(",")' \
+  "$postgresql_exporter")" == \
+  'n8n_postgresql_backup_last_success_timestamp_seconds,n8n_postgresql_connections,n8n_postgresql_database_size_bytes,n8n_postgresql_transactions_total' && \
+  "$(yq -r '.collectors[].metrics[] | select(.metric_name == "n8n_postgresql_connections") | .key_labels | join(",")' \
+  "$postgresql_exporter")" == 'state' && \
+  "$(yq -r '.collectors[].metrics[] | select(.metric_name == "n8n_postgresql_transactions_total") | .key_labels | join(",")' \
+  "$postgresql_exporter")" == 'result' ]] || {
+  echo 'SQL Exporter must define the four n8n PostgreSQL metric families.' >&2
+  exit 1
+}
+
+sh -n "$postgresql_init" "$postgresql_backup"
+shellcheck "$postgresql_init" "$postgresql_backup"
+kustomize build "$postgresql_app" >"$temp_dir/postgresql.yaml"
+yq ea 'del(.sops)' "$temp_dir/postgresql.yaml" >"$temp_dir/postgresql-conform.yaml"
+kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/postgresql-conform.yaml"
+yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."init-database.sh" != null) | .data."init-database.sh"' \
+  "$temp_dir/postgresql.yaml" >"$temp_dir/init-database.sh"
+yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."backup.sh" != null) | .data."backup.sh"' \
+  "$temp_dir/postgresql.yaml" >"$temp_dir/backup.sh"
+yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."update-backup-status.sql" != null) | .data."update-backup-status.sql"' \
+  "$temp_dir/postgresql.yaml" >"$temp_dir/update-backup-status.sql"
+yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."sql-exporter.yml" != null) | .data."sql-exporter.yml"' \
+  "$temp_dir/postgresql.yaml" >"$temp_dir/sql-exporter.yml"
+[[ -s "$temp_dir/init-database.sh" && -s "$temp_dir/backup.sh" && \
+  -s "$temp_dir/update-backup-status.sql" && -s "$temp_dir/sql-exporter.yml" ]] || {
+  echo 'The rendered PostgreSQL ConfigMaps must contain every runtime script and collector.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.collectors[].metrics[].metric_name] | sort | join(",")' \
+  "$temp_dir/sql-exporter.yml")" == \
+  'n8n_postgresql_backup_last_success_timestamp_seconds,n8n_postgresql_connections,n8n_postgresql_database_size_bytes,n8n_postgresql_transactions_total' ]]
+rg -q '^CREATE ROLE n8n ' "$temp_dir/init-database.sh"
+rg -q '^CREATE ROLE n8n_backup ' "$temp_dir/init-database.sh"
+rg -q '^CREATE ROLE n8n_exporter ' "$temp_dir/init-database.sh"
+rg -q '^GRANT pg_read_all_data TO n8n_backup;' "$temp_dir/init-database.sh"
+rg -q '^GRANT pg_monitor TO n8n_exporter;' "$temp_dir/init-database.sh"
+rg -q '^GRANT SELECT, INSERT, UPDATE ON platform_operations.logical_backup_status TO n8n_backup;' \
+  "$temp_dir/init-database.sh"
+rg -q '^GRANT SELECT ON platform_operations.logical_backup_status TO n8n_exporter;' \
+  "$temp_dir/init-database.sh"
+! rg -q -- '--set=.*PASSWORD' "$temp_dir/init-database.sh" || {
+  echo 'Database initialization must not place role passwords in process arguments.' >&2
+  exit 1
+}
+rg -q '^INSERT INTO platform_operations.logical_backup_status' "$temp_dir/update-backup-status.sql"
+rg -q '^ON CONFLICT ' "$temp_dir/update-backup-status.sql"
+rg -q '^DO UPDATE SET' "$temp_dir/update-backup-status.sql"
+rg -Fq ":'completed_at'::timestamp with time zone" "$temp_dir/update-backup-status.sql"
+rg -Fq ":'filename'::text" "$temp_dir/update-backup-status.sql"
+rg -Fq ":'checksum'::character(64)" "$temp_dir/update-backup-status.sql"
+
+previous_line=0
+# shellcheck disable=SC2016 # These are literal markers from the rendered script.
+for marker in \
+  'pg_dump --format=custom --compress=9 --no-owner --no-privileges' \
+  'pg_restore --file /dev/null "$temporary_dump"' \
+  'checksum="$(sha256sum "$temporary_dump" | awk' \
+  'printf '\''%s  %s\n'\'' "$checksum" "$(basename "$final_dump")"' \
+  'mv -- "$temporary_dump" "$final_dump"' \
+  'mv -- "$temporary_checksum" "$final_checksum"' \
+  '(cd "$backup_dir" && sha256sum --check "$(basename "$final_checksum")")' \
+  'psql --set=completed_at="$completed_at"'; do
+  marker_line="$(rg -n -m 1 -F -- "$marker" "$temp_dir/backup.sh" | cut -d: -f1)"
+  [[ -n "$marker_line" && "$marker_line" -gt "$previous_line" ]] || {
+    echo "Rendered backup order is missing or incorrect at: $marker" >&2
+    exit 1
+  }
+  previous_line="$marker_line"
+done
+cleanup_line="$(rg -n -m 1 -F -- 'find "$backup_dir"' "$temp_dir/backup.sh" | cut -d: -f1)"
+[[ -n "$cleanup_line" && "$cleanup_line" -gt "$previous_line" ]] || {
+  echo 'Backup cleanup must occur only after the status upsert.' >&2
+  exit 1
+}
+
+[[ -z "$(yq ea -r 'select(.kind == "HTTPRoute") | .metadata.name' \
+  "$temp_dir/postgresql.yaml")" ]] || {
+  echo 'PostgreSQL must not render an HTTPRoute.' >&2
+  exit 1
+}
+[[ -z "$(yq ea -r 'select(.kind == "Service" and (.spec.type == "NodePort" or .spec.type == "LoadBalancer")) | .metadata.name' \
+  "$temp_dir/postgresql.yaml")" ]] || {
+  echo 'PostgreSQL must not render an externally exposed Service.' >&2
+  exit 1
+}
+
+echo 'n8n namespace, public edge, suspended PostgreSQL, retained storage, logical backup, SQL metrics, monitoring, and containment source passed validation.'

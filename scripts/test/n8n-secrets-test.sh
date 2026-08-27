@@ -393,12 +393,8 @@ kind: Kustomization
 resources:
   - ./n8n-runtime.sops.yaml
 YAML
-  cat >"$validator_tree/kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml" <<'YAML'
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ./postgresql-credentials.sops.yaml
-YAML
+  yq -i '.resources += ["./postgresql-credentials.sops.yaml"]' \
+    "$validator_tree/kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml"
   cat >"$validator_tree/kubernetes/apps/monitoring/gatus/app/kustomization.yaml" <<'YAML'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
