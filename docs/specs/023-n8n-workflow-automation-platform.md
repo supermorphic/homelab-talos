@@ -19,13 +19,13 @@ The target request path is:
 Internet sender
     |
     v
-public Envoy Gateway -- hooks.lab.supermorphic.com/webhook/* --+
-                                                               |
-private operator -- n8n.lab.supermorphic.com ----------------> n8n
-                                                               |
-                                                               v
-                                                        PostgreSQL
-                                                               |
+public Envoy Gateway -- hooks.lab.supermorphic.com/webhook/platform-canary --+
+                                                                              |
+private operator -- n8n.lab.supermorphic.com ------------------------------> n8n
+                                                                              |
+                                                                              v
+                                                                       PostgreSQL
+                                                                              |
                               +--------------------------------+
                               |
                               +--> n8n execution state
@@ -88,10 +88,11 @@ invalidate the infrastructure pattern.
 
 ## Selected deployment approach
 
-The implementation uses the official n8n Helm chart for n8n and focused native Kubernetes
-resources for PostgreSQL. Exact chart and image versions are pinned. The rendered n8n
-workload must use one replica, external PostgreSQL, filesystem binary-data mode, and no
-queue components. Repository-owned HTTPRoutes replace any chart-provided ingress.
+The implementation uses official n8n Helm chart 1.11.0 and n8n 2.36.7, plus focused
+native Kubernetes resources for PostgreSQL. The chart's mutable `stable` application
+default is overridden with the exact n8n image version. The rendered n8n workload must
+use one replica, external PostgreSQL, filesystem binary-data mode, and no queue
+components. Repository-owned HTTPRoutes replace any chart-provided ingress.
 
 The official chart reduces local ownership of n8n-specific probes, ports, and deployment
 configuration. PostgreSQL remains a small, understandable StatefulSet rather than
@@ -102,7 +103,8 @@ database platform for one consumer.
 The chart's single-process external-PostgreSQL mode is less prominent in its examples
 than queue mode. Rendered-manifest assertions are therefore a release requirement. They
 must prove that queue mode, Redis, workers, separate webhook processors, and bundled
-ingress remain disabled.
+ingress remain disabled. They must also prove that the exact supported webhook URL
+variable reaches the n8n container without the chart's deprecated compatibility alias.
 
 ## Flux and namespace ownership
 
@@ -151,7 +153,7 @@ n8n is configured with:
 - PostgreSQL as its database;
 - filesystem binary-data mode on the n8n claim;
 - `N8N_WEBHOOK_URL=https://hooks.lab.supermorphic.com/`;
-- the private editor base URL at `https://n8n.lab.supermorphic.com/`;
+- `N8N_EDITOR_BASE_URL=https://n8n.lab.supermorphic.com/`;
 - one trusted reverse-proxy hop;
 - Prometheus metrics on an internal-only endpoint;
 - successful and failed execution persistence;
@@ -159,8 +161,12 @@ n8n is configured with:
   removes data first; and
 - telemetry and unattended application updates disabled.
 
-The implementation must use environment-variable names supported by the pinned n8n
-version. Deprecated names do not satisfy this design even when they still function.
+In n8n 2.36.7, `N8N_WEBHOOK_URL` is the canonical variable and `WEBHOOK_URL` is its
+deprecated predecessor. Chart 1.11.0 still renders `WEBHOOK_URL` when `webhook.url` is
+set. The Helm values therefore leave `webhook.url` empty and inject both canonical URLs
+through `config.extraEnv`. Rendered-manifest assertions require one
+`N8N_WEBHOOK_URL`, one `N8N_EDITOR_BASE_URL`, and no `WEBHOOK_URL`. Deprecated names do
+not satisfy this design even when they still function.
 
 ## PostgreSQL runtime
 
@@ -201,9 +207,15 @@ Gateway accepts explicitly attached routes and does not expose an n8n administra
 path. Its listener accepts routes only from the dedicated public routing namespace, so an
 application namespace cannot attach another backend directly.
 
-n8n owns `/webhook/*`. Future applications may reuse the same hostname only through
-separately reviewed, non-overlapping top-level prefixes. Adding a Service does not make it
-public; every prefix needs an explicit HTTPRoute rule and any required `ReferenceGrant`.
+The initial HTTPRoute uses an `Exact` path match for `/webhook/platform-canary`. It does
+not expose `/webhook/*`, `/webhook-test/*`, or another prefix. Each later production n8n
+integration, including TheirStack, requires its own exact path to be added through
+Git/Flux. Publishing an n8n workflow alone therefore does not make its webhook Internet
+reachable.
+
+Future applications may reuse the same hostname only through separately reviewed,
+non-overlapping exact paths or top-level prefixes. Adding a Service does not make it
+public; every path needs an explicit HTTPRoute rule and any required `ReferenceGrant`.
 Unmatched paths have no backend route.
 
 TLS and route matching authenticate neither the sender nor the event. Every production
@@ -360,22 +372,33 @@ does not provide that paid feature.
 ## Synthetic canary
 
 The canary is a real published n8n workflow, not a static Envoy or web-server response. It
-contains only a header-authenticated Webhook trigger, a small deterministic response that
-includes a request correlation value, and a final response node. It contains no career
-logic, SQL node, domain persistence, or external side effect.
+contains only a header-authenticated Webhook trigger configured with **Respond: When Last
+Node Finishes** and a deterministic final Edit Fields node. The response includes the
+request correlation value and `$execution.id`. The workflow contains no Respond to
+Webhook node, career logic, SQL node, domain persistence, or external side effect.
 
-The workflow uses normal n8n execution persistence and responds only after its final node.
-This makes PostgreSQL part of the canary semantics without adding an artificial database
-query. A platform acceptance run confirms that the successful execution appears in n8n
-history. A request that cannot create and persist a normal execution does not satisfy the
-canary contract.
+This precise response mode is part of the persistence contract. In pinned n8n 2.36.7
+regular mode, the last-node response waits for the post-execution promise. The execution
+lifecycle awaits its `workflowExecuteAfter` hooks, including the PostgreSQL execution
+update, before resolving that promise. The successful response therefore represents a
+completed normal execution whose configured success record has been persisted. This
+makes PostgreSQL part of the canary semantics without adding an artificial database
+query.
+
+Acceptance must verify the implementation behavior rather than infer it only from source.
+It sends a unique correlation value, records the returned execution ID, and then retrieves
+that execution through the private n8n history or API. The record must be successful and
+contain the matching correlation value immediately after the response completes. If the
+pinned runtime requires polling because persistence is asynchronous, implementation must
+stop and revise this contract before merge rather than claim that the response acknowledges
+completed persistence.
 
 The template contains no authentication value. After the initial deployment, the
 operator creates the n8n owner account through the private UI, imports the template,
 creates and binds its header-auth credential using the SOPS-managed canary value, and
 publishes it. This one-time bootstrap avoids a persistent privileged bootstrap API key.
 
-Gatus calls the production public webhook path every five minutes from its normal
+Gatus calls `/webhook/platform-canary` every five minutes from its normal
 monitoring context with the same SOPS-managed header value. It verifies the status and
 correlation response. A separate negative acceptance request without valid authentication
 must fail. Gatus never checks the public n8n UI because no such route exists.
@@ -383,9 +406,11 @@ must fail. Gatus never checks the public n8n UI because no such route exists.
 ## Error and retry behavior
 
 The public Gateway returns no backend route for unmatched paths. n8n rejects missing or
-invalid canary authentication before a successful execution. When n8n or PostgreSQL is
-unavailable, readiness and backend failure produce an unsuccessful webhook response and
-the canary fails.
+invalid canary authentication before a successful execution. The chart readiness probe
+uses `/healthz/readiness`, which checks database connectivity and migrations before Envoy
+can send traffic to the pod. If PostgreSQL becomes unavailable during a canary run, the
+required execution-persistence update cannot complete and the request cannot satisfy the
+successful last-node response contract.
 
 n8n records workflow failures according to the 14-day and 10,000-execution retention
 bounds. Prometheus alerts on platform failure patterns; the UI remains the detailed
@@ -475,7 +500,8 @@ The rollout follows dependency order:
 5. Add operator-managed public DNS and TCP/443 router forwarding.
 6. Run off-network positive and negative webhook acceptance tests.
 
-Exact image and chart pins are reconciled into this specification before merge. An n8n
+The initial pins are n8n chart 1.11.0 and n8n 2.36.7. The implementation also records the
+resolved immutable chart artifact digest and exact container image reference. An n8n
 upgrade requires a fresh logical dump and review of the upstream release notes. A rollback
 must account for database migrations; reverting an image is not assumed safe when the new
 version changed the schema.
@@ -490,9 +516,12 @@ Focused tests and rendered-manifest assertions verify:
 
 - the selected official chart renders one n8n process with external PostgreSQL;
 - queue mode, Redis, workers, separate webhook processors, and bundled ingress are absent;
+- the n8n container has one `N8N_WEBHOOK_URL`, one `N8N_EDITOR_BASE_URL`, and no
+  deprecated `WEBHOOK_URL`;
 - a Deployment mounting the n8n `ReadWriteOnce` claim uses `Recreate`;
 - all three claims are Longhorn-backed and carry Flux prune protection;
-- no public route exposes the editor, API, metrics, PostgreSQL, or a catch-all path;
+- the only initial public route is an `Exact` match for `/webhook/platform-canary`, with
+  no editor, API, metrics, PostgreSQL, test-webhook, prefix, or catch-all route;
 - only the public routing namespace receives the cross-namespace Service grant;
 - network policies implement the approved ingress and egress boundaries;
 - resource and execution-retention settings match this specification;
@@ -503,9 +532,10 @@ Scoped live acceptance verifies:
 
 1. Flux reports the public Gateway, PostgreSQL, n8n, and monitoring resources ready.
 2. The n8n UI works through the private hostname and has no public route.
-3. The public hostname serves only the intended `/webhook/*` route family.
-4. An authenticated canary request completes a normal workflow execution and the
-   execution appears in n8n history; invalid authentication fails.
+3. The public hostname serves only the exact `/webhook/platform-canary` path.
+4. An authenticated canary request returns its correlation value and execution ID only
+   after a matching successful execution is immediately retrievable from n8n history;
+   invalid authentication fails without a successful execution.
 5. Controlled n8n and PostgreSQL pod restarts preserve configuration, workflow, database,
    and required filesystem state.
 6. A logical backup creates a validated final artifact and advances the Prometheus
@@ -585,6 +615,14 @@ actual configuration fields, rendered resources, runbook, and validated cluster 
 ## External references
 
 - [n8n Kubernetes hosting repository](https://github.com/n8n-io/n8n-hosting)
+- [n8n Helm chart 1.11.0](https://github.com/n8n-io/n8n-hosting/tree/v1.11.0/charts/n8n)
+- [n8n 2.36.7 release](https://github.com/n8n-io/n8n/releases/tag/n8n%402.36.7)
+- [n8n 2.36.7 canonical URL environment
+  variables](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/%40n8n/config/src/index.ts)
+- [n8n 2.36.7 webhook response
+  sequence](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/webhooks/webhook-helpers.ts)
+- [n8n 2.36.7 execution persistence
+  hooks](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/execution-lifecycle/execution-lifecycle-hooks.ts)
 - [n8n PostgreSQL
   configuration](https://docs.n8n.io/hosting/configuration/supported-databases-settings/)
 - [n8n queue mode](https://docs.n8n.io/hosting/scaling/queue-mode/)
