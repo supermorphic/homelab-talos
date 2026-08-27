@@ -687,6 +687,7 @@ shell_sources+=(
 	"$dispatch_helper"
 	"$results_helper"
 	"$diagnostic_evidence_results_helper"
+	"$diagnostic_producer_contract_helper"
 	"$selection_helper"
 	"$live_verifier"
 	"$validator"
