@@ -25,6 +25,18 @@ postgresql_init="$postgresql_app/scripts/init-database.sh"
 postgresql_backup="$postgresql_app/scripts/backup.sh"
 postgresql_status_sql="$postgresql_app/scripts/update-backup-status.sql"
 postgresql_exporter="$postgresql_app/sql-exporter.yml"
+n8n_base="$base/n8n"
+n8n_app="$n8n_base/app"
+n8n_ks="$n8n_base/ks.yaml"
+n8n_kustomization="$n8n_app/kustomization.yaml"
+n8n_source="$n8n_app/ocirepository.yaml"
+n8n_release="$n8n_app/helmrelease.yaml"
+n8n_values="$n8n_app/values.yaml"
+n8n_pvc="$n8n_app/persistentvolumeclaim.yaml"
+n8n_route="$n8n_app/httproute.yaml"
+n8n_grant="$n8n_app/referencegrant.yaml"
+n8n_monitor="$n8n_app/servicemonitor.yaml"
+n8n_policy="$n8n_app/ciliumnetworkpolicy.yaml"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -129,6 +141,11 @@ for file in "$postgresql_ks" "$postgresql_kustomization" "$postgresql_pvcs" \
   "$postgresql_monitor" "$postgresql_policy" "$postgresql_init" \
   "$postgresql_backup" "$postgresql_status_sql" "$postgresql_exporter"; do
   [[ -f "$file" ]] || { echo "Missing n8n PostgreSQL source: $file" >&2; exit 1; }
+done
+for file in "$n8n_ks" "$n8n_kustomization" "$n8n_source" "$n8n_release" \
+  "$n8n_values" "$n8n_pvc" "$n8n_route" "$n8n_grant" "$n8n_monitor" \
+  "$n8n_policy"; do
+  [[ -f "$file" ]] || { echo "Missing n8n chart source: $file" >&2; exit 1; }
 done
 yq -e '.resources[] | select(. == "./automation")' kubernetes/apps/kustomization.yaml >/dev/null
 yq -e '.resources[] | select(. == "./public-webhook-gateway/ks.yaml")' \
@@ -477,4 +494,263 @@ cleanup_line="$(rg -n -m 1 -F -- 'find "$backup_dir"' "$temp_dir/backup.sh" | cu
   exit 1
 }
 
-echo 'n8n namespace, public edge, suspended PostgreSQL, retained storage, logical backup, SQL metrics, monitoring, and containment source passed validation.'
+yq -e '.resources[] | select(. == "./n8n/ks.yaml")' "$base/kustomization.yaml" >/dev/null || {
+  echo 'The automation root must select n8n/ks.yaml.' >&2
+  exit 1
+}
+[[ "$(yq -r '.metadata.name' "$n8n_ks")" == 'n8n' && \
+  "$(yq -r '.metadata.namespace' "$n8n_ks")" == 'flux-system' && \
+  "$(yq -r '.spec.path' "$n8n_ks")" == './kubernetes/apps/automation/n8n/app' && \
+  "$(yq -r '.spec.suspend' "$n8n_ks")" == 'true' && \
+  "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$n8n_ks")" == \
+    'automation,cilium,internal-gateway,kube-prometheus-stack,longhorn,n8n-postgresql,public-webhook-gateway' ]] || {
+  echo 'n8n must remain suspended with its complete foundation dependency graph.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.kind' "$n8n_source")" == 'OCIRepository' && \
+  "$(yq -r '.metadata.name' "$n8n_source")" == 'n8n-chart' && \
+  "$(yq -r '.metadata.namespace' "$n8n_source")" == 'automation' && \
+  "$(yq -r '.spec.url' "$n8n_source")" == 'oci://ghcr.io/n8n-io/n8n-helm-chart/n8n' && \
+  "$(yq -r '.spec.ref.digest' "$n8n_source")" == \
+    'sha256:a0bf4694f6e0f91dfb196fd8de08ad40cb3dd798edaa9bd54fa9c3f32566517c' && \
+  "$(yq -r '.spec.layerSelector | [.mediaType, .operation] | join(",")' "$n8n_source")" == \
+    'application/vnd.cncf.helm.chart.content.v1.tar+gzip,copy' ]] || {
+  echo 'n8n must use the immutable official chart 1.11.0 OCI artifact.' >&2
+  exit 1
+}
+[[ "$(yq -r '.metadata.name' "$n8n_release")" == 'n8n' && \
+  "$(yq -r '.metadata.namespace' "$n8n_release")" == 'automation' && \
+  "$(yq -r '.spec.chartRef | [.kind, .name] | join(",")' "$n8n_release")" == \
+    'OCIRepository,n8n-chart' && \
+  "$(yq -r '.spec.releaseName' "$n8n_release")" == 'n8n' && \
+  "$(yq -r '.spec.valuesFrom | length' "$n8n_release")" == '1' && \
+  "$(yq -r '.spec.valuesFrom[0] | [.kind, .name, .valuesKey] | join(",")' "$n8n_release")" == \
+    'ConfigMap,n8n-values,values.yaml' ]] || {
+  echo 'The n8n HelmRelease must consume only the watched n8n-values ConfigMap.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches | length' "$n8n_release")" == '2' && \
+  "$(yq -r '[.spec.postRenderers[0].kustomize.patches[].target.kind] | sort | join(",")' \
+    "$n8n_release")" == 'Deployment,Service' && \
+  "$(yq -r '.spec.postRenderers[0].kustomize.patches[] | select(.target.kind == "Deployment") | .target.name' \
+    "$n8n_release")" == 'n8n-main' && \
+  "$(yq -r '.spec.postRenderers[0].kustomize.patches[] | select(.target.kind == "Service") | .target.name' \
+    "$n8n_release")" == 'n8n-main' && \
+  "$(yq -r '[.spec.postRenderers[0].kustomize.patches[] | (.patch | from_yaml) | select(length == 1) | .[0] | [.op, .path, .value] | join(",")] | unique | join(";")' \
+    "$n8n_release")" == 'replace,/metadata/name,n8n' ]] || {
+  echo 'The Helm post-renderer must expose the one main Deployment and Service as n8n.' >&2
+  exit 1
+}
+
+declare -A n8n_resource_counts=()
+while IFS= read -r resource; do
+  resource="$(normalise_resource_path "$resource")"
+  case "$resource" in
+    ciliumnetworkpolicy.yaml | helmrelease.yaml | httproute.yaml | ocirepository.yaml | \
+      persistentvolumeclaim.yaml | referencegrant.yaml | servicemonitor.yaml | n8n-runtime.sops.yaml)
+      n8n_resource_counts["$resource"]=$((
+        ${n8n_resource_counts["$resource"]:-0} + 1
+      ))
+      ;;
+    *)
+      echo "The n8n app Kustomization selects an unexpected resource: $resource" >&2
+      exit 1
+      ;;
+  esac
+done < <(yq -r '.resources[]' "$n8n_kustomization")
+for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepository.yaml \
+  persistentvolumeclaim.yaml referencegrant.yaml servicemonitor.yaml; do
+  [[ "${n8n_resource_counts["$resource"]:-0}" == '1' ]] || {
+    echo "The n8n app must select $resource exactly once." >&2
+    exit 1
+  }
+done
+[[ "${n8n_resource_counts[n8n-runtime.sops.yaml]:-0}" -le 1 && \
+  "$(yq -r '[.configMapGenerator[].name] | join(",")' "$n8n_kustomization")" == \
+    'n8n-values' && \
+  "$(yq -r '.generatorOptions.disableNameSuffixHash' "$n8n_kustomization")" == 'true' ]] || {
+  echo 'The n8n app must generate one stable values ConfigMap and select runtime ciphertext at most once.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.metadata.name' "$n8n_pvc")" == 'n8n-data' && \
+  "$(yq -r '.metadata.annotations."kustomize.toolkit.fluxcd.io/prune"' "$n8n_pvc")" == \
+    'disabled' && \
+  "$(yq -r '.spec.accessModes | join(",")' "$n8n_pvc")" == 'ReadWriteOnce' && \
+  "$(yq -r '.spec.resources.requests.storage' "$n8n_pvc")" == '5Gi' && \
+  "$(yq -r '.spec.storageClassName' "$n8n_pvc")" == 'longhorn' ]] || {
+  echo 'n8n-data must be a retained 5Gi Longhorn RWO claim.' >&2
+  exit 1
+}
+[[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$n8n_route")" == \
+    'internal' && \
+  "$(yq -r '.spec.hostnames | join(",")' "$n8n_route")" == 'n8n.lab.supermorphic.com' && \
+  "$(yq -r '.spec.parentRefs | length' "$n8n_route")" == '1' && \
+  "$(yq -r '.spec.parentRefs[0] | [.namespace, .name, .sectionName] | join(",")' "$n8n_route")" == \
+    'networking,internal,https' && \
+  "$(yq -r '.spec.rules | length' "$n8n_route")" == '1' && \
+  "$(yq -r '.spec.rules[0].backendRefs | length' "$n8n_route")" == '1' && \
+  "$(yq -r '.spec.rules[0].backendRefs[0] | [.kind, .name, .port] | join(",")' "$n8n_route")" == \
+    'Service,n8n,5678' ]] || {
+  echo 'The private n8n route must attach only to networking/internal and target n8n:5678.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.from | length' "$n8n_grant")" == '1' && \
+  "$(yq -r '.spec.from[0] | [.group, .kind, .namespace] | join(",")' "$n8n_grant")" == \
+    'gateway.networking.k8s.io,HTTPRoute,networking-public' && \
+  "$(yq -r '.spec.to | length' "$n8n_grant")" == '1' && \
+  "$(yq -r '.spec.to[0] | [.group, .kind, .name] | join(",")' "$n8n_grant")" == \
+    ',Service,n8n' ]] || {
+  echo 'The ReferenceGrant must admit only networking-public HTTPRoutes to Service n8n.' >&2
+  exit 1
+}
+[[ "$(yq -r '.spec.selector.matchLabels."app.kubernetes.io/name"' "$n8n_monitor")" == \
+    'n8n' && \
+  "$(yq -r '[.spec.endpoints[] | .port + ":" + .path] | join(",")' "$n8n_monitor")" == \
+    'http:/metrics' ]] || {
+  echo 'The n8n ServiceMonitor must scrape only /metrics on the named HTTP port.' >&2
+  exit 1
+}
+
+[[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$n8n_policy")" == \
+    'n8n' && \
+  "$(yq -r '[.spec.ingress[].toPorts[].ports[].port] | unique | join(",")' "$n8n_policy")" == \
+    '5678' && \
+  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "internal") | .matchLabels | [."k8s:io.kubernetes.pod.namespace", ."gateway.envoyproxy.io/owning-gateway-namespace"] | join(",")] | join(",")' "$n8n_policy")" == \
+    'envoy-gateway-system,networking' && \
+  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "public-webhooks") | .matchLabels | [."k8s:io.kubernetes.pod.namespace", ."gateway.envoyproxy.io/owning-gateway-namespace"] | join(",")] | join(",")' "$n8n_policy")" == \
+    'envoy-gateway-system,networking-public' && \
+  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "prometheus") | .matchLabels | to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | join(";")' "$n8n_policy")" == \
+    'app.kubernetes.io/name=prometheus,k8s:io.kubernetes.pod.namespace=monitoring,operator.prometheus.io/name=kube-prometheus-stack-prometheus' && \
+  "$(yq -r '[.spec.ingress[].fromEntities[]] | sort | join(",")' "$n8n_policy")" == \
+    'host,remote-node' ]] || {
+  echo 'n8n ingress must admit only both Envoy data planes, Prometheus, and kubelet probes.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.spec.egress[].toPorts[].ports[].port] | sort | join(",")' "$n8n_policy")" == \
+    '443,53,53,5432' && \
+  "$(yq -r '[.spec.egress[].toEndpoints[] | select(.matchLabels."k8s:k8s-app" == "kube-dns") | .matchLabels."k8s:io.kubernetes.pod.namespace"] | join(",")' "$n8n_policy")" == \
+    'kube-system' && \
+  "$(yq -r '[.spec.egress[].toEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "n8n-postgresql") | .matchLabels."k8s:io.kubernetes.pod.namespace"] | join(",")' "$n8n_policy")" == \
+    'automation' && \
+  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet | length' "$n8n_policy")" == \
+    '1' && \
+  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].cidr' "$n8n_policy")" == \
+    '0.0.0.0/0' && \
+  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].except | sort | join(",")' "$n8n_policy")" == \
+    '0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4' ]] || {
+  echo 'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.' >&2
+  exit 1
+}
+
+kustomize build "$n8n_app" >"$temp_dir/n8n-source.yaml"
+yq ea 'del(.sops)' "$temp_dir/n8n-source.yaml" >"$temp_dir/n8n-source-conform.yaml"
+kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/n8n-source-conform.yaml"
+chart_pull_output="$(helm pull "$(yq -r '.spec.url' "$n8n_source")" --version 1.11.0 \
+  --destination "$temp_dir")"
+rg -Fq 'Digest: sha256:a0bf4694f6e0f91dfb196fd8de08ad40cb3dd798edaa9bd54fa9c3f32566517c' \
+  <<<"$chart_pull_output" || {
+  echo 'The downloaded n8n chart does not match the pinned OCI digest.' >&2
+  exit 1
+}
+helm template n8n "$temp_dir/n8n-1.11.0.tgz" --namespace automation \
+  --values "$n8n_values" >"$temp_dir/n8n-chart.yaml"
+# Flux applies the two checked HelmRelease post-render patches before ownership and apply.
+yq ea '
+  with(select(.kind == "Deployment" and .metadata.name == "n8n-main");
+    .metadata.name = "n8n") |
+  with(select(.kind == "Service" and .metadata.name == "n8n-main");
+    .metadata.name = "n8n")
+' "$temp_dir/n8n-chart.yaml" >"$temp_dir/n8n-rendered.yaml"
+kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/n8n-rendered.yaml"
+
+[[ "$(yq ea -r '[select(.kind == "Deployment")] | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$temp_dir/n8n-rendered.yaml")" == \
+    'n8n' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.replicas' "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.strategy.type' "$temp_dir/n8n-rendered.yaml")" == \
+    'Recreate' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$temp_dir/n8n-rendered.yaml")" == \
+    'docker.n8n.io/n8nio/n8n:2.36.7' ]] || {
+  echo 'The n8n chart must render one exact-image Deployment replica with Recreate.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "Service")] | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r 'select(.kind == "Service") | [.metadata.name, .spec.type, .spec.ports[0].name, .spec.ports[0].port] | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
+    'n8n,ClusterIP,http,5678' && \
+  "$(yq ea -r '[select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "data") | .persistentVolumeClaim.claimName] | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
+    'n8n-data' ]] || {
+  echo 'The n8n chart must expose n8n:5678 and mount only the retained n8n-data claim.' >&2
+  exit 1
+}
+[[ "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].resources | [.requests.cpu, .requests.memory, .limits.memory] | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
+    '100m,256Mi,1Gi' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].resources.limits | has("cpu") | not' "$temp_dir/n8n-rendered.yaml")" == \
+    'true' && \
+  "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.automountServiceAccountToken' "$temp_dir/n8n-rendered.yaml")" == \
+    'false' && \
+  "$(yq ea -r '[select(.kind == "Role" or .kind == "RoleBinding" or .kind == "ServiceAccount")] | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '0' ]] || {
+  echo 'The n8n pod must use the exact resource envelope without Kubernetes API credentials.' >&2
+  exit 1
+}
+[[ "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].env[] | select(.name == "DB_POSTGRESDB_PASSWORD") | .valueFrom.secretKeyRef | [.name, .key] | join(",")] | join(";")' "$temp_dir/n8n-rendered.yaml")" == \
+    'postgresql-credentials,n8n-password' && \
+  "$(yq ea -r 'select(.kind == "ConfigMap") | [.data.DB_TYPE, .data.DB_POSTGRESDB_HOST, .data.DB_POSTGRESDB_PORT, .data.DB_POSTGRESDB_DATABASE, .data.DB_POSTGRESDB_USER] | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
+    'postgresdb,n8n-postgresql.automation.svc.cluster.local,5432,n8n,n8n' ]] || {
+  echo 'The n8n chart must use only the dedicated external PostgreSQL database.' >&2
+  exit 1
+}
+[[ "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].env[] | select(.valueFrom.secretKeyRef != null) | .name + "=" + .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] | sort | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
+    'DB_POSTGRESDB_PASSWORD=postgresql-credentials/n8n-password,N8N_ENCRYPTION_KEY=n8n-runtime/N8N_ENCRYPTION_KEY,N8N_HOST=n8n-runtime/N8N_HOST,N8N_PORT=n8n-runtime/N8N_PORT,N8N_PROTOCOL=n8n-runtime/N8N_PROTOCOL' ]] || {
+  echo 'The n8n container must consume only the exact runtime and database Secret keys.' >&2
+  exit 1
+}
+[[ -z "$(yq ea -r 'select(.kind == "ConfigMap") | .data | keys | .[] | select(test("REDIS|QUEUE"))' \
+    "$temp_dir/n8n-rendered.yaml")" && \
+  "$(yq ea -r '[select(.kind == "Deployment" and .metadata.labels."app.kubernetes.io/component" != "main")] | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '0' && \
+  "$(yq ea -r '[select(.kind == "Secret" or .kind == "HorizontalPodAutoscaler" or .kind == "PodDisruptionBudget" or .kind == "Ingress" or .kind == "ScaledObject")] | length' "$temp_dir/n8n-rendered.yaml")" == \
+    '0' ]] || {
+  echo 'The n8n chart must not render queue, Redis, worker, webhook-processor, autoscaling, disruption-budget, or Ingress behavior.' >&2
+  exit 1
+}
+
+n8n_env_query='select(.kind == "Deployment") | .spec.template.spec.containers[0].env'
+[[ "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_WEBHOOK_URL\")] | length" "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_EDITOR_BASE_URL\")] | length" "$temp_dir/n8n-rendered.yaml")" == \
+    '1' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"WEBHOOK_URL\")] | length" "$temp_dir/n8n-rendered.yaml")" == \
+    '0' && \
+  "$(yq ea -r 'select(.kind == "ConfigMap") | .data | has("WEBHOOK_URL")' "$temp_dir/n8n-rendered.yaml")" == \
+    'false' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_WEBHOOK_URL\") | .value, .[] | select(.name == \"N8N_EDITOR_BASE_URL\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    'https://hooks.lab.supermorphic.com/,https://n8n.lab.supermorphic.com/' ]] || {
+  echo 'The n8n container must have each canonical URL once and no deprecated WEBHOOK_URL.' >&2
+  exit 1
+}
+[[ "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_PROXY_HOPS\") | .value, .[] | select(.name == \"N8N_METRICS\") | .value, .[] | select(.name == \"N8N_METRICS_INCLUDE_WORKFLOW_STATISTICS\") | .value, .[] | select(.name == \"N8N_METRICS_INCLUDE_DB_POOL_METRICS\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    '1,true,true,true' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_DIAGNOSTICS_ENABLED\" or .name == \"N8N_VERSION_NOTIFICATIONS_ENABLED\" or .name == \"N8N_PERSONALIZATION_ENABLED\") | .name + \"=\" + .value] | sort | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    'N8N_DIAGNOSTICS_ENABLED=false,N8N_PERSONALIZATION_ENABLED=false,N8N_VERSION_NOTIFICATIONS_ENABLED=false' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL\" or .name == \"N8N_METRICS_INCLUDE_NODE_TYPE_LABEL\" or .name == \"N8N_METRICS_INCLUDE_CREDENTIAL_TYPE_LABEL\") | .name + \"=\" + .value] | sort | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    'N8N_METRICS_INCLUDE_CREDENTIAL_TYPE_LABEL=false,N8N_METRICS_INCLUDE_NODE_TYPE_LABEL=false,N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL=false' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_DEFAULT_BINARY_DATA_MODE\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    'filesystem' ]] || {
+  echo 'The n8n proxy, metrics, telemetry, and filesystem settings are incorrect.' >&2
+  exit 1
+}
+[[ "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"EXECUTIONS_DATA_SAVE_ON_ERROR\") | .value, .[] | select(.name == \"EXECUTIONS_DATA_SAVE_ON_SUCCESS\") | .value, .[] | select(.name == \"EXECUTIONS_DATA_PRUNE\") | .value, .[] | select(.name == \"EXECUTIONS_DATA_MAX_AGE\") | .value, .[] | select(.name == \"EXECUTIONS_DATA_PRUNE_MAX_COUNT\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == \
+    'all,all,true,336,10000' ]] || {
+  echo 'n8n must save success and error executions and enforce both retention bounds.' >&2
+  exit 1
+}
+
+echo 'n8n standalone external-PostgreSQL render, private route, retained storage, metrics, and containment passed validation.'

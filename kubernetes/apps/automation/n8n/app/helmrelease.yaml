@@ -1,0 +1,50 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/helm.toolkit.fluxcd.io/helmrelease_v2.json
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+  namespace: automation
+spec:
+  chartRef:
+    kind: OCIRepository
+    name: n8n-chart
+  driftDetection:
+    mode: enabled
+  install:
+    remediation:
+      retries: 3
+  interval: 1h
+  postRenderers:
+    - kustomize:
+        patches:
+          # Chart 1.11.0 names the only main workload and Service n8n-main. Keep the
+          # stable repository-owned application interface at automation/n8n.
+          - target:
+              group: apps
+              version: v1
+              kind: Deployment
+              name: n8n-main
+            patch: |
+              - op: replace
+                path: /metadata/name
+                value: n8n
+          - target:
+              version: v1
+              kind: Service
+              name: n8n-main
+            patch: |
+              - op: replace
+                path: /metadata/name
+                value: n8n
+  releaseName: n8n
+  timeout: 15m
+  upgrade:
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+      strategy: rollback
+  valuesFrom:
+    - kind: ConfigMap
+      name: n8n-values
+      valuesKey: values.yaml

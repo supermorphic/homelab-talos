@@ -387,12 +387,8 @@ select_all_n8n_secrets() {
   mkdir -p "$validator_tree/kubernetes/apps/automation/n8n/app"
   mkdir -p "$validator_tree/kubernetes/apps/automation/n8n-postgresql/app"
   mkdir -p "$validator_tree/kubernetes/apps/monitoring/gatus/app"
-  cat >"$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml" <<'YAML'
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ./n8n-runtime.sops.yaml
-YAML
+  yq -i '.resources += ["./n8n-runtime.sops.yaml"]' \
+    "$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml"
   yq -i '.resources += ["./postgresql-credentials.sops.yaml"]' \
     "$validator_tree/kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml"
   cat >"$validator_tree/kubernetes/apps/monitoring/gatus/app/kustomization.yaml" <<'YAML'
@@ -406,12 +402,8 @@ YAML
 select_runtime_secret() {
   local resource="$1"
   mkdir -p "$validator_tree/kubernetes/apps/automation/n8n/app"
-  cat >"$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml" <<EOF
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - $resource
-EOF
+  resource="$resource" yq -i '.resources += [env(resource)]' \
+    "$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml"
 }
 
 write_selected_secret_fixtures() {

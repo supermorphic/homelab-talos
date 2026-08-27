@@ -97,4 +97,59 @@ yq -i 'with(select(.metadata.name == "n8n-postgresql");
 expect_fail 'namespace-only Prometheus ingress' \
   'PostgreSQL metrics ingress must select only the pinned Prometheus workload identity.'
 
-echo 'n8n validator public-edge and internal-Gateway cases passed.'
+reset_tree
+yq -i '.pdb.enabled = true' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'chart-generated disruption budget' \
+  'The n8n chart must not render queue, Redis, worker, webhook-processor, autoscaling, disruption-budget, or Ingress behavior.'
+
+reset_tree
+yq -i 'del(.resources.main.limits.cpu)' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'inherited chart CPU limit' \
+  'The n8n pod must use the exact resource envelope without Kubernetes API credentials.'
+
+reset_tree
+yq -i 'del(.taskRunners.authToken.existingSecret)' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'unused chart task-runner Secret' \
+  'The n8n chart must not render queue, Redis, worker, webhook-processor, autoscaling, disruption-budget, or Ingress behavior.'
+
+reset_tree
+yq -i '.config.extraEnv += [{"name": "WEBHOOK_URL", "value": "https://hooks.lab.supermorphic.com/"}]' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'deprecated webhook URL variable' \
+  'The n8n container must have each canonical URL once and no deprecated WEBHOOK_URL.'
+
+reset_tree
+yq -i 'del(.config.extraEnv[] | select(.name == "N8N_DIAGNOSTICS_ENABLED"))' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'missing telemetry disable' \
+  'The n8n proxy, metrics, telemetry, and filesystem settings are incorrect.'
+
+reset_tree
+yq -i '.secretRefs.existingSecret = "other-runtime"' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/values.yaml"
+expect_fail 'wrong n8n runtime Secret' \
+  'The n8n container must consume only the exact runtime and database Secret keys.'
+
+reset_tree
+yq -i '.spec.to += [{"group": "", "kind": "Secret"}]' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/referencegrant.yaml"
+expect_fail 'Secret ReferenceGrant access' \
+  'The ReferenceGrant must admit only networking-public HTTPRoutes to Service n8n.'
+
+reset_tree
+yq -i 'del(.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].except[] | select(. == "192.168.0.0/16"))' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
+expect_fail 'private-network HTTPS egress' \
+  'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.'
+
+reset_tree
+yq -i '(.spec.ingress[].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "prometheus") | .matchLabels) = {
+  "k8s:io.kubernetes.pod.namespace": "monitoring"
+}' "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
+expect_fail 'namespace-only n8n metrics ingress' \
+  'n8n ingress must admit only both Envoy data planes, Prometheus, and kubelet probes.'
+
+echo 'n8n validator public-edge, rendered-runtime, routing, and containment cases passed.'
