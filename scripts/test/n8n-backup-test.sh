@@ -63,6 +63,11 @@ case "$tool" in
     ;;
   psql)
     [[ "${FAIL_STAGE:-}" != psql ]] || exit 41
+    if [[ "${FAIL_STAGE:-}" == psql_sql_error ]]; then
+      for argument in "$@"; do
+        [[ "$argument" != '--set=ON_ERROR_STOP=1' ]] || exit 42
+      done
+    fi
     ;;
   *) exit 90 ;;
 esac
@@ -178,6 +183,18 @@ fi
   -f "$cleanup_gate_case/backups/orphan.tmp" ]] ||
   fail 'cleanup must not run before a successful status update'
 
+sql_error_case="$(new_case sql-error-gate)"
+printf 'older valid archive\n' >"$sql_error_case/backups/n8n-postgresql-20260801T010000Z.dump"
+printf 'temporary artifact\n' >"$sql_error_case/backups/orphan.tmp"
+if run_backup "$sql_error_case" psql_sql_error >/dev/null 2>&1; then
+  fail 'an error in the status SQL file must fail the backup'
+fi
+[[ -f "$sql_error_case/backups/n8n-postgresql-20260801T010000Z.dump" &&
+  -f "$sql_error_case/backups/orphan.tmp" ]] ||
+  fail 'a status SQL error must prevent cleanup'
+[[ "$psql_line" == *$'\t--set=ON_ERROR_STOP=1'* ]] ||
+  fail 'status update must set ON_ERROR_STOP=1 exactly'
+
 retention_case="$(new_case retention)"
 for day in 19 20 21 22 23 24 25 26; do
   prior_dump="$retention_case/backups/n8n-postgresql-202608${day}T010000Z.dump"
@@ -185,6 +202,9 @@ for day in 19 20 21 22 23 24 25 26; do
   prior_checksum="$($real_sha256sum "$prior_dump" | awk '{print $1}')"
   printf '%s  %s\n' "$prior_checksum" "$(basename -- "$prior_dump")" >"$prior_dump.sha256"
 done
+corrupt_dump="$retention_case/backups/n8n-postgresql-20260829T010000Z.dump"
+printf 'corrupt prior archive\n' >"$corrupt_dump"
+printf '%064d  %s\n' 0 "$(basename -- "$corrupt_dump")" >"$corrupt_dump.sha256"
 printf 'unpaired archive\n' >"$retention_case/backups/n8n-postgresql-20260828T010000Z.dump"
 printf 'unpaired checksum\n' >"$retention_case/backups/n8n-postgresql-20260817T010000Z.dump.sha256"
 printf 'temporary dump\n' >"$retention_case/backups/.n8n-postgresql-incomplete.dump.tmp"
@@ -196,11 +216,15 @@ assert_file_count "$retention_case/backups" '*.tmp' 0
 [[ ! -e "$retention_case/backups/n8n-postgresql-20260819T010000Z.dump" &&
   ! -e "$retention_case/backups/n8n-postgresql-20260820T010000Z.dump" ]] ||
   fail 'retention must remove pairs older than the newest seven successful artifacts'
-[[ -f "$retention_case/backups/n8n-postgresql-20260826T010000Z.dump" &&
+[[ -f "$retention_case/backups/n8n-postgresql-20260821T010000Z.dump" &&
+  -f "$retention_case/backups/n8n-postgresql-20260821T010000Z.dump.sha256" &&
+  -f "$retention_case/backups/n8n-postgresql-20260826T010000Z.dump" &&
   -f "$retention_case/backups/n8n-postgresql-20260826T010000Z.dump.sha256" ]] ||
   fail 'cleanup must preserve a valid retained archive pair'
 [[ ! -e "$retention_case/backups/n8n-postgresql-20260828T010000Z.dump" &&
   ! -e "$retention_case/backups/n8n-postgresql-20260817T010000Z.dump.sha256" ]] ||
   fail 'cleanup must remove unpaired final artifacts'
+[[ ! -e "$corrupt_dump" && ! -e "$corrupt_dump.sha256" ]] ||
+  fail 'a corrupt archive pair must not occupy a retention slot'
 
 echo 'n8n logical backup behavior passed.'

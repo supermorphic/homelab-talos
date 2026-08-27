@@ -87,4 +87,14 @@ yq -i '.spec.listeners[0].allowedRoutes.namespaces = {"from": "Selector", "selec
   "$tree_root/kubernetes/apps/networking/public-webhook-gateway/app/gateway.yaml"
 expect_fail 'selector public route admission' 'The public listener must use its exact hostname and Same-namespace route admission.'
 
+reset_tree
+yq -i 'with(select(.metadata.name == "n8n-postgresql");
+  (.spec.ingress[] | select(.toPorts[].ports[].port == "9399") |
+    .fromEndpoints[0].matchLabels) = {
+      "k8s:io.kubernetes.pod.namespace": "monitoring"
+    })' \
+  "$tree_root/kubernetes/apps/automation/n8n-postgresql/app/ciliumnetworkpolicy.yaml"
+expect_fail 'namespace-only Prometheus ingress' \
+  'PostgreSQL metrics ingress must select only the pinned Prometheus workload identity.'
+
 echo 'n8n validator public-edge and internal-Gateway cases passed.'

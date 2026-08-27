@@ -99,6 +99,22 @@ validate_selected_sops_secret() {
   }
 }
 
+validate_postgresql_metrics_ingress() {
+  local manifest="$1" metrics_identity
+  metrics_identity="$(yq ea -r '
+    select(.kind == "CiliumNetworkPolicy" and .metadata.name == "n8n-postgresql") |
+    .spec.ingress[] |
+    select(.toPorts[].ports[].port == "9399") |
+    .fromEndpoints[].matchLabels |
+    to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")
+  ' "$manifest")"
+  [[ "$metrics_identity" == \
+    'app.kubernetes.io/name=prometheus,k8s:io.kubernetes.pod.namespace=monitoring,operator.prometheus.io/name=kube-prometheus-stack-prometheus' ]] || {
+    echo 'PostgreSQL metrics ingress must select only the pinned Prometheus workload identity.' >&2
+    exit 1
+  }
+}
+
 for file in "$base/kustomization.yaml" "$base/namespace/ks.yaml" \
   "$base/namespace/app/kustomization.yaml" "$ns"; do
   [[ -f "$file" ]] || { echo "Missing n8n platform source: $file" >&2; exit 1; }
@@ -349,9 +365,10 @@ done
   echo 'The PostgreSQL ServiceMonitor must scrape only the named metrics port.' >&2
   exit 1
 }
+validate_postgresql_metrics_ingress "$postgresql_policy"
 [[ "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].toPorts[].ports[].port] | sort | join(",")' \
   "$postgresql_policy")" == '5432,9399' && \
-  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].fromEndpoints[].matchLabels."app.kubernetes.io/name"] | map(select(. != null)) | sort | join(",")' \
+  "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[] | select(.toPorts[].ports[].port == "5432") | .fromEndpoints[].matchLabels."app.kubernetes.io/name"] | sort | join(",")' \
   "$postgresql_policy")" == 'n8n,n8n-postgresql-backup' && \
   "$(yq ea -r 'select(.metadata.name == "n8n-postgresql") | [.spec.ingress[].fromEndpoints[].matchLabels."k8s:io.kubernetes.pod.namespace"] | sort | join(",")' \
   "$postgresql_policy")" == 'automation,automation,monitoring' && \
@@ -388,6 +405,7 @@ shellcheck "$postgresql_init" "$postgresql_backup"
 kustomize build "$postgresql_app" >"$temp_dir/postgresql.yaml"
 yq ea 'del(.sops)' "$temp_dir/postgresql.yaml" >"$temp_dir/postgresql-conform.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/postgresql-conform.yaml"
+validate_postgresql_metrics_ingress "$temp_dir/postgresql.yaml"
 yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."init-database.sh" != null) | .data."init-database.sh"' \
   "$temp_dir/postgresql.yaml" >"$temp_dir/init-database.sh"
 yq ea -r 'select(.kind == "ConfigMap" and has("data") and .data."backup.sh" != null) | .data."backup.sh"' \
@@ -434,7 +452,7 @@ for marker in \
   'mv -- "$temporary_dump" "$final_dump"' \
   'mv -- "$temporary_checksum" "$final_checksum"' \
   '(cd "$backup_dir" && sha256sum --check "$(basename "$final_checksum")")' \
-  'psql --set=completed_at="$completed_at"'; do
+  'psql --set=ON_ERROR_STOP=1 --set=completed_at="$completed_at"'; do
   marker_line="$(rg -n -m 1 -F -- "$marker" "$temp_dir/backup.sh" | cut -d: -f1)"
   [[ -n "$marker_line" && "$marker_line" -gt "$previous_line" ]] || {
     echo "Rendered backup order is missing or incorrect at: $marker" >&2
