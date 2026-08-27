@@ -88,18 +88,75 @@ The current CI implementation has these relevant properties:
 - Recent workflow dispatch normally starts immediately. A rare queue outlier exists, so
   queue latency must remain separate from execution time.
 
-Local decomposition of `encode-benchmark` showed the following relative distribution:
+### Controlled audit result
+
+The Stage 1 audit fixed the local baseline at commit
+`6c42658c54a95ed84fa0abc107ea0847e50bfd2f`. Three complete, sequential, offline
+`mise exec -- just ci` runs passed all 39 suites:
+
+| Sample | Total time |
+| --- | ---: |
+| 1 | 1,352s |
+| 2 | 1,276s |
+| 3 | 1,352s |
+
+The distribution is count 3, minimum 1,276s, median 1,352s, provisional p95 1,352s,
+and maximum 1,352s. The p95 is explicitly provisional because three samples cannot
+establish a stable tail distribution. These measurements are local fixed-commit
+observations, not a claim about GitHub-hosted performance.
+
+The fixed-commit suite medians confirm the concentration:
+
+| Suite | Median | Share of the 1,352s gate median |
+| --- | ---: | ---: |
+| `validation.encode-benchmark` | 741.103s | 54.8% |
+| `validation.test-harness` | 501.329s | 37.1% |
+| Both suites | 1,242.432s | 91.9% |
+| `validation.repo-validate` | 20.344s | 1.5% |
+| `validation.monitoring` | 9.550s | 0.7% |
+| `validation.links` | 7.828s | 0.6% |
+| `validation.kubeconform` | 3.946s | 0.3% |
+
+Focused profiles overlap the canonical CI run and each other. They are decomposition
+evidence and are never summed into an estimated gate total.
+
+The required controlled GitHub baseline could not be completed. Three fixed-`main`
+batches were invalidated when `main` advanced:
+
+| Fixed SHA | Accepted successful runs before discard | Disposition |
+| --- | --- | --- |
+| `0734b978f156e74723b36ff541f154657304331b` | `33000678906` | Discarded after `main` advanced before run 2. |
+| `eb1bd7eb3b4428cd7d37dccda96cb5704fd4f10a` | `33002554203`, `33004276638`, `33005856967`, `33007447835` | Discarded after `main` advanced before run 5. Mismatched-SHA run `33009016143` was cancelled and excluded. |
+| `40da2cdc6ea1409cba3d008702e9e150f932b471` | `33009566401`, `33011325436`, `33013054735`, `33014762171` | Discarded after `main` advanced before run 5. |
+
+The discarded partial batches remain descriptive evidence only. They do not provide a
+controlled remote queue, workflow, canonical-validation, or end-to-end distribution.
+There is no controlled remote p95, and none of the partial samples can substitute for
+one. A later rebaseline needs five sequential successful runs on one unchanged SHA in a
+quiet merge window or through an explicitly authorized stable-ref workflow.
+
+Local decomposition of `encode-benchmark` produced this fixed-commit distribution:
 
 | Bats file | Tests | Approximate local time |
 | --- | ---: | ---: |
-| `benchmark.bats` | 111 | 458s |
-| `dispatch.bats` | 107 | 209s |
-| `diagnostic-evidence.bats` | 53 | 50s |
-| All remaining Bats files | 100 | 38s |
+| `benchmark.bats` | 111 | 446.394s |
+| `dispatch.bats` | 107 | 205.091s |
+| `diagnostic-evidence.bats` | 53 | 45.805s |
+| `runmeta.bats` | 37 | 15.267s |
+| `census.bats` | 13 | 10.498s |
+| `bootstrap.bats` | 13 | 5.327s |
+| `source-contract.bats` | 24 | 2.989s |
+| `selection.bats` | 9 | 1.827s |
+| `stills.bats` | 7 | 1.635s |
 
 These local measurements are useful for hotspot decomposition. They are not a controlled
 comparison with GitHub-hosted execution. `benchmark.bats` and `dispatch.bats` account for
-about 88 percent of the local Bats runtime.
+about 88 percent of the local encode suite median; adding `diagnostic-evidence.bats`
+accounts for about 94 percent. The slowest individually profiled general-harness cases
+were `monitoring-alloy-logs-validator` at 118.989s, `logging-verifier` at 114.834s,
+`monitoring-alloy-events-validator` at 57.768s, `catalog-negative` at 23.930s, and
+`monitoring-loki-validator` at 23.246s. These case profiles also overlap the enclosing
+test-harness suite and are not an additive savings estimate.
 
 ## Staged decision model
 
@@ -120,6 +177,16 @@ minimum acceptable shape so Stage 1 does not create incompatible foundations. Af
 specification merges and becomes historical, either later stage uses a new numbered
 specification when its measured decision is material enough to require implementation.
 
+The reviewed execution boundary is:
+
+- Plan 023a completes the audit and controlled baseline.
+- Plan 023b reduces encode-benchmark runtime without changing ICQ evidence semantics.
+- Plan 023c removes duplicate work and optimizes repository and general-harness checks.
+- Plan 023d completes remaining Active-suite optimization, justified bounded
+  parallelism, and post-Stage-1 remeasurement.
+- Stage 2 gets a plan only if post-Stage-1 results still justify impact selection.
+- Stage 3 remains gated by issue 275 and its later decision gate.
+
 ## Validation inventory and lifecycle
 
 Stage 1 inventories all 39 CI suites and their meaningful test groups. A meaningful group
@@ -139,6 +206,42 @@ Each inventory entry records:
 
 The inventory is initially an analysis and implementation artifact. Stage 1 must not add a
 permanent target registry merely to conduct the audit.
+
+### Completed audit inventory
+
+The fixed-commit audit resolved 500 entries: all 39 CI suites, nine general-harness
+setup or validator groups, 47 shell cases, three Python discovery groups, two Ruff
+groups, all 371 encode Bats tests, and 29 experimental or diagnostic surfaces. The final
+disposition is 494 Active and six Removed. All 39 suite-level entries remain Active;
+the Removed entries are duplicate child executions whose coverage has an exact Active
+owner.
+
+The six Removed entries and their canonical owners are:
+
+| Removed execution | Canonical Active owner | Required removal boundary |
+| --- | --- | --- |
+| `harness:conftest-console` | `harness:conftest-junit` | Run the exact Chainsaw policy/input set once with native JUnit and derive its human view without reevaluating Rego. |
+| `harness:yaml-parse` | `harness:chainsaw-test-lint` | Delete the generic `yq` parse over the same 19 Chainsaw documents; independently derive and parse only a future set difference. |
+| `harness:bash-syntax` | `validation.repo-validate` | Reuse only a matching passed same-run repository result; standalone validation recomputes. |
+| `harness:shellcheck-per-file` | `validation.repo-validate` | Replace the per-file rerun with the canonical repository-wide batched machine-readable result. |
+| `harness:shellcheck-json` | `validation.repo-validate` | Move machine-readable findings and JUnit production to the canonical repository owner, then consume only its matching passed same-run result. |
+| `shell:qbit-manage-policy-shellcheck` | `validation.repo-validate` | Delete the focused rerun because the canonical repository source set already contains the same file and rules. |
+
+The repository-wide Bash and ShellCheck owner covers 166 sorted files. The harness set
+contains 95 files, all of which are in that repository set. The same-run handoff is one
+atomic JSON document bound to the run ID, commit, sorted source-set digest, Bash and
+ShellCheck versions, exact arguments, status, and findings. A failed producer in full CI
+fails the gate and causes the fail-fast coordinator to record
+`validation.test-harness` as skipped; no consumer reads or recomputes the failed
+artifact. A direct or standalone consumer rejects a failed, status-inconsistent,
+missing, stale, malformed, truncated, schema-invalid, or corrupt artifact and recomputes
+canonical validation. A passing result is never reused across runs.
+
+The audit keeps the other 494 entries Active. This includes all 371 encode tests, the
+`validation.encode-benchmark` suite, and all 19 encode operational and source surfaces:
+391 Active encode entries in total. It also retains the other ten current diagnostic
+surfaces. Active experimental evidence remains maintained and runnable for its current
+consumer; Active does not mean permanently required.
 
 ### Lifecycle states
 
@@ -175,6 +278,12 @@ deployed, and the harness does not authorize a FileFlows deployment.
 
 During Stage 1, `encode-benchmark` remains part of every required `just ci` run. Stage 1
 optimizes its intrinsic offline cost before changing when it runs.
+
+The audit found no reviewed encode removal. All encode assertions and runnable surfaces
+remain Active while specification 017 lacks a terminal diagnostic decision. Removal is
+reconsidered only after that decision closes and current shared dispatch, identity,
+rollback, cleanup, publication, mapping, and diagnostic code has an exact safe separation
+boundary. Plans 023b through 023d cannot delete encode tests or source.
 
 ### Offline-CI scope
 
@@ -312,6 +421,41 @@ Small suites are not rewritten merely because improvement is possible. The audit
 complete, while implementation effort remains proportional to measured runtime,
 duplication, and maintenance value.
 
+### Reviewed Stage 1 backlog and savings semantics
+
+Stage 1 first implements the six lifecycle removals above. Their focused local costs are
+30.384ms for the Chainsaw Conftest console rerun, 145.830ms for generic YAML parsing,
+621.190ms for the harness Bash subset, 10.103s for per-file harness ShellCheck, 8.164s
+for the harness ShellCheck JSON rerun, and 81.295ms for focused qbit-manage policy
+ShellCheck. These are separate command measurements. They are not added into one savings
+claim because focused profiles overlap other views and were not measured as a combined
+in-run delta.
+
+Semantic-preserving runtime work then addresses:
+
+- immutable samples preparation and repeated parser startup in the 111-test
+  `benchmark.bats` hotspot;
+- immutable cluster-stub preparation and repeated parser startup in the 107-test
+  `dispatch.bats` hotspot;
+- parser and fixture cost in the 53-test `diagnostic-evidence.bats` hotspot;
+- one native-result evaluation for the remaining Conftest and kubeconform console/JUnit
+  pairs;
+- run-scoped immutable render and pinned OCI chart inputs while each semantic consumer
+  keeps its own assertions;
+- repeated locked-environment startup without combining distinct Python or Ruff
+  invariants;
+- repeated JSON projections and real-time retry waits in the offline logging verifier;
+- repeated unrelated render preparation in the three monitoring mutation suites;
+- encode group decomposition for exact case-level reports and timing; and
+- bounded parallel trials only after temporary files, environment, fixtures, results,
+  and cancellation behavior are isolated.
+
+Savings claims remain conservative. A separately profiled removable command can report
+its observed range. An enclosing suite provides only a zero-to-container ceiling, not
+measured savings. OCI resolution, locked-environment startup, decomposition, and
+parallelism claim zero savings until a focused or bounded trial measures them. Overlapping
+suite, file, shell-case, and focused profiles are never summed.
+
 ### Execution and failure behavior
 
 After work removal and intrinsic optimization, retained suites may run concurrently in
@@ -365,6 +509,12 @@ Stage 2.
 If the residual bottleneck is universally required validation, an impact planner is not
 the remedy. The next action is further intrinsic optimization or a separately justified
 focused rewrite.
+
+No Stage 2 plan exists at the audit boundary. The missing controlled remote baseline and
+the remaining Stage 1 backlog cannot justify impact selection. Plan 023d must first
+complete the controlled post-Stage-1 rebaseline and evaluate every decision-gate item.
+Only measurements that satisfy all four conditions above authorize a new plan and, after
+this specification becomes historical, a new numbered design specification.
 
 ## Conditional Stage 2 architecture
 
@@ -445,6 +595,11 @@ Issue 303 does not duplicate that provisioning. Stage 1 and conditional Stage 2 
 proceed before issue 275 completes. The NUC comparison cannot start until issue 275
 provides a usable Forgejo repository and runner.
 
+At the audit boundary, issue 275 is an external blocker for Stage 3. There is no Stage 3
+implementation plan and no NUC comparison activity. After issue 275 supplies the usable
+Forgejo repository, runner, and scoped access model, a later decision gate must still
+authorize the comparison.
+
 ### Comparison scope
 
 NUC #4 runs the same repository-owned offline commands for the same commits. The default
@@ -489,6 +644,12 @@ Agent-owned automation triggers runs, collects results, verifies commit and tool
 calculates statistics, and produces the placement recommendation. The operator does not
 manually trigger runs, clear caches, collect logs, or calculate comparisons. The
 experiment should not require root access after the runner and task-scoped access exist.
+
+This operator/automation boundary is mandatory for any later Stage 3 plan. The operator
+provides scoped access, authorizes a benchmark window when NUC service load requires it,
+and reviews the recommendation. Automation owns all compatible run dispatch, task-owned
+cache namespaces, evidence collection, parity checks, calculations, cleanup, and the
+placement report.
 
 The result selects one outcome:
 
