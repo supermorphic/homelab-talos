@@ -28,6 +28,8 @@ failed_collector_reason() {
 	case "${1:-}" in
 	'diagnostic evidence reader panel identity is malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-identity-malformed' ;;
 	'diagnostic evidence reader panel bounds are malformed') printf '%s\n' 'diagnostic-evidence-reader-panel-bounds-malformed' ;;
+	'diagnostic evidence reader image identity is malformed') printf '%s\n' 'diagnostic-evidence-reader-image-identity-malformed' ;;
+	'diagnostic evidence reader script identity is unavailable') printf '%s\n' 'diagnostic-evidence-reader-script-identity-unavailable' ;;
 	'diagnostic evidence root is missing or unsafe') printf '%s\n' 'diagnostic-evidence-root-unsafe' ;;
 	'diagnostic evidence contains a symlink') printf '%s\n' 'diagnostic-evidence-symlink-present' ;;
 	'diagnostic evidence files are missing or unexpected') printf '%s\n' 'diagnostic-evidence-files-unexpected' ;;
@@ -95,7 +97,7 @@ job_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		 (.spec.template.spec | has("initContainers") | not)) and
 		(.spec.template.spec.containers | type == "array" and length == 1) and
 		(.spec.template.spec.containers[0] | .name == "benchmark" and .image == $image and
-			 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
+			 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel,$image] and
 		 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
 		 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
 		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
@@ -148,7 +150,7 @@ pod_state="$(jq -e -r --arg run "$RUN_ID" --arg mode "$MODE" --arg name "$name" 
 		(.spec.containers | type == "array" and length == 1) and
 		(.spec.containers[0] |
 		 .name == "benchmark" and .image == $image and
-		 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel] and
+		 .command == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$evidence_panel,$image] and
 		 (has("env") | not) and (has("envFrom") | not) and (has("volumeDevices") | not) and
 		 .securityContext == {allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}} and
 		 .resources == {requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}} and
@@ -203,7 +205,9 @@ if [[ "$job_state" == 'failed' ]]; then
 			"upstream.diagnostics.decisionSha256",
 			"upstream.diagnostics.historicalQualityRunId",
 			"upstream.diagnostics.historicalFindingsRunId",
-			"upstream.diagnostics.panelSha256"
+			"upstream.diagnostics.panelSha256",
+			"scriptDigests",
+			"images"
 		] as $fields |
 		select(exact(["manifestIssues","reason","schemaVersion","status"]) and
 		.schemaVersion == 1 and .status == "failed" and .reason == "diagnostic-manifest-binding-invalid" and
@@ -334,14 +338,22 @@ jq -e -c -L "$app_directory/scripts" --arg run "$RUN_ID" --arg legacy_run '20260
 		elif .reason == "timeline-evidence-invalid" then
 			$source != null and complete_metrics and offset_metric_count == 10 and baseline_timeline
 		else false end;
-	def setting($observed; $source): exact(["globalQuality","offsets","reason","status","timeline","vmaf"]) and (.globalQuality == 16 or .globalQuality == 30) and (.status | status) and (if .status == "complete" then .reason == null else (.reason | setting_reason) end) and (.vmaf | exact(["current","reset"]) and (.current | partial_vmaf_frames($observed)) and (.reset | partial_vmaf_frames($observed))) and (.offsets | type == "array" and length == 5 and ([.[].offset] | sort) == [-2,-1,0,1,2] and all(.[]; exact(["offset","psnr","ssim"]) and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.ssim == null or (.ssim | type == "number")) and (.psnr | psnr))) and (.timeline | exact(["discontinuity","zeroOffsetAligned"]) and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (exact(["kind","offset"]) and (.kind == "drop" or .kind == "duplicate" or .kind == "timestamp-discontinuity") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0)))) and reachable_setting_shape($source);
 	def merged_status:
 		if any(.[]; .status == "failed") then "failed"
 		elif any(.[]; .status == "harness-blocked") then "harness-blocked"
 		else "complete" end;
 	def continuity: exact(["issue","status"]) and (.status == "clean" and .issue == null or .status == "discontinuity" and (.issue | exact(["afterFrameIndex","kind"]) and (.afterFrameIndex | type == "number" and floor == .) and (.kind == "gap" or .kind == "inconsistent-duration" or .kind == "non-monotonic-timestamp" or .kind == "repeat")));
-	def source_object($observed): . as $source | exact(["decodedFrameCount","frames","sourceWindow","stream"]) and (.decodedFrameCount | type == "number" and floor == . and . >= 0) and (.stream | exact(["averageFrameRate","duration","startTime","timeBase"]) and (.startTime | numeric_string) and (.duration | numeric_string) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length == 5 and all(.[]; exact(["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string) and (.keyFrame | type == "boolean") and (.pictureType == "I" or .pictureType == "P" or .pictureType == "B")) and ([.[].frameIndex] | sort) == [range($observed - 2; $observed + 3)]) and (.sourceWindow | continuity) and .sourceWindow == ($source.frames | diagnostic_continuity($source.stream.timeBase));
+	def source_object($observed): . as $source | exact(["decodedFrameCount","frames","sourceWindow","stream"]) and (.decodedFrameCount | type == "number" and floor == . and . >= 0) and (.stream | exact(["averageFrameRate","duration","startTime","timeBase"]) and (.startTime | numeric_string) and (.duration | numeric_string) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length == 5 and all(.[]; exact(["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string) and (.keyFrame | type == "boolean") and (.pictureType == "I" or .pictureType == "P" or .pictureType == "B")) and ([.[].frameIndex]) == [range($observed - 2; $observed + 3)]) and (.sourceWindow | continuity) and .sourceWindow == ($source.frames | diagnostic_continuity($source.stream.timeBase));
 	def source($observed): . == null or source_object($observed);
+	def output_object($observed): . as $output | exact(["frames","sourceWindow","stream"]) and (.stream | exact(["averageFrameRate","timeBase"]) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length == 5 and all(.[]; exact(["bestEffortTimestamp","frameIndex","packetDuration"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string)) and ([.[].frameIndex]) == [range($observed - 2; $observed + 3)]) and (.sourceWindow | continuity) and .sourceWindow == ($output.frames | diagnostic_continuity($output.stream.timeBase));
+	def output($observed): . == null or output_object($observed);
+	def timeline_matches_windows($observed; $source):
+		if
+			$source != null and .outputContinuity != null and offset_metric_count == 10 and
+			.reason != "timeline-evidence-invalid"
+		then .timeline == diagnostic_vmaf_timeline($source; .outputContinuity; .offsets; $observed)
+		else true end;
+	def setting($observed; $source): exact(["globalQuality","offsets","outputContinuity","reason","status","timeline","vmaf"]) and (.globalQuality == 16 or .globalQuality == 30) and (.status | status) and (if .status == "complete" then .reason == null else (.reason | setting_reason) end) and (.vmaf | exact(["current","reset"]) and (.current | partial_vmaf_frames($observed)) and (.reset | partial_vmaf_frames($observed))) and (.offsets | type == "array" and length == 5 and ([.[].offset] | sort) == [-2,-1,0,1,2] and all(.[]; exact(["offset","psnr","ssim"]) and (.offset | type == "number" and floor == . and . >= -2 and . <= 2) and (.ssim == null or (.ssim | type == "number")) and (.psnr | psnr))) and (.outputContinuity | output($observed)) and (if .status == "complete" then .outputContinuity != null else true end) and (.timeline | exact(["discontinuity","zeroOffsetAligned"]) and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (exact(["kind","offset"]) and (.kind == "drop" or .kind == "duplicate" or .kind == "timestamp-discontinuity") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0)))) and reachable_setting_shape($source) and timeline_matches_windows($observed; $source);
 	def evidence_reason: . == "HDR-classification-failed" or . == "HDR-oracle-normalization-failed" or . == "clip-identity-unavailable" or . == "conflicting-HDR-oracle" or . == "decode-failed" or . == "encode-failed" or . == "output-identity-unavailable" or . == "post-run-identity-drift" or hdr_preparation_reason or . == "source-duration-unavailable" or . == "source-identity-unavailable" or . == "source-stream-oracle-failed";
 	def classifier_setting($observed; $source):
 		. as $setting |

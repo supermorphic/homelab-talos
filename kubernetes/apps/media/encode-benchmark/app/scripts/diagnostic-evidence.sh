@@ -12,8 +12,8 @@ vmaf_reason_classes="$(contract_diagnostics_terminal_vmaf_reason_classes_json)"
 hdr_reason_classes="$(contract_diagnostics_terminal_hdr_reason_classes_json)"
 readonly script_directory vmaf_reason_classes hdr_reason_classes
 
-if (($# != 5)) || [[ "$1" != 'collect' ]]; then
-	echo 'usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel>' >&2
+if (($# != 6)) || [[ "$1" != 'collect' ]]; then
+	echo 'usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel> <configured-image>' >&2
 	exit 64
 fi
 
@@ -21,6 +21,7 @@ requested_run_id="$2"
 evidence_root="$3"
 expected_panel_sha256="$4"
 expected_evidence_panel="$5"
+expected_configured_image="$6"
 contract_is_run_id "$requested_run_id" || {
 	echo "invalid run id: $requested_run_id" >&2
 	exit 64
@@ -50,6 +51,29 @@ jq -e -n --argjson actual "$expected_evidence_panel" '
 	echo 'diagnostic evidence reader panel bounds are malformed' >&2
 	exit 65
 }
+[[ "$expected_configured_image" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || {
+	echo 'diagnostic evidence reader image identity is malformed' >&2
+	exit 65
+}
+expected_image_digest="${expected_configured_image##*@}"
+current_script_digests='{}'
+for script_path in "$script_directory"/*.sh; do
+	[[ -f "$script_path" && ! -L "$script_path" ]] || {
+		echo 'diagnostic evidence reader script identity is unavailable' >&2
+		exit 65
+	}
+	script_name="${script_path##*/}"
+	script_digest="sha256:$(sha256sum "$script_path" | awk '{print $1}')"
+	current_script_digests="$(jq -c --arg name "$script_name" --arg digest "$script_digest" '. + {($name):$digest}' <<<"$current_script_digests")"
+done
+historical_script_digests='{"benchmark.sh":"sha256:8bc91c7ca04168c648509eb778dcd384e9af50d05ee6e2a6dd3c2553be6022b4","census.sh":"sha256:505c58d595fad640cec7fbac2eefcb02b4e1c96b3c64094afd785f2b72d39f07","contract.sh":"sha256:e62192d0e6f03a1f44ee96760da32c4efe0f52436305f0d83a5e89c0759632c8","diagnostic-evidence.sh":"sha256:da81c1a8725d95ccd1a0e992c789c09387750d9df2efaa73877ded6e0c1bfc70","probe.sh":"sha256:537724eac650d8bdf8a38412b5b2125ca26d4925d88caa8ef5958b9053ae20fb","runmeta.sh":"sha256:df5891bea05ee4ebb9c920c62fd363bc5c8a54744ac60ff558a265c4646128a3","stills.sh":"sha256:5887426ee150673a91604916a8a860a7e3395a8172557ff2e3e3456358eb510e"}'
+expected_script_digests="$current_script_digests"
+legacy_source_clip_unavailable_allowed=false
+if [[ "$requested_run_id" == '20260826T014246Z-373a665e' ]]; then
+	expected_script_digests="$historical_script_digests"
+	legacy_source_clip_unavailable_allowed=true
+fi
+readonly expected_configured_image expected_image_digest current_script_digests historical_script_digests expected_script_digests
 [[ "$evidence_root" == /* && -d "$evidence_root" && ! -L "$evidence_root" ]] || {
 	echo 'diagnostic evidence root is missing or unsafe' >&2
 	exit 65
@@ -127,16 +151,28 @@ manifest_issues="$(jq -S -c --arg created_at "${requested_run_id%-*}" --arg pane
 		 end)
 	end
 ' "$manifest")"
+if [[ "$manifest_issues" == '[]' ]]; then
+	manifest_issues="$(jq -S -c --argjson scripts "$expected_script_digests" --arg digest "$expected_image_digest" '
+		[
+			(if has("scriptDigests") | not then {field:"scriptDigests",kind:"missing"}
+			 elif (.scriptDigests | type) != "object" then {field:"scriptDigests",kind:"wrong-type"}
+			 elif .scriptDigests != $scripts then {field:"scriptDigests",kind:"mismatch"} else empty end),
+			(if has("images") | not then {field:"images",kind:"missing"}
+			 elif (.images | type) != "object" then {field:"images",kind:"wrong-type"}
+			 elif .images != {configured:$digest,dispatched:$digest,running:$digest} then {field:"images",kind:"mismatch"} else empty end)
+		]
+	' "$manifest")"
+fi
+if [[ "$manifest_issues" == '[]' ]]; then
+	manifest_identity="$(jq -c 'del(.createdAt)' "$manifest")"
+	if ! CONTRACT_STRATEGY_ID='qsv-hevc-icq-v1' CONTRACT_MANIFEST_SCHEMA=2 CONTRACT_RESULTS_SCHEMA=1 \
+		contract_normalize_run_identity "$manifest_identity" diagnostics >/dev/null 2>&1; then
+		manifest_issues='[{"field":"manifest","kind":"mismatch"}]'
+	fi
+fi
 if [[ "$manifest_issues" != '[]' ]]; then
 	jq -n -S -c --argjson issues "$manifest_issues" '{schemaVersion:1,status:"failed",reason:"diagnostic-manifest-binding-invalid",manifestIssues:$issues}'
 	exit 65
-fi
-legacy_source_clip_unavailable_allowed=false
-if [[ "$requested_run_id" == '20260826T014246Z-373a665e' ]] && jq -e '
-	.scriptDigests | type == "object" and
-	.["benchmark.sh"] == "sha256:8bc91c7ca04168c648509eb778dcd384e9af50d05ee6e2a6dd3c2553be6022b4"
-' "$manifest" >/dev/null; then
-	legacy_source_clip_unavailable_allowed=true
 fi
 jq -e --arg run "$requested_run_id" --argjson panel "$expected_evidence_panel" --argjson vmaf_reason_classes "$vmaf_reason_classes" --argjson hdr_reason_classes "$hdr_reason_classes" '
 	def status: . == "complete" or . == "failed" or . == "harness-blocked";
@@ -169,7 +205,7 @@ validate_vmaf() {
 		def frame: exact(["bestEffortTimestamp","frameIndex","keyFrame","packetDuration","pictureType"]) and (.frameIndex | type == "number" and floor == .) and (.bestEffortTimestamp | numeric_string) and (.packetDuration | numeric_string) and (.keyFrame | type == "boolean") and (.pictureType == "I" or .pictureType == "P" or .pictureType == "B");
 		def continuity: exact(["issue","status"]) and (.status == "clean" and .issue == null or .status == "discontinuity" and (.issue | exact(["afterFrameIndex","kind"]) and (.afterFrameIndex | type == "number" and floor == .) and (.kind == "gap" or .kind == "inconsistent-duration" or .kind == "non-monotonic-timestamp" or .kind == "repeat")));
 		def window: . as $window | exact(["decodedFrameCount","frames","sourceWindow","stream"]) and (.decodedFrameCount | type == "number" and floor == . and . >= 0) and (.stream | exact(["averageFrameRate","duration","startTime","timeBase"]) and (.startTime | numeric_string) and (.duration | numeric_string) and (.timeBase | rational_string) and (.averageFrameRate | rational_string)) and (.frames | type == "array" and length <= 5 and all(.[]; frame)) and (.sourceWindow | continuity) and .sourceWindow == ($window.frames | diagnostic_continuity($window.stream.timeBase));
-		def complete_window($observed): window and (.frames | length == 5 and ([.[].frameIndex] | sort) == [range($observed - 2; $observed + 3)]);
+		def complete_window($observed): window and (.frames | length == 5 and ([.[].frameIndex]) == [range($observed - 2; $observed + 3)]);
 		def optional_complete_window($observed): . == null or complete_window($observed);
 		def optional_identity: . == null or identity;
 		def vmaf_frame: exact(["frameIndex","vmaf"]) and (.frameIndex | type == "number" and floor == .) and (.vmaf | type == "number");
@@ -203,6 +239,18 @@ validate_vmaf() {
 			($present | map(select(.)) | length) as $count |
 			all(range(0; 10); $present[.] == (. < $count));
 		def no_metric_evidence: empty_metrics and offset_metric_count == 0 and baseline_timeline;
+		def timeline_matches_windows($source_window):
+			if
+				source_ready and output_ready and offset_metric_count == 10 and
+				.reason != "timeline-evidence-invalid"
+			then
+				.timeline == diagnostic_vmaf_timeline(
+					$source_window;
+					.outputFrameWindow;
+					[.offsets[] | {offset,ssim:.ssim.value,psnr:.psnr.value}];
+					$index
+				)
+			else true end;
 		def reachable_setting_shape:
 			(
 				(source_ready | not) and output_absent and no_metric_evidence
@@ -277,7 +325,7 @@ validate_vmaf() {
 			.status == "harness-blocked" and (has("reason") | not) and
 			all(.settings[]; .status == "complete" and .reason == null) and
 			.classification == {schemaVersion:1,classification:"unresolved",reasons:["classification-failed"]};
-		def setting($source_identity; $source_window): exact(["commands","globalQuality","offsets","outputFrameWindow","outputIdentity","reason","sourceFrameWindow","sourceIdentity","status","timeline","vmaf"]) and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (if .status == "complete" then .reason == null else (.reason | setting_reason) end) and .sourceIdentity == $source_identity and .sourceFrameWindow == $source_window and (.sourceIdentity | optional_identity) and (.sourceFrameWindow | optional_complete_window($index)) and (.outputIdentity | optional_identity) and (.outputFrameWindow | optional_complete_window($index)) and (.vmaf | partial_metric($index)) and (.commands | exact(["decode","encode","outputFrameProbe","vmafCurrent","vmafReset"]) and all(.[]; command)) and (.offsets | complete_offsets) and (.timeline | exact(["discontinuity","zeroOffsetAligned"]) and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (exact(["kind","offset"]) and (.kind == "drop" or .kind == "duplicate" or .kind == "timestamp-discontinuity") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0)))) and reachable_setting_shape;
+		def setting($source_identity; $source_window): exact(["commands","globalQuality","offsets","outputFrameWindow","outputIdentity","reason","sourceFrameWindow","sourceIdentity","status","timeline","vmaf"]) and (.globalQuality == 16 or .globalQuality == 30) and (.status|status) and (if .status == "complete" then .reason == null else (.reason | setting_reason) end) and .sourceIdentity == $source_identity and .sourceFrameWindow == $source_window and (.sourceIdentity | optional_identity) and (.sourceFrameWindow | optional_complete_window($index)) and (.outputIdentity | optional_identity) and (.outputFrameWindow | optional_complete_window($index)) and (.vmaf | partial_metric($index)) and (.commands | exact(["decode","encode","outputFrameProbe","vmafCurrent","vmafReset"]) and all(.[]; command)) and (.offsets | complete_offsets) and (.timeline | exact(["discontinuity","zeroOffsetAligned"]) and (.zeroOffsetAligned | type == "boolean") and (.discontinuity == null or (exact(["kind","offset"]) and (.kind == "drop" or .kind == "duplicate" or .kind == "timestamp-discontinuity") and (.offset | type == "number" and floor == . and . >= -2 and . <= 2 and . != 0)))) and reachable_setting_shape and timeline_matches_windows($source_window);
 		. as $evidence |
 		(exact(["classification","clipId","observedFrameIndex","sampleId","schemaVersion","settings","sourceClip","status","strategyId"]) or exact(["classification","clipId","observedFrameIndex","reason","sampleId","schemaVersion","settings","sourceClip","status","strategyId"])) and .schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .sampleId == $sample and .clipId == $clip and .observedFrameIndex == $index and (.status|status) and
 		(.sourceClip | exact(["command","frameProbeCommand","frameWindow","identity"]) and (.command | command) and (.frameProbeCommand | command) and (.identity | optional_identity) and (.frameWindow | optional_complete_window($index))) and
@@ -549,7 +597,8 @@ canonical="$(jq -n -S -c --arg run "$requested_run_id" \
 		def vmaf_metric: {current:[.current[] | {frameIndex,vmaf}],reset:[.reset[] | {frameIndex,vmaf}]};
 		def offset: {offset,ssim:.ssim.value,psnr:.psnr.value};
 		def continuity: {decodedFrameCount,stream:(.stream | {startTime,duration,timeBase,averageFrameRate}),frames:[.frames[] | {frameIndex,bestEffortTimestamp,packetDuration,keyFrame,pictureType}],sourceWindow};
-		def vmaf($raw): $raw[0] | {sampleId,clipId,observedFrameIndex,status,sourceContinuity:(if .sourceClip.frameWindow == null then null else (.sourceClip.frameWindow | continuity) end),settings:[.settings[] | {globalQuality,status,reason,vmaf:(.vmaf | vmaf_metric),offsets:[.offsets[] | offset],timeline}],classification};
+		def timeline_window: {stream:(.stream | {timeBase,averageFrameRate}),frames:[.frames[] | {frameIndex,bestEffortTimestamp,packetDuration}],sourceWindow};
+		def vmaf($raw): $raw[0] | {sampleId,clipId,observedFrameIndex,status,sourceContinuity:(if .sourceClip.frameWindow == null then null else (.sourceClip.frameWindow | continuity) end),settings:[.settings[] | {globalQuality,status,reason,vmaf:(.vmaf | vmaf_metric),offsets:[.offsets[] | offset],outputContinuity:(if .outputFrameWindow == null then null else (.outputFrameWindow | timeline_window) end),timeline}],classification};
 		def gcd($a; $b): if $b == 0 then $a else gcd($b; ($a % $b)) end;
 		def normalize_rationals:
 			walk(if type == "object" and (keys | sort) == ["denominator","numerator"] and (.numerator | type == "number" and floor == . and . >= 0) and (.denominator | type == "number" and floor == . and . > 0) then

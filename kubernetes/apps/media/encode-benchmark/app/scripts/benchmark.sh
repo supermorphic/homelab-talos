@@ -1479,29 +1479,8 @@ diagnostic_vmaf_setting() {
 		timeline="$(jq -n -c -L "$script_directory" --argjson source "$source_window" --argjson output "$output_window" \
 			--argjson offsets "$offsets" --argjson observed "$observed" '
 			include "diagnostic-contract";
-			def unique_best($metric):
-				def rank:
-					if $metric == "psnr" then
-						if .[$metric].value.kind == "positive-infinity" then {infinity:1,value:0}
-						else {infinity:0,value:.[$metric].value.value} end
-					else {infinity:0,value:.[$metric].value} end;
-				([$offsets[] | {offset,rank:rank}] | max_by([.rank.infinity,.rank.value]).rank) as $best |
-				([$offsets[] | select(rank == $best) | .offset]) as $matches |
-				if ($matches | length) == 1 then $matches[0] else null end;
-			(unique_best("ssim")) as $ssim_offset |
-			(unique_best("psnr")) as $psnr_offset |
-			{
-				zeroOffsetAligned:diagnostic_local_alignment($source; $output),
-				discontinuity:(
-					if $ssim_offset != null and $ssim_offset == $psnr_offset and $ssim_offset != 0 then
-						([$source.frames[] | select(.frameIndex == $observed)][0].bestEffortTimestamp) as $source_pts |
-						([$output.frames[] | select(.frameIndex == ($observed + $ssim_offset))][0].bestEffortTimestamp) as $output_pts |
-						if $source_pts == $output_pts then
-							{kind:"timestamp-discontinuity",offset:$ssim_offset}
-						else null end
-					else null end
-				)
-			}
+			[$offsets[] | {offset,ssim:.ssim.value,psnr:.psnr.value}] as $values |
+			diagnostic_vmaf_timeline($source; $output; $values; $observed)
 		')" || {
 			status='harness-blocked'
 			reason='timeline-evidence-invalid'

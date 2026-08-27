@@ -33,6 +33,7 @@ preflight_helper='scripts/encode-benchmark/preflight.sh'
 dispatch_helper='scripts/encode-benchmark/dispatch.sh'
 results_helper='scripts/encode-benchmark/results.sh'
 diagnostic_evidence_results_helper='scripts/encode-benchmark/diagnostic-evidence-results.sh'
+diagnostic_producer_contract_helper='scripts/encode-benchmark/diagnostic-producer-contract.sh'
 selection_helper='scripts/encode-benchmark/select-samples.sh'
 live_verifier='scripts/verify/encode-benchmark.sh'
 validator='scripts/validate/encode-benchmark.sh'
@@ -82,6 +83,7 @@ for file in \
 	"$dispatch_helper" \
 	"$results_helper" \
 	"$diagnostic_evidence_results_helper" \
+	"$diagnostic_producer_contract_helper" \
 	"$selection_helper" \
 	"$live_verifier" \
 	"$validator" \
@@ -101,6 +103,7 @@ done
 [[ -x "$dispatch_helper" ]] || fail "$dispatch_helper must be executable"
 [[ -x "$results_helper" ]] || fail "$results_helper must be executable"
 [[ -x "$diagnostic_evidence_results_helper" ]] || fail "$diagnostic_evidence_results_helper must be executable"
+[[ -x "$diagnostic_producer_contract_helper" ]] || fail "$diagnostic_producer_contract_helper must be executable"
 [[ -x "$selection_helper" ]] || fail "$selection_helper must be executable"
 [[ -x "$live_verifier" ]] || fail "$live_verifier must be executable"
 

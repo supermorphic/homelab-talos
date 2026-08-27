@@ -160,7 +160,16 @@ fi
 
 if contains get "$@" && contains jobs "$@"; then
 	if [[ "$*" == *'homelab-talos/benchmark-mode=diagnostics'* && -n "${STUB_DIAGNOSTIC_JOBS_JSON:-}" ]]; then
-		sed -n '1,$p' "$STUB_DIAGNOSTIC_JOBS_JSON"
+		diagnostic_jobs_source="$STUB_DIAGNOSTIC_JOBS_JSON"
+		if [[ -n "${STUB_DIAGNOSTIC_JOBS_JSON_SECOND:-}" ]]; then
+			sequence_file="$STUB_CAPTURE_DIR/.diagnostic-job-query-sequence"
+			sequence_step=0
+			[[ ! -f "$sequence_file" ]] || read -r sequence_step <"$sequence_file"
+			sequence_step=$((sequence_step + 1))
+			printf '%s\n' "$sequence_step" >"$sequence_file"
+			[[ "$sequence_step" -lt 2 ]] || diagnostic_jobs_source="$STUB_DIAGNOSTIC_JOBS_JSON_SECOND"
+		fi
+		sed -n '1,$p' "$diagnostic_jobs_source"
 	elif [[ "$*" == *'homelab-talos/benchmark-mode=diagnostic-evidence-reader'* && "${STUB_READER_LIST_QUERY_FAIL:-0}" == '1' ]]; then
 		exit 28
 	elif [[ "$*" == *'homelab-talos/benchmark-mode=diagnostic-evidence-reader'* && -n "${STUB_READER_AVAILABILITY_JOBS_JSON:-}" ]]; then
@@ -236,7 +245,16 @@ if contains get "$@" && contains pods "$@"; then
 				}]}'
 		fi
 	elif [[ "$*" == *'app.kubernetes.io/name=encode-benchmark'* && -n "${STUB_BENCHMARK_PODS_JSON:-}" ]]; then
-		sed -n '1,$p' "$STUB_BENCHMARK_PODS_JSON"
+		benchmark_pods_source="$STUB_BENCHMARK_PODS_JSON"
+		if [[ "$*" == *'homelab-talos/benchmark-mode=diagnostics'* && -n "${STUB_BENCHMARK_PODS_JSON_SECOND:-}" ]]; then
+			sequence_file="$STUB_CAPTURE_DIR/.diagnostic-pod-query-sequence"
+			sequence_step=0
+			[[ ! -f "$sequence_file" ]] || read -r sequence_step <"$sequence_file"
+			sequence_step=$((sequence_step + 1))
+			printf '%s\n' "$sequence_step" >"$sequence_file"
+			[[ "$sequence_step" -lt 2 ]] || benchmark_pods_source="$STUB_BENCHMARK_PODS_JSON_SECOND"
+		fi
+		sed -n '1,$p' "$benchmark_pods_source"
 	elif [[ "$*" == *'app.kubernetes.io/name=plex'* && -n "${STUB_PLEX_PODS_JSON:-}" ]]; then
 		sed -n '1,$p' "$STUB_PLEX_PODS_JSON"
 	else
@@ -398,7 +416,7 @@ EOF
 	job_json="$(yq -o=json -I=0 '.' "$job")"
 	run jq -e --arg run "$run_id" '
 		.spec.template.spec.containers[0].command as $command |
-		($command | length) == 6 and
+		($command | length) == 7 and
 		$command[0:4] == ["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence"] and
 		$command[4] == "sha256:2722def1986d9591db363063315b94e8faca78ace7c56a7b6a55c6c9b4889e6f" and
 		($command[5] | fromjson) == {
@@ -416,7 +434,8 @@ EOF
 				{clipId:"detail",evidence:"vmaf/vc1-fugitive/detail/evidence.json",observedFrameIndex:781,sampleId:"vc1-fugitive"},
 				{clipId:"motion",evidence:"vmaf/vc1-fugitive/motion/evidence.json",observedFrameIndex:798,sampleId:"vc1-fugitive"}
 			]
-		}
+		} and
+		$command[6] == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
 	' <<<"$job_json"
 	[ "$status" -eq 0 ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | .subPath' "$job")" = "benchmark/runs/$run_id/diagnostics" ]
@@ -467,6 +486,83 @@ EOF
 		}
 		assert_no_mutations
 	done
+}
+
+@test "diagnostic evidence reader admits only the exact immutable historical producer protocol" {
+	local run_id='20260826T014246Z-373a665e'
+	local historical_scripts='encode-benchmark-scripts-cfcdgkg5c7'
+	local summary termination terminal_message
+	prepare_terminal_diagnostics_job "$run_id"
+	summary="$BATS_TEST_TMPDIR/historical-summary.json"
+	termination="$BATS_TEST_TMPDIR/historical-termination.json"
+	write_diagnostics_summary_fixture "$run_id" harness-blocked "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message harness-blocked "$run_id" "$summary" "$termination")"
+	jq --arg scripts "$historical_scripts" '
+		.items[0].metadata.annotations."homelab-talos/scripts-configmap" = $scripts |
+		(.items[0].spec.template.spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts |
+		.items[0].status = {conditions:[{type:"Failed",status:"True",reason:"BackoffLimitExceeded"}],active:0,succeeded:0,failed:1}
+	' "$STUB_DIAGNOSTIC_JOBS_JSON" >"$STUB_DIAGNOSTIC_JOBS_JSON.tmp"
+	mv "$STUB_DIAGNOSTIC_JOBS_JSON.tmp" "$STUB_DIAGNOSTIC_JOBS_JSON"
+	jq --arg scripts "$historical_scripts" --arg message "$terminal_message" '
+		(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts |
+		.items[0].status.phase = "Failed" |
+		.items[0].status.containerStatuses[0].state.terminated = {exitCode:2,reason:"Error",message:$message}
+	' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+
+	run_dispatch evidence-reader "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 1 ]
+}
+
+@test "diagnostic evidence reader rejects every historical protocol identity mutation" {
+	local run_id='20260826T014246Z-373a665e' case_name base_jobs base_pods
+	prepare_historical_terminal_diagnostics_job
+	base_jobs="$BATS_TEST_TMPDIR/historical-producer-jobs-base.json"
+	base_pods="$BATS_TEST_TMPDIR/historical-producer-pods-base.json"
+	cp "$STUB_DIAGNOSTIC_JOBS_JSON" "$base_jobs"
+	cp "$STUB_BENCHMARK_PODS_JSON" "$base_pods"
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+
+	for case_name in wrong-run wrong-script workload pod-owner pod-script pod-phase pod-exit pod-image termination termination-run termination-artifact; do
+		cp "$base_jobs" "$STUB_DIAGNOSTIC_JOBS_JSON"
+		cp "$base_pods" "$STUB_BENCHMARK_PODS_JSON"
+		case "$case_name" in
+		wrong-run) jq '.items[0].metadata.labels."homelab-talos/benchmark-run" = "20260826T014246Z-deadbeef"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		wrong-script) jq '.items[0].metadata.annotations."homelab-talos/scripts-configmap" = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		workload) jq '.items[0].spec.template.spec.containers[0].command = ["/bin/true"]' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		pod-owner) jq '.items[0].metadata.ownerReferences[0].uid = "spoofed-job-uid"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-script) jq '(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-phase) jq '.items[0].status.phase = "Succeeded"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-exit) jq '.items[0].status.containerStatuses[0].state.terminated.exitCode = 1' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-image) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination) jq '.items[0].status.containerStatuses[0].state.terminated.message = "not-json"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-run) jq '.items[0].status.containerStatuses[0].state.terminated.message |= (fromjson | .runId = "20260826T014246Z-deadbeef" | tojson)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		termination-artifact) jq '.items[0].status.containerStatuses[0].state.terminated.message |= (fromjson | .artifactLocation = "/out/runs/20260826T014246Z-deadbeef/diagnostics" | tojson)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		esac
+		: >"$STUB_CALLS"
+
+		run_dispatch evidence-reader "$run_id"
+		[ "$status" -eq 65 ] || {
+			echo "reader dispatch accepted invalid historical producer protocol: $case_name" >&3
+			return 1
+		}
+		assert_no_mutations
+	done
+}
+
+@test "diagnostic evidence reader reauthenticates the producer immediately before create" {
+	local run_id='20260823T141907Z-9d6f6b71'
+	prepare_terminal_diagnostics_job "$run_id"
+	STUB_DIAGNOSTIC_JOBS_JSON_SECOND="$BATS_TEST_TMPDIR/terminal-diagnostics-second.json"
+	jq 'del(.items[0].spec)' "$STUB_DIAGNOSTIC_JOBS_JSON" >"$STUB_DIAGNOSTIC_JOBS_JSON_SECOND"
+	export STUB_DIAGNOSTIC_JOBS_JSON_SECOND
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+
+	run_dispatch evidence-reader "$run_id"
+	[ "$status" -eq 65 ]
+	assert_no_mutations
 }
 
 @test "diagnostic evidence reader dispatch rejects absent failed active malformed and colliding fresh-run provenance before mutation" {
@@ -730,8 +826,10 @@ prepare_terminal_diagnostics_job() {
 	jq -n --arg run "$run_id" --arg name "$name" --arg uid "diagnostic-job-uid" \
 		--arg image "$configured_image" --arg message "$terminal_message" --argjson spec "$pod_spec" '{
 		apiVersion:"v1",items:[{
+			apiVersion:"v1",kind:"Pod",
 			metadata:{
 				name:($name + "-fixture-pod"),
+				namespace:"media",
 				labels:{
 					"app.kubernetes.io/name":"encode-benchmark",
 					"homelab-talos/benchmark-dispatch":$run,
@@ -751,6 +849,29 @@ prepare_terminal_diagnostics_job() {
 			}
 		}]}
 	' >"$STUB_BENCHMARK_PODS_JSON"
+}
+
+prepare_historical_terminal_diagnostics_job() {
+	local run_id='20260826T014246Z-373a665e'
+	local scripts='encode-benchmark-scripts-cfcdgkg5c7'
+	local summary="$BATS_TEST_TMPDIR/historical-summary.json"
+	local termination="$BATS_TEST_TMPDIR/historical-termination.json"
+	local terminal_message
+	prepare_terminal_diagnostics_job "$run_id"
+	write_diagnostics_summary_fixture "$run_id" harness-blocked "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message harness-blocked "$run_id" "$summary" "$termination")"
+	jq --arg scripts "$scripts" '
+		.items[0].metadata.annotations."homelab-talos/scripts-configmap" = $scripts |
+		(.items[0].spec.template.spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts |
+		.items[0].status = {conditions:[{type:"Failed",status:"True",reason:"BackoffLimitExceeded"}],active:0,succeeded:0,failed:1}
+	' "$STUB_DIAGNOSTIC_JOBS_JSON" >"$STUB_DIAGNOSTIC_JOBS_JSON.tmp"
+	mv "$STUB_DIAGNOSTIC_JOBS_JSON.tmp" "$STUB_DIAGNOSTIC_JOBS_JSON"
+	jq --arg scripts "$scripts" --arg message "$terminal_message" '
+		(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts |
+		.items[0].status.phase = "Failed" |
+		.items[0].status.containerStatuses[0].state.terminated = {exitCode:2,reason:"Error",message:$message}
+	' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
 }
 
 tamper_deployed_diagnostics_contract() {
@@ -1242,7 +1363,7 @@ set_dispatch_chosen_record() {
 		contract_diagnostics_evidence_panel_json "$BATS_TEST_TMPDIR/reader-samples.json"
 	)"
 	[ "$panel_sha" = 'sha256:2722def1986d9591db363063315b94e8faca78ace7c56a7b6a55c6c9b4889e6f' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/diagnostic-evidence.sh collect $run_id /evidence $panel_sha $evidence_panel" ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/diagnostic-evidence.sh collect $run_id /evidence $panel_sha $evidence_panel docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" ]
 	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = 'docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].env | length' "$job")" = '0' ]
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts | map(.name) | sort | join(",")' "$job")" = 'evidence,scripts' ]
@@ -1263,8 +1384,9 @@ write_canonical_collector_json() {
 		def frames($index): ["0","0.041667","0.083334","0.125001","0.166668"] | to_entries | map({frameIndex:($index - 2 + .key),bestEffortTimestamp:.value,packetDuration:"0.041667",keyFrame:false,pictureType:"P"});
 		def vmaf_frames($index): [range($index - 2; $index + 3) | {frameIndex:.,vmaf:90}];
 		def offsets: [range(-2; 3) | {offset:.,ssim:0.9,psnr:{kind:"finite",value:40}}];
-		def setting($quality; $index): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:vmaf_frames($index),reset:vmaf_frames($index)},offsets:offsets,timeline:{zeroOffsetAligned:true,discontinuity:null}};
 		def source($index): {decodedFrameCount:2160,stream:{startTime:"0",duration:"90",timeBase:"1/90000",averageFrameRate:"24/1"},frames:frames($index),sourceWindow:{status:"clean",issue:null}};
+		def output($index): source($index) | {stream:(.stream | {timeBase,averageFrameRate}),frames:[.frames[] | {frameIndex,bestEffortTimestamp,packetDuration}],sourceWindow};
+		def setting($quality; $index): {globalQuality:$quality,status:"complete",reason:null,vmaf:{current:vmaf_frames($index),reset:vmaf_frames($index)},offsets:offsets,outputContinuity:output($index),timeline:{zeroOffsetAligned:true,discontinuity:null}};
 		def vmaf($sample; $clip; $index): {sampleId:$sample,clipId:$clip,observedFrameIndex:$index,status:"complete",sourceContinuity:source($index),settings:[setting(16;$index),setting(30;$index)],classification:class};
 		def stream_oracle: {status:"null"};
 		def pair_oracle: {status:"absent"};
@@ -1275,7 +1397,11 @@ write_canonical_collector_json() {
 
 write_collector_runtime_fixtures() {
 	local run_id="$1" jobs_path="$2" pods_path="$3" job name pod_spec api_scripts_mode availability_jobs
-	prepare_terminal_diagnostics_job "$run_id"
+	if [[ "$run_id" == '20260826T014246Z-373a665e' ]]; then
+		prepare_historical_terminal_diagnostics_job
+	else
+		prepare_terminal_diagnostics_job "$run_id"
+	fi
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
 	availability_jobs="$BATS_TEST_TMPDIR/reader-availability-jobs.json"
 	printf '%s\n' '{"items":[]}' >"$availability_jobs"
@@ -1318,7 +1444,7 @@ write_independent_fresh_reader_runtime_fixtures() {
 		{
 			containers:[{
 				name:"benchmark", image:$image,
-				command:["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$panel],
+				command:["/scripts/diagnostic-evidence.sh","collect",$run,"/evidence",$panel_sha,$panel,$image],
 				securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}},
 				resources:{requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"256Mi"}},
 				volumeMounts:[{name:"scripts",mountPath:"/scripts",readOnly:true},{name:"evidence",mountPath:"/evidence",subPath:$subpath,readOnly:true}]
@@ -1371,7 +1497,7 @@ producer_fixed_failed_collector_lines() {
 			line = $0
 			sub(/^[[:space:]]*echo '\''/, "", line)
 			sub(/'\'' >&2$/, "", line)
-			if (line != "usage: diagnostic-evidence.sh collect <run-id> <evidence-root> <panel-sha256> <evidence-panel>") {
+			if (line !~ /^usage: diagnostic-evidence.sh /) {
 				print line
 			}
 		}
@@ -1401,6 +1527,46 @@ producer_fixed_failed_collector_lines() {
 	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$(cat "$collector_json")" ]
+}
+
+@test "workstation reader rejects permuted and misaligned projected output windows" {
+	local run_id='20260820T223425Z-082b3d38' case_name collector_json base_json
+	collector_json="$BATS_TEST_TMPDIR/collector.json"
+	base_json="$BATS_TEST_TMPDIR/collector-base.json"
+	write_canonical_collector_json "$base_json" "$run_id"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/reader-jobs.json"
+	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/reader-pods.json"
+	STUB_LOGS_FILE="$collector_json"
+	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
+	write_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
+
+	for case_name in permuted misaligned; do
+		case "$case_name" in
+		permuted)
+			jq -S -c -L "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts" '
+				include "diagnostic-contract";
+				.vmaf[0].settings[0].outputContinuity.frames |= [.[1],.[0],.[2],.[3],.[4]] |
+				.vmaf[0].settings[0].outputContinuity as $window |
+				.vmaf[0].settings[0].outputContinuity.sourceWindow = ($window.frames | diagnostic_continuity($window.stream.timeBase))
+			' "$base_json" >"$collector_json"
+			;;
+		misaligned)
+			jq -S -c -L "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts" '
+				include "diagnostic-contract";
+				.vmaf[0].settings[0].outputContinuity.frames[2].bestEffortTimestamp = "0.100000" |
+				.vmaf[0].settings[0].outputContinuity as $window |
+				.vmaf[0].settings[0].outputContinuity.sourceWindow = ($window.frames | diagnostic_continuity($window.stream.timeBase))
+			' "$base_json" >"$collector_json"
+			;;
+		esac
+
+		run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -eq 65 ] || {
+			echo "workstation reader accepted unauthenticated projected timeline: $case_name" >&3
+			return 1
+		}
+		[ "$output" = 'diagnostic evidence result schema rejected' ]
+	done
 }
 
 @test "diagnostic evidence results admit legacy source reason only for the historical run" {
@@ -1551,7 +1717,7 @@ producer_fixed_failed_collector_lines() {
 	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
 
 	mapfile -t producer_lines < <(producer_fixed_failed_collector_lines)
-	[ "${#producer_lines[@]}" -eq 14 ]
+	[ "${#producer_lines[@]}" -eq 16 ]
 
 	for line in "${producer_lines[@]}"; do
 		printf '%s\n' "$line" >"$STUB_LOGS_FILE"
@@ -3254,122 +3420,36 @@ write_multi_node_results_fixtures() {
 
 write_diagnostics_results_fixture() {
 	local run_id="$1" pod_phase="$2" terminal_message="${3:-}"
-	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods.json"
-	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-jobs.json"
-	unset STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
-	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
-	jq -n -c --arg run "$run_id" '{
-		apiVersion:"v1",
-		items:[{
-			metadata:{
-				name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"fixture-job-uid",
-				labels:{
-					"app.kubernetes.io/name":"encode-benchmark",
-				"homelab-talos/benchmark-dispatch":$run,
-				"homelab-talos/benchmark-run":$run,
-					"homelab-talos/benchmark-mode":"diagnostics"
-				},
-				annotations:{"homelab-talos/benchmark-owned":"true"}
-			},
-			status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
-		}]
-	}' >"$STUB_JOBS_JSON"
-	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --arg message "$terminal_message" '
-		{
-			apiVersion:"v1",
-			items:[{
-				metadata:{
-					name:"encode-benchmark-diagnostics-fixture-pod",
-					labels:{
-						"app.kubernetes.io/name":"encode-benchmark",
-					"homelab-talos/benchmark-dispatch":$run,
-					"homelab-talos/benchmark-run":$run,
-					"homelab-talos/benchmark-mode":"diagnostics",
-					"job-name":("encode-benchmark-diagnostics-" + ($run | ascii_downcase))
-				},
-					ownerReferences:[{
-						apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),
-						uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true
-					}]
-				},
-				spec:{nodeName:"nuc2"},
-				status:{
-					phase:$phase,
-					containerStatuses:[{
-						name:"benchmark",
-						state:(if $message == "" then
-							(if $phase == "Running" or $phase == "Pending" then {running:{startedAt:"2026-08-19T12:00:00Z"}} else {terminated:{exitCode:0,reason:"Completed"}} end)
-						else
-							{terminated:{
-								exitCode:(if $phase == "Succeeded" then 0 else 1 end),
-								reason:(if $phase == "Succeeded" then "Completed" else "Error" end),
-								finishedAt:"2026-08-19T12:05:00Z",
-								message:$message
-							}}
-						end)
-					}]
-				}
-			}]
-		}
-	' >"$STUB_BENCHMARK_PODS_JSON"
+	prepare_terminal_diagnostics_job "$run_id"
+	STUB_JOBS_JSON="$STUB_DIAGNOSTIC_JOBS_JSON"
+	export STUB_JOBS_JSON
+	jq --arg phase "$pod_phase" --arg message "$terminal_message" '
+		.items[0].status.phase = $phase |
+		.items[0].status.containerStatuses[0].state =
+			(if $message == "" and ($phase == "Running" or $phase == "Pending") then
+				{running:{startedAt:"2026-08-19T12:00:00Z"}}
+			 elif $message == "" then
+				{terminated:{exitCode:(if $phase == "Succeeded" then 0 else 1 end),reason:(if $phase == "Succeeded" then "Completed" else "Error" end)}}
+			 else
+				{terminated:{exitCode:(if $phase == "Succeeded" then 0 else 1 end),reason:(if $phase == "Succeeded" then "Completed" else "Error" end),finishedAt:"2026-08-19T12:05:00Z",message:$message}}
+			 end)
+	' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
 }
 
 write_diagnostics_results_fixture_from_file() {
 	local run_id="$1" pod_phase="$2" terminal_message_file="$3"
-	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods.json"
-	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-jobs.json"
-	unset STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
-	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
-	jq -n -c --arg run "$run_id" '{
-		apiVersion:"v1",
-		items:[{
-			metadata:{
-				name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"fixture-job-uid",
-				labels:{
-					"app.kubernetes.io/name":"encode-benchmark",
-					"homelab-talos/benchmark-dispatch":$run,
-					"homelab-talos/benchmark-run":$run,
-					"homelab-talos/benchmark-mode":"diagnostics"
-				},
-				annotations:{"homelab-talos/benchmark-owned":"true"}
-			},
-			status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
-		}]
-	}' >"$STUB_JOBS_JSON"
-	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --rawfile message "$terminal_message_file" '
-		{
-			apiVersion:"v1",
-			items:[{
-				metadata:{
-					name:"encode-benchmark-diagnostics-fixture-pod",
-					labels:{
-						"app.kubernetes.io/name":"encode-benchmark",
-						"homelab-talos/benchmark-dispatch":$run,
-						"homelab-talos/benchmark-run":$run,
-						"homelab-talos/benchmark-mode":"diagnostics",
-						"job-name":("encode-benchmark-diagnostics-" + ($run | ascii_downcase))
-					},
-					ownerReferences:[{
-						apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),
-						uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true
-					}]
-				},
-				spec:{nodeName:"nuc2"},
-				status:{
-					phase:$phase,
-					containerStatuses:[{
-						name:"benchmark",
-						state:{terminated:{
-							exitCode:(if $phase == "Succeeded" then 0 else 1 end),
-							reason:(if $phase == "Succeeded" then "Completed" else "Error" end),
-							finishedAt:"2026-08-19T12:05:00Z",
-							message:$message
-						}}
-					}]
-				}
-			}]
-		}
-	' >"$STUB_BENCHMARK_PODS_JSON"
+	prepare_terminal_diagnostics_job "$run_id"
+	STUB_JOBS_JSON="$STUB_DIAGNOSTIC_JOBS_JSON"
+	export STUB_JOBS_JSON
+	jq --arg phase "$pod_phase" --rawfile message "$terminal_message_file" '
+		.items[0].status.phase = $phase |
+		.items[0].status.containerStatuses[0].state = {terminated:{
+			exitCode:(if $phase == "Succeeded" then 0 else 1 end),
+			reason:(if $phase == "Succeeded" then "Completed" else "Error" end),
+			finishedAt:"2026-08-19T12:05:00Z",message:$message}}
+	' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
 }
 
 write_diagnostics_summary_fixture() {
@@ -3782,6 +3862,45 @@ write_diagnostics_custom_summary_fixture() {
 	done
 }
 
+@test "ordinary diagnostics results authenticate the complete producer workload" {
+	local run_id='20260823T141907Z-9d6f6b71' case_name
+	local base_jobs base_pods
+	prepare_terminal_diagnostics_job "$run_id"
+	base_jobs="$BATS_TEST_TMPDIR/results-producer-jobs-base.json"
+	base_pods="$BATS_TEST_TMPDIR/results-producer-pods-base.json"
+	cp "$STUB_DIAGNOSTIC_JOBS_JSON" "$base_jobs"
+	cp "$STUB_BENCHMARK_PODS_JSON" "$base_pods"
+
+	for case_name in job-spec job-image job-scripts job-command job-volumes job-security job-node pod-spec pod-image pod-image-id pod-scripts pod-command pod-volumes pod-security pod-node; do
+		cp "$base_jobs" "$STUB_DIAGNOSTIC_JOBS_JSON"
+		cp "$base_pods" "$STUB_BENCHMARK_PODS_JSON"
+		case "$case_name" in
+		job-spec) jq 'del(.items[0].spec)' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-image) jq '.items[0].spec.template.spec.containers[0].image = "example.invalid/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-scripts) jq '(.items[0].spec.template.spec.volumes[] | select(.name == "scripts").configMap.name) = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-command) jq '.items[0].spec.template.spec.containers[0].command = ["/bin/true"]' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-volumes) jq '.items[0].spec.template.spec.volumes = []' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-security) jq '.items[0].spec.template.spec.automountServiceAccountToken = true' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		job-node) jq '.items[0].spec.template.spec.nodeSelector."kubernetes.io/hostname" = "nuc3"' "$base_jobs" >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		pod-spec) jq 'del(.items[0].spec)' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-image) jq '.items[0].spec.containers[0].image = "example.invalid/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-image-id) jq '.items[0].status.containerStatuses[0].imageID = "containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-scripts) jq '(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = "encode-benchmark-scripts-aaaaaaaaaa"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-command) jq '.items[0].spec.containers[0].command = ["/bin/true"]' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-volumes) jq '.items[0].spec.volumes = []' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-security) jq '.items[0].spec.automountServiceAccountToken = true' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		pod-node) jq '.items[0].spec.nodeName = "nuc3"' "$base_pods" >"$STUB_BENCHMARK_PODS_JSON" ;;
+		esac
+
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -ne 0 ] || {
+			echo "ordinary results accepted invalid diagnostics workload: $case_name" >&3
+			return 1
+		}
+		[[ "$output" != *'example.invalid'* && "$output" != *'encode-benchmark-scripts-aaaaaaaaaa'* ]]
+	done
+}
+
 @test "results reject failed diagnostics Pods despite an authenticated scientific terminal status" {
 	run_id='20260819T120000Z-feedbeef'
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
@@ -4007,7 +4126,8 @@ EOF
 		write_diagnostics_results_fixture "$run_id" Succeeded "$case_data"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
-		[[ "$output" == 'no-sanitized-summary' || "$output" == terminal-summary-schema-error:* ]]
+		[[ "$output" == "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $run_id" ||
+			"$output" == 'no-sanitized-summary' || "$output" == terminal-summary-schema-error:* ]]
 		if [[ -n "$case_data" ]]; then
 			[[ "$output" != *"$case_data"* ]]
 		fi
@@ -4095,8 +4215,8 @@ EOF
 }
 
 # Catches extracting the Pod termination message through command substitution,
-# which removes trailing line feeds before the raw byte-limit check.
-@test "results count exact diagnostics Pod message bytes including trailing line feeds" {
+# which removes trailing line feeds before the raw byte and canonical checks.
+@test "results count and reject noncanonical diagnostics Pod message bytes including trailing line feeds" {
 	run_id='20260819T120000Z-feedbeef'
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
 	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
@@ -4112,8 +4232,8 @@ EOF
 	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3072 ]
 	write_diagnostics_results_fixture_from_file "$run_id" Succeeded "$case_terminal"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == "mode=diagnostics phase=Succeeded run_id=$run_id "* ]]
+	[ "$status" -ne 0 ]
+	[ "$output" = 'terminal-summary-schema-error:noncanonical' ]
 
 	case_terminal="$BATS_TEST_TMPDIR/over-limit-with-trailing-lf.json"
 	{
@@ -4287,9 +4407,11 @@ EOF
 }
 
 @test "results allow only a dispatch-bound reader owned by the deterministic reader Job beside diagnostics" {
-	local run_id='20260823T141907Z-9d6f6b71' reader_job diagnostic_job reader_pod reader_job_json diagnostic_job_json summary termination terminal_message case_name readers
+	local run_id='20260823T141907Z-9d6f6b71' reader_job reader_pod reader_job_json diagnostic_job_json diagnostic_pod summary termination terminal_message case_name readers
 	reader_job='encode-benchmark-evidence-reader-20260823t141907z-9d6f6b71'
-	diagnostic_job='encode-benchmark-diagnostics-20260823t141907z-9d6f6b71'
+	prepare_terminal_diagnostics_job "$run_id"
+	diagnostic_job_json="$(<"$STUB_DIAGNOSTIC_JOBS_JSON")"
+	diagnostic_pod="$(jq -c '.items[0]' "$STUB_BENCHMARK_PODS_JSON")"
 	reader_pod="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{
 		metadata:{name:($job + "-pod"),labels:{
 			"app.kubernetes.io/name":"encode-benchmark",
@@ -4300,10 +4422,6 @@ EOF
 		},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"reader-job-uid",controller:true,blockOwnerDeletion:true}]},
 		status:{phase:"Succeeded"}
 	}')"
-	diagnostic_job_json="$(jq -n -c --arg run "$run_id" --arg job "$diagnostic_job" '{items:[{
-		metadata:{name:$job,uid:"diagnostic-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
-	}]}' )"
 	reader_job_json="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{items:[{metadata:{name:$job,uid:"reader-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"}}}]}')"
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
 	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
@@ -4328,17 +4446,8 @@ EOF
 		mislabeled) readers="[$(jq -c '.metadata.labels."job-name" = "encode-benchmark-evidence-reader-spoofed"' <<<"$reader_pod")]" ;;
 		other-mode) readers="[$(jq -c '.metadata.labels."homelab-talos/benchmark-mode" = "quality"' <<<"$reader_pod")]" ;;
 		esac
-		jq -n -c --arg run "$run_id" --arg job "$diagnostic_job" --arg message "$terminal_message" --argjson readers "$readers" '{
-			items:([{
-				metadata:{name:($job + "-pod"),labels:{
-					"app.kubernetes.io/name":"encode-benchmark",
-					"homelab-talos/benchmark-dispatch":$run,
-					"homelab-talos/benchmark-run":$run,
-					"homelab-talos/benchmark-mode":"diagnostics",
-					"job-name":$job
-				},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"diagnostic-job-uid",controller:true,blockOwnerDeletion:true}]},
-				status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",state:{terminated:{exitCode:0,reason:"Completed",message:$message}}}]}
-			}] + $readers)
+		jq -n -c --arg message "$terminal_message" --argjson diagnostic "$diagnostic_pod" --argjson readers "$readers" '{
+			items:([($diagnostic | .status.containerStatuses[0].state.terminated.message = $message)] + $readers)
 		}' >"$STUB_BENCHMARK_PODS_JSON"
 		: >"$STUB_CALLS"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"

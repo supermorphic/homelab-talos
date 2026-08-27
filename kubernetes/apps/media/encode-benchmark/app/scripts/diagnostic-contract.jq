@@ -135,6 +135,28 @@ def diagnostic_unique_metric_offset($metric):
 		else {state: "tie"} end
 	end;
 
+# Derive the only timeline facts that can affect the VMAF classifier. Callers
+# supply the five redacted offset values, so this predicate is usable by the
+# producer and by both read-only evidence readers.
+def diagnostic_vmaf_timeline($source; $output; $offsets; $observed):
+	({offsets:$offsets} | diagnostic_unique_metric_offset("ssim")) as $ssim_best |
+	({offsets:$offsets} | diagnostic_unique_metric_offset("psnr")) as $psnr_best |
+	{
+		zeroOffsetAligned:diagnostic_local_alignment($source; $output),
+		discontinuity:(
+			if
+				$ssim_best.state == "unique" and $psnr_best.state == "unique" and
+				$ssim_best.offset == $psnr_best.offset and $ssim_best.offset != 0
+			then
+				([$source.frames[] | select(.frameIndex == $observed)][0].bestEffortTimestamp) as $source_timestamp |
+				([$output.frames[] | select(.frameIndex == ($observed + $ssim_best.offset))][0].bestEffortTimestamp) as $output_timestamp |
+				if $source_timestamp == $output_timestamp then
+					{kind:"timestamp-discontinuity",offset:$ssim_best.offset}
+				else null end
+			else null end
+		)
+	};
+
 def diagnostic_unique_target_minimum($metric):
 	([.offsets[] | select(.[$metric] != null) | .[$metric]] | length) == 5 and
 	(
