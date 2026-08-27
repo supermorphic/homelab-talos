@@ -216,6 +216,7 @@ n8n-secrets:
     declare -a stages=()
     declare -a backups=()
     declare -a replaced=(false false false)
+    declare -a retained_stage=(false false false)
     committed=false
     umask 077
     temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-n8n-secrets.XXXXXX")"
@@ -229,18 +230,28 @@ n8n-secrets:
           target="${targets[$index]}"
           backup="${backups[$index]:-}"
           if [[ -n "$backup" && -e "$backup" ]]; then
-            rm -f -- "$target" || rollback_failed=true
-            mv -- "$backup" "$target" || rollback_failed=true
+            if ! mv -- "$backup" "$target"; then
+              rollback_failed=true
+              retained_stage[$index]=true
+            fi
           elif [[ "${replaced[$index]}" == true ]]; then
             rm -f -- "$target" || rollback_failed=true
           fi
         done
       fi
       rm -rf -- "$temp_dir"
-      for stage_directory in "${stage_directories[@]}"; do
-        rm -rf -- "$stage_directory"
+      for index in "${!stage_directories[@]}"; do
+        stage_directory="${stage_directories[$index]}"
+        if [[ "${retained_stage[$index]}" == true ]]; then
+          echo "Recovery ciphertext retained at $stage_directory for ${targets[$index]}." >&2
+        else
+          rm -rf -- "$stage_directory"
+        fi
       done
-      [[ "$rollback_failed" != true ]] || echo 'Failed to restore every previous n8n Secret target.' >&2
+      if [[ "$rollback_failed" == true ]]; then
+        echo 'Failed to restore every previous n8n Secret target.' >&2
+        result=1
+      fi
       exit "$result"
     }
     trap cleanup EXIT
@@ -379,12 +390,10 @@ n8n-secrets:
       stages+=("$stage_directory/candidate")
       backups+=("$stage_directory/previous")
       cp -- "${candidates[$index]}" "${stages[$index]}"
+      [[ ! -e "${targets[$index]}" ]] || cp -- "${targets[$index]}" "${backups[$index]}"
     done
     for index in "${!targets[@]}"; do
       target="${targets[$index]}"
-      if [[ -e "$target" ]]; then
-        mv -- "$target" "${backups[$index]}"
-      fi
       mv -- "${stages[$index]}" "$target"
       replaced[$index]=true
     done

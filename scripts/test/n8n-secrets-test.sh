@@ -159,11 +159,18 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
+source="${@: -2:1}"
 destination="${!#}"
+if [[ -n "${FAKE_MV_LOG:-}" ]]; then
+  printf '%s\t%s\n' "$source" "$destination" >>"$FAKE_MV_LOG"
+fi
 if [[ -n "${FAKE_MV_FAIL_TARGET:-}" && "$destination" == "$FAKE_MV_FAIL_TARGET" && \
   ! -e "$FAKE_MV_FAIL_MARKER" ]]; then
   : >"$FAKE_MV_FAIL_MARKER"
   exit 96
+fi
+if [[ "${FAKE_MV_RESTORE_FAILURE:-}" == true && "$(basename -- "$source")" == 'previous' ]]; then
+  exit 95
 fi
 exec /bin/mv "$@"
 EOF
@@ -202,7 +209,7 @@ set_all_inputs() {
   N8N_CANARY_TOKEN="${synthetic_values[5]}"
   N8N_SECRETS_CONFIRM="$expected_confirmation"
   unset FAKE_SOPS_FAIL FAKE_SOPS_MALFORMED_TARGET FAKE_SOPS_WRONG_RECIPIENT
-  unset FAKE_MV_FAIL_TARGET FAKE_MV_FAIL_MARKER
+  unset FAKE_MV_FAIL_TARGET FAKE_MV_FAIL_MARKER FAKE_MV_LOG FAKE_MV_RESTORE_FAILURE
 }
 
 run_recipe() {
@@ -224,6 +231,8 @@ run_recipe() {
   if [[ -n "${FAKE_MV_FAIL_TARGET:-}" ]]; then
     env_args+=("FAKE_MV_FAIL_TARGET=$FAKE_MV_FAIL_TARGET" "FAKE_MV_FAIL_MARKER=$FAKE_MV_FAIL_MARKER")
   fi
+  [[ -z "${FAKE_MV_LOG:-}" ]] || env_args+=("FAKE_MV_LOG=$FAKE_MV_LOG")
+  [[ "${FAKE_MV_RESTORE_FAILURE:-}" != true ]] || env_args+=("FAKE_MV_RESTORE_FAILURE=true")
 
   set +e
   (
@@ -320,6 +329,39 @@ assert_existing_targets() {
   done
 }
 
+assert_atomic_replacements() {
+  local target source destination target_moves=0
+  while IFS=$'\t' read -r source destination; do
+    for target in "${targets[@]}"; do
+      [[ "$source" != "$target" ]] || {
+        echo 'A prior target was moved away before its replacement was installed.' >&2
+        exit 1
+      }
+      if [[ "$destination" == "$target" ]]; then
+        [[ "$(basename -- "$source")" == 'candidate' ]] || {
+          echo 'A canonical target was not directly replaced from its same-filesystem candidate.' >&2
+          exit 1
+        }
+        target_moves=$((target_moves + 1))
+      fi
+    done
+  done <"$FAKE_MV_LOG"
+  [[ "$target_moves" -eq "${#targets[@]}" ]] || {
+    echo 'Each target must receive exactly one direct candidate replacement.' >&2
+    exit 1
+  }
+}
+
+assert_retained_recovery_copy() {
+  local target
+  for target in "${targets[@]}"; do
+    find "$(dirname -- "$tree_root/$target")" -maxdepth 2 -type f -name previous -print -quit | \
+      rg -q . && return 0
+  done
+  echo 'A failed rollback removed every retained ciphertext recovery copy.' >&2
+  exit 1
+}
+
 reset_validator_tree() {
   rm -rf -- "$validator_tree"
   mkdir -p "$validator_tree/kubernetes/apps/networking"
@@ -363,6 +405,17 @@ kind: Kustomization
 resources:
   - ./n8n-canary.sops.yaml
 YAML
+}
+
+select_runtime_secret() {
+  local resource="$1"
+  mkdir -p "$validator_tree/kubernetes/apps/automation/n8n/app"
+  cat >"$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - $resource
+EOF
 }
 
 write_selected_secret_fixtures() {
@@ -546,12 +599,46 @@ run_recipe
 assert_no_plaintext "$RECIPE_OUTPUT"
 assert_existing_targets
 
+reset_tree
+seed_existing_targets
+set_all_inputs
+FAKE_MV_LOG="$test_dir/mv-atomic-replacements"
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -eq 0 ]] || {
+  echo 'Atomic replacement coverage requires a successful guarded write.' >&2
+  exit 1
+}
+assert_atomic_replacements
+
+reset_tree
+seed_existing_targets
+set_all_inputs
+FAKE_MV_FAIL_TARGET="$target_postgresql"
+FAKE_MV_FAIL_MARKER="$test_dir/mv-replacement-failed-once"
+FAKE_MV_RESTORE_FAILURE=true
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -ne 0 ]] || {
+  echo 'A replacement failure with failed rollback unexpectedly succeeded.' >&2
+  exit 1
+}
+assert_no_plaintext "$RECIPE_OUTPUT"
+rg -Fq 'Recovery ciphertext retained at' <<<"$RECIPE_OUTPUT" || {
+  echo 'A failed rollback did not report its safe retained-ciphertext recovery path.' >&2
+  exit 1
+}
+assert_retained_recovery_copy
+
 reset_validator_tree
 run_validator
 expect_validator_pass
 
 reset_validator_tree
 select_all_n8n_secrets
+run_validator
+expect_validator_failure "Missing selected n8n SOPS Secret: $target_runtime."
+
+reset_validator_tree
+select_runtime_secret 'n8n-runtime.sops.yaml'
 run_validator
 expect_validator_failure "Missing selected n8n SOPS Secret: $target_runtime."
 

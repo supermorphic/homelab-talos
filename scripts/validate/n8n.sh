@@ -12,14 +12,27 @@ public_route="$public_base/route/httproute.yaml"
 public_ks="$public_base/ks.yaml"
 external_dns='kubernetes/apps/networking/external-dns/app/values.yaml'
 
+normalise_resource_path() {
+  local path="$1"
+  while [[ "$path" == ./* ]]; do
+    path="${path#./}"
+  done
+  printf '%s\n' "$path"
+}
+
 validate_selected_sops_secret() {
   local owner="$1" resource="$2" target="$3" expected_name="$4"
-  local expected_namespace="$5" expected_keys="$6" expected_recipient
+  local expected_namespace="$5" expected_keys="$6" expected_recipient selected_resource
+  local normalised_resource normalised_selected_resource selected=false
   local -a expected_recipients candidate_recipients
 
   [[ -f "$owner" ]] || return 0
-  resource="$resource" yq -e \
-    '.resources[]? | select(. == strenv(resource))' "$owner" >/dev/null || return 0
+  normalised_resource="$(normalise_resource_path "$resource")"
+  while IFS= read -r selected_resource; do
+    normalised_selected_resource="$(normalise_resource_path "$selected_resource")"
+    [[ "$normalised_selected_resource" != "$normalised_resource" ]] || selected=true
+  done < <(yq -r '.resources[]?' "$owner")
+  [[ "$selected" == true ]] || return 0
   [[ -f "$target" ]] || {
     echo "Missing selected n8n SOPS Secret: $target." >&2
     exit 1
