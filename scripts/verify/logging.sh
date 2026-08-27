@@ -435,10 +435,20 @@ yq -e '
   echo 'Loki effective runtime service-name discovery is not disabled.' >&2
   exit 1
 }
+
+# Disabled stream sharding is omitted from the tenant-limits response. Loki's resolved
+# configuration endpoint retains the explicit false value and proves what the process
+# loaded after chart rendering and rollout.
+runtime_config_response=''
+if ! runtime_config_response="$(curl --silent --show-error --fail --max-time 20 \
+  "$loki_base_url/config?mode=diffs")"; then
+  echo 'Loki resolved runtime configuration endpoint was unavailable.' >&2
+  exit 1
+fi
 yq -e '
-  ((.shard_streams | type) == "!!map") and
-  (.shard_streams.enabled == false)
-' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+  ((.limits_config.shard_streams | type) == "!!map") and
+  (.limits_config.shard_streams.enabled == false)
+' >/dev/null 2>&1 <<<"$runtime_config_response" || {
   echo 'Loki effective runtime automatic stream sharding is not disabled.' >&2
   exit 1
 }
