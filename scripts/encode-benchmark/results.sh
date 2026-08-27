@@ -117,8 +117,9 @@ diagnostic_sanitize_terminal() {
 }
 
 diagnostic_results() {
-	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal
+	local all_pods_json="$1" requested_run_id="$2" matching_pods diagnostic_pods reader_pods unexpected_pods pod_count reader_count unexpected_count reader_valid reader_jobs_json reader_job_uid pod_json pod_phase sanitized_terminal diagnostic_jobs_json
 	local reader_job="encode-benchmark-evidence-reader-${requested_run_id,,}"
+	local diagnostic_job="encode-benchmark-diagnostics-${requested_run_id,,}"
 	matching_pods="$(RUN_ID="$requested_run_id" jq -c '
 		[
 			.items[]
@@ -183,7 +184,35 @@ diagnostic_results() {
 		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "$pod_phase" "$requested_run_id"
 		return 0
 		;;
-	Succeeded | Failed)
+	Succeeded)
+		if ! diagnostic_jobs_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+			--selector "app.kubernetes.io/name=encode-benchmark,homelab-talos/benchmark-dispatch=$requested_run_id,homelab-talos/benchmark-run=$requested_run_id,homelab-talos/benchmark-mode=diagnostics" \
+			--output json)" || ! jq -e --arg run "$requested_run_id" --arg job "$diagnostic_job" '
+			.items |
+			if length == 1 then .[0] else error("expected one diagnostics Job") end |
+			.metadata.name == $job and
+			.metadata.labels."app.kubernetes.io/name" == "encode-benchmark" and
+			.metadata.labels."homelab-talos/benchmark-dispatch" == $run and
+			.metadata.labels."homelab-talos/benchmark-run" == $run and
+			.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics" and
+			.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
+			(.metadata.uid | type == "string" and length > 0) and
+			((.status.active // 0) == 0) and
+			([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 1) and
+			([.status.conditions[]? | select(.type == "Failed" and .status == "True")] | length == 0) and
+			(.status.succeeded == 1 and (.status.failed // 0) == 0)
+		' <<<"$diagnostic_jobs_json" >/dev/null || ! jq -e --arg job "$diagnostic_job" --arg uid "$(jq -r '.items[0].metadata.uid // ""' <<<"$diagnostic_jobs_json")" '
+			.metadata.labels."job-name" == $job and
+			(.metadata.ownerReferences | type == "array" and length == 1 and
+			 .[0].apiVersion == "batch/v1" and .[0].kind == "Job" and .[0].name == $job and
+			 .[0].uid == $uid and .[0].controller == true and .[0].blockOwnerDeletion == true) and
+			.status.phase == "Succeeded" and
+			([.status.containerStatuses[]? | select(.name == "benchmark") | .state.terminated] |
+			 length == 1 and .[0].exitCode == 0 and .[0].reason == "Completed")
+		' <<<"$pod_json" >/dev/null; then
+			echo "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $requested_run_id" >&2
+			return 1
+		fi
 		jq -j '
 			[
 				.status.containerStatuses[]?
@@ -204,6 +233,10 @@ diagnostic_results() {
 		}
 		printf 'mode=diagnostics phase=%s %s\n' "$pod_phase" "${sanitized_terminal#mode=diagnostics }"
 		return 0
+		;;
+	Failed)
+		echo "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $requested_run_id" >&2
+		return 1
 		;;
 	*)
 		printf 'mode=diagnostics phase=%s run_id=%s status=active\n' "${pod_phase:-Unknown}" "$requested_run_id"

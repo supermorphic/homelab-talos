@@ -280,7 +280,9 @@ require_terminal_diagnostics_job() {
 		.metadata.labels."homelab-talos/benchmark-mode" == "diagnostics" and
 		.metadata.annotations."homelab-talos/benchmark-owned" == "true" and
 		((.status.active // 0) == 0) and
-		([.status.conditions[]? | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length == 1))
+		([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length == 1) and
+		([.status.conditions[]? | select(.type == "Failed" and .status == "True")] | length == 0) and
+		(.status.succeeded == 1 and (.status.failed // 0) == 0))
 	' <<<"$existing" >/dev/null || {
 		echo "diagnostic evidence reader requires one terminal owned diagnostics Job: $run_id" >&2
 		return 65

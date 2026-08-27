@@ -903,8 +903,8 @@ EOF
 		RESULTS_STUB_CALLS="$stub_calls" \
 		RESULTS_STUB_PODS_JSON="$pods_json" \
 		"$results_script" "$kubeconfig" "$run_id"
-	[ "$status" -eq 0 ]
-	[ "$output" = "mode=diagnostics phase=$pod_phase run_id=$run_id artifact_location=/out/runs/$run_id/diagnostics status=$expected_status vmaf_total=5 vmaf_encoder_output_defect=0 vmaf_temporal_alignment_defect=0 vmaf_unresolved=5 vmaf_vmaf_measurement_defect=0 vmaf_reasons=$expected_reason hdr_total=3 hdr_clip_boundary_defect=0 hdr_encoder_output_defect=0 hdr_preserved=0 hdr_source_probe_defect=0 hdr_unresolved_oracle=3 hdr_reasons=$expected_reason" ]
+	[ "$status" -ne 0 ]
+	[ "$output" = "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $run_id" ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$stub_calls")" -eq 1 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$stub_calls")" -eq 0 ]
@@ -2653,7 +2653,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE="$failure"
 
 		run "$SCRIPTS/benchmark.sh" diagnostics
-		[ "$status" -eq 2 ]
+		[ "$status" -eq 0 ]
 		terminal="$(tail -n 1 <<<"$output")"
 		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
 		run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2699,7 +2699,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	export BENCHMARK_DIAGNOSTIC_HDR_ORACLE_FAILURE=1
 
 	run "$SCRIPTS/benchmark.sh" diagnostics
-	[ "$status" -eq 2 ]
+	[ "$status" -eq 0 ]
 	run_id="$(jq -r '.runId' <<<"$(tail -n 1 <<<"$output")")"
 	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
 	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
@@ -2740,7 +2740,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		esac
 
 		run "$SCRIPTS/benchmark.sh" diagnostics
-		[ "$status" -eq 2 ]
+		[ "$status" -eq 0 ]
 		terminal="$(tail -n 1 <<<"$output")"
 		[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
 		run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2792,7 +2792,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 			export BENCHMARK_DIAGNOSTIC_FAIL_DECODE=1
 		fi
 		run "$SCRIPTS/benchmark.sh" diagnostics
-		[ "$status" -eq 1 ]
+		[ "$status" -eq 0 ]
 		terminal="$(tail -n 1 <<<"$output")"
 		[ "$(jq -r '.status' <<<"$terminal")" = 'failed' ]
 		run_id="$(jq -r '.runId' <<<"$terminal")"
@@ -2810,6 +2810,37 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
+}
+
+# A published canonical summary is scientific evidence; failure to emit its
+# bounded termination transport is still a protocol failure and must not make
+# the Job Complete.
+@test "diagnostics returns nonzero when terminal publication fails after summary publication" {
+	prepare_diagnostic_execution_run
+	termination_directory="$BATS_TEST_TMPDIR/diagnostic-termination-directory"
+	mkdir -p "$termination_directory"
+	export BENCHMARK_TERMINATION_LOG_PATH="$termination_directory"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -ne 0 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	[ -n "$run_id" ]
+	[ -f "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json" ]
+	[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
+}
+
+@test "diagnostics returns nonzero when summary publication fails before terminal emission" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_PUBLISH_FAILURE=summary
+	export BENCHMARK_TERMINATION_LOG_PATH="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -ne 0 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	[ -n "$run_id" ]
+	[ ! -e "$BENCHMARK_OUT/runs/$run_id/diagnostics/diagnostic-summary.json" ]
+	[ -e "$BENCHMARK_SCRATCH/$run_id" ]
+	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
 @test "quality passes title HDR metadata through orchestration and rejects missing output metadata" {

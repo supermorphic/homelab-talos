@@ -389,7 +389,7 @@ EOF
 	export STUB_DIAGNOSTIC_JOBS_JSON
 	jq -n --arg run "$run_id" '{items:[{
 		metadata:{name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"diagnostic-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		status:{conditions:[{type:"Failed",status:"True",reason:"BackoffLimitExceeded"}],active:0,succeeded:0,failed:1}
+		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
 	}]}' >"$STUB_DIAGNOSTIC_JOBS_JSON"
 
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
@@ -427,14 +427,15 @@ EOF
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "evidence") | .subPath' "$job")" = "benchmark/runs/$run_id/diagnostics" ]
 }
 
-@test "diagnostic evidence reader dispatch rejects absent active malformed and colliding fresh-run provenance before mutation" {
+@test "diagnostic evidence reader dispatch rejects absent failed active malformed and colliding fresh-run provenance before mutation" {
 	local run_id='20260823T141907Z-9d6f6b71' case_name document
 	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
-	for case_name in absent active malformed collision; do
+	for case_name in absent failed active malformed collision; do
 		STUB_DIAGNOSTIC_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-$case_name.json"
 		export STUB_DIAGNOSTIC_JOBS_JSON
 		case "$case_name" in
 		absent) printf '%s\n' '{"items":[]}' >"$STUB_DIAGNOSTIC_JOBS_JSON" ;;
+		failed) document='{items:[{metadata:{name:"encode-benchmark-diagnostics-20260823t141907z-9d6f6b71",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-run":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},status:{conditions:[{type:"Failed",status:"True",reason:"BackoffLimitExceeded"}],active:0,succeeded:0,failed:1}}]}' ;;
 		active) document='{items:[{metadata:{name:"encode-benchmark-diagnostics-20260823t141907z-9d6f6b71",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-run":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},status:{active:1}}]}' ;;
 		malformed) document='{items:[{metadata:{name:"spoofed",labels:{"homelab-talos/benchmark-run":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-mode":"quality"}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1}}]}' ;;
 		collision) document='{items:[{metadata:{name:"encode-benchmark-diagnostics-20260823t141907z-9d6f6b71",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-run":"20260823T141907Z-9d6f6b71","homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1}}]}' ;;
@@ -644,7 +645,7 @@ prepare_terminal_diagnostics_job() {
 	export STUB_DIAGNOSTIC_JOBS_JSON
 	jq -n --arg run "$run_id" '{items:[{
 		metadata:{name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
-		status:{conditions:[{type:"Failed",status:"True",reason:"BackoffLimitExceeded"}],active:0,succeeded:0,failed:1}
+		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
 	}]}' >"$STUB_DIAGNOSTIC_JOBS_JSON"
 }
 
@@ -3103,8 +3104,25 @@ write_multi_node_results_fixtures() {
 write_diagnostics_results_fixture() {
 	local run_id="$1" pod_phase="$2" terminal_message="${3:-}"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods.json"
-	unset STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
-	export STUB_BENCHMARK_PODS_JSON
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-jobs.json"
+	unset STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
+	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
+	jq -n -c --arg run "$run_id" '{
+		apiVersion:"v1",
+		items:[{
+			metadata:{
+				name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"fixture-job-uid",
+				labels:{
+					"app.kubernetes.io/name":"encode-benchmark",
+				"homelab-talos/benchmark-dispatch":$run,
+				"homelab-talos/benchmark-run":$run,
+					"homelab-talos/benchmark-mode":"diagnostics"
+				},
+				annotations:{"homelab-talos/benchmark-owned":"true"}
+			},
+			status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
+		}]
+	}' >"$STUB_JOBS_JSON"
 	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --arg message "$terminal_message" '
 		{
 			apiVersion:"v1",
@@ -3113,12 +3131,13 @@ write_diagnostics_results_fixture() {
 					name:"encode-benchmark-diagnostics-fixture-pod",
 					labels:{
 						"app.kubernetes.io/name":"encode-benchmark",
-						"homelab-talos/benchmark-run":$run,
-						"homelab-talos/benchmark-mode":"diagnostics",
-						"job-name":"encode-benchmark-diagnostics-fixture"
-					},
+					"homelab-talos/benchmark-dispatch":$run,
+					"homelab-talos/benchmark-run":$run,
+					"homelab-talos/benchmark-mode":"diagnostics",
+					"job-name":("encode-benchmark-diagnostics-" + ($run | ascii_downcase))
+				},
 					ownerReferences:[{
-						apiVersion:"batch/v1",kind:"Job",name:"encode-benchmark-diagnostics-fixture",
+						apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),
 						uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true
 					}]
 				},
@@ -3147,8 +3166,25 @@ write_diagnostics_results_fixture() {
 write_diagnostics_results_fixture_from_file() {
 	local run_id="$1" pod_phase="$2" terminal_message_file="$3"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods.json"
-	unset STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
-	export STUB_BENCHMARK_PODS_JSON
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-jobs.json"
+	unset STUB_PODS_JSON STUB_LOGS_FILE STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
+	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
+	jq -n -c --arg run "$run_id" '{
+		apiVersion:"v1",
+		items:[{
+			metadata:{
+				name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),uid:"fixture-job-uid",
+				labels:{
+					"app.kubernetes.io/name":"encode-benchmark",
+					"homelab-talos/benchmark-dispatch":$run,
+					"homelab-talos/benchmark-run":$run,
+					"homelab-talos/benchmark-mode":"diagnostics"
+				},
+				annotations:{"homelab-talos/benchmark-owned":"true"}
+			},
+			status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
+		}]
+	}' >"$STUB_JOBS_JSON"
 	jq -n -c --arg run "$run_id" --arg phase "$pod_phase" --rawfile message "$terminal_message_file" '
 		{
 			apiVersion:"v1",
@@ -3157,12 +3193,13 @@ write_diagnostics_results_fixture_from_file() {
 					name:"encode-benchmark-diagnostics-fixture-pod",
 					labels:{
 						"app.kubernetes.io/name":"encode-benchmark",
+						"homelab-talos/benchmark-dispatch":$run,
 						"homelab-talos/benchmark-run":$run,
 						"homelab-talos/benchmark-mode":"diagnostics",
-						"job-name":"encode-benchmark-diagnostics-fixture"
+						"job-name":("encode-benchmark-diagnostics-" + ($run | ascii_downcase))
 					},
 					ownerReferences:[{
-						apiVersion:"batch/v1",kind:"Job",name:"encode-benchmark-diagnostics-fixture",
+						apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-diagnostics-" + ($run | ascii_downcase)),
 						uid:"fixture-job-uid",controller:true,blockOwnerDeletion:true
 					}]
 				},
@@ -3572,8 +3609,8 @@ write_diagnostics_custom_summary_fixture() {
 	write_diagnostics_summary_fixture "$run_id" complete "$summary"
 	for case_data in \
 		'Succeeded|complete|complete' \
-		'Failed|harness-blocked|harness-blocked' \
-		'Failed|failed|failed'; do
+		'Succeeded|harness-blocked|harness-blocked' \
+		'Succeeded|failed|failed'; do
 		IFS='|' read -r pod_phase summary_status producer_status <<<"$case_data"
 		: >"$STUB_CALLS"
 		write_diagnostics_summary_fixture "$run_id" "$producer_status" "$summary"
@@ -3589,9 +3626,22 @@ write_diagnostics_custom_summary_fixture() {
 		[[ "$output" != *'node='* && "$output" != *'nodeName'* && "$output" != *'sourcePath'* ]]
 		[[ "$output" != *'stderr'* && "$output" != *'terminated'* ]]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / && index($2, "app.kubernetes.io/name=encode-benchmark") {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
+		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	done
+}
+
+@test "results reject failed diagnostics Pods despite an authenticated scientific terminal status" {
+	run_id='20260819T120000Z-feedbeef'
+	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
+	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
+	write_diagnostics_summary_fixture "$run_id" harness-blocked "$summary"
+	terminal_message="$(produce_diagnostics_terminal_message harness-blocked "$run_id" "$summary" "$termination")"
+	write_diagnostics_results_fixture "$run_id" Failed "$terminal_message"
+
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ "$output" = "diagnostic result provenance rejected: terminal Job and Pod do not prove protocol completion for run $run_id" ]
 }
 
 # Catches an active diagnostics collector trying to parse a terminal payload or
@@ -3829,7 +3879,7 @@ EOF
 		'.hdr.reasons = ["unknown-reason"]'; do
 		case_terminal="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
 		jq -c "$mutation" <<<"$terminal_message" >"$case_terminal"
-		write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+		write_diagnostics_results_fixture "$run_id" Succeeded "$(<"$case_terminal")"
 
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
@@ -3850,7 +3900,7 @@ EOF
 		'.vmaf.unresolved = 5 | .vmaf["encoder-output-defect"] = 0 | .vmaf.reasons = ["source-window-clean"]' ; do
 		case_terminal="$BATS_TEST_TMPDIR/limit-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
 		jq -c "$mutation" <<<"$terminal_message" >"$case_terminal"
-		write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+		write_diagnostics_results_fixture "$run_id" Succeeded "$(<"$case_terminal")"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 		[ "$status" -ne 0 ]
 		if [[ "$mutation" == *'source-stream-probe-absent'* ]]; then
@@ -3863,14 +3913,14 @@ EOF
 	case_terminal="$BATS_TEST_TMPDIR/overlong-terminal.json"
 	jq -c '.vmaf.reasons = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]' \
 		<<<"$terminal_message" >"$case_terminal"
-	write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+	write_diagnostics_results_fixture "$run_id" Succeeded "$(<"$case_terminal")"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ "$output" = 'terminal-summary-schema-error:reason-too-long' ]
 
 	case_terminal="$BATS_TEST_TMPDIR/oversized-terminal.json"
 	printf '%3073s%s' '' "$terminal_message" >"$case_terminal"
-	write_diagnostics_results_fixture "$run_id" Failed "$(<"$case_terminal")"
+	write_diagnostics_results_fixture "$run_id" Succeeded "$(<"$case_terminal")"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[[ "$output" == 'terminal-summary-schema-error:raw-message-too-large' ]]
@@ -3888,7 +3938,7 @@ EOF
 	character_count="$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "${#1}"' _ "$raw_terminal_message")"
 	[ "$character_count" -le 3072 ]
 	jq -e -c . "$case_terminal" >/dev/null
-	write_diagnostics_results_fixture "$run_id" Failed "$raw_terminal_message"
+	write_diagnostics_results_fixture "$run_id" Succeeded "$raw_terminal_message"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
@@ -3921,7 +3971,7 @@ EOF
 		printf '%s\n' "$terminal_message"
 	} >"$case_terminal"
 	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3073 ]
-	write_diagnostics_results_fixture_from_file "$run_id" Failed "$case_terminal"
+	write_diagnostics_results_fixture_from_file "$run_id" Succeeded "$case_terminal"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
@@ -3932,7 +3982,7 @@ EOF
 		printf '%s\n\n\n' "$terminal_message"
 	} >"$case_terminal"
 	[ "$(LC_ALL=C wc -c <"$case_terminal" | tr -d '[:space:]')" -eq 3075 ]
-	write_diagnostics_results_fixture_from_file "$run_id" Failed "$case_terminal"
+	write_diagnostics_results_fixture_from_file "$run_id" Succeeded "$case_terminal"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -ne 0 ]
 	[ "$output" = 'terminal-summary-schema-error:raw-message-too-large' ]
@@ -4087,8 +4137,9 @@ EOF
 }
 
 @test "results allow only a dispatch-bound reader owned by the deterministic reader Job beside diagnostics" {
-	local run_id='20260823T141907Z-9d6f6b71' reader_job reader_pod reader_job_json summary termination terminal_message case_name readers
+	local run_id='20260823T141907Z-9d6f6b71' reader_job diagnostic_job reader_pod reader_job_json diagnostic_job_json summary termination terminal_message case_name readers
 	reader_job='encode-benchmark-evidence-reader-20260823t141907z-9d6f6b71'
+	diagnostic_job='encode-benchmark-diagnostics-20260823t141907z-9d6f6b71'
 	reader_pod="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{
 		metadata:{name:($job + "-pod"),labels:{
 			"app.kubernetes.io/name":"encode-benchmark",
@@ -4099,6 +4150,10 @@ EOF
 		},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"reader-job-uid",controller:true,blockOwnerDeletion:true}]},
 		status:{phase:"Succeeded"}
 	}')"
+	diagnostic_job_json="$(jq -n -c --arg run "$run_id" --arg job "$diagnostic_job" '{items:[{
+		metadata:{name:$job,uid:"diagnostic-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostics"},annotations:{"homelab-talos/benchmark-owned":"true"}},
+		status:{conditions:[{type:"Complete",status:"True"}],active:0,succeeded:1,failed:0}
+	}]}' )"
 	reader_job_json="$(jq -n -c --arg run "$run_id" --arg job "$reader_job" '{items:[{metadata:{name:$job,uid:"reader-job-uid",labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-dispatch":$run,"homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"diagnostic-evidence-reader"}}}]}')"
 	summary="$BATS_TEST_TMPDIR/diagnostic-summary.json"
 	termination="$BATS_TEST_TMPDIR/diagnostic-termination.json"
@@ -4106,8 +4161,10 @@ EOF
 	terminal_message="$(produce_diagnostics_terminal_message complete "$run_id" "$summary" "$termination")"
 	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/diagnostic-pods-reader-coexistence.json"
 	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostic-reader-jobs.json"
-	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON
+	STUB_DIAGNOSTIC_JOBS_JSON="$BATS_TEST_TMPDIR/diagnostics-jobs.json"
+	export STUB_BENCHMARK_PODS_JSON STUB_JOBS_JSON STUB_DIAGNOSTIC_JOBS_JSON
 	printf '%s\n' "$reader_job_json" >"$STUB_JOBS_JSON"
+	printf '%s\n' "$diagnostic_job_json" >"$STUB_DIAGNOSTIC_JOBS_JSON"
 
 	for case_name in zero one missing-dispatch wrong-dispatch wrong-owner-uid duplicate spoofed mislabeled other-mode; do
 		case "$case_name" in
@@ -4121,15 +4178,16 @@ EOF
 		mislabeled) readers="[$(jq -c '.metadata.labels."job-name" = "encode-benchmark-evidence-reader-spoofed"' <<<"$reader_pod")]" ;;
 		other-mode) readers="[$(jq -c '.metadata.labels."homelab-talos/benchmark-mode" = "quality"' <<<"$reader_pod")]" ;;
 		esac
-		jq -n -c --arg run "$run_id" --arg message "$terminal_message" --argjson readers "$readers" '{
+		jq -n -c --arg run "$run_id" --arg job "$diagnostic_job" --arg message "$terminal_message" --argjson readers "$readers" '{
 			items:([{
-				metadata:{name:"encode-benchmark-diagnostics-fixture-pod",labels:{
+				metadata:{name:($job + "-pod"),labels:{
 					"app.kubernetes.io/name":"encode-benchmark",
+					"homelab-talos/benchmark-dispatch":$run,
 					"homelab-talos/benchmark-run":$run,
 					"homelab-talos/benchmark-mode":"diagnostics",
-					"job-name":"encode-benchmark-diagnostics-fixture"
-				}},
-				status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",state:{terminated:{message:$message}}}]}
+					"job-name":$job
+				},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job,uid:"diagnostic-job-uid",controller:true,blockOwnerDeletion:true}]},
+				status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",state:{terminated:{exitCode:0,reason:"Completed",message:$message}}}]}
 			}] + $readers)
 		}' >"$STUB_BENCHMARK_PODS_JSON"
 		: >"$STUB_CALLS"
@@ -4142,11 +4200,17 @@ EOF
 			[ "$output" = "diagnostic result provenance rejected: expected one canonical diagnostics pod for run $run_id" ]
 		fi
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-		if [[ "$case_name" != 'zero' && "$case_name" != 'duplicate' && "$case_name" != 'other-mode' ]]; then
-			[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-		else
-			[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
-		fi
+		case "$case_name" in
+		zero) expected_job_queries=1 ;;
+		one) expected_job_queries=2 ;;
+		missing-dispatch | wrong-dispatch | wrong-owner-uid | spoofed | mislabeled) expected_job_queries=1 ;;
+		*) expected_job_queries=0 ;;
+		esac
+		actual_job_queries="$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get jobs / {count += 1} END {print count + 0}' "$STUB_CALLS")"
+		[ "$actual_job_queries" -eq "$expected_job_queries" ] || {
+			echo "case=$case_name expected_jobs=$expected_job_queries actual_jobs=$actual_job_queries" >&3
+			return 1
+		}
 		[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / logs / {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
 	done
 }

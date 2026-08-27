@@ -58,7 +58,8 @@ if [[ "$test_mode" != '1' ]]; then
 		BENCHMARK_DIAGNOSTIC_MISSING_TOOL BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS \
 		BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW BENCHMARK_DIAGNOSTIC_MISSING_METRIC \
 		BENCHMARK_DIAGNOSTIC_DRIFT_SOURCE BENCHMARK_DIAGNOSTIC_DRIFT_IMAGE_FILE \
-		BENCHMARK_DIAGNOSTIC_FAIL_ENCODE BENCHMARK_DIAGNOSTIC_FAIL_DECODE; do
+		BENCHMARK_DIAGNOSTIC_FAIL_ENCODE BENCHMARK_DIAGNOSTIC_FAIL_DECODE \
+		BENCHMARK_DIAGNOSTIC_PUBLISH_FAILURE; do
 		if [[ -v "$test_hook" ]]; then
 			echo 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' >&2
 			exit 64
@@ -801,6 +802,10 @@ diagnostic_hdr_classify() {
 
 diagnostic_publish_json() {
 	local destination="$1" document="$2" directory staged
+	if [[ "$test_mode" == '1' && "${BENCHMARK_DIAGNOSTIC_PUBLISH_FAILURE:-}" == 'summary' &&
+		"$(basename "$destination")" == 'diagnostic-summary.json' ]]; then
+		return 65
+	fi
 	directory="$(dirname "$destination")"
 	mkdir -p "$directory"
 	staged="$(mktemp "$directory/.diagnostic-json.XXXXXX")" || return
@@ -1948,12 +1953,8 @@ diagnostics_mode() {
 	}')"
 	diagnostic_publish_json "$diagnostic_root/diagnostic-summary.json" "$summary" || return
 	rm -rf -- "$run_scratch"
-	diagnostic_terminal "$overall_status" "$run_id" "$summary"
-	case "$overall_status" in
-	complete) return 0 ;;
-	failed) return 1 ;;
-	*) return 2 ;;
-	esac
+	diagnostic_terminal "$overall_status" "$run_id" "$summary" || return
+	return 0
 }
 
 ensure_results_file() {
