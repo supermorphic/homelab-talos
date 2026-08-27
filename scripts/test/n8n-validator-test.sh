@@ -64,6 +64,20 @@ reset_tree
 expect_pass
 
 reset_tree
+yq -i '(.spec.postRenderers[0].kustomize.patches[] |
+  select(.target.kind == "Deployment") | .target.group) = "wrong.example.io"' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/helmrelease.yaml"
+expect_fail 'wrong n8n post-render target group' \
+  'The Helm post-renderer must expose the one main Deployment and Service as n8n.'
+
+reset_tree
+yq -i '(.spec.postRenderers[0].kustomize.patches[] |
+  select(.target.kind == "Service") | .target.labelSelector) = "app.kubernetes.io/name=does-not-match"' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/helmrelease.yaml"
+expect_fail 'non-matching n8n post-render selector' \
+  'The Helm post-renderer must expose the one main Deployment and Service as n8n.'
+
+reset_tree
 yq -i '.metadata.labels."gateway.supermorphic.com/access" = "public"' \
   "$tree_root/kubernetes/apps/automation/namespace/app/namespace.yaml"
 expect_fail 'public Gateway access' 'n8n automation namespace Gateway access must be internal.'
@@ -143,6 +157,32 @@ reset_tree
 yq -i 'del(.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].except[] | select(. == "192.168.0.0/16"))' \
   "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
 expect_fail 'private-network HTTPS egress' \
+  'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.'
+
+reset_tree
+yq -i 'del(.spec.egress[] | select(.toCIDRSet != null) |
+  .toCIDRSet[0].except[] | select(. == "192.88.99.0/24"))' \
+  "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
+expect_fail '6to4 relay anycast HTTPS egress' \
+  'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.'
+
+reset_tree
+yq -i '(.spec.ingress[] |
+  select(.fromEndpoints[]?.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "internal") |
+  .fromEndpoints) += [{"matchLabels": {
+    "k8s:io.kubernetes.pod.namespace": "automation",
+    "app.kubernetes.io/name": "unauthorized-ingress"
+  }}]' "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
+expect_fail 'additional n8n ingress endpoint' \
+  'n8n ingress must admit only both Envoy data planes, Prometheus, and kubelet probes.'
+
+reset_tree
+yq -i '(.spec.egress[] | select(.toPorts[].ports[].port == "5432") |
+  .toEndpoints) += [{"matchLabels": {
+    "k8s:io.kubernetes.pod.namespace": "automation",
+    "app.kubernetes.io/name": "unauthorized-database"
+  }}]' "$tree_root/kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml"
+expect_fail 'additional PostgreSQL-rule egress endpoint' \
   'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.'
 
 reset_tree

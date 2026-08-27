@@ -530,15 +530,22 @@ yq -e '.resources[] | select(. == "./n8n/ks.yaml")' "$base/kustomization.yaml" >
   echo 'The n8n HelmRelease must consume only the watched n8n-values ConfigMap.' >&2
   exit 1
 }
-[[ "$(yq -r '.spec.postRenderers[0].kustomize.patches | length' "$n8n_release")" == '2' && \
-  "$(yq -r '[.spec.postRenderers[0].kustomize.patches[].target.kind] | sort | join(",")' \
-    "$n8n_release")" == 'Deployment,Service' && \
-  "$(yq -r '.spec.postRenderers[0].kustomize.patches[] | select(.target.kind == "Deployment") | .target.name' \
-    "$n8n_release")" == 'n8n-main' && \
-  "$(yq -r '.spec.postRenderers[0].kustomize.patches[] | select(.target.kind == "Service") | .target.name' \
-    "$n8n_release")" == 'n8n-main' && \
-  "$(yq -r '[.spec.postRenderers[0].kustomize.patches[] | (.patch | from_yaml) | select(length == 1) | .[0] | [.op, .path, .value] | join(",")] | unique | join(";")' \
-    "$n8n_release")" == 'replace,/metadata/name,n8n' ]] || {
+expected_postrender_contract='[{"target":{"group":"apps","version":"v1","kind":"Deployment","name":"n8n-main"},"patch":[{"op":"replace","path":"/metadata/name","value":"n8n"}]},{"target":{"group":"","version":"v1","kind":"Service","name":"n8n-main"},"patch":[{"op":"replace","path":"/metadata/name","value":"n8n"}]}]'
+actual_postrender_contract="$(yq -o=json -I=0 '
+  [.spec.postRenderers[0].kustomize.patches[] | {
+    "target": {
+      "group": .target.group,
+      "version": .target.version,
+      "kind": .target.kind,
+      "name": .target.name
+    },
+    "patch": (.patch | from_yaml)
+  }] | sort_by(.target.kind)
+' "$n8n_release")"
+[[ "$(yq -r '[.spec.postRenderers[0].kustomize.patches[].target |
+    keys | sort | join(",")] | sort | join(";")' "$n8n_release")" == \
+    'group,kind,name,version;group,kind,name,version' && \
+  "$actual_postrender_contract" == "$expected_postrender_contract" ]] || {
   echo 'The Helm post-renderer must expose the one main Deployment and Service as n8n.' >&2
   exit 1
 }
@@ -613,33 +620,55 @@ done
   exit 1
 }
 
-[[ "$(yq -r '.spec.endpointSelector.matchLabels."app.kubernetes.io/name"' "$n8n_policy")" == \
-    'n8n' && \
-  "$(yq -r '[.spec.ingress[].toPorts[].ports[].port] | unique | join(",")' "$n8n_policy")" == \
-    '5678' && \
-  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "internal") | .matchLabels | [."k8s:io.kubernetes.pod.namespace", ."gateway.envoyproxy.io/owning-gateway-namespace"] | join(",")] | join(",")' "$n8n_policy")" == \
-    'envoy-gateway-system,networking' && \
-  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "public-webhooks") | .matchLabels | [."k8s:io.kubernetes.pod.namespace", ."gateway.envoyproxy.io/owning-gateway-namespace"] | join(",")] | join(",")' "$n8n_policy")" == \
-    'envoy-gateway-system,networking-public' && \
-  "$(yq -r '[.spec.ingress[].fromEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "prometheus") | .matchLabels | to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | join(";")' "$n8n_policy")" == \
-    'app.kubernetes.io/name=prometheus,k8s:io.kubernetes.pod.namespace=monitoring,operator.prometheus.io/name=kube-prometheus-stack-prometheus' && \
-  "$(yq -r '[.spec.ingress[].fromEntities[]] | sort | join(",")' "$n8n_policy")" == \
-    'host,remote-node' ]] || {
+expected_n8n_ingress='[{"fromEndpoints":["app.kubernetes.io/name=prometheus,k8s:io.kubernetes.pod.namespace=monitoring,operator.prometheus.io/name=kube-prometheus-stack-prometheus"],"fromEntities":[],"toPorts":["5678/TCP"]},{"fromEndpoints":["gateway.envoyproxy.io/owning-gateway-name=internal,gateway.envoyproxy.io/owning-gateway-namespace=networking,k8s:io.kubernetes.pod.namespace=envoy-gateway-system","gateway.envoyproxy.io/owning-gateway-name=public-webhooks,gateway.envoyproxy.io/owning-gateway-namespace=networking-public,k8s:io.kubernetes.pod.namespace=envoy-gateway-system"],"fromEntities":[],"toPorts":["5678/TCP"]},{"fromEndpoints":[],"fromEntities":["host","remote-node"],"toPorts":["5678/TCP"]}]'
+actual_n8n_ingress="$(yq -o=json -I=0 '
+  [.spec.ingress[] | {
+    "fromEndpoints": ([.fromEndpoints[]?.matchLabels |
+      to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | sort),
+    "fromEntities": ((.fromEntities // []) | sort),
+    "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+  }] | sort_by((.fromEndpoints + .fromEntities + .toPorts) | join("|"))
+' "$n8n_policy")"
+[[ "$(yq -r '.spec | keys | sort | join(",")' "$n8n_policy")" == \
+    'egress,endpointSelector,ingress' && \
+  "$(yq -o=json -I=0 '.spec.endpointSelector' "$n8n_policy")" == \
+    '{"matchLabels":{"app.kubernetes.io/name":"n8n"}}' && \
+  "$(yq -r '[.spec.ingress[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == \
+    'fromEndpoints,toPorts;fromEndpoints,toPorts;fromEntities,toPorts' && \
+  "$(yq -r '[.spec.ingress[].fromEndpoints[]? | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'matchLabels;matchLabels;matchLabels' && \
+  "$(yq -r '[.spec.ingress[].toPorts[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'ports;ports;ports' && \
+  "$(yq -r '[.spec.ingress[].toPorts[].ports[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'port,protocol;port,protocol;port,protocol' && \
+  "$actual_n8n_ingress" == "$expected_n8n_ingress" ]] || {
   echo 'n8n ingress must admit only both Envoy data planes, Prometheus, and kubelet probes.' >&2
   exit 1
 }
-[[ "$(yq -r '[.spec.egress[].toPorts[].ports[].port] | sort | join(",")' "$n8n_policy")" == \
-    '443,53,53,5432' && \
-  "$(yq -r '[.spec.egress[].toEndpoints[] | select(.matchLabels."k8s:k8s-app" == "kube-dns") | .matchLabels."k8s:io.kubernetes.pod.namespace"] | join(",")' "$n8n_policy")" == \
-    'kube-system' && \
-  "$(yq -r '[.spec.egress[].toEndpoints[] | select(.matchLabels."app.kubernetes.io/name" == "n8n-postgresql") | .matchLabels."k8s:io.kubernetes.pod.namespace"] | join(",")' "$n8n_policy")" == \
-    'automation' && \
-  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet | length' "$n8n_policy")" == \
-    '1' && \
-  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].cidr' "$n8n_policy")" == \
-    '0.0.0.0/0' && \
-  "$(yq -r '.spec.egress[] | select(.toCIDRSet != null) | .toCIDRSet[0].except | sort | join(",")' "$n8n_policy")" == \
-    '0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4' ]] || {
+expected_n8n_egress='[{"toEndpoints":[],"toCIDRSet":["0.0.0.0/0 except=0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,192.88.99.0/24,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4"],"toPorts":["443/TCP"]},{"toEndpoints":["app.kubernetes.io/name=n8n-postgresql,k8s:io.kubernetes.pod.namespace=automation"],"toCIDRSet":[],"toPorts":["5432/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toCIDRSet":[],"toPorts":["53/TCP","53/UDP"]}]'
+actual_n8n_egress="$(yq -o=json -I=0 '
+  [.spec.egress[] | {
+    "toEndpoints": ([.toEndpoints[]?.matchLabels |
+      to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | sort),
+    "toCIDRSet": ([.toCIDRSet[]? |
+      .cidr + " except=" + ((.except // []) | sort | join(","))] | sort),
+    "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+  }] | sort_by((.toEndpoints + .toCIDRSet + .toPorts) | join("|"))
+' "$n8n_policy")"
+[[ "$(yq -r '[.spec.egress[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == \
+    'toCIDRSet,toPorts;toEndpoints,toPorts;toEndpoints,toPorts' && \
+  "$(yq -r '[.spec.egress[].toEndpoints[]? | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'matchLabels;matchLabels' && \
+  "$(yq -r '[.spec.egress[].toCIDRSet[]? | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'cidr,except' && \
+  "$(yq -r '[.spec.egress[].toPorts[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == 'ports;ports;ports' && \
+  "$(yq -r '[.spec.egress[].toPorts[].ports[] | keys | sort | join(",")] | sort | join(";")' \
+    "$n8n_policy")" == \
+    'port,protocol;port,protocol;port,protocol;port,protocol' && \
+  "$actual_n8n_egress" == "$expected_n8n_egress" ]] || {
   echo 'n8n egress must reach only DNS, PostgreSQL, and public IPv4 HTTPS.' >&2
   exit 1
 }
@@ -656,13 +685,17 @@ rg -Fq 'Digest: sha256:a0bf4694f6e0f91dfb196fd8de08ad40cb3dd798edaa9bd54fa9c3f32
 }
 helm template n8n "$temp_dir/n8n-1.11.0.tgz" --namespace automation \
   --values "$n8n_values" >"$temp_dir/n8n-chart.yaml"
-# Flux applies the two checked HelmRelease post-render patches before ownership and apply.
-yq ea '
-  with(select(.kind == "Deployment" and .metadata.name == "n8n-main");
-    .metadata.name = "n8n") |
-  with(select(.kind == "Service" and .metadata.name == "n8n-main");
-    .metadata.name = "n8n")
-' "$temp_dir/n8n-chart.yaml" >"$temp_dir/n8n-rendered.yaml"
+# Apply the exact declared Flux post-render patches with Kustomize. A target that does
+# not match the pinned chart remains unmodified and fails the rendered-name assertions.
+mkdir -p "$temp_dir/n8n-postrender"
+cp "$temp_dir/n8n-chart.yaml" "$temp_dir/n8n-postrender/resources.yaml"
+n8n_release="$n8n_release" yq -n '
+  .apiVersion = "kustomize.config.k8s.io/v1beta1" |
+  .kind = "Kustomization" |
+  .resources = ["./resources.yaml"] |
+  .patches = load(strenv(n8n_release)).spec.postRenderers[0].kustomize.patches
+' >"$temp_dir/n8n-postrender/kustomization.yaml"
+kustomize build "$temp_dir/n8n-postrender" >"$temp_dir/n8n-rendered.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/n8n-rendered.yaml"
 
 [[ "$(yq ea -r '[select(.kind == "Deployment")] | length' "$temp_dir/n8n-rendered.yaml")" == \
