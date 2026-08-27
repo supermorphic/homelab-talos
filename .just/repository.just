@@ -200,6 +200,197 @@ gatus-media-integration-secrets:
     mv -- "$candidate" "$target"
     echo "Wrote SOPS-encrypted $target (gatus-media-integration-api-keys in gatus)."
 
+# Write the three SOPS-encrypted n8n platform Secrets from operator-supplied values.
+# The stable n8n encryption key and database passwords must be retained for recovery.
+n8n-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:automation:n8n-platform:sops'
+    runtime_target='kubernetes/apps/automation/n8n/app/n8n-runtime.sops.yaml'
+    postgresql_target='kubernetes/apps/automation/n8n-postgresql/app/postgresql-credentials.sops.yaml'
+    canary_target='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
+    declare -a targets=("$runtime_target" "$postgresql_target" "$canary_target")
+    declare -a candidates=()
+    declare -a stage_directories=()
+    declare -a stages=()
+    declare -a backups=()
+    declare -a replaced=(false false false)
+    committed=false
+    umask 077
+    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-n8n-secrets.XXXXXX")"
+
+    cleanup() {
+      local result="$?"
+      local index target backup stage_directory rollback_failed=false
+      trap - EXIT
+      if [[ "$committed" != true ]]; then
+        for ((index = ${#targets[@]} - 1; index >= 0; index -= 1)); do
+          target="${targets[$index]}"
+          backup="${backups[$index]:-}"
+          if [[ -n "$backup" && -e "$backup" ]]; then
+            rm -f -- "$target" || rollback_failed=true
+            mv -- "$backup" "$target" || rollback_failed=true
+          elif [[ "${replaced[$index]}" == true ]]; then
+            rm -f -- "$target" || rollback_failed=true
+          fi
+        done
+      fi
+      rm -rf -- "$temp_dir"
+      for stage_directory in "${stage_directories[@]}"; do
+        rm -rf -- "$stage_directory"
+      done
+      [[ "$rollback_failed" != true ]] || echo 'Failed to restore every previous n8n Secret target.' >&2
+      exit "$result"
+    }
+    trap cleanup EXIT
+
+    just repo secrets
+    [[ -n "${N8N_ENCRYPTION_KEY:-}" ]] || {
+      echo 'Set N8N_ENCRYPTION_KEY to one stable n8n encryption key.' >&2
+      exit 1
+    }
+    [[ -n "${N8N_DB_PASSWORD:-}" ]] || {
+      echo 'Set N8N_DB_PASSWORD to the n8n PostgreSQL password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_SUPERUSER_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_SUPERUSER_PASSWORD to the PostgreSQL superuser password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_BACKUP_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_BACKUP_PASSWORD to the PostgreSQL backup-role password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_EXPORTER_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_EXPORTER_PASSWORD to the SQL Exporter password.' >&2
+      exit 1
+    }
+    [[ -n "${N8N_CANARY_TOKEN:-}" ]] || {
+      echo 'Set N8N_CANARY_TOKEN to the n8n canary token.' >&2
+      exit 1
+    }
+    [[ "${N8N_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the n8n platform Secrets.' >&2
+      echo "Set N8N_SECRETS_CONFIRM='$expected_confirmation' after reviewing all three targets." >&2
+      exit 1
+    }
+    for secret_variable in N8N_ENCRYPTION_KEY N8N_DB_PASSWORD \
+      POSTGRES_SUPERUSER_PASSWORD POSTGRES_BACKUP_PASSWORD \
+      POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN; do
+      secret_value="${!secret_variable}"
+      [[ "${#secret_value}" -ge 32 ]] || {
+        echo "Refusing: $secret_variable must be at least 32 characters." >&2
+        exit 1
+      }
+    done
+
+    mapfile -t expected_recipients < <(
+      target="$runtime_target" yq -r \
+        '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+        .sops.yaml
+    )
+    [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+      "${expected_recipients[0]}" != 'null' ]] || {
+      echo 'Unable to select exactly one SOPS age recipient for n8n platform Secrets.' >&2
+      exit 1
+    }
+    expected_recipient="${expected_recipients[0]}"
+
+    export N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
+    export POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
+    exporter_password_encoded="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["POSTGRES_EXPORTER_PASSWORD"], safe=""))')"
+    export exporter_password_encoded
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "n8n-runtime" |
+       .metadata.namespace = "automation" |
+       .type = "Opaque" |
+       .stringData.N8N_ENCRYPTION_KEY = strenv(N8N_ENCRYPTION_KEY) |
+       .stringData.N8N_HOST = "n8n.lab.supermorphic.com" |
+       .stringData.N8N_PORT = "5678" |
+       .stringData.N8N_PROTOCOL = "https"' \
+      >"$temp_dir/n8n-runtime.yaml"
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "postgresql-credentials" |
+       .metadata.namespace = "automation" |
+       .type = "Opaque" |
+       .stringData."postgres-superuser-password" = strenv(POSTGRES_SUPERUSER_PASSWORD) |
+       .stringData."n8n-password" = strenv(N8N_DB_PASSWORD) |
+       .stringData."backup-password" = strenv(POSTGRES_BACKUP_PASSWORD) |
+       .stringData."exporter-password" = strenv(POSTGRES_EXPORTER_PASSWORD) |
+       .stringData."exporter-dsn" = "postgresql://n8n_exporter:" + strenv(exporter_password_encoded) + "@127.0.0.1:5432/n8n?sslmode=disable"' \
+      >"$temp_dir/postgresql-credentials.yaml"
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "n8n-canary" |
+       .metadata.namespace = "gatus" |
+       .type = "Opaque" |
+       .stringData.token = strenv(N8N_CANARY_TOKEN)' \
+      >"$temp_dir/n8n-canary.yaml"
+
+    sops --encrypt --filename-override "$runtime_target" \
+      "$temp_dir/n8n-runtime.yaml" >"$temp_dir/n8n-runtime.sops.yaml"
+    sops --encrypt --filename-override "$postgresql_target" \
+      "$temp_dir/postgresql-credentials.yaml" >"$temp_dir/postgresql-credentials.sops.yaml"
+    sops --encrypt --filename-override "$canary_target" \
+      "$temp_dir/n8n-canary.yaml" >"$temp_dir/n8n-canary.sops.yaml"
+    candidates=(
+      "$temp_dir/n8n-runtime.sops.yaml"
+      "$temp_dir/postgresql-credentials.sops.yaml"
+      "$temp_dir/n8n-canary.sops.yaml"
+    )
+
+    validate_candidate() {
+      local candidate="$1" expected_name="$2" expected_namespace="$3" expected_keys="$4"
+      [[ "$(sops filestatus "$candidate" | yq -r '.encrypted')" == 'true' ]]
+      mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$candidate" | sort -u)
+      [[ "${#candidate_recipients[@]}" -eq 1 && \
+        "${candidate_recipients[0]}" == "$expected_recipient" ]]
+      [[ "$(yq -r 'keys | sort | join(",")' "$candidate")" == \
+        'apiVersion,kind,metadata,sops,stringData,type' ]]
+      [[ "$(yq -r '.metadata | keys | sort | join(",")' "$candidate")" == 'name,namespace' ]]
+      [[ "$(yq -r '.apiVersion' "$candidate")" == 'v1' ]]
+      [[ "$(yq -r '.kind' "$candidate")" == 'Secret' ]]
+      [[ "$(yq -r '.metadata.name' "$candidate")" == "$expected_name" ]]
+      [[ "$(yq -r '.metadata.namespace' "$candidate")" == "$expected_namespace" ]]
+      [[ "$(yq -r '.type' "$candidate")" == 'Opaque' ]]
+      [[ "$(yq -r 'has("data") | not' "$candidate")" == 'true' ]]
+      [[ "$(yq -r '.stringData | keys | sort | join(",")' "$candidate")" == "$expected_keys" ]]
+      for supplied_value in "$N8N_ENCRYPTION_KEY" "$N8N_DB_PASSWORD" \
+        "$POSTGRES_SUPERUSER_PASSWORD" "$POSTGRES_BACKUP_PASSWORD" \
+        "$POSTGRES_EXPORTER_PASSWORD" "$N8N_CANARY_TOKEN"; do
+        ! rg -Fq -- "$supplied_value" "$candidate"
+      done
+    }
+    validate_candidate "${candidates[0]}" n8n-runtime automation \
+      'N8N_ENCRYPTION_KEY,N8N_HOST,N8N_PORT,N8N_PROTOCOL'
+    validate_candidate "${candidates[1]}" postgresql-credentials automation \
+      'backup-password,exporter-dsn,exporter-password,n8n-password,postgres-superuser-password'
+    validate_candidate "${candidates[2]}" n8n-canary gatus token
+
+    for index in "${!targets[@]}"; do
+      stage_directory="$(mktemp -d "$(dirname -- "${targets[$index]}")/.n8n-secrets.XXXXXX")"
+      stage_directories+=("$stage_directory")
+      stages+=("$stage_directory/candidate")
+      backups+=("$stage_directory/previous")
+      cp -- "${candidates[$index]}" "${stages[$index]}"
+    done
+    for index in "${!targets[@]}"; do
+      target="${targets[$index]}"
+      if [[ -e "$target" ]]; then
+        mv -- "$target" "${backups[$index]}"
+      fi
+      mv -- "${stages[$index]}" "$target"
+      replaced[$index]=true
+    done
+    committed=true
+    echo 'Wrote three SOPS-encrypted n8n platform Secret manifests.'
+
 # Verify the external Pi-hole v6 HTTPS identity and write-capable app-session policy.
 pihole-status:
     #!/usr/bin/env bash
