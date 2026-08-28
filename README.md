@@ -88,6 +88,18 @@ Campaigns capture and publish every child run automatically. See the
 [test campaign guide](docs/guides/test-campaign-operations.md) for focused campaigns,
 failure behavior, resume, and exact membership.
 
+n8n assurance remains in the existing tier campaigns; it does not add a dedicated
+campaign:
+
+- `verification.n8n` -> `verification`, `scoped-verification`, `weekly`, `full`
+- `chainsaw.smoke.platform.n8n` -> smoke coverage, `standard`, `weekly`, `full`
+- `test.n8n-restore-drill` -> `integration`, `weekly`, `full`
+- `test.n8n-persistence` -> `resilience`, `weekly`, `full`
+
+Before an operator starts a `weekly` or `full` campaign, they must silently prompt for
+and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
+not appear in the catalog or campaign plan.
+
 ### Agent workflow
 
 Agents use the development workflow above. Repository authority, credential, live-action,

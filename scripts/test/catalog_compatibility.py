@@ -145,6 +145,21 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
     expect_rejection(
         root,
         canonical,
+        "unsupported-runner-placeholder",
+        lambda data: suite(data, "chainsaw.resilience.test-reports-persistence")[
+            "runner"
+        ].__setitem__(
+            "command",
+            "TEST_REPORT_RUN_ID=<token> "
+            "CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence "
+            "mise exec -- just test resilience test-reports-persistence",
+        ),
+        "Catalog entry chainsaw.resilience.test-reports-persistence contains "
+        "unsupported runner placeholder: <token>.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
         "missing-ci-suite",
         lambda data: data["suites"].remove(suite(data, "validation.trivy")),
         "CI execution ID must resolve to one child validation suite: validation.trivy\n",
@@ -320,9 +335,7 @@ def entry_contract(root: Path, canonical: dict[str, Any]) -> None:
         f"Exact-confirmation entry {exact_id} command does not expose its declared guard.\n",
     )
     n8n_guard_cases = {
-        "test.n8n-persistence": (
-            "N8N_CANARY_TOKEN=<token> mise exec -- just test resilience n8n-persistence"
-        ),
+        "test.n8n-persistence": "mise exec -- just test resilience n8n-persistence",
         "test.n8n-restore-drill": "mise exec -- just kube n8n-restore-drill",
     }
     for n8n_id, unguarded_command in n8n_guard_cases.items():

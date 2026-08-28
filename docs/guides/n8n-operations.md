@@ -142,6 +142,36 @@ mise exec -- just kube n8n-verify
 unset N8N_CANARY_TOKEN
 ```
 
+## Focused n8n acceptance
+
+Run this focused sequence for initial activation, an n8n upgrade, PostgreSQL changes, or
+recovery changes:
+
+```bash
+mise exec -- just kube n8n-verify
+mise exec -- just test smoke platform n8n
+N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
+  mise exec -- just kube n8n-restore-drill
+IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
+export N8N_CANARY_TOKEN
+CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
+  mise exec -- just test resilience n8n-persistence
+unset N8N_CANARY_TOKEN
+```
+
+`n8n-verify` observes readiness, routes, monitoring, backup freshness, and the Gatus
+canary series. The smoke suite checks the stable n8n resources without mutation. The
+restore drill proves a temporary PostgreSQL restore can decrypt retained credentials. The
+persistence test recreates the n8n and PostgreSQL pods and proves volume, canary, and
+backup recovery. This is a focused acceptance sequence, not a new campaign.
+
+The existing tier campaigns retain these entries: `verification.n8n` in `verification` and
+`scoped-verification`; `chainsaw.smoke.platform.n8n` in smoke coverage; `test.n8n-restore-drill`
+in `integration`; and `test.n8n-persistence` in `resilience`. Their aggregate placements
+remain `standard`, `weekly`, and `full` as applicable. An operator running `weekly` or
+`full` must export `N8N_CANARY_TOKEN` before the campaign starts and unset it afterward.
+The catalog and campaign plan never contain its value.
+
 ## Off-network acceptance
 
 Disconnect the test client from the LAN and private VPN. Load the token with a silent

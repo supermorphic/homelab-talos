@@ -1188,6 +1188,13 @@ class CatalogValidator:
                 f"Catalog entry {suite_id} runner command is not a safe literal mise + just "
                 "invocation.\n"
             )
+        allowed_placeholders = {"<run-id>", "<node>", "<ip>"}
+        for placeholder in sorted(set(re.findall(r"<[^<>]+>", command))):
+            if placeholder not in allowed_placeholders:
+                fail(
+                    f"Catalog entry {suite_id} contains unsupported runner placeholder: "
+                    f"{placeholder}.\n"
+                )
         if not (REPO_ROOT / implementation).exists():
             fail(
                 f"Catalog entry {suite_id} points to missing implementation '{implementation}'.\n"
