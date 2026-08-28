@@ -210,6 +210,49 @@ n8n-secrets:
     runtime_target='kubernetes/apps/automation/n8n/app/n8n-runtime.sops.yaml'
     postgresql_target='kubernetes/apps/automation/n8n-postgresql/app/postgresql-credentials.sops.yaml'
     canary_target='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
+    [[ -n "${N8N_ENCRYPTION_KEY:-}" ]] || {
+      echo 'Set N8N_ENCRYPTION_KEY to one stable n8n encryption key.' >&2
+      exit 1
+    }
+    [[ -n "${N8N_DB_PASSWORD:-}" ]] || {
+      echo 'Set N8N_DB_PASSWORD to the n8n PostgreSQL password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_SUPERUSER_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_SUPERUSER_PASSWORD to the PostgreSQL superuser password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_BACKUP_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_BACKUP_PASSWORD to the PostgreSQL backup-role password.' >&2
+      exit 1
+    }
+    [[ -n "${POSTGRES_EXPORTER_PASSWORD:-}" ]] || {
+      echo 'Set POSTGRES_EXPORTER_PASSWORD to the SQL Exporter password.' >&2
+      exit 1
+    }
+    [[ -n "${N8N_CANARY_TOKEN:-}" ]] || {
+      echo 'Set N8N_CANARY_TOKEN to the n8n canary token.' >&2
+      exit 1
+    }
+    [[ "${N8N_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the n8n platform Secrets.' >&2
+      echo "Set N8N_SECRETS_CONFIRM='$expected_confirmation' after reviewing all three targets." >&2
+      exit 1
+    }
+    for secret_variable in N8N_ENCRYPTION_KEY N8N_DB_PASSWORD \
+      POSTGRES_SUPERUSER_PASSWORD POSTGRES_BACKUP_PASSWORD \
+      POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN; do
+      secret_value="${!secret_variable}"
+      [[ "${#secret_value}" -ge 32 ]] || {
+        echo "Refusing: $secret_variable must be at least 32 characters." >&2
+        exit 1
+      }
+    done
+    [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+      echo 'Refusing: N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -, with at least 32 characters.' >&2
+      exit 1
+    }
+
     declare -a targets=("$runtime_target" "$postgresql_target" "$canary_target")
     declare -a candidates=()
     declare -a stage_directories=()
@@ -257,49 +300,6 @@ n8n-secrets:
     trap cleanup EXIT
 
     just repo secrets
-    [[ -n "${N8N_ENCRYPTION_KEY:-}" ]] || {
-      echo 'Set N8N_ENCRYPTION_KEY to one stable n8n encryption key.' >&2
-      exit 1
-    }
-    [[ -n "${N8N_DB_PASSWORD:-}" ]] || {
-      echo 'Set N8N_DB_PASSWORD to the n8n PostgreSQL password.' >&2
-      exit 1
-    }
-    [[ -n "${POSTGRES_SUPERUSER_PASSWORD:-}" ]] || {
-      echo 'Set POSTGRES_SUPERUSER_PASSWORD to the PostgreSQL superuser password.' >&2
-      exit 1
-    }
-    [[ -n "${POSTGRES_BACKUP_PASSWORD:-}" ]] || {
-      echo 'Set POSTGRES_BACKUP_PASSWORD to the PostgreSQL backup-role password.' >&2
-      exit 1
-    }
-    [[ -n "${POSTGRES_EXPORTER_PASSWORD:-}" ]] || {
-      echo 'Set POSTGRES_EXPORTER_PASSWORD to the SQL Exporter password.' >&2
-      exit 1
-    }
-    [[ -n "${N8N_CANARY_TOKEN:-}" ]] || {
-      echo 'Set N8N_CANARY_TOKEN to the n8n canary token.' >&2
-      exit 1
-    }
-    [[ "${N8N_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to write the n8n platform Secrets.' >&2
-      echo "Set N8N_SECRETS_CONFIRM='$expected_confirmation' after reviewing all three targets." >&2
-      exit 1
-    }
-    for secret_variable in N8N_ENCRYPTION_KEY N8N_DB_PASSWORD \
-      POSTGRES_SUPERUSER_PASSWORD POSTGRES_BACKUP_PASSWORD \
-      POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN; do
-      secret_value="${!secret_variable}"
-      [[ "${#secret_value}" -ge 32 ]] || {
-        echo "Refusing: $secret_variable must be at least 32 characters." >&2
-        exit 1
-      }
-    done
-    [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
-      echo 'Refusing: N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -, with at least 32 characters.' >&2
-      exit 1
-    }
-
     mapfile -t expected_recipients < <(
       target="$runtime_target" yq -r \
         '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \

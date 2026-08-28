@@ -322,7 +322,10 @@ The canary authentication value uses one contract across Secret creation, Gatus,
 requests, and the persistence scenario: at least 32 characters from the base64url-safe
 alphabet `A-Z`, `a-z`, `0-9`, `_`, and `-`. The guarded writer and request paths reject
 spaces, quotes, backslashes, line breaks, padding, and all other characters before they
-write a manifest or curl configuration. They never print the supplied value.
+write a manifest or curl configuration. The guarded writer performs all required
+presence, confirmation, minimum-length, and alphabet checks before it creates a temporary
+workspace, installs cleanup traps, or runs the age-identity preflight. It never prints the
+supplied value.
 
 Database passwords are also generated once and retained. Updating a Secret alone does not
 change a password already initialized inside PostgreSQL; database credential rotation is
@@ -494,14 +497,14 @@ PrometheusRules cover:
   signals; and
 - claim use for the n8n, PostgreSQL, and logical-backup claims.
 
-The monitoring-owned n8n rule group remains reconciled before application activation, but
-every alert expression is gated by one recording rule. The gate is true only when the
-`n8n`, `n8n-postgresql`, and `public-webhook-route` Flux Kustomizations all report
-`Ready=True` and are not suspended. This keeps deliberate pre-activation absence silent
-without weakening post-activation detection. Once the gate is true, the n8n and
-PostgreSQL scrape-target and workload-availability alerts fire for both an explicit zero
-and a fully absent matching series. The absent branches preserve stable namespace,
-service, Deployment, or StatefulSet identity labels.
+The monitoring alerts package owns `n8n.yaml`, but the active pre-activation alerts
+Kustomization does not select it. The reviewed public activation change selects the exact
+rule file together with the public route and Gatus canary. Git resource selection is the
+durable activation identity; runtime Flux health is not an alert-evaluation gate. Once
+selected, the rules stay loaded through reconciliation failures and missing Flux metric
+series. The n8n and PostgreSQL scrape-target and workload-availability alerts fire for
+both an explicit zero and a fully absent matching source series. The absent branches
+preserve stable namespace, service, Deployment, or StatefulSet identity labels.
 
 All three claims use the established repository thresholds:
 
@@ -517,18 +520,19 @@ remains the only alert-delivery path.
 The rollout follows dependency order:
 
 1. Reconcile the public Gateway, dedicated certificate, routing namespace, inactive
-   Gatus canary contract, and readiness-gated monitoring rules without publishing router
-   forwarding.
+   Gatus canary contract, and monitoring package with the n8n rule file staged but
+   unselected. Do not publish router forwarding.
 2. Reconcile the PostgreSQL claims, StatefulSet, Service, backup job, and SQL Exporter.
 3. Reconcile n8n with queue mode disabled and confirm database migrations and private UI
    readiness.
 4. Complete the owner and synthetic-canary bootstrap through the private UI.
 5. Add operator-managed public DNS and TCP/443 router forwarding. In one reviewed Git
-   change, unsuspend the exact public route and copy the staged Gatus Secret reference and
-   endpoint into the active values. The encrypted canary Secret and both private workload
-   Kustomizations must already be selected, unsuspended, and ready.
-6. Wait for the public route, Gatus probe, and the three-resource alert gate to become
-   current, then run off-network positive and negative webhook acceptance tests.
+   change, unsuspend the exact public route, copy the staged Gatus Secret reference and
+   endpoint into the active values, and select `./n8n.yaml` in the monitoring alerts
+   Kustomization. The encrypted canary Secret and both private workload Kustomizations
+   must already be selected, unsuspended, and ready.
+6. Wait for the public route, Gatus probe, and selected n8n rule group to become current,
+   then run off-network positive and negative webhook acceptance tests.
 
 The initial pins are n8n chart 1.11.0 and n8n 2.36.7. The implementation also records the
 resolved immutable chart artifact digest and exact container image reference. An n8n
@@ -545,8 +549,8 @@ reconciling with pruning enabled while its Kustomization stops selecting
 `httproute.yaml`, waits for current-generation reconciliation, and proves the route is
 absent. Only then may a later Git change suspend that child. Public activation and later
 reactivation remain Git-owned. A durable withdrawal also removes the n8n Secret reference
-and endpoint from active Gatus values while retaining their exact staged activation
-fragment.
+and endpoint from active Gatus values and unselects `./n8n.yaml` from the monitoring
+alerts Kustomization while retaining the staged Gatus fragment and rule file.
 
 ## Validation and acceptance
 
@@ -578,8 +582,9 @@ Focused tests and rendered-manifest assertions verify:
 - Prometheus alert expressions cover absent metrics and both storage thresholds;
 - the active pre-activation Gatus render has no required n8n Secret reference or canary
   endpoint, while the staged activation fragment renders their complete exact contract;
-- the n8n alert activation gate stays false for suspended dependencies and becomes true
-  only for the exact three current, unsuspended, Ready Flux Kustomizations; and
+- the active pre-activation monitoring render omits the n8n rule, complete Git activation
+  selects it exactly once, and incomplete or early selection fails source validation;
+- selected n8n rules remain evaluable when Flux readiness metrics are false or absent; and
 - zero-valued and fully absent n8n and PostgreSQL scrape-target and workload-replica
   series produce the same post-activation availability alerts with stable identity labels.
 

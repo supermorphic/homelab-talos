@@ -165,6 +165,8 @@ run_shell_case qbit-manage-policy-validator \
   scripts/test/qbit-manage-policy-validator-test.sh
 run_shell_case arr-validator scripts/test/arr-validator-test.sh
 run_shell_case gatus-validator scripts/test/gatus-validator-test.sh
+run_shell_case monitoring-alerts-validator \
+  scripts/test/monitoring-alerts-validator-test.sh
 run_shell_case gatus-media-integration-secrets \
   scripts/test/gatus-media-integration-secrets-test.sh
 run_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh

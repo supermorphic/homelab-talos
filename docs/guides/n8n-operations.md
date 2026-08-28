@@ -21,7 +21,9 @@ The Platform Canary token has one contract everywhere it is used: at least 32 ch
 from the base64url-safe alphabet `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use padding,
 spaces, quotes, backslashes, line breaks, or other punctuation. The Secret writer and the
 persistence scenario reject values outside this contract before they write a manifest or
-construct a curl configuration.
+construct a curl configuration. The guarded writer checks every required value,
+confirmation, minimum length, and token character before it creates a workspace, installs
+a cleanup trap, or checks the age identity.
 
 Load the values without putting them in shell history:
 
@@ -58,6 +60,9 @@ The selected canary Secret does not yet affect the active Gatus Deployment. The 
 environment reference and endpoint remain in
 `kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml`, outside the
 active `values.yaml`, until the public-route activation change.
+The monitoring-owned `kubernetes/apps/monitoring/alerts/app/n8n.yaml` rule file also stays
+unselected from `kubernetes/apps/monitoring/alerts/app/kustomization.yaml` until that same
+activation change.
 
 Keep `n8n-postgresql`, `n8n`, and `public-webhook-route` at `spec.suspend: true` in this
 staging change. Validate and review only ciphertext and non-secret structure:
@@ -144,8 +149,8 @@ Complete these steps in order:
 3. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
    forward port 80, 5678, or 5432.
 4. In one dedicated route-and-monitoring activation pull request, copy the staged Gatus
-   canary values into the active values and change
-   `public-webhook-route.spec.suspend` to `false`:
+   canary values into the active values, change
+   `public-webhook-route.spec.suspend` to `false`, and select the staged n8n rule:
 
 ```bash
 mise exec -- yq -i '
@@ -158,14 +163,21 @@ mise exec -- yq -i '
 mise exec -- yq -i '
   (select(.metadata.name == "public-webhook-route") | .spec.suspend) = false
 ' kubernetes/apps/networking/public-webhook-gateway/ks.yaml
+mise exec -- yq -i '
+  del(.resources[] | select(. == "./n8n.yaml" or . == "n8n.yaml")) |
+  .resources += ["./n8n.yaml"]
+' kubernetes/apps/monitoring/alerts/app/kustomization.yaml
 ```
 
    The Gatus validator rejects partial activation, duplicate canary entries, an unselected
    canary Secret, or active canary values while n8n, PostgreSQL, or the public route is
-   suspended. Run `mise exec -- just kube gatus-validate` and
-   `mise exec -- just kube n8n-validate`, obtain review and explicit merge authorization,
-   merge, and wait for Flux readiness. The n8n Prometheus rule group starts evaluating
-   only after all three Flux Kustomizations report current `Ready=True` and unsuspended.
+   suspended. The alerts and n8n validators reject early, missing, or duplicate n8n rule
+   selection. Run `mise exec -- just kube gatus-validate`,
+   `mise exec -- just kube n8n-validate`, and
+   `mise exec -- just kube alerts-validate monitoring`; obtain review and explicit merge
+   authorization, merge, and wait for Flux readiness. Once selected, the n8n Prometheus
+   rule group stays loaded and can alert during a Flux reconciliation failure or complete
+   disappearance of its source series.
 5. Confirm Gatus has loaded `Platform / n8n-platform-canary` and its five-minute probe is
    green. Run the full read-only verifier. It observes the Gatus series and does not send
    a webhook request or require the canary token:
@@ -339,10 +351,12 @@ Only after that proof may a second reviewed Git change set
 `public-webhook-route.spec.suspend: true`. If the public path will stay withdrawn, remove
 both `GATUS_N8N_CANARY_TOKEN` and the `n8n-platform-canary` endpoint from active
 `values.yaml`; keep the exact reactivation source in
-`n8n-canary-activation.values.yaml`. To publish again, keep router forwarding disabled
-while one reviewed Git change re-adds `./httproute.yaml`, sets the child Kustomization
-unsuspended, and copies the staged Gatus fragment into active values. Wait for current
-Flux and route acceptance, complete off-network tests, and restore forwarding last.
+`n8n-canary-activation.values.yaml`, and remove `./n8n.yaml` from the monitoring alerts
+Kustomization in the same reviewed change. To publish again, keep router forwarding
+disabled while one reviewed Git change re-adds `./httproute.yaml`, sets the child
+Kustomization unsuspended, copies the staged Gatus fragment into active values, and
+selects `./n8n.yaml` exactly once. Wait for current Flux and route acceptance, complete
+off-network tests, and restore forwarding last.
 
 Do not delete the n8n, PostgreSQL, or backup claims during rollback. Keep the encrypted
 recovery unit and logical dumps. Use the [n8n recovery runbook](../runbooks/n8n-recovery.md)

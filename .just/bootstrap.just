@@ -3041,6 +3041,7 @@ n8n:
     require_deployed_source 'n8n bootstrap' \
       .just/bootstrap.just kubernetes/mod.just tests/catalog.yaml \
       scripts/validate/n8n.sh scripts/verify/n8n.sh \
+      scripts/lib/n8n-alert-activation.sh \
       scripts/test/scenarios/n8n-persistence.sh \
       scripts/test/scenarios/n8n-restore-drill.sh \
       tests/chainsaw/smoke/platform/n8n \

@@ -10,17 +10,6 @@ spec:
   groups:
     - name: n8n-platform
       rules:
-        - record: n8n_platform_alerting_ready
-          expr: >-
-            count(
-              gotk_resource_info{
-                customresource_kind="Kustomization",
-                exported_namespace="flux-system",
-                name=~"n8n|n8n-postgresql|public-webhook-route",
-                ready="True",
-                suspended!="true"
-              } == 1
-            ) == bool 3
         - alert: N8nUnavailable
           expr: >-
             (
@@ -28,7 +17,6 @@ spec:
               or
               absent(up{namespace="automation",service="n8n"})
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -43,7 +31,6 @@ spec:
               or
               absent(up{namespace="automation",service="n8n-postgresql"})
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -67,7 +54,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -91,7 +77,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -110,7 +95,6 @@ spec:
                 }[15m]
               ) > 2
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: warning
@@ -135,7 +119,6 @@ spec:
                 reason="OOMKilled"
               } == 1
             )
-            and on () n8n_platform_alerting_ready == 1
           labels:
             severity: critical
           annotations:
@@ -156,7 +139,6 @@ spec:
                 )
               ) > 0
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 15m
           labels:
             severity: warning
@@ -184,7 +166,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 15m
           labels:
             severity: critical
@@ -232,7 +213,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: warning
@@ -249,7 +229,6 @@ spec:
                 cronjob="n8n-postgresql-backup"
               } > 60 * 60
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: warning
@@ -266,7 +245,6 @@ spec:
                 name="n8n-platform-canary"
               } == 0
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -284,7 +262,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 15m
           labels:
             severity: warning
@@ -323,7 +300,6 @@ spec:
                 }
               )
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical
@@ -353,7 +329,6 @@ spec:
                 ) > 70
               ) <= 85
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 15m
           labels:
             severity: warning
@@ -381,7 +356,6 @@ spec:
                 )
               ) > 85
             )
-            and on () n8n_platform_alerting_ready == 1
           for: 5m
           labels:
             severity: critical

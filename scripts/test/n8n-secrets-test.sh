@@ -16,6 +16,9 @@ target_canary='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
 persistence_script="$repo_root/scripts/test/scenarios/n8n-persistence.sh"
 expected_confirmation='write:automation:n8n-platform:sops'
 expected_recipient='age1syntheticrecipientforn8nplatform00000000000000000000000000'
+real_mktemp_bin="$(command -v mktemp)"
+writer_mktemp_log="$test_dir/writer-mktemp.log"
+age_preflight_log="$test_dir/age-preflight.log"
 declare -a targets=("$target_runtime" "$target_postgresql" "$target_canary")
 declare -a secret_variables=(
   N8N_ENCRYPTION_KEY
@@ -44,6 +47,14 @@ set -euo pipefail
   echo 'Unexpected just invocation from guarded recipe.' >&2
   exit 98
 }
+[[ -z "${AGE_PREFLIGHT_LOG:-}" ]] || printf '%s\n' 'invoked' >>"$AGE_PREFLIGHT_LOG"
+EOF
+
+  cat >"$stub_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ -z "${WRITER_MKTEMP_LOG:-}" ]] || printf '%s\n' "$*" >>"$WRITER_MKTEMP_LOG"
+exec "$REAL_MKTEMP_BIN" "$@"
 EOF
 
   cat >"$stub_bin/sops" <<'EOF'
@@ -175,11 +186,12 @@ fi
 exec /bin/mv "$@"
 EOF
 
-  chmod 700 "$stub_bin/just" "$stub_bin/sops" "$stub_bin/mv"
+  chmod 700 "$stub_bin/just" "$stub_bin/mktemp" "$stub_bin/sops" "$stub_bin/mv"
 }
 
 reset_tree() {
   rm -rf -- "$tree_root"
+  rm -f -- "$writer_mktemp_log" "$age_preflight_log"
   mkdir -p "$tree_root/.just"
   for target in "${targets[@]}"; do
     mkdir -p "$(dirname -- "$tree_root/$target")"
@@ -217,6 +229,9 @@ run_recipe() {
   local -a env_args=(
     "PATH=$stub_bin:$PATH"
     "REAL_YQ_BIN=$yq_bin"
+    "REAL_MKTEMP_BIN=$real_mktemp_bin"
+    "WRITER_MKTEMP_LOG=$writer_mktemp_log"
+    "AGE_PREFLIGHT_LOG=$age_preflight_log"
     "N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY-}"
     "N8N_DB_PASSWORD=${N8N_DB_PASSWORD-}"
     "POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD-}"
@@ -310,6 +325,18 @@ assert_no_targets() {
   done
 }
 
+assert_no_input_guard_side_effects() {
+  [[ ! -e "$writer_mktemp_log" ]] || {
+    echo 'A rejected n8n Secret input created a guarded-writer workspace.' >&2
+    exit 1
+  }
+  [[ ! -e "$age_preflight_log" ]] || {
+    echo 'A rejected n8n Secret input invoked the age identity preflight.' >&2
+    exit 1
+  }
+  assert_no_targets
+}
+
 seed_existing_targets() {
   local index=0 target
   for target in "${targets[@]}"; do
@@ -380,7 +407,7 @@ for missing_variable in "${secret_variables[@]}"; do
   unset "$missing_variable"
   run_recipe
   expect_failure "Set $missing_variable"
-  assert_no_targets
+  assert_no_input_guard_side_effects
 done
 
 reset_tree
@@ -388,14 +415,14 @@ set_all_inputs
 unset N8N_SECRETS_CONFIRM
 run_recipe
 expect_failure 'Refusing to write the n8n platform Secrets.'
-assert_no_targets
+assert_no_input_guard_side_effects
 
 reset_tree
 set_all_inputs
 N8N_SECRETS_CONFIRM='write:automation:wrong:sops'
 run_recipe
 expect_failure 'Refusing to write the n8n platform Secrets.'
-assert_no_targets
+assert_no_input_guard_side_effects
 
 for short_variable in "${secret_variables[@]}"; do
   reset_tree
@@ -407,7 +434,7 @@ for short_variable in "${secret_variables[@]}"; do
     echo 'A rejected short synthetic value appeared in command output.' >&2
     exit 1
   }
-  assert_no_targets
+  assert_no_input_guard_side_effects
 done
 
 boundary_canary_token='Aa0_-Aa0_-Aa0_-Aa0_-Aa0_-Aa0_-A1'
@@ -438,7 +465,7 @@ for invalid_token_index in "${!invalid_canary_tokens[@]}"; do
     echo 'A rejected synthetic canary token appeared in command output.' >&2
     exit 1
   }
-  assert_no_targets
+  assert_no_input_guard_side_effects
 done
 
 reset_tree

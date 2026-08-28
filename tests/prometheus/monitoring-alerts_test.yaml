@@ -12,59 +12,6 @@ evaluation_interval: 1m
 tests:
   # --- n8n and PostgreSQL ---
 
-  - name: pre-public-activation n8n platform stays silent with zero and absent runtime series
-    interval: 1m
-    input_series:
-      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n",ready="True",suspended="false"}'
-        values: '1x24'
-      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n-postgresql",ready="True",suspended="false"}'
-        values: '1x24'
-      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="public-webhook-route",ready="False",suspended="true"}'
-        values: '1x24'
-      - series: 'up{namespace="automation",service="n8n",instance="n8n:5678"}'
-        values: '0x24'
-      - series: 'up{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
-        values: '0x24'
-      - series: 'kube_deployment_status_replicas_available{namespace="automation",deployment="n8n"}'
-        values: '0x24'
-      - series: 'kube_statefulset_status_replicas_ready{namespace="automation",statefulset="n8n-postgresql"}'
-        values: '0x24'
-      - series: 'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
-        values: '0x24'
-      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-data",phase="Bound"}'
-        values: '0x24'
-    promql_expr_test:
-      - expr: n8n_platform_alerting_ready
-        eval_time: 20m
-        exp_samples:
-          - labels: 'n8n_platform_alerting_ready{}'
-            value: 0
-    alert_rule_test:
-      - eval_time: 20m
-        alertname: N8nUnavailable
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nPostgresqlUnavailable
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nWorkloadUnavailable
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nPostgresqlWorkloadUnavailable
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nPostgresqlBackupStale
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nCanaryDown
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nCanaryProbeMissing
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: N8nPersistentVolumeClaimNotBound
-        exp_alerts: []
-
   - name: active n8n platform alerts when scrape and workload series are fully absent
     interval: 1m
     input_series:
@@ -77,12 +24,84 @@ tests:
       - &n8n_public_route_flux_ready
         series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="public-webhook-route",ready="True",suspended="false"}'
         values: '1x3000'
-    promql_expr_test:
-      - expr: n8n_platform_alerting_ready
-        eval_time: 1m
-        exp_samples:
-          - labels: 'n8n_platform_alerting_ready{}'
-            value: 1
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+
+  - name: selected availability rules fire for zero sources despite failed Flux reconciliation
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n",ready="False",suspended="false"}'
+        values: '1x8'
+      - series: 'up{namespace="automation",service="n8n",instance="n8n:5678"}'
+        values: '0x8'
+      - series: 'up{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
+        values: '0x8'
+      - series: 'kube_deployment_status_replicas_available{namespace="automation",deployment="n8n"}'
+        values: '0x8'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="automation",statefulset="n8n-postgresql"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n, instance: "n8n:5678"}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql, instance: "postgresql:9399"}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+
+  - name: selected availability rules fire when Flux and source series are fully absent
+    interval: 1m
+    input_series:
+      - series: 'unrelated_metric{scope="other"}'
+        values: '1x8'
     alert_rule_test:
       - eval_time: 6m
         alertname: N8nUnavailable
@@ -277,12 +296,6 @@ tests:
         values: '0x2400 144000x240'
       - series: 'kube_job_status_succeeded{namespace="automation",job_name="n8n-postgresql-backup-successful"}'
         values: '1x2640'
-    promql_expr_test:
-      - expr: n8n_platform_alerting_ready
-        eval_time: 38h
-        exp_samples:
-          - labels: 'n8n_platform_alerting_ready{}'
-            value: 1
     alert_rule_test:
       - eval_time: 36h
         alertname: N8nPostgresqlBackupStale

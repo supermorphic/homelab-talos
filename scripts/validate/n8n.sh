@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/n8n-alert-activation.sh
+source "$script_dir/../lib/n8n-alert-activation.sh"
+
 base='kubernetes/apps/automation'
 ns="$base/namespace/app/namespace.yaml"
 public_base='kubernetes/apps/networking/public-webhook-gateway'
@@ -40,6 +44,7 @@ n8n_policy="$n8n_app/ciliumnetworkpolicy.yaml"
 n8n_workflow="$n8n_app/workflows/platform-canary.json"
 monitoring_alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomization.yaml'
 n8n_alerts='kubernetes/apps/monitoring/alerts/app/n8n.yaml'
+n8n_alert_activation_lib='scripts/lib/n8n-alert-activation.sh'
 gatus_kustomization='kubernetes/apps/monitoring/gatus/app/kustomization.yaml'
 gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
 gatus_canary_activation='kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml'
@@ -166,7 +171,8 @@ for file in "$n8n_ks" "$n8n_kustomization" "$n8n_source" "$n8n_release" \
   "$n8n_policy"; do
   [[ -f "$file" ]] || { echo "Missing n8n chart source: $file" >&2; exit 1; }
 done
-for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$gatus_kustomization" \
+for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$n8n_alert_activation_lib" \
+  "$gatus_kustomization" \
   "$gatus_values" "$gatus_canary_activation" "$prometheus_config" "$n8n_dashboard"; do
   [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
@@ -1196,14 +1202,13 @@ mapfile -t public_route_contracts < <(
 # Cross-component observability checks derive identities from the workload, route,
 # collector, and probe sources. This prevents copied literals from agreeing with one
 # another while drifting away from the resources that produce the metrics.
-[[ "$(yq -r '[.resources[] | select(. == "./n8n.yaml")] | length' \
-  "$monitoring_alerts_kustomization")" == '1' && \
-  "$(yq -r '[.configMapGenerator[] | select(.name == "n8n-postgresql-dashboard") |
+[[ "$(yq -r '[.configMapGenerator[] | select(.name == "n8n-postgresql-dashboard") |
     .files[] | select(. == "dashboards/n8n-postgresql.json")] | length' \
     "$prometheus_config")" == '1' ]] || {
-  echo 'n8n alerts and dashboard must each be packaged exactly once.' >&2
+  echo 'The n8n dashboard must be packaged exactly once.' >&2
   exit 1
 }
+validate_n8n_alert_activation
 
 expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nContainerRestarting,N8nExecutionFailures,N8nPersistentVolumeClaimNotBound,N8nPersistentVolumeUsageCritical,N8nPersistentVolumeUsageWarning,N8nPostgresqlBackupJobFailed,N8nPostgresqlBackupJobOverdue,N8nPostgresqlBackupStale,N8nPostgresqlUnavailable,N8nPostgresqlWorkloadUnavailable,N8nUnavailable,N8nWorkloadUnavailable'
 [[ "$(yq -r '[.spec.groups[].rules[] | select(has("alert")) | .alert] | sort | join(",")' \
@@ -1212,12 +1217,9 @@ expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nCo
   echo 'The n8n PrometheusRule must contain the exact approved alert inventory.' >&2
   exit 1
 }
-[[ "$(yq -r '[.spec.groups[].rules[] | select(has("record")) | .record] | join(",")' \
-    "$n8n_alerts")" == 'n8n_platform_alerting_ready' && \
-  "$(yq -r '[.spec.groups[].rules[] | select(has("alert")) |
-    select(.expr | contains("n8n_platform_alerting_ready") | not)] | length' \
+[[ "$(yq -r '[.spec.groups[].rules[] | select(has("record"))] | length' \
     "$n8n_alerts")" == '0' ]] || {
-  echo 'Every n8n alert must use the exact platform activation recording gate.' >&2
+  echo 'The n8n PrometheusRule must not couple alert evaluation to a health recording rule.' >&2
   exit 1
 }
 
