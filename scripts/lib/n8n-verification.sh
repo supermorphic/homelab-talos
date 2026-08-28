@@ -54,13 +54,17 @@ n8n_prometheus_targets_match_contract() {
     pool="serviceMonitor/automation/$service/0"
     SERVICE="$service" ENDPOINT="$endpoint" POOL="$pool" \
       yq -p=json -o=json -e '
-        [.data.activeTargets[]? | select(.scrapePool == strenv(POOL))] as $targets |
-        (($targets | length) == 1 and
-        $targets[0].labels.namespace == "automation" and
-        $targets[0].labels.service == strenv(SERVICE) and
-        $targets[0].labels.endpoint == strenv(ENDPOINT) and
-        $targets[0].labels.job == strenv(SERVICE) and
-        $targets[0].health == "up")
+        [.data.activeTargets[]? | select(
+          .labels.namespace == "automation" and
+          .labels.service == strenv(SERVICE) and
+          .labels.endpoint == strenv(ENDPOINT) and
+          .labels.job == strenv(SERVICE)
+        )] as $identity_targets |
+        [.data.activeTargets[]? | select(.scrapePool == strenv(POOL))] as $pool_targets |
+        (($identity_targets | length) == 1 and
+        ($pool_targets | length) == 1 and
+        $identity_targets[0].scrapePool == strenv(POOL) and
+        $identity_targets[0].health == "up")
       ' "$input" >/dev/null 2>&1 || return 1
   done
 }

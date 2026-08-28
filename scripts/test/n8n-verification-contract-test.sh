@@ -156,6 +156,13 @@ yq -p=json -o=json '.data.activeTargets += [.data.activeTargets[0]]' \
 expect_false 'duplicate exact Prometheus target' n8n_prometheus_targets_match_contract \
   "$temp_dir/targets-duplicate.json"
 yq -p=json -o=json '.data.activeTargets += [
+  (.data.activeTargets[0] |
+    .scrapePool = "serviceMonitor/automation/n8n-shadow/0" |
+    .health = "down")
+]' "$temp_dir/targets.json" >"$temp_dir/targets-alternate-pool-duplicate.json"
+expect_false 'unhealthy exact-identity duplicate in alternate Prometheus scrape pool' \
+  n8n_prometheus_targets_match_contract "$temp_dir/targets-alternate-pool-duplicate.json"
+yq -p=json -o=json '.data.activeTargets += [
   (.data.activeTargets[0] | .labels.service = "n8n-shadow" | .labels.job = "n8n-shadow")
 ]' "$temp_dir/targets.json" >"$temp_dir/targets-pool-collision.json"
 expect_false 'unrelated target in exact Prometheus scrape pool' \
