@@ -141,6 +141,7 @@ manifest_issues="$(jq -S -c --arg created_at "${requested_run_id%-*}" --arg pane
 	else
 		[
 			issue(.; "schemaVersion"; "schemaVersion"; "number"; 2),
+			issue(.; "resultsSchemaVersion"; "resultsSchemaVersion"; "number"; 2),
 			issue(.; "mode"; "mode"; "string"; "diagnostics"),
 			issue(.; "createdAt"; "createdAt"; "string"; $created_at)
 		] +
@@ -175,7 +176,7 @@ if [[ "$manifest_issues" == '[]' ]]; then
 fi
 if [[ "$manifest_issues" == '[]' ]]; then
 	manifest_identity="$(jq -c 'del(.createdAt)' "$manifest")"
-	if ! CONTRACT_STRATEGY_ID='qsv-hevc-icq-v1' CONTRACT_MANIFEST_SCHEMA=2 CONTRACT_RESULTS_SCHEMA=1 \
+	if ! CONTRACT_STRATEGY_ID='qsv-hevc-icq-v1' CONTRACT_MANIFEST_SCHEMA=2 CONTRACT_RESULTS_SCHEMA=2 \
 		contract_normalize_run_identity "$manifest_identity" diagnostics >/dev/null 2>&1; then
 		manifest_issues='[{"field":"manifest","kind":"mismatch"}]'
 	fi

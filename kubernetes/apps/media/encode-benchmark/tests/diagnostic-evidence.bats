@@ -334,6 +334,7 @@ wrong-mode	.mode = "quality"	mode	mismatch
 missing-created-at	del(.createdAt)	createdAt	missing
 wrong-created-at-type	.createdAt = 7	createdAt	wrong-type
 wrong-created-at	.createdAt = "20260820T223426Z"	createdAt	mismatch
+wrong-run-results-schema	.resultsSchemaVersion = 1	resultsSchemaVersion	mismatch
 missing-upstream	del(.upstream)	upstream.diagnostics	missing
 wrong-upstream-type	.upstream = []	upstream.diagnostics	missing
 wrong-diagnostics-type	.upstream.diagnostics = []	upstream.diagnostics	wrong-type
@@ -1610,7 +1611,7 @@ create_valid_evidence_tree() {
 	configured_digest="${CONFIGURED_IMAGE##*@}"
 	jq -n --arg panel_sha "$PANEL_SHA256" --arg created_at "${RUN_ID%-*}" \
 		--arg image "$configured_digest" --argjson scripts "$script_digests" '{
-		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",resultsSchemaVersion:1,mode:"diagnostics",createdAt:$created_at,
+		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",resultsSchemaVersion:2,mode:"diagnostics",createdAt:$created_at,
 		images:{configured:$image,dispatched:$image,running:$image},scriptDigests:$scripts,
 		samplesDigest:("sha256:" + ("c" * 64)),
 		sources:[{path:"/media/fixture.mkv",sha256:("sha256:" + ("d" * 64)),size:4096}],
