@@ -74,7 +74,7 @@ In a representative run, `encode-benchmark` and the general test harness consume
 91 percent of validation time. Checkout, setup, and reporting are visible costs, but the
 current critical path is validation work.
 
-The current CI implementation has these relevant properties:
+At the initial investigation commit, the CI implementation had these relevant properties:
 
 - `just ci` executes 39 cataloged suites sequentially and fails fast.
 - Repository validation and the test harness repeat parsing and ShellCheck work.
@@ -82,8 +82,8 @@ The current CI implementation has these relevant properties:
 - The test harness contains at least 45 independently meaningful shell tests plus Python
   test groups.
 - Several logging-related shell tests are individually expensive.
-- `encode-benchmark` executes 371 Bats tests in one catalog target.
-- The current GitHub workflow runs one job with a 20-minute timeout, shallow operational
+- `encode-benchmark` executed 371 Bats tests in one catalog target.
+- The GitHub workflow ran one job with a 20-minute timeout, shallow operational
   setup, and a single `mise exec -- just ci` invocation.
 - Recent workflow dispatch normally starts immediately. A rare queue outlier exists, so
   queue latency must remain separate from execution time.
@@ -142,11 +142,11 @@ Local decomposition of `encode-benchmark` produced this fixed-commit distributio
 | `benchmark.bats` | 111 | 446.394s |
 | `dispatch.bats` | 107 | 205.091s |
 | `diagnostic-evidence.bats` | 53 | 45.805s |
-| `runmeta.bats` | 37 | 15.267s |
-| `census.bats` | 13 | 10.498s |
-| `bootstrap.bats` | 13 | 5.327s |
-| `source-contract.bats` | 24 | 2.989s |
-| `selection.bats` | 9 | 1.827s |
+| `runmeta.bats` | 42 | 15.267s |
+| `census.bats` | 21 | 10.498s |
+| `bootstrap.bats` | 8 | 5.327s |
+| `source-contract.bats` | 15 | 2.989s |
+| `selection.bats` | 7 | 1.827s |
 | `stills.bats` | 7 | 1.635s |
 
 These local measurements are useful for hotspot decomposition. They are not a controlled
@@ -157,6 +157,40 @@ were `monitoring-alloy-logs-validator` at 118.989s, `logging-verifier` at 114.83
 `monitoring-alloy-events-validator` at 57.768s, `catalog-negative` at 23.930s, and
 `monitoring-loki-validator` at 23.246s. These case profiles also overlap the enclosing
 test-harness suite and are not an additive savings estimate.
+
+### Issue 318 rebase boundary
+
+Issue 318 materially changed the encode audit after the controlled baseline above. Commit
+`e3233d04d142d2f33119d45602dbb90c5c2523aa` added or rewrote diagnostic preparation,
+producer authentication, evidence, dispatch, and result contracts. Source review shows
+393 current `@test` declarations across the same nine Bats files:
+
+| Bats file | Source-visible cases after issue 318 |
+| --- | ---: |
+| `benchmark.bats` | 117 |
+| `bootstrap.bats` | 8 |
+| `census.bats` | 21 |
+| `diagnostic-evidence.bats` | 59 |
+| `dispatch.bats` | 117 |
+| `runmeta.bats` | 42 |
+| `selection.bats` | 7 |
+| `source-contract.bats` | 15 |
+| `stills.bats` | 7 |
+
+These source counts are review evidence, not a substitute for Bats parser registration.
+The next controlled baseline must use Bats' own parser to establish the exact ordered
+identity set after all concurrent branches finish and this branch rebases again.
+
+Issue 318 also added `scripts/encode-benchmark/diagnostic-producer-contract.sh`, changed
+all three prior hotspots, and raised the GitHub job timeout from 20 to 30 minutes. Other
+merged work expanded the repository and harness shell source sets. The fixed-commit
+371-test identity digest, 166/95 shell-source counts, hotspot timings, and complete-suite
+timings therefore remain historical evidence only. They cannot accept or reject the
+current candidate.
+
+The 30-minute timeout is temporary safety headroom. It is not the runtime objective. The
+ordinary required pre-merge gate still targets approximately two minutes p95, with the
+same correctness and current-main evidence requirements.
 
 ## Staged decision model
 
@@ -180,7 +214,9 @@ specification when its measured decision is material enough to require implement
 The reviewed execution boundary is:
 
 - Plan 023a completes the audit and controlled baseline.
-- Plan 023b reduces encode-benchmark runtime without changing ICQ evidence semantics.
+- Plan 023b decomposes encode-benchmark reporting, corrects its runner evidence contract,
+  refreshes the issue-318 audit, and then optimizes measured current hotspots without
+  changing ICQ evidence semantics.
 - Plan 023c removes duplicate work and optimizes repository and general-harness checks.
 - Plan 023d completes remaining Active-suite optimization, justified bounded
   parallelism, and post-Stage-1 remeasurement.
@@ -207,7 +243,7 @@ Each inventory entry records:
 The inventory is initially an analysis and implementation artifact. Stage 1 must not add a
 permanent target registry merely to conduct the audit.
 
-### Completed audit inventory
+### Historical completed audit inventory
 
 The fixed-commit audit resolved 500 entries: all 39 CI suites, nine general-harness
 setup or validator groups, 47 shell cases, three Python discovery groups, two Ruff
@@ -227,7 +263,8 @@ The six Removed entries and their canonical owners are:
 | `harness:shellcheck-json` | `validation.repo-validate` | Move machine-readable findings and JUnit production to the canonical repository owner, then consume only its matching passed same-run result. |
 | `shell:qbit-manage-policy-shellcheck` | `validation.repo-validate` | Delete the focused rerun because the canonical repository source set already contains the same file and rules. |
 
-The repository-wide Bash and ShellCheck owner covers 166 sorted files. The harness set
+At that audit commit, the repository-wide Bash and ShellCheck owner covered 166 sorted
+files. The harness set
 contains 95 files, all of which are in that repository set. The same-run handoff is one
 atomic JSON document bound to the run ID, commit, sorted source-set digest, Bash and
 ShellCheck versions, exact arguments, status, and findings. A failed producer in full CI
@@ -237,11 +274,20 @@ artifact. A direct or standalone consumer rejects a failed, status-inconsistent,
 missing, stale, malformed, truncated, schema-invalid, or corrupt artifact and recomputes
 canonical validation. A passing result is never reused across runs.
 
-The audit keeps the other 494 entries Active. This includes all 371 encode tests, the
+That audit kept the other 494 entries Active. This included all 371 encode tests, the
 `validation.encode-benchmark` suite, and all 19 encode operational and source surfaces:
 391 Active encode entries in total. It also retains the other ten current diagnostic
 surfaces. Active experimental evidence remains maintained and runnable for its current
 consumer; Active does not mean permanently required.
+
+Issue 318 invalidates those totals as a current-tree inventory. Source review shows 393
+encode test declarations, 168 repository shell sources, and 96 harness shell sources on
+current `main`, plus the new diagnostic producer helper. The rebased per-file runner and
+its behavior test raise the branch shell sets to 170 repository sources and 97 harness
+sources. Exact current logical inventory, consumers, and Active totals must be regenerated
+after the final Stage 1 rebase. New assertions and operational surfaces remain Active
+unless the audit proves exact equivalent coverage or specification 017 records a terminal
+decision that ends their evidence lifecycle.
 
 ### Lifecycle states
 
@@ -322,21 +368,25 @@ reviewable: completed modes are not retained merely because they are newer than 
 
 ### Encode optimization hypotheses
 
-The current Bats structure exposes several high-value hypotheses:
+The issue-318 Bats structure exposes several high-value hypotheses:
 
-- `benchmark.bats` extracts the same samples document during setup for about 111 tests.
+- `benchmark.bats` extracts the same samples document during setup for about 117
+  source-visible tests.
 - `dispatch.bats` reconstructs large `kubectl`, `yq`, Git, Flux, and filesystem stubs for
-  about 107 tests.
+  about 117 source-visible tests.
+- `diagnostic-evidence.bats` now contains about 59 source-visible tests and changed with
+  the producer and evidence contracts.
 - Mutation matrices repeatedly start Bash, runtime scripts, `jq`, and `yq`.
 - Immutable renders and evidence fixtures are rebuilt repeatedly.
 - Some tests exercise a complete end-to-end path when a smaller independent assertion
   may protect the same invariant.
 
-Stage 1 can prepare immutable file-level fixtures once while preserving per-test mutable
-isolation, parse source documents once, batch table-driven cases with exact case-level
-failure output, reduce repeated full-script startup, and run independent files or groups
-concurrently after proving isolation. Test count is not a protected metric. Retained
-behavior and safety coverage are.
+The pre-issue-318 immutable-fixture experiments for the three historical hotspots were
+slower and were removed, so they provide zero retained savings and are not current
+optimization candidates by default. The new profile must identify current costs before
+any similar experiment is reconsidered. Parsing once, batching, reducing repeated script
+startup, and bounded file-level concurrency remain open hypotheses. Test count is not a
+protected metric. Retained behavior and safety coverage are.
 
 ## Stage 1 optimization design
 
@@ -433,11 +483,12 @@ in-run delta.
 
 Semantic-preserving runtime work then addresses:
 
-- immutable samples preparation and repeated parser startup in the 111-test
-  `benchmark.bats` hotspot;
-- immutable cluster-stub preparation and repeated parser startup in the 107-test
-  `dispatch.bats` hotspot;
-- parser and fixture cost in the 53-test `diagnostic-evidence.bats` hotspot;
+- repeated samples parsing and process startup in the current, approximately 117-test
+  `benchmark.bats` hotspot, subject to fresh profiling;
+- repeated cluster-stub preparation and process startup in the current, approximately
+  117-test `dispatch.bats` hotspot, subject to fresh profiling;
+- parser, producer, and fixture cost in the current, approximately 59-test
+  `diagnostic-evidence.bats` hotspot, subject to fresh profiling;
 - one native-result evaluation for the remaining Conftest and kubeconform console/JUnit
   pairs;
 - run-scoped immutable render and pinned OCI chart inputs while each semantic consumer
@@ -446,7 +497,12 @@ Semantic-preserving runtime work then addresses:
   invariants;
 - repeated JSON projections and real-time retry waits in the offline logging verifier;
 - repeated unrelated render preparation in the three monitoring mutation suites;
-- encode group decomposition for exact case-level reports and timing; and
+- encode group decomposition that preflights its report boundary and, while that boundary
+  remains writable, emits exactly one validated native JUnit success or error fragment
+  for each requested Bats file, continues after a recoverable file-level reporting error,
+  and records exact per-file timing;
+- required-harness coverage of the encode runner's discovery, ordering, fragment,
+  continuation, and exit-status contracts;
 - bounded parallel trials only after temporary files, environment, fixtures, results,
   and cancellation behavior are isolated.
 
@@ -462,6 +518,13 @@ After work removal and intrinsic optimization, retained suites may run concurren
 bounded groups. This remains full-suite execution in Stage 1: every retained Active suite
 runs for every pull request.
 
+Splitting encode execution into per-file report units does not select or omit work. Every
+Active encode unit still runs in Stage 1. The split supplies exact timings and isolated
+results now, and creates safe execution units for later bounded concurrency or Stage 2
+selection only if their separate decision gates justify those changes. Encode execution
+remains sequential until isolation, resource bounds, cancellation, and deterministic
+report aggregation are proved.
+
 Cheap, high-signal repository invariants run first where ordering materially improves
 failure latency. Concurrent execution must preserve deterministic reports, results for
 every started suite, reliable cancellation, isolated temporary state, and a failed
@@ -469,8 +532,12 @@ required suite causing the complete gate to fail.
 
 ## Stage 1 verification and measurement
 
-The observational baseline is retained with its sample count and limitations. Stage 1
-also records controlled fixed-commit before-and-after measurements.
+The pre-issue-318 observational baseline is retained with its sample count and
+limitations. It is historical context, not a current acceptance baseline. After the
+remaining concurrent branches finish, Stage 1 rebases again onto final current `main`,
+regenerates the exact inventory and Bats parser identity, and records new controlled
+before-and-after measurements under matching conditions. Historical and current samples
+must not be combined.
 
 Measurements separate:
 
@@ -728,19 +795,26 @@ retained evidence, and completed specifications provide the historical record.
 
 Stage 1 is complete when:
 
-1. Every current CI suite and meaningful test group has a recorded purpose, consumer,
-   runtime, overlap review, and Active or Removed disposition.
+1. After the final Stage 1 rebase, every current CI suite and meaningful test group has a
+   refreshed recorded purpose, consumer, runtime, overlap review, and Active or Removed
+   disposition.
 2. Removed work and its operational surfaces are deleted.
 3. Retained work has no known duplicate execution without a documented independent
    invariant.
 4. The encode harness remains Active for the ongoing ICQ diagnostic purpose, with legacy
    and current modes reviewed individually.
-5. Live ICQ behavior and evidence contracts remain unchanged.
-6. Representative positive and negative coverage passes.
-7. The complete `mise exec -- just ci` gate passes.
-8. Controlled post-change timing separates validation, setup, queue, and reporting costs
-   and reports sample sizes with its percentiles.
-9. The Stage 2 decision gate is evaluated explicitly rather than assumed.
+5. The encode runner preflights its report boundary. While that boundary remains writable,
+   each requested Bats file produces exactly one validated success or error JUnit
+   fragment, and a recoverable file-level runner error does not suppress later requested
+   files. Loss of the report boundary fails the gate.
+6. The encode runner behavior test executes in the required test harness.
+7. Live ICQ behavior and evidence contracts remain unchanged.
+8. Representative positive and negative coverage passes.
+9. The complete `mise exec -- just ci` gate passes.
+10. Controlled post-change timing separates validation, setup, queue, and reporting
+    costs, reports sample sizes with its percentiles, and evaluates the ordinary gate
+    against the approximately two-minute p95 objective.
+11. The Stage 2 decision gate is evaluated explicitly rather than assumed.
 
 If later stages proceed, their implementation specifications and plans must reconcile
 their measured results, provider trust model, and runner-placement decision before merge.
