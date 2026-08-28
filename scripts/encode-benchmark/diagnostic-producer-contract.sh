@@ -112,7 +112,7 @@ diagnostic_producer_validate() {
 			(.spec.containers | type == "array" and length == 1 and (.[] | benchmark_container)) and
 			(.spec.volumes | benchmark_volumes) and .status.phase == $pod_phase and
 			(.status.containerStatuses | type == "array" and length == 1 and .[0].name == "benchmark" and
-			 .[0].image == $image and .[0].ready == false and .[0].restartCount == 0 and
+			 .[0].ready == false and .[0].restartCount == 0 and
 			 ((.[0].lastState // {}) == {}) and (.[0].state | type == "object" and keys == ["terminated"]) and
 			 .[0].state.terminated.exitCode == $exit_code and .[0].state.terminated.reason == $exit_reason and
 			 (.[0].state.terminated.message | type == "string")) and image_matches;
