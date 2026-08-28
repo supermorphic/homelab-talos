@@ -12,6 +12,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 }
 
 real_sha256sum="$(command -v sha256sum)"
+backup_test_shell="$(command -v dash || command -v sh)"
 
 fail() {
   echo "n8n backup test failed: $*" >&2
@@ -109,8 +110,15 @@ case "${*: -1}" in
   *) exit 71 ;;
 esac
 EOF
+  cat >"$case_root/bin/awk" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${FAIL_STAGE:-}" != checksum ]] || exit 52
+exec /usr/bin/awk "$@"
+EOF
   chmod +x "$case_root/bin/fake-postgresql-tool" "$case_root/bin/sha256sum" \
-    "$case_root/bin/mv" "$case_root/bin/date"
+    "$case_root/bin/mv" "$case_root/bin/date" "$case_root/bin/awk"
   ln -s fake-postgresql-tool "$case_root/bin/pg_dump"
   ln -s fake-postgresql-tool "$case_root/bin/pg_restore"
   ln -s fake-postgresql-tool "$case_root/bin/psql"
@@ -132,7 +140,7 @@ run_backup() {
     FAKE_MV_COUNT="$case_root/mv-count" \
     FAIL_STAGE="$fail_stage" \
     REAL_SHA256SUM="$real_sha256sum" \
-    "$backup_script"
+    "$backup_test_shell" "$backup_script"
 }
 
 success_case="$(new_case success)"

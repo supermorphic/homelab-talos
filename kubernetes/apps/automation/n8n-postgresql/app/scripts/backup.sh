@@ -1,7 +1,9 @@
 #!/bin/sh
 # shellcheck shell=ash
 set -eu
-set -o pipefail
+if (set -o pipefail) 2>/dev/null; then
+  set -o pipefail
+fi
 
 backup_dir="${BACKUP_DIR:-/backups}"
 artifact_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
