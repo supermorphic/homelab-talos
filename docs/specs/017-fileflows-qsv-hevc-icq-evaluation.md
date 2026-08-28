@@ -629,3 +629,32 @@ reconciliation, the existing immutable run remains eligible for a separately aut
 bounded evidence-reader dispatch. The diagnostic must not be repeated. Any transported
 result still requires a separate accepted decision before any quality benchmark or
 encoding deployment.
+
+### Projected script identity correction
+
+The first bounded reader for run `20260827T233832Z-2a79502c` authenticated its Job and
+Pod but failed closed with `diagnostic-evidence-reader-script-identity-unavailable`
+before reading retained evidence. Kubernetes projects ConfigMap keys as symbolic links
+through `..data/<key>`. The collector required every mounted shell script path itself to
+be a regular non-link file, so the offline source-tree layout passed while the real
+ConfigMap volume could never pass.
+
+The collector accepts either a regular source-tree script or the exact Kubernetes
+projection link `..data/<same-name>`. It resolves each accepted path, requires the final
+target to be a regular file confined beneath the physical scripts mount, and hashes that
+resolved file. Broken links, noncanonical link text, and targets outside the scripts
+mount remain rejected. A Kubernetes-shaped regression proves the accepted projection,
+and an independent escaping-link fixture proves the confinement boundary.
+
+Changing the collector source creates a new content-addressed scripts ConfigMap and a
+new current script-digest set. The retained producer used
+`encode-benchmark-scripts-26b6c44827` and recorded the corresponding digest set before
+this correction. The dispatcher and collector admit that producer identity only for the
+exact completed run `20260827T233832Z-2a79502c`. Script drift and reuse by another run
+remain rejected before a reader Job is created or evidence is returned.
+
+This correction does not change the retained evidence, collector output schema, reader
+mounts, credentials, or downstream authority. The failed collector transported only its
+allowlisted failure category. After this correction merges, reconciles, and the failed
+TTL-managed Job is absent, the same immutable run remains eligible for one bounded
+reader retry. The diagnostic must not be repeated.

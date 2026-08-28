@@ -538,6 +538,59 @@ EOF
 	[ "$(mutation_count)" -eq 1 ]
 }
 
+@test "diagnostic evidence reader admits the exact completed retained producer after collector source changes" {
+	local run_id='20260827T233832Z-2a79502c'
+	local retained_scripts='encode-benchmark-scripts-26b6c44827'
+	prepare_terminal_diagnostics_job "$run_id"
+	jq --arg scripts "$retained_scripts" '
+		.items[0].metadata.annotations."homelab-talos/scripts-configmap" = $scripts |
+		(.items[0].spec.template.spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts
+	' "$STUB_DIAGNOSTIC_JOBS_JSON" >"$STUB_DIAGNOSTIC_JOBS_JSON.tmp"
+	mv "$STUB_DIAGNOSTIC_JOBS_JSON.tmp" "$STUB_DIAGNOSTIC_JOBS_JSON"
+	jq --arg scripts "$retained_scripts" '
+		(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts
+	' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+
+	run_dispatch evidence-reader "$run_id"
+	[ "$status" -eq 0 ] || {
+		echo "reader rejected completed retained producer: $output" >&3
+		return 1
+	}
+	[ "$(mutation_count)" -eq 1 ]
+}
+
+@test "diagnostic evidence reader rejects completed retained producer script drift and cross-run reuse" {
+	local retained_run='20260827T233832Z-2a79502c'
+	local retained_scripts='encode-benchmark-scripts-26b6c44827'
+	local run_id case_name scripts
+	while IFS='|' read -r case_name run_id scripts; do
+		prepare_terminal_diagnostics_job "$run_id"
+		jq --arg scripts "$scripts" '
+			.items[0].metadata.annotations."homelab-talos/scripts-configmap" = $scripts |
+			(.items[0].spec.template.spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts
+		' "$STUB_DIAGNOSTIC_JOBS_JSON" >"$STUB_DIAGNOSTIC_JOBS_JSON.tmp"
+		mv "$STUB_DIAGNOSTIC_JOBS_JSON.tmp" "$STUB_DIAGNOSTIC_JOBS_JSON"
+		jq --arg scripts "$scripts" '
+			(.items[0].spec.volumes[] | select(.name == "scripts").configMap.name) = $scripts
+		' "$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+		mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
+		export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+		: >"$STUB_CALLS"
+
+		run_dispatch evidence-reader "$run_id"
+		[ "$status" -eq 65 ] || {
+			echo "reader accepted invalid completed producer identity: $case_name" >&3
+			return 1
+		}
+		assert_no_mutations
+	done <<EOF
+script-drift|$retained_run|encode-benchmark-scripts-aaaaaaaaaa
+cross-run|20260827T233832Z-deadbeef|$retained_scripts
+EOF
+}
+
 @test "diagnostic evidence reader rejects every historical protocol identity mutation" {
 	local run_id='20260826T014246Z-373a665e' case_name base_jobs base_pods
 	prepare_historical_terminal_diagnostics_job
