@@ -10,7 +10,10 @@ tree_root="$test_dir/tree"
 
 reset_tree() {
   rm -rf -- "$tree_root"
-  mkdir -p "$tree_root/kubernetes/apps/networking"
+  mkdir -p "$tree_root/kubernetes/apps/networking" \
+    "$tree_root/kubernetes/apps/monitoring/alerts/app" \
+    "$tree_root/kubernetes/apps/monitoring/gatus/app" \
+    "$tree_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards"
   cp "$repo_root/kubernetes/apps/kustomization.yaml" \
     "$tree_root/kubernetes/apps/kustomization.yaml"
   cp -R "$repo_root/kubernetes/apps/automation" \
@@ -22,6 +25,20 @@ reset_tree() {
   if [[ -d "$repo_root/kubernetes/apps/networking/public-webhook-gateway" ]]; then
     cp -R "$repo_root/kubernetes/apps/networking/public-webhook-gateway" \
       "$tree_root/kubernetes/apps/networking/public-webhook-gateway"
+  fi
+  cp "$repo_root/kubernetes/apps/monitoring/alerts/app/n8n.yaml" \
+    "$tree_root/kubernetes/apps/monitoring/alerts/app/n8n.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml" \
+    "$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml" \
+    "$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml" \
+    "$tree_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml" \
+    "$tree_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml"
+  if [[ -f "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json" ]]; then
+    cp "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json" \
+      "$tree_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json"
   fi
 }
 
@@ -62,6 +79,81 @@ expect_fail() {
 
 reset_tree
 expect_pass
+
+dashboard="$tree_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json"
+
+reset_tree
+rm -f -- "$dashboard"
+expect_fail 'missing n8n observability dashboard' \
+  'Missing n8n observability source:'
+
+alerts="$tree_root/kubernetes/apps/monitoring/alerts/app/n8n.yaml"
+gatus_values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+
+reset_tree
+jq '.uid = "wrong-dashboard"' "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'wrong n8n dashboard UID' \
+  'The n8n PostgreSQL dashboard identity, datasource, and panel inventory are incorrect.'
+
+reset_tree
+jq '(.templating.list[] | select(.name == "datasource") | .query) = "loki"' \
+  "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'wrong n8n dashboard default datasource' \
+  'The n8n PostgreSQL dashboard identity, datasource, and panel inventory are incorrect.'
+
+reset_tree
+jq 'del(.panels[] | select(.title == "Validated logical backup status"))' \
+  "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'missing first-class backup status panel' \
+  'The n8n PostgreSQL dashboard identity, datasource, and panel inventory are incorrect.'
+
+reset_tree
+jq '(.panels[] | select(.title == "Validated logical backup age") | .targets[0].expr) = "max(kube_job_status_succeeded{namespace=\"automation\"})"' \
+  "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'dashboard backup age based on Kubernetes Job success' \
+  'Backup observability must use the validated logical-dump status marker.'
+
+reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "N8nPostgresqlBackupStale") | .expr) = "kube_job_status_succeeded{namespace=\"automation\"} == 0"' \
+  "$alerts"
+expect_fail 'backup freshness alert based on Kubernetes Job success' \
+  'Backup observability must use the validated logical-dump status marker.'
+
+reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "N8nCanaryDown") | .expr) = "gatus_results_endpoint_success{group=\"Platform\",name=\"wrong\"} == 0"' \
+  "$alerts"
+expect_fail 'canary alert identity drift' \
+  'The Gatus canary, Prometheus alerts, and dashboard must use one endpoint identity.'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .url) = "https://*.lab.supermorphic.com/webhook/platform-canary"' \
+  "$gatus_values"
+expect_fail 'Gatus canary wildcard route coupling' \
+  'The Gatus canary URL must match the dedicated public certificate and exact route.'
+
+reset_tree
+jq '(.panels[] | select(.title == "Persistent volume utilization") | .targets[0].expr) |= gsub("\\|n8n-postgresql-backups"; "")' \
+  "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'dashboard omits backup PVC' \
+  'n8n alert and dashboard PVC inventories must match the three retained claims.'
+
+reset_tree
+jq '(.panels[] | select(.title == "Ready replicas") | .targets[0].expr) = "kube_deployment_status_replicas_available{namespace=\"automation\",deployment=\"wrong\"}"' \
+  "$dashboard" >"$dashboard.tmp"
+mv -- "$dashboard.tmp" "$dashboard"
+expect_fail 'dashboard workload identity drift' \
+  'n8n availability alerts and dashboard must match the deployed workload identities.'
+
+reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "N8nExecutionFailures") | .expr) = "increase(obsolete_n8n_failures_total[15m]) > 0"' \
+  "$alerts"
+expect_fail 'execution alert uses obsolete n8n metric' \
+  'n8n execution alerts and dashboard must use the pinned duration histogram contract.'
 
 workflow="$tree_root/kubernetes/apps/automation/n8n/app/workflows/platform-canary.json"
 

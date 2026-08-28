@@ -365,6 +365,9 @@ assert_retained_recovery_copy() {
 reset_validator_tree() {
   rm -rf -- "$validator_tree"
   mkdir -p "$validator_tree/kubernetes/apps/networking"
+  mkdir -p "$validator_tree/kubernetes/apps/monitoring/alerts/app"
+  mkdir -p "$validator_tree/kubernetes/apps/monitoring/gatus/app"
+  mkdir -p "$validator_tree/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards"
   cp "$repo_root/kubernetes/apps/kustomization.yaml" \
     "$validator_tree/kubernetes/apps/kustomization.yaml"
   cp -R "$repo_root/kubernetes/apps/automation" \
@@ -375,6 +378,18 @@ reset_validator_tree() {
     "$validator_tree/kubernetes/apps/networking/external-dns"
   cp -R "$repo_root/kubernetes/apps/networking/public-webhook-gateway" \
     "$validator_tree/kubernetes/apps/networking/public-webhook-gateway"
+  cp "$repo_root/kubernetes/apps/monitoring/alerts/app/n8n.yaml" \
+    "$validator_tree/kubernetes/apps/monitoring/alerts/app/n8n.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml" \
+    "$validator_tree/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml" \
+    "$validator_tree/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml" \
+    "$validator_tree/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml" \
+    "$validator_tree/kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json" \
+    "$validator_tree/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json"
   cat >"$validator_tree/.sops.yaml" <<EOF
 creation_rules:
   - path_regex: ^kubernetes/.*\\.sops\\.ya?ml$
@@ -386,17 +401,12 @@ EOF
 select_all_n8n_secrets() {
   mkdir -p "$validator_tree/kubernetes/apps/automation/n8n/app"
   mkdir -p "$validator_tree/kubernetes/apps/automation/n8n-postgresql/app"
-  mkdir -p "$validator_tree/kubernetes/apps/monitoring/gatus/app"
   yq -i '.resources += ["./n8n-runtime.sops.yaml"]' \
     "$validator_tree/kubernetes/apps/automation/n8n/app/kustomization.yaml"
   yq -i '.resources += ["./postgresql-credentials.sops.yaml"]' \
     "$validator_tree/kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml"
-  cat >"$validator_tree/kubernetes/apps/monitoring/gatus/app/kustomization.yaml" <<'YAML'
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ./n8n-canary.sops.yaml
-YAML
+  yq -i '.resources += ["./n8n-canary.sops.yaml"]' \
+    "$validator_tree/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
 }
 
 select_runtime_secret() {

@@ -6,6 +6,7 @@ resources:
   - ./helmrepository.yaml
   - ./httproute.yaml
   - ./media-integration-api-keys.sops.yaml
+  # Task 9 adds ./n8n-canary.sops.yaml only after the operator-managed ciphertext exists.
   - ./namespace.yaml
 configMapGenerator:
   - name: gatus-values

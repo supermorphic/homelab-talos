@@ -71,3 +71,64 @@ spec:
             description: >-
               Prometheus has received no expiry timestamp for
               networking/wildcard-lab-supermorphic-com for more than five minutes.
+        - alert: HooksCertificateExpiringSoon
+          expr: >-
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking-public",
+                  name="hooks-lab-supermorphic-com"
+                }
+              ) - time()
+            ) < 14 * 24 * 60 * 60
+            and
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking-public",
+                  name="hooks-lab-supermorphic-com"
+                }
+              ) - time()
+            ) > 3 * 24 * 60 * 60
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Public hooks certificate expires within 14 days
+            description: >-
+              The networking-public/hooks-lab-supermorphic-com certificate has not renewed
+              and expires in less than 14 days.
+        - alert: HooksCertificateExpiringCritical
+          expr: >-
+            (
+              max by (name, namespace) (
+                certmanager_certificate_expiration_timestamp_seconds{
+                  namespace="networking-public",
+                  name="hooks-lab-supermorphic-com"
+                }
+              ) - time()
+            ) <= 3 * 24 * 60 * 60
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Public hooks certificate expires within 3 days
+            description: >-
+              The networking-public/hooks-lab-supermorphic-com certificate expires in 3
+              days or less.
+        - alert: HooksCertificateMetricMissing
+          expr: >-
+            absent(
+              certmanager_certificate_expiration_timestamp_seconds{
+                namespace="networking-public",
+                name="hooks-lab-supermorphic-com"
+              }
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Public hooks certificate expiry metric is missing
+            description: >-
+              Prometheus has received no expiry timestamp for
+              networking-public/hooks-lab-supermorphic-com for more than five minutes.

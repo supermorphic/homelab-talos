@@ -30,6 +30,24 @@ reset_tree() {
     "$tree_root/kubernetes/apps/testing/echo/app/service.yaml"
   cp "$repo_root/kubernetes/apps/networking/internal-gateway/app/gateway.yaml" \
     "$tree_root/kubernetes/apps/networking/internal-gateway/app/gateway.yaml"
+  local synthetic_recipient
+  synthetic_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' \
+    "$tree_root/.sops.yaml")"
+  synthetic_recipient="$synthetic_recipient" yq -n '
+    .apiVersion = "v1" |
+    .kind = "Secret" |
+    .metadata.name = "n8n-canary" |
+    .metadata.namespace = "gatus" |
+    .type = "Opaque" |
+    .stringData.token = "ENC[AES256_GCM,data:c3ludGhldGljLXRlc3Q=,iv:c3ludGhldGljLWl2,tag:c3ludGhldGljLXRhZw==,type:str]" |
+    .sops.age = [{"recipient": strenv(synthetic_recipient), "enc": "synthetic-test-envelope"}] |
+    .sops.lastmodified = "2026-01-01T00:00:00Z" |
+    .sops.mac = "ENC[AES256_GCM,data:c3ludGhldGljLW1hYw==,iv:c3ludGhldGljLWl2,tag:c3ludGhldGljLXRhZw==,type:str]" |
+    .sops.encrypted_regex = "^(data|stringData)$" |
+    .sops.version = "3.11.0"
+  ' >"$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml"
+  yq -i '.resources += ["./n8n-canary.sops.yaml"]' \
+    "$tree_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
 }
 
 run_validator() {
@@ -45,6 +63,20 @@ expect_pass() {
   set -e
   [[ "$exit_code" -eq 0 ]] || {
     echo "$description: expected Gatus validation to pass." >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+
+expect_fixture_pass() {
+  local description="$1"
+  local output exit_code
+  set +e
+  output="$(run_validator)"
+  exit_code="$?"
+  set -e
+  [[ "$exit_code" -eq 0 ]] || {
+    echo "$description: expected selected synthetic Gatus Secret fixture to pass." >&2
     echo "$output" >&2
     exit 1
   }
@@ -113,6 +145,36 @@ expect_pass 'production Gatus source'
 
 values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
 secret="$tree_root/kubernetes/apps/monitoring/gatus/app/media-integration-api-keys.sops.yaml"
+canary_secret="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml"
+
+reset_tree
+expect_fixture_pass 'selected synthetic n8n canary Secret'
+
+reset_tree
+rm -f -- "$canary_secret"
+expect_fail 'absent selected n8n canary Secret' 'Missing selected Gatus SOPS Secret:'
+
+reset_tree
+yq -i '.stringData.token = "malformed-ciphertext"' "$canary_secret"
+expect_fail 'malformed selected n8n canary ciphertext' \
+  'Selected Gatus SOPS Secret is not encrypted:'
+
+reset_tree
+yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary") | .headers."X-Platform-Canary")' \
+  "$values"
+expect_fail 'n8n canary missing authentication header' \
+  'Platform n8n canary endpoint authentication header:'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .url) = "https://*.lab.supermorphic.com/webhook/platform-canary"' \
+  "$values"
+expect_fail 'n8n canary wildcard URL' 'Existing Level 1 endpoint n8n-platform-canary URL:'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .interval) = "1m"' \
+  "$values"
+expect_fail 'n8n canary one-minute interval' \
+  'Existing Level 1 endpoint n8n-platform-canary interval:'
 
 reset_tree
 yq -i 'del(.config.endpoints[] | select(.name == "prowlarr-native-health"))' "$values"

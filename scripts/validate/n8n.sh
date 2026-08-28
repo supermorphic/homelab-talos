@@ -38,6 +38,12 @@ n8n_grant="$n8n_app/referencegrant.yaml"
 n8n_monitor="$n8n_app/servicemonitor.yaml"
 n8n_policy="$n8n_app/ciliumnetworkpolicy.yaml"
 n8n_workflow="$n8n_app/workflows/platform-canary.json"
+monitoring_alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomization.yaml'
+n8n_alerts='kubernetes/apps/monitoring/alerts/app/n8n.yaml'
+gatus_kustomization='kubernetes/apps/monitoring/gatus/app/kustomization.yaml'
+gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
+prometheus_config='kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml'
+n8n_dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -147,6 +153,10 @@ for file in "$n8n_ks" "$n8n_kustomization" "$n8n_source" "$n8n_release" \
   "$n8n_values" "$n8n_pvc" "$n8n_route" "$n8n_grant" "$n8n_monitor" \
   "$n8n_policy"; do
   [[ -f "$file" ]] || { echo "Missing n8n chart source: $file" >&2; exit 1; }
+done
+for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$gatus_kustomization" \
+  "$gatus_values" "$prometheus_config" "$n8n_dashboard"; do
+  [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
 [[ -f "$n8n_workflow" ]] || {
   echo "Missing n8n Platform Canary workflow template: $n8n_workflow" >&2
@@ -678,6 +688,130 @@ mapfile -t public_route_contracts < <(
 [[ "$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")" == \
   "/webhook/$workflow_path" ]] || {
   echo 'The public route and Platform Canary Webhook must use the same production path.' >&2
+  exit 1
+}
+
+# Cross-component observability checks derive identities from the workload, route,
+# collector, and probe sources. This prevents copied literals from agreeing with one
+# another while drifting away from the resources that produce the metrics.
+[[ "$(yq -r '[.resources[] | select(. == "./n8n.yaml")] | length' \
+  "$monitoring_alerts_kustomization")" == '1' && \
+  "$(yq -r '[.configMapGenerator[] | select(.name == "n8n-postgresql-dashboard") |
+    .files[] | select(. == "dashboards/n8n-postgresql.json")] | length' \
+    "$prometheus_config")" == '1' ]] || {
+  echo 'n8n alerts and dashboard must each be packaged exactly once.' >&2
+  exit 1
+}
+
+expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nContainerRestarting,N8nExecutionFailures,N8nPersistentVolumeClaimNotBound,N8nPersistentVolumeUsageCritical,N8nPersistentVolumeUsageWarning,N8nPostgresqlBackupJobFailed,N8nPostgresqlBackupJobOverdue,N8nPostgresqlBackupStale,N8nPostgresqlUnavailable,N8nPostgresqlWorkloadUnavailable,N8nUnavailable,N8nWorkloadUnavailable'
+[[ "$(yq -r '[.spec.groups[].rules[].alert] | sort | join(",")' "$n8n_alerts")" == \
+  "$expected_alerts" ]] || {
+  echo 'The n8n PrometheusRule must contain the exact approved alert inventory.' >&2
+  exit 1
+}
+
+expected_panels='Authenticated public canary|Container restarts|Execution duration p95|Execution success and failure rate|OOM termination state|Persistent volume utilization|Platform CPU|Platform memory|PostgreSQL connections|PostgreSQL database size|Ready replicas|Validated logical backup age|Validated logical backup status'
+[[ "$(jq -r '.uid' "$n8n_dashboard")" == 'n8n-postgresql' && \
+  "$(jq -r '[.templating.list[] | select(.name == "datasource" and .type == "datasource" and .query == "prometheus")] | length' "$n8n_dashboard")" == '1' && \
+  "$(jq -r '.templating.list | length' "$n8n_dashboard")" == '1' && \
+  "$(jq -r '[.panels[].title] | sort | join("|")' "$n8n_dashboard")" == \
+    "$expected_panels" && \
+  "$(jq -r '[.panels[] | select(.datasource != {"type":"prometheus","uid":"${datasource}"})] | length' "$n8n_dashboard")" == '0' ]] || {
+  echo 'The n8n PostgreSQL dashboard identity, datasource, and panel inventory are incorrect.' >&2
+  exit 1
+}
+
+canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' "$gatus_values")"
+canary_group="$(yq -r '.group' - <<<"$canary_endpoint")"
+canary_name="$(yq -r '.name' - <<<"$canary_endpoint")"
+canary_correlation="$(yq -r '.body | from_json | .correlation' - <<<"$canary_endpoint")"
+expected_canary_url="https://$(yq -r '.spec.dnsNames[0]' "$public_certificate")$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")"
+[[ "$(yq -r '.url' - <<<"$canary_endpoint")" == "$expected_canary_url" && \
+  "$(yq -r '.method' - <<<"$canary_endpoint")" == 'POST' && \
+  "$(yq -r '.interval' - <<<"$canary_endpoint")" == '5m' && \
+  "$canary_correlation" == 'gatus-platform-canary' ]] || {
+  echo 'The Gatus canary URL must match the dedicated public certificate and exact route.' >&2
+  exit 1
+}
+# shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
+[[ "$(yq -r '.env.GATUS_N8N_CANARY_TOKEN.valueFrom.secretKeyRef | [.name,.key] | join(",")' \
+    "$gatus_values")" == 'n8n-canary,token' && \
+  "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" == \
+    '${GATUS_N8N_CANARY_TOKEN}' ]] || {
+  echo 'The Gatus canary authentication must consume only gatus/n8n-canary token.' >&2
+  exit 1
+}
+canary_down_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nCanaryDown") | .expr' "$n8n_alerts")"
+canary_missing_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nCanaryProbeMissing") | .expr' "$n8n_alerts")"
+canary_dashboard_expr="$(jq -r '.panels[] | select(.title == "Authenticated public canary") | .targets[].expr' "$n8n_dashboard")"
+canary_matcher="group=\"$canary_group\",name=\"$canary_name\""
+[[ "$canary_down_expr" == *"group=\"$canary_group\""* && \
+  "$canary_down_expr" == *"name=\"$canary_name\""* && \
+  "$canary_missing_expr" == *"group=\"$canary_group\""* && \
+  "$canary_missing_expr" == *"name=\"$canary_name\""* && \
+  "$canary_dashboard_expr" == *"$canary_matcher"* ]] || {
+  echo 'The Gatus canary, Prometheus alerts, and dashboard must use one endpoint identity.' >&2
+  exit 1
+}
+
+backup_metric="$(yq -r '.collectors[].metrics[] | select(.query | contains("platform_operations.logical_backup_status")) | .metric_name' "$postgresql_exporter")"
+backup_alert_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nPostgresqlBackupStale") | .expr' "$n8n_alerts")"
+backup_age_expr="$(jq -r '.panels[] | select(.title == "Validated logical backup age") | .targets[].expr' "$n8n_dashboard")"
+backup_status_expr="$(jq -r '.panels[] | select(.title == "Validated logical backup status") | .targets[].expr' "$n8n_dashboard")"
+[[ "$backup_metric" == 'n8n_postgresql_backup_last_success_timestamp_seconds' && \
+  "$backup_alert_expr" == *"$backup_metric"* && \
+  "$backup_age_expr" == *"$backup_metric"* && \
+  "$backup_status_expr" == *"$backup_metric"* && \
+  "$backup_alert_expr$backup_age_expr$backup_status_expr" != *'kube_job_status_succeeded'* ]] || {
+  echo 'Backup observability must use the validated logical-dump status marker.' >&2
+  exit 1
+}
+
+execution_alert_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nExecutionFailures") | .expr' "$n8n_alerts")"
+execution_rate_expr="$(jq -r '.panels[] | select(.title == "Execution success and failure rate") | .targets[].expr' "$n8n_dashboard")"
+execution_duration_expr="$(jq -r '.panels[] | select(.title == "Execution duration p95") | .targets[].expr' "$n8n_dashboard")"
+[[ "$execution_alert_expr" == *'n8n_workflow_execution_duration_seconds_count'* && \
+  "$execution_alert_expr" == *'status="failed"'* && \
+  "$execution_rate_expr" == *'n8n_workflow_execution_duration_seconds_count'* && \
+  "$execution_duration_expr" == *'n8n_workflow_execution_duration_seconds_bucket'* ]] || {
+  echo 'n8n execution alerts and dashboard must use the pinned duration histogram contract.' >&2
+  exit 1
+}
+
+n8n_deployment_name="$(yq -r '.spec.postRenderers[0].kustomize.patches[] |
+  select(.target.kind == "Deployment") | .patch | from_yaml | .[] |
+  select(.path == "/metadata/name") | .value' "$n8n_release")"
+postgresql_workload_name="$(yq -r '.metadata.name' "$postgresql_statefulset")"
+n8n_workload_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nWorkloadUnavailable") | .expr' "$n8n_alerts")"
+postgresql_workload_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nPostgresqlWorkloadUnavailable") | .expr' "$n8n_alerts")"
+ready_replicas_expr="$(jq -r '.panels[] | select(.title == "Ready replicas") | .targets[].expr' "$n8n_dashboard")"
+[[ "$n8n_workload_expr" == *"deployment=\"$n8n_deployment_name\""* && \
+  "$postgresql_workload_expr" == *"statefulset=\"$postgresql_workload_name\""* && \
+  "$ready_replicas_expr" == *"deployment=\"$n8n_deployment_name\""* && \
+  "$ready_replicas_expr" == *"statefulset=\"$postgresql_workload_name\""* ]] || {
+  echo 'n8n availability alerts and dashboard must match the deployed workload identities.' >&2
+  exit 1
+}
+
+pvc_inventory="$(yq -r '.metadata.name' "$n8n_pvc")"
+while IFS= read -r postgresql_pvc; do
+  pvc_inventory+="|$postgresql_pvc"
+done < <(yq ea -N -r 'select(.kind == "PersistentVolumeClaim") | .metadata.name' "$postgresql_pvcs")
+pvc_matcher="persistentvolumeclaim=~\"$pvc_inventory\""
+pvc_alert_exprs="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nPersistentVolumeClaimNotBound" or .alert == "N8nPersistentVolumeUsageWarning" or .alert == "N8nPersistentVolumeUsageCritical") | .expr' "$n8n_alerts")"
+pvc_dashboard_expr="$(jq -r '.panels[] | select(.title == "Persistent volume utilization") | .targets[].expr' "$n8n_dashboard")"
+[[ "$pvc_inventory" == 'n8n-data|n8n-postgresql-data|n8n-postgresql-backups' && \
+  "$(rg -Foc "$pvc_matcher" <<<"$pvc_alert_exprs")" -eq 5 && \
+  "$(rg -Foc "$pvc_matcher" <<<"$pvc_dashboard_expr")" -eq 2 ]] || {
+  echo 'n8n alert and dashboard PVC inventories must match the three retained claims.' >&2
+  exit 1
+}
+
+connection_metric="$(yq -r '.collectors[].metrics[] | select(.key_labels == ["state"]) | .metric_name' "$postgresql_exporter")"
+database_size_metric="$(yq -r '.collectors[].metrics[] | select(.values == ["database_size_bytes"]) | .metric_name' "$postgresql_exporter")"
+[[ "$(jq -r '.panels[] | select(.title == "PostgreSQL connections") | .targets[].expr' "$n8n_dashboard")" == *"$connection_metric"* && \
+  "$(jq -r '.panels[] | select(.title == "PostgreSQL database size") | .targets[].expr' "$n8n_dashboard")" == *"$database_size_metric"* ]] || {
+  echo 'The PostgreSQL dashboard panels must use the Task 4 SQL Exporter metrics.' >&2
   exit 1
 }
 

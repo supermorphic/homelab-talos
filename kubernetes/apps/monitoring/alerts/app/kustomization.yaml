@@ -5,6 +5,7 @@ resources:
   - ./flux.yaml
   - ./gatus.yaml
   - ./logging.yaml
+  - ./n8n.yaml
   - ./ntfy.yaml
   - ./portainer.yaml
   - ./test-reports.yaml

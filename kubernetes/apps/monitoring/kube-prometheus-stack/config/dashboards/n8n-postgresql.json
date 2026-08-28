@@ -1,0 +1,283 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Platform CPU",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "n8n",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"automation\",pod=~\"n8n-.*\",container=\"n8n-main\"}[$__rate_interval]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "PostgreSQL / {{container}}",
+          "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"automation\",pod=~\"n8n-postgresql-.*\",container=~\"postgresql|sql-exporter\"}[$__rate_interval]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Platform memory",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "n8n",
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"automation\",pod=~\"n8n-.*\",container=\"n8n-main\"})"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "PostgreSQL / {{container}}",
+          "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"automation\",pod=~\"n8n-postgresql-.*\",container=~\"postgresql|sql-exporter\"})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Ready replicas",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "n8n",
+          "expr": "kube_deployment_status_replicas_available{namespace=\"automation\",deployment=\"n8n\"}"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "PostgreSQL",
+          "expr": "kube_statefulset_status_replicas_ready{namespace=\"automation\",statefulset=\"n8n-postgresql\"}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Container restarts",
+      "type": "timeseries",
+      "gridPos": {"h": 5, "w": 9, "x": 6, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{container}}",
+          "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=\"automation\",container=~\"n8n-main|postgresql|sql-exporter\"}[$__rate_interval]))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "OOM termination state",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 9, "x": 15, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [{"type": "value", "options": {"0": {"text": "OK"}, "1": {"text": "OOMKilled"}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{container}}",
+          "expr": "sum by (container) (kube_pod_container_status_last_terminated_reason{namespace=\"automation\",container=~\"n8n-main|postgresql|sql-exporter\",reason=\"OOMKilled\"})"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Execution success and failure rate",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{status}}",
+          "expr": "sum by (status) (rate(n8n_workflow_execution_duration_seconds_count{namespace=\"automation\",service=\"n8n\",status=~\"success|failed\"}[$__rate_interval]))"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Execution duration p95",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{status}}",
+          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(n8n_workflow_execution_duration_seconds_bucket{namespace=\"automation\",service=\"n8n\",status=~\"success|failed\"}[$__rate_interval])))"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "PostgreSQL connections",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{state}}",
+          "expr": "sum by (state) (n8n_postgresql_connections{namespace=\"automation\",service=\"n8n-postgresql\"})"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "PostgreSQL database size",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"legend": {"displayMode": "hidden"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(n8n_postgresql_database_size_bytes{namespace=\"automation\",service=\"n8n-postgresql\"})"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Persistent volume utilization",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 26},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}
+        },
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{persistentvolumeclaim}}",
+          "expr": "100 * (1 - max by (persistentvolumeclaim) (kubelet_volume_stats_available_bytes{namespace=\"automation\",persistentvolumeclaim=~\"n8n-data|n8n-postgresql-data|n8n-postgresql-backups\"}) / max by (persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace=\"automation\",persistentvolumeclaim=~\"n8n-data|n8n-postgresql-data|n8n-postgresql-backups\"}))"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Validated logical backup age",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 129600}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(n8n_postgresql_backup_last_success_timestamp_seconds{namespace=\"automation\",service=\"n8n-postgresql\"})"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Validated logical backup status",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {"0": {"text": "STALE / MISSING"}, "1": {"text": "CURRENT"}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(time() - max(n8n_postgresql_backup_last_success_timestamp_seconds{namespace=\"automation\",service=\"n8n-postgresql\"}) < bool 129600) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Authenticated public canary",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(gatus_results_endpoint_success{group=\"Platform\",name=\"n8n-platform-canary\"})"
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["n8n", "postgresql", "automation"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "Prometheus", "value": "Prometheus"},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "n8n and PostgreSQL",
+  "uid": "n8n-postgresql",
+  "version": 1
+}

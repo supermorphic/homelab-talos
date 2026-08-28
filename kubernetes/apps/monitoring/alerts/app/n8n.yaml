@@ -1,0 +1,282 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: n8n
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: n8n
+spec:
+  groups:
+    - name: n8n-platform
+      rules:
+        - alert: N8nUnavailable
+          expr: up{namespace="automation",service="n8n"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n metrics target is unavailable
+            description: >-
+              The automation/n8n Prometheus target has been down for more than five minutes.
+        - alert: N8nPostgresqlUnavailable
+          expr: up{namespace="automation",service="n8n-postgresql"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n PostgreSQL metrics target is unavailable
+            description: >-
+              The automation/n8n-postgresql SQL Exporter target has been down for more
+              than five minutes.
+        - alert: N8nWorkloadUnavailable
+          expr: >-
+            kube_deployment_status_replicas_available{
+              namespace="automation",
+              deployment="n8n"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n workload is unavailable
+            description: >-
+              The automation/n8n Deployment has had no available replica for more than
+              five minutes.
+        - alert: N8nPostgresqlWorkloadUnavailable
+          expr: >-
+            kube_statefulset_status_replicas_ready{
+              namespace="automation",
+              statefulset="n8n-postgresql"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n PostgreSQL workload is unavailable
+            description: >-
+              The automation/n8n-postgresql StatefulSet has had no ready replica for more
+              than five minutes.
+        - alert: N8nContainerRestarting
+          expr: >-
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="automation",
+                container=~"n8n-main|postgresql|sql-exporter"
+              }[15m]
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n platform container is restarting repeatedly
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.pod }} {{ $labels.container }}
+              container restarted more than twice in 15 minutes.
+        - alert: N8nContainerOomKilled
+          expr: >-
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="automation",
+                container=~"n8n-main|postgresql|sql-exporter"
+              }[15m]
+            ) > 0
+            and on (namespace, pod, container)
+            kube_pod_container_status_last_terminated_reason{
+              namespace="automation",
+              container=~"n8n-main|postgresql|sql-exporter",
+              reason="OOMKilled"
+            } == 1
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n platform container was OOM killed
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.pod }} {{ $labels.container }}
+              container was OOM killed during the last 15 minutes.
+        - alert: N8nExecutionFailures
+          expr: >-
+            sum(
+              increase(
+                n8n_workflow_execution_duration_seconds_count{
+                  namespace="automation",
+                  service="n8n",
+                  status="failed"
+                }[15m]
+              )
+            ) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n executions are failing
+            description: >-
+              Failed n8n executions have increased continuously across the 15-minute
+              observation window.
+        - alert: N8nPostgresqlBackupStale
+          expr: >-
+            (
+              time() - max by (namespace, service) (
+                n8n_postgresql_backup_last_success_timestamp_seconds{
+                  namespace="automation",
+                  service="n8n-postgresql"
+                }
+              )
+            ) > 36 * 60 * 60
+            or
+            absent(
+              n8n_postgresql_backup_last_success_timestamp_seconds{
+                namespace="automation",
+                service="n8n-postgresql"
+              }
+            )
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n PostgreSQL logical backup is stale or missing
+            description: >-
+              No validated logical-dump marker has reported success within 36 hours.
+        - alert: N8nPostgresqlBackupJobFailed
+          expr: >-
+            kube_job_status_failed{
+              namespace="automation",
+              job_name=~"n8n-postgresql-backup-.*"
+            } > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n PostgreSQL backup Job failed
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.job_name }} Job has remained failed
+              for more than five minutes.
+        - alert: N8nPostgresqlBackupJobOverdue
+          expr: >-
+            time() - kube_cronjob_next_schedule_time{
+              namespace="automation",
+              cronjob="n8n-postgresql-backup"
+            } > 60 * 60
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n PostgreSQL backup schedule is overdue
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.cronjob }} CronJob is more than one
+              hour past its next scheduled run.
+        - alert: N8nCanaryDown
+          expr: >-
+            gatus_results_endpoint_success{
+              group="Platform",
+              name="n8n-platform-canary"
+            } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n authenticated public canary is down
+            description: >-
+              The Platform/n8n-platform-canary probe has failed for more than five minutes.
+        - alert: N8nCanaryProbeMissing
+          expr: >-
+            absent(
+              gatus_results_endpoint_success{
+                group="Platform",
+                name="n8n-platform-canary"
+              }
+            )
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n authenticated public canary metric is missing
+            description: >-
+              The Platform/n8n-platform-canary success series has been absent for more
+              than 15 minutes.
+        - alert: N8nPersistentVolumeClaimNotBound
+          expr: >-
+            kube_persistentvolumeclaim_status_phase{
+              namespace="automation",
+              persistentvolumeclaim=~"n8n-data|n8n-postgresql-data|n8n-postgresql-backups",
+              phase="Bound"
+            } == 0
+            or absent(
+              kube_persistentvolumeclaim_status_phase{
+                namespace="automation",
+                persistentvolumeclaim="n8n-data",
+                phase="Bound"
+              }
+            )
+            or absent(
+              kube_persistentvolumeclaim_status_phase{
+                namespace="automation",
+                persistentvolumeclaim="n8n-postgresql-data",
+                phase="Bound"
+              }
+            )
+            or absent(
+              kube_persistentvolumeclaim_status_phase{
+                namespace="automation",
+                persistentvolumeclaim="n8n-postgresql-backups",
+                phase="Bound"
+              }
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n platform claim is absent or unbound
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has not
+              reported Bound for more than five minutes.
+        - alert: N8nPersistentVolumeUsageWarning
+          expr: >-
+            100 * (
+              1 - max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_available_bytes{
+                  namespace="automation",
+                  persistentvolumeclaim=~"n8n-data|n8n-postgresql-data|n8n-postgresql-backups"
+                }
+              )
+              /
+              max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_capacity_bytes{
+                  namespace="automation",
+                  persistentvolumeclaim=~"n8n-data|n8n-postgresql-data|n8n-postgresql-backups"
+                }
+              )
+            ) > 70
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: n8n platform PVC use is above 70 percent
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has
+              remained above 70 percent used for more than 15 minutes.
+        - alert: N8nPersistentVolumeUsageCritical
+          expr: >-
+            100 * (
+              1 - max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_available_bytes{
+                  namespace="automation",
+                  persistentvolumeclaim=~"n8n-data|n8n-postgresql-data|n8n-postgresql-backups"
+                }
+              )
+              /
+              max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_capacity_bytes{
+                  namespace="automation",
+                  persistentvolumeclaim=~"n8n-data|n8n-postgresql-data|n8n-postgresql-backups"
+                }
+              )
+            ) > 85
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: n8n platform PVC use is above 85 percent
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has
+              remained above 85 percent used for more than five minutes.

@@ -9,6 +9,7 @@ repo="$base/app/helmrepository.yaml"
 route="$base/app/httproute.yaml"
 ns="$base/app/namespace.yaml"
 secret="$base/app/media-integration-api-keys.sops.yaml"
+canary_secret="$base/app/n8n-canary.sops.yaml"
 echo_route='kubernetes/apps/testing/echo/app/httproute.yaml'
 echo_service='kubernetes/apps/testing/echo/app/service.yaml'
 internal_gateway='kubernetes/apps/networking/internal-gateway/app/gateway.yaml'
@@ -22,6 +23,71 @@ require_equal() {
   local expected="$3"
   [[ "$actual" == "$expected" ]] || {
     echo "$description: expected $expected; got $actual." >&2
+    exit 1
+  }
+}
+
+normalise_resource_path() {
+  local path="$1"
+  while [[ "$path" == ./* ]]; do
+    path="${path#./}"
+  done
+  printf '%s\n' "$path"
+}
+
+validate_selected_sops_secret() {
+  local owner="$1" resource="$2" target="$3" expected_name="$4"
+  local expected_namespace="$5" expected_keys="$6" expected_recipient selected_resource
+  local normalised_resource normalised_selected_resource selected=false
+  local -a expected_recipients candidate_recipients
+
+  normalised_resource="$(normalise_resource_path "$resource")"
+  while IFS= read -r selected_resource; do
+    normalised_selected_resource="$(normalise_resource_path "$selected_resource")"
+    [[ "$normalised_selected_resource" != "$normalised_resource" ]] || selected=true
+  done < <(yq -r '.resources[]?' "$owner")
+  [[ "$selected" == true ]] || return 0
+  [[ -f "$target" ]] || {
+    echo "Missing selected Gatus SOPS Secret: $target." >&2
+    exit 1
+  }
+  # shellcheck disable=SC2016 # yq reads target through its env() function.
+  mapfile -t expected_recipients < <(
+    target="$target" yq -r \
+      '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+      .sops.yaml
+  )
+  [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+    "${expected_recipients[0]}" != 'null' ]] || {
+    echo "Unable to select exactly one SOPS age recipient for $target." >&2
+    exit 1
+  }
+  expected_recipient="${expected_recipients[0]}"
+  [[ "$(sops filestatus "$target" | yq -r '.encrypted')" == 'true' && \
+    "$(yq -r '[.stringData[] | test("^ENC\\[AES256_GCM,")] | all' "$target")" == 'true' ]] || {
+    echo "Selected Gatus SOPS Secret is not encrypted: $target." >&2
+    exit 1
+  }
+  mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$target" | sort -u)
+  [[ "${#candidate_recipients[@]}" -eq 1 && \
+    "${candidate_recipients[0]}" == "$expected_recipient" ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected age recipient: $target." >&2
+    exit 1
+  }
+  [[ "$(yq -r 'has("data") | not' "$target")" == 'true' && \
+    "$(yq -r 'keys | sort | join(",")' "$target")" == \
+      'apiVersion,kind,metadata,sops,stringData,type' && \
+    "$(yq -r '.metadata | keys | sort | join(",")' "$target")" == 'name,namespace' && \
+    "$(yq -r '.apiVersion' "$target")" == 'v1' && \
+    "$(yq -r '.kind' "$target")" == 'Secret' && \
+    "$(yq -r '.metadata.name' "$target")" == "$expected_name" && \
+    "$(yq -r '.metadata.namespace' "$target")" == "$expected_namespace" && \
+    "$(yq -r '.type' "$target")" == 'Opaque' ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected Secret contract: $target." >&2
+    exit 1
+  }
+  [[ "$(yq -r '.stringData | keys | sort | join(",")' "$target")" == "$expected_keys" ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected key set: $target." >&2
     exit 1
   }
 }
@@ -40,8 +106,28 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,internal-gateway' ]]
 require_equal 'Gatus Flux SOPS provider' "$(yq -r '.spec.decryption.provider' "$ks")" 'sops'
 require_equal 'Gatus Flux SOPS Secret reference' "$(yq -r '.spec.decryption.secretRef.name' "$ks")" 'sops-age'
-require_equal 'Gatus media API-key Secret resource count' \
-  "$(yq -r '[.resources[] | select(. == "./media-integration-api-keys.sops.yaml")] | length' "$base/app/kustomization.yaml")" '1'
+declare -A resource_counts=()
+while IFS= read -r resource; do
+  resource="$(normalise_resource_path "$resource")"
+  case "$resource" in
+    helmrelease.yaml | helmrepository.yaml | httproute.yaml | \
+      media-integration-api-keys.sops.yaml | namespace.yaml | n8n-canary.sops.yaml)
+      resource_counts["$resource"]=$(( ${resource_counts["$resource"]:-0} + 1 ))
+      ;;
+    *)
+      echo "The Gatus app Kustomization selects an unexpected resource: $resource" >&2
+      exit 1
+      ;;
+  esac
+done < <(yq -r '.resources[]' "$base/app/kustomization.yaml")
+for resource in helmrelease.yaml helmrepository.yaml httproute.yaml \
+  media-integration-api-keys.sops.yaml namespace.yaml; do
+  require_equal "Gatus resource $resource count" "${resource_counts["$resource"]:-0}" '1'
+done
+[[ "${resource_counts[n8n-canary.sops.yaml]:-0}" -le 1 ]] || {
+  echo 'The Gatus app must not select n8n-canary.sops.yaml more than once.' >&2
+  exit 1
+}
 require_equal 'Gatus media API-key Secret encryption state' \
   "$(sops filestatus "$secret" | yq -r '.encrypted')" 'true'
 require_equal 'Gatus media API-key Secret SOPS recipient' \
@@ -54,6 +140,8 @@ require_equal 'Gatus media API-key Secret must not use data' "$(yq -r 'has("data
 require_equal 'Gatus media API-key Secret stringData keys' \
   "$(yq -r '.stringData | keys | sort | join(",")' "$secret")" \
   'lidarr_api_key,prowlarr_api_key,radarr_api_key,seerr_api_key,sonarr_api_key'
+validate_selected_sops_secret "$base/app/kustomization.yaml" './n8n-canary.sops.yaml' \
+  "$canary_secret" n8n-canary gatus token
 chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 [[ -n "$chart_version" && "$chart_version" != 'null' ]]
 [[ "$(yq -r '.spec.url' "$repo")" == 'https://twin.github.io/helm-charts' ]]
@@ -129,7 +217,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,n8n-platform-canary,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration") | .name] | sort | join(",")' "$values")" \
   "$legacy_endpoint_names"
@@ -148,6 +236,7 @@ prometheus|Observability|https://prometheus.lab.supermorphic.com/-/healthy|1m|[S
 alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200
 echo|Platform|https://echo.lab.supermorphic.com/|1m|[STATUS] == 200
+n8n-platform-canary|Platform|https://hooks.lab.supermorphic.com/webhook/platform-canary|5m|[STATUS] == 200|[BODY].status == ok|[BODY].correlation == gatus-platform-canary|len([BODY].executionId) > 0
 portainer|Platform|https://portainer.lab.supermorphic.com/|1m|[STATUS] == 200
 ntfy|Platform|http://ntfy.ntfy.svc.cluster.local/v1/health|1m|[STATUS] == 200|[BODY].healthy == true
 longhorn-ui|Storage|http://longhorn-frontend.longhorn-system.svc.cluster.local/|2m|[STATUS] == 200
@@ -162,6 +251,23 @@ tautulli|Media|https://tautulli.lab.supermorphic.com/status|1m|[STATUS] == 200
 flaresolverr|Media|http://flaresolverr.media.svc.cluster.local:8191/|1m|[STATUS] == 200
 letsencrypt-acme|External|https://acme-v02.api.letsencrypt.org/directory|10m|[STATUS] == 200
 EOF
+
+canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' "$values")"
+require_equal 'Platform n8n canary endpoint method' \
+  "$(yq -r '.method' - <<<"$canary_endpoint")" 'POST'
+# shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
+require_equal 'Platform n8n canary endpoint authentication header' \
+  "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" \
+  '${GATUS_N8N_CANARY_TOKEN}'
+require_equal 'Platform n8n canary endpoint header inventory' \
+  "$(yq -r '.headers | keys | sort | join(",")' - <<<"$canary_endpoint")" \
+  'Content-Type,X-Platform-Canary'
+require_equal 'Platform n8n canary endpoint content type' \
+  "$(yq -r '.headers."Content-Type"' - <<<"$canary_endpoint")" 'application/json'
+require_equal 'Platform n8n canary endpoint body' \
+  "$(yq -r '.body' - <<<"$canary_endpoint")" '{"correlation":"gatus-platform-canary"}'
+require_equal 'Platform n8n canary endpoint hides errors' \
+  "$(yq -r '.ui."hide-errors"' - <<<"$canary_endpoint")" 'true'
 
 kustomize build "$base/app" >/dev/null
 printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
@@ -187,6 +293,12 @@ GATUS_RADARR_API_KEY|radarr_api_key
 GATUS_LIDARR_API_KEY|lidarr_api_key
 GATUS_SEERR_API_KEY|seerr_api_key
 EOF
+require_equal 'Rendered Gatus GATUS_N8N_CANARY_TOKEN Secret name' \
+  "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .env[] | select(.name == "GATUS_N8N_CANARY_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$rendered")" \
+  'n8n-canary'
+require_equal 'Rendered Gatus GATUS_N8N_CANARY_TOKEN Secret key' \
+  "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .env[] | select(.name == "GATUS_N8N_CANARY_TOKEN") | .valueFrom.secretKeyRef.key] | .[0]' "$rendered")" \
+  'token'
 require_equal 'Rendered Gatus container envFrom Secret references' \
   "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .envFrom[]? | select(has("secretRef"))] | length' "$rendered")" '0'
 
