@@ -590,3 +590,42 @@ If preparation fails, it stops before GPU work and the specific bounded reason d
 the next correction. No monitoring schedule is created before a live Job exists. A
 diagnostic result still requires a separate accepted decision before any fresh quality
 benchmark or encoding deployment.
+
+## Corrective amendment — 2026-08-28 runtime image provenance
+
+This amendment corrects terminal producer authentication after the completed diagnostic
+run `20260827T233832Z-2a79502c`. It preserves the existing workload contract, immutable
+evidence, reader authority, and downstream decision boundaries. It does not repeat the
+diagnostic, change the runtime image, weaken registry identity checks, authorize a quality
+benchmark, or authorize FileFlows deployment or media replacement.
+
+The completed Job and Pod specs contained the exact configured registry digest. The
+kubelet's immutable `status.containerStatuses[0].imageID` also contained that digest. The
+runtime display field `status.containerStatuses[0].image` instead contained a local image
+configuration digest. The shared terminal producer validator required the display field
+to equal the configured registry reference, so both ordinary results and the bounded
+evidence-reader dispatch rejected otherwise valid terminal provenance.
+
+`status.containerStatuses[0].image` is not used as registry identity. Terminal producer
+authentication continues to require:
+
+- the exact configured registry digest in the Job template container spec;
+- the exact configured registry digest in the controlled Pod container spec;
+- the exact digest, with only the accepted runtime prefix normalization, in immutable
+  `status.containerStatuses[0].imageID`; and
+- all existing Job, Pod, owner, label, script, command, volume, security, node, terminal,
+  run, artifact, and payload checks.
+
+An executable fixture models the observed Kubernetes shape: the two specs and `imageID`
+retain the configured registry digest while `status.image` contains a different local
+configuration digest. Both terminal readers must accept that shape. Independent mutations
+of either workload spec image or `imageID` must still fail closed. Focused dispatch and
+results tests, the offline encode-benchmark validator, and canonical local CI must pass
+before publication.
+
+This source correction does not authorize merge, Flux reconciliation, evidence-reader
+dispatch, or another live action. After an operator-authorized merge and natural Flux
+reconciliation, the existing immutable run remains eligible for a separately authorized
+bounded evidence-reader dispatch. The diagnostic must not be repeated. Any transported
+result still requires a separate accepted decision before any quality benchmark or
+encoding deployment.

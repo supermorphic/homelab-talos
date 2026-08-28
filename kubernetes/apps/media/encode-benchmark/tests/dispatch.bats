@@ -488,6 +488,28 @@ EOF
 	done
 }
 
+# Catches treating the kubelet's runtime display field as registry identity.
+# containerd can report a local image configuration digest in status.image while
+# the immutable status.imageID and both workload specs retain the registry digest.
+@test "diagnostic readers accept a local runtime image display digest when imageID matches" {
+	local run_id='20260823T141907Z-9d6f6b71'
+	prepare_terminal_diagnostics_job "$run_id"
+	jq '.items[0].status.containerStatuses[0].image = ("sha256:" + ("b" * 64))' \
+		"$STUB_BENCHMARK_PODS_JSON" >"$STUB_BENCHMARK_PODS_JSON.tmp"
+	mv "$STUB_BENCHMARK_PODS_JSON.tmp" "$STUB_BENCHMARK_PODS_JSON"
+
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == "mode=diagnostics phase=Succeeded run_id=$run_id "* ]]
+	assert_no_mutations
+
+	: >"$STUB_CALLS"
+	export ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM="read:encode-benchmark:diagnostic-evidence:$run_id"
+	run_dispatch evidence-reader "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 1 ]
+}
+
 @test "diagnostic evidence reader admits only the exact immutable historical producer protocol" {
 	local run_id='20260826T014246Z-373a665e'
 	local historical_scripts='encode-benchmark-scripts-cfcdgkg5c7'
