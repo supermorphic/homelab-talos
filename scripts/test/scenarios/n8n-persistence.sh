@@ -27,8 +27,8 @@ run_dir="${HOMELAB_TEST_RUN_DIR:-}"
   exit 1
 }
 token="${N8N_CANARY_TOKEN:-}"
-[[ -n "$token" && "$token" != *$'\n'* && "$token" != *$'\r'* && "$token" != *'"'* ]] || {
-  echo 'Set N8N_CANARY_TOKEN to the operator-held canary token without line breaks.' >&2
+[[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+  echo 'N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -, with at least 32 characters.' >&2
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {

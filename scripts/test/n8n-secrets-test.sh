@@ -13,6 +13,7 @@ stub_bin="$test_dir/bin"
 target_runtime='kubernetes/apps/automation/n8n/app/n8n-runtime.sops.yaml'
 target_postgresql='kubernetes/apps/automation/n8n-postgresql/app/postgresql-credentials.sops.yaml'
 target_canary='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
+persistence_script="$repo_root/scripts/test/scenarios/n8n-persistence.sh"
 expected_confirmation='write:automation:n8n-platform:sops'
 expected_recipient='age1syntheticrecipientforn8nplatform00000000000000000000000000'
 declare -a targets=("$target_runtime" "$target_postgresql" "$target_canary")
@@ -408,6 +409,89 @@ for short_variable in "${secret_variables[@]}"; do
   }
   assert_no_targets
 done
+
+boundary_canary_token='Aa0_-Aa0_-Aa0_-Aa0_-Aa0_-Aa0_-A1'
+[[ "${#boundary_canary_token}" -eq 32 ]]
+declare -a invalid_canary_tokens=(
+  'invalid-canary-token with-a-space-0001'
+  'invalid-canary-token-with-a"quote-0002'
+  'invalid-canary-token-with-a\backslash-003'
+  $'invalid-canary-token-with-a\nnewline-004'
+  $'invalid-canary-token-with-a\ttab-000005'
+  'invalid-canary-token-with-a+plus-00006'
+  'invalid-canary-token-with-padding=000007'
+)
+declare -a invalid_canary_token_names=(space quote backslash line-break tab plus padding)
+for invalid_token_index in "${!invalid_canary_tokens[@]}"; do
+  invalid_token="${invalid_canary_tokens[$invalid_token_index]}"
+  invalid_token_name="${invalid_canary_token_names[$invalid_token_index]}"
+  reset_tree
+  set_all_inputs
+  N8N_CANARY_TOKEN="$invalid_token"
+  run_recipe
+  [[ "$RECIPE_EXIT_CODE" -ne 0 ]] || {
+    echo "The guarded recipe accepted the invalid $invalid_token_name canary-token fixture." >&2
+    exit 1
+  }
+  expect_failure 'N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -'
+  [[ "$RECIPE_OUTPUT" != *"$invalid_token"* ]] || {
+    echo 'A rejected synthetic canary token appeared in command output.' >&2
+    exit 1
+  }
+  assert_no_targets
+done
+
+reset_tree
+set_all_inputs
+N8N_CANARY_TOKEN="$boundary_canary_token"
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -eq 0 ]] || {
+  echo 'The guarded recipe rejected the 32-character base64url boundary token.' >&2
+  exit 1
+}
+assert_target_contracts
+
+persistence_run_dir="$test_dir/persistence-run"
+mkdir -p "$persistence_run_dir"
+run_persistence_token_guard() {
+  local candidate="$1" output_file="$test_dir/persistence-output" exit_code
+  set +e
+  (
+    cd "$repo_root"
+    CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
+      HOMELAB_TEST_RUN_DIR="$persistence_run_dir" \
+      N8N_CANARY_TOKEN="$candidate" \
+      "$persistence_script" "$test_dir/intentionally-missing-kubeconfig"
+  ) >"$output_file" 2>&1
+  exit_code="$?"
+  set -e
+  PERSISTENCE_EXIT_CODE="$exit_code"
+  PERSISTENCE_OUTPUT="$(<"$output_file")"
+}
+
+for invalid_token_index in "${!invalid_canary_tokens[@]}"; do
+  invalid_token="${invalid_canary_tokens[$invalid_token_index]}"
+  invalid_token_name="${invalid_canary_token_names[$invalid_token_index]}"
+  run_persistence_token_guard "$invalid_token"
+  [[ "$PERSISTENCE_EXIT_CODE" -eq 1 && \
+    "$PERSISTENCE_OUTPUT" == *'N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -'* ]] || {
+    echo "The persistence scenario did not reject the invalid $invalid_token_name canary-token fixture." >&2
+    exit 1
+  }
+  [[ "$PERSISTENCE_OUTPUT" != *"$invalid_token"* ]] || {
+    echo 'The persistence scenario printed a rejected synthetic canary token.' >&2
+    exit 1
+  }
+done
+
+run_persistence_token_guard "$boundary_canary_token"
+[[ "$PERSISTENCE_EXIT_CODE" -eq 1 && \
+  "$PERSISTENCE_OUTPUT" == *'intentionally-missing-kubeconfig'* && \
+  "$PERSISTENCE_OUTPUT" != *'N8N_CANARY_TOKEN must use only'* && \
+  "$PERSISTENCE_OUTPUT" != *"$boundary_canary_token"* ]] || {
+  echo 'The persistence scenario did not accept the 32-character base64url boundary token.' >&2
+  exit 1
+}
 
 for failure_mode in encrypt filestatus; do
   reset_tree

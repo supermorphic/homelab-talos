@@ -42,6 +42,7 @@ monitoring_alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomiza
 n8n_alerts='kubernetes/apps/monitoring/alerts/app/n8n.yaml'
 gatus_kustomization='kubernetes/apps/monitoring/gatus/app/kustomization.yaml'
 gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
+gatus_canary_activation='kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml'
 prometheus_config='kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml'
 n8n_dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json'
 catalog='tests/catalog.yaml'
@@ -166,7 +167,7 @@ for file in "$n8n_ks" "$n8n_kustomization" "$n8n_source" "$n8n_release" \
   [[ -f "$file" ]] || { echo "Missing n8n chart source: $file" >&2; exit 1; }
 done
 for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$gatus_kustomization" \
-  "$gatus_values" "$prometheus_config" "$n8n_dashboard"; do
+  "$gatus_values" "$gatus_canary_activation" "$prometheus_config" "$n8n_dashboard"; do
   [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
 for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
@@ -1205,9 +1206,18 @@ mapfile -t public_route_contracts < <(
 }
 
 expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nContainerRestarting,N8nExecutionFailures,N8nPersistentVolumeClaimNotBound,N8nPersistentVolumeUsageCritical,N8nPersistentVolumeUsageWarning,N8nPostgresqlBackupJobFailed,N8nPostgresqlBackupJobOverdue,N8nPostgresqlBackupStale,N8nPostgresqlUnavailable,N8nPostgresqlWorkloadUnavailable,N8nUnavailable,N8nWorkloadUnavailable'
-[[ "$(yq -r '[.spec.groups[].rules[].alert] | sort | join(",")' "$n8n_alerts")" == \
+[[ "$(yq -r '[.spec.groups[].rules[] | select(has("alert")) | .alert] | sort | join(",")' \
+    "$n8n_alerts")" == \
   "$expected_alerts" ]] || {
   echo 'The n8n PrometheusRule must contain the exact approved alert inventory.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.spec.groups[].rules[] | select(has("record")) | .record] | join(",")' \
+    "$n8n_alerts")" == 'n8n_platform_alerting_ready' && \
+  "$(yq -r '[.spec.groups[].rules[] | select(has("alert")) |
+    select(.expr | contains("n8n_platform_alerting_ready") | not)] | length' \
+    "$n8n_alerts")" == '0' ]] || {
+  echo 'Every n8n alert must use the exact platform activation recording gate.' >&2
   exit 1
 }
 
@@ -1222,7 +1232,7 @@ expected_panels='Authenticated public canary|Container restarts|Execution durati
   exit 1
 }
 
-canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' "$gatus_values")"
+canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' "$gatus_canary_activation")"
 canary_group="$(yq -r '.group' - <<<"$canary_endpoint")"
 canary_name="$(yq -r '.name' - <<<"$canary_endpoint")"
 canary_correlation="$(yq -r '.body | from_json | .correlation' - <<<"$canary_endpoint")"
@@ -1236,7 +1246,7 @@ expected_canary_url="https://$(yq -r '.spec.dnsNames[0]' "$public_certificate")$
 }
 # shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
 [[ "$(yq -r '.env.GATUS_N8N_CANARY_TOKEN.valueFrom.secretKeyRef | [.name,.key] | join(",")' \
-    "$gatus_values")" == 'n8n-canary,token' && \
+    "$gatus_canary_activation")" == 'n8n-canary,token' && \
   "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" == \
     '${GATUS_N8N_CANARY_TOKEN}' ]] || {
   echo 'The Gatus canary authentication must consume only gatus/n8n-canary token.' >&2

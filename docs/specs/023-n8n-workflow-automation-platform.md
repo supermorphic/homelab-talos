@@ -318,6 +318,12 @@ canary authentication value, and one stable `N8N_ENCRYPTION_KEY`. The encryption
 generated once and never regenerated during a normal reconciliation, reinstall, or
 restore.
 
+The canary authentication value uses one contract across Secret creation, Gatus, attended
+requests, and the persistence scenario: at least 32 characters from the base64url-safe
+alphabet `A-Z`, `a-z`, `0-9`, `_`, and `-`. The guarded writer and request paths reject
+spaces, quotes, backslashes, line breaks, padding, and all other characters before they
+write a manifest or curl configuration. They never print the supplied value.
+
 Database passwords are also generated once and retained. Updating a Secret alone does not
 change a password already initialized inside PostgreSQL; database credential rotation is
 a coordinated database and Secret operation.
@@ -404,10 +410,14 @@ operator creates the n8n owner account through the private UI, imports the templ
 creates and binds its header-auth credential using the SOPS-managed canary value, and
 publishes it. This one-time bootstrap avoids a persistent privileged bootstrap API key.
 
-Gatus calls `/webhook/platform-canary` every five minutes from its normal
-monitoring context with the same SOPS-managed header value. It verifies the status and
-correlation response. A separate negative acceptance request without valid authentication
-must fail. Gatus never checks the public n8n UI because no such route exists.
+Gatus calls `/webhook/platform-canary` every five minutes from its normal monitoring
+context with the same SOPS-managed header value after public activation. Before
+activation, the active Gatus Helm values contain neither the required Secret reference nor
+the endpoint. Their complete exact values remain in a Git-owned staged activation fragment
+and are copied into active values only in the reviewed public-route activation change.
+Gatus then verifies the status and correlation response. A separate negative acceptance
+request without valid authentication must fail. Gatus never checks the public n8n UI
+because no such route exists.
 
 ## Error and retry behavior
 
@@ -484,6 +494,15 @@ PrometheusRules cover:
   signals; and
 - claim use for the n8n, PostgreSQL, and logical-backup claims.
 
+The monitoring-owned n8n rule group remains reconciled before application activation, but
+every alert expression is gated by one recording rule. The gate is true only when the
+`n8n`, `n8n-postgresql`, and `public-webhook-route` Flux Kustomizations all report
+`Ready=True` and are not suspended. This keeps deliberate pre-activation absence silent
+without weakening post-activation detection. Once the gate is true, the n8n and
+PostgreSQL scrape-target and workload-availability alerts fire for both an explicit zero
+and a fully absent matching series. The absent branches preserve stable namespace,
+service, Deployment, or StatefulSet identity labels.
+
 All three claims use the established repository thresholds:
 
 - warning above 70 percent used for 15 minutes; and
@@ -497,14 +516,19 @@ remains the only alert-delivery path.
 
 The rollout follows dependency order:
 
-1. Reconcile the public Gateway, dedicated certificate, routing namespace, and monitoring
-   rules without publishing router forwarding.
+1. Reconcile the public Gateway, dedicated certificate, routing namespace, inactive
+   Gatus canary contract, and readiness-gated monitoring rules without publishing router
+   forwarding.
 2. Reconcile the PostgreSQL claims, StatefulSet, Service, backup job, and SQL Exporter.
 3. Reconcile n8n with queue mode disabled and confirm database migrations and private UI
    readiness.
 4. Complete the owner and synthetic-canary bootstrap through the private UI.
-5. Add operator-managed public DNS and TCP/443 router forwarding.
-6. Run off-network positive and negative webhook acceptance tests.
+5. Add operator-managed public DNS and TCP/443 router forwarding. In one reviewed Git
+   change, unsuspend the exact public route and copy the staged Gatus Secret reference and
+   endpoint into the active values. The encrypted canary Secret and both private workload
+   Kustomizations must already be selected, unsuspended, and ready.
+6. Wait for the public route, Gatus probe, and the three-resource alert gate to become
+   current, then run off-network positive and negative webhook acceptance tests.
 
 The initial pins are n8n chart 1.11.0 and n8n 2.36.7. The implementation also records the
 resolved immutable chart artifact digest and exact container image reference. An n8n
@@ -520,7 +544,9 @@ delete an already applied HTTPRoute. The Git rollback therefore keeps the route 
 reconciling with pruning enabled while its Kustomization stops selecting
 `httproute.yaml`, waits for current-generation reconciliation, and proves the route is
 absent. Only then may a later Git change suspend that child. Public activation and later
-reactivation remain Git-owned.
+reactivation remain Git-owned. A durable withdrawal also removes the n8n Secret reference
+and endpoint from active Gatus values while retaining their exact staged activation
+fragment.
 
 ## Validation and acceptance
 
@@ -549,7 +575,13 @@ Focused tests and rendered-manifest assertions verify:
 - network policies implement the approved ingress and egress boundaries;
 - resource and execution-retention settings match this specification;
 - the backup script cannot update freshness before final artifact validation; and
-- Prometheus alert expressions cover absent metrics and both storage thresholds.
+- Prometheus alert expressions cover absent metrics and both storage thresholds;
+- the active pre-activation Gatus render has no required n8n Secret reference or canary
+  endpoint, while the staged activation fragment renders their complete exact contract;
+- the n8n alert activation gate stays false for suspended dependencies and becomes true
+  only for the exact three current, unsuspended, Ready Flux Kustomizations; and
+- zero-valued and fully absent n8n and PostgreSQL scrape-target and workload-replica
+  series produce the same post-activation availability alerts with stable identity labels.
 
 The read-only verifier uses only observational Kubernetes and Prometheus/Gatus state. It
 requires unsuspended current-generation Flux resources, complete current workload

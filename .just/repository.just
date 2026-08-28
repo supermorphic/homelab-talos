@@ -295,6 +295,10 @@ n8n-secrets:
         exit 1
       }
     done
+    [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+      echo 'Refusing: N8N_CANARY_TOKEN must use only A-Z, a-z, 0-9, _, and -, with at least 32 characters.' >&2
+      exit 1
+    }
 
     mapfile -t expected_recipients < <(
       target="$runtime_target" yq -r \

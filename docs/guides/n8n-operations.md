@@ -17,6 +17,11 @@ Do this in a clean feature branch based on `origin/main`. Retrieve the stable va
 the operator password manager. For a first installation only, create each value once with
 a password generator and save it before continuing. For an existing or recovered
 installation, use the saved values that match the database; do not create replacements.
+The Platform Canary token has one contract everywhere it is used: at least 32 characters
+from the base64url-safe alphabet `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use padding,
+spaces, quotes, backslashes, line breaks, or other punctuation. The Secret writer and the
+persistence scenario reject values outside this contract before they write a manifest or
+construct a curl configuration.
 
 Load the values without putting them in shell history:
 
@@ -27,6 +32,11 @@ IFS= read -r -s -p 'PostgreSQL superuser password: ' POSTGRES_SUPERUSER_PASSWORD
 IFS= read -r -s -p 'PostgreSQL backup-role password: ' POSTGRES_BACKUP_PASSWORD; printf '\n'
 IFS= read -r -s -p 'PostgreSQL exporter password: ' POSTGRES_EXPORTER_PASSWORD; printf '\n'
 IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
+[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+  unset N8N_CANARY_TOKEN
+  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+  exit 1
+}
 export N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
 export POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
 N8N_SECRETS_CONFIRM='write:automation:n8n-platform:sops' \
@@ -43,6 +53,11 @@ Select each generated ciphertext in its owning Kustomization:
   `kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml`; and
 - `./n8n-canary.sops.yaml` in
   `kubernetes/apps/monitoring/gatus/app/kustomization.yaml`.
+
+The selected canary Secret does not yet affect the active Gatus Deployment. The required
+environment reference and endpoint remain in
+`kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml`, outside the
+active `values.yaml`, until the public-route activation change.
 
 Keep `n8n-postgresql`, `n8n`, and `public-webhook-route` at `spec.suspend: true` in this
 staging change. Validate and review only ciphertext and non-secret structure:
@@ -128,10 +143,29 @@ Complete these steps in order:
    off-network client resolves the public record, not `192.168.90.39`.
 3. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
    forward port 80, 5678, or 5432.
-4. In a dedicated route-activation pull request, change only
-   `public-webhook-route.spec.suspend` to `false`. Run
+4. In one dedicated route-and-monitoring activation pull request, copy the staged Gatus
+   canary values into the active values and change
+   `public-webhook-route.spec.suspend` to `false`:
+
+```bash
+mise exec -- yq -i '
+  .env.GATUS_N8N_CANARY_TOKEN =
+    load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").env.GATUS_N8N_CANARY_TOKEN |
+  del(.config.endpoints[] | select(.name == "n8n-platform-canary")) |
+  .config.endpoints +=
+    load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").config.endpoints
+' kubernetes/apps/monitoring/gatus/app/values.yaml
+mise exec -- yq -i '
+  (select(.metadata.name == "public-webhook-route") | .spec.suspend) = false
+' kubernetes/apps/networking/public-webhook-gateway/ks.yaml
+```
+
+   The Gatus validator rejects partial activation, duplicate canary entries, an unselected
+   canary Secret, or active canary values while n8n, PostgreSQL, or the public route is
+   suspended. Run `mise exec -- just kube gatus-validate` and
    `mise exec -- just kube n8n-validate`, obtain review and explicit merge authorization,
-   merge, and wait for Flux readiness.
+   merge, and wait for Flux readiness. The n8n Prometheus rule group starts evaluating
+   only after all three Flux Kustomizations report current `Ready=True` and unsuspended.
 5. Confirm Gatus has loaded `Platform / n8n-platform-canary` and its five-minute probe is
    green. Run the full read-only verifier. It observes the Gatus series and does not send
    a webhook request or require the canary token:
@@ -151,6 +185,11 @@ mise exec -- just test smoke platform n8n
 N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
   mise exec -- just kube n8n-restore-drill
 IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
+[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+  unset N8N_CANARY_TOKEN
+  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+  exit 1
+}
 export N8N_CANARY_TOKEN
 CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
   mise exec -- just test resilience n8n-persistence
@@ -195,6 +234,10 @@ appear in process arguments:
   trap 'exit 130' INT
   trap 'exit 143' TERM
   IFS= read -r -s -p 'Platform Canary token: ' canary_token; printf '\n'
+  [[ "$canary_token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+    exit 1
+  }
   correlation="off-network-$(date -u +%Y%m%dT%H%M%SZ)"
   {
     printf '%s\n' 'silent' 'show-error' 'fail' 'connect-timeout = 10' \
@@ -242,6 +285,11 @@ operator-run, use the shared cluster test Lease, and require their exact confirm
 
 ```bash
 IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
+[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+  unset N8N_CANARY_TOKEN
+  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+  exit 1
+}
 export N8N_CANARY_TOKEN
 CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
   mise exec -- just test resilience n8n-persistence
@@ -288,11 +336,13 @@ test -z "$(mise exec -- kubectl --kubeconfig .kube/config \
 ```
 
 Only after that proof may a second reviewed Git change set
-`public-webhook-route.spec.suspend: true`. Remove or disable the Gatus canary endpoint
-only through a separate reviewed Git change if the public path will stay withdrawn. To
-publish again, keep router forwarding disabled while a reviewed Git change re-adds
-`./httproute.yaml` and sets the child Kustomization unsuspended. Wait for current Flux and
-route acceptance, complete off-network tests, and restore forwarding last.
+`public-webhook-route.spec.suspend: true`. If the public path will stay withdrawn, remove
+both `GATUS_N8N_CANARY_TOKEN` and the `n8n-platform-canary` endpoint from active
+`values.yaml`; keep the exact reactivation source in
+`n8n-canary-activation.values.yaml`. To publish again, keep router forwarding disabled
+while one reviewed Git change re-adds `./httproute.yaml`, sets the child Kustomization
+unsuspended, and copies the staged Gatus fragment into active values. Wait for current
+Flux and route acceptance, complete off-network tests, and restore forwarding last.
 
 Do not delete the n8n, PostgreSQL, or backup claims during rollback. Keep the encrypted
 recovery unit and logical dumps. Use the [n8n recovery runbook](../runbooks/n8n-recovery.md)
