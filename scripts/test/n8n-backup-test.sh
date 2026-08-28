@@ -110,15 +110,8 @@ case "${*: -1}" in
   *) exit 71 ;;
 esac
 EOF
-  cat >"$case_root/bin/awk" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-[[ "${FAIL_STAGE:-}" != checksum ]] || exit 52
-exec /usr/bin/awk "$@"
-EOF
   chmod +x "$case_root/bin/fake-postgresql-tool" "$case_root/bin/sha256sum" \
-    "$case_root/bin/mv" "$case_root/bin/date" "$case_root/bin/awk"
+    "$case_root/bin/mv" "$case_root/bin/date"
   ln -s fake-postgresql-tool "$case_root/bin/pg_dump"
   ln -s fake-postgresql-tool "$case_root/bin/pg_restore"
   ln -s fake-postgresql-tool "$case_root/bin/psql"
