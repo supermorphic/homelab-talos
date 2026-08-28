@@ -14,7 +14,9 @@ diagnostic_producer_validate() {
 	local job_condition='Complete' pod_phase='Succeeded' exit_code=0 exit_reason='Completed'
 	local payload_string payload payload_bytes schema_reason
 
-	if diagnostic_producer_failed_phase_supported "$run_id"; then
+	if [[ "$run_id" == '20260827T233832Z-2a79502c' ]]; then
+		expected_scripts='encode-benchmark-scripts-26b6c44827'
+	elif diagnostic_producer_failed_phase_supported "$run_id"; then
 		expected_scripts='encode-benchmark-scripts-cfcdgkg5c7'
 		job_condition='Failed'
 		pod_phase='Failed'

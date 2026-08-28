@@ -56,24 +56,34 @@ jq -e -n --argjson actual "$expected_evidence_panel" '
 	exit 65
 }
 expected_image_digest="${expected_configured_image##*@}"
+script_identity_unavailable() {
+	echo 'diagnostic evidence reader script identity is unavailable' >&2
+	exit 65
+}
+script_directory_physical="$(cd -P "$script_directory" && pwd)" || script_identity_unavailable
 current_script_digests='{}'
 for script_path in "$script_directory"/*.sh; do
-	[[ -f "$script_path" && ! -L "$script_path" ]] || {
-		echo 'diagnostic evidence reader script identity is unavailable' >&2
-		exit 65
-	}
 	script_name="${script_path##*/}"
-	script_digest="sha256:$(sha256sum "$script_path" | awk '{print $1}')"
+	if [[ -L "$script_path" ]] && [[ "$(readlink "$script_path")" != "..data/$script_name" ]]; then
+		script_identity_unavailable
+	fi
+	resolved_script_path="$(realpath "$script_path" 2>/dev/null)" || script_identity_unavailable
+	[[ "$resolved_script_path" == "$script_directory_physical/"* &&
+		-f "$resolved_script_path" && ! -L "$resolved_script_path" ]] || script_identity_unavailable
+	script_digest="sha256:$(sha256sum "$resolved_script_path" | awk '{print $1}')"
 	current_script_digests="$(jq -c --arg name "$script_name" --arg digest "$script_digest" '. + {($name):$digest}' <<<"$current_script_digests")"
 done
 historical_script_digests='{"benchmark.sh":"sha256:8bc91c7ca04168c648509eb778dcd384e9af50d05ee6e2a6dd3c2553be6022b4","census.sh":"sha256:505c58d595fad640cec7fbac2eefcb02b4e1c96b3c64094afd785f2b72d39f07","contract.sh":"sha256:e62192d0e6f03a1f44ee96760da32c4efe0f52436305f0d83a5e89c0759632c8","diagnostic-evidence.sh":"sha256:da81c1a8725d95ccd1a0e992c789c09387750d9df2efaa73877ded6e0c1bfc70","probe.sh":"sha256:537724eac650d8bdf8a38412b5b2125ca26d4925d88caa8ef5958b9053ae20fb","runmeta.sh":"sha256:df5891bea05ee4ebb9c920c62fd363bc5c8a54744ac60ff558a265c4646128a3","stills.sh":"sha256:5887426ee150673a91604916a8a860a7e3395a8172557ff2e3e3456358eb510e"}'
+completed_run_script_digests='{"benchmark.sh":"sha256:749746d12b6c8c9398061314e3a8918707ed620830165c6ffaf71e22ebfe7b37","census.sh":"sha256:505c58d595fad640cec7fbac2eefcb02b4e1c96b3c64094afd785f2b72d39f07","contract.sh":"sha256:b6a2b679556932773f7804843822e750640453a9700dc41f0351a43a0c83675b","diagnostic-evidence.sh":"sha256:f13bf66d0f3af7675f2121c4529e0679a594e03ef08e2165ba1f0b6e15389c25","probe.sh":"sha256:ccf31501570406304ad6292ba77901610b2d3dffe59d53d19128e9d1facff82d","runmeta.sh":"sha256:df5891bea05ee4ebb9c920c62fd363bc5c8a54744ac60ff558a265c4646128a3","stills.sh":"sha256:5887426ee150673a91604916a8a860a7e3395a8172557ff2e3e3456358eb510e"}'
 expected_script_digests="$current_script_digests"
 legacy_source_clip_unavailable_allowed=false
 if [[ "$requested_run_id" == '20260826T014246Z-373a665e' ]]; then
 	expected_script_digests="$historical_script_digests"
 	legacy_source_clip_unavailable_allowed=true
+elif [[ "$requested_run_id" == '20260827T233832Z-2a79502c' ]]; then
+	expected_script_digests="$completed_run_script_digests"
 fi
-readonly expected_configured_image expected_image_digest current_script_digests historical_script_digests expected_script_digests
+readonly expected_configured_image expected_image_digest script_directory_physical current_script_digests historical_script_digests completed_run_script_digests expected_script_digests
 [[ "$evidence_root" == /* && -d "$evidence_root" && ! -L "$evidence_root" ]] || {
 	echo 'diagnostic evidence root is missing or unsafe' >&2
 	exit 65

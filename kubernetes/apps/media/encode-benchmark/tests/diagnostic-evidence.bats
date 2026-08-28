@@ -21,6 +21,18 @@ run_collector() {
 	"$COLLECTOR_SCRIPT" "$@" "$EVIDENCE_PANEL" "$CONFIGURED_IMAGE"
 }
 
+create_projected_scripts() {
+	local payload="$BATS_TEST_TMPDIR/projected-scripts/..2026_08_28_17_56_18.0000000000"
+	local source name
+	mkdir -p "$payload"
+	cp "$SCRIPTS"/* "$payload/"
+	ln -s "${payload##*/}" "$BATS_TEST_TMPDIR/projected-scripts/..data"
+	for source in "$payload"/*; do
+		name="${source##*/}"
+		ln -s "..data/$name" "$BATS_TEST_TMPDIR/projected-scripts/$name"
+	done
+}
+
 # The expected document is hand-written from the approved 5+3 panel.  It is
 # deliberately not assembled from the collector so a broadened panel, raw path,
 # or command leak changes the observable result.
@@ -50,6 +62,83 @@ run_collector() {
 		(tostring | test("/media|/out|raw-command-secret|command|identity|nodeName"; "i") | not)
 	' <<<"$output"
 	[ "$status" -eq 0 ]
+}
+
+# Kubernetes ConfigMap volumes expose each key through ..data/<key>. The
+# collector must authenticate that real projection instead of requiring the
+# regular-file layout used by the offline source tree.
+@test "collector authenticates scripts from a Kubernetes projected ConfigMap" {
+	create_valid_evidence_tree
+	create_projected_scripts
+	COLLECTOR_SCRIPT="$BATS_TEST_TMPDIR/projected-scripts/diagnostic-evidence.sh"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 0 ] || {
+		echo "collector status=$status output=$output" >&3
+		return 1
+	}
+	run jq -e --arg run "$RUN_ID" '
+		.mode == "diagnostic-evidence-reader" and .runId == $run and
+		(.vmaf | length) == 5 and (.hdr | length) == 3
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
+@test "collector rejects a projected script target outside the scripts mount" {
+	create_valid_evidence_tree
+	create_projected_scripts
+	cp "$SCRIPTS/contract.sh" "$BATS_TEST_TMPDIR/outside-contract.sh"
+	rm "$BATS_TEST_TMPDIR/projected-scripts/contract.sh"
+	ln -s ../outside-contract.sh "$BATS_TEST_TMPDIR/projected-scripts/contract.sh"
+	COLLECTOR_SCRIPT="$BATS_TEST_TMPDIR/projected-scripts/diagnostic-evidence.sh"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 65 ]
+	[ "$output" = 'diagnostic evidence reader script identity is unavailable' ]
+}
+
+@test "collector authenticates the exact completed retained producer through projected current scripts" {
+	local retained_scripts='{"benchmark.sh":"sha256:749746d12b6c8c9398061314e3a8918707ed620830165c6ffaf71e22ebfe7b37","census.sh":"sha256:505c58d595fad640cec7fbac2eefcb02b4e1c96b3c64094afd785f2b72d39f07","contract.sh":"sha256:b6a2b679556932773f7804843822e750640453a9700dc41f0351a43a0c83675b","diagnostic-evidence.sh":"sha256:f13bf66d0f3af7675f2121c4529e0679a594e03ef08e2165ba1f0b6e15389c25","probe.sh":"sha256:ccf31501570406304ad6292ba77901610b2d3dffe59d53d19128e9d1facff82d","runmeta.sh":"sha256:df5891bea05ee4ebb9c920c62fd363bc5c8a54744ac60ff558a265c4646128a3","stills.sh":"sha256:5887426ee150673a91604916a8a860a7e3395a8172557ff2e3e3456358eb510e"}'
+	RUN_ID='20260827T233832Z-2a79502c'
+	create_valid_evidence_tree
+	jq --argjson scripts "$retained_scripts" '.scriptDigests = $scripts' \
+		"$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+	mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+	create_projected_scripts
+	COLLECTOR_SCRIPT="$BATS_TEST_TMPDIR/projected-scripts/diagnostic-evidence.sh"
+
+	run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+	[ "$status" -eq 0 ] || {
+		echo "collector status=$status output=$output" >&3
+		return 1
+	}
+	run jq -e --arg run "$RUN_ID" '.runId == $run' <<<"$output"
+	[ "$status" -eq 0 ]
+}
+
+@test "collector rejects completed retained producer script identity drift and cross-run reuse" {
+	local retained_scripts='{"benchmark.sh":"sha256:749746d12b6c8c9398061314e3a8918707ed620830165c6ffaf71e22ebfe7b37","census.sh":"sha256:505c58d595fad640cec7fbac2eefcb02b4e1c96b3c64094afd785f2b72d39f07","contract.sh":"sha256:b6a2b679556932773f7804843822e750640453a9700dc41f0351a43a0c83675b","diagnostic-evidence.sh":"sha256:f13bf66d0f3af7675f2121c4529e0679a594e03ef08e2165ba1f0b6e15389c25","probe.sh":"sha256:ccf31501570406304ad6292ba77901610b2d3dffe59d53d19128e9d1facff82d","runmeta.sh":"sha256:df5891bea05ee4ebb9c920c62fd363bc5c8a54744ac60ff558a265c4646128a3","stills.sh":"sha256:5887426ee150673a91604916a8a860a7e3395a8172557ff2e3e3456358eb510e"}'
+	local case_name run_id scripts
+	while IFS='|' read -r case_name run_id scripts; do
+		RUN_ID="$run_id"
+		create_valid_evidence_tree
+		jq --argjson scripts "$scripts" '.scriptDigests = $scripts' \
+			"$EVIDENCE_ROOT/manifest.json" >"$BATS_TEST_TMPDIR/manifest.json"
+		mv "$BATS_TEST_TMPDIR/manifest.json" "$EVIDENCE_ROOT/manifest.json"
+		create_projected_scripts
+		COLLECTOR_SCRIPT="$BATS_TEST_TMPDIR/projected-scripts/diagnostic-evidence.sh"
+
+		run "$COLLECTOR" collect "$RUN_ID" "$EVIDENCE_ROOT" "$PANEL_SHA256"
+		[ "$status" -eq 65 ] || {
+			echo "collector accepted invalid completed producer identity: $case_name" >&3
+			return 1
+		}
+		jq -e '.manifestIssues == [{field:"scriptDigests",kind:"mismatch"}]' <<<"$output" >/dev/null
+		rm -rf "$BATS_TEST_TMPDIR/projected-scripts"
+	done <<EOF
+digest-drift|20260827T233832Z-2a79502c|$(jq -c '."benchmark.sh" = ("sha256:" + ("a" * 64))' <<<"$retained_scripts")
+cross-run|20260827T233832Z-deadbeef|$retained_scripts
+EOF
 }
 
 # Catches an infrastructure-specific run allowlist or an incomplete binding of
