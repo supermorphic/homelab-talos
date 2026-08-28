@@ -987,7 +987,8 @@ previous_line=0
 for marker in \
   'pg_dump --format=custom --compress=9 --no-owner --no-privileges' \
   'pg_restore --file /dev/null "$temporary_dump"' \
-  'checksum="$(sha256sum "$temporary_dump" | awk' \
+  'checksum_line="$(sha256sum "$temporary_dump")"' \
+  'checksum="${checksum_line%% *}"' \
   'printf '\''%s  %s\n'\'' "$checksum" "$(basename "$final_dump")"' \
   'mv -- "$temporary_dump" "$final_dump"' \
   'mv -- "$temporary_checksum" "$final_checksum"' \
