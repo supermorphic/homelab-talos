@@ -512,6 +512,16 @@ removal is never part of application rollback.
 ## Validation and acceptance
 
 Cluster-independent validation includes the canonical `mise exec -- just ci` gate.
+CI runs one complete n8n source/render validator against the candidate tree. CI retains
+focused backup, Secret-writer, and verifier-helper behavior tests. CI does not copy and
+corrupt production manifests to self-test the validator. The existing verification,
+scoped-verification, smoke, integration, and resilience tiers retain their n8n suites.
+The documented focused operator sequence runs verification, smoke, isolated restore, and
+persistence/recovery assurance in that order. The existing standard, weekly, and full
+campaigns compose the applicable tier suites without adding an app-specific n8n campaign.
+Intentional validator-failure fixtures are diagnostics, not authoritative campaign
+evidence.
+
 Focused tests and rendered-manifest assertions verify:
 
 - the selected official chart renders one n8n process with external PostgreSQL;
