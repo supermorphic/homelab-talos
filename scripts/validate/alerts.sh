@@ -55,10 +55,7 @@ for rule in "${rule_files[@]}"; do
   }
   selected_count="$(n8n_alert_resource_count "$app_kustomization" "$(basename "$rule")")"
   if [[ "$domain" == 'monitoring' && "$(basename "$rule")" == 'n8n.yaml' ]]; then
-    [[ "$selected_count" -le 1 ]] || {
-      echo "Refusing: n8n.yaml is selected more than once in $app_kustomization." >&2
-      exit 1
-    }
+    : # The activation validator resolves aliases and owns the staged n8n selection count.
   elif [[ "$selected_count" != '1' ]]; then
     echo "Refusing: $(basename "$rule") is not wired into $app_kustomization." >&2
     exit 1

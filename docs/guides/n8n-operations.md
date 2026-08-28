@@ -111,6 +111,9 @@ N8N_BOOTSTRAP_CONFIRM='bootstrap:n8n' mise exec -- just bootstrap n8n
 If private verification fails, the recipe re-suspends the PostgreSQL and n8n
 Kustomizations that it resumed. It preserves the three claims and all diagnostic
 resources. Fix the source or runtime fault before retrying.
+Private verification also requires the staged `n8n-platform` Prometheus rule group to be
+absent. A loaded group means alert activation happened early or stale alert state remains;
+fix that state before retrying the private bootstrap.
 
 ## Create the owner and publish the canary privately
 
@@ -164,23 +167,25 @@ mise exec -- yq -i '
   (select(.metadata.name == "public-webhook-route") | .spec.suspend) = false
 ' kubernetes/apps/networking/public-webhook-gateway/ks.yaml
 mise exec -- yq -i '
-  del(.resources[] | select(. == "./n8n.yaml" or . == "n8n.yaml")) |
   .resources += ["./n8n.yaml"]
 ' kubernetes/apps/monitoring/alerts/app/kustomization.yaml
 ```
 
    The Gatus validator rejects partial activation, duplicate canary entries, an unselected
    canary Secret, or active canary values while n8n, PostgreSQL, or the public route is
-   suspended. The alerts and n8n validators reject early, missing, or duplicate n8n rule
-   selection. Run `mise exec -- just kube gatus-validate`,
+   suspended. The alerts and n8n validators resolve every resource path from the alerts
+   Kustomization directory. They reject early or missing n8n rule selection, aliases, and
+   canonical or mixed duplicates; complete activation requires one literal `./n8n.yaml`.
+   Run `mise exec -- just kube gatus-validate`,
    `mise exec -- just kube n8n-validate`, and
    `mise exec -- just kube alerts-validate monitoring`; obtain review and explicit merge
    authorization, merge, and wait for Flux readiness. Once selected, the n8n Prometheus
    rule group stays loaded and can alert during a Flux reconciliation failure or complete
    disappearance of its source series.
 5. Confirm Gatus has loaded `Platform / n8n-platform-canary` and its five-minute probe is
-   green. Run the full read-only verifier. It observes the Gatus series and does not send
-   a webhook request or require the canary token:
+   green. Run the full read-only verifier. It requires the exact healthy 15-alert
+   `n8n-platform` group, observes the Gatus series, and does not send a webhook request or
+   require the canary token:
 
 ```bash
 mise exec -- just kube n8n-verify

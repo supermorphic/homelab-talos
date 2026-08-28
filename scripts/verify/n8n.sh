@@ -152,45 +152,14 @@ rules_response="$(
   echo 'Prometheus rules API did not return success.' >&2
   exit 1
 }
-expected_rules=(
-  N8nCanaryDown
-  N8nCanaryProbeMissing
-  N8nContainerOomKilled
-  N8nContainerRestarting
-  N8nExecutionFailures
-  N8nPersistentVolumeClaimNotBound
-  N8nPersistentVolumeUsageCritical
-  N8nPersistentVolumeUsageWarning
-  N8nPostgresqlBackupJobFailed
-  N8nPostgresqlBackupJobOverdue
-  N8nPostgresqlBackupStale
-  N8nPostgresqlUnavailable
-  N8nPostgresqlWorkloadUnavailable
-  N8nUnavailable
-  N8nWorkloadUnavailable
-)
-loaded_rules="$(yq -r '
-  [.data.groups[]? | select(.name == "n8n-platform") | .rules[]?.name] |
-  sort | .[]
-' <<<"$rules_response")"
-expected_loaded_rules="$(printf '%s\n' "${expected_rules[@]}" | LC_ALL=C sort)"
-[[ "$loaded_rules" == "$expected_loaded_rules" ]] || {
-  echo 'The loaded n8n-platform rule group differs from the exact 15-rule contract.' >&2
+n8n_prometheus_rule_group_matches_contract "$mode" <(printf '%s\n' "$rules_response") || {
+  if [[ "$mode" == 'private' ]]; then
+    echo 'Private verification found a stale or early n8n-platform Prometheus rule group.' >&2
+  else
+    echo 'The loaded n8n-platform rule group differs from the exact healthy 15-rule contract.' >&2
+  fi
   exit 1
 }
-for rule in "${expected_rules[@]}"; do
-  rule_row="$(RULE="$rule" yq -r '
-    [
-      .data.groups[]?.rules[]? |
-      select(.name == strenv(RULE)) |
-      [(.health // ""), (.lastError // "")] | join("|")
-    ] | join(",")
-  ' <<<"$rules_response")"
-  [[ "$rule_row" == 'ok|' ]] || {
-    echo "Prometheus rule $rule is absent, duplicated, or unhealthy." >&2
-    exit 1
-  }
-done
 
 certificate="$(
   "${kc[@]}" --namespace networking-public get certificate.cert-manager.io \
@@ -250,9 +219,9 @@ if [[ "$mode" == 'full' ]]; then
 
 fi
 
-echo "n8n $mode acceptance passed: Flux and workloads are Ready, all claims are Bound, routes and grants are exact, Prometheus targets/rules/backup metrics are healthy, and the dashboard and certificate are loaded."
+echo "n8n $mode acceptance passed: Flux and workloads are Ready, all claims are Bound, routes and grants are exact, Prometheus targets and backup metrics are healthy, and the dashboard and certificate are loaded."
 if [[ "$mode" == 'full' ]]; then
-  echo 'The observational Gatus canary series is green; this verifier sent no canary request.'
+  echo 'The exact 15-alert n8n rule group is healthy and the observational Gatus canary series is green; this verifier sent no canary request.'
 else
-  echo 'The public route remains suspended and absent; no canary credential was required.'
+  echo 'The n8n rule group and public route remain absent; no canary credential was required.'
 fi

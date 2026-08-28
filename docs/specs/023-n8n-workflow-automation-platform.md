@@ -498,9 +498,11 @@ PrometheusRules cover:
 - claim use for the n8n, PostgreSQL, and logical-backup claims.
 
 The monitoring alerts package owns `n8n.yaml`, but the active pre-activation alerts
-Kustomization does not select it. The reviewed public activation change selects the exact
-rule file together with the public route and Gatus canary. Git resource selection is the
-durable activation identity; runtime Flux health is not an alert-evaluation gate. Once
+Kustomization does not select any resource path that resolves to it. The reviewed public
+activation change selects it exactly once with the literal path `./n8n.yaml`, together
+with the public route and Gatus canary. Aliases and canonical or mixed duplicates fail
+source validation. Git resource selection is the durable activation identity; runtime
+Flux health is not an alert-evaluation gate. Once
 selected, the rules stay loaded through reconciliation failures and missing Flux metric
 series. The n8n and PostgreSQL scrape-target and workload-availability alerts fire for
 both an explicit zero and a fully absent matching source series. The absent branches
@@ -583,7 +585,8 @@ Focused tests and rendered-manifest assertions verify:
 - the active pre-activation Gatus render has no required n8n Secret reference or canary
   endpoint, while the staged activation fragment renders their complete exact contract;
 - the active pre-activation monitoring render omits the n8n rule, complete Git activation
-  selects it exactly once, and incomplete or early selection fails source validation;
+  selects it exactly once as literal `./n8n.yaml`, and incomplete, early, aliased, or
+  duplicate selection fails source validation;
 - selected n8n rules remain evaluable when Flux readiness metrics are false or absent; and
 - zero-valued and fully absent n8n and PostgreSQL scrape-target and workload-replica
   series produce the same post-activation availability alerts with stable identity labels.
@@ -591,9 +594,12 @@ Focused tests and rendered-manifest assertions verify:
 The read-only verifier uses only observational Kubernetes and Prometheus/Gatus state. It
 requires unsuspended current-generation Flux resources, complete current workload
 rollouts, one exact healthy Prometheus target for each ServiceMonitor, and the complete
-canonical shape of every route to the n8n Service. It does not read Secrets, access the
-database, use pod exec, or send a canary request. Authenticated canary execution belongs
-to the attended mutating persistence, restore, and off-network acceptance paths.
+canonical shape of every route to the n8n Service. Private bootstrap verification requires
+the staged `n8n-platform` rule group to be absent; a stale or early group fails. Full
+verification requires the exact 15-alert group and healthy evaluation for every rule. It
+does not read Secrets, access the database, use pod exec, or send a canary request.
+Authenticated canary execution belongs to the attended mutating persistence, restore,
+and off-network acceptance paths.
 
 Combined read-only and attended live acceptance verifies:
 

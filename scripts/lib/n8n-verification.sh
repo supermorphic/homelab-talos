@@ -69,6 +69,56 @@ n8n_prometheus_targets_match_contract() {
   done
 }
 
+n8n_expected_prometheus_alert_rules() {
+  printf '%s\n' \
+    N8nCanaryDown \
+    N8nCanaryProbeMissing \
+    N8nContainerOomKilled \
+    N8nContainerRestarting \
+    N8nExecutionFailures \
+    N8nPersistentVolumeClaimNotBound \
+    N8nPersistentVolumeUsageCritical \
+    N8nPersistentVolumeUsageWarning \
+    N8nPostgresqlBackupJobFailed \
+    N8nPostgresqlBackupJobOverdue \
+    N8nPostgresqlBackupStale \
+    N8nPostgresqlUnavailable \
+    N8nPostgresqlWorkloadUnavailable \
+    N8nUnavailable \
+    N8nWorkloadUnavailable
+}
+
+n8n_prometheus_rule_group_matches_contract() {
+  local mode="$1" input="$2" group_count actual_rules expected_rules rule rule_row
+
+  yq -p=json -o=json -e '.status == "success"' "$input" >/dev/null 2>&1 || return 1
+  group_count="$(yq -p=json -o=json -r \
+    '[.data.groups[]? | select(.name == "n8n-platform")] | length' "$input")"
+  case "$mode" in
+    private) [[ "$group_count" == '0' ]] ;;
+    full)
+      [[ "$group_count" == '1' ]] || return 1
+      actual_rules="$(yq -p=json -o=json -r '
+        [.data.groups[]? | select(.name == "n8n-platform") | .rules[]?.name] |
+        sort | .[]
+      ' "$input")"
+      expected_rules="$(n8n_expected_prometheus_alert_rules | LC_ALL=C sort)"
+      [[ "$actual_rules" == "$expected_rules" ]] || return 1
+      while IFS= read -r rule; do
+        rule_row="$(RULE="$rule" yq -p=json -o=json -r '
+          [
+            .data.groups[]? | select(.name == "n8n-platform") | .rules[]? |
+            select(.name == strenv(RULE)) |
+            [(.health // ""), (.lastError // "")] | join("|")
+          ] | join(",")
+        ' "$input")"
+        [[ "$rule_row" == 'ok|' ]] || return 1
+      done < <(n8n_expected_prometheus_alert_rules)
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 n8n_routes_target_service() {
   local target_namespace="$1" target_service="$2" input="$3"
   python - "$target_namespace" "$target_service" "$input" <<'PY'

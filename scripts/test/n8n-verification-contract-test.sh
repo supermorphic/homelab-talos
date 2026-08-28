@@ -179,6 +179,52 @@ yq -p=json -o=json '(.data.activeTargets[] | select(.labels.service == "n8n") |
 expect_false 'substring-only Prometheus target' n8n_prometheus_targets_match_contract \
   "$temp_dir/targets-substring.json"
 
+cat >"$temp_dir/rules-absent.json" <<'EOF'
+{
+  "status": "success",
+  "data": {"groups": [{"name": "unrelated-platform", "rules": []}]}
+}
+EOF
+cat >"$temp_dir/rules-exact.json" <<'EOF'
+{
+  "status": "success",
+  "data": {
+    "groups": [{
+      "name": "n8n-platform",
+      "rules": [
+        {"name": "N8nCanaryDown", "health": "ok", "lastError": ""},
+        {"name": "N8nCanaryProbeMissing", "health": "ok", "lastError": ""},
+        {"name": "N8nContainerOomKilled", "health": "ok", "lastError": ""},
+        {"name": "N8nContainerRestarting", "health": "ok", "lastError": ""},
+        {"name": "N8nExecutionFailures", "health": "ok", "lastError": ""},
+        {"name": "N8nPersistentVolumeClaimNotBound", "health": "ok", "lastError": ""},
+        {"name": "N8nPersistentVolumeUsageCritical", "health": "ok", "lastError": ""},
+        {"name": "N8nPersistentVolumeUsageWarning", "health": "ok", "lastError": ""},
+        {"name": "N8nPostgresqlBackupJobFailed", "health": "ok", "lastError": ""},
+        {"name": "N8nPostgresqlBackupJobOverdue", "health": "ok", "lastError": ""},
+        {"name": "N8nPostgresqlBackupStale", "health": "ok", "lastError": ""},
+        {"name": "N8nPostgresqlUnavailable", "health": "ok", "lastError": ""},
+        {"name": "N8nPostgresqlWorkloadUnavailable", "health": "ok", "lastError": ""},
+        {"name": "N8nUnavailable", "health": "ok", "lastError": ""},
+        {"name": "N8nWorkloadUnavailable", "health": "ok", "lastError": ""}
+      ]
+    }]
+  }
+}
+EOF
+expect_true 'private verifier accepts an absent staged n8n rule group' \
+  n8n_prometheus_rule_group_matches_contract private "$temp_dir/rules-absent.json"
+expect_false 'private verifier rejects a stale or early n8n rule group' \
+  n8n_prometheus_rule_group_matches_contract private "$temp_dir/rules-exact.json"
+expect_false 'full verifier rejects a missing n8n rule group' \
+  n8n_prometheus_rule_group_matches_contract full "$temp_dir/rules-absent.json"
+expect_true 'full verifier accepts the exact 15-rule n8n group' \
+  n8n_prometheus_rule_group_matches_contract full "$temp_dir/rules-exact.json"
+yq -p=json -o=json '(.data.groups[0].rules[] | select(.name == "N8nUnavailable") |
+  .health) = "err"' "$temp_dir/rules-exact.json" >"$temp_dir/rules-unhealthy.json"
+expect_false 'full verifier rejects an unhealthy rule in the exact n8n group' \
+  n8n_prometheus_rule_group_matches_contract full "$temp_dir/rules-unhealthy.json"
+
 cat >"$temp_dir/routes.json" <<'EOF'
 {
   "items": [

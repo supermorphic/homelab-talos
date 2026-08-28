@@ -119,7 +119,7 @@ case_unsafe_selection() {
   reset_tree
   set_alert_selection true
   expect_fail 'pre-activation n8n alert selection' \
-    'The n8n alert rule must remain unselected until complete platform activation.'
+    'Pre-activation n8n alerts must select no resource path resolving to n8n.yaml; found 1.'
 }
 
 case_unsafe_path() {
@@ -129,7 +129,17 @@ case_unsafe_path() {
   kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
   yq -i '.resources += ["n8n.yaml"]' "$kustomization"
   expect_fail 'non-canonical n8n alert resource selection' \
-    'The n8n alert rule must use only the exact ./n8n.yaml resource path.'
+    'Pre-activation n8n alerts must select no resource path resolving to n8n.yaml; found 1.'
+}
+
+case_parent_alias() {
+  local kustomization
+  reset_tree
+  set_alert_selection false
+  kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  yq -i '.resources += ["../app/n8n.yaml"]' "$kustomization"
+  expect_fail 'parent-directory alias selects staged n8n alert rule' \
+    'Pre-activation n8n alerts must select no resource path resolving to n8n.yaml; found 1.'
 }
 
 case_complete_activation() {
@@ -145,21 +155,62 @@ case_missing_activation_selection() {
   activate_platform
   set_alert_selection false
   expect_fail 'activated platform without n8n alert selection' \
-    'Complete n8n platform activation must select ./n8n.yaml exactly once.'
+    'Complete n8n platform activation must select exactly one resource path resolving to n8n.yaml; found 0.'
+}
+
+case_complete_alias_selection() {
+  local kustomization
+  reset_tree
+  activate_platform
+  set_alert_selection false
+  kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  yq -i '.resources += ["n8n.yaml"]' "$kustomization"
+  expect_fail 'complete activation with non-canonical n8n alert path' \
+    'Complete n8n platform activation must use the literal resource path ./n8n.yaml; got n8n.yaml.'
+}
+
+case_duplicate_canonical_selection() {
+  local kustomization
+  reset_tree
+  activate_platform
+  set_alert_selection true
+  kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  yq -i '.resources += ["./n8n.yaml"]' "$kustomization"
+  expect_fail 'complete activation with duplicate canonical n8n alert entries' \
+    'Complete n8n platform activation must select exactly one resource path resolving to n8n.yaml; found 2.'
+}
+
+case_canonical_alias_duplicate_selection() {
+  local kustomization
+  reset_tree
+  activate_platform
+  set_alert_selection true
+  kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  yq -i '.resources += ["../app/n8n.yaml"]' "$kustomization"
+  expect_fail 'complete activation with canonical and aliased n8n alert entries' \
+    'Complete n8n platform activation must select exactly one resource path resolving to n8n.yaml; found 2.'
 }
 
 case "${1:-all}" in
   production) case_production ;;
   unsafe-selection) case_unsafe_selection ;;
   unsafe-path) case_unsafe_path ;;
+  parent-alias) case_parent_alias ;;
   complete-activation) case_complete_activation ;;
   missing-activation-selection) case_missing_activation_selection ;;
+  complete-alias-selection) case_complete_alias_selection ;;
+  duplicate-canonical-selection) case_duplicate_canonical_selection ;;
+  canonical-alias-duplicate-selection) case_canonical_alias_duplicate_selection ;;
   all)
     case_production
     case_unsafe_selection
     case_unsafe_path
+    case_parent_alias
     case_complete_activation
     case_missing_activation_selection
+    case_complete_alias_selection
+    case_duplicate_canonical_selection
+    case_canonical_alias_duplicate_selection
     ;;
   *) echo "Unknown monitoring-alerts-validator test case: $1" >&2; exit 2 ;;
 esac

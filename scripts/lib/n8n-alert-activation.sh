@@ -12,6 +12,38 @@ n8n_alert_resource_count() {
   printf '%s\n' "$count"
 }
 
+n8n_normalise_relative_path() {
+  local path="$1" segment last_index
+  local -a segments=() resolved=()
+
+  IFS='/' read -r -a segments <<<"$path"
+  for segment in "${segments[@]}"; do
+    case "$segment" in
+      ''|.) ;;
+      ..)
+        if [[ "${#resolved[@]}" -gt 0 ]]; then
+          last_index=$((${#resolved[@]} - 1))
+          if [[ "${resolved[$last_index]}" != '..' ]]; then
+            unset "resolved[$last_index]"
+          else
+            resolved+=("$segment")
+          fi
+        else
+          resolved+=("$segment")
+        fi
+        ;;
+      *) resolved+=("$segment") ;;
+    esac
+  done
+
+  if [[ "${#resolved[@]}" -eq 0 ]]; then
+    printf '.\n'
+  else
+    local IFS=/
+    printf '%s\n' "${resolved[*]}"
+  fi
+}
+
 validate_n8n_alert_activation() {
   local alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomization.yaml'
   local n8n_ks='kubernetes/apps/automation/n8n/ks.yaml'
@@ -19,9 +51,9 @@ validate_n8n_alert_activation() {
   local public_route_ks='kubernetes/apps/networking/public-webhook-gateway/ks.yaml'
   local gatus_kustomization='kubernetes/apps/monitoring/gatus/app/kustomization.yaml'
   local gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
-  local alert_count canary_secret_count canary_env_count canary_endpoint_count
+  local alert_count=0 alert_resource='' canary_secret_count canary_env_count canary_endpoint_count
   local n8n_suspended postgresql_suspended public_route_suspended activation_complete=false
-  local resource normalised
+  local resource resolved_resource alerts_directory n8n_alert_path
 
   for source in "$alerts_kustomization" "$n8n_ks" "$postgresql_ks" \
     "$public_route_ks" "$gatus_kustomization" "$gatus_values"; do
@@ -31,18 +63,16 @@ validate_n8n_alert_activation() {
     }
   done
 
+  alerts_directory="${alerts_kustomization%/*}"
+  n8n_alert_path="$(n8n_normalise_relative_path "$alerts_directory/n8n.yaml")"
   while IFS= read -r resource; do
-    normalised="$resource"
-    while [[ "$normalised" == ./* ]]; do
-      normalised="${normalised#./}"
-    done
-    if [[ "$normalised" == 'n8n.yaml' && "$resource" != './n8n.yaml' ]]; then
-      echo 'The n8n alert rule must use only the exact ./n8n.yaml resource path.' >&2
-      return 1
+    resolved_resource="$(n8n_normalise_relative_path "$alerts_directory/$resource")"
+    if [[ "$resolved_resource" == "$n8n_alert_path" ]]; then
+      alert_count=$((alert_count + 1))
+      alert_resource="$resource"
     fi
   done < <(yq -r '.resources[]?' "$alerts_kustomization")
 
-  alert_count="$(n8n_alert_resource_count "$alerts_kustomization" 'n8n.yaml')"
   canary_secret_count="$(n8n_alert_resource_count "$gatus_kustomization" 'n8n-canary.sops.yaml')"
   canary_env_count="$(yq -r '[.env.GATUS_N8N_CANARY_TOKEN | select(. != null)] | length' \
     "$gatus_values")"
@@ -63,12 +93,16 @@ validate_n8n_alert_activation() {
 
   if [[ "$activation_complete" == true ]]; then
     [[ "$alert_count" == '1' ]] || {
-      echo 'Complete n8n platform activation must select ./n8n.yaml exactly once.' >&2
+      echo "Complete n8n platform activation must select exactly one resource path resolving to n8n.yaml; found $alert_count." >&2
+      return 1
+    }
+    [[ "$alert_resource" == './n8n.yaml' ]] || {
+      echo "Complete n8n platform activation must use the literal resource path ./n8n.yaml; got $alert_resource." >&2
       return 1
     }
   else
     [[ "$alert_count" == '0' ]] || {
-      echo 'The n8n alert rule must remain unselected until complete platform activation.' >&2
+      echo "Pre-activation n8n alerts must select no resource path resolving to n8n.yaml; found $alert_count." >&2
       return 1
     }
   fi
