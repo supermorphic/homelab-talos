@@ -11,6 +11,7 @@ trap 'rm -rf -- "$test_dir"' EXIT
 tree_root="$test_dir/tree"
 validator_tree="$test_dir/validator-tree"
 stub_bin="$test_dir/bin"
+validator_stub_bin="$test_dir/validator-bin"
 target_runtime='kubernetes/apps/automation/n8n/app/n8n-runtime.sops.yaml'
 target_postgresql='kubernetes/apps/automation/n8n-postgresql/app/postgresql-credentials.sops.yaml'
 target_canary='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
@@ -364,10 +365,37 @@ assert_retained_recovery_copy() {
 
 reset_validator_tree() {
   rm -rf -- "$validator_tree"
-  mkdir -p "$validator_tree/kubernetes/apps/networking"
+  mkdir -p "$validator_stub_bin" "$validator_tree/docs/guides" \
+    "$validator_tree/docs/runbooks" "$validator_tree/scripts/lib" \
+    "$validator_tree/scripts/test/lib" "$validator_tree/scripts/test/scenarios" \
+    "$validator_tree/scripts/verify" "$validator_tree/talos" \
+    "$validator_tree/tests/chainsaw/smoke/platform" \
+    "$validator_tree/kubernetes/apps/networking"
   mkdir -p "$validator_tree/kubernetes/apps/monitoring/alerts/app"
   mkdir -p "$validator_tree/kubernetes/apps/monitoring/gatus/app"
   mkdir -p "$validator_tree/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards"
+  ln -sfn "$stub_bin/sops" "$validator_stub_bin/sops"
+  cp "$repo_root/.justfile" "$validator_tree/.justfile"
+  cp -R "$repo_root/.just" "$validator_tree/.just"
+  cp "$repo_root/kubernetes/mod.just" "$validator_tree/kubernetes/mod.just"
+  cp "$repo_root/talos/mod.just" "$validator_tree/talos/mod.just"
+  cp "$repo_root/tests/mod.just" "$repo_root/tests/catalog.yaml" \
+    "$validator_tree/tests/"
+  cp -R "$repo_root/tests/chainsaw/smoke/platform/n8n" \
+    "$validator_tree/tests/chainsaw/smoke/platform/n8n"
+  cp "$repo_root/docs/guides/n8n-operations.md" \
+    "$validator_tree/docs/guides/n8n-operations.md"
+  cp "$repo_root/docs/runbooks/n8n-recovery.md" \
+    "$validator_tree/docs/runbooks/n8n-recovery.md"
+  cp "$repo_root/scripts/lib/common.sh" "$repo_root/scripts/lib/flux-alerts.sh" \
+    "$repo_root/scripts/lib/network.sh" "$validator_tree/scripts/lib/"
+  cp "$repo_root/scripts/test/lib/lease.sh" \
+    "$validator_tree/scripts/test/lib/lease.sh"
+  cp "$repo_root/scripts/test/scenarios/n8n-persistence.sh" \
+    "$repo_root/scripts/test/scenarios/n8n-restore-drill.sh" \
+    "$validator_tree/scripts/test/scenarios/"
+  cp "$repo_root/scripts/verify/n8n.sh" \
+    "$validator_tree/scripts/verify/n8n.sh"
   cp "$repo_root/kubernetes/apps/kustomization.yaml" \
     "$validator_tree/kubernetes/apps/kustomization.yaml"
   cp -R "$repo_root/kubernetes/apps/automation" \
@@ -470,7 +498,7 @@ run_validator() {
   set +e
   (
     cd "$validator_tree"
-    PATH="$stub_bin:$PATH" "$repo_root/scripts/validate/n8n.sh"
+    PATH="$validator_stub_bin:$PATH" "$repo_root/scripts/validate/n8n.sh"
   ) >"$output_file" 2>&1
   VALIDATOR_EXIT_CODE="$?"
   set -e

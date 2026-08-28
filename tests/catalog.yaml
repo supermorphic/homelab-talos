@@ -62,6 +62,7 @@ campaigns:
       - verification.cilium
       - verification.flux
       - verification.foundation
+      - verification.n8n
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -121,6 +122,7 @@ campaigns:
       - verification.cilium
       - verification.flux
       - verification.foundation
+      - verification.n8n
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -170,6 +172,7 @@ campaigns:
       - chainsaw.smoke.platform.dns
       - chainsaw.smoke.platform.cilium
       - chainsaw.smoke.platform.longhorn
+      - chainsaw.smoke.platform.n8n
       - chainsaw.smoke.platform.portainer
       - chainsaw.smoke.platform.smb
       - chainsaw.smoke.platform.tailscale
@@ -181,6 +184,7 @@ campaigns:
       - test.cilium-connectivity
       - test.storage-provisioning
       - test.flux-canary
+      - test.n8n-restore-drill
       - test.integration.media-hardlink
       - test.plex-network-policy
       - test.ntfy-publish
@@ -198,6 +202,7 @@ campaigns:
     members:
       - test.flux-restart
       - test.portainer-persistence
+      - test.n8n-persistence
       - chainsaw.resilience.qbittorrent-vpn-disconnect
       - chainsaw.resilience.qbittorrent-pod-recreation
       - chainsaw.resilience.plex-cross-node-reschedule
@@ -437,6 +442,11 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube foundation-verify", implementation: scripts/verify/foundation.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.n8n, source: verification, framework: bash, suite: platform, tier: verification, target: n8n, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "N8N_CANARY_TOKEN=<token> mise exec -- just kube n8n-verify", implementation: scripts/verify/n8n.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
@@ -591,6 +601,11 @@ suites:
     confirmation: {type: exact, variable: FLUX_CANARY_CONFIRM, expected: "recreate:flux-system:flux-canary"}
     runner: {command: "FLUX_CANARY_CONFIRM=recreate:flux-system:flux-canary mise exec -- just kube flux-canary-test", implementation: kubernetes/mod.just}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.n8n-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: n8n-restore-drill, scenario: temporary-database, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: N8N_RESTORE_DRILL_CONFIRM, expected: "restore:n8n-postgresql:temporary"}
+    runner: {command: "N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary mise exec -- just kube n8n-restore-drill", implementation: scripts/test/scenarios/n8n-restore-drill.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/n8n-restore-drill.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
     runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}
@@ -603,6 +618,11 @@ suites:
     confirmation: {type: exact, variable: PORTAINER_PERSISTENCE_CONFIRM, expected: "recreate:portainer:pod:preserve-pvc"}
     runner: {command: "PORTAINER_PERSISTENCE_CONFIRM=recreate:portainer:pod:preserve-pvc mise exec -- just kube portainer-persistence-test", implementation: scripts/verify/portainer-persistence.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.n8n-persistence, source: test, framework: bash, suite: platform, tier: resilience, target: n8n-persistence, scenario: pod-recreation, scope: storage, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:n8n-persistence"}
+    runner: {command: "N8N_CANARY_TOKEN=<token> CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence mise exec -- just test resilience n8n-persistence", implementation: scripts/test/scenarios/n8n-persistence.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/n8n-persistence.sh, args: [.kube/config], selector: null}
 
   - metadata: {id: chainsaw.smoke.cluster.default, source: chainsaw, framework: chainsaw, suite: cluster, tier: smoke, target: cluster, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
@@ -664,6 +684,11 @@ suites:
     runner: {command: "mise exec -- just test smoke platform longhorn", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/longhorn, selector: "homelab-talos/suite=platform"}
+  - metadata: {id: chainsaw.smoke.platform.n8n, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: n8n, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test smoke platform n8n", implementation: scripts/test/run-chainsaw.sh}
+    native_results: {strategy: chainsaw-junit-step}
+    dispatch: {mode: chainsaw, path: tests/chainsaw/smoke/platform/n8n, selector: "homelab-talos/suite=platform"}
   - metadata: {id: chainsaw.smoke.platform.portainer, source: chainsaw, framework: chainsaw, suite: platform, tier: smoke, target: platform, scenario: portainer, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just test smoke platform portainer", implementation: scripts/test/run-chainsaw.sh}

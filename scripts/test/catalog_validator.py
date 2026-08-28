@@ -37,9 +37,19 @@ EXPECTED_SMOKE = [
     "chainsaw.smoke.media.qbit-manage",
     "chainsaw.smoke.platform.all",
 ]
+EXPECTED_INTEGRATION = [
+    "test.cilium-connectivity",
+    "test.storage-provisioning",
+    "test.flux-canary",
+    "test.n8n-restore-drill",
+    "test.integration.media-hardlink",
+    "test.plex-network-policy",
+    "test.ntfy-publish",
+]
 EXPECTED_RESILIENCE = [
     "test.flux-restart",
     "test.portainer-persistence",
+    "test.n8n-persistence",
     "chainsaw.resilience.qbittorrent-vpn-disconnect",
     "chainsaw.resilience.qbittorrent-pod-recreation",
     "chainsaw.resilience.plex-cross-node-reschedule",
@@ -1390,6 +1400,13 @@ class CatalogValidator:
         actual_smoke = self.campaigns["smoke"]["members"]
         if actual_smoke != EXPECTED_SMOKE:
             fail(exact_diff("Campaign smoke aggregate ordering", EXPECTED_SMOKE, actual_smoke))
+        actual_integration = self.campaigns["integration"]["members"]
+        if actual_integration != EXPECTED_INTEGRATION:
+            fail(
+                exact_diff(
+                    "Campaign integration ordering", EXPECTED_INTEGRATION, actual_integration
+                )
+            )
         actual_resilience = self.campaigns["resilience"]["members"]
         if actual_resilience != EXPECTED_RESILIENCE:
             fail(

@@ -10,10 +10,30 @@ tree_root="$test_dir/tree"
 
 reset_tree() {
   rm -rf -- "$tree_root"
-  mkdir -p "$tree_root/kubernetes/apps/networking" \
+  mkdir -p "$tree_root/docs/guides" "$tree_root/docs/runbooks" \
+    "$tree_root/scripts/lib" "$tree_root/scripts/test/lib" \
+    "$tree_root/scripts/test/scenarios" "$tree_root/scripts/verify" \
+    "$tree_root/talos" "$tree_root/tests/chainsaw/smoke/platform" \
+    "$tree_root/kubernetes/apps/networking" \
     "$tree_root/kubernetes/apps/monitoring/alerts/app" \
     "$tree_root/kubernetes/apps/monitoring/gatus/app" \
     "$tree_root/kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards"
+  cp "$repo_root/.justfile" "$tree_root/.justfile"
+  cp -R "$repo_root/.just" "$tree_root/.just"
+  cp "$repo_root/kubernetes/mod.just" "$tree_root/kubernetes/mod.just"
+  cp "$repo_root/talos/mod.just" "$tree_root/talos/mod.just"
+  cp "$repo_root/tests/mod.just" "$repo_root/tests/catalog.yaml" "$tree_root/tests/"
+  cp -R "$repo_root/tests/chainsaw/smoke/platform/n8n" \
+    "$tree_root/tests/chainsaw/smoke/platform/n8n"
+  cp "$repo_root/docs/guides/n8n-operations.md" "$tree_root/docs/guides/n8n-operations.md"
+  cp "$repo_root/docs/runbooks/n8n-recovery.md" "$tree_root/docs/runbooks/n8n-recovery.md"
+  cp "$repo_root/scripts/lib/common.sh" "$repo_root/scripts/lib/flux-alerts.sh" \
+    "$repo_root/scripts/lib/network.sh" "$tree_root/scripts/lib/"
+  cp "$repo_root/scripts/test/lib/lease.sh" "$tree_root/scripts/test/lib/lease.sh"
+  cp "$repo_root/scripts/test/scenarios/n8n-persistence.sh" \
+    "$repo_root/scripts/test/scenarios/n8n-restore-drill.sh" \
+    "$tree_root/scripts/test/scenarios/"
+  cp "$repo_root/scripts/verify/n8n.sh" "$tree_root/scripts/verify/n8n.sh"
   cp "$repo_root/kubernetes/apps/kustomization.yaml" \
     "$tree_root/kubernetes/apps/kustomization.yaml"
   cp -R "$repo_root/kubernetes/apps/automation" \

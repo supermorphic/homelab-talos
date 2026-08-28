@@ -44,6 +44,15 @@ gatus_kustomization='kubernetes/apps/monitoring/gatus/app/kustomization.yaml'
 gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
 prometheus_config='kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml'
 n8n_dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json'
+catalog='tests/catalog.yaml'
+n8n_verifier='scripts/verify/n8n.sh'
+n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
+n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
+n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
+n8n_operations='docs/guides/n8n-operations.md'
+n8n_recovery='docs/runbooks/n8n-recovery.md'
+bootstrap_just='.just/bootstrap.just'
+kubernetes_just='kubernetes/mod.just'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -158,6 +167,332 @@ for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$gatus_kustomizati
   "$gatus_values" "$prometheus_config" "$n8n_dashboard"; do
   [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
+for file in "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
+  "$n8n_operations" "$n8n_recovery" "$catalog" "$bootstrap_just" \
+  "$kubernetes_just"; do
+  [[ -f "$file" ]] || { echo "Missing n8n operations source: $file" >&2; exit 1; }
+done
+
+# Validate the executable public interfaces rather than inferring them from prose.
+just --dry-run kube n8n-verify >"$temp_dir/n8n-verify-command" 2>&1
+just --dry-run kube n8n-restore-drill >"$temp_dir/n8n-restore-command" 2>&1
+just --dry-run test smoke platform n8n >"$temp_dir/n8n-smoke-command" 2>&1
+just --dry-run test resilience n8n-persistence >"$temp_dir/n8n-persistence-command" 2>&1
+rg -Fq 'run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh' \
+  "$temp_dir/n8n-verify-command"
+rg -Fq 'run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8n-restore-drill.sh' \
+  "$temp_dir/n8n-restore-command"
+rg -Fq "run-live-suite.sh smoke 'platform' 'n8n'" "$temp_dir/n8n-smoke-command"
+rg -Fq "run-live-suite.sh resilience 'n8n-persistence'" \
+  "$temp_dir/n8n-persistence-command"
+
+# Both mutating scenario implementations must reject an absent confirmation before
+# trying to inspect kubeconfig or contact Kubernetes.
+if env -u CLUSTER_CHAOS_CONFIRM -u N8N_CANARY_TOKEN \
+  "$n8n_persistence" "$temp_dir/missing-kubeconfig" \
+  >"$temp_dir/persistence-guard" 2>&1; then
+  echo 'n8n persistence ran without its exact confirmation.' >&2
+  exit 1
+fi
+rg -Fq 'CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence' \
+  "$temp_dir/persistence-guard"
+if env -u N8N_RESTORE_DRILL_CONFIRM \
+  "$n8n_restore_drill" "$temp_dir/missing-kubeconfig" \
+  >"$temp_dir/restore-guard" 2>&1; then
+  echo 'n8n restore drill ran without its exact confirmation.' >&2
+  exit 1
+fi
+rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
+  "$temp_dir/restore-guard"
+
+# Catalog ownership, confirmation, dispatch, and campaign order are a stable public
+# interface. These assertions operate on parsed YAML and the validator independently
+# enforces command safety, access tiers, and exact-order constants.
+[[ "$(yq -r '.suites[] | select(.metadata.id == "verification.n8n") |
+    [.metadata.execution_owner, .metadata.mutates_cluster, .access.tier,
+     .confirmation.type, .runner.implementation] | join(",")' "$catalog")" == \
+    'human,false,observer,none,scripts/verify/n8n.sh' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "chainsaw.smoke.platform.n8n") |
+    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.target,
+     .metadata.scenario, .dispatch.mode, .dispatch.path, .dispatch.selector] | join(",")' \
+    "$catalog")" == \
+    'human,false,platform,n8n,chainsaw,tests/chainsaw/smoke/platform/n8n,homelab-talos/suite=platform' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
+    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier,
+     .confirmation.type, .confirmation.variable, .confirmation.expected,
+     .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
+    'human,true,resilience,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-restore-drill") |
+    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier,
+     .confirmation.type, .confirmation.variable, .confirmation.expected,
+     .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
+    'human,true,integration,exact,N8N_RESTORE_DRILL_CONFIRM,restore:n8n-postgresql:temporary,direct,bash,scripts/test/scenarios/n8n-restore-drill.sh' ]] || {
+  echo 'n8n catalog ownership, confirmation, access, or dispatch differs from the contract.' >&2
+  exit 1
+}
+[[ "$(yq -r '.campaigns.integration.members | join(",")' "$catalog")" == \
+    'test.cilium-connectivity,test.storage-provisioning,test.flux-canary,test.n8n-restore-drill,test.integration.media-hardlink,test.plex-network-policy,test.ntfy-publish' && \
+  "$(yq -r '.campaigns.resilience.members | join(",")' "$catalog")" == \
+    'test.flux-restart,test.portainer-persistence,test.n8n-persistence,chainsaw.resilience.qbittorrent-vpn-disconnect,chainsaw.resilience.qbittorrent-pod-recreation,chainsaw.resilience.plex-cross-node-reschedule,chainsaw.resilience.test-reports-persistence,chainsaw.resilience.tailscale-subnet-router-replica-recovery,test.resilience.plex-node-reboot' && \
+  "$(yq -r '[.campaigns.verification.members[] | select(. == "verification.n8n")] | length' \
+    "$catalog")" == '1' && \
+  "$(yq -r '[.campaigns."scoped-verification".members[] | select(. == "verification.n8n")] | length' \
+    "$catalog")" == '1' && \
+  "$(yq -r '[.campaigns.smoke.coverage[] | select(. == "chainsaw.smoke.platform.n8n")] | length' \
+    "$catalog")" == '1' ]] || {
+  echo 'n8n catalog campaign membership or ordering differs from the contract.' >&2
+  exit 1
+}
+
+# The read-only verifier and smoke source contain no Kubernetes Secret reads,
+# database clients, exec actions, or Chainsaw mutation/script operations.
+if rg -n '\b(psql|pg_dump|pg_restore)\b|kubectl[^\n]*(exec|secrets?)' "$n8n_verifier"; then
+  echo 'The read-only n8n verifier accesses a database, Secret, or pod shell.' >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # These are literal verifier source markers.
+for marker in \
+  'n8n_postgresql_backup_last_success_timestamp_seconds{namespace="automation",service="n8n-postgresql"}' \
+  'for _attempt in {1..18}' \
+  '($value >= (now | to_unix) - 129600 and $value <= (now | to_unix))'; do
+  rg -Fq -- "$marker" "$n8n_verifier" || {
+    echo "n8n verifier backup-freshness invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+[[ "$(yq -r '[.. | select(type == "!!map") | select(
+    .kind == "Secret" or has("script") or has("command") or has("apply") or
+    has("create") or has("delete") or has("patch")
+  )] | length' "$n8n_smoke")" == '0' ]] || {
+  echo 'The n8n Chainsaw smoke must contain only read-only resource assertions.' >&2
+  exit 1
+}
+
+# Inspect the parsed Just recipe source and require its safety state transitions in
+# order. The public route is never resumed or reconciled by this recipe.
+just --show bootstrap n8n >"$temp_dir/bootstrap-n8n-source"
+bootstrap_source="$temp_dir/bootstrap-n8n-source"
+# shellcheck disable=SC2016 # These are literal markers from the rendered recipe.
+for marker in \
+  "expected_confirmation='bootstrap:n8n'" \
+  "require_deployed_source 'n8n bootstrap'" \
+  'git cat-file -e "origin/main:$secret"' \
+  'trap cleanup_n8n_bootstrap EXIT' \
+  'flux reconcile kustomization public-webhook-gateway' \
+  'flux resume kustomization n8n-postgresql' \
+  'flux resume kustomization n8n --namespace flux-system' \
+  'create job "$backup_job"' \
+  '--from=cronjob/n8n-postgresql-backup' \
+  'wait_for_backup_job "$backup_job"' \
+  'N8N_VERIFY_MODE=private just kube n8n-verify' \
+  'bootstrap_complete=true'; do
+  rg -Fq -- "$marker" "$bootstrap_source" || {
+    echo "n8n bootstrap safety marker is absent: $marker" >&2
+    exit 1
+  }
+done
+previous_line=0
+# shellcheck disable=SC2016 # These are literal markers from the rendered recipe.
+for marker in \
+  'trap cleanup_n8n_bootstrap EXIT' \
+  "require_deployed_source 'n8n bootstrap'" \
+  'git cat-file -e "origin/main:$secret"' \
+  '[[ "${N8N_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]]' \
+  'flux reconcile kustomization public-webhook-gateway' \
+  'flux resume kustomization n8n-postgresql' \
+  'flux resume kustomization n8n --namespace flux-system' \
+  'create job "$backup_job"' \
+  '--from=cronjob/n8n-postgresql-backup' \
+  'wait_for_backup_job "$backup_job"' \
+  'N8N_VERIFY_MODE=private just kube n8n-verify' \
+  'bootstrap_complete=true'; do
+  marker_line="$(rg -n -m 1 -F -- "$marker" "$bootstrap_source" | cut -d: -f1)"
+  [[ -n "$marker_line" && "$marker_line" -gt "$previous_line" ]] || {
+    echo "n8n bootstrap safety ordering is incorrect at: $marker" >&2
+    exit 1
+  }
+  previous_line="$marker_line"
+done
+private_verify_line="$(rg -n -m 1 -F -- 'N8N_VERIFY_MODE=private just kube n8n-verify' \
+  "$bootstrap_source" | cut -d: -f1)"
+bootstrap_complete_line="$(rg -n -m 1 -F -- 'bootstrap_complete=true' \
+  "$bootstrap_source" | cut -d: -f1)"
+trap_clear_line="$(rg -n -F -- 'trap - EXIT' "$bootstrap_source" | tail -n 1 | cut -d: -f1)"
+[[ -n "$private_verify_line" && -n "$bootstrap_complete_line" && -n "$trap_clear_line" && \
+  "$private_verify_line" -lt "$bootstrap_complete_line" && \
+  "$bootstrap_complete_line" -lt "$trap_clear_line" ]] || {
+  echo 'n8n bootstrap clears its rollback trap before private verification completes.' >&2
+  exit 1
+}
+cleanup_backup_delete_line="$(rg -n -m 1 -F -- 'delete job "$backup_job"' \
+  "$bootstrap_source" | cut -d: -f1)"
+cleanup_suspend_n8n_line="$(rg -n -m 1 -F -- 'flux suspend kustomization n8n --namespace' \
+  "$bootstrap_source" | cut -d: -f1)"
+cleanup_suspend_postgresql_line="$(rg -n -m 1 -F -- \
+  'flux suspend kustomization n8n-postgresql --namespace' "$bootstrap_source" | cut -d: -f1)"
+normal_backup_delete_line="$(rg -n -F -- 'delete job "$backup_job"' \
+  "$bootstrap_source" | tail -n 1 | cut -d: -f1)"
+backup_wait_line="$(rg -n -m 1 -F -- 'wait_for_backup_job "$backup_job"' \
+  "$bootstrap_source" | cut -d: -f1)"
+[[ -n "$cleanup_backup_delete_line" && -n "$cleanup_suspend_n8n_line" && \
+  -n "$cleanup_suspend_postgresql_line" && -n "$normal_backup_delete_line" && \
+  -n "$backup_wait_line" && \
+  "$cleanup_backup_delete_line" -lt "$cleanup_suspend_n8n_line" && \
+  "$cleanup_suspend_n8n_line" -lt "$cleanup_suspend_postgresql_line" && \
+  "$backup_wait_line" -lt "$normal_backup_delete_line" && \
+  "$normal_backup_delete_line" -lt "$private_verify_line" ]] || {
+  echo 'n8n bootstrap backup cleanup, terminal wait, or rollback ordering is incorrect.' >&2
+  exit 1
+}
+if rg -n 'resume kustomization public-webhook-route|reconcile kustomization public-webhook-route|kubectl[^\n]*(secrets?|exec)|sops[[:space:]]+-d|kubectl[^\n]*(create|patch|annotate)[^\n]*cronjob' \
+  "$bootstrap_source"; then
+  echo 'n8n bootstrap contains a forbidden public-route, Secret, exec, decrypt, or CronJob mutation.' >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # These are literal markers from the rendered recipe.
+for marker in 'bootstrap_run_id="$(date -u +%Y%m%d%H%M%S)-$$"' \
+  'backup_job="n8n-backup-bootstrap-$bootstrap_run_id"' \
+  '"homelab-talos/test" = "n8n-bootstrap"' \
+  '"homelab-talos/run-id" = strenv(BOOTSTRAP_RUN_ID)' \
+  '"homelab-talos/role" = "initial-backup"' \
+  'local deadline=$((SECONDS + 1800)) state' \
+  '.type == "Complete" and .status == "True"' \
+  '.type == "Failed" and .status == "True"' \
+  '--tail=80 --limit-bytes=16384 --timestamps=true' \
+  'backup_job_created=true' 'delete job "$backup_job"' \
+  'get job "$backup_job" --ignore-not-found --output name' \
+  'backup_job_created=false'; do
+  rg -Fq -- "$marker" "$bootstrap_source" || {
+    echo "n8n bootstrap backup cleanup invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+
+# The restore source must pass credentials only through secretKeyRef, select and
+# checksum archives newest-first before pg_restore, omit HTTPRoute creation, and
+# retain explicit cleanup verification. Persistence helpers are restricted to the
+# single run-specific sentinel path.
+[[ "$(rg -c 'secretKeyRef' "$n8n_restore_drill")" -ge 3 ]]
+if rg -n 'kubectl[^\n]*(get|describe)[^\n]*secrets?|"kind": "HTTPRoute"|kubectl[^\n]*exec' \
+  "$n8n_restore_drill" "$n8n_persistence"; then
+  echo 'An n8n recovery scenario reads Secrets, creates an HTTPRoute, or uses exec.' >&2
+  exit 1
+fi
+for marker in 'LC_ALL=C sort -r' 'sha256sum --check' 'pg_restore --list' \
+  'pg_restore --dbname=' 'credentialDecryptionProvedByAuthenticatedCanary' \
+  'dropdb --if-exists --force' 'write_phase cleanup failed'; do
+  rg -Fq "$marker" "$n8n_restore_drill" || {
+    echo "n8n restore safety invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+for marker in 'sentinel="/data/.homelab-n8n-persistence-' \
+  'persistentVolumeClaim": {"claimName": "n8n-data"}' \
+  'verify_test_lease_holder' 'write_phase cleanup failed' \
+  'write_phase recovery failed'; do
+  rg -Fq "$marker" "$n8n_persistence" || {
+    echo "n8n persistence safety invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+[[ "$(rg -c '^backup_freshness_check$' "$n8n_persistence")" == '3' ]] || {
+  echo 'n8n persistence must prove backup freshness before disruption and after both recoveries.' >&2
+  exit 1
+}
+
+bash -n "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"
+shellcheck --external-sources "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"
+for file in "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"; do
+  [[ -x "$file" ]] || { echo "n8n operations script is not executable: $file" >&2; exit 1; }
+done
+
+# Render every helper resource without executing either scenario. This catches yq,
+# quoting, document-boundary, schema, secret-reference, and exact-volume regressions.
+sed -n '/^job_manifest()/,/^}/p' "$n8n_persistence" \
+  >"$temp_dir/persistence-manifest-function.sh"
+(
+  # shellcheck disable=SC1091 # Generated from the named function in validated source.
+  source "$temp_dir/persistence-manifest-function.sh"
+  run_hash='0123456789ab'
+  # shellcheck disable=SC2034 # Consumed by the dynamically extracted function.
+  sentinel='/data/.homelab-n8n-persistence-0123456789ab' sentinel_value='homelab-n8n-persistence-0123456789ab'
+  job_manifest n8n-persistence-0123456789ab-write nuc1 write \
+    >"$temp_dir/persistence-write.yaml"
+  job_manifest n8n-persistence-0123456789ab-verify nuc2 verify-remove \
+    >"$temp_dir/persistence-verify.yaml"
+  job_manifest n8n-persistence-0123456789ab-cleanup nuc3 cleanup \
+    >"$temp_dir/persistence-cleanup.yaml"
+)
+sed -n '/^policy_manifest()/,/^}/p; /^database_job_manifest()/,/^}/p; /^application_manifests()/,/^}/p; /^request_job_manifest()/,/^}/p' \
+  "$n8n_restore_drill" >"$temp_dir/restore-manifest-functions.sh"
+(
+  # shellcheck disable=SC1091 # Generated from named functions in validated source.
+  source "$temp_dir/restore-manifest-functions.sh"
+  deployment='n8n-restore-0123456789ab'
+  # shellcheck disable=SC2034 # Consumed by the dynamically extracted functions.
+  policy='n8n-restore-0123456789ab' run_hash='0123456789ab' \
+    database_name='n8n_restore_0123456789ab' service="$deployment" \
+    request_job='n8n-restore-0123456789ab-request' \
+    restore_job='n8n-restore-0123456789ab-load'
+  policy_manifest >"$temp_dir/restore-policy.yaml"
+  database_job_manifest "$restore_job" restore >"$temp_dir/restore-job.yaml"
+  database_job_manifest n8n-restore-0123456789ab-drop drop \
+    >"$temp_dir/restore-drop-job.yaml"
+  application_manifests >"$temp_dir/restore-application.yaml"
+  request_job_manifest >"$temp_dir/restore-request-job.yaml"
+)
+kubeconform -strict -summary -ignore-missing-schemas \
+  "$temp_dir/persistence-write.yaml" "$temp_dir/persistence-verify.yaml" \
+  "$temp_dir/persistence-cleanup.yaml" "$temp_dir/restore-policy.yaml" \
+  "$temp_dir/restore-job.yaml" "$temp_dir/restore-drop-job.yaml" \
+  "$temp_dir/restore-application.yaml" "$temp_dir/restore-request-job.yaml"
+rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
+  "$temp_dir/restore-drop-job.yaml" || {
+  echo 'Rendered n8n restore cleanup does not prove temporary database absence through the catalog.' >&2
+  exit 1
+}
+# shellcheck disable=SC2016 # These are exact commands rendered into the helper Jobs.
+[[ "$(yq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' \
+    "$temp_dir/persistence-write.yaml")" == 'n8n-data' && \
+  "$(yq -r '.spec.template.spec.containers[0].args[0]' \
+    "$temp_dir/persistence-write.yaml")" == \
+    'umask 077; printf %s "$SENTINEL_VALUE" >"$SENTINEL"; sync; test "$(cat "$SENTINEL")" = "$SENTINEL_VALUE"' && \
+  "$(yq -r '.spec.template.spec.containers[0].args[0]' \
+    "$temp_dir/persistence-verify.yaml")" == \
+    'test "$(cat "$SENTINEL")" = "$SENTINEL_VALUE"; rm -f -- "$SENTINEL"; test ! -e "$SENTINEL"' && \
+  "$(yq -r '.spec.template.spec.containers[0].args[0]' \
+    "$temp_dir/persistence-cleanup.yaml")" == \
+    'rm -f -- "$SENTINEL"; test ! -e "$SENTINEL"' ]] || {
+  echo 'Rendered n8n persistence Jobs do not restrict access to the exact sentinel.' >&2
+  exit 1
+}
+[[ "$(yq -r '.specs | length' "$temp_dir/restore-policy.yaml")" == '3' && \
+  "$(yq -r '.spec.template.spec.containers[0].env[] |
+    select(.name == "PGPASSWORD") | .valueFrom.secretKeyRef | [.name, .key] | join(",")' \
+    "$temp_dir/restore-job.yaml")" == \
+    'postgresql-credentials,postgres-superuser-password' && \
+  "$(yq ea -r 'select(.kind == "Deployment") |
+    [.spec.template.spec.containers[0].env[] |
+      select(.name == "DB_POSTGRESDB_PASSWORD" or .name == "N8N_ENCRYPTION_KEY") |
+      .name + "=" + .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] |
+    sort | join(",")' "$temp_dir/restore-application.yaml")" == \
+    'DB_POSTGRESDB_PASSWORD=postgresql-credentials/n8n-password,N8N_ENCRYPTION_KEY=n8n-runtime/N8N_ENCRYPTION_KEY' && \
+  "$(yq ea -r 'select(.kind == "Deployment") |
+    [.spec.template.spec.containers[0].env[] |
+      select(.name == "N8N_WEBHOOK_URL") | .value] | join(",")' \
+    "$temp_dir/restore-application.yaml")" == \
+    'http://n8n-restore-0123456789ab.automation.svc.cluster.local:5678/' && \
+  "$(yq ea -r 'select(.kind == "Deployment") |
+    [.spec.template.spec.containers[0].env[] | select(.name == "WEBHOOK_URL")] | length' \
+    "$temp_dir/restore-application.yaml")" == '0' && \
+  "$(yq -r '.spec.template.spec.containers[0].env[] |
+    select(.name == "CANARY_TOKEN") | .valueFrom.secretKeyRef | [.name, .key] | join(",")' \
+    "$temp_dir/restore-request-job.yaml")" == 'n8n-canary,token' && \
+  -z "$(yq ea -r 'select(.kind == "HTTPRoute") | .metadata.name' \
+    "$temp_dir/restore-application.yaml")" ]] || {
+  echo 'Rendered n8n restore resources violate the policy, Secret, or no-route contract.' >&2
+  exit 1
+}
 [[ -f "$n8n_workflow" ]] || {
   echo "Missing n8n Platform Canary workflow template: $n8n_workflow" >&2
   exit 1

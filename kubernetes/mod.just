@@ -26,6 +26,16 @@ cilium-validate: require-bash
 n8n-validate: require-bash
     @scripts/validate/n8n.sh
 
+# Run the read-only n8n live acceptance contract. Full mode requires the
+# operator-held N8N_CANARY_TOKEN; private bootstrap sets N8N_VERIFY_MODE=private.
+n8n-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh {{quote(kubeconfig)}}
+
+# Restore the newest valid logical dump into an isolated temporary database and
+# prove the retained n8n key can decrypt the restored canary credential.
+n8n-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8n-restore-drill.sh {{quote(kubeconfig)}}
+
 # Print read-only live Cilium and Kubernetes status.
 cilium-status:
     #!/usr/bin/env bash

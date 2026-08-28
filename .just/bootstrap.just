@@ -2928,3 +2928,260 @@ resize-longhorn node:
     just kube foundation-verify
 
     echo "Resize passed for $node: u-longhorn reprovisioned to ~500GiB, Secure Boot and TPM auto-unlock, three-member etcd, and foundation acceptance are healthy."
+
+# Reconcile the private n8n platform in dependency order while keeping its public
+# route suspended. On failure, re-suspend only the Kustomizations resumed here.
+n8n:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    expected_origin='https://github.com/supermorphic/homelab-talos.git'
+    expected_confirmation='bootstrap:n8n'
+    postgresql_ks='kubernetes/apps/automation/n8n-postgresql/ks.yaml'
+    n8n_ks='kubernetes/apps/automation/n8n/ks.yaml'
+    public_ks='kubernetes/apps/networking/public-webhook-gateway/ks.yaml'
+    runtime_secret='kubernetes/apps/automation/n8n/app/n8n-runtime.sops.yaml'
+    database_secret='kubernetes/apps/automation/n8n-postgresql/app/postgresql-credentials.sops.yaml'
+    canary_secret='kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml'
+    bootstrap_run_id="$(date -u +%Y%m%d%H%M%S)-$$"
+    backup_job="n8n-backup-bootstrap-$bootstrap_run_id"
+    backup_job_created=false
+    resumed_postgresql=false
+    resumed_n8n=false
+    bootstrap_complete=false
+
+    cleanup_n8n_bootstrap() {
+      local original_exit="$?" cleanup_failed=false
+      trap - EXIT
+      if [[ "$bootstrap_complete" != 'true' ]]; then
+        set +e
+        if [[ "$backup_job_created" == 'true' ]]; then
+          echo "n8n private acceptance did not pass; deleting run-owned Job automation/$backup_job." >&2
+          kubectl --kubeconfig "$kubeconfig" --namespace automation delete job "$backup_job" \
+            --ignore-not-found --wait=true --timeout=2m >/dev/null || cleanup_failed=true
+          backup_job_absent || cleanup_failed=true
+        fi
+        if [[ "$resumed_n8n" == 'true' ]]; then
+          echo 'n8n private acceptance did not pass; re-suspending n8n while preserving its resources and claim.' >&2
+          flux suspend kustomization n8n --namespace flux-system \
+            --kubeconfig "$kubeconfig" >/dev/null || cleanup_failed=true
+        fi
+        if [[ "$resumed_postgresql" == 'true' ]]; then
+          echo 'n8n private acceptance did not pass; re-suspending n8n-postgresql while preserving its resources and claims.' >&2
+          flux suspend kustomization n8n-postgresql --namespace flux-system \
+            --kubeconfig "$kubeconfig" >/dev/null || cleanup_failed=true
+        fi
+        set -e
+      fi
+      if [[ "$cleanup_failed" == 'true' ]]; then
+        echo 'Failed to remove the bootstrap Job or re-suspend every n8n Kustomization resumed by this invocation.' >&2
+        exit 1
+      fi
+      exit "$original_exit"
+    }
+    backup_job_absent() {
+      local resource
+      resource="$(kubectl --kubeconfig "$kubeconfig" --namespace automation \
+        get job "$backup_job" --ignore-not-found --output name)" || return 1
+      [[ -z "$resource" ]]
+    }
+    report_backup_job_failure() {
+      echo "Initial n8n backup Job automation/$backup_job did not complete." >&2
+      kubectl --kubeconfig "$kubeconfig" --namespace automation get job "$backup_job" \
+        --output json 2>/dev/null | yq -r '
+          {
+            name: .metadata.name,
+            active: (.status.active // 0),
+            succeeded: (.status.succeeded // 0),
+            failed: (.status.failed // 0),
+            conditions: [.status.conditions[]? | {
+              type: .type,
+              status: .status,
+              reason: (.reason // "")
+            }]
+          }
+        ' >&2 || true
+      kubectl --kubeconfig "$kubeconfig" --namespace automation logs "job/$backup_job" \
+        --container backup --tail=80 --limit-bytes=16384 --timestamps=true >&2 || true
+    }
+    wait_for_backup_job() {
+      local deadline=$((SECONDS + 1800)) state
+      while (( SECONDS < deadline )); do
+        if ! state="$(kubectl --kubeconfig "$kubeconfig" --namespace automation \
+          get job "$backup_job" --output json)"; then
+          report_backup_job_failure
+          return 1
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Complete" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          return 0
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Failed" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          report_backup_job_failure
+          return 1
+        fi
+        sleep 5
+      done
+      report_backup_job_failure
+      return 1
+    }
+    trap cleanup_n8n_bootstrap EXIT
+
+    [[ -f "$kubeconfig" ]] || {
+      echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+      exit 1
+    }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
+      echo "Refusing n8n bootstrap: origin must be $expected_origin." >&2
+      exit 1
+    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'n8n bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just tests/catalog.yaml \
+      scripts/validate/n8n.sh scripts/verify/n8n.sh \
+      scripts/test/scenarios/n8n-persistence.sh \
+      scripts/test/scenarios/n8n-restore-drill.sh \
+      tests/chainsaw/smoke/platform/n8n \
+      kubernetes/apps/automation/n8n-postgresql \
+      kubernetes/apps/automation/n8n \
+      kubernetes/apps/networking/public-webhook-gateway \
+      kubernetes/apps/monitoring/gatus/app \
+      kubernetes/apps/monitoring/alerts/app/n8n.yaml \
+      kubernetes/apps/security/alerts
+
+    [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == 'true' && \
+      "$(yq -r '.spec.suspend' "$n8n_ks")" == 'true' && \
+      "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | .spec.suspend' \
+        "$public_ks")" == 'true' ]] || {
+      echo 'Refusing n8n bootstrap: PostgreSQL, n8n, and the public route must be staged suspended in Git.' >&2
+      exit 1
+    }
+
+    just kube n8n-validate
+    just kube alerts-validate monitoring
+    just kube alerts-validate security
+
+    for secret in "$runtime_secret" "$database_secret" "$canary_secret"; do
+      git cat-file -e "origin/main:$secret" 2>/dev/null || {
+        echo "Refusing n8n bootstrap: deployed Git does not contain $secret." >&2
+        exit 1
+      }
+    done
+    yq -e '.resources[] | select(. == "./n8n-runtime.sops.yaml")' \
+      kubernetes/apps/automation/n8n/app/kustomization.yaml >/dev/null
+    yq -e '.resources[] | select(. == "./postgresql-credentials.sops.yaml")' \
+      kubernetes/apps/automation/n8n-postgresql/app/kustomization.yaml >/dev/null
+    yq -e '.resources[] | select(. == "./n8n-canary.sops.yaml")' \
+      kubernetes/apps/monitoring/gatus/app/kustomization.yaml >/dev/null
+
+    [[ "${N8N_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the private n8n platform.' >&2
+      echo "Set N8N_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the staged source and encrypted recovery unit." >&2
+      exit 1
+    }
+
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    remote_main="$(git rev-parse origin/main)"
+    deployed_revision="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get gitrepository flux-system --output jsonpath='{.status.artifact.revision}')"
+    [[ "$deployed_revision" == *"$remote_main"* ]] || {
+      echo "Refusing n8n bootstrap: Flux revision $deployed_revision does not match origin/main $remote_main." >&2
+      exit 1
+    }
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps --namespace flux-system --with-source \
+      --kubeconfig "$kubeconfig" --timeout 10m
+
+    for name in n8n-postgresql n8n public-webhook-route; do
+      [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+        get kustomization "$name" --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+        echo "Refusing n8n bootstrap: $name is not suspended in the live cluster." >&2
+        exit 1
+      }
+    done
+    public_route_resource="$(kubectl --kubeconfig "$kubeconfig" \
+      --namespace networking-public get httproute n8n-platform-canary \
+      --ignore-not-found --output name)"
+    [[ -z "$public_route_resource" ]] || {
+      echo 'Refusing private n8n bootstrap: the public Platform Canary route already exists.' >&2
+      exit 1
+    }
+
+    echo 'Reconciling the private public-webhook-gateway foundation.'
+    flux reconcile kustomization public-webhook-gateway --namespace flux-system \
+      --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/public-webhook-gateway --timeout=15m
+
+    echo 'Reconciling n8n-postgresql.'
+    resumed_postgresql=true
+    flux resume kustomization n8n-postgresql --namespace flux-system \
+      --kubeconfig "$kubeconfig"
+    flux reconcile kustomization n8n-postgresql --namespace flux-system \
+      --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/n8n-postgresql --timeout=15m
+
+    echo 'Reconciling n8n.'
+    resumed_n8n=true
+    flux resume kustomization n8n --namespace flux-system --kubeconfig "$kubeconfig"
+    flux reconcile kustomization n8n --namespace flux-system --with-source \
+      --kubeconfig "$kubeconfig" --timeout 20m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/n8n --timeout=20m
+
+    backup_job_absent || {
+      echo "Refusing n8n bootstrap: automation/$backup_job exists or its absence cannot be proved." >&2
+      exit 1
+    }
+    echo 'Creating the first validated logical backup from the reconciled CronJob.'
+    backup_job_created=true
+    kubectl --kubeconfig "$kubeconfig" --namespace automation create job "$backup_job" \
+      --from=cronjob/n8n-postgresql-backup --dry-run=client --output yaml | \
+      BOOTSTRAP_RUN_ID="$bootstrap_run_id" yq '
+        .metadata.labels."app.kubernetes.io/name" = "n8n-postgresql-backup" |
+        .metadata.labels."homelab-talos/test" = "n8n-bootstrap" |
+        .metadata.labels."homelab-talos/run-id" = strenv(BOOTSTRAP_RUN_ID) |
+        .metadata.labels."homelab-talos/role" = "initial-backup" |
+        .spec.template.metadata.labels = .metadata.labels
+      ' | kubectl --kubeconfig "$kubeconfig" --namespace automation create \
+        --filename - >/dev/null
+    wait_for_backup_job "$backup_job"
+    kubectl --kubeconfig "$kubeconfig" --namespace automation delete job "$backup_job" \
+      --wait=true --timeout=2m >/dev/null
+    backup_job_absent || {
+      echo "Failed to remove run-owned Job automation/$backup_job." >&2
+      exit 1
+    }
+    backup_job_created=false
+
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get kustomization public-webhook-route --output jsonpath='{.spec.suspend}')" == \
+      'true' ]] || {
+      echo 'The public webhook route became active during private bootstrap.' >&2
+      exit 1
+    }
+    N8N_VERIFY_MODE=private just kube n8n-verify
+
+    bootstrap_complete=true
+    trap - EXIT
+    cat <<'EOF'
+    n8n private platform acceptance passed. The public webhook route is still suspended.
+    The first checksum-validated logical backup completed and its freshness metric is current.
+
+    Complete these attended steps through https://n8n.lab.supermorphic.com/:
+    1. Create the one owner account in the private UI.
+    2. Import kubernetes/apps/automation/n8n/app/workflows/platform-canary.json.
+    3. Create one Header Auth credential named "Platform Canary Header" with header name
+       "X-Platform-Canary" and the operator-held N8N_CANARY_TOKEN value.
+    4. Bind that credential to the imported Webhook node. Do not place the value in the
+       workflow JSON, Git, shell history, or command output.
+    5. Publish the Platform Canary workflow.
+    6. Execute one authenticated request privately, then immediately open its returned
+       execution ID in execution history. Require status Succeeded and the same correlation.
+
+    Stop here. Public DNS, router TCP/443 forwarding, route activation, and Gatus activation
+    are separate reviewed operator steps. Durable suspend:false changes must go through Git.
+    EOF
