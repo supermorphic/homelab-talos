@@ -229,7 +229,7 @@ available for focused developer validation.
 | `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
 | `just kube n8n-validate` | Validate n8n, PostgreSQL, backup, route, monitoring, and operations source contracts | — | Cluster-independent and read-only |
 | `just bootstrap n8n` | Reconcile the staged private n8n platform and create its first validated logical backup while the public route stays suspended | `.kube/config`; `N8N_BOOTSTRAP_CONFIRM=bootstrap:n8n` | Operator-only; mutating with run-owned Job cleanup and rollback re-suspension |
-| `just kube n8n-verify` | Verify n8n and PostgreSQL readiness, exact routes, monitoring, backup freshness, and authenticated canary | `.kube/config`; `N8N_CANARY_TOKEN` in full mode | Operator-only and read-only |
+| `just kube n8n-verify` | Observe current n8n and PostgreSQL readiness, exact routes, monitoring, backup freshness, and the Gatus canary series | `.kube/config` | Operator-only and read-only |
 | `just kube n8n-restore-drill` | Restore the newest valid dump into a temporary database and prove retained-key credential decryption | `.kube/config`; `N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary` | Operator-only; temporary state-changing drill |
 | `just test smoke platform n8n` | Assert stable n8n resources without DNS, credentials, mutation, or pod exec | `.kube/config` | Operator-only and read-only |
 | `just test resilience n8n-persistence` | Recreate only the n8n and PostgreSQL pods while proving claim, sentinel, canary, and backup recovery | `.kube/config`; `N8N_CANARY_TOKEN`; `CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence` | Operator-only and disruptive |

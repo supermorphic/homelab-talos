@@ -249,6 +249,12 @@ Cilium policy limits traffic by workload role:
   and
 - SQL Exporter can reach PostgreSQL and accepts metrics scrapes only from Prometheus.
 
+The temporary restore drill adds run-owned policy only for its lifetime. Its isolated
+n8n and database-helper pods receive the minimum DNS and PostgreSQL paths. A separate
+policy in `gatus` selects only the run-labeled request Job and permits only DNS and the
+run-owned n8n endpoint on TCP/5678. Cleanup must remove and prove absence of both exact
+policies.
+
 Inbound TheirStack webhooks do not themselves require n8n to pull data from TheirStack.
 Outbound HTTPS remains part of the initial platform because later workflows must call
 APIs and external processing services.
@@ -509,6 +515,13 @@ version changed the schema.
 Removing or rolling back workloads does not delete retained claims. Destructive data
 removal is never part of application rollback.
 
+Public containment removes router TCP/443 forwarding first. Flux suspension does not
+delete an already applied HTTPRoute. The Git rollback therefore keeps the route child
+reconciling with pruning enabled while its Kustomization stops selecting
+`httproute.yaml`, waits for current-generation reconciliation, and proves the route is
+absent. Only then may a later Git change suspend that child. Public activation and later
+reactivation remain Git-owned.
+
 ## Validation and acceptance
 
 Cluster-independent validation includes the canonical `mise exec -- just ci` gate.
@@ -538,7 +551,14 @@ Focused tests and rendered-manifest assertions verify:
 - the backup script cannot update freshness before final artifact validation; and
 - Prometheus alert expressions cover absent metrics and both storage thresholds.
 
-Scoped live acceptance verifies:
+The read-only verifier uses only observational Kubernetes and Prometheus/Gatus state. It
+requires unsuspended current-generation Flux resources, complete current workload
+rollouts, one exact healthy Prometheus target for each ServiceMonitor, and the complete
+canonical shape of every route to the n8n Service. It does not read Secrets, access the
+database, use pod exec, or send a canary request. Authenticated canary execution belongs
+to the attended mutating persistence, restore, and off-network acceptance paths.
+
+Combined read-only and attended live acceptance verifies:
 
 1. Flux reports the public Gateway, PostgreSQL, n8n, and monitoring resources ready.
 2. The n8n UI works through the private hostname and has no public route.
@@ -550,8 +570,11 @@ Scoped live acceptance verifies:
    and required filesystem state.
 6. A logical backup creates a validated final artifact and advances the Prometheus
    freshness timestamp.
-7. The documented procedure restores that artifact into a temporary database while the
-   unchanged encryption key permits n8n to read restored credential ciphertext.
+7. The documented procedure restores that artifact into a temporary database, identifies
+   the exact active Platform Canary workflow and its exact bound Header Auth credential
+   from non-secret metadata, rejects an unauthenticated request, and accepts a structurally
+   exact authenticated response. This proves that the unchanged encryption key permits
+   n8n to read restored credential ciphertext.
 8. Prometheus scrapes n8n and SQL Exporter, the new rules evaluate without errors, and the
    Grafana dashboard shows data for both services.
 9. An off-network client reaches the authenticated public webhook while public editor,

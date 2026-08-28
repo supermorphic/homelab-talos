@@ -4,6 +4,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
+source scripts/lib/n8n-verification.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -30,10 +31,8 @@ kc=(kubectl --kubeconfig "$kubeconfig")
 require_ready_kustomization() {
   local name="$1" state
   state="$("${kc[@]}" --namespace flux-system get kustomization "$name" --output json)"
-  [[ "$(yq -r '.spec.suspend // false' - <<<"$state")" == 'false' && \
-    "$(yq -r '[.status.conditions[]? | select(.type == "Ready") | .status][0] // ""' \
-      - <<<"$state")" == 'True' ]] || {
-    echo "Flux Kustomization $name is suspended or not Ready." >&2
+  n8n_flux_resource_current_ready <(printf '%s\n' "$state") || {
+    echo "Flux Kustomization $name is suspended, stale, or not Ready." >&2
     exit 1
   }
 }
@@ -63,17 +62,27 @@ else
   require_ready_kustomization public-webhook-route
 fi
 
-"${kc[@]}" --namespace "$namespace" rollout status deployment/n8n --timeout=10m
-"${kc[@]}" --namespace "$namespace" rollout status statefulset/n8n-postgresql --timeout=10m
+deployment_state="$(
+  "${kc[@]}" --namespace "$namespace" get deployment n8n --output json
+)"
+n8n_deployment_current_ready <(printf '%s\n' "$deployment_state") || {
+  echo 'The n8n Deployment has not completed its current-generation rollout.' >&2
+  exit 1
+}
+statefulset_state="$(
+  "${kc[@]}" --namespace "$namespace" get statefulset n8n-postgresql --output json
+)"
+n8n_statefulset_current_ready <(printf '%s\n' "$statefulset_state") || {
+  echo 'The n8n PostgreSQL StatefulSet has not completed its current revision.' >&2
+  exit 1
+}
 
 helm_release="$(
   "${kc[@]}" --namespace "$namespace" get helmrelease.helm.toolkit.fluxcd.io n8n \
     --output json
 )"
-[[ "$(yq -r '.spec.suspend // false' - <<<"$helm_release")" == 'false' && \
-  "$(yq -r '[.status.conditions[]? | select(.type == "Ready") | .status][0] // ""' \
-    - <<<"$helm_release")" == 'True' ]] || {
-  echo 'The n8n HelmRelease is suspended or not Ready.' >&2
+n8n_flux_resource_current_ready <(printf '%s\n' "$helm_release") || {
+  echo 'The n8n HelmRelease is suspended, stale, or not Ready.' >&2
   exit 1
 }
 
@@ -91,37 +100,7 @@ pvc_json="$(
 }
 
 routes_json="$("${kc[@]}" get httproutes.gateway.networking.k8s.io --all-namespaces --output json)"
-# shellcheck disable=SC2016 # yq evaluates its own $route variable.
-n8n_route_rows="$(yq -r '
-  [
-    .items[] as $route |
-    $route.spec.rules[]? as $rule |
-    $rule.backendRefs[]? |
-    select(.kind == "Service" and .name == "n8n" and
-      ((.namespace // $route.metadata.namespace) == "automation")) |
-    [
-      ($route.metadata.namespace + "/" + $route.metadata.name),
-      ($route.spec.hostnames | join(",")),
-      ($route.spec.parentRefs | map(
-        ((.namespace // $route.metadata.namespace) + "/" + .name + "/" + (.sectionName // ""))
-      ) | sort | join(",")),
-      ($rule.matches[0].path.type // ""),
-      ($rule.matches[0].path.value // ""),
-      (.namespace // $route.metadata.namespace),
-      (.port | tostring),
-      ([
-        $route.status.parents[]?.conditions[]? |
-        select(.type == "Accepted" or .type == "ResolvedRefs") |
-        (.type + "=" + .status)
-      ] | sort | join(","))
-    ] | join("|")
-  ] | sort | .[]
-' - <<<"$routes_json")"
-expected_private_route='automation/n8n|n8n.lab.supermorphic.com|networking/internal/https|PathPrefix|/|automation|5678|Accepted=True,ResolvedRefs=True'
-expected_public_route='networking-public/n8n-platform-canary|hooks.lab.supermorphic.com|networking-public/public-webhooks/https|Exact|/webhook/platform-canary|automation|5678|Accepted=True,ResolvedRefs=True'
-expected_route_rows="$expected_private_route"
-[[ "$mode" != 'full' ]] || expected_route_rows+=$'\n'"$expected_public_route"
-[[ "$n8n_route_rows" == "$expected_route_rows" ]] || {
+n8n_routes_match_contract "$mode" <(printf '%s\n' "$routes_json") || {
   echo 'Live accepted routes to automation/n8n differ from the exact private/public contract.' >&2
   exit 1
 }
@@ -160,13 +139,10 @@ targets_response="$(
   echo 'Prometheus targets API did not return success.' >&2
   exit 1
 }
-for service in n8n n8n-postgresql; do
-  [[ "$(flux_alerts_target_count "$service" <<<"$targets_response")" -gt 0 && \
-    "$(flux_alerts_target_healths "$service" <<<"$targets_response")" == 'up' ]] || {
-    echo "Prometheus target $service is absent or unhealthy." >&2
-    exit 1
-  }
-done
+n8n_prometheus_targets_match_contract <(printf '%s\n' "$targets_response") || {
+  echo 'The exact n8n and n8n-postgresql Prometheus targets are absent, duplicated, or unhealthy.' >&2
+  exit 1
+}
 
 rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
@@ -272,56 +248,11 @@ if [[ "$mode" == 'full' ]]; then
     exit 1
   }
 
-  token="${N8N_CANARY_TOKEN:-}"
-  [[ -n "$token" && "$token" != *$'\n'* && "$token" != *$'\r'* && "$token" != *'"'* ]] || {
-    echo 'Set N8N_CANARY_TOKEN to the operator-held canary token without line breaks.' >&2
-    exit 1
-  }
-  umask 077
-  canary_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-n8n-verify.XXXXXX")"
-  cleanup_canary_dir() {
-    local original_exit="$?"
-    trap - EXIT
-    rm -rf -- "$canary_dir" && [[ ! -e "$canary_dir" ]] || {
-      echo 'Failed to remove the permission-restricted n8n canary workspace.' >&2
-      exit 1
-    }
-    exit "$original_exit"
-  }
-  trap cleanup_canary_dir EXIT
-  correlation="n8n-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  curl_config="$canary_dir/canary.curl"
-  response_file="$canary_dir/response.json"
-  {
-    printf '%s\n' 'silent' 'show-error' 'fail' 'max-time = 30' 'request = "POST"'
-    printf 'resolve = "hooks.lab.supermorphic.com:443:%s"\n' "$HOMELAB_PUBLIC_GATEWAY_VIP"
-    printf '%s\n' 'header = "Content-Type: application/json"'
-    printf 'header = "X-Platform-Canary: %s"\n' "$token"
-    printf 'data = "{\\"correlation\\":\\"%s\\"}"\n' "$correlation"
-    printf '%s\n' 'url = "https://hooks.lab.supermorphic.com/webhook/platform-canary"'
-    printf 'output = "%s"\n' "$response_file"
-  } >"$curl_config"
-  curl --config "$curl_config"
-  [[ "$(yq -r '.status // ""' "$response_file")" == 'ok' && \
-    "$(yq -r '.correlation // ""' "$response_file")" == "$correlation" && \
-    -n "$(yq -r '.executionId // ""' "$response_file")" ]] || {
-    echo 'The authenticated Platform Canary response failed its correlation contract.' >&2
-    exit 1
-  }
-  negative_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-    --max-time 30 --resolve "hooks.lab.supermorphic.com:443:${HOMELAB_PUBLIC_GATEWAY_VIP}" \
-    --header 'Content-Type: application/json' \
-    --data '{"correlation":"n8n-negative-auth-check"}' \
-    https://hooks.lab.supermorphic.com/webhook/platform-canary)"
-  [[ "$negative_status" =~ ^(400|401|403|404)$ ]] || {
-    echo "Unauthenticated Platform Canary request returned HTTP $negative_status." >&2
-    exit 1
-  }
 fi
 
 echo "n8n $mode acceptance passed: Flux and workloads are Ready, all claims are Bound, routes and grants are exact, Prometheus targets/rules/backup metrics are healthy, and the dashboard and certificate are loaded."
 if [[ "$mode" == 'full' ]]; then
-  echo 'The authenticated canary and Gatus series are green, and an unauthenticated request is denied.'
+  echo 'The observational Gatus canary series is green; this verifier sent no canary request.'
 else
   echo 'The public route remains suspended and absent; no canary credential was required.'
 fi

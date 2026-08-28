@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+source scripts/lib/n8n-verification.sh
 source scripts/test/lib/lease.sh
 require_bash
 
@@ -38,12 +39,14 @@ restore_job="$resource_prefix-load"
 drop_job="$resource_prefix-drop"
 deployment="$resource_prefix"
 service="$resource_prefix"
-policy="$resource_prefix"
+automation_policy="$resource_prefix-automation"
+request_policy="$resource_prefix-request"
 request_job="$resource_prefix-request"
 automation_namespace='automation'
 request_namespace='gatus'
 k_auto=(kubectl --kubeconfig "$kubeconfig" --namespace "$automation_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
+k_cluster=(kubectl --kubeconfig "$kubeconfig")
 database_possible=false
 
 automation_resource_absent() {
@@ -52,9 +55,9 @@ automation_resource_absent() {
   [[ -z "$resource" ]]
 }
 
-request_job_absent() {
-  local resource
-  resource="$("${k_request[@]}" get job "$request_job" --ignore-not-found --output name)" || return 1
+request_resource_absent() {
+  local target="$1" resource
+  resource="$("${k_request[@]}" get "$target" --ignore-not-found --output name)" || return 1
   [[ -z "$resource" ]]
 }
 
@@ -80,13 +83,14 @@ verify_lease() {
 
 policy_manifest() {
   # shellcheck disable=SC2016 # yq evaluates strenv; generated policy values are literal.
-  POLICY_NAME="$policy" RUN_HASH="$run_hash" \
+  AUTOMATION_POLICY_NAME="$automation_policy" REQUEST_POLICY_NAME="$request_policy" \
+  RUN_HASH="$run_hash" \
     yq --null-input --output-format yaml --expression '
       [{
         "apiVersion": "cilium.io/v2",
         "kind": "CiliumNetworkPolicy",
         "metadata": {
-          "name": strenv(POLICY_NAME),
+          "name": strenv(AUTOMATION_POLICY_NAME),
           "namespace": "automation",
           "labels": {
             "homelab-talos/test": "n8n-restore-drill",
@@ -170,13 +174,54 @@ policy_manifest() {
             }]
           }
         ]
+      },
+      {
+        "apiVersion": "cilium.io/v2",
+        "kind": "CiliumNetworkPolicy",
+        "metadata": {
+          "name": strenv(REQUEST_POLICY_NAME),
+          "namespace": "gatus",
+          "labels": {
+            "homelab-talos/test": "n8n-restore-drill",
+            "homelab-talos/run-id": strenv(RUN_HASH)
+          }
+        },
+        "spec": {
+          "endpointSelector": {"matchLabels": {
+            "homelab-talos/test": "n8n-restore-drill",
+            "homelab-talos/run-id": strenv(RUN_HASH),
+            "homelab-talos/role": "request"
+          }},
+          "ingress": [],
+          "egress": [
+            {
+              "toEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "kube-system",
+                "k8s:k8s-app": "kube-dns"
+              }}],
+              "toPorts": [{"ports": [
+                {"port": "53", "protocol": "UDP"},
+                {"port": "53", "protocol": "TCP"}
+              ]}]
+            },
+            {
+              "toEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "automation",
+                "homelab-talos/test": "n8n-restore-drill",
+                "homelab-talos/run-id": strenv(RUN_HASH),
+                "homelab-talos/role": "n8n"
+              }}],
+              "toPorts": [{"ports": [{"port": "5678", "protocol": "TCP"}]}]
+            }
+          ]
+        }
       }] | .[] | split_doc'
 }
 
 database_job_manifest() {
   local name="$1" operation="$2" job_command volume_mounts_json volumes_json
   if [[ "$operation" == 'restore' ]]; then
-    job_command=$'selected=""\nfor dump in $(find /backups -maxdepth 1 -type f -name "n8n-postgresql-*.dump" | LC_ALL=C sort -r); do\n  sidecar="$dump.sha256"\n  test -f "$sidecar" || continue\n  target=$(awk "NF == 2 { print \\$2; exit }" "$sidecar")\n  test "$target" = "$(basename "$dump")" || continue\n  (cd /backups && sha256sum --check "$(basename "$sidecar")") >/dev/null 2>&1 || continue\n  pg_restore --list "$dump" >/dev/null 2>&1 || continue\n  selected="$dump"\n  break\ndone\ntest -n "$selected"\nif psql --dbname="$RESTORE_DATABASE" --command="SELECT 1" >/dev/null 2>&1; then exit 1; fi\ncreatedb --owner=n8n "$RESTORE_DATABASE"\nrestore_ok=false\ncleanup_partial() {\n  test "$restore_ok" = true || dropdb --if-exists --force "$RESTORE_DATABASE" >/dev/null 2>&1 || true\n}\ntrap cleanup_partial EXIT\npg_restore --dbname="$RESTORE_DATABASE" --no-owner --no-privileges --role=n8n "$selected"\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (to_regclass(\$\$public.workflow_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.credentials_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.webhook_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.execution_entity\$\$) IS NOT NULL)::text")" = true\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (count(*) > 0)::text FROM workflow_entity WHERE name = \$\$Platform Canary\$\$ AND active IS TRUE")" = true\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (count(*) > 0)::text FROM credentials_entity")" = true\nrestore_ok=true\nprintf "selected_dump=%s\\n" "$(basename "$selected")"'
+    job_command=$'selected=""\nfor dump in $(find /backups -maxdepth 1 -type f -name "n8n-postgresql-*.dump" | LC_ALL=C sort -r); do\n  sidecar="$dump.sha256"\n  test -f "$sidecar" || continue\n  target=$(awk "NF == 2 { print \\$2; exit }" "$sidecar")\n  test "$target" = "$(basename "$dump")" || continue\n  (cd /backups && sha256sum --check "$(basename "$sidecar")") >/dev/null 2>&1 || continue\n  pg_restore --list "$dump" >/dev/null 2>&1 || continue\n  selected="$dump"\n  break\ndone\ntest -n "$selected"\nif psql --dbname="$RESTORE_DATABASE" --command="SELECT 1" >/dev/null 2>&1; then exit 1; fi\ncreatedb --owner=n8n "$RESTORE_DATABASE"\nrestore_ok=false\ncleanup_partial() {\n  test "$restore_ok" = true || dropdb --if-exists --force "$RESTORE_DATABASE" >/dev/null 2>&1 || true\n}\ntrap cleanup_partial EXIT\npg_restore --dbname="$RESTORE_DATABASE" --no-owner --no-privileges --role=n8n "$selected"\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (to_regclass(\$\$public.workflow_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.credentials_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.webhook_entity\$\$) IS NOT NULL AND to_regclass(\$\$public.execution_entity\$\$) IS NOT NULL)::text")" = true\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (count(*) = 1)::text FROM workflow_entity WHERE name = \$\$Platform Canary\$\$ AND active IS TRUE")" = true\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (count(*) = 1)::text FROM credentials_entity WHERE name = \$\$Platform Canary Header\$\$ AND type = \$\$httpHeaderAuth\$\$")" = true\ntest "$(psql --dbname="$RESTORE_DATABASE" --tuples-only --no-align --command="SELECT (count(*) = 1)::text FROM workflow_entity AS workflow JOIN credentials_entity AS credential ON credential.name = \$\$Platform Canary Header\$\$ AND credential.type = \$\$httpHeaderAuth\$\$ WHERE workflow.name = \$\$Platform Canary\$\$ AND workflow.active IS TRUE AND EXISTS (SELECT 1 FROM jsonb_array_elements(workflow.nodes::jsonb) AS node WHERE node->>\$\$name\$\$ = \$\$Webhook\$\$ AND node->\$\$credentials\$\$->\$\$httpHeaderAuth\$\$->>\$\$id\$\$ = credential.id::text AND node->\$\$credentials\$\$->\$\$httpHeaderAuth\$\$->>\$\$name\$\$ = \$\$Platform Canary Header\$\$)")" = true\nrestore_ok=true\nprintf "selected_dump=%s\\n" "$(basename "$selected")"'
     volume_mounts_json='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
     volumes_json='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups"}},{"name":"tmp","emptyDir":{}}]'
   elif [[ "$operation" == 'drop' ]]; then
@@ -383,10 +428,10 @@ request_job_manifest() {
               "securityContext": {"runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}},
               "containers": [{
                 "name": "request",
-                "image": "curlimages/curl:8.11.1",
+                "image": "docker.n8n.io/n8nio/n8n:2.36.7",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["/bin/sh", "-ceu"],
-                "args": ["correlation=restore-$RUN_HASH\nresponse=/tmp/response.json\ncurl --silent --show-error --fail --max-time 60 --request POST --header \"Content-Type: application/json\" --header \"X-Platform-Canary: $CANARY_TOKEN\" --data \"{\\\"correlation\\\":\\\"$correlation\\\"}\" --output \"$response\" \"http://$APP_NAME.automation.svc.cluster.local:5678/webhook/platform-canary\"\ngrep -Fq \"\\\"status\\\":\\\"ok\\\"\" \"$response\"\ngrep -Fq \"\\\"correlation\\\":\\\"$correlation\\\"\" \"$response\"\ngrep -Eq \"\\\"executionId\\\":\\\"[^\\\"]+\\\"\" \"$response\"\nrm -f -- \"$response\""],
+                "command": ["node", "--input-type=module", "--eval"],
+                "args": ["const endpoint = `http://${process.env.APP_NAME}.automation.svc.cluster.local:5678/webhook/platform-canary`;\nconst correlation = `restore-${process.env.RUN_HASH}`;\nconst send = (value, token) => fetch(endpoint, {\n  method: \"POST\",\n  headers: {\n    \"Content-Type\": \"application/json\",\n    ...(token ? {\"X-Platform-Canary\": token} : {}),\n  },\n  body: JSON.stringify({correlation: value}),\n  signal: AbortSignal.timeout(60000),\n});\nconst negative = await send(`restore-negative-${process.env.RUN_HASH}`);\nif (![400, 401, 403, 404].includes(negative.status)) {\n  throw new Error(`Unauthenticated request returned HTTP ${negative.status}`);\n}\nconst positive = await send(correlation, process.env.CANARY_TOKEN);\nif (!positive.ok) throw new Error(`Authenticated request returned HTTP ${positive.status}`);\nlet body;\ntry { body = await positive.json(); } catch { throw new Error(\"Authenticated response was not JSON\"); }\nconst keys = Object.keys(body).sort();\nif (JSON.stringify(keys) !== JSON.stringify([\"correlation\", \"executionId\", \"status\"])) {\n  throw new Error(\"Authenticated response had an unexpected key set\");\n}\nif (body.status !== \"ok\" || body.correlation !== correlation ||\n    typeof body.executionId !== \"string\" || body.executionId.length === 0) {\n  throw new Error(\"Authenticated response failed its exact value contract\");\n}"],
                 "env": [
                   {"name": "APP_NAME", "value": strenv(APP_NAME)},
                   {"name": "RUN_HASH", "value": strenv(RUN_HASH)},
@@ -396,16 +441,16 @@ request_job_manifest() {
                   {"name": "HOME", "value": "/tmp"}
                 ],
                 "resources": {
-                  "requests": {"cpu": "10m", "memory": "16Mi"},
-                  "limits": {"memory": "64Mi"}
+                  "requests": {"cpu": "10m", "memory": "32Mi"},
+                  "limits": {"memory": "128Mi"}
                 },
                 "securityContext": {
                   "allowPrivilegeEscalation": false,
                   "capabilities": {"drop": ["ALL"]},
                   "readOnlyRootFilesystem": true,
-                  "runAsGroup": 65532,
+                  "runAsGroup": 1000,
                   "runAsNonRoot": true,
-                  "runAsUser": 65532
+                  "runAsUser": 1000
                 },
                 "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
               }],
@@ -438,10 +483,12 @@ cleanup() {
   for job in "$restore_job" "$drop_job"; do
     "${k_auto[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
   done
-  "${k_auto[@]}" delete ciliumnetworkpolicy "$policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  "${k_request[@]}" delete ciliumnetworkpolicy "$request_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  "${k_auto[@]}" delete ciliumnetworkpolicy "$automation_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
 
-  request_job_absent >/dev/null 2>&1 || cleanup_ok=false
-  for target in "job/$restore_job" "job/$drop_job" "deployment/$deployment" "service/$service" "ciliumnetworkpolicy/$policy"; do
+  request_resource_absent "job/$request_job" >/dev/null 2>&1 || cleanup_ok=false
+  request_resource_absent "ciliumnetworkpolicy/$request_policy" >/dev/null 2>&1 || cleanup_ok=false
+  for target in "job/$restore_job" "job/$drop_job" "deployment/$deployment" "service/$service" "ciliumnetworkpolicy/$automation_policy"; do
     automation_resource_absent "$target" >/dev/null 2>&1 || cleanup_ok=false
   done
 
@@ -459,32 +506,30 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 verify_lease
-for target in "job/$restore_job" "job/$drop_job" "deployment/$deployment" "service/$service" "ciliumnetworkpolicy/$policy"; do
+for target in "job/$restore_job" "job/$drop_job" "deployment/$deployment" "service/$service" "ciliumnetworkpolicy/$automation_policy"; do
   automation_resource_absent "$target" || {
     echo "Refusing to adopt $automation_namespace/$target or proceed without proving its absence." >&2
     exit 1
   }
 done
-request_job_absent || {
+request_resource_absent "job/$request_job" || {
   echo "Refusing to adopt $request_namespace/job/$request_job or proceed without proving its absence." >&2
+  exit 1
+}
+request_resource_absent "ciliumnetworkpolicy/$request_policy" || {
+  echo "Refusing to adopt $request_namespace/ciliumnetworkpolicy/$request_policy or proceed without proving its absence." >&2
   exit 1
 }
 
 # There is deliberately no HTTPRoute manifest. Refuse any existing route that
 # already targets this run-owned Service name before creating the Service.
 routes_json="$(kubectl --kubeconfig "$kubeconfig" get httproutes.gateway.networking.k8s.io --all-namespaces --output json)"
-# shellcheck disable=SC2016 # yq evaluates $route.
-SERVICE_NAME="$service" yq -e '[
-  .items[] as $route |
-  $route.spec.rules[]?.backendRefs[]? |
-  select(.kind == "Service" and .name == strenv(SERVICE_NAME) and
-    ((.namespace // $route.metadata.namespace) == "automation"))
-] | length == 0' <<<"$routes_json" >/dev/null || {
+if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json"); then
   echo 'Refusing restore drill because an HTTPRoute already targets its temporary Service name.' >&2
   exit 1
-}
+fi
 
-policy_manifest | "${k_auto[@]}" create --filename - >/dev/null
+policy_manifest | "${k_cluster[@]}" create --filename - >/dev/null
 verify_lease
 database_possible=true
 database_job_manifest "$restore_job" restore | "${k_auto[@]}" create --filename - >/dev/null
@@ -502,13 +547,10 @@ application_manifests | "${k_auto[@]}" create --filename - >/dev/null
 # Recheck after Service creation. The drill must remain cluster-internal and does
 # not create, own, or accept any HTTPRoute.
 routes_json="$(kubectl --kubeconfig "$kubeconfig" get httproutes.gateway.networking.k8s.io --all-namespaces --output json)"
-# shellcheck disable=SC2016 # yq evaluates $route.
-SERVICE_NAME="$service" yq -e '[
-  .items[] as $route |
-  $route.spec.rules[]?.backendRefs[]? |
-  select(.kind == "Service" and .name == strenv(SERVICE_NAME) and
-    ((.namespace // $route.metadata.namespace) == "automation"))
-] | length == 0' <<<"$routes_json" >/dev/null
+if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json"); then
+  echo 'Restore drill Service gained an HTTPRoute after creation.' >&2
+  exit 1
+fi
 
 verify_lease
 request_job_manifest | "${k_request[@]}" create --filename - >/dev/null
@@ -522,5 +564,5 @@ RUN_HASH="$run_hash" DATABASE_NAME="$database_name" SELECTED_DUMP="$selected_dum
     "httpRouteCreated": false,
     "credentialDecryptionProvedByAuthenticatedCanary": true
   }' >"$run_dir/evidence.json"
-write_phase assertion passed 'newest checksum-valid dump restored; required tables and authenticated restored canary passed'
+write_phase assertion passed 'newest checksum-valid dump restored; exact workflow credential binding and negative/authenticated restored canary passed'
 echo "n8n temporary restore drill passed with $selected_dump; cleanup will remove the temporary database and run-owned resources."

@@ -26,8 +26,8 @@ cilium-validate: require-bash
 n8n-validate: require-bash
     @scripts/validate/n8n.sh
 
-# Run the read-only n8n live acceptance contract. Full mode requires the
-# operator-held N8N_CANARY_TOKEN; private bootstrap sets N8N_VERIFY_MODE=private.
+# Run the observational n8n live acceptance contract. It sends no canary request;
+# private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh {{quote(kubeconfig)}}
 

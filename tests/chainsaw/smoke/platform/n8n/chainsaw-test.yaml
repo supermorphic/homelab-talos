@@ -23,6 +23,10 @@ spec:
               metadata:
                 name: public-webhook-gateway
                 namespace: flux-system
+              (metadata.generation == status.observedGeneration): true
+              ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
+              spec:
+                suspend: false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"
@@ -33,6 +37,10 @@ spec:
               metadata:
                 name: n8n-postgresql
                 namespace: flux-system
+              (metadata.generation == status.observedGeneration): true
+              ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
+              spec:
+                suspend: false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"
@@ -43,6 +51,10 @@ spec:
               metadata:
                 name: n8n
                 namespace: flux-system
+              (metadata.generation == status.observedGeneration): true
+              ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
+              spec:
+                suspend: false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"
@@ -53,6 +65,10 @@ spec:
               metadata:
                 name: public-webhook-route
                 namespace: flux-system
+              (metadata.generation == status.observedGeneration): true
+              ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
+              spec:
+                suspend: false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"
@@ -63,6 +79,10 @@ spec:
               metadata:
                 name: n8n
                 namespace: automation
+              (metadata.generation == status.observedGeneration): true
+              ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
+              spec:
+                suspend: false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"
@@ -73,11 +93,17 @@ spec:
               metadata:
                 name: n8n
                 namespace: automation
+              (metadata.generation == status.observedGeneration): true
               spec:
                 replicas: 1
                 strategy:
                   type: Recreate
               status:
+                replicas: 1
+                updatedReplicas: 1
+                readyReplicas: 1
+                availableReplicas: 1
+                (unavailableReplicas || `0`): 0
                 (conditions[?type == 'Available']):
                   - status: "True"
         - assert:
@@ -87,10 +113,16 @@ spec:
               metadata:
                 name: n8n-postgresql
                 namespace: automation
+              (metadata.generation == status.observedGeneration): true
               spec:
                 replicas: 1
               status:
+                replicas: 1
+                currentReplicas: 1
+                updatedReplicas: 1
                 readyReplicas: 1
+                availableReplicas: 1
+                (currentRevision == updateRevision): true
       catch:
         - events:
             namespace: automation

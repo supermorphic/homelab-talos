@@ -46,6 +46,8 @@ prometheus_config='kubernetes/apps/monitoring/kube-prometheus-stack/config/kusto
 n8n_dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json'
 catalog='tests/catalog.yaml'
 n8n_verifier='scripts/verify/n8n.sh'
+n8n_verification_lib='scripts/lib/n8n-verification.sh'
+n8n_verification_contract_test='scripts/test/n8n-verification-contract-test.sh'
 n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
 n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
@@ -167,7 +169,8 @@ for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$gatus_kustomizati
   "$gatus_values" "$prometheus_config" "$n8n_dashboard"; do
   [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
-for file in "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
+for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
+  "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
   "$n8n_operations" "$n8n_recovery" "$catalog" "$bootstrap_just" \
   "$kubernetes_just"; do
   [[ -f "$file" ]] || { echo "Missing n8n operations source: $file" >&2; exit 1; }
@@ -185,6 +188,70 @@ rg -Fq 'run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8
 rg -Fq "run-live-suite.sh smoke 'platform' 'n8n'" "$temp_dir/n8n-smoke-command"
 rg -Fq "run-live-suite.sh resilience 'n8n-persistence'" \
   "$temp_dir/n8n-persistence-command"
+
+# Public containment removes the selected HTTPRoute while the Flux child remains
+# reconciling with prune enabled. Prove that the documented empty source is a valid,
+# empty Kustomize build without modifying the checked-in activation source.
+mkdir -p "$temp_dir/public-route-disabled"
+cp "$public_base/route/kustomization.yaml" "$public_route" \
+  "$temp_dir/public-route-disabled/"
+yq -i '.resources = []' "$temp_dir/public-route-disabled/kustomization.yaml"
+kustomize build "$temp_dir/public-route-disabled" \
+  >"$temp_dir/public-route-disabled.yaml"
+[[ ! -s "$temp_dir/public-route-disabled.yaml" ]] || {
+  echo 'The Git-owned public route containment source does not build empty.' >&2
+  exit 1
+}
+
+# Validate executable Markdown command blocks as shell and inspect the actual curl
+# option/config contracts. Human explanatory prose is deliberately not an oracle.
+python - "$n8n_operations" <<'PY'
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+document = Path(sys.argv[1]).read_text(encoding="utf-8")
+blocks = re.findall(r"```bash\n(.*?)\n```", document, re.DOTALL)
+if not blocks:
+    raise SystemExit("The n8n operations guide has no Bash command blocks.")
+for index, block in enumerate(blocks, start=1):
+    syntax = subprocess.run(
+        ["bash", "-n"], input=block, text=True, capture_output=True, check=False
+    )
+    if syntax.returncode:
+        raise SystemExit(f"The n8n operations Bash block {index} is not valid shell.")
+
+section_match = re.search(
+    r"## Off-network acceptance\n(.*?)(?=\n## )", document, re.DOTALL
+)
+off_network_section = section_match.group(1) if section_match else ""
+off_network = next((block for block in blocks if "n8n-off-network" in block), "")
+normalized = off_network_section.replace("\\\n", " ")
+direct_curls = [line for line in normalized.splitlines() if "curl --silent" in line]
+config_contract = {
+    "umask 077",
+    "mktemp -d",
+    "trap cleanup_check_dir EXIT",
+    "trap 'exit 130' INT",
+    "trap 'exit 143' TERM",
+    "rm -rf -- \"$check_dir\"",
+    "connect-timeout = 10",
+    "max-time = 30",
+}
+if (
+    not off_network
+    or not all(marker in off_network for marker in config_contract)
+    or not direct_curls
+    or any(
+        "--connect-timeout" not in command or "--max-time" not in command
+        for command in direct_curls
+    )
+):
+    raise SystemExit(
+        "The off-network n8n curl commands lack bounded requests or trap-backed restricted cleanup."
+    )
+PY
 
 # Both mutating scenario implementations must reject an absent confirmation before
 # trying to inspect kubeconfig or contact Kubernetes.
@@ -210,8 +277,8 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
 # enforces command safety, access tiers, and exact-order constants.
 [[ "$(yq -r '.suites[] | select(.metadata.id == "verification.n8n") |
     [.metadata.execution_owner, .metadata.mutates_cluster, .access.tier,
-     .confirmation.type, .runner.implementation] | join(",")' "$catalog")" == \
-    'human,false,observer,none,scripts/verify/n8n.sh' && \
+     .confirmation.type, .runner.command, .runner.implementation] | join(",")' "$catalog")" == \
+    'human,false,observer,none,mise exec -- just kube n8n-verify,scripts/verify/n8n.sh' && \
   "$(yq -r '.suites[] | select(.metadata.id == "chainsaw.smoke.platform.n8n") |
     [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.target,
      .metadata.scenario, .dispatch.mode, .dispatch.path, .dispatch.selector] | join(",")' \
@@ -249,8 +316,9 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
 
 # The read-only verifier and smoke source contain no Kubernetes Secret reads,
 # database clients, exec actions, or Chainsaw mutation/script operations.
-if rg -n '\b(psql|pg_dump|pg_restore)\b|kubectl[^\n]*(exec|secrets?)' "$n8n_verifier"; then
-  echo 'The read-only n8n verifier accesses a database, Secret, or pod shell.' >&2
+if rg -n '\b(psql|pg_dump|pg_restore)\b|kubectl[^\n]*(exec|secrets?)|curl[^\n]*(--request|-X|--data|--form)' \
+  "$n8n_verifier"; then
+  echo 'The read-only n8n verifier accesses a database, Secret, pod shell, or mutating HTTP method.' >&2
   exit 1
 fi
 # shellcheck disable=SC2016 # These are literal verifier source markers.
@@ -268,6 +336,29 @@ done
     has("create") or has("delete") or has("patch")
   )] | length' "$n8n_smoke")" == '0' ]] || {
   echo 'The n8n Chainsaw smoke must contain only read-only resource assertions.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.spec.steps[].try[].assert.resource |
+    select(.kind == "Kustomization") |
+    select(.spec.suspend == false and
+      has("(metadata.generation == status.observedGeneration)") and
+      has("([metadata.generation] == status.conditions[?type == '\''Ready'\''].observedGeneration)"))] | length' \
+    "$n8n_smoke")" == '4' ]] || {
+  echo 'The n8n Chainsaw smoke must reject suspended or stale Kustomizations.' >&2
+  exit 1
+}
+[[ "$(yq -r '[.spec.steps[].try[].assert.resource |
+    select(.kind == "HelmRelease") |
+    select(.spec.suspend == false and
+      has("(metadata.generation == status.observedGeneration)") and
+      has("([metadata.generation] == status.conditions[?type == '\''Ready'\''].observedGeneration)"))] | length' \
+    "$n8n_smoke")" == '1' ]] || {
+  echo 'The n8n Chainsaw smoke must reject a suspended or stale HelmRelease.' >&2
+  exit 1
+}
+
+bash "$n8n_verification_contract_test" >/dev/null || {
+  echo 'The n8n verification semantic API fixtures failed.' >&2
   exit 1
 }
 
@@ -381,14 +472,30 @@ if rg -n 'kubectl[^\n]*(get|describe)[^\n]*secrets?|"kind": "HTTPRoute"|kubectl[
   echo 'An n8n recovery scenario reads Secrets, creates an HTTPRoute, or uses exec.' >&2
   exit 1
 fi
+# shellcheck disable=SC2016 # These are literal recovery-source markers.
 for marker in 'LC_ALL=C sort -r' 'sha256sum --check' 'pg_restore --list' \
   'pg_restore --dbname=' 'credentialDecryptionProvedByAuthenticatedCanary' \
-  'dropdb --if-exists --force' 'write_phase cleanup failed'; do
+  'dropdb --if-exists --force' 'write_phase cleanup failed' \
+  'automation_policy="$resource_prefix-automation"' \
+  'request_policy="$resource_prefix-request"' \
+  'policy_manifest | "${k_cluster[@]}" create --filename -' \
+  'n8n_routes_target_service automation "$service"' \
+  'request_resource_absent "ciliumnetworkpolicy/$request_policy"' \
+  'automation_resource_absent "$target"'; do
   rg -Fq "$marker" "$n8n_restore_drill" || {
     echo "n8n restore safety invariant is absent: $marker" >&2
     exit 1
   }
 done
+if rg -n 'SELECT[[:space:]]+([^;]*\.)?data\b|credential\.data' "$n8n_restore_drill"; then
+  echo 'The n8n restore drill selects credential ciphertext.' >&2
+  exit 1
+fi
+[[ "$(rg -Fc 'n8n_routes_target_service automation "$service"' \
+    "$n8n_restore_drill")" == '2' ]] || {
+  echo 'The n8n restore drill must perform both default-aware no-route checks.' >&2
+  exit 1
+}
 for marker in 'sentinel="/data/.homelab-n8n-persistence-' \
   'persistentVolumeClaim": {"claimName": "n8n-data"}' \
   'verify_test_lease_holder' 'write_phase cleanup failed' \
@@ -403,9 +510,12 @@ done
   exit 1
 }
 
-bash -n "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"
-shellcheck --external-sources "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"
-for file in "$n8n_verifier" "$n8n_persistence" "$n8n_restore_drill"; do
+bash -n "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
+  "$n8n_persistence" "$n8n_restore_drill"
+shellcheck --external-sources "$n8n_verifier" "$n8n_verification_lib" \
+  "$n8n_verification_contract_test" "$n8n_persistence" "$n8n_restore_drill"
+for file in "$n8n_verifier" "$n8n_verification_contract_test" "$n8n_persistence" \
+  "$n8n_restore_drill"; do
   [[ -x "$file" ]] || { echo "n8n operations script is not executable: $file" >&2; exit 1; }
 done
 
@@ -433,7 +543,8 @@ sed -n '/^policy_manifest()/,/^}/p; /^database_job_manifest()/,/^}/p; /^applicat
   source "$temp_dir/restore-manifest-functions.sh"
   deployment='n8n-restore-0123456789ab'
   # shellcheck disable=SC2034 # Consumed by the dynamically extracted functions.
-  policy='n8n-restore-0123456789ab' run_hash='0123456789ab' \
+  automation_policy='n8n-restore-0123456789ab-automation' \
+    request_policy='n8n-restore-0123456789ab-request' run_hash='0123456789ab' \
     database_name='n8n_restore_0123456789ab' service="$deployment" \
     request_job='n8n-restore-0123456789ab-request' \
     restore_job='n8n-restore-0123456789ab-load'
@@ -469,7 +580,12 @@ rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
   echo 'Rendered n8n persistence Jobs do not restrict access to the exact sentinel.' >&2
   exit 1
 }
-[[ "$(yq -r '.specs | length' "$temp_dir/restore-policy.yaml")" == '3' && \
+[[ "$(yq ea -r '[select(.kind == "CiliumNetworkPolicy") |
+      .metadata.namespace + "/" + .metadata.name] | sort | join(",")' \
+    "$temp_dir/restore-policy.yaml")" == \
+    'automation/n8n-restore-0123456789ab-automation,gatus/n8n-restore-0123456789ab-request' && \
+  "$(yq ea -r 'select(.metadata.namespace == "automation") | .specs | length' \
+    "$temp_dir/restore-policy.yaml")" == '3' && \
   "$(yq -r '.spec.template.spec.containers[0].env[] |
     select(.name == "PGPASSWORD") | .valueFrom.secretKeyRef | [.name, .key] | join(",")' \
     "$temp_dir/restore-job.yaml")" == \
@@ -494,6 +610,43 @@ rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
   -z "$(yq ea -r 'select(.kind == "HTTPRoute") | .metadata.name' \
     "$temp_dir/restore-application.yaml")" ]] || {
   echo 'Rendered n8n restore resources violate the policy, Secret, or no-route contract.' >&2
+  exit 1
+}
+expected_request_egress='[{"toEndpoints":["homelab-talos/role=n8n,homelab-talos/run-id=0123456789ab,homelab-talos/test=n8n-restore-drill,k8s:io.kubernetes.pod.namespace=automation"],"toPorts":["5678/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toPorts":["53/TCP","53/UDP"]}]'
+actual_request_egress="$(yq ea -o=json -I=0 '
+  select(.metadata.namespace == "gatus") | [.spec.egress[] | {
+    "toEndpoints": ([.toEndpoints[].matchLabels | to_entries | sort_by(.key) |
+      map(.key + "=" + .value) | join(",")] | sort),
+    "toPorts": ([.toPorts[].ports[] | .port + "/" + .protocol] | sort)
+  }] | sort_by((.toEndpoints + .toPorts) | join("|"))
+' "$temp_dir/restore-policy.yaml")"
+[[ "$(yq ea -o=json -I=0 'select(.metadata.namespace == "gatus") |
+    .spec.endpointSelector.matchLabels' "$temp_dir/restore-policy.yaml")" == \
+    '{"homelab-talos/test":"n8n-restore-drill","homelab-talos/run-id":"0123456789ab","homelab-talos/role":"request"}' && \
+  "$(yq ea -r 'select(.metadata.namespace == "gatus") | .spec.ingress | length' \
+    "$temp_dir/restore-policy.yaml")" == '0' && \
+  "$actual_request_egress" == "$expected_request_egress" ]] || {
+  echo 'Rendered n8n restore request policy must select only its Job and allow only DNS and its temporary n8n endpoint.' >&2
+  exit 1
+}
+restore_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
+  "$temp_dir/restore-job.yaml")"
+request_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
+  "$temp_dir/restore-request-job.yaml")"
+[[ "$restore_command" == *'count(*) = 1'* && \
+  "$restore_command" == *'Platform Canary Header'* && \
+  "$restore_command" == *'httpHeaderAuth'* && \
+  "$restore_command" == *'jsonb_array_elements(workflow.nodes::jsonb)'* && \
+  "$restore_command" != *'credential.data'* && \
+  "$restore_command" != *'SELECT data'* && \
+  "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
+    "$temp_dir/restore-request-job.yaml")" == 'node,--input-type=module,--eval' && \
+  "$request_command" == *'const negative = await send'* && \
+  "$request_command" == *'[400, 401, 403, 404]'* && \
+  "$request_command" == *'Object.keys(body).sort()'* && \
+  "$request_command" == *'["correlation", "executionId", "status"]'* && \
+  "$request_command" == *'body.executionId.length === 0'* ]] || {
+  echo 'Rendered n8n restore proof must bind exact metadata and structurally validate negative and authenticated canary responses.' >&2
   exit 1
 }
 [[ -f "$n8n_workflow" ]] || {
@@ -563,14 +716,24 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The public webhook route must depend on public-webhook-gateway and n8n while suspended.' >&2
   exit 1
 }
-[[ "$(yq -r '.metadata.namespace' "$public_route")" == 'networking-public' && \
+[[ "$(yq -r '.resources | join(",")' "$public_base/route/kustomization.yaml")" == \
+    './httproute.yaml' && \
+  "$(yq -r '.metadata.namespace' "$public_route")" == 'networking-public' && \
+  "$(yq -r '.spec | keys | sort | join(",")' "$public_route")" == \
+    'hostnames,parentRefs,rules' && \
   "$(yq -r '.spec.parentRefs | length' "$public_route")" == '1' && \
-  "$(yq -r '.spec.parentRefs[0] | [.namespace, .name, .sectionName] | join(",")' "$public_route")" == 'networking-public,public-webhooks,https' && \
+  "$(yq -r '.spec.parentRefs[0] | [.group, .kind, .namespace, .name, .sectionName] | join(",")' "$public_route")" == 'gateway.networking.k8s.io,Gateway,networking-public,public-webhooks,https' && \
   "$(yq -r '.spec.rules | length' "$public_route")" == '1' && \
+  "$(yq -r '.spec.rules[0] | keys | sort | join(",")' "$public_route")" == \
+    'backendRefs,matches' && \
   "$(yq -r '.spec.rules[0].matches | length' "$public_route")" == '1' && \
+  "$(yq -r '.spec.rules[0].matches[0] | keys | sort | join(",")' "$public_route")" == \
+    'path' && \
   "$(yq -r '.spec.rules[0].matches[0].path | [.type, .value] | join(",")' "$public_route")" == 'Exact,/webhook/platform-canary' && \
   "$(yq -r '.spec.rules[0].backendRefs | length' "$public_route")" == '1' && \
-  "$(yq -r '.spec.rules[0].backendRefs[0] | [.kind, .namespace, .name, .port] | join(",")' "$public_route")" == 'Service,automation,n8n,5678' ]] || {
+  "$(yq -r '.spec.rules[0].backendRefs[0] | keys | sort | join(",")' "$public_route")" == \
+    'group,kind,name,namespace,port' && \
+  "$(yq -r '.spec.rules[0].backendRefs[0] | [.group, .kind, .namespace, .name, .port] | join(",")' "$public_route")" == ',Service,automation,n8n,5678' ]] || {
   echo 'The public webhook route must be the exact platform-canary path to automation/n8n:5678.' >&2
   exit 1
 }

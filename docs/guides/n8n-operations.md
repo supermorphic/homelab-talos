@@ -133,13 +133,11 @@ Complete these steps in order:
    `mise exec -- just kube n8n-validate`, obtain review and explicit merge authorization,
    merge, and wait for Flux readiness.
 5. Confirm Gatus has loaded `Platform / n8n-platform-canary` and its five-minute probe is
-   green. Run the full read-only verifier with the token loaded by a silent prompt:
+   green. Run the full read-only verifier. It observes the Gatus series and does not send
+   a webhook request or require the canary token:
 
 ```bash
-IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
-export N8N_CANARY_TOKEN
 mise exec -- just kube n8n-verify
-unset N8N_CANARY_TOKEN
 ```
 
 ## Focused n8n acceptance
@@ -179,24 +177,40 @@ prompt and use a permission-restricted curl configuration so the header value do
 appear in process arguments:
 
 ```bash
-umask 077
-check_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-off-network.XXXXXX")"
-IFS= read -r -s -p 'Platform Canary token: ' canary_token; printf '\n'
-correlation="off-network-$(date -u +%Y%m%dT%H%M%SZ)"
-{
-  printf '%s\n' 'silent' 'show-error' 'fail' 'max-time = 30' 'request = "POST"'
-  printf '%s\n' 'header = "Content-Type: application/json"'
-  printf 'header = "X-Platform-Canary: %s"\n' "$canary_token"
-  printf 'data = "{\\"correlation\\":\\"%s\\"}"\n' "$correlation"
-  printf '%s\n' 'url = "https://hooks.lab.supermorphic.com/webhook/platform-canary"'
-  printf 'output = "%s/response.json"\n' "$check_dir"
-} >"$check_dir/request.curl"
-curl --config "$check_dir/request.curl"
-CORRELATION="$correlation" mise exec -- yq -e \
-  '.status == "ok" and .correlation == strenv(CORRELATION) and (.executionId | length > 0)' \
-  "$check_dir/response.json"
-rm -rf -- "$check_dir"
-unset canary_token correlation check_dir
+(
+  set -euo pipefail
+  umask 077
+  check_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-off-network.XXXXXX")"
+  cleanup_check_dir() {
+    original_exit="$?"
+    trap - EXIT INT TERM
+    unset canary_token
+    rm -rf -- "$check_dir" && test ! -e "$check_dir" || {
+      echo 'Failed to remove the permission-restricted canary workspace.' >&2
+      exit 1
+    }
+    exit "$original_exit"
+  }
+  trap cleanup_check_dir EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  IFS= read -r -s -p 'Platform Canary token: ' canary_token; printf '\n'
+  correlation="off-network-$(date -u +%Y%m%dT%H%M%SZ)"
+  {
+    printf '%s\n' 'silent' 'show-error' 'fail' 'connect-timeout = 10' \
+      'max-time = 30' 'request = "POST"'
+    printf '%s\n' 'header = "Content-Type: application/json"'
+    printf 'header = "X-Platform-Canary: %s"\n' "$canary_token"
+    printf 'data = "{\\"correlation\\":\\"%s\\"}"\n' "$correlation"
+    printf '%s\n' 'url = "https://hooks.lab.supermorphic.com/webhook/platform-canary"'
+    printf 'output = "%s/response.json"\n' "$check_dir"
+  } >"$check_dir/request.curl"
+  curl --config "$check_dir/request.curl"
+  CORRELATION="$correlation" mise exec -- yq -e \
+    '.status == "ok" and .correlation == strenv(CORRELATION) and
+      (.executionId | type == "!!str" and length > 0)' \
+    "$check_dir/response.json"
+)
 ```
 
 The exact webhook without authentication must fail. The editor, API, metrics, test
@@ -204,6 +218,7 @@ webhook, unrelated webhook, and root paths must also stay unavailable:
 
 ```bash
 case "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  --connect-timeout 10 --max-time 30 \
   --request POST --header 'Content-Type: application/json' \
   --data '{"correlation":"negative-auth"}' \
   https://hooks.lab.supermorphic.com/webhook/platform-canary)" in
@@ -212,6 +227,7 @@ case "$(curl --silent --output /dev/null --write-out '%{http_code}' \
 esac
 for path in / /rest/settings /metrics /webhook-test/platform-canary /webhook/unrelated; do
   test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --connect-timeout 10 --max-time 30 \
     "https://hooks.lab.supermorphic.com${path}")" = 404
 done
 ```
@@ -245,10 +261,38 @@ reverting the container image can reverse a database migration.
 ## Public rollback
 
 Remove the router TCP/443 forwarding rule first. Confirm an off-network connection can no
-longer reach the host. Then remove the public DNS record. Finally, change
-`public-webhook-route.spec.suspend` to `true` in a reviewed pull request, merge it, and
-wait until the route resource is absent. Remove or disable the Gatus canary endpoint only
-through a separate reviewed Git change if the public path will stay withdrawn.
+longer reach the host, then remove the public DNS record. Suspension alone does not prune
+an already applied route. In the first reviewed containment change, keep
+`public-webhook-route.spec.suspend: false` and change
+`kubernetes/apps/networking/public-webhook-gateway/route/kustomization.yaml` to
+`resources: []`. This is a valid empty Kustomization; validate it with
+`mise exec -- kustomize build kubernetes/apps/networking/public-webhook-gateway/route`
+and `mise exec -- just kube n8n-validate`. Merge with explicit authorization and let the
+unsuspended child reconcile with `prune: true`.
+
+After Flux observes the merged generation, prove the route is absent:
+
+```bash
+route_state="$(mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
+  get kustomization public-webhook-route --output json)"
+mise exec -- yq -e '
+  .spec.suspend == false and
+  .metadata.generation == .status.observedGeneration and
+  (.metadata.generation as $generation |
+    [.status.conditions[]? | select(.type == "Ready" and .status == "True" and
+      .observedGeneration == $generation)] | length == 1)
+' <<<"$route_state"
+test -z "$(mise exec -- kubectl --kubeconfig .kube/config \
+  --namespace networking-public get httproute n8n-platform-canary \
+  --ignore-not-found --output name)"
+```
+
+Only after that proof may a second reviewed Git change set
+`public-webhook-route.spec.suspend: true`. Remove or disable the Gatus canary endpoint
+only through a separate reviewed Git change if the public path will stay withdrawn. To
+publish again, keep router forwarding disabled while a reviewed Git change re-adds
+`./httproute.yaml` and sets the child Kustomization unsuspended. Wait for current Flux and
+route acceptance, complete off-network tests, and restore forwarding last.
 
 Do not delete the n8n, PostgreSQL, or backup claims during rollback. Keep the encrypted
 recovery unit and logical dumps. Use the [n8n recovery runbook](../runbooks/n8n-recovery.md)

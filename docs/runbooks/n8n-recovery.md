@@ -7,9 +7,12 @@ readable only with the stable `N8N_ENCRYPTION_KEY` from that encrypted manifest 
 operator password manager.
 
 Start by removing the router TCP/443 forwarding rule if the failure can expose incorrect
-responses, authentication failures, or partial data. Keep `public-webhook-route`
-suspended in Git during recovery. Do not delete any current claim while collecting
-evidence.
+responses, authentication failures, or partial data. Then use the
+[public rollback containment sequence](../guides/n8n-operations.md#public-rollback): keep
+the route child reconciling while Git removes `httproute.yaml` from its selected
+resources, wait for current Flux observation, and prove the HTTPRoute is absent before
+optionally suspending the child through Git. Suspension by itself preserves an already
+applied route. Do not delete any current claim while collecting evidence.
 
 ## Classify the fault
 
@@ -50,13 +53,11 @@ pod events. Reconcile the existing Git source or delete only the failed pod thro
 approved operator workflow. Require the Deployment and StatefulSet to return Ready and
 the three recorded PVC UIDs to remain unchanged.
 
-Load the canary token without shell history and run the read-only acceptance command:
+Run the read-only acceptance command. It observes the Gatus result and does not send a
+canary request or read the token:
 
 ```bash
-IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
-export N8N_CANARY_TOKEN
 mise exec -- just kube n8n-verify
-unset N8N_CANARY_TOKEN
 ```
 
 Do not restore PostgreSQL when pod rescheduling has recovered the existing database.
