@@ -767,6 +767,18 @@ backup_status_expr="$(jq -r '.panels[] | select(.title == "Validated logical bac
   exit 1
 }
 
+backup_cronjob_name="$(yq -r '.metadata.name' "$postgresql_cronjob")"
+backup_job_failure_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nPostgresqlBackupJobFailed") | .expr' "$n8n_alerts")"
+[[ "$backup_job_failure_expr" == *'kube_job_failed{'* && \
+  "$backup_job_failure_expr" == *'condition="true"'* && \
+  "$backup_job_failure_expr" == *'kube_job_status_start_time{'* && \
+  "$backup_job_failure_expr" == *'kube_cronjob_status_last_successful_time{'* && \
+  "$backup_job_failure_expr" == *"cronjob=\"$backup_cronjob_name\""* && \
+  "$backup_job_failure_expr" != *'kube_job_status_failed'* ]] || {
+  echo 'The backup Job failure alert must use terminal failure and last-success recovery semantics.' >&2
+  exit 1
+}
+
 execution_alert_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nExecutionFailures") | .expr' "$n8n_alerts")"
 execution_rate_expr="$(jq -r '.panels[] | select(.title == "Execution success and failure rate") | .targets[].expr' "$n8n_dashboard")"
 execution_duration_expr="$(jq -r '.panels[] | select(.title == "Execution duration p95") | .targets[].expr' "$n8n_dashboard")"
@@ -804,6 +816,11 @@ pvc_dashboard_expr="$(jq -r '.panels[] | select(.title == "Persistent volume uti
   "$(rg -Foc "$pvc_matcher" <<<"$pvc_alert_exprs")" -eq 5 && \
   "$(rg -Foc "$pvc_matcher" <<<"$pvc_dashboard_expr")" -eq 2 ]] || {
   echo 'n8n alert and dashboard PVC inventories must match the three retained claims.' >&2
+  exit 1
+}
+pvc_warning_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nPersistentVolumeUsageWarning") | .expr' "$n8n_alerts")"
+[[ "$pvc_warning_expr" == *'> 70'* && "$pvc_warning_expr" == *'<= 85'* ]] || {
+  echo 'The n8n PVC warning range must stop at 85 percent.' >&2
   exit 1
 }
 

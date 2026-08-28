@@ -46,13 +46,15 @@ tests:
         alertname: HooksCertificateExpiringCritical
         exp_alerts: []
 
-  - name: dedicated hooks certificate metric missing ignores wildcard and unrelated series
+  - name: dedicated hooks certificate missing fires then exact healthy series clears it
     interval: 1m
     input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking-public",name="hooks-lab-supermorphic-com",issuer_name="letsencrypt-production"}'
+        values: '_x8 7776000x4'
       - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking",name="wildcard-lab-supermorphic-com"}'
-        values: '7776000x10'
+        values: '7776000x12'
       - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="networking-public",name="other-certificate"}'
-        values: '7776000x10'
+        values: '7776000x12'
     alert_rule_test:
       - eval_time: 4m
         alertname: HooksCertificateMetricMissing
@@ -64,6 +66,21 @@ tests:
             exp_annotations:
               summary: Public hooks certificate expiry metric is missing
               description: Prometheus has received no expiry timestamp for networking-public/hooks-lab-supermorphic-com for more than five minutes.
+      - eval_time: 6m
+        alertname: HooksCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HooksCertificateExpiringCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: HooksCertificateMetricMissing
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: HooksCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: HooksCertificateExpiringCritical
+        exp_alerts: []
 
   - name: production wildcard remains silent outside the warning window
     interval: 1m

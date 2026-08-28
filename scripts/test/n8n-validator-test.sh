@@ -124,6 +124,18 @@ expect_fail 'backup freshness alert based on Kubernetes Job success' \
   'Backup observability must use the validated logical-dump status marker.'
 
 reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "N8nPostgresqlBackupJobFailed") | .expr) = "kube_job_status_failed{namespace=\"automation\",job_name=~\"n8n-postgresql-backup-.*\"} > 0"' \
+  "$alerts"
+expect_fail 'backup Job alert uses retry-attempt counter instead of terminal result' \
+  'The backup Job failure alert must use terminal failure and last-success recovery semantics.'
+
+reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "N8nPersistentVolumeUsageWarning") | .expr) |= sub("<= 85"; "<= 95")' \
+  "$alerts"
+expect_fail 'PVC warning range overlaps the critical range' \
+  'The n8n PVC warning range must stop at 85 percent.'
+
+reset_tree
 yq -i '(.spec.groups[].rules[] | select(.alert == "N8nCanaryDown") | .expr) = "gatus_results_endpoint_success{group=\"Platform\",name=\"wrong\"} == 0"' \
   "$alerts"
 expect_fail 'canary alert identity drift' \

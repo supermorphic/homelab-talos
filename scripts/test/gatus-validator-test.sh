@@ -160,6 +160,12 @@ expect_fail 'malformed selected n8n canary ciphertext' \
   'Selected Gatus SOPS Secret is not encrypted:'
 
 reset_tree
+yq -i '.stringData.token = "ENC[AES256_GCM,data:c3ludGhldGlj,iv:c3ludGhldGlj]"' \
+  "$canary_secret"
+expect_fail 'incomplete selected n8n canary SOPS value envelope' \
+  'Selected Gatus SOPS Secret is not encrypted:'
+
+reset_tree
 yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary") | .headers."X-Platform-Canary")' \
   "$values"
 expect_fail 'n8n canary missing authentication header' \

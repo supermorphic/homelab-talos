@@ -63,8 +63,10 @@ validate_selected_sops_secret() {
     exit 1
   }
   expected_recipient="${expected_recipients[0]}"
+  # This verifies the complete serialized SOPS value envelope shape. Only Task 9
+  # operator/Flux decryption with the private key can prove cryptographic authenticity.
   [[ "$(sops filestatus "$target" | yq -r '.encrypted')" == 'true' && \
-    "$(yq -r '[.stringData[] | test("^ENC\\[AES256_GCM,")] | all' "$target")" == 'true' ]] || {
+    "$(yq -r '[.stringData[] | test("^ENC\\[AES256_GCM,data:[A-Za-z0-9+/=]+,iv:[A-Za-z0-9+/=]+,tag:[A-Za-z0-9+/=]+,type:str\\]$")] | all' "$target")" == 'true' ]] || {
     echo "Selected Gatus SOPS Secret is not encrypted: $target." >&2
     exit 1
   }
