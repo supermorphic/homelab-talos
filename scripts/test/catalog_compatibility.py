@@ -160,6 +160,21 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
     expect_rejection(
         root,
         canonical,
+        "empty-runner-placeholder",
+        lambda data: suite(data, "chainsaw.resilience.test-reports-persistence")[
+            "runner"
+        ].__setitem__(
+            "command",
+            "TEST_REPORT_RUN_ID=<> "
+            "CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence "
+            "mise exec -- just test resilience test-reports-persistence",
+        ),
+        "Catalog entry chainsaw.resilience.test-reports-persistence contains "
+        "unsupported runner placeholder: <>.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
         "missing-ci-suite",
         lambda data: data["suites"].remove(suite(data, "validation.trivy")),
         "CI execution ID must resolve to one child validation suite: validation.trivy\n",

@@ -1195,6 +1195,21 @@ class CatalogValidator:
                     f"Catalog entry {suite_id} contains unsupported runner placeholder: "
                     f"{placeholder}.\n"
                 )
+        command_without_allowed_placeholders = command
+        for placeholder in allowed_placeholders:
+            command_without_allowed_placeholders = command_without_allowed_placeholders.replace(
+                placeholder, ""
+            )
+        if (
+            "<" in command_without_allowed_placeholders
+            or ">" in command_without_allowed_placeholders
+        ):
+            placeholder_match = re.search(r"<[^<>]*>", command_without_allowed_placeholders)
+            placeholder = placeholder_match.group() if placeholder_match else "angle bracket"
+            fail(
+                f"Catalog entry {suite_id} contains unsupported runner placeholder: "
+                f"{placeholder}.\n"
+            )
         if not (REPO_ROOT / implementation).exists():
             fail(
                 f"Catalog entry {suite_id} points to missing implementation '{implementation}'.\n"
