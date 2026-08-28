@@ -658,3 +658,26 @@ mounts, credentials, or downstream authority. The failed collector transported o
 allowlisted failure category. After this correction merges, reconciles, and the failed
 TTL-managed Job is absent, the same immutable run remains eligible for one bounded
 reader retry. The diagnostic must not be repeated.
+
+### Run-manifest results schema correction
+
+The next bounded reader authenticated its projected scripts and the exact retained
+producer, then failed closed with a `manifest` mismatch. The producer creates every root
+run manifest with the benchmark results schema from the strategy contract, which is
+`resultsSchemaVersion: 2`. The collector instead normalized that root identity against
+schema `1`. Its offline fixture repeated the same incorrect value and did not model the
+retained producer manifest.
+
+The collector requires root `resultsSchemaVersion: 2` and reports drift at that exact
+field. The workstation results reader transports that field only through its fixed
+manifest-issue allowlist and never transports the retained value. The separate nested
+field `upstream.diagnostics.resultSchemaVersion` remains `1`; it describes the bounded
+diagnostic evidence result rather than the benchmark run manifest. The live-shaped
+fixture uses the producer's root schema, and independent mutations prove that either
+schema fails closed when used in the wrong location.
+
+This correction does not change retained evidence, producer compatibility, the collector
+output schema, mounts, credentials, or downstream authority. The failed collector
+returned only a bounded manifest issue. After merge, natural reconciliation, and absence
+of the failed TTL-managed Job, the same immutable run remains eligible for one bounded
+reader retry. The diagnostic must not be repeated.

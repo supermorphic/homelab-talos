@@ -1838,7 +1838,7 @@ producer_fixed_failed_collector_lines() {
 	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/collector.log"
 	export STUB_JOBS_JSON STUB_BENCHMARK_PODS_JSON STUB_LOGS_FILE
 	write_failed_collector_runtime_fixtures "$run_id" "$STUB_JOBS_JSON" "$STUB_BENCHMARK_PODS_JSON"
-	printf '%s\n' '{"manifestIssues":[{"field":"createdAt","kind":"mismatch"},{"field":"upstream.diagnostics.panelSha256","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' >"$STUB_LOGS_FILE"
+	printf '%s\n' '{"manifestIssues":[{"field":"resultsSchemaVersion","kind":"mismatch"},{"field":"createdAt","kind":"mismatch"},{"field":"upstream.diagnostics.panelSha256","kind":"mismatch"}],"reason":"diagnostic-manifest-binding-invalid","schemaVersion":1,"status":"failed"}' >"$STUB_LOGS_FILE"
 
 	run "$PROJECT_ROOT/scripts/encode-benchmark/diagnostic-evidence-results.sh" "$KUBECONFIG_FIXTURE" "$run_id"
 	[ "$status" -eq 0 ]
@@ -1848,6 +1848,7 @@ producer_fixed_failed_collector_lines() {
 		.mode == "diagnostic-evidence-reader" and .runId == $run and .status == "failed" and
 		.reason == "diagnostic-manifest-binding-invalid" and
 		.manifestIssues == [
+			{field:"resultsSchemaVersion",kind:"mismatch"},
 			{field:"createdAt",kind:"mismatch"},
 			{field:"upstream.diagnostics.panelSha256",kind:"mismatch"}
 		]
