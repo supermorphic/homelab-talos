@@ -146,10 +146,10 @@ quality_hdr_evidence() {
 			{classification:"source-oracle-defect",reasons:$oracle.source.authoritative.reasons}
 		elif $oracle.clip.authoritative.status != "ok" then
 			{classification:"clip-boundary-defect",reasons:$oracle.clip.authoritative.reasons}
-		elif $oracle.clip.authoritative.metadata != $oracle.source.authoritative.metadata then
-			{classification:"clip-boundary-defect",reasons:["authoritative-source-metadata","clip-metadata-changed"]}
 		elif $oracle.encoded.authoritative.status != "ok" then
 			{classification:"encoder-output-defect",reasons:$oracle.encoded.authoritative.reasons}
+		elif $oracle.clip.authoritative.metadata != $oracle.source.authoritative.metadata then
+			{classification:"clip-boundary-defect",reasons:["authoritative-source-metadata","clip-metadata-changed"]}
 		elif $oracle.encoded.authoritative.metadata != $oracle.clip.authoritative.metadata then
 			{classification:"encoder-output-defect",reasons:["source-and-clip-metadata-agree","encoded-metadata-changed"]}
 		else

@@ -116,6 +116,14 @@
       "expected": {"classification": "encoder-output-defect", "reasons": ["source-and-clip-metadata-agree", "encoded-metadata-changed"]}
     },
     {
+      "id": "masked-encoded-oracle-defect",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "changed-frame", "trace": "changed-trace"},
+      "encoded": {"decoded": "changed-frame", "trace": "trace"},
+      "expected": {"classification": "encoder-output-defect", "reasons": ["decoded-trace-disagreement"]}
+    },
+    {
       "id": "auxiliary-null",
       "stream": "null",
       "source": {"decoded": "frame", "trace": "trace"},

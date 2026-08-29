@@ -214,6 +214,29 @@ quality_hdr_case() {
 	done
 }
 
+# Catches comparing source and clip before proving that the encoded decoded and
+# trace_headers evidence forms an authoritative oracle.
+@test "quality HDR encoded oracle defect is not masked by a clip boundary defect" {
+	local calls="$BATS_TEST_TMPDIR/masked-encoded-oracle-defect.calls"
+	local evidence
+	quality_hdr_case masked-encoded-oracle-defect "$calls"
+	[ "$status" -eq 0 ]
+	evidence="$output"
+	run jq -e '
+		.classification == "encoder-output-defect" and
+		.reasons == ["decoded-trace-disagreement"] and
+		.normalizedOracle.source.authoritative.status == "ok" and
+		.normalizedOracle.clip.authoritative.status == "ok" and
+		.normalizedOracle.encoded.authoritative == {
+			status:"unresolved", reasons:["decoded-trace-disagreement"]
+		}
+	' <<<"$evidence"
+	[ "$status" -eq 0 ] || {
+		echo "encoded oracle defect was masked: $(jq -c '{classification,reasons}' <<<"$evidence")" >&3
+		return 1
+	}
+}
+
 # Catches promoting the known-null stream probe into an HDR preservation veto
 # or probing the clip/output at the full-title source timestamp.
 @test "quality HDR keeps null stream status auxiliary and captures committed timestamps" {
