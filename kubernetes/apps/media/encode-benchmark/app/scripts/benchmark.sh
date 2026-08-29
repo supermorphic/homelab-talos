@@ -56,6 +56,8 @@ if [[ "$test_mode" != '1' ]]; then
 		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
 		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
 		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
+		BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING \
+		BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE \
 		BENCHMARK_TEST_FAIL_AUDIO_INVENTORY_WRITE \
 		BENCHMARK_DIAGNOSTIC_MISSING_TOOL BENCHMARK_DIAGNOSTIC_FFPROBE_FIELDS \
 		BENCHMARK_DIAGNOSTIC_INCOMPLETE_WINDOW BENCHMARK_DIAGNOSTIC_MISSING_METRIC \
@@ -2022,15 +2024,21 @@ quality_evidence_document_matches() {
 	' "$document" >/dev/null
 }
 
-publish_quality_evidence() {
+publish_quality_evidence() (
 	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
 	local clip_id="$6" setting="$7" attempt="$8" vmaf="$9" ssim="${10}" psnr="${11}"
 	local hdr="${12}" validation_hdr="${13}"
 	local evidence_directory evidence_base relative destination staged='' digest document
+	local lock_directory lock_owned=0 expected_digest actual_digest competitor
 	evidence_directory="$run_directory/quality-evidence"
 	evidence_base="$sample_id-$clip_id-qsv-$setting-attempt-$attempt"
 	relative="quality-evidence/$evidence_base.json"
 	destination="$run_directory/$relative"
+	lock_directory="$evidence_directory/.$evidence_base.publish.lock"
+	trap '
+		if [[ -n "$staged" ]]; then rm -f -- "$staged"; fi
+		if ((lock_owned)); then rmdir -- "$lock_directory" 2>/dev/null || true; fi
+	' EXIT
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || return 65
 	if [[ -e "$evidence_directory" || -L "$evidence_directory" ]]; then
 		[[ -d "$evidence_directory" && ! -L "$evidence_directory" ]] || return 65
@@ -2038,7 +2046,6 @@ publish_quality_evidence() {
 		mkdir -- "$evidence_directory" || return
 	fi
 	[[ "$(cd -P "$evidence_directory" && pwd)" == "$(cd -P "$run_directory" && pwd)/quality-evidence" ]] || return 65
-	[[ ! -e "$destination" && ! -L "$destination" ]] || return 65
 	document="$(jq -S -c -n \
 		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
 		--arg source_sha "$source_sha" --arg clip "$clip_id" --argjson setting "$setting" \
@@ -2049,19 +2056,56 @@ publish_quality_evidence() {
 			ssim:$ssim,strategyId:$strategy,vmaf:$vmaf
 		}')" || return 65
 	staged="$(mktemp "$evidence_directory/.$evidence_base.tmp.XXXXXX")" || return
-	if ! printf '%s\n' "$document" >"$staged" ||
+	if ! printf '%s\n' "$document" >"$staged" || ! chmod 0600 "$staged" ||
 		! quality_evidence_document_matches "$staged" "$run_id" "$sample_id" "$cohort" \
 			"$source_sha" "$clip_id" "$setting" \
 			"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
-			"$ssim" "$validation_hdr" ||
-		! chmod 0600 "$staged" || ! mv -- "$staged" "$destination"; then
-		rm -f -- "$staged"
+			"$ssim" "$validation_hdr"; then
 		return 65
 	fi
-	digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
-	[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
+	expected_digest="sha256:$(sha256sum "$staged" | awk 'NR == 1 { print $1 }')"
+	[[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
+	# mkdir is the atomic ownership operation for this exact attempt. All
+	# publishers must own it before inspecting or installing the destination.
+	mkdir -- "$lock_directory" || return 65
+	# shellcheck disable=SC2034 # Read by the EXIT trap.
+	lock_owned=1
+	[[ -d "$lock_directory" && ! -L "$lock_directory" ]] || return 65
+	[[ "$(cd -P "$lock_directory" && pwd)" == "$(cd -P "$evidence_directory" && pwd)/.${evidence_base}.publish.lock" ]] || return 65
+	if [[ "$test_mode" == '1' &&
+		"${BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING:-}" == "$setting" &&
+		-n "${BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE:-}" ]]; then
+		competitor="$BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE"
+		[[ -f "$competitor" && ! -L "$competitor" ]] || return 65
+		if [[ ! -e "$destination" && ! -L "$destination" ]]; then
+			cp -- "$competitor" "$destination" || return 65
+		fi
+	fi
+	if [[ -e "$destination" || -L "$destination" ]]; then
+		[[ -f "$destination" && ! -L "$destination" ]] || return 65
+		[[ "$(realpath "$destination")" == "$(cd -P "$run_directory" && pwd)/$relative" ]] || return 65
+		actual_digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
+		[[ "$actual_digest" == "$expected_digest" ]] || return 65
+		quality_evidence_document_matches "$destination" "$run_id" "$sample_id" "$cohort" \
+			"$source_sha" "$clip_id" "$setting" \
+			"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
+			"$ssim" "$validation_hdr" || return 65
+		chmod 0600 "$destination" || return 65
+		digest="$actual_digest"
+	else
+		mv -- "$staged" "$destination" || return 65
+		staged=''
+		[[ -f "$destination" && ! -L "$destination" ]] || return 65
+		[[ "$(realpath "$destination")" == "$(cd -P "$run_directory" && pwd)/$relative" ]] || return 65
+		digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
+		[[ "$digest" == "$expected_digest" ]] || return 65
+		quality_evidence_document_matches "$destination" "$run_id" "$sample_id" "$cohort" \
+			"$source_sha" "$clip_id" "$setting" \
+			"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
+			"$ssim" "$validation_hdr" || return 65
+	fi
 	printf '%s\t%s\n' "$relative" "$digest"
-}
+)
 
 validate_quality_evidence_reference() {
 	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"

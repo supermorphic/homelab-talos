@@ -3591,6 +3591,68 @@ PYTHON
 	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 8 ]
 }
 
+# Catches an append error leaving a valid sidecar that makes the same attempt
+# permanently unrecordable on retry.
+@test "quality evidence retry recovers an exact orphan after append failure" {
+	prepare_execution_run
+	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 74 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	[ -n "$run_id" ]
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	evidence="$run_dir/quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
+	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
+	[ -f "$evidence" ]
+	before="$BATS_TEST_TMPDIR/orphan-before.json"
+	cp "$evidence" "$before"
+	before_digest="$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
+
+	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	run cmp -s "$before" "$evidence"
+	[ "$status" -eq 0 ]
+	[ "$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')" = "$before_digest" ]
+	run python3 - "$run_dir/results.csv" "$before_digest" <<'PYTHON'
+import csv
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = list(csv.DictReader(stream))
+assert len(rows) == 8
+row = next(row for row in rows if row["requested_setting"] == "16")
+assert row["attempt"] == "1"
+assert row["quality_evidence_path"] == (
+    "quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
+)
+assert row["quality_evidence_sha256"] == "sha256:" + sys.argv[2]
+PYTHON
+	[ "$status" -eq 0 ]
+}
+
+# Catches a destination appearing at the former absence-check/rename boundary.
+# The injected competing bytes must survive, and no row may bind them.
+@test "quality evidence publication never overwrites a competing destination" {
+	prepare_execution_run
+	competitor="$BATS_TEST_TMPDIR/competing-evidence.json"
+	printf '%s\n' '{"competing":"evidence"}' >"$competitor"
+	export BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING=16
+	export BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE="$competitor"
+
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	evidence="$run_dir/quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
+	run cmp -s "$competitor" "$evidence"
+	[ "$status" -eq 0 ]
+	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
+	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
+	[ -z "$(find "$run_dir/quality-evidence" -mindepth 1 \( -name '.*.tmp.*' -o -name '.*.publish.lock' \) -print)" ]
+}
+
 # Catches a missing finite metric becoming an unbound row or an apparently
 # successful result. The retained validation file names the closed failure.
 @test "quality evidence failure records a closed reason and appends no row" {
