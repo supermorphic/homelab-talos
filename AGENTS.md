@@ -204,15 +204,11 @@ solely to satisfy these style rules.
 - Use consecutive, monotonically increasing three-digit identifiers for durable design
   specifications, such as `001-<name>.md`. Assign the next number after the highest
   existing specification. After merge, do not reuse or renumber an identifier.
-- A design specification may evolve during implementation and must be reconciled with the
-  implemented and validated result before merge.
-- After merge, preserve the specification's original decisions, evidence, and outcomes.
-  A dated corrective amendment may update the same specification only when it fixes the
-  original work without expanding its scope, authority, interfaces, operational modes, or
-  intended outcome. Preserve prior behavior and explain the defect, evidence, and correction.
-- A material evolution that expands what the work is intended to accomplish requires a new
-  numbered specification. Internal implementation or evidence changes alone do not require
-  a new specification when they remain corrective.
+- A specification is a living design record and may be updated during or after
+  implementation to reflect the current validated design for its subject.
+- Prefer updating an existing specification for iterative work on the same subject. Create
+  a new numbered specification when the work introduces a distinct design subject, not
+  merely because the earlier specification merged.
 - When a transient implementation plan corresponds to a numbered specification, use the
   same numeric identifier and descriptive name where practical.
 - Repository-defined artifact locations override tool or skill defaults. Do not create
