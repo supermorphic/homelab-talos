@@ -1,0 +1,15 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/source.toolkit.fluxcd.io/ocirepository_v1.json
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: n8n-chart
+  namespace: automation
+spec:
+  interval: 15m
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+  ref:
+    digest: sha256:a0bf4694f6e0f91dfb196fd8de08ad40cb3dd798edaa9bd54fa9c3f32566517c
+  url: oci://ghcr.io/n8n-io/n8n-helm-chart/n8n

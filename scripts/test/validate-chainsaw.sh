@@ -137,6 +137,8 @@ run_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.s
 run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
 run_shell_case logging-verifier scripts/test/logging-verify-test.sh
 run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
+run_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
+run_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 run_shell_case monitoring-alloy-logs-validator \
   scripts/test/monitoring-alloy-logs-validator-test.sh
 run_shell_case monitoring-loki-validator \
@@ -163,6 +165,8 @@ run_shell_case qbit-manage-policy-validator \
   scripts/test/qbit-manage-policy-validator-test.sh
 run_shell_case arr-validator scripts/test/arr-validator-test.sh
 run_shell_case gatus-validator scripts/test/gatus-validator-test.sh
+run_shell_case monitoring-alerts-validator \
+  scripts/test/monitoring-alerts-validator-test.sh
 run_shell_case gatus-media-integration-secrets \
   scripts/test/gatus-media-integration-secrets-test.sh
 run_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh

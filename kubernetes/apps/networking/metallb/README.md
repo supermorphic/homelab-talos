@@ -5,9 +5,11 @@ This Kustomization owns one pool, `internal` (`192.168.90.30-192.168.90.38`,
 `autoAssign` disabled), from which the internal Gateway explicitly requests
 `192.168.90.30`, plus its L2Advertisement. FRR and FRR-K8s are disabled.
 
-`192.168.90.39` is unallocated. It previously held a second pool, `public`, owned by
-the dedicated public Plex Gateway; that plane was retired once direct remote access
-was accepted, and the pool went with it.
+`192.168.90.39` is the dedicated webhook VIP. The separate
+`public-webhooks` pool assigns it only to the isolated public Envoy data plane.
+The operator owns router TCP/443 forwarding to this address. Internal ExternalDNS
+does not publish the public hostname, and adding an n8n workflow does not add a
+public route.
 
 Keep the ordering lesson it left behind if a second pool is ever added: MetalLB's
 validating webhook refuses a pool overlapping one already defined, and Flux dry-runs

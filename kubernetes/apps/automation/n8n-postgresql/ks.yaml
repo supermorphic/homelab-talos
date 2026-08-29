@@ -1,0 +1,29 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/kustomize.toolkit.fluxcd.io/kustomization_v1.json
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: n8n-postgresql
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: automation
+    - name: cilium
+    - name: kube-prometheus-stack
+    - name: longhorn
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  interval: 1h
+  path: ./kubernetes/apps/automation/n8n-postgresql/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Task 9 selects operator-generated ciphertext before the attended rollout.
+  suspend: true
+  timeout: 10m
+  wait: true

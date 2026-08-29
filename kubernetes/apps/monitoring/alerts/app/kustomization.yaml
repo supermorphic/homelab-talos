@@ -5,6 +5,7 @@ resources:
   - ./flux.yaml
   - ./gatus.yaml
   - ./logging.yaml
+  # ./n8n.yaml is selected with the public route and Gatus canary activation.
   - ./ntfy.yaml
   - ./portainer.yaml
   - ./test-reports.yaml

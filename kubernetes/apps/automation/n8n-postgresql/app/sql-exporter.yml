@@ -1,0 +1,62 @@
+global:
+  scrape_timeout_offset: 500ms
+  min_interval: 0s
+  max_connections: 3
+  max_idle_connections: 3
+target:
+  name: n8n
+  # Required by SQL Exporter; SQLEXPORTER_TARGET_DSN replaces this password-free value.
+  data_source_name: postgresql://n8n_exporter@127.0.0.1:5432/n8n?sslmode=disable
+  collectors:
+    - n8n_postgresql
+collectors:
+  - collector_name: n8n_postgresql
+    metrics:
+      - metric_name: n8n_postgresql_connections
+        type: gauge
+        help: PostgreSQL connections to the n8n database by state.
+        key_labels:
+          - state
+        values:
+          - connections
+        query: |
+          SELECT COALESCE(state, 'unknown')::text AS state,
+                 count(*)::double precision AS connections
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+          GROUP BY COALESCE(state, 'unknown')
+      - metric_name: n8n_postgresql_transactions_total
+        type: counter
+        help: PostgreSQL transactions in the n8n database by result.
+        key_labels:
+          - result
+        values:
+          - transactions
+        query: |
+          SELECT 'committed'::text AS result,
+                 xact_commit::double precision AS transactions
+          FROM pg_stat_database
+          WHERE datname = current_database()
+          UNION ALL
+          SELECT 'rolled_back'::text AS result,
+                 xact_rollback::double precision AS transactions
+          FROM pg_stat_database
+          WHERE datname = current_database()
+      - metric_name: n8n_postgresql_database_size_bytes
+        type: gauge
+        help: PostgreSQL storage used by the n8n database.
+        values:
+          - database_size_bytes
+        query: |
+          SELECT pg_database_size(current_database())::double precision
+                 AS database_size_bytes
+      - metric_name: n8n_postgresql_backup_last_success_timestamp_seconds
+        type: gauge
+        help: Unix timestamp of the newest validated n8n logical backup.
+        values:
+          - completed_at_seconds
+        query: |
+          SELECT extract(epoch FROM completed_at)::double precision
+                 AS completed_at_seconds
+          FROM platform_operations.logical_backup_status
+          WHERE singleton = true

@@ -12,11 +12,36 @@ run_production_validator() {
   (cd "$repo_root" && "$validator") 2>&1
 }
 
+assert_production_pre_activation_render() {
+  local values chart_version render
+  values="$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  chart_version="$(yq -r '.spec.chart.spec.version' \
+    "$repo_root/kubernetes/apps/monitoring/gatus/app/helmrelease.yaml")"
+  render="$test_dir/production-pre-activation.yaml"
+  helm template gatus gatus --repo https://twin.github.io/helm-charts \
+    --version "$chart_version" --namespace gatus --values "$values" >"$render"
+  [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") |
+    .spec.template.spec.containers[] | select(.name == "gatus") | .env[]? |
+    select(.name == "GATUS_N8N_CANARY_TOKEN")] | length' "$render")" == '0' ]] || {
+    echo 'Pre-activation Gatus must not render the required n8n canary Secret reference.' >&2
+    exit 1
+  }
+  [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
+    .data."config.yaml" | from_yaml | .endpoints[]? |
+    select(.name == "n8n-platform-canary")] | length' "$render")" == '0' ]] || {
+    echo 'Pre-activation Gatus must not render the unavailable n8n canary endpoint.' >&2
+    exit 1
+  }
+}
+
 tree_root="$test_dir/tree"
 
 reset_tree() {
   rm -rf -- "$tree_root"
   mkdir -p "$tree_root/kubernetes/apps/monitoring" \
+    "$tree_root/kubernetes/apps/automation/n8n" \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql" \
+    "$tree_root/kubernetes/apps/networking/public-webhook-gateway" \
     "$tree_root/kubernetes/apps/testing/echo/app" \
     "$tree_root/kubernetes/apps/networking/internal-gateway/app"
   cp "$repo_root/.sops.yaml" "$tree_root/.sops.yaml"
@@ -30,10 +55,50 @@ reset_tree() {
     "$tree_root/kubernetes/apps/testing/echo/app/service.yaml"
   cp "$repo_root/kubernetes/apps/networking/internal-gateway/app/gateway.yaml" \
     "$tree_root/kubernetes/apps/networking/internal-gateway/app/gateway.yaml"
+  cp "$repo_root/kubernetes/apps/automation/n8n/ks.yaml" \
+    "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  cp "$repo_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml" \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
+  cp "$repo_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml" \
+    "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
+  local synthetic_recipient
+  synthetic_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' \
+    "$tree_root/.sops.yaml")"
+  synthetic_recipient="$synthetic_recipient" yq -n '
+    .apiVersion = "v1" |
+    .kind = "Secret" |
+    .metadata.name = "n8n-canary" |
+    .metadata.namespace = "gatus" |
+    .type = "Opaque" |
+    .stringData.token = "ENC[AES256_GCM,data:c3ludGhldGljLXRlc3Q=,iv:c3ludGhldGljLWl2,tag:c3ludGhldGljLXRhZw==,type:str]" |
+    .sops.age = [{"recipient": strenv(synthetic_recipient), "enc": "synthetic-test-envelope"}] |
+    .sops.lastmodified = "2026-01-01T00:00:00Z" |
+    .sops.mac = "ENC[AES256_GCM,data:c3ludGhldGljLW1hYw==,iv:c3ludGhldGljLWl2,tag:c3ludGhldGljLXRhZw==,type:str]" |
+    .sops.encrypted_regex = "^(data|stringData)$" |
+    .sops.version = "3.11.0"
+  ' >"$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml"
+  yq -i '.resources += ["./n8n-canary.sops.yaml"]' \
+    "$tree_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
 }
 
 run_validator() {
   (cd "$tree_root" && "$validator") 2>&1
+}
+
+activate_canary_values() {
+  local values activation candidate
+  values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  activation="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
+  candidate="$test_dir/activated-values.yaml"
+  # shellcheck disable=SC2016 # yq expands $item inside its expression.
+  yq ea '. as $item ireduce ({}; . *+ $item)' "$values" "$activation" >"$candidate"
+  mv -- "$candidate" "$values"
+  yq -i '.spec.suspend = false' \
+    "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  yq -i '.spec.suspend = false' \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
+  yq -i '(select(.metadata.name == "public-webhook-route") | .spec.suspend) = false' \
+    "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
 }
 
 expect_pass() {
@@ -45,6 +110,20 @@ expect_pass() {
   set -e
   [[ "$exit_code" -eq 0 ]] || {
     echo "$description: expected Gatus validation to pass." >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+
+expect_fixture_pass() {
+  local description="$1"
+  local output exit_code
+  set +e
+  output="$(run_validator)"
+  exit_code="$?"
+  set -e
+  [[ "$exit_code" -eq 0 ]] || {
+    echo "$description: expected selected synthetic Gatus Secret fixture to pass." >&2
     echo "$output" >&2
     exit 1
   }
@@ -107,12 +186,81 @@ for native_endpoint in \
   }
 done
 
-# The production source must pass before mutation cases begin; the direct assertion
-# above provides the status-only RED gate.
+# The production source must pass before mutation cases begin. The rendered assertion
+# independently proves that the active Helm release has no pre-activation n8n dependency.
+assert_production_pre_activation_render
 expect_pass 'production Gatus source'
 
 values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
 secret="$tree_root/kubernetes/apps/monitoring/gatus/app/media-integration-api-keys.sops.yaml"
+canary_secret="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml"
+
+reset_tree
+expect_fixture_pass 'selected synthetic n8n canary Secret'
+
+reset_tree
+yq -i '.spec.valuesFrom[0].valuesKey = "n8n-canary-activation.values.yaml"' \
+  "$tree_root/kubernetes/apps/monitoring/gatus/app/helmrelease.yaml"
+expect_fail 'active HelmRelease selects staged n8n canary values directly' \
+  'Active Gatus Helm values source:'
+
+reset_tree
+activate_canary_values
+expect_fixture_pass 'complete activated n8n canary values'
+
+reset_tree
+activate_canary_values
+yq -i '(select(.metadata.name == "public-webhook-route") | .spec.suspend) = true' \
+  "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
+expect_fail 'activated n8n canary with suspended public route' \
+  'Activated Gatus public webhook route Kustomization state:'
+
+reset_tree
+yq -i 'del(.env.GATUS_N8N_CANARY_TOKEN)' \
+  "$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
+expect_fail 'staged n8n canary missing Secret reference' \
+  'Staged Gatus n8n canary environment contract:'
+
+reset_tree
+yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary"))' \
+  "$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
+expect_fail 'staged n8n canary missing endpoint' \
+  'Staged Gatus n8n canary endpoint contract:'
+
+reset_tree
+rm -f -- "$canary_secret"
+expect_fail 'absent selected n8n canary Secret' 'Missing selected Gatus SOPS Secret:'
+
+reset_tree
+yq -i '.stringData.token = "malformed-ciphertext"' "$canary_secret"
+expect_fail 'malformed selected n8n canary ciphertext' \
+  'Selected Gatus SOPS Secret is not encrypted:'
+
+reset_tree
+yq -i '.stringData.token = "ENC[AES256_GCM,data:c3ludGhldGlj,iv:c3ludGhldGlj]"' \
+  "$canary_secret"
+expect_fail 'incomplete selected n8n canary SOPS value envelope' \
+  'Selected Gatus SOPS Secret is not encrypted:'
+
+reset_tree
+activate_canary_values
+yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary") | .headers."X-Platform-Canary")' \
+  "$values"
+expect_fail 'n8n canary missing authentication header' \
+  'Activated Gatus n8n canary endpoint contract:'
+
+reset_tree
+activate_canary_values
+yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .url) = "https://*.lab.supermorphic.com/webhook/platform-canary"' \
+  "$values"
+expect_fail 'n8n canary wildcard URL' 'Activated Gatus n8n canary endpoint contract:'
+
+reset_tree
+activate_canary_values
+yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .interval) = "1m"' \
+  "$values"
+expect_fail 'n8n canary one-minute interval' \
+  'Activated Gatus n8n canary endpoint contract:'
 
 reset_tree
 yq -i 'del(.config.endpoints[] | select(.name == "prowlarr-native-health"))' "$values"

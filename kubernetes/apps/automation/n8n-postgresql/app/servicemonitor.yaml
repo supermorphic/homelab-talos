@@ -1,0 +1,16 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: n8n-postgresql
+  labels:
+    app.kubernetes.io/name: n8n-postgresql
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n-postgresql
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 1m
+      scrapeTimeout: 10s

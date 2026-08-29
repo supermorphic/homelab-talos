@@ -4,14 +4,19 @@ set -euo pipefail
 base='kubernetes/apps/monitoring/gatus'
 ks="$base/ks.yaml"
 values="$base/app/values.yaml"
+canary_activation_values="$base/app/n8n-canary-activation.values.yaml"
 hr="$base/app/helmrelease.yaml"
 repo="$base/app/helmrepository.yaml"
 route="$base/app/httproute.yaml"
 ns="$base/app/namespace.yaml"
 secret="$base/app/media-integration-api-keys.sops.yaml"
+canary_secret="$base/app/n8n-canary.sops.yaml"
 echo_route='kubernetes/apps/testing/echo/app/httproute.yaml'
 echo_service='kubernetes/apps/testing/echo/app/service.yaml'
 internal_gateway='kubernetes/apps/networking/internal-gateway/app/gateway.yaml'
+n8n_ks='kubernetes/apps/automation/n8n/ks.yaml'
+postgresql_ks='kubernetes/apps/automation/n8n-postgresql/ks.yaml'
+public_route_ks='kubernetes/apps/networking/public-webhook-gateway/ks.yaml'
 expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
 temp_dir="$(mktemp -d /tmp/homelab-talos-gatus-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -26,7 +31,76 @@ require_equal() {
   }
 }
 
-for f in "$ks" "$values" "$hr" "$repo" "$route" "$ns" "$secret" "$echo_route" "$echo_service" "$internal_gateway" "$base/app/kustomization.yaml"; do
+normalise_resource_path() {
+  local path="$1"
+  while [[ "$path" == ./* ]]; do
+    path="${path#./}"
+  done
+  printf '%s\n' "$path"
+}
+
+validate_selected_sops_secret() {
+  local owner="$1" resource="$2" target="$3" expected_name="$4"
+  local expected_namespace="$5" expected_keys="$6" expected_recipient selected_resource
+  local normalised_resource normalised_selected_resource selected=false
+  local -a expected_recipients candidate_recipients
+
+  normalised_resource="$(normalise_resource_path "$resource")"
+  while IFS= read -r selected_resource; do
+    normalised_selected_resource="$(normalise_resource_path "$selected_resource")"
+    [[ "$normalised_selected_resource" != "$normalised_resource" ]] || selected=true
+  done < <(yq -r '.resources[]?' "$owner")
+  [[ "$selected" == true ]] || return 0
+  [[ -f "$target" ]] || {
+    echo "Missing selected Gatus SOPS Secret: $target." >&2
+    exit 1
+  }
+  # shellcheck disable=SC2016 # yq reads target through its env() function.
+  mapfile -t expected_recipients < <(
+    target="$target" yq -r \
+      '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+      .sops.yaml
+  )
+  [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+    "${expected_recipients[0]}" != 'null' ]] || {
+    echo "Unable to select exactly one SOPS age recipient for $target." >&2
+    exit 1
+  }
+  expected_recipient="${expected_recipients[0]}"
+  # This verifies the complete serialized SOPS value envelope shape. Only Task 9
+  # operator/Flux decryption with the private key can prove cryptographic authenticity.
+  [[ "$(sops filestatus "$target" | yq -r '.encrypted')" == 'true' && \
+    "$(yq -r '[.stringData[] | test("^ENC\\[AES256_GCM,data:[A-Za-z0-9+/=]+,iv:[A-Za-z0-9+/=]+,tag:[A-Za-z0-9+/=]+,type:str\\]$")] | all' "$target")" == 'true' ]] || {
+    echo "Selected Gatus SOPS Secret is not encrypted: $target." >&2
+    exit 1
+  }
+  mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$target" | sort -u)
+  [[ "${#candidate_recipients[@]}" -eq 1 && \
+    "${candidate_recipients[0]}" == "$expected_recipient" ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected age recipient: $target." >&2
+    exit 1
+  }
+  [[ "$(yq -r 'has("data") | not' "$target")" == 'true' && \
+    "$(yq -r 'keys | sort | join(",")' "$target")" == \
+      'apiVersion,kind,metadata,sops,stringData,type' && \
+    "$(yq -r '.metadata | keys | sort | join(",")' "$target")" == 'name,namespace' && \
+    "$(yq -r '.apiVersion' "$target")" == 'v1' && \
+    "$(yq -r '.kind' "$target")" == 'Secret' && \
+    "$(yq -r '.metadata.name' "$target")" == "$expected_name" && \
+    "$(yq -r '.metadata.namespace' "$target")" == "$expected_namespace" && \
+    "$(yq -r '.type' "$target")" == 'Opaque' ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected Secret contract: $target." >&2
+    exit 1
+  }
+  [[ "$(yq -r '.stringData | keys | sort | join(",")' "$target")" == "$expected_keys" ]] || {
+    echo "Selected Gatus SOPS Secret has an unexpected key set: $target." >&2
+    exit 1
+  }
+}
+
+for f in "$ks" "$values" "$canary_activation_values" "$hr" "$repo" "$route" "$ns" \
+  "$secret" "$echo_route" "$echo_service" "$internal_gateway" \
+  "$n8n_ks" "$postgresql_ks" "$public_route_ks" "$base/app/kustomization.yaml"; do
   [[ -f "$f" ]] || { echo "Missing Gatus source: $f" >&2; exit 1; }
 done
 rg -qx '  - ./gatus/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
@@ -40,8 +114,28 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'cilium,internal-gateway' ]]
 require_equal 'Gatus Flux SOPS provider' "$(yq -r '.spec.decryption.provider' "$ks")" 'sops'
 require_equal 'Gatus Flux SOPS Secret reference' "$(yq -r '.spec.decryption.secretRef.name' "$ks")" 'sops-age'
-require_equal 'Gatus media API-key Secret resource count' \
-  "$(yq -r '[.resources[] | select(. == "./media-integration-api-keys.sops.yaml")] | length' "$base/app/kustomization.yaml")" '1'
+declare -A resource_counts=()
+while IFS= read -r resource; do
+  resource="$(normalise_resource_path "$resource")"
+  case "$resource" in
+    helmrelease.yaml | helmrepository.yaml | httproute.yaml | \
+      media-integration-api-keys.sops.yaml | namespace.yaml | n8n-canary.sops.yaml)
+      resource_counts["$resource"]=$(( ${resource_counts["$resource"]:-0} + 1 ))
+      ;;
+    *)
+      echo "The Gatus app Kustomization selects an unexpected resource: $resource" >&2
+      exit 1
+      ;;
+  esac
+done < <(yq -r '.resources[]' "$base/app/kustomization.yaml")
+for resource in helmrelease.yaml helmrepository.yaml httproute.yaml \
+  media-integration-api-keys.sops.yaml namespace.yaml; do
+  require_equal "Gatus resource $resource count" "${resource_counts["$resource"]:-0}" '1'
+done
+[[ "${resource_counts[n8n-canary.sops.yaml]:-0}" -le 1 ]] || {
+  echo 'The Gatus app must not select n8n-canary.sops.yaml more than once.' >&2
+  exit 1
+}
 require_equal 'Gatus media API-key Secret encryption state' \
   "$(sops filestatus "$secret" | yq -r '.encrypted')" 'true'
 require_equal 'Gatus media API-key Secret SOPS recipient' \
@@ -54,8 +148,38 @@ require_equal 'Gatus media API-key Secret must not use data' "$(yq -r 'has("data
 require_equal 'Gatus media API-key Secret stringData keys' \
   "$(yq -r '.stringData | keys | sort | join(",")' "$secret")" \
   'lidarr_api_key,prowlarr_api_key,radarr_api_key,seerr_api_key,sonarr_api_key'
+validate_selected_sops_secret "$base/app/kustomization.yaml" './n8n-canary.sops.yaml' \
+  "$canary_secret" n8n-canary gatus token
+active_canary_env_count="$(yq -r \
+  '[.env.GATUS_N8N_CANARY_TOKEN | select(. != null)] | length' "$values")"
+active_canary_endpoint_count="$(yq -r \
+  '[.config.endpoints[] | select(.name == "n8n-platform-canary")] | length' "$values")"
+[[ "$active_canary_env_count" == "$active_canary_endpoint_count" && \
+  ("$active_canary_env_count" == '0' || "$active_canary_env_count" == '1') ]] || {
+  echo 'Active Gatus n8n canary values must be entirely absent or entirely activated.' >&2
+  exit 1
+}
+canary_active=false
+[[ "$active_canary_env_count" == '0' ]] || canary_active=true
+if [[ "$canary_active" == true ]]; then
+  require_equal 'Activated Gatus n8n canary Secret selection' \
+    "${resource_counts[n8n-canary.sops.yaml]:-0}" '1'
+  require_equal 'Activated Gatus n8n Kustomization state' \
+    "$(yq -r '.spec.suspend // false' "$n8n_ks")" 'false'
+  require_equal 'Activated Gatus n8n PostgreSQL Kustomization state' \
+    "$(yq -r '.spec.suspend // false' "$postgresql_ks")" 'false'
+  require_equal 'Activated Gatus public webhook route Kustomization state' \
+    "$(yq ea -r 'select(.metadata.name == "public-webhook-route") |
+      .spec.suspend // false' "$public_route_ks")" 'false'
+fi
 chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 [[ -n "$chart_version" && "$chart_version" != 'null' ]]
+require_equal 'Active Gatus Helm values source' \
+  "$(yq -r '.spec.valuesFrom | map([.kind, .name, .valuesKey] | join(",")) | join("|")' \
+    "$hr")" 'ConfigMap,gatus-values,values.yaml'
+require_equal 'Active Gatus generated values files' \
+  "$(yq -r '[.configMapGenerator[] | select(.name == "gatus-values") | .files[]] |
+    sort | join(",")' "$base/app/kustomization.yaml")" 'values.yaml=values.yaml'
 [[ "$(yq -r '.spec.url' "$repo")" == 'https://twin.github.io/helm-charts' ]]
 [[ "$(yq -r '.config.storage.type' "$values")" == 'memory' ]]
 echo_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "echo")' "$values")"
@@ -131,7 +255,8 @@ require_equal 'Media Integration endpoint methods and bodies' \
 
 legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
-  "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration") | .name] | sort | join(",")' "$values")" \
+  "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
+    .name != "n8n-platform-canary") | .name] | sort | join(",")' "$values")" \
   "$legacy_endpoint_names"
 while IFS='|' read -r name group url interval conditions; do
   require_equal "Existing Level 1 endpoint $name group" \
@@ -163,6 +288,40 @@ flaresolverr|Media|http://flaresolverr.media.svc.cluster.local:8191/|1m|[STATUS]
 letsencrypt-acme|External|https://acme-v02.api.letsencrypt.org/directory|10m|[STATUS] == 200
 EOF
 
+canary_endpoint="$(yq -o=json -I=0 \
+  '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' \
+  "$canary_activation_values")"
+require_equal 'Staged Gatus n8n canary environment contract' \
+  "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$canary_activation_values")" \
+  '{"valueFrom":{"secretKeyRef":{"name":"n8n-canary","key":"token"}}}'
+require_equal 'Staged Gatus n8n canary endpoint contract' \
+  "$(yq -r '[.config.endpoints[] | select(.name == "n8n-platform-canary")] | length' \
+    "$canary_activation_values")" '1'
+require_equal 'Platform n8n canary endpoint method' \
+  "$(yq -r '.method' - <<<"$canary_endpoint")" 'POST'
+# shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
+require_equal 'Platform n8n canary endpoint authentication header' \
+  "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" \
+  '${GATUS_N8N_CANARY_TOKEN}'
+require_equal 'Platform n8n canary endpoint header inventory' \
+  "$(yq -r '.headers | keys | sort | join(",")' - <<<"$canary_endpoint")" \
+  'Content-Type,X-Platform-Canary'
+require_equal 'Platform n8n canary endpoint content type' \
+  "$(yq -r '.headers."Content-Type"' - <<<"$canary_endpoint")" 'application/json'
+require_equal 'Platform n8n canary endpoint body' \
+  "$(yq -r '.body' - <<<"$canary_endpoint")" '{"correlation":"gatus-platform-canary"}'
+require_equal 'Platform n8n canary endpoint hides errors' \
+  "$(yq -r '.ui."hide-errors"' - <<<"$canary_endpoint")" 'true'
+
+if [[ "$canary_active" == true ]]; then
+  require_equal 'Activated Gatus n8n canary environment contract' \
+    "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$values")" \
+    "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$canary_activation_values")"
+  require_equal 'Activated Gatus n8n canary endpoint contract' \
+    "$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "n8n-platform-canary")' \
+      "$values")" "$canary_endpoint"
+fi
+
 kustomize build "$base/app" >/dev/null
 printf 'apiVersion: v1\ngenerated: null\nrepositories: []\n' >"$temp_dir/repos.yaml"
 HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
@@ -187,7 +346,27 @@ GATUS_RADARR_API_KEY|radarr_api_key
 GATUS_LIDARR_API_KEY|lidarr_api_key
 GATUS_SEERR_API_KEY|seerr_api_key
 EOF
+rendered_canary_env_count="$(yq ea -r \
+  '[select(.kind == "Deployment" and .metadata.name == "gatus") |
+    .spec.template.spec.containers[] | select(.name == "gatus") | .env[]? |
+    select(.name == "GATUS_N8N_CANARY_TOKEN")] | length' "$rendered")"
+require_equal 'Rendered active Gatus n8n canary environment count' \
+  "$rendered_canary_env_count" "$active_canary_env_count"
+rendered_canary_endpoint_count="$(yq ea -r \
+  '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
+    .data."config.yaml" | from_yaml | .endpoints[]? |
+    select(.name == "n8n-platform-canary")] | length' "$rendered")"
+require_equal 'Rendered active Gatus n8n canary endpoint count' \
+  "$rendered_canary_endpoint_count" "$active_canary_endpoint_count"
+if [[ "$canary_active" == true ]]; then
+  require_equal 'Rendered Gatus GATUS_N8N_CANARY_TOKEN Secret name' \
+    "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .env[] | select(.name == "GATUS_N8N_CANARY_TOKEN") | .valueFrom.secretKeyRef.name] | .[0]' "$rendered")" \
+    'n8n-canary'
+  require_equal 'Rendered Gatus GATUS_N8N_CANARY_TOKEN Secret key' \
+    "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .env[] | select(.name == "GATUS_N8N_CANARY_TOKEN") | .valueFrom.secretKeyRef.key] | .[0]' "$rendered")" \
+    'token'
+fi
 require_equal 'Rendered Gatus container envFrom Secret references' \
   "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .envFrom[]? | select(has("secretRef"))] | length' "$rendered")" '0'
 
-echo 'Gatus source, encrypted media API-key Secret, exact silent media-integration probes, legacy Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'
+echo 'Gatus source, staged n8n canary activation contract, encrypted media API-key Secret, exact silent media-integration probes, active Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'

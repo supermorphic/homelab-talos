@@ -6,11 +6,13 @@ only namespaces whose `gateway.supermorphic.com/access` label is `internal` or
 separate `internal-gateway` package creates the GatewayClass, shared HTTPS
 Gateway, and two-replica Envoy data plane at `192.168.90.30`.
 
-The `public` access class is admitted by the controller but is not populated:
-no namespace currently carries that label, and no Gateway, listener, data
-plane, or route exists for it. Widening the selector alone changes nothing that
-is reachable — a `public` Gateway only becomes real when its own namespace and
-resources are added under a separate, explicitly reviewed change.
+The `public` access class is used only by the separate public webhook Gateway in
+`networking-public`. That isolated data plane uses the dedicated
+`192.168.90.39` webhook VIP. Its listener admits routes only from its own
+namespace, so adding an n8n workflow does not add a public route.
+
+The operator owns public DNS and router TCP/443 forwarding for the public VIP.
+The internal ExternalDNS controller does not publish the public hostname.
 
 Applications attach portable HTTPRoutes from explicitly labeled namespaces.
 They do not receive the wildcard TLS private key. Use the guarded foundation Just

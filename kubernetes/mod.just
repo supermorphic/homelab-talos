@@ -21,6 +21,21 @@ cilium-render:
 cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
+# Validate specification 023 source, rendered n8n chart, database, backup, routes,
+# containment, monitoring, and secret structure. Cluster-independent; part of just ci.
+n8n-validate: require-bash
+    @scripts/validate/n8n.sh
+
+# Run the observational n8n live acceptance contract. It sends no canary request;
+# private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
+n8n-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh {{quote(kubeconfig)}}
+
+# Restore the newest valid logical dump into an isolated temporary database and
+# prove the retained n8n key can decrypt the restored canary credential.
+n8n-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8n-restore-drill.sh {{quote(kubeconfig)}}
+
 # Print read-only live Cilium and Kubernetes status.
 cilium-status:
     #!/usr/bin/env bash

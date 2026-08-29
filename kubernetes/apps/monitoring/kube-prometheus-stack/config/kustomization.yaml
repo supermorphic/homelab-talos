@@ -12,6 +12,12 @@ resources:
 # variable (auto-selects the default Prometheus datasource), so no datasource
 # substitution is needed.
 configMapGenerator:
+  - name: n8n-postgresql-dashboard
+    files:
+      - dashboards/n8n-postgresql.json
+    options:
+      labels:
+        grafana_dashboard: "1"
   - name: trivy-operator-dashboard
     files:
       - dashboards/trivy-operator.json

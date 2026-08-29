@@ -80,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=110.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=115.\n"
     assert completed.stderr == ""
 
 
@@ -141,6 +141,36 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
         ),
         "Catalog entry verification.metrics-server runner command is not a safe literal "
         "mise + just invocation.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "unsupported-runner-placeholder",
+        lambda data: suite(data, "chainsaw.resilience.test-reports-persistence")[
+            "runner"
+        ].__setitem__(
+            "command",
+            "TEST_REPORT_RUN_ID=<token> "
+            "CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence "
+            "mise exec -- just test resilience test-reports-persistence",
+        ),
+        "Catalog entry chainsaw.resilience.test-reports-persistence contains "
+        "unsupported runner placeholder: <token>.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "empty-runner-placeholder",
+        lambda data: suite(data, "chainsaw.resilience.test-reports-persistence")[
+            "runner"
+        ].__setitem__(
+            "command",
+            "TEST_REPORT_RUN_ID=<> "
+            "CLUSTER_CHAOS_CONFIRM=chaos:test-reports-persistence "
+            "mise exec -- just test resilience test-reports-persistence",
+        ),
+        "Catalog entry chainsaw.resilience.test-reports-persistence contains "
+        "unsupported runner placeholder: <>.\n",
     )
     expect_rejection(
         root,
@@ -319,6 +349,20 @@ def entry_contract(root: Path, canonical: dict[str, Any]) -> None:
         ),
         f"Exact-confirmation entry {exact_id} command does not expose its declared guard.\n",
     )
+    n8n_guard_cases = {
+        "test.n8n-persistence": "mise exec -- just test resilience n8n-persistence",
+        "test.n8n-restore-drill": "mise exec -- just kube n8n-restore-drill",
+    }
+    for n8n_id, unguarded_command in n8n_guard_cases.items():
+        expect_rejection(
+            root,
+            canonical,
+            f"hidden-guard-{n8n_id}",
+            lambda data, n8n_id=n8n_id, unguarded_command=unguarded_command: suite(data, n8n_id)[
+                "runner"
+            ].__setitem__("command", unguarded_command),
+            f"Exact-confirmation entry {n8n_id} command does not expose its declared guard.\n",
+        )
     expect_rejection(
         root,
         canonical,
@@ -547,14 +591,39 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
     expect_rejection(
         root,
         canonical,
+        "integration-ordering",
+        lambda data: data["campaigns"]["integration"]["members"].reverse(),
+        "Campaign integration ordering differs from the explicit catalog contract.\n"
+        "--- /dev/fd/<fd>\t<timestamp>\n"
+        "+++ /dev/fd/<fd>\t<timestamp>\n"
+        "@@ -1,7 +1,7 @@\n"
+        "-test.cilium-connectivity\n"
+        "-test.storage-provisioning\n"
+        "-test.flux-canary\n"
+        "-test.n8n-restore-drill\n"
+        "-test.integration.media-hardlink\n"
+        "-test.plex-network-policy\n"
+        " test.ntfy-publish\n"
+        "+test.plex-network-policy\n"
+        "+test.integration.media-hardlink\n"
+        "+test.n8n-restore-drill\n"
+        "+test.flux-canary\n"
+        "+test.storage-provisioning\n"
+        "+test.cilium-connectivity\n",
+        normalize_diff=True,
+    )
+    expect_rejection(
+        root,
+        canonical,
         "resilience-ordering",
         lambda data: data["campaigns"]["resilience"]["members"].reverse(),
         "Campaign resilience ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,8 +1,8 @@\n"
+        "@@ -1,9 +1,9 @@\n"
         "-test.flux-restart\n"
         "-test.portainer-persistence\n"
+        "-test.n8n-persistence\n"
         "-chainsaw.resilience.qbittorrent-vpn-disconnect\n"
         "-chainsaw.resilience.qbittorrent-pod-recreation\n"
         "-chainsaw.resilience.plex-cross-node-reschedule\n"
@@ -566,6 +635,7 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "+chainsaw.resilience.plex-cross-node-reschedule\n"
         "+chainsaw.resilience.qbittorrent-pod-recreation\n"
         "+chainsaw.resilience.qbittorrent-vpn-disconnect\n"
+        "+test.n8n-persistence\n"
         "+test.portainer-persistence\n"
         "+test.flux-restart\n",
         normalize_diff=True,
@@ -591,7 +661,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=40 ci=39.\n",
+        "Validation catalog/executions.ci count differs: catalog=41 ci=40.\n",
     )
     expect_rejection(
         root,
@@ -958,7 +1028,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=110.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=115.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

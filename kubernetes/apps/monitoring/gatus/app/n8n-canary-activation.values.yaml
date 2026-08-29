@@ -1,0 +1,27 @@
+# Staged Gatus values for the n8n public canary. These values are intentionally absent
+# from values.yaml until the encrypted gatus/n8n-canary Secret and public webhook route
+# are activated together through the reviewed Git procedure in docs/guides/n8n-operations.md.
+env:
+  GATUS_N8N_CANARY_TOKEN:
+    valueFrom:
+      secretKeyRef:
+        name: n8n-canary
+        key: token
+config:
+  endpoints:
+    - name: n8n-platform-canary
+      group: Platform
+      url: "https://hooks.lab.supermorphic.com/webhook/platform-canary"
+      method: POST
+      interval: 5m
+      headers:
+        Content-Type: application/json
+        X-Platform-Canary: "${GATUS_N8N_CANARY_TOKEN}"
+      body: '{"correlation":"gatus-platform-canary"}'
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].status == ok"
+        - "[BODY].correlation == gatus-platform-canary"
+        - "len([BODY].executionId) > 0"
+      ui:
+        hide-errors: true

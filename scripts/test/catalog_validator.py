@@ -37,9 +37,19 @@ EXPECTED_SMOKE = [
     "chainsaw.smoke.media.qbit-manage",
     "chainsaw.smoke.platform.all",
 ]
+EXPECTED_INTEGRATION = [
+    "test.cilium-connectivity",
+    "test.storage-provisioning",
+    "test.flux-canary",
+    "test.n8n-restore-drill",
+    "test.integration.media-hardlink",
+    "test.plex-network-policy",
+    "test.ntfy-publish",
+]
 EXPECTED_RESILIENCE = [
     "test.flux-restart",
     "test.portainer-persistence",
+    "test.n8n-persistence",
     "chainsaw.resilience.qbittorrent-vpn-disconnect",
     "chainsaw.resilience.qbittorrent-pod-recreation",
     "chainsaw.resilience.plex-cross-node-reschedule",
@@ -1178,6 +1188,28 @@ class CatalogValidator:
                 f"Catalog entry {suite_id} runner command is not a safe literal mise + just "
                 "invocation.\n"
             )
+        allowed_placeholders = {"<run-id>", "<node>", "<ip>"}
+        for placeholder in sorted(set(re.findall(r"<[^<>]+>", command))):
+            if placeholder not in allowed_placeholders:
+                fail(
+                    f"Catalog entry {suite_id} contains unsupported runner placeholder: "
+                    f"{placeholder}.\n"
+                )
+        command_without_allowed_placeholders = command
+        for placeholder in allowed_placeholders:
+            command_without_allowed_placeholders = command_without_allowed_placeholders.replace(
+                placeholder, ""
+            )
+        if (
+            "<" in command_without_allowed_placeholders
+            or ">" in command_without_allowed_placeholders
+        ):
+            placeholder_match = re.search(r"<[^<>]*>", command_without_allowed_placeholders)
+            placeholder = placeholder_match.group() if placeholder_match else "angle bracket"
+            fail(
+                f"Catalog entry {suite_id} contains unsupported runner placeholder: "
+                f"{placeholder}.\n"
+            )
         if not (REPO_ROOT / implementation).exists():
             fail(
                 f"Catalog entry {suite_id} points to missing implementation '{implementation}'.\n"
@@ -1390,6 +1422,13 @@ class CatalogValidator:
         actual_smoke = self.campaigns["smoke"]["members"]
         if actual_smoke != EXPECTED_SMOKE:
             fail(exact_diff("Campaign smoke aggregate ordering", EXPECTED_SMOKE, actual_smoke))
+        actual_integration = self.campaigns["integration"]["members"]
+        if actual_integration != EXPECTED_INTEGRATION:
+            fail(
+                exact_diff(
+                    "Campaign integration ordering", EXPECTED_INTEGRATION, actual_integration
+                )
+            )
         actual_resilience = self.campaigns["resilience"]["members"]
         if actual_resilience != EXPECTED_RESILIENCE:
             fail(

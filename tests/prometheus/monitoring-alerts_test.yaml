@@ -2,6 +2,7 @@ rule_files:
   - flux.yaml
   - gatus.yaml
   - logging.yaml
+  - n8n.yaml
   - ntfy.yaml
   - portainer.yaml
   - test-reports.yaml
@@ -9,6 +10,592 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # --- n8n and PostgreSQL ---
+
+  - name: active n8n platform alerts when scrape and workload series are fully absent
+    interval: 1m
+    input_series:
+      - &n8n_flux_ready
+        series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n",ready="True",suspended="false"}'
+        values: '1x3000'
+      - &n8n_postgresql_flux_ready
+        series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n-postgresql",ready="True",suspended="false"}'
+        values: '1x3000'
+      - &n8n_public_route_flux_ready
+        series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="public-webhook-route",ready="True",suspended="false"}'
+        values: '1x3000'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+
+  - name: selected availability rules fire for zero sources despite failed Flux reconciliation
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="n8n",ready="False",suspended="false"}'
+        values: '1x8'
+      - series: 'up{namespace="automation",service="n8n",instance="n8n:5678"}'
+        values: '0x8'
+      - series: 'up{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
+        values: '0x8'
+      - series: 'kube_deployment_status_replicas_available{namespace="automation",deployment="n8n"}'
+        values: '0x8'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="automation",statefulset="n8n-postgresql"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n, instance: "n8n:5678"}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql, instance: "postgresql:9399"}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+
+  - name: selected availability rules fire when Flux and source series are fully absent
+    interval: 1m
+    input_series:
+      - series: 'unrelated_metric{scope="other"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 6m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+
+  - name: n8n and PostgreSQL scrape targets fire only while down and recover
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'up{namespace="automation",service="n8n",instance="n8n:5678"}'
+        values: '1x3 0x8 1x4'
+      - series: 'up{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
+        values: '1x3 0x8 1x4'
+      - series: 'up{namespace="other",service="n8n",instance="unrelated"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: N8nUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: N8nUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n, instance: "n8n:5678"}
+            exp_annotations:
+              summary: n8n metrics target is unavailable
+              description: The automation/n8n Prometheus target has been down or missing for more than five minutes.
+      - eval_time: 9m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql, instance: "postgresql:9399"}
+            exp_annotations:
+              summary: n8n PostgreSQL metrics target is unavailable
+              description: The automation/n8n-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 14m
+        alertname: N8nUnavailable
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: N8nPostgresqlUnavailable
+        exp_alerts: []
+
+  - name: n8n and PostgreSQL workload availability fires and recovers independently
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_deployment_status_replicas_available{namespace="automation",deployment="n8n"}'
+        values: '1x3 0x8 1x4'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="automation",statefulset="n8n-postgresql"}'
+        values: '1x3 0x8 1x4'
+      - series: 'kube_deployment_status_replicas_available{namespace="automation",deployment="unrelated"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, deployment: n8n}
+            exp_annotations:
+              summary: n8n workload is unavailable
+              description: The automation/n8n Deployment has reported no available replicas or no replica metric for more than five minutes.
+      - eval_time: 9m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, statefulset: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL workload is unavailable
+              description: The automation/n8n-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+      - eval_time: 14m
+        alertname: N8nWorkloadUnavailable
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: N8nPostgresqlWorkloadUnavailable
+        exp_alerts: []
+
+  - name: repeated n8n platform container restarts fire after the exact window and recover
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation",pod="n8n-abc-123",container="n8n-main"}'
+        values: '0x2 1x2 2x2 3x10 3x12'
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation",pod="n8n-postgresql-0",container="postgresql"}'
+        values: '0x26'
+      - series: 'kube_pod_container_status_restarts_total{namespace="other",pod="n8n-abc-123",container="n8n-main"}'
+        values: '0+1x26'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: N8nContainerRestarting
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: N8nContainerRestarting
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation, pod: n8n-abc-123, container: n8n-main}
+            exp_annotations:
+              summary: n8n platform container is restarting repeatedly
+              description: The automation/n8n-abc-123 n8n-main container restarted more than twice in 15 minutes.
+      - eval_time: 25m
+        alertname: N8nContainerRestarting
+        exp_alerts: []
+
+  - name: a recent n8n PostgreSQL OOM kill fires and then ages out
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation",pod="n8n-postgresql-0",container="postgresql"}'
+        values: '0x3 1x19'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="automation",pod="n8n-postgresql-0",container="postgresql",reason="OOMKilled"}'
+        values: '0x3 1x19'
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation",pod="n8n-postgresql-0",container="sql-exporter"}'
+        values: '0x22'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="automation",pod="n8n-postgresql-0",container="sql-exporter",reason="Error"}'
+        values: '0x3 1x19'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: N8nContainerOomKilled
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: N8nContainerOomKilled
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, pod: n8n-postgresql-0, container: postgresql}
+            exp_annotations:
+              summary: n8n platform container was OOM killed
+              description: The automation/n8n-postgresql-0 postgresql container was OOM killed during the last 15 minutes.
+      - eval_time: 20m
+        alertname: N8nContainerOomKilled
+        exp_alerts: []
+
+  - name: sustained failed n8n executions fire and recover
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'n8n_workflow_execution_duration_seconds_count{namespace="automation",service="n8n",status="failed",mode="webhook"}'
+        values: '0+1x32 32x20'
+      - series: 'n8n_workflow_execution_duration_seconds_count{namespace="automation",service="n8n",status="success",mode="webhook"}'
+        values: '0+5x52'
+      - series: 'n8n_workflow_execution_duration_seconds_count{namespace="other",service="n8n",status="failed",mode="webhook"}'
+        values: '0+5x52'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: N8nExecutionFailures
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: N8nExecutionFailures
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: n8n executions are failing
+              description: Failed n8n executions have increased continuously across the 15-minute observation window.
+      - eval_time: 49m
+        alertname: N8nExecutionFailures
+        exp_alerts: []
+
+  - name: logical backup marker older than thirty six hours fires and a fresh marker recovers
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'n8n_postgresql_backup_last_success_timestamp_seconds{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
+        values: '0x2400 144000x240'
+      - series: 'kube_job_status_succeeded{namespace="automation",job_name="n8n-postgresql-backup-successful"}'
+        values: '1x2640'
+    alert_rule_test:
+      - eval_time: 36h
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts: []
+      - eval_time: 38h
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL logical backup is stale or missing
+              description: No validated logical-dump marker has reported success within 36 hours.
+      - eval_time: 41h
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts: []
+
+  - name: absent logical backup marker fires then a fresh exact marker clears it
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'n8n_postgresql_backup_last_success_timestamp_seconds{namespace="automation",service="n8n-postgresql",instance="postgresql:9399"}'
+        values: '_x18 1080x6'
+      - series: 'n8n_postgresql_backup_last_success_timestamp_seconds{namespace="other",service="n8n-postgresql"}'
+        values: '0x24'
+      - series: 'kube_job_status_succeeded{namespace="automation",job_name="n8n-postgresql-backup-successful"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, service: n8n-postgresql}
+            exp_annotations:
+              summary: n8n PostgreSQL logical backup is stale or missing
+              description: No validated logical-dump marker has reported success within 36 hours.
+      - eval_time: 19m
+        alertname: N8nPostgresqlBackupStale
+        exp_alerts: []
+
+  - name: failed attempts in a PostgreSQL backup Job that completes stay silent
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_job_status_failed{namespace="automation",job_name="n8n-postgresql-backup-retried"}'
+        values: '1x12'
+      - series: 'kube_job_failed{namespace="automation",job_name="n8n-postgresql-backup-retried",condition="true"}'
+        values: '0x12'
+      - series: 'kube_job_complete{namespace="automation",job_name="n8n-postgresql-backup-retried",condition="true"}'
+        values: '1x12'
+      - series: 'kube_job_status_start_time{namespace="automation",job_name="n8n-postgresql-backup-retried"}'
+        values: '60x12'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="automation",cronjob="n8n-postgresql-backup"}'
+        values: '120x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nPostgresqlBackupJobFailed
+        exp_alerts: []
+
+  - name: terminal PostgreSQL backup Job failure fires with no prior success
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_job_failed{namespace="automation",job_name="n8n-postgresql-backup-terminal",condition="true"}'
+        values: '1x12'
+      - series: 'kube_job_status_start_time{namespace="automation",job_name="n8n-postgresql-backup-terminal"}'
+        values: '60x12'
+      - series: 'kube_job_failed{namespace="automation",job_name="unrelated",condition="true"}'
+        values: '1x12'
+      - series: 'kube_job_status_start_time{namespace="automation",job_name="unrelated"}'
+        values: '120x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: N8nPostgresqlBackupJobFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: N8nPostgresqlBackupJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation, job_name: n8n-postgresql-backup-terminal}
+            exp_annotations:
+              summary: n8n PostgreSQL backup Job failed
+              description: The automation/n8n-postgresql-backup-terminal Job has remained failed for more than five minutes.
+
+  - name: later successful backup clears an old retained terminal failure gauge
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_job_failed{namespace="automation",job_name="n8n-postgresql-backup-old",condition="true"}'
+        values: '1x15'
+      - series: 'kube_job_status_start_time{namespace="automation",job_name="n8n-postgresql-backup-old"}'
+        values: '60x15'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="automation",cronjob="n8n-postgresql-backup"}'
+        values: '_x8 480x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nPostgresqlBackupJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation, job_name: n8n-postgresql-backup-old}
+            exp_annotations:
+              summary: n8n PostgreSQL backup Job failed
+              description: The automation/n8n-postgresql-backup-old Job has remained failed for more than five minutes.
+      - eval_time: 9m
+        alertname: N8nPostgresqlBackupJobFailed
+        exp_alerts: []
+
+  - name: overdue PostgreSQL backup CronJob fires and recovers
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_cronjob_next_schedule_time{namespace="automation",cronjob="n8n-postgresql-backup"}'
+        values: '-7200x10 72000x5'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: N8nPostgresqlBackupJobOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation, cronjob: n8n-postgresql-backup}
+            exp_annotations:
+              summary: n8n PostgreSQL backup schedule is overdue
+              description: The automation/n8n-postgresql-backup CronJob is more than one hour past its next scheduled run.
+      - eval_time: 12m
+        alertname: N8nPostgresqlBackupJobOverdue
+        exp_alerts: []
+
+  - name: n8n canary down series fires without cross-firing the missing-series alert and recovers
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
+        values: '1x3 0x8 1x5'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: N8nCanaryDown
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Platform, name: n8n-platform-canary}
+            exp_annotations:
+              summary: n8n authenticated public canary is down
+              description: The Platform/n8n-platform-canary probe has failed for more than five minutes.
+      - eval_time: 9m
+        alertname: N8nCanaryProbeMissing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: N8nCanaryDown
+        exp_alerts: []
+
+  - name: absent n8n canary series fires only missing then exact healthy series clears it
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
+        values: '_x18 1x6'
+      - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: N8nCanaryProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Platform, name: n8n-platform-canary}
+            exp_annotations:
+              summary: n8n authenticated public canary metric is missing
+              description: The Platform/n8n-platform-canary success series has been absent for more than 15 minutes.
+      - eval_time: 16m
+        alertname: N8nCanaryDown
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: N8nCanaryProbeMissing
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: N8nCanaryDown
+        exp_alerts: []
+
+  - name: one exact n8n platform claim leaves Bound and recovers
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-data",phase="Bound"}'
+        values: '1x3 0x8 1x5'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-postgresql-data",phase="Bound"}'
+        values: '1x16'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-postgresql-backups",phase="Bound"}'
+        values: '1x16'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="unrelated",phase="Bound"}'
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: N8nPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, persistentvolumeclaim: n8n-data, phase: Bound}
+            exp_annotations:
+              summary: n8n platform claim is absent or unbound
+              description: The automation/n8n-data PVC has not reported Bound for more than five minutes.
+      - eval_time: 14m
+        alertname: N8nPersistentVolumeClaimNotBound
+        exp_alerts: []
+
+  - name: absent exact n8n platform claim fires then its Bound series clears it
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-data",phase="Bound"}'
+        values: '1x12'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-postgresql-data",phase="Bound"}'
+        values: '1x12'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation",persistentvolumeclaim="n8n-postgresql-backups",phase="Bound"}'
+        values: '_x8 1x4'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="other",persistentvolumeclaim="n8n-postgresql-backups",phase="Bound"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: N8nPersistentVolumeClaimNotBound
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: N8nPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, persistentvolumeclaim: n8n-postgresql-backups, phase: Bound}
+            exp_annotations:
+              summary: n8n platform claim is absent or unbound
+              description: The automation/n8n-postgresql-backups PVC has not reported Bound for more than five minutes.
+      - eval_time: 9m
+        alertname: N8nPersistentVolumeClaimNotBound
+        exp_alerts: []
+
+  - name: n8n platform PVC warning is strict above seventy percent for fifteen minutes
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kubelet_volume_stats_available_bytes{namespace="automation",persistentvolumeclaim="n8n-postgresql-data",instance="node-a"}'
+        values: '30x3 29x18 40x5'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="automation",persistentvolumeclaim="n8n-postgresql-data",instance="node-a"}'
+        values: '100x26'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="automation",persistentvolumeclaim="unrelated",instance="node-a"}'
+        values: '1x26'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="automation",persistentvolumeclaim="unrelated",instance="node-a"}'
+        values: '100x26'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: N8nPersistentVolumeUsageWarning
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: N8nPersistentVolumeUsageWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation, persistentvolumeclaim: n8n-postgresql-data}
+            exp_annotations:
+              summary: n8n platform PVC use is above 70 percent
+              description: The automation/n8n-postgresql-data PVC has remained above 70 percent used for more than 15 minutes.
+      - eval_time: 23m
+        alertname: N8nPersistentVolumeUsageWarning
+        exp_alerts: []
+
+  - name: n8n platform PVC critical is strict above eighty five percent for five minutes
+    interval: 1m
+    input_series:
+      - *n8n_flux_ready
+      - *n8n_postgresql_flux_ready
+      - *n8n_public_route_flux_ready
+      - series: 'kubelet_volume_stats_available_bytes{namespace="automation",persistentvolumeclaim="n8n-postgresql-backups",instance="node-a"}'
+        values: '15x3 14x20 25x5'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="automation",persistentvolumeclaim="n8n-postgresql-backups",instance="node-a"}'
+        values: '100x28'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="other",persistentvolumeclaim="n8n-postgresql-backups",instance="node-a"}'
+        values: '1x28'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="other",persistentvolumeclaim="n8n-postgresql-backups",instance="node-a"}'
+        values: '100x28'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: N8nPersistentVolumeUsageCritical
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: N8nPersistentVolumeUsageCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation, persistentvolumeclaim: n8n-postgresql-backups}
+            exp_annotations:
+              summary: n8n platform PVC use is above 85 percent
+              description: The automation/n8n-postgresql-backups PVC has remained above 85 percent used for more than five minutes.
+      - eval_time: 19m
+        alertname: N8nPersistentVolumeUsageWarning
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: N8nPersistentVolumeUsageCritical
+        exp_alerts: []
+
   - name: reconciliation failure fires for every unsuspended resource not Ready=True
     interval: 1m
     input_series:
