@@ -2074,7 +2074,7 @@ publish_quality_evidence() (
 	fi
 	# A hard link publishes the already complete same-filesystem inode only when
 	# the destination does not exist. It cannot replace a concurrent publisher.
-	if ln -- "$staged" "$destination" 2>/dev/null; then
+	if ln -T -- "$staged" "$destination" 2>/dev/null; then
 		rm -f -- "$staged" || return 65
 		staged=''
 	else

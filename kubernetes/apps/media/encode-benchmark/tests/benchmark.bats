@@ -6,6 +6,7 @@ setup() {
 	GOLDEN="$BATS_TEST_DIRNAME/golden"
 	export BENCHMARK_TEST_MODE=1
 	export REAL_SHA256SUM="$(command -v sha256sum)"
+	export REAL_LN="$(command -v ln)"
 	QUALITY_RUN_ID='20260815T120000Z-c4b9c436'
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/scratch"
@@ -673,7 +674,20 @@ set -euo pipefail
 printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
 exec "$REAL_SHA256SUM" "$@"
 EOF
-	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
+	cat >"$stub_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == '-T' && "${2:-}" == '--' && "$#" -eq 4 ]]; then
+	exec python3 - "$3" "$4" <<'PYTHON'
+import os
+import sys
+
+os.link(sys.argv[1], sys.argv[2])
+PYTHON
+fi
+exec "$REAL_LN" "$@"
+EOF
+	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum" "$stub_bin/ln"
 	export PATH="$stub_bin:$PATH"
 	export BENCHMARK_COMMAND_LOG="$BATS_TEST_TMPDIR/execution-commands.log"
 	export BENCHMARK_PACKET_FIXTURE="$FIXTURES/logs/audio-packets.log"
@@ -3654,6 +3668,74 @@ PYTHON
 	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
 	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
 	[ -z "$(find "$run_dir/quality-evidence" -mindepth 1 \( -name '.*.tmp.*' -o -name '.*.publish.lock' \) -print)" ]
+}
+
+# Catches the hard-link tool treating the exact destination as a directory and
+# installing the staged basename inside it before row validation fails.
+@test "quality evidence publication never links inside a directory destination" {
+	prepare_execution_run
+	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 74 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	evidence_directory="$run_dir/quality-evidence"
+	evidence="$evidence_directory/sample-hdr-detail-qsv-16-attempt-1.json"
+	[ -f "$evidence" ]
+	rm "$evidence"
+	mkdir "$evidence"
+	printf '%s\n' 'directory marker' >"$evidence/marker"
+	before="$BATS_TEST_TMPDIR/directory-before.txt"
+	after="$BATS_TEST_TMPDIR/directory-after.txt"
+	snapshot_tree_state "$evidence" "$before"
+
+	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	[ -d "$evidence" ]
+	[ ! -L "$evidence" ]
+	snapshot_tree_state "$evidence" "$after"
+	run cmp -s "$before" "$after"
+	[ "$status" -eq 0 ]
+	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
+	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
+	[ -z "$(find "$evidence_directory" -maxdepth 1 -type f -name '.*.tmp.*' -print)" ]
+}
+
+# Catches the hard-link tool following a symlinked destination directory and
+# publishing outside the confined run evidence directory.
+@test "quality evidence publication never follows a symlinked directory destination" {
+	prepare_execution_run
+	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 74 ]
+	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	evidence_directory="$run_dir/quality-evidence"
+	evidence="$evidence_directory/sample-hdr-detail-qsv-16-attempt-1.json"
+	outside="$BATS_TEST_TMPDIR/competing-directory"
+	[ -f "$evidence" ]
+	rm "$evidence"
+	mkdir "$outside"
+	printf '%s\n' 'outside marker' >"$outside/marker"
+	ln -s "$outside" "$evidence"
+	before="$BATS_TEST_TMPDIR/symlink-directory-before.txt"
+	after="$BATS_TEST_TMPDIR/symlink-directory-after.txt"
+	snapshot_tree_state "$outside" "$before"
+
+	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	[ -L "$evidence" ]
+	[ "$(readlink "$evidence")" = "$outside" ]
+	snapshot_tree_state "$outside" "$after"
+	run cmp -s "$before" "$after"
+	[ "$status" -eq 0 ]
+	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
+	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
+	[ -z "$(find "$evidence_directory" -maxdepth 1 -type f -name '.*.tmp.*' -print)" ]
 }
 
 # Catches a missing finite metric becoming an unbound row or an apparently
