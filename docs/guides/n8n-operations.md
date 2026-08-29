@@ -25,7 +25,7 @@ Use this guide according to the operation you need:
 The normal day-2 health check is read-only. Run it from a worktree with a current
 `.kube/config`:
 
-```bash
+```zsh
 mise exec -- just kube n8n-verify
 ```
 
@@ -36,6 +36,9 @@ mutating assurance tests. Do not use them as routine health checks.
 The command blocks in the activation and rollback phases are attended operator
 procedures. An explicit confirmation string is a safety guard; it does not make a
 human-owned live mutation unattended or delegate its authority.
+All operator shell blocks are compatible with interactive zsh and modern Bash. A block
+that can terminate early runs in a subshell, so `exit` stops that block without closing
+the operator's parent shell.
 
 ## Activation flow
 
@@ -73,24 +76,38 @@ a cleanup trap, or checks the age identity.
 
 Load the values without putting them in shell history:
 
-```bash
-IFS= read -r -s -p 'Stable N8N encryption key: ' N8N_ENCRYPTION_KEY; printf '\n'
-IFS= read -r -s -p 'n8n database password: ' N8N_DB_PASSWORD; printf '\n'
-IFS= read -r -s -p 'PostgreSQL superuser password: ' POSTGRES_SUPERUSER_PASSWORD; printf '\n'
-IFS= read -r -s -p 'PostgreSQL backup-role password: ' POSTGRES_BACKUP_PASSWORD; printf '\n'
-IFS= read -r -s -p 'PostgreSQL exporter password: ' POSTGRES_EXPORTER_PASSWORD; printf '\n'
-IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
-[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
-  unset N8N_CANARY_TOKEN
-  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
-  exit 1
-}
-export N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
-export POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
-N8N_SECRETS_CONFIRM='write:automation:n8n-platform:sops' \
-  mise exec -- just repo n8n-secrets
-unset N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
-unset POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
+```zsh
+(
+  printf '%s' 'Stable N8N encryption key: ' >&2
+  IFS= read -r -s N8N_ENCRYPTION_KEY
+  printf '\n' >&2
+  printf '%s' 'n8n database password: ' >&2
+  IFS= read -r -s N8N_DB_PASSWORD
+  printf '\n' >&2
+  printf '%s' 'PostgreSQL superuser password: ' >&2
+  IFS= read -r -s POSTGRES_SUPERUSER_PASSWORD
+  printf '\n' >&2
+  printf '%s' 'PostgreSQL backup-role password: ' >&2
+  IFS= read -r -s POSTGRES_BACKUP_PASSWORD
+  printf '\n' >&2
+  printf '%s' 'PostgreSQL exporter password: ' >&2
+  IFS= read -r -s POSTGRES_EXPORTER_PASSWORD
+  printf '\n' >&2
+  printf '%s' 'Platform Canary token: ' >&2
+  IFS= read -r -s N8N_CANARY_TOKEN
+  printf '\n' >&2
+  [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    unset N8N_CANARY_TOKEN
+    echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+    exit 1
+  }
+  export N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
+  export POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
+  N8N_SECRETS_CONFIRM='write:automation:n8n-platform:sops' \
+    mise exec -- just repo n8n-secrets
+  unset N8N_ENCRYPTION_KEY N8N_DB_PASSWORD POSTGRES_SUPERUSER_PASSWORD
+  unset POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD N8N_CANARY_TOKEN
+)
 ```
 
 Select each generated ciphertext in its owning Kustomization as part of the Recovery
@@ -114,7 +131,7 @@ activation change.
 Keep `n8n-postgresql`, `n8n`, and `public-webhook-route` at `spec.suspend: true` in the
 Recovery material PR. Validate and review only ciphertext and non-secret structure:
 
-```bash
+```zsh
 mise exec -- just kube n8n-validate
 mise exec -- just repo validate
 git diff --check
@@ -161,7 +178,7 @@ invocation. If it fails or times out, the rollback trap prints only bounded Job 
 the last 80 backup-container log lines, removes and verifies absence of that exact Job,
 then re-suspends the private workloads in reverse order.
 
-```bash
+```zsh
 mise exec -- just talos kubeconfig
 N8N_BOOTSTRAP_CONFIRM='bootstrap:n8n' mise exec -- just bootstrap n8n
 ```
@@ -246,7 +263,7 @@ In the dedicated Public route + monitoring activation PR, copy the staged Gatus 
 values into the active values, change `public-webhook-route.spec.suspend` to `false`, and
 select the staged n8n rule:
 
-```bash
+```zsh
 mise exec -- yq -i '
   .env.GATUS_N8N_CANARY_TOKEN =
     load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").env.GATUS_N8N_CANARY_TOKEN |
@@ -290,7 +307,7 @@ green. Run the full read-only verifier. It requires the exact healthy 15-alert
 `n8n-platform` group, observes the Gatus series, and does not send a webhook request or
 require the canary token:
 
-```bash
+```zsh
 mise exec -- just kube n8n-verify
 ```
 
@@ -311,21 +328,25 @@ The verifier and smoke suite are read-only. The restore drill and persistence te
 temporary or run-owned cluster state, use the shared test Lease, and require their exact
 confirmations:
 
-```bash
-mise exec -- just kube n8n-verify
-mise exec -- just test smoke platform n8n
-N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
-  mise exec -- just kube n8n-restore-drill
-IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
-[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+```zsh
+(
+  mise exec -- just kube n8n-verify
+  mise exec -- just test smoke platform n8n
+  N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
+    mise exec -- just kube n8n-restore-drill
+  printf '%s' 'Platform Canary token: ' >&2
+  IFS= read -r -s N8N_CANARY_TOKEN
+  printf '\n' >&2
+  [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    unset N8N_CANARY_TOKEN
+    echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+    exit 1
+  }
+  export N8N_CANARY_TOKEN
+  CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
+    mise exec -- just test resilience n8n-persistence
   unset N8N_CANARY_TOKEN
-  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
-  exit 1
-}
-export N8N_CANARY_TOKEN
-CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
-  mise exec -- just test resilience n8n-persistence
-unset N8N_CANARY_TOKEN
+)
 ```
 
 `n8n-verify` observes readiness, routes, monitoring, backup freshness, and the Gatus
@@ -363,7 +384,7 @@ Disconnect the test client from the LAN and private VPN. Load the token with a s
 prompt and use a permission-restricted curl configuration so the header value does not
 appear in process arguments:
 
-```bash
+```zsh
 (
   set -euo pipefail
   umask 077
@@ -381,7 +402,9 @@ appear in process arguments:
   trap cleanup_check_dir EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  IFS= read -r -s -p 'Platform Canary token: ' canary_token; printf '\n'
+  printf '%s' 'Platform Canary token: ' >&2
+  IFS= read -r -s canary_token
+  printf '\n' >&2
   [[ "$canary_token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
     echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
     exit 1
@@ -407,20 +430,22 @@ appear in process arguments:
 The exact webhook without authentication must fail. The editor, API, metrics, test
 webhook, unrelated webhook, and root paths must also stay unavailable:
 
-```bash
-case "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  --connect-timeout 10 --max-time 30 \
-  --request POST --header 'Content-Type: application/json' \
-  --data '{"correlation":"negative-auth"}' \
-  https://hooks.lab.supermorphic.com/webhook/platform-canary)" in
-  400|401|403|404) ;;
-  *) exit 1 ;;
-esac
-for path in / /rest/settings /metrics /webhook-test/platform-canary /webhook/unrelated; do
-  test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+```zsh
+(
+  case "$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --connect-timeout 10 --max-time 30 \
-    "https://hooks.lab.supermorphic.com${path}")" = 404
-done
+    --request POST --header 'Content-Type: application/json' \
+    --data '{"correlation":"negative-auth"}' \
+    https://hooks.lab.supermorphic.com/webhook/platform-canary)" in
+    400|401|403|404) ;;
+    *) exit 1 ;;
+  esac
+  for request_path in / /rest/settings /metrics /webhook-test/platform-canary /webhook/unrelated; do
+    test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+      --connect-timeout 10 --max-time 30 \
+      "https://hooks.lab.supermorphic.com${request_path}")" = 404
+  done
+)
 ```
 
 Open the returned positive execution ID immediately and require the matching successful
@@ -441,19 +466,23 @@ following mutating tests are operator-run, use the shared cluster test Lease, an
 their exact confirmations. Run them for the controlled assurance cases identified above,
 not as routine health checks:
 
-```bash
-IFS= read -r -s -p 'Platform Canary token: ' N8N_CANARY_TOKEN; printf '\n'
-[[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+```zsh
+(
+  printf '%s' 'Platform Canary token: ' >&2
+  IFS= read -r -s N8N_CANARY_TOKEN
+  printf '\n' >&2
+  [[ "$N8N_CANARY_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    unset N8N_CANARY_TOKEN
+    echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
+    exit 1
+  }
+  export N8N_CANARY_TOKEN
+  CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
+    mise exec -- just test resilience n8n-persistence
   unset N8N_CANARY_TOKEN
-  echo 'The Platform Canary token does not satisfy the base64url contract.' >&2
-  exit 1
-}
-export N8N_CANARY_TOKEN
-CLUSTER_CHAOS_CONFIRM='chaos:n8n-persistence' \
-  mise exec -- just test resilience n8n-persistence
-unset N8N_CANARY_TOKEN
-N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
-  mise exec -- just kube n8n-restore-drill
+  N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
+    mise exec -- just kube n8n-restore-drill
+)
 ```
 
 The persistence scenario recreates only the n8n and PostgreSQL pods and uses one exact
@@ -481,7 +510,7 @@ unsuspended child reconcile with `prune: true`.
 
 After Flux observes the merged generation, prove the route is absent:
 
-```bash
+```zsh
 route_state="$(mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
   get kustomization public-webhook-route --output json)"
 mise exec -- yq -e '

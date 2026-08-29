@@ -214,20 +214,44 @@ kustomize build "$temp_dir/public-route-disabled" \
 # option/config contracts. Human explanatory prose is deliberately not an oracle.
 python - "$n8n_operations" <<'PY'
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 document = Path(sys.argv[1]).read_text(encoding="utf-8")
-blocks = re.findall(r"```bash\n(.*?)\n```", document, re.DOTALL)
+fenced_blocks = re.findall(r"```(bash|zsh)\n(.*?)\n```", document, re.DOTALL)
+blocks = [block for _, block in fenced_blocks]
 if not blocks:
-    raise SystemExit("The n8n operations guide has no Bash command blocks.")
+    raise SystemExit("The n8n operations guide has no executable shell command blocks.")
 for index, block in enumerate(blocks, start=1):
-    syntax = subprocess.run(
-        ["bash", "-n"], input=block, text=True, capture_output=True, check=False
-    )
-    if syntax.returncode:
-        raise SystemExit(f"The n8n operations Bash block {index} is not valid shell.")
+    for shell in ("zsh", "bash"):
+        syntax = subprocess.run(
+            [shell, "-n"], input=block, text=True, capture_output=True, check=False
+        )
+        if syntax.returncode:
+            raise SystemExit(
+                f"The n8n operations block {index} is not valid {shell} syntax."
+            )
+    for line in block.splitlines():
+        read_match = re.match(r"\s*(?:IFS=\s*)?read\s+(.*)", line)
+        if not read_match:
+            continue
+        for token in shlex.split(read_match.group(1), posix=True):
+            if token == "--":
+                break
+            if (
+                token.startswith("-")
+                and not token.startswith("--")
+                and "p" in token[1:]
+            ):
+                raise SystemExit(
+                    f"The n8n operations block {index} uses the incompatible read -p option."
+                )
+    if re.search(r"\bfor\s+path\s+in\b", block):
+        raise SystemExit(
+            f"The n8n operations block {index} overwrites zsh's special path array."
+        )
 
 section_match = re.search(
     r"## Off-network acceptance\n(.*?)(?=\n## )", document, re.DOTALL
