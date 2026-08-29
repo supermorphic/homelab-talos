@@ -158,7 +158,7 @@ were `monitoring-alloy-logs-validator` at 118.989s, `logging-verifier` at 114.83
 `monitoring-loki-validator` at 23.246s. These case profiles also overlap the enclosing
 test-harness suite and are not an additive savings estimate.
 
-### Issue 318 rebase boundary
+### Issues 318-323 and 320 rebase boundary
 
 Issue 318 materially changed the encode audit after the controlled baseline above. Commit
 `e3233d04d142d2f33119d45602dbb90c5c2523aa` added or rewrote diagnostic preparation,
@@ -177,20 +177,41 @@ producer authentication, evidence, dispatch, and result contracts. Source review
 | `source-contract.bats` | 15 |
 | `stills.bats` | 7 |
 
-These source counts are review evidence, not a substitute for Bats parser registration.
+These issue-318 source counts are historical review evidence, not a substitute for Bats
+parser registration. Issues 319, 321, 322, and 323 then changed benchmark preparation,
+projected-script, diagnostic-evidence, display-digest, and run-manifest behavior. At
+current `main` commit `5916f2ed8c22bd52d9be67e41ce3ebe363053183`, source review shows
+401 declarations:
+
+| Bats file | Source-visible cases after issues 319-323 |
+| --- | ---: |
+| `benchmark.bats` | 118 |
+| `bootstrap.bats` | 8 |
+| `census.bats` | 21 |
+| `diagnostic-evidence.bats` | 63 |
+| `dispatch.bats` | 120 |
+| `runmeta.bats` | 42 |
+| `selection.bats` | 7 |
+| `source-contract.bats` | 15 |
+| `stills.bats` | 7 |
+
 The next controlled baseline must use Bats' own parser to establish the exact ordered
-identity set after all concurrent branches finish and this branch rebases again.
+identity set on this base. Do not treat the source-visible total as the acceptance oracle.
 
-Issue 318 also added `scripts/encode-benchmark/diagnostic-producer-contract.sh`, changed
-all three prior hotspots, and raised the GitHub job timeout from 20 to 30 minutes. Other
-merged work expanded the repository and harness shell source sets. The fixed-commit
-371-test identity digest, 166/95 shell-source counts, hotspot timings, and complete-suite
-timings therefore remain historical evidence only. They cannot accept or reject the
-current candidate.
+Issue 318 also added `scripts/encode-benchmark/diagnostic-producer-contract.sh` and changed
+all three prior hotspots. Issue 320 added `validation.n8n` and three general-harness shell
+cases, bringing current `main` to 40 CI suites, 176 repository shell sources, and 102
+harness shell sources. The rebased branch has 178 repository sources and 103 harness
+sources because it adds the encode split runner and its behavior test. Issue 320 also
+reduced the GitHub job timeout from 30 back to 20 minutes. The fixed-commit 371-test
+identity digest, the issue-318 393-test identity digest, prior shell-source counts,
+hotspot timings, and complete-suite timings therefore remain historical evidence only.
+They cannot accept or reject the current candidate.
 
-The 30-minute timeout is temporary safety headroom. It is not the runtime objective. The
-ordinary required pre-merge gate still targets approximately two minutes p95, with the
-same correctness and current-main evidence requirements.
+The 20-minute timeout is failure headroom, not the runtime objective. It must be checked
+against the fresh clean-host runtime tail before final Stage 1 acceptance. The ordinary
+required pre-merge gate still targets approximately two minutes p95, with the same
+correctness and current-main evidence requirements.
 
 ## Staged decision model
 
@@ -280,14 +301,14 @@ That audit kept the other 494 entries Active. This included all 371 encode tests
 surfaces. Active experimental evidence remains maintained and runnable for its current
 consumer; Active does not mean permanently required.
 
-Issue 318 invalidates those totals as a current-tree inventory. Source review shows 393
-encode test declarations, 168 repository shell sources, and 96 harness shell sources on
-current `main`, plus the new diagnostic producer helper. The rebased per-file runner and
-its behavior test raise the branch shell sets to 170 repository sources and 97 harness
-sources. Exact current logical inventory, consumers, and Active totals must be regenerated
-after the final Stage 1 rebase. New assertions and operational surfaces remain Active
-unless the audit proves exact equivalent coverage or specification 017 records a terminal
-decision that ends their evidence lifecycle.
+Issues 318-323 and 320 invalidate those totals as a current-tree inventory. Source review
+on current `main` shows 401 encode test declarations, 176 repository shell sources, and
+102 harness shell sources, plus the diagnostic producer helper and new n8n validation.
+The rebased per-file runner and its behavior test raise the branch shell sets to 178
+repository sources and 103 harness sources. Exact current logical inventory, consumers,
+and Active totals must be regenerated from the new base. New assertions and operational
+surfaces remain Active unless the audit proves exact equivalent coverage or specification
+017 records a terminal decision that ends their evidence lifecycle.
 
 ### Lifecycle states
 
