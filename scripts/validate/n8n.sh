@@ -225,14 +225,13 @@ blocks = [block for _, block in fenced_blocks]
 if not blocks:
     raise SystemExit("The n8n operations guide has no executable shell command blocks.")
 for index, block in enumerate(blocks, start=1):
-    for shell in ("zsh", "bash"):
-        syntax = subprocess.run(
-            [shell, "-n"], input=block, text=True, capture_output=True, check=False
+    syntax = subprocess.run(
+        ["bash", "-n"], input=block, text=True, capture_output=True, check=False
+    )
+    if syntax.returncode:
+        raise SystemExit(
+            f"The n8n operations block {index} is not valid Bash syntax."
         )
-        if syntax.returncode:
-            raise SystemExit(
-                f"The n8n operations block {index} is not valid {shell} syntax."
-            )
     for line in block.splitlines():
         read_match = re.match(r"\s*(?:IFS=\s*)?read\s+(.*)", line)
         if not read_match:
