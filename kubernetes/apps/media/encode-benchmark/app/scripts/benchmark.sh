@@ -2029,15 +2029,13 @@ publish_quality_evidence() (
 	local clip_id="$6" setting="$7" attempt="$8" vmaf="$9" ssim="${10}" psnr="${11}"
 	local hdr="${12}" validation_hdr="${13}"
 	local evidence_directory evidence_base relative destination staged='' digest document
-	local lock_directory lock_owned=0 expected_digest actual_digest competitor
+	local expected_digest actual_digest competitor
 	evidence_directory="$run_directory/quality-evidence"
 	evidence_base="$sample_id-$clip_id-qsv-$setting-attempt-$attempt"
 	relative="quality-evidence/$evidence_base.json"
 	destination="$run_directory/$relative"
-	lock_directory="$evidence_directory/.$evidence_base.publish.lock"
 	trap '
 		if [[ -n "$staged" ]]; then rm -f -- "$staged"; fi
-		if ((lock_owned)); then rmdir -- "$lock_directory" 2>/dev/null || true; fi
 	' EXIT
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || return 65
 	if [[ -e "$evidence_directory" || -L "$evidence_directory" ]]; then
@@ -2065,13 +2063,6 @@ publish_quality_evidence() (
 	fi
 	expected_digest="sha256:$(sha256sum "$staged" | awk 'NR == 1 { print $1 }')"
 	[[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
-	# mkdir is the atomic ownership operation for this exact attempt. All
-	# publishers must own it before inspecting or installing the destination.
-	mkdir -- "$lock_directory" || return 65
-	# shellcheck disable=SC2034 # Read by the EXIT trap.
-	lock_owned=1
-	[[ -d "$lock_directory" && ! -L "$lock_directory" ]] || return 65
-	[[ "$(cd -P "$lock_directory" && pwd)" == "$(cd -P "$evidence_directory" && pwd)/.${evidence_base}.publish.lock" ]] || return 65
 	if [[ "$test_mode" == '1' &&
 		"${BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING:-}" == "$setting" &&
 		-n "${BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE:-}" ]]; then
@@ -2081,29 +2072,24 @@ publish_quality_evidence() (
 			cp -- "$competitor" "$destination" || return 65
 		fi
 	fi
-	if [[ -e "$destination" || -L "$destination" ]]; then
-		[[ -f "$destination" && ! -L "$destination" ]] || return 65
-		[[ "$(realpath "$destination")" == "$(cd -P "$run_directory" && pwd)/$relative" ]] || return 65
-		actual_digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
-		[[ "$actual_digest" == "$expected_digest" ]] || return 65
-		quality_evidence_document_matches "$destination" "$run_id" "$sample_id" "$cohort" \
-			"$source_sha" "$clip_id" "$setting" \
-			"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
-			"$ssim" "$validation_hdr" || return 65
-		chmod 0600 "$destination" || return 65
-		digest="$actual_digest"
-	else
-		mv -- "$staged" "$destination" || return 65
+	# A hard link publishes the already complete same-filesystem inode only when
+	# the destination does not exist. It cannot replace a concurrent publisher.
+	if ln -- "$staged" "$destination" 2>/dev/null; then
+		rm -f -- "$staged" || return 65
 		staged=''
-		[[ -f "$destination" && ! -L "$destination" ]] || return 65
-		[[ "$(realpath "$destination")" == "$(cd -P "$run_directory" && pwd)/$relative" ]] || return 65
-		digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
-		[[ "$digest" == "$expected_digest" ]] || return 65
-		quality_evidence_document_matches "$destination" "$run_id" "$sample_id" "$cohort" \
-			"$source_sha" "$clip_id" "$setting" \
-			"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
-			"$ssim" "$validation_hdr" || return 65
+	else
+		[[ -e "$destination" || -L "$destination" ]] || return 65
 	fi
+	[[ -f "$destination" && ! -L "$destination" ]] || return 65
+	[[ "$(realpath "$destination")" == "$(cd -P "$run_directory" && pwd)/$relative" ]] || return 65
+	actual_digest="sha256:$(sha256sum "$destination" | awk 'NR == 1 { print $1 }')"
+	[[ "$actual_digest" == "$expected_digest" ]] || return 65
+	quality_evidence_document_matches "$destination" "$run_id" "$sample_id" "$cohort" \
+		"$source_sha" "$clip_id" "$setting" \
+		"$(jq -r '.harmonicMean' <<<"$vmaf")" "$(jq -r '.onePercentLow' <<<"$vmaf")" \
+		"$ssim" "$validation_hdr" || return 65
+	chmod 0600 "$destination" || return 65
+	digest="$actual_digest"
 	printf '%s\t%s\n' "$relative" "$digest"
 )
 

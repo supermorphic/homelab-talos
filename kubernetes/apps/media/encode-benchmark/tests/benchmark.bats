@@ -3607,6 +3607,8 @@ PYTHON
 	before="$BATS_TEST_TMPDIR/orphan-before.json"
 	cp "$evidence" "$before"
 	before_digest="$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
+	stale_lock="$run_dir/quality-evidence/.sample-hdr-detail-qsv-16-attempt-1.publish.lock"
+	mkdir "$stale_lock"
 
 	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
 	run "$SCRIPTS/benchmark.sh" quality "$run_id"
@@ -3615,6 +3617,7 @@ PYTHON
 	run cmp -s "$before" "$evidence"
 	[ "$status" -eq 0 ]
 	[ "$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')" = "$before_digest" ]
+	[ -d "$stale_lock" ]
 	run python3 - "$run_dir/results.csv" "$before_digest" <<'PYTHON'
 import csv
 import sys
