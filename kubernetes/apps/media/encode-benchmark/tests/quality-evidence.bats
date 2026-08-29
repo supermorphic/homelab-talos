@@ -81,6 +81,20 @@ quality_vmaf_stats() {
 	[ "$(jq -r '.evaluatedFrameCount' <<<"$output")" = '100' ]
 }
 
+# Catches retaining only the loaded contract state while reading a different
+# caller-supplied file for exclusions on a later reducer call.
+@test "VMAF reducer rejects a second contract that grants unresolved frame 781" {
+	local unresolved_metrics="$BATS_TEST_TMPDIR/unresolved.json"
+	local modified_samples="$BATS_TEST_TMPDIR/modified-samples.json"
+	jq '.frames[0].frameNum = 781' "$FIXTURE" >"$unresolved_metrics"
+	jq '.qualityCorrection.vmafMeasurementDefects += [{sampleId:"vc1-fugitive",clipId:"detail",frameIndex:781}]' \
+		"$SAMPLES" >"$modified_samples"
+
+	run bash -c 'source "$1"; quality_vmaf_stats "$2" "$3" avc-clean-coco motion >/dev/null; quality_vmaf_stats "$4" "$5" vc1-fugitive detail' \
+		quality-evidence "$QUALITY_EVIDENCE" "$FIXTURE" "$SAMPLES" "$unresolved_metrics" "$modified_samples"
+	[ "$status" -eq 65 ]
+}
+
 # Catches coercing malformed frame metadata or VMAF values into valid evidence.
 @test "VMAF reducer rejects malformed frame arrays and string scores" {
 	local case_name mutation

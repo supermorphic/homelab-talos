@@ -10,12 +10,26 @@ fi
 
 quality_vmaf_stats() {
 	local metrics_file="$1" samples_file="$2" sample_id="$3" clip_id="$4"
-	local allowed_index='null' exclusion_index
+	local allowed_index='null' exclusion_index contract_path contract_digest
 
 	[[ -f "$metrics_file" && ! -L "$metrics_file" ]] || return 66
 	[[ -f "$samples_file" && ! -L "$samples_file" ]] || return 66
-	if [[ ! -v CONTRACT_QUALITY_EVIDENCE_SCHEMA ]]; then
-		contract_load "$samples_file" || return 65
+	contract_path="$(realpath "$samples_file")" || return 65
+	contract_digest="sha256:$(sha256sum "$contract_path" | awk 'NR == 1 { print $1 }')"
+	[[ "$contract_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
+	if [[ ! -v QUALITY_EVIDENCE_CONTRACT_PATH ]]; then
+		if [[ ! -v CONTRACT_QUALITY_EVIDENCE_SCHEMA ]]; then
+			contract_load "$contract_path" || return 65
+		elif ! bash -c 'source "$1"; contract_load "$2"' \
+			quality-evidence-contract "$quality_evidence_directory/contract.sh" "$contract_path" >/dev/null; then
+			return 65
+		fi
+		QUALITY_EVIDENCE_CONTRACT_PATH="$contract_path"
+		QUALITY_EVIDENCE_CONTRACT_DIGEST="$contract_digest"
+		readonly QUALITY_EVIDENCE_CONTRACT_PATH QUALITY_EVIDENCE_CONTRACT_DIGEST
+	elif [[ "$contract_path" != "$QUALITY_EVIDENCE_CONTRACT_PATH" ||
+		"$contract_digest" != "$QUALITY_EVIDENCE_CONTRACT_DIGEST" ]]; then
+		return 65
 	fi
 	jq -e '
 		(.frames | type) == "array" and (.frames | length) > 0 and
