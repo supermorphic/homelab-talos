@@ -3514,10 +3514,70 @@ append_comparison_once() {
 	mv -f -- "$staged" "$output"
 }
 
+quality_evidence_for_ranking() {
+	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
+	local clip_id="$6" setting="$7" attempt="$8" evidence_path="$9" evidence_digest="${10}"
+	local evidence_directory evidence_file expected_path actual_digest run_physical
+	expected_path="quality-evidence/$sample_id-$clip_id-qsv-$setting-attempt-$attempt.json"
+	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ &&
+		"$evidence_path" == "$expected_path" && "$evidence_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
+	evidence_directory="$run_directory/quality-evidence"
+	[[ -d "$evidence_directory" && ! -L "$evidence_directory" ]] || return 65
+	run_physical="$(cd -P "$run_directory" && pwd)" || return 65
+	[[ "$(cd -P "$evidence_directory" && pwd)" == "$run_physical/quality-evidence" ]] || return 65
+	evidence_file="$run_directory/$evidence_path"
+	[[ -f "$evidence_file" && ! -L "$evidence_file" ]] || return 65
+	[[ "$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+	actual_digest="sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+	[[ "$actual_digest" == "$evidence_digest" ]] || return 65
+	jq -e -c \
+		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
+		--arg source_sha "$source_sha" --arg clip "$clip_id" --argjson setting "$setting" \
+		--arg strategy "$CONTRACT_STRATEGY_ID" --argjson schema "$CONTRACT_QUALITY_EVIDENCE_SCHEMA" '
+		def exact_keys($wanted): type == "object" and ((keys | sort) == ($wanted | sort));
+		def finite_number: type == "number" and isfinite;
+		def nonnegative_integer: finite_number and floor == . and . >= 0;
+		def excluded_frame:
+			exact_keys(["frameIndex","vmaf"]) and
+			(.frameIndex | nonnegative_integer) and .vmaf == 0;
+		. as $document |
+		exact_keys(["clipId","cohort","globalQuality","hdr","psnr","runId","sampleId",
+			"schemaVersion","sourceSha256","ssim","strategyId","vmaf"]) and
+		.schemaVersion == $schema and .strategyId == $strategy and .runId == $run and
+		.sampleId == $sample and .cohort == $cohort and .sourceSha256 == $source_sha and
+		.clipId == $clip and .globalQuality == $setting and
+		(.ssim | finite_number) and (.psnr | finite_number) and
+		(.vmaf |
+			exact_keys(["evaluatedFrameCount","excludedFrames","harmonicMean","onePercentLow","rawFrameCount"]) and
+			(.rawFrameCount | nonnegative_integer and . > 0) and
+			(.evaluatedFrameCount | nonnegative_integer and . > 0) and
+			(.excludedFrames | type == "array" and length <= 1 and all(.[]; excluded_frame)) and
+			.evaluatedFrameCount == (.rawFrameCount - (.excludedFrames | length)) and
+			(.harmonicMean | finite_number) and (.onePercentLow | finite_number)) and
+		(if $cohort == "hdr10" then
+			(.hdr |
+				exact_keys(["classification","normalizedOracle","reasons"]) and
+				(.classification as $classification |
+					["preserved","source-oracle-defect","clip-boundary-defect","encoder-output-defect"] |
+					index($classification)) != null and
+				(.reasons | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) and
+				(.normalizedOracle | type == "object"))
+		else .hdr == null end) |
+		select(.) |
+		{
+			vmafHarmonicMean:$document.vmaf.harmonicMean,
+			vmafOnePercentLow:$document.vmaf.onePercentLow,
+			ssim:$document.ssim,
+			psnr:$document.psnr,
+			hdrClassification:($document.hdr.classification // null)
+		}
+	' "$evidence_file"
+}
+
 rank_quality_candidates() {
 	local results="$1" candidate_samples="$2" run_id="$3"
 	local run_directory artifact staged rows expected settings expected_keys digest candidates
-	local probe_source probe_clip durable_status diagnostic_status
+	local authenticated_rows='[]' row evidence diagnostic_status
 	if [[ ! -v CONTRACT_ICQ_SETTINGS ]]; then
 		contract_load "$candidate_samples" || return
 	fi
@@ -3551,15 +3611,15 @@ rank_quality_candidates() {
 				source_sha256: $columns[4], clip_id: $columns[5], encoder: $columns[6],
 				requested_setting: $columns[7], selected_rate_control: $columns[8], status: $columns[9],
 				attempt: $columns[10],
-				reduction_percent: $columns[13], vmaf_harmonic_mean: $columns[19],
-				vmaf_1pct_low: $columns[20], ssim: $columns[21], qsv_proof: $columns[23],
+				reduction_percent: $columns[13], qsv_proof: $columns[23],
 				validation_codec: $columns[24], validation_duration: $columns[25],
 				validation_resolution: $columns[26], validation_frame_rate: $columns[27],
 				validation_bit_depth: $columns[28], validation_hdr: $columns[29],
 				validation_audio_tracks: $columns[30], validation_subtitle_tracks: $columns[31],
 				validation_chapters: $columns[32], validation_failures: $columns[33],
 				strategy_id: $columns[36], qsv_initialization: $columns[37],
-				video_busy_nanoseconds: $columns[38]
+				video_busy_nanoseconds: $columns[38], quality_evidence_path: $columns[39],
+				quality_evidence_sha256: $columns[40]
 			} end
 		] end
 	' "$results")" || return 65
@@ -3573,52 +3633,65 @@ rank_quality_candidates() {
 		]
 	' "$candidate_samples")" || return 65
 	settings="$(jq -n -c --arg settings "$CONTRACT_ICQ_SETTINGS" '$settings | split(" ") | map(tonumber)')" || return
-	probe_source="$(jq -e -r '.[0].source_sha256 | strings' <<<"$expected")" || return 65
-	probe_clip="$(jq -e -r '.[0].clip_id | strings' <<<"$expected")" || return 65
-	set +e
-	"$script_directory/runmeta.sh" completed "$run_id" "quality|$probe_source|$probe_clip|qsv|16" >/dev/null
-	durable_status=$?
-	set -e
-	[[ "$durable_status" == '0' || "$durable_status" == '1' ]] || return "$durable_status"
 	expected_keys="$(jq -r '[.[] | [.cohort, .sample_id, .source_sha256, .clip_id] | join("|")] | join("\u001c")' <<<"$expected")"
-	awk -F, -v run_id="$run_id" -v settings="$CONTRACT_ICQ_SETTINGS" -v expected="$expected_keys" '
+	awk -F, -v run_id="$run_id" -v settings="$CONTRACT_ICQ_SETTINGS" \
+		-v strategy="$CONTRACT_STRATEGY_ID" -v expected="$expected_keys" '
 		BEGIN {
 			count = split(expected, values, "\034")
 			for (item = 1; item <= count; item++) known[values[item]] = 1
 		}
 		NR > 1 {
 			key = $4 "|" $3 "|" $5 "|" $6
+			expected_evidence = "quality-evidence/" $3 "-" $6 "-qsv-" $8 "-attempt-" $11 ".json"
 			if ($1 != run_id || $2 != "quality" || $7 != "qsv" || $8 !~ /^[0-9]+$/ ||
 				index(" " settings " ", " " $8 " ") == 0 ||
-				!(key in known)) exit 65
+				!(key in known) ||
+				($10 != "passed" && $10 != "failed" && $10 != "invalid") ||
+				$11 !~ /^[0-9]+$/ || $11 + 0 < 1 || $37 != strategy ||
+				$40 != expected_evidence || $41 !~ /^sha256:[0-9a-f]{64}$/) exit 65
+			if ($10 == "passed" && ($9 != "ICQ" || $38 != "passed" ||
+				$39 !~ /^[0-9]+$/ || $39 + 0 <= 0)) exit 65
 		}
 	' "$results" || {
 		echo 'invalid quality results row' >&2
 		return 65
 	}
+	while IFS= read -r row; do
+		if evidence="$(quality_evidence_for_ranking "$run_directory" "$run_id" \
+			"$(jq -r '.sample_id' <<<"$row")" "$(jq -r '.cohort' <<<"$row")" \
+			"$(jq -r '.source_sha256' <<<"$row")" "$(jq -r '.clip_id' <<<"$row")" \
+			"$(jq -r '.requested_setting' <<<"$row")" "$(jq -r '.attempt' <<<"$row")" \
+			"$(jq -r '.quality_evidence_path' <<<"$row")" \
+			"$(jq -r '.quality_evidence_sha256' <<<"$row")" 2>/dev/null)"; then
+			row="$(jq -c --argjson evidence "$evidence" '. + {evidenceValid:true,quality:$evidence}' <<<"$row")" || return 65
+		else
+			row="$(jq -c '. + {evidenceValid:false}' <<<"$row")" || return 65
+		fi
+		authenticated_rows="$(jq -c --argjson row "$row" '. + [$row]' <<<"$authenticated_rows")" || return 65
+	done < <(jq -c '.[]' <<<"$rows")
+	rows="$authenticated_rows"
 	digest="$(sha256sum "$results" | awk '{print $1}')"
 	[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 65
 	candidates="$(jq -n -c \
 		--arg run_id "$run_id" --arg strategy "$CONTRACT_STRATEGY_ID" \
 		--arg digest "sha256:$digest" \
 		--argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--argjson candidate_schema "$CONTRACT_QUALITY_CANDIDATES_SCHEMA" \
 		--slurpfile rows_input <(printf '%s\n' "$rows") \
 		--slurpfile expected_input <(printf '%s\n' "$expected") \
 		--slurpfile settings_input <(printf '%s\n' "$settings") '
 		($rows_input[0]) as $rows |
 		($expected_input[0]) as $expected |
 		($settings_input[0]) as $settings |
-		def numeric_at_least($minimum):
-			(tonumber?) as $number |
-			$number != null and ($number == $number) and ($number != infinite) and $number >= $minimum;
-		def numeric: numeric_at_least(-infinite);
+		def numeric: (tonumber?) as $number | $number != null and ($number | isfinite);
+		def finite_number: type == "number" and isfinite;
 		def median:
 			sort as $values | ($values | length) as $count |
 			if ($count % 2) == 1 then $values[($count / 2 | floor)]
 			else (($values[($count / 2 - 1 | floor)] + $values[($count / 2 | floor)]) / 2)
 			end;
 		def objective_passes:
-			.status == "passed" and .selected_rate_control == "ICQ" and
+			.evidenceValid == true and .status == "passed" and .selected_rate_control == "ICQ" and
 			.qsv_proof == "passed" and .qsv_initialization == "passed" and
 			(.video_busy_nanoseconds | test("^[0-9]+$") and tonumber > 0) and
 			(.validation_codec == "passed" and .validation_duration == "passed" and
@@ -3626,31 +3699,42 @@ rank_quality_candidates() {
 			 .validation_bit_depth == "passed" and .validation_hdr == "passed" and
 			 .validation_audio_tracks == "passed" and .validation_subtitle_tracks == "passed" and
 			 .validation_chapters == "passed") and .validation_failures == "" and
-			(.vmaf_harmonic_mean | numeric_at_least(95)) and
-			(.vmaf_1pct_low | numeric_at_least(90)) and
+			(.quality.vmafHarmonicMean | finite_number and . >= 95) and
+			(.quality.vmafOnePercentLow | finite_number and . >= 90) and
+			(.quality.ssim | finite_number) and (.quality.psnr | finite_number) and
+			(if .cohort == "hdr10" then .quality.hdrClassification == "preserved" else true end) and
 			(.reduction_percent | numeric) and .strategy_id == $strategy;
 		def expected_keys: map([.sample_id, .clip_id]) | sort;
+		def group_for($cohort; $setting):
+			[ $rows[] | select(
+				.run_id == $run_id and .panel == "quality" and .cohort == $cohort and
+				.encoder == "qsv" and .requested_setting == ($setting | tostring)
+			) ];
+		def complete_group($group; $cohort_expected):
+			($cohort_expected | length) > 0 and
+			($group | length) == ($cohort_expected | length) and
+			($group | map([.sample_id, .clip_id]) | sort) == ($cohort_expected | expected_keys) and
+			($group | all(.evidenceValid == true));
 		{
-			schemaVersion: 1, strategyId: $strategy, qualityRunId: $run_id,
+			schemaVersion: $candidate_schema, strategyId: $strategy, qualityRunId: $run_id,
 			resultsSchemaVersion: $schema, resultsSha256: $digest,
 			cohorts: (reduce ["avc", "vc1", "hdr10"][] as $cohort ({};
 				($expected | map(select(.cohort == $cohort))) as $cohort_expected |
 				([ $settings[] as $setting |
-					([ $rows[] | select(
-						.run_id == $run_id and .panel == "quality" and .cohort == $cohort and
-						.encoder == "qsv" and .requested_setting == ($setting | tostring)
-					)] ) as $group |
-					select(($cohort_expected | length) > 0 and
-						($group | length) == ($cohort_expected | length) and
-						($group | map([.sample_id, .clip_id]) | sort) == ($cohort_expected | expected_keys) and
-						($group | all(objective_passes))) |
+					group_for($cohort; $setting) as $group |
+					select(complete_group($group; $cohort_expected) and ($group | all(objective_passes))) |
 					{globalQuality: $setting, medianReductionPercent: ($group | map(.reduction_percent | tonumber) | median)}
 				] | sort_by(-.medianReductionPercent, .globalQuality)) as $eligible |
+				([$settings[] as $setting |
+					complete_group(group_for($cohort; $setting); $cohort_expected)] | all) as $complete |
 				.[$cohort] = if ($eligible | length) > 0 then {
 					status: "eligible", expectedClipCount: ($cohort_expected | length), candidates: $eligible
-				} else {
+				} elif $complete then {
 					status: "no-go", expectedClipCount: ($cohort_expected | length), candidates: [],
 					reason: "no-objective-candidate"
+				} else {
+					status: "no-verdict", expectedClipCount: ($cohort_expected | length), candidates: [],
+					reason: "incomplete-evidence"
 				} end
 			))
 		}
@@ -3744,8 +3828,9 @@ prepare_chosen_upstream() {
 	}
 	jq -e --arg cohort "$cohort" --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" \
 		--arg digest "$actual_results_digest" --argjson schema "$CONTRACT_RESULTS_SCHEMA" \
+		--argjson candidate_schema "$CONTRACT_QUALITY_CANDIDATES_SCHEMA" \
 		--argjson record "$record" '
-		.schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+		.schemaVersion == $candidate_schema and .strategyId == $strategy and .qualityRunId == $run and
 		.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
 		(.cohorts | type == "object") and
 		(.cohorts[$cohort] | type == "object" and .status == "eligible" and
@@ -4834,11 +4919,12 @@ findings_validate_evidence() {
 	[[ "$(findings_sha256 "$quality_results")" == "$(jq -r '.quality.resultsSha256' "$inputs")" &&
 	"$(findings_sha256 "$quality_candidates")" == "$(jq -r '.quality.candidatesSha256' "$inputs")" ]] || return 65
 	jq -e --arg run "$quality_run" --arg strategy "$CONTRACT_STRATEGY_ID" --arg digest "$(findings_sha256 "$quality_results")" \
-		--argjson schema "$CONTRACT_RESULTS_SCHEMA" '
-			type == "object" and .schemaVersion == 1 and .strategyId == $strategy and .qualityRunId == $run and
+		--argjson schema "$CONTRACT_RESULTS_SCHEMA" --argjson candidate_schema "$CONTRACT_QUALITY_CANDIDATES_SCHEMA" '
+			type == "object" and .schemaVersion == $candidate_schema and .strategyId == $strategy and .qualityRunId == $run and
 			.resultsSchemaVersion == $schema and .resultsSha256 == $digest and
 			(.cohorts | type == "object" and keys == ["avc","hdr10","vc1"] and
-			 all(.[]; type == "object" and (.status == "eligible" or .status == "no-go")))
+				all(.[]; type == "object" and
+					(.status == "eligible" or .status == "no-go" or .status == "no-verdict")))
 		' "$quality_candidates" >/dev/null || return 65
 	for findings_cohort in avc vc1 hdr10; do
 		if jq -e --arg cohort "$findings_cohort" '.chosenSettings[$cohort]?.state == "final"' "$samples_file" >/dev/null; then

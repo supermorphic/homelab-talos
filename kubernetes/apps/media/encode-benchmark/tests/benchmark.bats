@@ -358,7 +358,7 @@ prepare_quality_upstream() {
 	else
 		jq -n -c --arg run "$quality_run" --arg digest "$results_digest" '
 		{
-			schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
+			schemaVersion:2,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
 			resultsSchemaVersion:3,resultsSha256:$digest,
 			cohorts:{avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
 				vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
@@ -1199,14 +1199,15 @@ prepare_quality_panel_with_six_titles_three_clips() {
 }
 
 write_quality_ranking_results() {
-	local results="$1" run_id="$2" sample sample_id cohort sha clip setting reduction vmaf status failures evidence_ref
+	local results="$1" run_id="$2" sample sample_id cohort sha clip setting reduction vmaf vmaf_low
+	local status failures evidence_ref evidence_path evidence_file
 	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' >"$results"
 	while IFS= read -r sample; do
 		sample_id="$(jq -r '.id' <<<"$sample")"
 		cohort="$(jq -r '.cohort' <<<"$sample")"
 		sha="$(jq -r '.sha256' <<<"$sample")"
 		for clip in detail motion grain; do
-			for setting in 16 18 20 22 24; do
+			for setting in 16 18 20 22 24 26 28 30; do
 				case "$setting:$clip" in
 				16:detail|24:detail) reduction='20' ;;
 				16:motion|24:motion) reduction='35' ;;
@@ -1214,23 +1215,63 @@ write_quality_ranking_results() {
 				18:detail) reduction='15' ;;
 				18:motion) reduction='25' ;;
 				18:grain) reduction='35' ;;
+				26:detail) reduction='5' ;;
+				26:motion) reduction='10' ;;
+				26:grain) reduction='15' ;;
 				*) reduction='30' ;;
 				esac
 				vmaf='96'
+				vmaf_low='91'
 				status='passed'
 				failures=''
-				if [[ "$setting" == '20' && "$clip" == 'detail' ]]; then vmaf='89'; fi
+				if [[ "$setting" == '20' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
 				if [[ "$setting" == '22' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
-				if [[ "$cohort" == 'vc1' && "$setting" == '24' && "$clip" == 'detail' ]]; then vmaf='89'; fi
-				if [[ "$cohort" == 'vc1' && "$setting" == '16' && "$clip" == 'detail' ]]; then vmaf='89'; fi
+				if [[ "$setting" == '28' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
+				if [[ "$setting" == '30' && "$clip" == 'detail' ]]; then vmaf_low='89.999'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '24' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '16' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
 				if [[ "$cohort" == 'vc1' && "$setting" == '18' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
+				if [[ "$cohort" == 'vc1' && "$setting" == '26' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
 				evidence_ref="$(quality_evidence_reference "$run_id" "$sample_id" "$cohort" \
-					"$sha" "$clip" "$setting" 1 "$vmaf" 91 0.991)"
-				printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,%s,1,1000,650,%s,1000,650,1.000000,72.0,1.25,%s,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,%s,logs/%s-%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000,%s\n' \
-					"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$status" "$reduction" "$vmaf" "$failures" "$sample_id" "$clip" "$setting" "$evidence_ref" >>"$results"
+					"$sha" "$clip" "$setting" 1 "$vmaf" "$vmaf_low" 0.991)"
+				# The AVC candidate carries one accepted exact-zero correction. Ranking
+				# must use its evaluated metrics without treating the retained raw frame
+				# as a quality failure.
+				if [[ "$sample_id:$clip:$setting" == 'quality-1:detail:16' ]]; then
+					evidence_path="${evidence_ref%%,*}"
+					evidence_file="$BENCHMARK_OUT/runs/$run_id/$evidence_path"
+					jq '.vmaf.rawFrameCount = 100 | .vmaf.evaluatedFrameCount = 99 |
+						.vmaf.excludedFrames = [{frameIndex:1641,vmaf:0}]' \
+						"$evidence_file" >"$evidence_file.tmp"
+					mv -f -- "$evidence_file.tmp" "$evidence_file"
+					chmod 0600 "$evidence_file"
+					evidence_ref="$evidence_path,sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+				fi
+				# A real diagnostic evidence document at the expected quality path must
+				# remain unusable as quality evidence even when its digest is current.
+				if [[ "$sample_id:$clip:$setting" == 'quality-3:detail:30' ]]; then
+					evidence_path="${evidence_ref%%,*}"
+					evidence_file="$BENCHMARK_OUT/runs/$run_id/$evidence_path"
+					jq -c '.cases[0].evidence' \
+						"$FIXTURES/encode-benchmark/diagnostic-vmaf-cases.json" >"$evidence_file"
+					chmod 0600 "$evidence_file"
+					evidence_ref="$evidence_path,sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+				fi
+				printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,%s,1,1000,650,%s,1000,650,1.000000,72.0,1.25,%s,%s,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,%s,logs/%s-%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000,%s\n' \
+					"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$status" "$reduction" "$vmaf" "$vmaf_low" "$failures" "$sample_id" "$clip" "$setting" "$evidence_ref" >>"$results"
 			done
 		done
 	done < <(jq -c '.qualityPanel[]' "$BENCHMARK_SAMPLES_FILE")
+}
+
+rewrite_quality_result_evidence_digest() {
+	local results="$1" sample_id="$2" clip="$3" setting="$4" digest="$5"
+	awk -F, -v sample="$sample_id" -v clip="$clip" -v setting="$setting" -v digest="$digest" '
+		BEGIN { OFS = FS }
+		$3 == sample && $6 == clip && $8 == setting { $41 = digest }
+		{ print }
+	' "$results" >"$results.tmp"
+	mv -f -- "$results.tmp" "$results"
 }
 
 # Catches a production break where the durable result contract drifts from the
@@ -3304,7 +3345,7 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
-@test "quality candidates require complete objective evidence and rank median reductions" {
+@test "quality candidates authenticate corrected evidence and rank cohorts independently" {
 	prepare_execution_run
 	prepare_quality_panel_with_six_titles_three_clips
 	run_id='20260815T120000Z-aaaaaaaa'
@@ -3317,7 +3358,7 @@ PYTHON
 	[ "$status" -eq 0 ]
 	artifact="$run_dir/quality-candidates.json"
 	actual_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
-	run jq --arg digest "$actual_digest" '.resultsSchemaVersion = 3 | .resultsSha256 = $digest' \
+	run jq --arg digest "$actual_digest" '.resultsSha256 = $digest' \
 		"$FIXTURES/metrics/quality-candidates.json"
 	[ "$status" -eq 0 ]
 	printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/expected-quality-candidates.json"
@@ -3331,6 +3372,71 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -ne 0 ]
 	run cmp -s "$BATS_TEST_TMPDIR/prior-quality-candidates.json" "$artifact"
+	[ "$status" -eq 0 ]
+}
+
+# Catches a ranker that treats missing, changed, or non-preserved evidence as
+# passing because the unauthenticated CSV metric columns still pass.
+@test "quality candidates reject unavailable changed and non-preserved evidence per setting" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0001'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	missing="$run_dir/quality-evidence/quality-1-detail-qsv-24-attempt-1.json"
+	changed="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
+	hdr="$run_dir/quality-evidence/quality-5-detail-qsv-16-attempt-1.json"
+	rm -f -- "$missing"
+	jq '.psnr = 41' "$changed" >"$changed.tmp"
+	mv -f -- "$changed.tmp" "$changed"
+	chmod 0600 "$changed"
+	jq '.hdr.classification = "encoder-output-defect" | .hdr.reasons = ["encoded-metadata-differs"]' \
+		"$hdr" >"$hdr.tmp"
+	mv -f -- "$hdr.tmp" "$hdr"
+	chmod 0600 "$hdr"
+	hdr_digest="sha256:$(sha256sum "$hdr" | awk 'NR == 1 { print $1 }')"
+	rewrite_quality_result_evidence_digest "$results" quality-5 detail 16 "$hdr_digest"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		(.cohorts.avc.candidates | map(.globalQuality)) == [18,26] and
+		(.cohorts.hdr10.candidates | map(.globalQuality)) == [24,18,26] and
+		.cohorts.vc1.status == "no-verdict"
+	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+}
+
+# Catches collapsing incomplete evidence into a scientific no-go. Replacing
+# the diagnostic document with a complete quality sidecar is the only change
+# that permits the VC-1 cohort to report no-go.
+@test "quality candidates distinguish incomplete no-verdict from complete no-go" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0002'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e '.cohorts.vc1 == {
+		status:"no-verdict", expectedClipCount:6, candidates:[], reason:"incomplete-evidence"
+	}' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+
+	sha="$(jq -r '.qualityPanel[] | select(.id == "quality-3") | .sha256' "$BENCHMARK_SAMPLES_FILE")"
+	evidence_ref="$(quality_evidence_reference "$run_id" quality-3 vc1 "$sha" detail 30 1 96 89.999 0.991)"
+	rewrite_quality_result_evidence_digest "$results" quality-3 detail 30 "${evidence_ref#*,}"
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e '.cohorts.vc1 == {
+		status:"no-go", expectedClipCount:6, candidates:[], reason:"no-objective-candidate"
+	}' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
 }
 
@@ -3378,7 +3484,8 @@ PYTHON
 	run jq -e '
 		.cohorts.avc.candidates == [
 			{globalQuality: 24, medianReductionPercent: 35},
-			{globalQuality: 18, medianReductionPercent: 25}
+			{globalQuality: 18, medianReductionPercent: 25},
+			{globalQuality: 26, medianReductionPercent: 10}
 		]
 	' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
@@ -4611,7 +4718,7 @@ prepare_findings_quality() {
 	candidates="$quality_dir/quality-candidates.json"
 	jq -n -c --arg run "$QUALITY_RUN_ID" --arg digest "$results_digest" --arg cohort "$cohort" \
 		--argjson setting "$setting" --argjson count "$expected_count" '
-		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,resultsSchemaVersion:3,
+		{schemaVersion:2,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,resultsSchemaVersion:3,
 		 resultsSha256:$digest,cohorts:{
 			avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
 			vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
