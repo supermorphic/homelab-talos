@@ -463,35 +463,42 @@ manifest's script digests distinguish the corrected producer and readers from ea
 runs. New reasons remain closed enumerations in the producer, in-cluster collector,
 workstation reader, termination projection, and tests.
 
-### Source-preparation gate
+### Original source-preparation gate — superseded
 
-The producer creates and validates all fixed source inputs before the first QSV encode.
-For each of the five VMAF cases it must:
+This section records the original global-gate correction. The later
+2026-08-28 per-entry diagnostic preparation amendment supersedes its zero-encode
+behavior. The requirement to prepare and validate all fixed inputs before the first QSV
+encode remains current.
+
+The original producer created and validated all fixed source inputs before the first QSV
+encode. For each of the five VMAF cases it:
 
 1. create the 90-second stream-copy source clip;
 2. record the clip identity; and
 3. record the exact five-frame source window around the fixed observed frame.
 
-For each of the three HDR cases it must create the 90-second stream-copy source clip and
-record the identities needed by the existing HDR evidence path. HDR metadata oracle
-outcomes remain scientific evidence and do not become preparation failures.
+For each of the three HDR cases it created the 90-second stream-copy source clip and
+recorded the identities needed by the existing HDR evidence path. HDR metadata oracle
+outcomes remained scientific evidence and did not become preparation failures.
 
-The gate records one specific reason at a failing boundary:
+The original gate recorded one specific reason at a failing boundary:
 
 - `source-clip-create-failed`;
 - `source-clip-identity-unavailable`; or
 - `source-frame-window-unavailable`.
 
-If any fixed input fails preparation, the producer performs zero QSV encodes and
-publishes a complete canonical eight-entry summary. The failed input retains its specific
-reason. Inputs whose own preparation succeeded use
-`source-panel-preparation-aborted`. All affected evidence remains `harness-blocked` and
-unresolved. This correction does not retry extraction, change seek placement, transcode
-the source, or select a nearby window.
+If any fixed input failed preparation, the original producer performed zero QSV encodes
+and published a complete canonical eight-entry summary. The failed input retained its
+specific reason. Inputs whose own preparation succeeded used
+`source-panel-preparation-aborted`. All affected evidence remained `harness-blocked` and
+unresolved. Retained run `20260827T233832Z-2a79502c` proved that this global propagation
+discarded usable prepared work. The current per-entry rule is defined only by the later
+amendment.
 
-If all source inputs pass, the producer executes the unchanged census: ten VMAF encodes
-and three HDR encodes. Later encoder, decoder, metric, oracle, or identity failures keep
-their existing evidence behavior and do not trigger an automatic second run.
+When all source inputs passed, the original producer executed the unchanged census: ten
+VMAF encodes and three HDR encodes. Later encoder, decoder, metric, oracle, or identity
+failures kept their existing evidence behavior and did not trigger an automatic second
+run.
 
 ### Timestamp continuity correction
 
@@ -681,3 +688,51 @@ output schema, mounts, credentials, or downstream authority. The failed collecto
 returned only a bounded manifest issue. After merge, natural reconciliation, and absence
 of the failed TTL-managed Job, the same immutable run remains eligible for one bounded
 reader retry. The diagnostic must not be repeated.
+
+## Corrective amendment — 2026-08-28 per-entry diagnostic preparation
+
+The retained evidence for run `20260827T233832Z-2a79502c` proved that four VMAF source
+windows and all three HDR source clips prepared successfully. Only the fixed
+`vc1-fugitive/detail` VMAF window was unavailable, with the exact reason
+`source-frame-window-unavailable`. The producer's source-preparation gate then assigned
+`source-panel-preparation-aborted` to every prepared entry and performed zero QSV
+encodes. The gate therefore discarded usable prepared work and prevented the diagnostic
+from answering its bounded encoder questions.
+
+The producer continues to prepare and validate all eight fixed inputs before the first
+QSV encode. It now applies a preparation failure only to the entry that failed. That
+entry performs zero QSV encodes and retains its exact preparation reason. Every prepared
+VMAF entry still runs ICQ 16 and 30, and every prepared HDR entry still runs ICQ 16. The
+producer publishes the same five VMAF documents, three HDR documents, summary, manifest,
+and terminal payload even when those documents contain a mixture of complete and
+`harness-blocked` entries.
+
+This behavior gives deterministic encode counts:
+
+- all eight inputs prepared: ten VMAF encodes and three HDR encodes;
+- one failed VMAF input: eight VMAF encodes and three HDR encodes; and
+- one failed HDR input: ten VMAF encodes and two HDR encodes.
+
+The summary remains `harness-blocked` when any entry is blocked. Complete entries retain
+their independently derived classification. The correction does not retry extraction,
+move a fixed frame window, substitute a different title or window, alter the panel,
+change an encoder command, increase the 13-encode maximum, or trigger an automatic
+second run.
+
+Executable tests inject each reachable VMAF preparation failure and an HDR clip-creation
+failure. They prove that the failed entry performs no encode, every prepared entry runs,
+all eight evidence documents are published, and exact reasons and classifications are
+retained. Collector tests start with a complete eight-entry tree, replace one entry with
+each producer-reachable preparation shape, and require the mixed tree to produce one
+canonical bounded document. Workstation reader tests then require those mixed canonical
+projections to pass unchanged through the terminal reader contract. These tests preserve
+the historical reader compatibility needed for older immutable runs, while producer
+tests prove that the corrected producer no longer creates the old global-abort shape.
+
+After merge and natural Flux reconciliation, one fresh preflight and one new immutable
+diagnostic run may exercise this correction. With the currently observed source shape,
+the expected result is 11 QSV encodes, complete evidence for seven prepared entries, and
+one exact `source-frame-window-unavailable` result. A separate bounded reader collects
+that run after it reaches a terminal state. This amendment does not authorize a quality
+benchmark, FileFlows deployment, media replacement, another encoder strategy, or an
+automatic diagnostic retry.
