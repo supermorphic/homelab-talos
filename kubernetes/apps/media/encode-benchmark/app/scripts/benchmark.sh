@@ -1779,7 +1779,7 @@ diagnostics_mode() {
 	local overall_status='complete' sample_id clip_id observed timestamp source clip output
 	local sample source_identity source_window clip_identity clip_command source_frame_command settings setting setting_json evidence classifier_file classification
 	local entry_status summary vmaf_entries='[]' hdr_entries='[]' title_scratch evidence_path clip_ready
-	local preparations preparation preparation_failed preparation_reason
+	local preparations preparation preparation_reason
 	local post_identity_valid=1 invalidated_entries
 	if [[ -n "$explicit_run_id" ]]; then
 		"$script_directory/runmeta.sh" diagnostic-precheck "$explicit_run_id" || return
@@ -1822,10 +1822,6 @@ diagnostics_mode() {
 	chmod 0444 "$diagnostic_root/manifest.json"
 
 	preparations="$(diagnostic_prepare_inputs "$run_scratch")" || return
-	preparation_failed=0
-	if jq -e 'any(.[]; .status != "complete")' <<<"$preparations" >/dev/null; then
-		preparation_failed=1
-	fi
 
 	while IFS= read -r preparation; do
 		[[ -n "$preparation" ]] || continue
@@ -1840,9 +1836,8 @@ diagnostics_mode() {
 		clip_command="$(diagnostic_command_clip "$timestamp")"
 		source_frame_command="$(diagnostic_command_vmaf_frame '<source-clip>')"
 		entry_status='complete'
-		preparation_reason=''
-		if [[ "$preparation_failed" == '1' ]]; then
-			preparation_reason="$(jq -r '.reason // "source-panel-preparation-aborted"' <<<"$preparation")"
+		preparation_reason="$(jq -r '.reason // empty' <<<"$preparation")"
+		if [[ -n "$preparation_reason" ]]; then
 			entry_status='harness-blocked'
 		fi
 		settings='[]'
@@ -1900,10 +1895,9 @@ diagnostics_mode() {
 		clip_identity="$(jq -c '.clipIdentity' <<<"$preparation")"
 		output="$title_scratch/diagnostic-hdr-$sample_id-qsv-16.mkv"
 		clip_ready=1
-		preparation_reason=''
-		if [[ "$preparation_failed" == '1' ]]; then
+		preparation_reason="$(jq -r '.reason // empty' <<<"$preparation")"
+		if [[ -n "$preparation_reason" ]]; then
 			clip_ready=0
-			preparation_reason="$(jq -r '.reason // "source-panel-preparation-aborted"' <<<"$preparation")"
 		fi
 		evidence="$(diagnostic_hdr_evidence "$sample_id" "$source" "$clip_id" "$timestamp" "$clip" "$output" "$title_scratch" "$clip_ready" "$source_identity" "$clip_identity" "$preparation_reason")"
 		entry_status="$(jq -r '.status' <<<"$evidence")"

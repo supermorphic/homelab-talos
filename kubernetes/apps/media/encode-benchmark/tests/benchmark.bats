@@ -726,6 +726,11 @@ if [[ "$arguments" == *'-c copy'* && "$last" == *'/diagnostic-vmaf-avc-clean-coc
 	exit 87
 fi
 
+if [[ "$arguments" == *'-c copy'* && "$last" == *'/diagnostic-hdr-hdr10-clean-ministry-source.mkv' &&
+	"${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'hdr-clip-create' ]]; then
+	exit 87
+fi
+
 if [[ "$arguments" == *'-f null -'* && "$arguments" != *'libvmaf='* &&
 	"$arguments" != *']ssim='* && "$arguments" != *']psnr='* &&
 	"$arguments" == *'/diagnostic-'* && "${BENCHMARK_DIAGNOSTIC_FAIL_DECODE:-0}" == '1' ]]; then
@@ -772,8 +777,10 @@ if [[ "$arguments" == *'frame=side_data_list'* ]]; then
 	exit 0
 fi
 media="${!#}"
-if [[ "${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'frame-window' &&
-	"$media" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv' ]]; then
+if [[ ("${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'frame-window' &&
+	"$media" == *'/diagnostic-vmaf-avc-clean-coco-motion-frame-1641-source.mkv') ||
+	("${BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE:-}" == 'vc1-frame-window' &&
+	"$media" == *'/diagnostic-vmaf-vc1-fugitive-detail-frame-781-source.mkv') ]]; then
 	jq -n '{streams:[{start_time:"0.000000",duration:"90.000000",time_base:"1/1000",avg_frame_rate:"24/1"}],frames:[]}'
 	exit 0
 fi
@@ -2641,14 +2648,15 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ ! -e "$BENCHMARK_TERMINATION_LOG_PATH" ]
 }
 
-# Catches a source-preparation failure allowing another panel entry to consume
-# QSV, or hiding which bounded preparation stage failed.
-@test "diagnostics preparation failures block all encodes and retain exact reasons" {
+# Catches one VMAF source-preparation failure suppressing every prepared panel
+# entry, or the failed entry itself consuming QSV.
+@test "diagnostics isolate VMAF preparation failures and run every prepared entry" {
 	for case_data in \
-		'clip-create|source-clip-create-failed' \
-		'clip-identity|source-clip-identity-unavailable' \
-		'frame-window|source-frame-window-unavailable'; do
-		IFS='|' read -r failure expected_reason <<<"$case_data"
+		'clip-create|source-clip-create-failed|avc-clean-coco|motion|1641' \
+		'clip-identity|source-clip-identity-unavailable|avc-clean-coco|motion|1641' \
+		'frame-window|source-frame-window-unavailable|avc-clean-coco|motion|1641' \
+		'vc1-frame-window|source-frame-window-unavailable|vc1-fugitive|detail|781'; do
+		IFS='|' read -r failure expected_reason failed_sample failed_clip failed_frame <<<"$case_data"
 		prepare_diagnostic_execution_run
 		export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE="$failure"
 
@@ -2662,42 +2670,43 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		[ -f "$diagnostic_root/diagnostic-summary.json" ]
 		[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
 		[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
-		run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+		run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 11}' "$BENCHMARK_COMMAND_LOG"
 		[ "$status" -eq 0 ]
-		run jq -e --arg reason "$expected_reason" '
+		run awk -v failed="diagnostic-vmaf-$failed_sample-$failed_clip-frame-$failed_frame-qsv-" \
+			'/-c:v hevc_qsv/ && index($0, failed) {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+		[ "$status" -eq 0 ]
+		run jq -e --arg reason "$expected_reason" --arg sample "$failed_sample" --arg clip "$failed_clip" '
 			.status == "harness-blocked" and
 			all(.vmaf.entries[];
-				.status == "harness-blocked" and .classification == "unresolved" and
-				(if .sampleId == "avc-clean-coco" and .clipId == "motion" then
-					.reasons == [$reason]
-				else .reasons == ["source-panel-preparation-aborted"] end)) and
+				(if .sampleId == $sample and .clipId == $clip then
+					.status == "harness-blocked" and .classification == "unresolved" and .reasons == [$reason]
+				else .status == "complete" and .classification == "unresolved" and .reasons == ["offset-best-tie"] end)) and
 			all(.hdr.entries[];
-				.status == "harness-blocked" and .classification == "unresolved-oracle" and
-				.reasons == ["source-panel-preparation-aborted"])
+				.status == "complete" and .classification == "preserved" and
+				.reasons == ["source-clip-encoded-metadata-agree"])
 		' "$diagnostic_root/diagnostic-summary.json"
 		[ "$status" -eq 0 ]
-		run jq -e -s --arg reason "$expected_reason" '
+		run jq -e -s --arg reason "$expected_reason" --arg sample "$failed_sample" --arg clip "$failed_clip" '
 			length == 5 and
 			all(.[];
-				if .sampleId == "avc-clean-coco" and .clipId == "motion" then
+				if .sampleId == $sample and .clipId == $clip then
 					.status == "harness-blocked" and all(.settings[]; .reason == $reason) and
 					.classification == {schemaVersion:1,classification:"unresolved",reasons:[$reason]}
 				else
-					.status == "harness-blocked" and
-					all(.settings[]; .reason == "source-panel-preparation-aborted") and
-					.classification == {schemaVersion:1,classification:"unresolved",reasons:["source-panel-preparation-aborted"]}
+					.status == "complete" and all(.settings[]; .status == "complete" and .reason == null) and
+					.classification == {schemaVersion:1,classification:"unresolved",reasons:["offset-best-tie"]}
 				end)
 		' "$diagnostic_root"/vmaf/*/*/evidence.json
 		[ "$status" -eq 0 ]
 		run jq -e -s '
 			length == 3 and all(.[];
-				.status == "harness-blocked" and .reason == "source-panel-preparation-aborted" and
-				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["source-panel-preparation-aborted"]})
+				.status == "complete" and .reason == null and
+				.classification == {schemaVersion:1,classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]})
 		' "$diagnostic_root"/hdr/*/evidence.json
 		[ "$status" -eq 0 ]
 		run jq -e --arg reason "$expected_reason" '
-			(.vmaf.reasons | sort) == ([$reason,"source-panel-preparation-aborted"] | sort) and
-			.hdr.reasons == ["source-panel-preparation-aborted"]
+			(.vmaf.reasons | sort) == ([$reason,"offset-best-tie"] | sort) and
+			.hdr.reasons == ["source-clip-encoded-metadata-agree"]
 		' <<<"$terminal"
 		[ "$status" -eq 0 ]
 		[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
@@ -2706,6 +2715,48 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 	done
+}
+
+# Catches one HDR source-preparation failure suppressing prepared VMAF and HDR
+# entries, or the failed HDR entry itself consuming QSV.
+@test "diagnostics isolate an HDR preparation failure and run every prepared entry" {
+	prepare_diagnostic_execution_run
+	export BENCHMARK_DIAGNOSTIC_PREPARATION_FAILURE=hdr-clip-create
+
+	run "$SCRIPTS/benchmark.sh" diagnostics
+	[ "$status" -eq 0 ]
+	terminal="$(tail -n 1 <<<"$output")"
+	[ "$(jq -r '.status' <<<"$terminal")" = 'harness-blocked' ]
+	run_id="$(jq -r '.runId' <<<"$terminal")"
+	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
+	[ "$(find "$diagnostic_root/vmaf" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 5 ]
+	[ "$(find "$diagnostic_root/hdr" -name evidence.json -type f | wc -l | tr -d ' ')" -eq 3 ]
+	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 12}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run awk '/-c:v hevc_qsv/ && /diagnostic-hdr-hdr10-clean-ministry-qsv-16/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.status == "harness-blocked" and
+		all(.vmaf.entries[]; .status == "complete" and .reasons == ["offset-best-tie"]) and
+		all(.hdr.entries[];
+			if .sampleId == "hdr10-clean-ministry" then
+				.status == "harness-blocked" and .classification == "unresolved-oracle" and
+				.reasons == ["source-clip-create-failed"]
+			else .status == "complete" and .classification == "preserved" and
+				.reasons == ["source-clip-encoded-metadata-agree"] end)
+	' "$diagnostic_root/diagnostic-summary.json"
+	[ "$status" -eq 0 ]
+	run jq -e -s '
+		length == 3 and all(.[];
+			if .sampleId == "hdr10-clean-ministry" then
+				.status == "harness-blocked" and .reason == "source-clip-create-failed" and
+				.source.identity == null and .clip.identity == null and .encoded.identity == null and
+				.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["source-clip-create-failed"]}
+			else .status == "complete" and .reason == null and
+				.classification == {schemaVersion:1,classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]} end)
+	' "$diagnostic_root"/hdr/*/evidence.json
+	[ "$status" -eq 0 ]
+	[ ! -e "$BENCHMARK_SCRATCH/$run_id" ]
 }
 
 @test "diagnostics preparation reasons survive blocked HDR scientific probe failures" {
@@ -2717,25 +2768,26 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$status" -eq 0 ]
 	run_id="$(jq -r '.runId' <<<"$(tail -n 1 <<<"$output")")"
 	diagnostic_root="$BENCHMARK_OUT/runs/$run_id/diagnostics"
-	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 0}' "$BENCHMARK_COMMAND_LOG"
+	run awk '/-c:v hevc_qsv/ {count += 1} END {exit count != 11}' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run jq -e -s '
 		length == 5 and
 		all(.[];
 			if .sampleId == "avc-clean-coco" and .clipId == "motion" then
-				all(.settings[]; .reason == "source-clip-create-failed")
-			else all(.settings[]; .reason == "source-panel-preparation-aborted")
+				.status == "harness-blocked" and all(.settings[]; .reason == "source-clip-create-failed")
+			else .status == "complete" and all(.settings[]; .reason == null)
 			end)
 	' "$diagnostic_root"/vmaf/*/*/evidence.json
 	[ "$status" -eq 0 ]
 	run jq -e -s '
 		length == 3 and all(.[];
 			.status == "harness-blocked" and
-			.reason == "source-panel-preparation-aborted" and
-			.source.streamProbe == {command:[],oracle:{status:"malformed"}} and
-			all(.source.windows[]; .decoded.command == [] and .trace.command == []) and
-			.clip.decoded.command == [] and .clip.trace.command == [] and
-			.encoded.decoded.command == [] and .encoded.trace.command == [])
+			.reason == "source-stream-oracle-failed" and
+			.source.streamProbe.command != [] and .source.streamProbe.oracle == {status:"malformed"} and
+			all(.source.windows[]; .decoded.command != [] and .trace.command != []) and
+			.clip.decoded.command != [] and .clip.trace.command != [] and
+			.encoded.decoded.command != [] and .encoded.trace.command != [] and
+			.classification == {schemaVersion:1,classification:"unresolved-oracle",reasons:["incomplete-or-failed-evidence"]})
 	' "$diagnostic_root"/hdr/*/evidence.json
 	[ "$status" -eq 0 ]
 }
