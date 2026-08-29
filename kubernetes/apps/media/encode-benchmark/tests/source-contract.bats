@@ -24,10 +24,10 @@ setup() {
 # sweep that cannot compare every agreed candidate across later benchmark modes.
 @test "embedded samples publish the exact ordered ICQ strategy contract" {
 	run jq -e '
-		.schemaVersion == 2 and
+		.schemaVersion == 3 and
 		.strategy == {
 			id: "qsv-hevc-icq-v1",
-			resultsSchemaVersion: 2,
+			resultsSchemaVersion: 3,
 			runManifestSchemaVersion: 2,
 			capabilityProofSchemaVersion: 3,
 			globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
@@ -57,6 +57,24 @@ setup() {
 		([.runtime.capabilityEvidence.nodes[] | .configuredImageDigest] | all(. == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
 		([.runtime.capabilityEvidence.nodes[] | .imageId] | all(. == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
 		.chosenSettings == {}
+	' "$samples_json"
+	[ "$status" -eq 0 ]
+}
+
+# Catches quality evidence accepting a diagnostic identity that was not
+# independently classified as a VMAF measurement defect.
+@test "embedded samples publish the exact corrected quality evidence contract" {
+	run jq -e '
+		.qualityCorrection == {
+			schemaVersion: 1,
+			diagnosticRunId: "20260829T020752Z-43984d8d",
+			vmafMeasurementDefects: [
+				{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
+				{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
+				{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
+				{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
+			]
+		}
 	' "$samples_json"
 	[ "$status" -eq 0 ]
 }
@@ -114,10 +132,12 @@ setup() {
 
 @test "shared base contract accepts a minimal non-diagnostic samples document" {
 	minimal="$BATS_TEST_TMPDIR/minimal-non-diagnostic.json"
-	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" '
+	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" \
+		--argjson quality_correction "$(jq -c '.qualityCorrection' "$samples_json")" '
 		{
-			schemaVersion: 2,
+			schemaVersion: 3,
 			strategy: $strategy,
+			qualityCorrection: $quality_correction,
 			runtime: {
 				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
 			},
@@ -147,6 +167,64 @@ setup() {
 		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
 		[ "$status" -eq 65 ]
 	done
+}
+
+# Catches accidental broadening of the diagnosed VMAF exception list, including
+# the unresolved vc1-fugitive/detail observation and pattern-like identifiers.
+@test "shared contract rejects every non-canonical quality correction" {
+	for mutation in \
+		'.qualityCorrection.vmafMeasurementDefects |= reverse' \
+		'.qualityCorrection.vmafMeasurementDefects += [.qualityCorrection.vmafMeasurementDefects[0]]' \
+		'.qualityCorrection.unexpected = true' \
+		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "missing-title"' \
+		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "avc-*"' \
+		'.qualityCorrection.vmafMeasurementDefects[3] = {sampleId:"vc1-fugitive",clipId:"detail",frameIndex:781}'; do
+		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$samples_json" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
+		[ "$status" -eq 65 ]
+	done
+}
+
+# Catches a quality worker excluding a frame outside the closed source contract
+# or treating an absent identity as an accepted empty response.
+@test "shared contract returns only the four diagnosed VMAF exclusions" {
+	for identity in \
+		'avc-clean-coco motion 1641' \
+		'avc-grain-memento dark 523' \
+		'avc-grain-memento detail 370' \
+		'vc1-fugitive motion 798'; do
+		read -r sample_id clip_id frame_index <<<"$identity"
+		run bash -c 'source "$1"; contract_load "$2"; contract_quality_vmaf_exclusion "$2" "$3" "$4"' \
+			_ "$contract" "$samples_json" "$sample_id" "$clip_id"
+		[ "$status" -eq 0 ]
+		[ "$output" = "$frame_index" ]
+	done
+
+	for identity in \
+		'avc-clean-coco detail' \
+		'vc1-fugitive detail' \
+		'avc-* motion' \
+		'missing-title motion'; do
+		read -r sample_id clip_id <<<"$identity"
+		run bash -c 'source "$1"; contract_load "$2"; contract_quality_vmaf_exclusion "$2" "$3" "$4"' \
+			_ "$contract" "$samples_json" "$sample_id" "$clip_id"
+		[ "$status" -eq 1 ]
+		[ "$output" = "" ]
+	done
+}
+
+@test "shared contract publishes corrected quality schema constants" {
+	run bash -c '
+		source "$1"
+		contract_load "$2"
+		printf "%s %s %s\\n" \
+			"$CONTRACT_QUALITY_EVIDENCE_SCHEMA" \
+			"$CONTRACT_QUALITY_CANDIDATES_SCHEMA" \
+			"$CONTRACT_QUALITY_DIAGNOSTIC_RUN_ID"
+	' _ "$contract" "$samples_json"
+	[ "$status" -eq 0 ]
+	[ "$output" = "1 2 20260829T020752Z-43984d8d" ]
 }
 
 @test "shared contract rejects malformed present diagnostics scope" {

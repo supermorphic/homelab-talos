@@ -208,19 +208,32 @@ assert_eq "$completed_expr" \
 samples_doc="$(yq -r '.data."samples.json"' "$samples")"
 samples_document="$temp_dir/samples.json"
 printf '%s\n' "$samples_doc" >"$samples_document"
-assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
+assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '3' 'samples schema version'
 jq -e '
-	.schemaVersion == 2 and
+	.schemaVersion == 3 and
 	.chosenSettings == {} and
 	.strategy == {
 		id: "qsv-hevc-icq-v1",
-		resultsSchemaVersion: 2,
+		resultsSchemaVersion: 3,
 		runManifestSchemaVersion: 2,
 		capabilityProofSchemaVersion: 3,
 		globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
 		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
 	}
 ' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
+jq -e '
+	.qualityCorrection == {
+		schemaVersion: 1,
+		diagnosticRunId: "20260829T020752Z-43984d8d",
+		vmafMeasurementDefects: [
+			{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
+			{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
+			{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
+			{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
+		]
+	}
+' <<<"$samples_doc" >/dev/null ||
+	fail 'samples must publish the exact corrected quality evidence contract'
 jq -e '
 	.diagnostics == {
 		schemaVersion: 1,

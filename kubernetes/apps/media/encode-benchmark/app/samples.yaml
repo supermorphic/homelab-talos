@@ -18,10 +18,10 @@ metadata:
 data:
   samples.json: |
     {
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "strategy": {
         "id": "qsv-hevc-icq-v1",
-        "resultsSchemaVersion": 2,
+        "resultsSchemaVersion": 3,
         "runManifestSchemaVersion": 2,
         "capabilityProofSchemaVersion": 3,
         "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30],
@@ -323,6 +323,32 @@ data:
           {
             "sampleId": "hdr10-motion-john-wick-2",
             "clipId": "detail"
+          }
+        ]
+      },
+      "qualityCorrection": {
+        "schemaVersion": 1,
+        "diagnosticRunId": "20260829T020752Z-43984d8d",
+        "vmafMeasurementDefects": [
+          {
+            "sampleId": "avc-clean-coco",
+            "clipId": "motion",
+            "frameIndex": 1641
+          },
+          {
+            "sampleId": "avc-grain-memento",
+            "clipId": "dark",
+            "frameIndex": 523
+          },
+          {
+            "sampleId": "avc-grain-memento",
+            "clipId": "detail",
+            "frameIndex": 370
+          },
+          {
+            "sampleId": "vc1-fugitive",
+            "clipId": "motion",
+            "frameIndex": 798
           }
         ]
       },
