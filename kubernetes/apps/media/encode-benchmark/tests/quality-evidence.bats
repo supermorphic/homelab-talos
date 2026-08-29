@@ -3,8 +3,10 @@
 setup() {
 	PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../../../../.." && pwd)"
 	QUALITY_EVIDENCE="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/quality-evidence.sh"
+	PROBE="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/probe.sh"
 	SAMPLES="$BATS_TEST_TMPDIR/samples.json"
 	FIXTURE="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/metrics/vmaf-correctable-zero.json"
+	HDR_FIXTURE="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/encode-benchmark/quality-hdr-cases.json"
 	mise exec -- yq -r '.data."samples.json"' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml" >"$SAMPLES"
 }
 
@@ -12,6 +14,49 @@ quality_vmaf_stats() {
 	local metrics_file="$1" sample_id="$2" clip_id="$3"
 	run bash -c 'source "$1"; quality_vmaf_stats "$2" "$3" "$4" "$5"' \
 		quality-evidence "$QUALITY_EVIDENCE" "$metrics_file" "$SAMPLES" "$sample_id" "$clip_id"
+}
+
+quality_hdr_case() {
+	local case_id="$1" call_log="$2"
+	touch "$BATS_TEST_TMPDIR/source.mkv" "$BATS_TEST_TMPDIR/clip.mkv" "$BATS_TEST_TMPDIR/output.mkv"
+	run bash -c '
+		source "$1"
+		probe_script="$2"
+		fixture="$3"
+		case_id="$4"
+		call_log="$5"
+		source_path="$6"
+		clip_path="$7"
+		encoded_path="$8"
+		quality_hdr_probe() {
+			local command="$1" path entity oracle_key
+			if [[ "$command" == "diagnostic-hdr-normalize-oracle" ]]; then
+				"$probe_script" "$@"
+				return
+			fi
+			path="$2"
+			printf "%s\t%s\t%s\t%s\n" "$command" "$path" "$3" "$4" >>"$call_log"
+			case "$path" in
+			"$source_path") entity=source ;;
+			"$clip_path") entity=clip ;;
+			"$encoded_path") entity=encoded ;;
+			*) return 64 ;;
+			esac
+			if [[ "$command" == "diagnostic-hdr-stream" ]]; then
+				oracle_key="$(jq -e -r --arg id "$case_id" ".cases[] | select(.id == \$id) | .stream" "$fixture")" || return
+			else
+				case "$command" in
+				diagnostic-hdr-frame) kind=decoded ;;
+				diagnostic-hdr-trace) kind=trace ;;
+				*) return 64 ;;
+				esac
+				oracle_key="$(jq -e -r --arg id "$case_id" --arg entity "$entity" --arg kind "$kind" ".cases[] | select(.id == \$id) | .[\$entity][\$kind]" "$fixture")" || return
+			fi
+			jq -e -c --arg key "$oracle_key" ".oracles[\$key]" "$fixture"
+		}
+		quality_hdr_evidence "$source_path" 37.5 "$clip_path" "$encoded_path"
+	' quality-hdr "$QUALITY_EVIDENCE" "$PROBE" "$HDR_FIXTURE" "$case_id" "$call_log" \
+		"$BATS_TEST_TMPDIR/source.mkv" "$BATS_TEST_TMPDIR/clip.mkv" "$BATS_TEST_TMPDIR/output.mkv"
 }
 
 # Catches retaining the proven measurement defect in aggregates, dropping it
@@ -144,4 +189,53 @@ quality_vmaf_stats() {
 		run bash -c 'source "$1"; quality_parse_metric "$2" "$3"' quality-evidence "$QUALITY_EVIDENCE" "$kind" "$log"
 		[ "$status" -ne 0 ]
 	done
+}
+
+# Catches trusting either HDR oracle alone, comparing unreduced rationals, or
+# collapsing source, clip-boundary, and encoder-output defects into one verdict.
+@test "quality HDR classifier returns authoritative classifications" {
+	local case_id calls expected
+	for case_id in preserved source-oracle-defect clip-boundary-defect encoder-output-defect; do
+		calls="$BATS_TEST_TMPDIR/$case_id.calls"
+		quality_hdr_case "$case_id" "$calls"
+		[ "$status" -eq 0 ] || {
+			echo "HDR classifier rejected $case_id: status=$status output=$output" >&3
+			return 1
+		}
+		expected="$(jq -e -c --arg id "$case_id" '.cases[] | select(.id == $id) | .expected' "$HDR_FIXTURE")"
+		run jq -e -c --argjson expected "$expected" '
+			{classification,reasons} == $expected and
+			(.normalizedOracle.source.decoded.status == "ok") and
+			(.normalizedOracle.source.trace.status == "ok") and
+			(.. | objects | select(has("numerator") and has("denominator")) |
+				(.numerator | type) == "number" and (.denominator | type) == "number")
+		' <<<"$output"
+		[ "$status" -eq 0 ]
+	done
+}
+
+# Catches promoting the known-null stream probe into an HDR preservation veto
+# or probing the clip/output at the full-title source timestamp.
+@test "quality HDR keeps null stream status auxiliary and captures committed timestamps" {
+	local calls="$BATS_TEST_TMPDIR/auxiliary-null.calls"
+	quality_hdr_case auxiliary-null "$calls"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.classification == "preserved" and
+		.reasons == ["source-clip-encoded-metadata-agree"] and
+		.normalizedOracle.source.streamProbe == {status:"null"} and
+		.normalizedOracle.source.authoritative.metadata == .normalizedOracle.clip.authoritative.metadata and
+		.normalizedOracle.clip.authoritative.metadata == .normalizedOracle.encoded.authoritative.metadata
+	' <<<"$output"
+	[ "$status" -eq 0 ]
+	run diff -u - "$calls" <<EOF
+diagnostic-hdr-stream	$BATS_TEST_TMPDIR/source.mkv	37.5	10
+diagnostic-hdr-frame	$BATS_TEST_TMPDIR/source.mkv	37.5	10
+diagnostic-hdr-trace	$BATS_TEST_TMPDIR/source.mkv	37.5	10
+diagnostic-hdr-frame	$BATS_TEST_TMPDIR/clip.mkv	0	10
+diagnostic-hdr-trace	$BATS_TEST_TMPDIR/clip.mkv	0	10
+diagnostic-hdr-frame	$BATS_TEST_TMPDIR/output.mkv	0	10
+diagnostic-hdr-trace	$BATS_TEST_TMPDIR/output.mkv	0	10
+EOF
+	[ "$status" -eq 0 ]
 }

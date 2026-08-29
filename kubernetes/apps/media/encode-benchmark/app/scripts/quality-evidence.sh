@@ -79,6 +79,87 @@ quality_parse_metric() {
 	printf '%s\n' "$value"
 }
 
+quality_hdr_probe() {
+	"$quality_evidence_directory/probe.sh" "$@"
+}
+
+quality_hdr_evidence() {
+	local source_path="$1" source_start="$2" clip_path="$3" output_path="$4" path
+	local stream source_decoded source_trace clip_decoded clip_trace encoded_decoded encoded_trace
+	local normalized_oracle document
+	for path in "$source_path" "$clip_path" "$output_path"; do
+		[[ -f "$path" && -r "$path" ]] || return 66
+	done
+
+	stream="$(quality_hdr_probe diagnostic-hdr-stream "$source_path" "$source_start" 10)" || return
+	source_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$source_path" "$source_start" 10)" || return
+	source_trace="$(quality_hdr_probe diagnostic-hdr-trace "$source_path" "$source_start" 10)" || return
+	clip_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$clip_path" 0 10)" || return
+	clip_trace="$(quality_hdr_probe diagnostic-hdr-trace "$clip_path" 0 10)" || return
+	encoded_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$output_path" 0 10)" || return
+	encoded_trace="$(quality_hdr_probe diagnostic-hdr-trace "$output_path" 0 10)" || return
+
+	stream="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$stream")" || return
+	source_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$source_decoded")" || return
+	source_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$source_trace")" || return
+	clip_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$clip_decoded")" || return
+	clip_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$clip_trace")" || return
+	encoded_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$encoded_decoded")" || return
+	encoded_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$encoded_trace")" || return
+
+	normalized_oracle="$(jq -e -n -c \
+		--argjson stream "$stream" \
+		--argjson source_decoded "$source_decoded" --argjson source_trace "$source_trace" \
+		--argjson clip_decoded "$clip_decoded" --argjson clip_trace "$clip_trace" \
+		--argjson encoded_decoded "$encoded_decoded" --argjson encoded_trace "$encoded_trace" '
+		def authoritative($decoded; $trace):
+			if $decoded.status != "ok" then
+				{status:"unresolved",reasons:[("decoded-frame-" + $decoded.status)]}
+			elif $trace.status != "ok" then
+				{status:"unresolved",reasons:[("trace-headers-" + $trace.status)]}
+			elif $decoded.metadata != $trace.metadata then
+				{status:"unresolved",reasons:["decoded-trace-disagreement"]}
+			else {status:"ok",metadata:$decoded.metadata} end;
+		{
+			schemaVersion:1,
+			source:{
+				streamProbe:$stream,
+				decoded:$source_decoded,
+				trace:$source_trace,
+				authoritative:authoritative($source_decoded; $source_trace)
+			},
+			clip:{
+				decoded:$clip_decoded,
+				trace:$clip_trace,
+				authoritative:authoritative($clip_decoded; $clip_trace)
+			},
+			encoded:{
+				decoded:$encoded_decoded,
+				trace:$encoded_trace,
+				authoritative:authoritative($encoded_decoded; $encoded_trace)
+			}
+		}
+	')" || return
+
+	document="$(jq -e -n -c --argjson oracle "$normalized_oracle" '
+		if $oracle.source.authoritative.status != "ok" then
+			{classification:"source-oracle-defect",reasons:$oracle.source.authoritative.reasons}
+		elif $oracle.clip.authoritative.status != "ok" then
+			{classification:"clip-boundary-defect",reasons:$oracle.clip.authoritative.reasons}
+		elif $oracle.clip.authoritative.metadata != $oracle.source.authoritative.metadata then
+			{classification:"clip-boundary-defect",reasons:["authoritative-source-metadata","clip-metadata-changed"]}
+		elif $oracle.encoded.authoritative.status != "ok" then
+			{classification:"encoder-output-defect",reasons:$oracle.encoded.authoritative.reasons}
+		elif $oracle.encoded.authoritative.metadata != $oracle.clip.authoritative.metadata then
+			{classification:"encoder-output-defect",reasons:["source-and-clip-metadata-agree","encoded-metadata-changed"]}
+		else
+			{classification:"preserved",reasons:["source-clip-encoded-metadata-agree"]}
+		end | . + {normalizedOracle:$oracle}
+	')" || return
+
+	printf '%s\n' "$document"
+}
+
 quality_evidence_test_cli() {
 	local command="${1:-}"
 	shift || true
@@ -90,6 +171,10 @@ quality_evidence_test_cli() {
 	metric)
 		(($# == 2)) || return 64
 		quality_parse_metric "$@"
+		;;
+	hdr)
+		(($# == 4)) || return 64
+		quality_hdr_evidence "$@"
 		;;
 	*) return 64 ;;
 	esac

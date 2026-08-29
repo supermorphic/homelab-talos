@@ -28,6 +28,48 @@ diagnostic_validate_interval() {
 	awk -v value="$duration" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value > 0 && value <= 90) }'
 }
 
+# Keep exact HDR values as reduced rationals. Both the diagnostic probes and
+# quality evidence use this boundary, so equivalent ffprobe and trace_headers
+# representations compare without decimal conversion or rounding.
+diagnostic_hdr_normalize_oracle() {
+	jq -e -c '
+		def exact_keys($wanted): type == "object" and ((keys | sort) == ($wanted | sort));
+		def gcd($a; $b):
+			if $b == 0 then $a else gcd($b; ($a % $b)) end;
+		def rational:
+			exact_keys(["denominator", "numerator"]) and
+			(.numerator | type == "number" and floor == . and . >= 0) and
+			(.denominator | type == "number" and floor == . and . > 0);
+		def reduced_rational:
+			(gcd(.numerator; .denominator)) as $divisor |
+			{numerator:(.numerator / $divisor),denominator:(.denominator / $divisor)};
+		def chromaticity:
+			exact_keys(["x", "y"]) and (.x | rational) and (.y | rational);
+		def mastering_display:
+			exact_keys(["displayPrimaries", "luminance", "whitePoint"]) and
+			(.displayPrimaries | exact_keys(["blue", "green", "red"]) and
+				(.red | chromaticity) and (.green | chromaticity) and (.blue | chromaticity)) and
+			(.whitePoint | chromaticity) and
+			(.luminance | exact_keys(["max", "min"]) and (.min | rational) and (.max | rational));
+		def hdr_metadata:
+			exact_keys(["masteringDisplay", "maxCLL", "maxFALL"]) and
+			(.masteringDisplay | mastering_display) and
+			(.maxCLL | rational) and (.maxFALL | rational);
+		def normalize_metadata:
+			walk(if type == "object" and exact_keys(["denominator", "numerator"])
+				then reduced_rational else . end);
+		if
+			exact_keys(["metadata", "status"]) and .status == "ok" and
+			(.metadata | hdr_metadata)
+		then {status:"ok",metadata:(.metadata | normalize_metadata)}
+		elif
+			exact_keys(["status"]) and
+			(.status == "null" or .status == "absent" or .status == "malformed")
+		then {status}
+		else error("invalid HDR oracle") end
+	'
+}
+
 diagnostic_window() {
 	local path="$1" start="$2" duration="$3" first="$4" last="$5" probe_json
 	[[ -f "$path" && -r "$path" ]] || return 66
@@ -143,12 +185,12 @@ diagnostic_hdr_probe() {
 	stream)
 		probe_json="$(ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
 			-show_streams -show_entries 'stream_side_data' -of json "$path")" || return
-		diagnostic_hdr_oracle null <<<"$probe_json"
+		diagnostic_hdr_oracle null <<<"$probe_json" | diagnostic_hdr_normalize_oracle
 		;;
 	frame)
 		probe_json="$(ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
 			-show_frames -show_entries 'frame=side_data_list' -of json "$path")" || return
-		diagnostic_hdr_oracle absent <<<"$probe_json"
+		diagnostic_hdr_oracle absent <<<"$probe_json" | diagnostic_hdr_normalize_oracle
 		;;
 	*) return 64 ;;
 	esac
@@ -266,7 +308,7 @@ diagnostic_hdr_trace() {
 	set -e
 	rm -f -- "$trace_log"
 	((process_status == 0)) || return "$process_status"
-	printf '%s\n' "$oracle"
+	diagnostic_hdr_normalize_oracle <<<"$oracle"
 }
 
 case "${1:-}" in
@@ -295,10 +337,15 @@ diagnostic-hdr-trace)
 	diagnostic_hdr_trace "$2" "$3" "$4"
 	exit
 	;;
+diagnostic-hdr-normalize-oracle)
+	(($# == 1)) || exit 64
+	diagnostic_hdr_normalize_oracle
+	exit
+	;;
 esac
 
 if (($# != 1)); then
-	echo 'usage: probe.sh <source-path> | diagnostic-identity <source-path> | diagnostic-window <source-path> <start> <duration> <first-frame> <last-frame> | diagnostic-hdr-{stream,frame,trace} <source-path> <start> <duration>' >&2
+	echo 'usage: probe.sh <source-path> | diagnostic-identity <source-path> | diagnostic-window <source-path> <start> <duration> <first-frame> <last-frame> | diagnostic-hdr-{stream,frame,trace} <source-path> <start> <duration> | diagnostic-hdr-normalize-oracle' >&2
 	exit 64
 fi
 
