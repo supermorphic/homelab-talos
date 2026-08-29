@@ -672,7 +672,12 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
-exec "$REAL_SHA256SUM" "$@"
+"$REAL_SHA256SUM" "$@"
+if [[ -n "${BENCHMARK_TEST_SHA256_REPLACE_TARGET:-}" &&
+	-n "${BENCHMARK_TEST_SHA256_REPLACEMENT:-}" &&
+	-e "$BENCHMARK_TEST_SHA256_REPLACEMENT" ]]; then
+	mv -f -- "$BENCHMARK_TEST_SHA256_REPLACEMENT" "$BENCHMARK_TEST_SHA256_REPLACE_TARGET"
+fi
 EOF
 	cat >"$stub_bin/ln" <<'EOF'
 #!/usr/bin/env bash
@@ -1224,6 +1229,10 @@ write_quality_ranking_results() {
 				vmaf_low='91'
 				status='passed'
 				failures=''
+				if [[ "$setting" == '26' ]]; then
+					vmaf='95'
+					vmaf_low='90'
+				fi
 				if [[ "$setting" == '20' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
 				if [[ "$setting" == '22' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
 				if [[ "$setting" == '28' && "$clip" == 'detail' ]]; then vmaf='94.999'; fi
@@ -3345,7 +3354,7 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
-@test "quality candidates authenticate corrected evidence and rank cohorts independently" {
+@test "quality candidates authenticate corrected evidence and rank cohorts independently at exact gates" {
 	prepare_execution_run
 	prepare_quality_panel_with_six_titles_three_clips
 	run_id='20260815T120000Z-aaaaaaaa'
@@ -3372,6 +3381,89 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -ne 0 ]
 	run cmp -s "$BATS_TEST_TMPDIR/prior-quality-candidates.json" "$artifact"
+	[ "$status" -eq 0 ]
+}
+
+# Catches hashing one pathname read and parsing a replacement pathname read.
+# The sha256sum stub replaces the pathname after it returns the original digest.
+@test "quality candidates hash and parse one stable evidence snapshot" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0000'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	target="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
+	replacement="$BATS_TEST_TMPDIR/replacement-quality-evidence.json"
+	jq '.vmaf.harmonicMean = 1' "$target" >"$replacement"
+	chmod 0600 "$replacement"
+	export BENCHMARK_TEST_SHA256_REPLACE_TARGET="$target"
+	export BENCHMARK_TEST_SHA256_REPLACEMENT="$replacement"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	[ ! -e "$replacement" ]
+	run jq -e '
+		(.cohorts.avc.candidates | map(.globalQuality)) == [16,24,18,26] and
+		.cohorts.avc.candidates[3] == {globalQuality:26, medianReductionPercent:10}
+	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+}
+
+# Catches accepting evidence that is not a confined regular file, has a false
+# schema or identity, or contains non-finite comparison metrics.
+@test "quality candidates reject link escape identity schema and non-finite evidence" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0003'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	linked="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
+	escaped="$BATS_TEST_TMPDIR/escaped-quality-evidence.json"
+	mv -f -- "$linked" "$escaped"
+	"$REAL_LN" -s "$escaped" "$linked"
+
+	schema="$run_dir/quality-evidence/quality-1-detail-qsv-24-attempt-1.json"
+	jq '.schemaVersion = 2' "$schema" >"$schema.tmp"
+	mv -f -- "$schema.tmp" "$schema"
+	chmod 0600 "$schema"
+	schema_digest="sha256:$(sha256sum "$schema" | awk 'NR == 1 { print $1 }')"
+	rewrite_quality_result_evidence_digest "$results" quality-1 detail 24 "$schema_digest"
+
+	identity="$run_dir/quality-evidence/quality-1-detail-qsv-18-attempt-1.json"
+	jq '.sampleId = "quality-2"' "$identity" >"$identity.tmp"
+	mv -f -- "$identity.tmp" "$identity"
+	chmod 0600 "$identity"
+	identity_digest="sha256:$(sha256sum "$identity" | awk 'NR == 1 { print $1 }')"
+	rewrite_quality_result_evidence_digest "$results" quality-1 detail 18 "$identity_digest"
+
+	ssim="$run_dir/quality-evidence/quality-1-detail-qsv-26-attempt-1.json"
+	sed 's/"ssim":0.991/"ssim":1e999/' "$ssim" >"$ssim.tmp"
+	mv -f -- "$ssim.tmp" "$ssim"
+	chmod 0600 "$ssim"
+	ssim_digest="sha256:$(sha256sum "$ssim" | awk 'NR == 1 { print $1 }')"
+	rewrite_quality_result_evidence_digest "$results" quality-1 detail 26 "$ssim_digest"
+
+	psnr="$run_dir/quality-evidence/quality-5-detail-qsv-16-attempt-1.json"
+	sed 's/"psnr":40/"psnr":1e999/' "$psnr" >"$psnr.tmp"
+	mv -f -- "$psnr.tmp" "$psnr"
+	chmod 0600 "$psnr"
+	psnr_digest="sha256:$(sha256sum "$psnr" | awk 'NR == 1 { print $1 }')"
+	rewrite_quality_result_evidence_digest "$results" quality-5 detail 16 "$psnr_digest"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		.cohorts.avc == {
+			status:"no-verdict", expectedClipCount:6, candidates:[], reason:"incomplete-evidence"
+		} and
+		(.cohorts.hdr10.candidates | map(.globalQuality)) == [24,18,26]
+	' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
 }
 

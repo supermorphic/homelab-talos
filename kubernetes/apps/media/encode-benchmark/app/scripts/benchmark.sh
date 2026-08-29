@@ -3514,10 +3514,16 @@ append_comparison_once() {
 	mv -f -- "$staged" "$output"
 }
 
-quality_evidence_for_ranking() {
+quality_evidence_for_ranking() (
 	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
 	local clip_id="$6" setting="$7" attempt="$8" evidence_path="$9" evidence_digest="${10}"
 	local evidence_directory evidence_file expected_path actual_digest run_physical
+	local snapshot_directory='' snapshot_file='' evidence_fd='' evidence_snapshot=''
+	trap '
+		if [[ -n "$evidence_fd" ]]; then exec {evidence_fd}<&-; fi
+		if [[ -n "$snapshot_file" ]]; then rm -f -- "$snapshot_file"; fi
+		if [[ -n "$snapshot_directory" ]]; then rmdir -- "$snapshot_directory"; fi
+	' EXIT
 	expected_path="quality-evidence/$sample_id-$clip_id-qsv-$setting-attempt-$attempt.json"
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ &&
 		"$evidence_path" == "$expected_path" && "$evidence_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
@@ -3528,9 +3534,37 @@ quality_evidence_for_ranking() {
 	evidence_file="$run_directory/$evidence_path"
 	[[ -f "$evidence_file" && ! -L "$evidence_file" ]] || return 65
 	[[ "$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
-	actual_digest="sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+
+	# Bind a private hard link to the validated evidence inode, then open and
+	# remove that link before reading. The original pathname may change after
+	# this point, but both the digest and parser consume the same bytes captured
+	# from the already-open regular file.
+	snapshot_directory="$(mktemp -d "$evidence_directory/.quality-ranking.XXXXXX")" || return
+	chmod 0700 "$snapshot_directory" || return
+	snapshot_file="$snapshot_directory/evidence.json"
+	ln -T -- "$evidence_file" "$snapshot_file" 2>/dev/null || return 65
+	[[ -f "$evidence_file" && ! -L "$evidence_file" &&
+		-f "$snapshot_file" && ! -L "$snapshot_file" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" &&
+		"$evidence_file" -ef "$snapshot_file" ]] || return 65
+	exec {evidence_fd}<"$snapshot_file" || return 65
+	[[ -f "/dev/fd/$evidence_fd" && -f "$snapshot_file" && ! -L "$snapshot_file" &&
+		"$evidence_file" -ef "$snapshot_file" ]] || return 65
+	rm -f -- "$snapshot_file" || return 65
+	snapshot_file=''
+	rmdir -- "$snapshot_directory" || return 65
+	snapshot_directory=''
+	evidence_snapshot=''
+	# A NUL byte cannot occur in a JSON document. A successful NUL-delimited
+	# read therefore rejects the object instead of silently changing its bytes.
+	if IFS= read -r -d '' evidence_snapshot <&"$evidence_fd"; then
+		return 65
+	fi
+	exec {evidence_fd}<&-
+	evidence_fd=''
+	actual_digest="sha256:$(printf '%s' "$evidence_snapshot" | sha256sum | awk 'NR == 1 { print $1 }')"
 	[[ "$actual_digest" == "$evidence_digest" ]] || return 65
-	jq -e -c \
+	printf '%s' "$evidence_snapshot" | jq -e -c \
 		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
 		--arg source_sha "$source_sha" --arg clip "$clip_id" --argjson setting "$setting" \
 		--arg strategy "$CONTRACT_STRATEGY_ID" --argjson schema "$CONTRACT_QUALITY_EVIDENCE_SCHEMA" '
@@ -3571,8 +3605,8 @@ quality_evidence_for_ranking() {
 			psnr:$document.psnr,
 			hdrClassification:($document.hdr.classification // null)
 		}
-	' "$evidence_file"
-}
+	'
+)
 
 rank_quality_candidates() {
 	local results="$1" candidate_samples="$2" run_id="$3"
