@@ -6,7 +6,7 @@ setup() {
 	GOLDEN="$BATS_TEST_DIRNAME/golden"
 	export BENCHMARK_TEST_MODE=1
 	export REAL_SHA256SUM="$(command -v sha256sum)"
-	QUALITY_RUN_ID='20260815T120000Z-6cdfc9f3'
+	QUALITY_RUN_ID='20260815T120000Z-c4b9c436'
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/scratch"
 	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
@@ -53,6 +53,69 @@ snapshot_command_logs() {
 			fi
 		done
 	} >"$snapshot"
+}
+
+bind_quality_fixture_evidence() {
+	local run_id="$1" fixture="$2" attempt="$3" output_fixture="$4"
+	local sample_id cohort source_sha clip setting strategy vmaf_harmonic vmaf_low ssim
+	local evidence_path evidence_file evidence_digest hdr='null'
+	sample_id="$(jq -r '.sample_id' "$fixture")"
+	cohort="$(jq -r '.cohort' "$fixture")"
+	source_sha="$(jq -r '.source_sha256' "$fixture")"
+	clip="$(jq -r '.clip_id' "$fixture")"
+	setting="$(jq -r '.requested_setting' "$fixture")"
+	strategy="$(jq -r '.strategy_id' "$fixture")"
+	vmaf_harmonic="$(jq -r '.vmaf_harmonic_mean' "$fixture")"
+	vmaf_low="$(jq -r '.vmaf_1pct_low' "$fixture")"
+	ssim="$(jq -r '.ssim' "$fixture")"
+	if [[ "$cohort" == 'hdr10' ]]; then
+		hdr='{"classification":"preserved","reasons":["source-clip-encoded-metadata-agree"],"normalizedOracle":{}}'
+	fi
+	evidence_path="quality-evidence/$sample_id-$clip-qsv-$setting-attempt-$attempt.json"
+	evidence_file="$BENCHMARK_OUT/runs/$run_id/$evidence_path"
+	mkdir -p "${evidence_file%/*}"
+	jq -S -c -n \
+		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
+		--arg source_sha "$source_sha" --arg clip "$clip" --arg strategy "$strategy" \
+		--argjson setting "$setting" --argjson vmaf_harmonic "$vmaf_harmonic" \
+		--argjson vmaf_low "$vmaf_low" --argjson ssim "$ssim" --argjson hdr "$hdr" '{
+			clipId:$clip,cohort:$cohort,globalQuality:$setting,hdr:$hdr,psnr:40,
+			runId:$run,sampleId:$sample,schemaVersion:1,sourceSha256:$source_sha,
+			ssim:$ssim,strategyId:$strategy,
+			vmaf:{rawFrameCount:100,evaluatedFrameCount:100,excludedFrames:[],
+				harmonicMean:$vmaf_harmonic,onePercentLow:$vmaf_low}
+		}' >"$evidence_file"
+	chmod 0600 "$evidence_file"
+	evidence_digest="sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+	jq --arg path "$evidence_path" --arg digest "$evidence_digest" '
+		.quality_evidence_path = $path | .quality_evidence_sha256 = $digest
+	' "$fixture" >"$output_fixture"
+}
+
+quality_evidence_reference() {
+	local run_id="$1" sample_id="$2" cohort="$3" source_sha="$4" clip="$5"
+	local setting="$6" attempt="$7" vmaf_harmonic="$8" vmaf_low="$9" ssim="${10}"
+	local evidence_path evidence_file evidence_digest hdr='null'
+	if [[ "$cohort" == 'hdr10' ]]; then
+		hdr='{"classification":"preserved","reasons":["source-clip-encoded-metadata-agree"],"normalizedOracle":{}}'
+	fi
+	evidence_path="quality-evidence/$sample_id-$clip-qsv-$setting-attempt-$attempt.json"
+	evidence_file="$BENCHMARK_OUT/runs/$run_id/$evidence_path"
+	mkdir -p "${evidence_file%/*}"
+	jq -S -c -n \
+		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
+		--arg source_sha "$source_sha" --arg clip "$clip" --argjson setting "$setting" \
+		--argjson vmaf_harmonic "$vmaf_harmonic" --argjson vmaf_low "$vmaf_low" \
+		--argjson ssim "$ssim" --argjson hdr "$hdr" '{
+			clipId:$clip,cohort:$cohort,globalQuality:$setting,hdr:$hdr,psnr:40,
+			runId:$run,sampleId:$sample,schemaVersion:1,sourceSha256:$source_sha,
+			ssim:$ssim,strategyId:"qsv-hevc-icq-v1",
+			vmaf:{rawFrameCount:100,evaluatedFrameCount:100,excludedFrames:[],
+				harmonicMean:$vmaf_harmonic,onePercentLow:$vmaf_low}
+		}' >"$evidence_file"
+	chmod 0600 "$evidence_file"
+	evidence_digest="sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+	printf '%s,%s\n' "$evidence_path" "$evidence_digest"
 }
 
 # Catches findings accepting a legacy, ambiguous, or path-bearing input before
@@ -205,9 +268,11 @@ write_capability_samples() {
 	jq -n \
 		--arg image "$image" \
 		--argjson strategy "$(strategy_contract)" \
+		--argjson quality_correction "$(quality_correction_contract)" \
 		--argjson required "$(capability_declared_list requiredCommands "${@:2}")" \
 		--argjson optional "$(capability_declared_list optionalCommands)" \
-		'{schemaVersion: 2, strategy: $strategy, runtime: {image: $image, requiredCommands: $required, optionalCommands: $optional}}' \
+		'{schemaVersion: 3, strategy: $strategy, qualityCorrection: $quality_correction,
+			runtime: {image: $image, requiredCommands: $required, optionalCommands: $optional}}' \
 		>"$BENCHMARK_SAMPLES_FILE"
 }
 
@@ -223,6 +288,10 @@ capability_declared_list() {
 
 strategy_contract() {
 	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.strategy'
+}
+
+quality_correction_contract() {
+	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" | jq -c '.qualityCorrection'
 }
 
 chosen_record() {
@@ -270,13 +339,15 @@ set_chosen_record() {
 
 prepare_quality_upstream() {
 	local cohort="$1" state="$2" setting="$3" candidates="$4" rejected="${5:-[]}"
-	local quality_run="$QUALITY_RUN_ID" quality_dir results results_digest candidate_digest
+	local quality_run="$QUALITY_RUN_ID" quality_dir results results_digest candidate_digest evidence_ref
 	quality_dir="$BENCHMARK_OUT/runs/$quality_run"
 	mkdir -p "$quality_dir"
 	results="$quality_dir/results.csv"
+	evidence_ref="$(quality_evidence_reference "$quality_run" "fixture-$cohort" "$cohort" \
+		'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' detail "$setting" 1 96 92 0.99)"
 	printf '%s\n' \
-		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
-		"$quality_run,quality,fixture-$cohort,$cohort,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,$setting,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' \
+		"$quality_run,quality,fixture-$cohort,$cohort,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,$setting,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_ref" \
 		>"$results"
 	jq -S -c --arg created_at "${quality_run%-*}" '. + {createdAt:$created_at}' \
 		"$FIXTURES/manifests/identity.json" >"$quality_dir/manifest.json"
@@ -287,7 +358,7 @@ prepare_quality_upstream() {
 		jq -n -c --arg run "$quality_run" --arg digest "$results_digest" '
 		{
 			schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
-			resultsSchemaVersion:2,resultsSha256:$digest,
+			resultsSchemaVersion:3,resultsSha256:$digest,
 			cohorts:{avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
 				vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
 				hdr10:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"}}
@@ -509,6 +580,34 @@ if [[ "$arguments" == *'[0:v][1:v]ssim'* ]]; then
 	printf '%s\n' '[Parsed_ssim_0 @ 0x3000] SSIM Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >&2
 	exit 0
 fi
+if [[ "$arguments" == *'[0:v][1:v]psnr'* ]]; then
+	if [[ "${BENCHMARK_TEST_PSNR_COMMAND_FAILURE:-0}" == '1' ]]; then
+		exit 90
+	fi
+	if [[ "${BENCHMARK_TEST_PSNR_PARSE_FAILURE:-0}" == '1' ]]; then
+		printf '%s\n' '[Parsed_psnr_0 @ 0x3000] no aggregate score' >&2
+		exit 0
+	fi
+	printf '%s\n' '[Parsed_psnr_0 @ 0x3000] PSNR y:40.000000 u:40.000000 v:40.000000 average:40.000000 min:40.000000 max:40.000000' >&2
+	exit 0
+fi
+if [[ "$arguments" == *'-bsf:v trace_headers'* ]]; then
+	if [[ -n "${BENCHMARK_TEST_INVALID_OUTPUT_MATCH:-}" &&
+		"$arguments" =~ ${BENCHMARK_TEST_INVALID_OUTPUT_MATCH} ]]; then
+		exit 0
+	fi
+	printf '%s\n' \
+		'Mastering Display Colour Volume' \
+		'display_primaries_x[0] = 13250' 'display_primaries_y[0] = 34500' \
+		'display_primaries_x[1] = 7500' 'display_primaries_y[1] = 3000' \
+		'display_primaries_x[2] = 34000' 'display_primaries_y[2] = 16000' \
+		'white_point_x = 15635' 'white_point_y = 16450' \
+		'max_display_mastering_luminance = 10000000' \
+		'min_display_mastering_luminance = 1' \
+		'Content Light Level Information' \
+		'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
+	exit 0
+fi
 if [[ "${BENCHMARK_TEST_PGS_DECODE:-0}" == '1' && "$arguments" == *'-f null -'* &&
 	"$arguments" != *'libvmaf='* && " $arguments " == *' -map 0 '* ]]; then
 	exit 92
@@ -543,6 +642,22 @@ fi
 if [[ "$*" == *'-show_packets -select_streams a -show_entries packet=stream_index,size -of csv=p=0'* ]]; then
 	if [[ "${BENCHMARK_TEST_PACKET_FAILURE:-0}" == '1' ]]; then exit 91; fi
 	exec cat "$BENCHMARK_PACKET_FIXTURE"
+fi
+if [[ "$*" == *'-show_streams -show_entries stream_side_data'* ]]; then
+	printf '%s\n' '{"streams":[{}]}'
+	exit 0
+fi
+if [[ "$*" == *'-show_frames -show_entries frame=side_data_list'* ]]; then
+	if [[ -n "${BENCHMARK_TEST_INVALID_OUTPUT_MATCH:-}" &&
+		"$*" =~ ${BENCHMARK_TEST_INVALID_OUTPUT_MATCH} ]]; then
+		printf '%s\n' '{"frames":[{}]}'
+		exit 0
+	fi
+	jq -n '{frames:[{side_data_list:[
+		{side_data_type:"Mastering display metadata",red_x:"34000/50000",red_y:"16000/50000",green_x:"13250/50000",green_y:"34500/50000",blue_x:"7500/50000",blue_y:"3000/50000",white_point_x:"15635/50000",white_point_y:"16450/50000",min_luminance:"1/10000",max_luminance:"10000000/10000"},
+		{side_data_type:"Content light level metadata",max_content:1000,max_average:400}
+	]}]}'
+	exit 0
 fi
 exit 97
 EOF
@@ -583,12 +698,14 @@ prepare_execution_run() {
 		--argjson source_size "$source_size" \
 		--arg source_sha "$source_sha" \
 		--argjson strategy "$(strategy_contract)" \
+		--argjson quality_correction "$(quality_correction_contract)" \
 		--argjson required "$(capability_declared_list requiredCommands)" \
 		--argjson optional "$(capability_declared_list optionalCommands)" \
 		--argjson chosen "$(chosen_record hdr10 final 22)" \
 		'{
-			schemaVersion: 2,
+			schemaVersion: 3,
 			strategy: $strategy,
+			qualityCorrection: $quality_correction,
 			runtime: {
 				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
 				requiredCommands: $required, optionalCommands: $optional
@@ -946,7 +1063,7 @@ prepare_partial_savings_execution_run() {
 
 prepare_x265_execution_run() {
 	local sample_id="$1" cohort="$2" qsv_vmaf="${3:-97}" setting="${4:-22}" quality_dir results results_digest candidate_digest
-	local chosen upstream selected cpu_identity
+	local chosen upstream selected cpu_identity clip evidence_ref
 	prepare_execution_run
 	jq --arg sample "$sample_id" --arg cohort "$cohort" '
 		.qualityPanel[0].id = $sample |
@@ -960,12 +1077,12 @@ prepare_x265_execution_run() {
 	prepare_quality_upstream "$cohort" final "$setting" "[$setting]"
 	quality_dir="$BENCHMARK_OUT/runs/$QUALITY_RUN_ID"
 	results="$quality_dir/results.csv"
-	printf '%s\n' \
-		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,detail,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/detail.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,dark,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/dark.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
-		"$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,motion,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/motion.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
-		>"$results"
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' >"$results"
+	for clip in detail dark motion; do
+		evidence_ref="$(quality_evidence_reference "$QUALITY_RUN_ID" "$sample_id" "$cohort" \
+			"$source_sha" "$clip" "$setting" 1 "$qsv_vmaf" 92 0.99)"
+		printf '%s\n' "$QUALITY_RUN_ID,quality,$sample_id,$cohort,$source_sha,$clip,qsv,$setting,ICQ,passed,1,1000,600,40,10000,8000,10,30,1,$qsv_vmaf,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/$clip.log,discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_ref" >>"$results"
+	done
 	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
 	jq --arg digest "$results_digest" '.resultsSha256 = $digest | .cohorts |= with_entries(
 		.value.expectedClipCount = 3)' "$quality_dir/quality-candidates.json" \
@@ -1003,15 +1120,17 @@ reset_cross_path_workspace() {
 }
 
 write_cross_path_quality_results() {
-	local results="$1" run_id="$2" setting="$3" sample sample_id cohort sha clip
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' >"$results"
+	local results="$1" run_id="$2" setting="$3" sample sample_id cohort sha clip evidence_ref
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' >"$results"
 	while IFS= read -r sample; do
 		sample_id="$(jq -r '.id' <<<"$sample")"
 		cohort="$(jq -r '.cohort' <<<"$sample")"
 		sha="$(jq -r '.sha256' <<<"$sample")"
 		for clip in detail motion grain; do
-			printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,35,1000,650,1.000000,72.0,1.25,96,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
-				"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$sample_id" "$clip" >>"$results"
+			evidence_ref="$(quality_evidence_reference "$run_id" "$sample_id" "$cohort" \
+				"$sha" "$clip" "$setting" 1 96 91 0.991)"
+			printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,35,1000,650,1.000000,72.0,1.25,96,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000,%s\n' \
+				"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$sample_id" "$clip" "$evidence_ref" >>"$results"
 		done
 	done < <(jq -c '.qualityPanel[]' "$BENCHMARK_SAMPLES_FILE")
 }
@@ -1066,8 +1185,8 @@ prepare_quality_panel_with_six_titles_three_clips() {
 }
 
 write_quality_ranking_results() {
-	local results="$1" run_id="$2" sample sample_id cohort sha clip setting reduction vmaf status failures
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' >"$results"
+	local results="$1" run_id="$2" sample sample_id cohort sha clip setting reduction vmaf status failures evidence_ref
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' >"$results"
 	while IFS= read -r sample; do
 		sample_id="$(jq -r '.id' <<<"$sample")"
 		cohort="$(jq -r '.cohort' <<<"$sample")"
@@ -1091,8 +1210,10 @@ write_quality_ranking_results() {
 				if [[ "$cohort" == 'vc1' && "$setting" == '24' && "$clip" == 'detail' ]]; then vmaf='89'; fi
 				if [[ "$cohort" == 'vc1' && "$setting" == '16' && "$clip" == 'detail' ]]; then vmaf='89'; fi
 				if [[ "$cohort" == 'vc1' && "$setting" == '18' && "$clip" == 'motion' ]]; then status='invalid'; failures='codec'; fi
-				printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,%s,1,1000,650,%s,1000,650,1.000000,72.0,1.25,%s,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,%s,logs/%s-%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
-					"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$status" "$reduction" "$vmaf" "$failures" "$sample_id" "$clip" "$setting" >>"$results"
+				evidence_ref="$(quality_evidence_reference "$run_id" "$sample_id" "$cohort" \
+					"$sha" "$clip" "$setting" 1 "$vmaf" 91 0.991)"
+				printf '%s,quality,%s,%s,%s,%s,qsv,%s,ICQ,%s,1,1000,650,%s,1000,650,1.000000,72.0,1.25,%s,91,0.991,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,%s,logs/%s-%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000,%s\n' \
+					"$run_id" "$sample_id" "$cohort" "$sha" "$clip" "$setting" "$status" "$reduction" "$vmaf" "$failures" "$sample_id" "$clip" "$setting" "$evidence_ref" >>"$results"
 			done
 		done
 	done < <(jq -c '.qualityPanel[]' "$BENCHMARK_SAMPLES_FILE")
@@ -1100,10 +1221,10 @@ write_quality_ranking_results() {
 
 # Catches a production break where the durable result contract drifts from the
 # exact schema that runmeta uses to decide whether a variant is resumable.
-@test "results header is the exact 39-column ICQ resume schema" {
+@test "results header is the exact 41-column ICQ resume schema" {
 	run "$SCRIPTS/benchmark.sh" _test results-header
 	[ "$status" -eq 0 ]
-	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' ]
+	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' ]
 }
 
 @test "benchmark failure hooks are rejected outside test mode" {
@@ -1251,7 +1372,7 @@ write_quality_ranking_results() {
 
 # Catches a production break where the requested ICQ controls, lossless clip
 # extraction, stream preservation, or reference/distorted ordering drifts.
-@test "quality command construction preserves exact clip QSV x265 VMAF and SSIM contracts" {
+@test "quality command construction preserves exact clip QSV x265 VMAF SSIM and PSNR contracts" {
 	for setting in 16 18 30; do
 		run "$SCRIPTS/benchmark.sh" _test commands \
 			'/media/Movie.mkv' '00:17:23.456' '/scratch/detail.mkv' \
@@ -1264,7 +1385,8 @@ write_quality_ranking_results() {
 		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality",$setting,"-look_ahead","0","-extbrc","0","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0",("/scratch/qsv-" + $setting + ".mkv")] and
 		.x265 == ["ffmpeg","-nostdin","-v","verbose","-i","/scratch/detail.mkv","-map","0","-c:v","libx265","-preset","slow","-crf","20","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0","/scratch/x265-20.mkv"] and
 		.vmaf == ["ffmpeg","-nostdin","-v","error","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
-		.ssim == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"]
+		.ssim == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"] and
+		.psnr == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]psnr","-f","null","-"]
 	' <<<"$commands"
 		[ "$status" -eq 0 ]
 	done
@@ -1275,7 +1397,7 @@ write_quality_ranking_results() {
 # others still retain the ICQ contract.
 @test "table-driven ICQ settings cross commands durable evidence decisions and reports" {
 	for setting in 16 18 30; do
-		QUALITY_RUN_ID='20260815T120000Z-6cdfc9f3'
+		QUALITY_RUN_ID='20260815T120000Z-c4b9c436'
 		reset_cross_path_workspace
 		prepare_execution_run
 
@@ -1293,9 +1415,11 @@ write_quality_ranking_results() {
 		result_fixture="$BATS_TEST_TMPDIR/result-$setting.json"
 		jq --arg setting "$setting" '.requested_setting = $setting' \
 			"$FIXTURES/metrics/variant-passed.json" >"$result_fixture"
+		bound_result_fixture="$BATS_TEST_TMPDIR/result-$setting-bound.json"
+		bind_quality_fixture_evidence "$result_run" "$result_fixture" 1 "$bound_result_fixture"
 		scratch_output="$BENCHMARK_SCRATCH/result-$setting.mkv"
 		printf '%s' 'encoded fixture' >"$scratch_output"
-		run "$SCRIPTS/benchmark.sh" _test record-result "$result_run" "$result_fixture" "$scratch_output"
+		run "$SCRIPTS/benchmark.sh" _test record-result "$result_run" "$bound_result_fixture" "$scratch_output"
 		[ "$status" -eq 0 ]
 		[ ! -e "$scratch_output" ]
 		run "$SCRIPTS/runmeta.sh" completed "$result_run" \
@@ -1327,7 +1451,7 @@ write_quality_ranking_results() {
 		run "$SCRIPTS/benchmark.sh" _test chosen-upstream avc provisional
 		[ "$status" -eq 0 ]
 		run jq -e --argjson setting "$setting" \
-			'.selectedSettings == [{cohort:"avc",globalQuality:$setting,qualityRunId:"20260815T120000Z-6cdfc9f3"}]' <<<"$output"
+			'.selectedSettings == [{cohort:"avc",globalQuality:$setting,qualityRunId:"20260815T120000Z-c4b9c436"}]' <<<"$output"
 		[ "$status" -eq 0 ]
 		prepare_quality_upstream avc final "$setting" "[$setting]"
 		run "$SCRIPTS/benchmark.sh" _test chosen-upstream avc final
@@ -2930,11 +3054,15 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 
+	attempt=0
 	for fixture in variant-fallback variant-invalid-output variant-passed; do
+		attempt=$((attempt + 1))
 		scratch_output="$BENCHMARK_SCRATCH/$fixture.mkv"
 		printf '%s' 'encoded bytes' >"$scratch_output"
+		bound_fixture="$BATS_TEST_TMPDIR/$fixture-bound.json"
+		bind_quality_fixture_evidence "$run_id" "$FIXTURES/metrics/$fixture.json" "$attempt" "$bound_fixture"
 		run "$SCRIPTS/benchmark.sh" _test record-result \
-			"$run_id" "$FIXTURES/metrics/$fixture.json" "$scratch_output"
+			"$run_id" "$bound_fixture" "$scratch_output"
 		[ "$status" -eq 0 ]
 		[ ! -e "$scratch_output" ]
 	done
@@ -2984,10 +3112,12 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	fixture="$BATS_TEST_TMPDIR/missing-qsv-evidence.json"
 	jq '.qsv_initialization = "failed" | .video_busy_nanoseconds = "0"' \
 		"$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	bound_fixture="$BATS_TEST_TMPDIR/missing-qsv-evidence-bound.json"
+	bind_quality_fixture_evidence "$run_id" "$fixture" 1 "$bound_fixture"
 	scratch_output="$BENCHMARK_SCRATCH/missing-qsv-evidence.mkv"
 	printf '%s' 'encoded bytes' >"$scratch_output"
 
-	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$bound_fixture" "$scratch_output"
 	[ "$status" -eq 0 ]
 	[ "$output" = '{"status":"invalid","attempt":1,"output_disposition":"discarded"}' ]
 	run awk -F, 'NR == 2 {print $10 "," $38 "," $39}' "$run_dir/results.csv"
@@ -3118,7 +3248,8 @@ PYTHON
 	run rg -F -- '-nostdin -v error -i ' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 0 ]
 	run awk '
-		/-f null -$/ && !/nullsrc=size=16x16/ && !/libvmaf=/ && !/\[0:v\]\[1:v\]ssim/ {
+		/-f null -$/ && !/nullsrc=size=16x16/ && !/libvmaf=/ &&
+			!/\[0:v\]\[1:v\]ssim/ && !/\[0:v\]\[1:v\]psnr/ && !/trace_headers/ {
 			seen = 1
 			if ($0 !~ /(^| )-map 0:v:0( |$)/) { bad = 1; exit }
 		}
@@ -3172,7 +3303,8 @@ PYTHON
 	[ "$status" -eq 0 ]
 	artifact="$run_dir/quality-candidates.json"
 	actual_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
-	run jq --arg digest "$actual_digest" '.resultsSha256 = $digest' "$FIXTURES/metrics/quality-candidates.json"
+	run jq --arg digest "$actual_digest" '.resultsSchemaVersion = 3 | .resultsSha256 = $digest' \
+		"$FIXTURES/metrics/quality-candidates.json"
 	[ "$status" -eq 0 ]
 	printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/expected-quality-candidates.json"
 	run diff -u "$BATS_TEST_TMPDIR/expected-quality-candidates.json" "$artifact"
@@ -3203,7 +3335,7 @@ PYTHON
 	artifact="$run_dir/quality-candidates.json"
 	cp "$artifact" "$BATS_TEST_TMPDIR/prior-semantic-quality-candidates.json"
 
-	# This stays a 39-column QSV passed row, but cannot be resumed because
+	# This stays a 41-column QSV passed row, but cannot be resumed because
 	# QSV initialization evidence is incomplete.
 	awk -F, 'BEGIN { OFS = FS } NR == 2 { $38 = "not-applicable" } { print }' "$results" \
 		>"$BATS_TEST_TMPDIR/semantic-invalid-results.csv"
@@ -3242,13 +3374,14 @@ PYTHON
 	invalid_json="$BATS_TEST_TMPDIR/invalid-probe.json"
 	printf '%s\n' '{' >"$invalid_json"
 	case_number=0
-	for failure in source-probe output-probe vmaf-command vmaf-parse ssim-command ssim-parse; do
+	for failure in source-probe output-probe vmaf-command vmaf-parse ssim-command ssim-parse psnr-command psnr-parse; do
 		case_number=$((case_number + 1))
 		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
 		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
 		prepare_execution_run
 		unset BENCHMARK_TEST_VMAF_COMMAND_FAILURE BENCHMARK_TEST_VMAF_PARSE_FAILURE
 		unset BENCHMARK_TEST_SSIM_COMMAND_FAILURE BENCHMARK_TEST_SSIM_PARSE_FAILURE
+		unset BENCHMARK_TEST_PSNR_COMMAND_FAILURE BENCHMARK_TEST_PSNR_PARSE_FAILURE
 		export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
 		export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
 		case "$failure" in
@@ -3258,14 +3391,19 @@ PYTHON
 		vmaf-parse) export BENCHMARK_TEST_VMAF_PARSE_FAILURE=1 ;;
 		ssim-command) export BENCHMARK_TEST_SSIM_COMMAND_FAILURE=1 ;;
 		ssim-parse) export BENCHMARK_TEST_SSIM_PARSE_FAILURE=1 ;;
+		psnr-command) export BENCHMARK_TEST_PSNR_COMMAND_FAILURE=1 ;;
+		psnr-parse) export BENCHMARK_TEST_PSNR_PARSE_FAILURE=1 ;;
 		esac
 		run "$SCRIPTS/benchmark.sh" quality
 		[ "$status" -eq 0 ]
 		run_id="$output"
 		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count }' "$results"
+		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count + 0 }' "$results"
 		[ "$status" -eq 0 ]
-		[ "$output" = '8' ]
+		case "$failure" in
+		source-probe|output-probe) [ "$output" = '8' ] ;;
+		*) [ "$output" = '0' ] ;;
+		esac
 		[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 	done
 }
@@ -3294,9 +3432,13 @@ PYTHON
 		'sample-hdr-detail-qsv-20-attempt-*-source-probe.json' \
 		'sample-hdr-detail-qsv-20-attempt-*-output-probe.json' \
 		'sample-hdr-detail-qsv-20-attempt-*-validation.json' \
-		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json'; do
+		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json' \
+		'sample-hdr-detail-qsv-20-attempt-*-ssim.log' \
+		'sample-hdr-detail-qsv-20-attempt-*-psnr.log'; do
 		[ "$(find "$BENCHMARK_OUT/runs/$run_id/logs" -type f -name "$evidence_pattern" | wc -l | tr -d ' ')" -eq 3 ]
 	done
+	[ "$(find "$BENCHMARK_OUT/runs/$run_id/quality-evidence" -type f \
+		-name 'sample-hdr-detail-qsv-20-attempt-*.json' | wc -l | tr -d ' ')" -eq 3 ]
 }
 
 # Catches resume identity omitting the production commands whose bytes and
@@ -3386,6 +3528,102 @@ PYTHON
 	[ "$output" = "$expected_cohorts" ]
 	run rg -F 'excluded-vc1' "$BENCHMARK_COMMAND_LOG"
 	[ "$status" -eq 1 ]
+}
+
+# Catches publishing a quality row without its immutable, bounded scientific
+# evidence or using raw rather than evaluated VMAF values in the CSV.
+@test "quality evidence publication atomically binds evaluated metrics and HDR oracle" {
+	prepare_execution_run
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+
+	run python3 - "$run_dir" <<'PYTHON'
+import csv
+import hashlib
+import json
+import os
+import stat
+import sys
+
+run_dir = sys.argv[1]
+with open(os.path.join(run_dir, "results.csv"), newline="", encoding="utf-8") as stream:
+    rows = list(csv.DictReader(stream))
+assert len(rows) == 8
+for row in rows:
+    relative = row["quality_evidence_path"]
+    expected = (
+        f"quality-evidence/{row['sample_id']}-{row['clip_id']}-qsv-"
+        f"{row['requested_setting']}-attempt-{row['attempt']}.json"
+    )
+    assert relative == expected
+    assert not os.path.isabs(relative) and ".." not in relative.split("/")
+    evidence_path = os.path.join(run_dir, relative)
+    assert os.path.isfile(evidence_path) and not os.path.islink(evidence_path)
+    assert stat.S_IMODE(os.stat(evidence_path).st_mode) == 0o600
+    with open(evidence_path, "rb") as stream:
+        payload = stream.read()
+    assert row["quality_evidence_sha256"] == "sha256:" + hashlib.sha256(payload).hexdigest()
+    evidence = json.loads(payload)
+    assert sorted(evidence) == sorted([
+        "clipId", "cohort", "globalQuality", "hdr", "psnr", "runId",
+        "sampleId", "schemaVersion", "sourceSha256", "ssim", "strategyId", "vmaf",
+    ])
+    assert evidence["runId"] == row["run_id"]
+    assert evidence["sampleId"] == row["sample_id"]
+    assert evidence["cohort"] == row["cohort"]
+    assert evidence["sourceSha256"] == row["source_sha256"]
+    assert evidence["clipId"] == row["clip_id"]
+    assert evidence["globalQuality"] == int(row["requested_setting"])
+    assert evidence["schemaVersion"] == 1
+    assert evidence["strategyId"] == "qsv-hevc-icq-v1"
+    assert evidence["vmaf"]["harmonicMean"] == float(row["vmaf_harmonic_mean"])
+    assert evidence["vmaf"]["onePercentLow"] == float(row["vmaf_1pct_low"])
+    assert evidence["ssim"] == float(row["ssim"])
+    assert evidence["psnr"] == 40
+    assert evidence["hdr"]["classification"] == "preserved"
+assert not any(name.startswith(".") and ".tmp." in name for name in os.listdir(os.path.join(run_dir, "quality-evidence")))
+print("bound")
+PYTHON
+	[ "$status" -eq 0 ]
+	[ "$output" = 'bound' ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 8 ]
+}
+
+# Catches a missing finite metric becoming an unbound row or an apparently
+# successful result. The retained validation file names the closed failure.
+@test "quality evidence failure records a closed reason and appends no row" {
+	prepare_execution_run
+	export BENCHMARK_TEST_PSNR_PARSE_FAILURE=1
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
+	[ ! -e "$run_dir/quality-evidence" ]
+	[ "$(find "$run_dir/logs" -type f -name '*-validation.json' -exec jq -r '.validation_failures' {} \; | sort -u)" = 'psnr;quality-evidence' ]
+}
+
+# Catches extending the evidence reference to modes that do not produce the
+# bounded quality document.
+@test "quality evidence columns stay empty for non-quality rows" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	fixture="$BATS_TEST_TMPDIR/x265-row.json"
+	jq '.panel = "x265" | .encoder = "x265" | .selected_rate_control = "CRF" |
+		.qsv_initialization = "not-applicable" | .video_busy_nanoseconds = "0" |
+		.ssim = "" | .gpu_busy_percent = "" | .qsv_proof = "not-applicable"' \
+		"$FIXTURES/metrics/variant-passed.json" >"$fixture"
+	scratch_output="$BENCHMARK_SCRATCH/x265.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
+	[ "$status" -eq 0 ]
+	run awk -F, 'NR == 2 {print NF ":" $40 ":" $41}' "$run_dir/results.csv"
+	[ "$status" -eq 0 ]
+	[ "$output" = '41::' ]
 }
 
 # Catches a preflight that permits drift in a measured title or that creates a
@@ -3728,18 +3966,21 @@ prepare_contention_samples() {
 	source_sha="$(sha256sum "$source_media" | awk '{print $1}')"
 	runtime="$(jq -c '.runtime' "$BENCHMARK_SAMPLES_FILE")"
 	strategy="$(strategy_contract)"
+	quality_correction="$(quality_correction_contract)"
 	jq -n \
 		--arg path "$source_media" \
 		--argjson size "$source_size" \
 		--arg sha "$source_sha" \
 		--argjson runtime "$runtime" \
 		--argjson strategy "$strategy" \
+		--argjson quality_correction "$quality_correction" \
 		'def title($id; $cohort; $w; $h):
 			{id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
 			 width: $w, height: $h, clips: {detail: "00:17:23.456"}};
 		{
-			schemaVersion: 2,
+			schemaVersion: 3,
 			strategy: $strategy,
+			qualityCorrection: $quality_correction,
 			runtime: $runtime,
 			savingsSeed: 20260802,
 			qualityPanel: [
@@ -4177,9 +4418,14 @@ write_findings_manifest() {
 append_findings_result() {
 	local results="$1" run_id="$2" panel="$3" sample="$4" cohort="$5" sha="$6" clip="$7" setting="$8"
 	local reduction="${9:-35}" vmaf="${10:-96}" low="${11:-91}" ssim="${12:-0.991}" speed="${13:-1.25}"
-	printf '%s,%s,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,%s,1000,650,1.000000,72.0,%s,%s,%s,%s,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000\n' \
+	local evidence_ref=','
+	if [[ "$panel" == 'quality' ]]; then
+		evidence_ref="$(quality_evidence_reference "$run_id" "$sample" "$cohort" \
+			"$sha" "$clip" "$setting" 1 "$vmaf" "$low" "$ssim")"
+	fi
+	printf '%s,%s,%s,%s,%s,%s,qsv,%s,ICQ,passed,1,1000,650,%s,1000,650,1.000000,72.0,%s,%s,%s,%s,50.0,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/%s-%s.log,discarded,qsv-hevc-icq-v1,passed,800000000,%s\n' \
 		"$run_id" "$panel" "$sample" "$cohort" "$sha" "$clip" "$setting" "$reduction" "$speed" \
-		"$vmaf" "$low" "$ssim" "$sample" "$clip" >>"$results"
+		"$vmaf" "$low" "$ssim" "$sample" "$clip" "$evidence_ref" >>"$results"
 }
 
 prepare_findings_quality() {
@@ -4218,7 +4464,7 @@ prepare_findings_quality() {
 	candidates="$quality_dir/quality-candidates.json"
 	jq -n -c --arg run "$QUALITY_RUN_ID" --arg digest "$results_digest" --arg cohort "$cohort" \
 		--argjson setting "$setting" --argjson count "$expected_count" '
-		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,resultsSchemaVersion:2,
+		{schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,resultsSchemaVersion:3,
 		 resultsSha256:$digest,cohorts:{
 			avc:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
 			vc1:{status:"no-go",expectedClipCount:0,candidates:[],reason:"no-objective-candidate"},
