@@ -88,7 +88,8 @@ activate_platform() {
   # shellcheck disable=SC2016 # yq expands $item inside its expression.
   yq ea '. as $item ireduce ({}; . *+ $item)' "$values" "$activation" >"$candidate"
   mv -- "$candidate" "$values"
-  yq -i '.resources += ["./n8n-canary.sops.yaml"]' \
+  yq -i '.resources = ([.resources[] |
+    select(. != "./n8n-canary.sops.yaml")] + ["./n8n-canary.sops.yaml"])' \
     "$tree_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
   yq -i '.spec.suspend = false' "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
   yq -i '.spec.suspend = false' \
