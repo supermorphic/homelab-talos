@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: n8n-canary
+    namespace: gatus
+type: Opaque
+stringData:
+    token: ENC[AES256_GCM,data:uV1fX2jiEIyqs2IyaJDMpJG5KcwfUzD4upVGxP7wclXQEP5CTstrFQ==,iv:IzP8euQUebVcMDx750e+eQPFkqYrYQS8S51snds0qfA=,tag:hSyb35G/3TSBL93kyFmWyA==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBVcDdjWXRRdU43alV5SlZW
+            M1RXNDJmVWhOMUt0UDl2dU9EUnhHRlYyUUc0CjI2cE0xa05laTFUV1pJMlNyQTR4
+            M094dEdDS1IxMHR0L0ZQQkFwMzNHR2MKLS0tIEJRSVBndWp3OFFtcWVYb1A3MzI3
+            UDFWZUtoVDdzVVNzMWNqMXZ5dXNKZ1UK18npgWiViEMAxa1UbSzs9j0XZwE0DY+E
+            3wXbDBRgI04hSF8EQsvaEljqGKfNdjQ/eeq2gvMjIjD/l/sm2yiB1w==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-08-29T16:27:40Z"
+    mac: ENC[AES256_GCM,data:aOm85Q+x7xbQ0pfPb9jmapaa0IoqTKq5sGdgNpIq8bplhnrxcGPBPKD9tU70o8ScNm825ECr7FbUV6cKDxVw84JNbQywmaOeKFg5/qio4EEsZ2vYNJfF6NkRkSWn0Xqh/brFFZGRJtrpPpCF2ddlpKQsqtPmbTAs2LHjWPGGUxU=,iv:FdfH0H9AGoY61FEawhBb2kUHuB5avflsaHQP1kabbB0=,tag:VQvLqPuvCeKkLEqWurSLvg==,type:str]
+    version: 3.13.2

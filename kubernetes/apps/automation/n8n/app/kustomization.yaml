@@ -6,6 +6,7 @@ resources:
   - ./ciliumnetworkpolicy.yaml
   - ./helmrelease.yaml
   - ./httproute.yaml
+  - ./n8n-runtime.sops.yaml
   - ./ocirepository.yaml
   - ./persistentvolumeclaim.yaml
   - ./referencegrant.yaml

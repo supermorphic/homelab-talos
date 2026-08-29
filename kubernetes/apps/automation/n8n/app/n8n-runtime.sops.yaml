@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: n8n-runtime
+    namespace: automation
+type: Opaque
+stringData:
+    N8N_ENCRYPTION_KEY: ENC[AES256_GCM,data:M7y1c+p5MbzAvrh8DMOMDJW8S0+fUco1AchsMo07qPDSjZAJwvPJOQ==,iv:pP7/jY77UbIAJV6A5XC+HWJhl1BwBWy3Z6b5JT+RlUk=,tag:4TzmVd/E4VWhlXxPC65gBg==,type:str]
+    N8N_HOST: ENC[AES256_GCM,data:DwC0LEItv0gV23PjheHByUL20owKzpPh,iv:aJUZTzuMi723kBqFUeFS11KfH7J1TAVaQbzjDL9Q85U=,tag:espqmIuAm7L0P9R6oLONIw==,type:str]
+    N8N_PORT: ENC[AES256_GCM,data:kxiw7Q==,iv:6Hp3q/04KRpjqao66tNS9rqVTxLlRE5NDMbudpVjXzA=,tag:lIb6ug1arKdpHnXXxBF/4w==,type:str]
+    N8N_PROTOCOL: ENC[AES256_GCM,data:CDBDYGc=,iv:kdb7HUPtj3/8hTuL+oZUDlEmcXwFqCD4G+4+lN/BQiw=,tag:IFYASAOWSTuzXFmRFHhGag==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB0WGNMU1VBQXZVd1Z2K0hm
+            RTBtTnZzZlhGSFdXVTNHOXZCSnpSc2tTZjBVClpjb1Q4Y1FySTQwbExZb25TTmty
+            VnB0bGhXZUdGVDA2U25sSHhmVUVyZk0KLS0tIGJOL29CNmdJMzJPRnB3Z3Yzcy92
+            NGlSRWI5Ni9qSVg3R2I3RHozaEFUUkEKgbXTN059TQvn4JaMeK8RJ3L4lkiDRI/U
+            kGubeLsAfkqjEzlExFk3/TPigtiIJ2d9YwcQpsp/nl4WkcbHkYM5cQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-08-29T16:27:40Z"
+    mac: ENC[AES256_GCM,data:2fzKQHBiBdjO2sO/IprYeU6i4BySpQrSXdRunY5LJERHx0S4ot6jMmdwU/sqz7d5sEQei+SNV3WCEfAC9Tt8XoOFAG3UqoHEY+sFfAi7OOl5/gp1tBV3fEs7BkrnKIJ7eQnaC6bEV8hAiLd0TyRUP4v0qEamZnLcYeqIv2TiQNc=,iv:KIjMT6CDnbttlZHleFb99jr/EWwR/J/kuvmNMGAiTHU=,tag:51rYuG18U4z8dajS++Kcjw==,type:str]
+    version: 3.13.2

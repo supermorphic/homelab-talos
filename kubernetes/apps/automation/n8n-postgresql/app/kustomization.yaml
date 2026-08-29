@@ -6,6 +6,7 @@ resources:
   - ./ciliumnetworkpolicy.yaml
   - ./cronjob.yaml
   - ./persistentvolumeclaims.yaml
+  - ./postgresql-credentials.sops.yaml
   - ./service.yaml
   - ./servicemonitor.yaml
   - ./statefulset.yaml
