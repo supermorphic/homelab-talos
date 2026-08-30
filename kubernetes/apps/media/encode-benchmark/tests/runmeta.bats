@@ -30,14 +30,8 @@ results_header() {
 results_row() {
 	local run_id="$1" encoder="${2:-qsv}" strategy="${3:-qsv-hevc-icq-v1}"
 	local initialization="${4:-passed}" busy="${5:-800000000}"
-	local selected='ICQ' row
-	if [[ "$encoder" == 'x265' ]]; then
-		selected='CRF'
-		initialization='not-applicable'
-		busy='0'
-		printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,$encoder,22,$selected,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,hdr10,1,2,3,none,logs/a.log,discarded,$strategy,$initialization,$busy,,"
-		return
-	fi
+	local row
+	[[ "$encoder" == 'qsv' ]] || return 64
 	row="$(quality_evidence_row_v3 "$run_id" 22 passed "$strategy")"
 	awk -F, -v initialization="$initialization" -v busy="$busy" \
 		'BEGIN {OFS=FS} {$38=initialization; $39=busy; print}' <<<"$row"
@@ -87,13 +81,6 @@ rewrite_samples_to_test_media() {
 			else
 				.path = $hdr_path | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
 			end
-		) |
-		.savingsPanel |= map(
-			if .cohort == "avc" or .cohort == "vc1" then
-				.path = $avc_path | .sizeBytes = $avc_size | .sha256 = $avc_sha
-			else
-				.path = $hdr_path | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
-			end
 		)
 	' "$file" >"$file.tmp"
 	mv -f -- "$file.tmp" "$file"
@@ -123,104 +110,16 @@ prepare_configmap_script_mount() {
 	export BENCHMARK_VPL_VERSION='fixture-vpl'
 }
 
-prepare_diagnostic_samples() {
-	unset BENCHMARK_IDENTITY_FIXTURE
-	diagnostic_media="$BATS_TEST_TMPDIR/diagnostic-media"
-	mkdir -p "$diagnostic_media"
-	avc_fixture="$BATS_TEST_DIRNAME/fixtures/media/avc-8bit.mkv"
-	hdr_fixture="$BATS_TEST_DIRNAME/fixtures/media/hdr10-hevc-10bit.mkv"
-	avc_size="$(wc -c <"$avc_fixture" | tr -d '[:space:]')"
-	hdr_size="$(wc -c <"$hdr_fixture" | tr -d '[:space:]')"
-	avc_sha="$(sha256sum "$avc_fixture" | awk 'NR == 1 { print $1 }')"
-	hdr_sha="$(sha256sum "$hdr_fixture" | awk 'NR == 1 { print $1 }')"
-
-	coco="$diagnostic_media/Coco (2017).mkv"
-	memento="$diagnostic_media/Memento (2000).mkv"
-	fugitive="$diagnostic_media/Fugitive (1993).mkv"
-	ministry="$diagnostic_media/Ministry Of Ungentlemanly Warfare (2024).mkv"
-	goodfellas="$diagnostic_media/Goodfellas (1990).mkv"
-	john_wick="$diagnostic_media/John Wick Chapter 2 (2017).mkv"
-	cp "$avc_fixture" "$coco"
-	cp "$avc_fixture" "$memento"
-	cp "$avc_fixture" "$fugitive"
-	cp "$hdr_fixture" "$ministry"
-	cp "$hdr_fixture" "$goodfellas"
-	cp "$hdr_fixture" "$john_wick"
-
-	jq \
-		--arg coco "$coco" \
-		--arg memento "$memento" \
-		--arg fugitive "$fugitive" \
-		--arg ministry "$ministry" \
-		--arg goodfellas "$goodfellas" \
-		--arg john_wick "$john_wick" \
-		--arg avc_sha "$avc_sha" \
-		--arg hdr_sha "$hdr_sha" \
-		--argjson avc_size "$avc_size" \
-		--argjson hdr_size "$hdr_size" '
-		.qualityPanel |= map(
-			if .id == "avc-clean-coco" then
-				.path = $coco | .sizeBytes = $avc_size | .sha256 = $avc_sha
-			elif .id == "avc-grain-memento" then
-				.path = $memento | .sizeBytes = $avc_size | .sha256 = $avc_sha
-			elif .id == "vc1-fugitive" then
-				.path = $fugitive | .sizeBytes = $avc_size | .sha256 = $avc_sha
-			elif .id == "hdr10-clean-ministry" then
-				.path = $ministry | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
-			elif .id == "hdr10-grain-goodfellas" then
-				.path = $goodfellas | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
-			elif .id == "hdr10-motion-john-wick-2" then
-				.path = $john_wick | .sizeBytes = $hdr_size | .sha256 = $hdr_sha
-			else
-				.
-			end
-		)
-	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-
-	export BENCHMARK_ENCODER_COMMANDS_JSON='[
-		"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
-		"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
-		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
-		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
-		"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
-		"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
-		"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
-		"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
-	]'
-}
-
-diagnostic_expected_sources() {
-	jq -S -c '
-		[
-			.qualityPanel[] |
-			select(.id == "avc-clean-coco" or .id == "avc-grain-memento" or
-				.id == "vc1-fugitive" or .id == "hdr10-clean-ministry" or
-				.id == "hdr10-grain-goodfellas" or .id == "hdr10-motion-john-wick-2") |
-			{path, size: .sizeBytes, sha256: ("sha256:" + .sha256)}
-		] | sort_by(.path)
-	' "$BENCHMARK_SAMPLES_FILE"
-}
-
-diagnostic_expected_panel_sha() {
-	local payload
-	payload="$(jq -S -c '
-		.diagnostics |
-		{vmafPanel, hdrPanel, vmafSettings, hdrSetting, frameRadius, frameOffsets, traceWindowSeconds}
-	' "$BENCHMARK_SAMPLES_FILE")"
-	printf 'sha256:%s\n' "$(printf '%s' "$payload" | sha256sum | awk 'NR == 1 { print $1 }')"
-}
-
 # Catches a production break where a bare create discovers and reuses an older
 # identity instead of making the timestamped run an operator-held handle.
 @test "no run id always creates a fresh timestamped immutable identity" {
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-c4b9c436' ]
+	[ "$output" = '20260802T120000Z-f7a1c845' ]
 	first="$output"
 	first_manifest="$BENCHMARK_OUT/runs/$first/manifest.json"
 	expected="$BATS_TEST_TMPDIR/expected-manifest.json"
-	printf '%s\n' '{"clientDevice":null,"cpu":null,"createdAt":"20260802T120000Z","encoderCommands":[],"gpu":{"i915":"fixture-i915","vpl":"fixture-vpl"},"images":{"configured":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","dispatched":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","running":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},"mode":"quality","node":{"kernel":"","name":""},"resultsSchemaVersion":3,"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","savingsSeed":20260802,"schemaVersion":2,"scriptDigests":{},"selectedSettings":[],"sources":[],"strategyId":"qsv-hevc-icq-v1","upstream":{},"vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
+	printf '%s\n' '{"createdAt":"20260802T120000Z","encoderCommands":[],"gpu":{"i915":"fixture-i915","vpl":"fixture-vpl"},"images":{"configured":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","dispatched":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","running":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},"mode":"quality","node":{"kernel":"","name":""},"resultsSchemaVersion":3,"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","schemaVersion":2,"scriptDigests":{},"sources":[],"strategyId":"qsv-hevc-icq-v1","vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
 	cmp -s "$expected" "$first_manifest"
 	[ "$(file_mode "$first_manifest")" = '444' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$first/manifest.json.tmp" ]
@@ -228,7 +127,7 @@ diagnostic_expected_panel_sha() {
 	export BENCHMARK_NOW=20260802T120001Z
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120001Z-c4b9c436' ]
+	[ "$output" = '20260802T120001Z-f7a1c845' ]
 	[ "$output" != "$first" ]
 	[ "$(run_directory_count)" -eq 2 ]
 }
@@ -255,27 +154,8 @@ diagnostic_expected_panel_sha() {
 	[ "$(run_directory_count)" -eq 1 ]
 }
 
-# Catches diagnostics treating a completed matching directory as resumable,
-# which would let a later command replace immutable diagnostic evidence.
-@test "diagnostics create rejects an existing immutable run before identity discovery" {
-	prepare_diagnostic_samples
-	run_id='20260802T121501Z-deadbeef'
-	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
-	[ "$status" -eq 0 ]
-	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
-	before="$BATS_TEST_TMPDIR/diagnostic-manifest-before"
-	cp "$manifest" "$before"
-
-	# A broken identity fixture proves collision handling did not discover it.
-	export BENCHMARK_IDENTITY_FIXTURE="$BATS_TEST_TMPDIR/missing-identity.json"
-	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
-	[ "$status" -eq 73 ]
-	[ "$output" = "diagnostic run already exists: $run_id" ]
-	cmp -s "$before" "$manifest"
-}
-
-# Catches an explicit creator claiming or removing a pre-existing directory it
-# did not create, or overwriting an immutable manifest after identity drift.
+# Catches create treating an occupied matching directory as resumable, which
+# would let a later command replace immutable evidence.
 @test "explicit create preserves collision ownership and refuses identity mismatch" {
 	collision_id='20260802T121500Z-cafef00d'
 	collision="$BENCHMARK_OUT/runs/$collision_id"
@@ -317,99 +197,7 @@ diagnostic_expected_panel_sha() {
 	done
 }
 
-# Catches resumed ICQ work being accepted after its selected setting or upstream
-# evidence changes. Values are deliberately redacted by the public resume
-# diagnostic; the stable field path is the observable API.
-@test "verify refuses changed selected settings and upstream identity" {
-	base_identity="$BATS_TEST_TMPDIR/identity-with-upstream.json"
-	jq '.selectedSettings = [{cohort:"avc", globalQuality:22, qualityRunId:"20260815T120000Z-deadbeef"}] |
-		.upstream = {qualityRunId:"20260802T120000Z-deadbeef", resultsDigest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
-		"$BENCHMARK_IDENTITY_FIXTURE" >"$base_identity"
-	export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	for mutation in \
-		'.selectedSettings[0].globalQuality = 24|selectedSettings.0.globalQuality' \
-		'.upstream.qualityRunId = "20260802T120000Z-cafef00d"|upstream.qualityRunId'; do
-		expression="${mutation%%|*}"
-		expected_path="${mutation#*|}"
-		changed="$BATS_TEST_TMPDIR/changed-$expected_path.json"
-		jq "$expression" "$base_identity" >"$changed"
-		export BENCHMARK_IDENTITY_FIXTURE="$changed"
-		run "$SCRIPTS/runmeta.sh" verify "$run_id"
-		[ "$status" -eq 1 ]
-		[[ "$output" == "identity mismatch: $expected_path "* ]]
-		export BENCHMARK_IDENTITY_FIXTURE="$base_identity"
-	done
-}
-
-# Catches a scoped downstream selection being ignored in favor of every chosen
-# record, or a malformed scoped override becoming durable run identity.
-@test "selected settings override is scoped strict and falls back only when absent" {
-	prepare_configmap_script_mount
-	jq '.chosenSettings = {
-		avc:{globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"},
-		hdr10:{globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}
-	}' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	export BENCHMARK_SELECTED_SETTINGS_JSON='[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb"}]'
-
-	run "$configmap_root/runmeta.sh" create finalist '20260815T150000Z-deadbeef'
-	[ "$status" -eq 0 ]
-	run jq -e '.selectedSettings == [{cohort:"hdr10",globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}]' \
-		"$BENCHMARK_OUT/runs/20260815T150000Z-deadbeef/manifest.json"
-	[ "$status" -eq 0 ]
-
-	for invalid in \
-		'{"cohort":"hdr10"}' \
-		'[{"cohort":"hdr10","globalQuality":23,"qualityRunId":"20260815T120000Z-bbbbbbbb"}]' \
-		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20261315T120000Z-bbbbbbbb"}]' \
-		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb","extra":true}]' \
-		'[{"cohort":"hdr10","globalQuality":22,"qualityRunId":"20260815T120000Z-bbbbbbbb"},{"cohort":"hdr10","globalQuality":24,"qualityRunId":"20260815T120000Z-aaaaaaaa"}]'; do
-		export BENCHMARK_SELECTED_SETTINGS_JSON="$invalid"
-		run "$configmap_root/runmeta.sh" create savings '20260815T150001Z-cafef00d'
-		[ "$status" -ne 0 ]
-		[ ! -e "$BENCHMARK_OUT/runs/20260815T150001Z-cafef00d" ]
-	done
-
-	unset BENCHMARK_SELECTED_SETTINGS_JSON
-	run "$configmap_root/runmeta.sh" create savings '20260815T150002Z-cafef00d'
-	[ "$status" -eq 0 ]
-	run jq -e '.selectedSettings == [
-		{cohort:"avc",globalQuality:24,qualityRunId:"20260815T120000Z-aaaaaaaa"},
-		{cohort:"hdr10",globalQuality:22,qualityRunId:"20260815T120000Z-bbbbbbbb"}
-	]' "$BENCHMARK_OUT/runs/20260815T150002Z-cafef00d/manifest.json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches CPU-only x265 results being resumed across processors or runtime
-# builds, which would make matched-quality comparisons non-comparable.
-@test "node-bound x265 resume refuses changed node kernel CPU FFmpeg and libx265 identities" {
-	cpu_identity="$BATS_TEST_TMPDIR/cpu-identity.json"
-	jq '.gpu = null | .cpu = {model:"Intel(R) Core(TM) i5", ffmpeg:"8.1.2", libx265:"4.1"} |
-		.node = {name:"nuc3",kernel:"6.12.0-fixture"}' \
-		"$BENCHMARK_IDENTITY_FIXTURE" >"$cpu_identity"
-	export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
-	run_id="$($SCRIPTS/runmeta.sh create x265)"
-	for mutation in \
-		'.node.name = "nuc1"|node.name' \
-		'.node.kernel = "6.12.1-fixture"|node.kernel' \
-		'.cpu.model = "other cpu"|cpu.model' \
-		'.cpu.ffmpeg = "8.1.3"|cpu.ffmpeg' \
-		'.cpu.libx265 = "4.2"|cpu.libx265'; do
-		expression="${mutation%%|*}"
-		expected_path="${mutation#*|}"
-		changed="$BATS_TEST_TMPDIR/changed-$expected_path.json"
-		jq "$expression" "$cpu_identity" >"$changed"
-		export BENCHMARK_IDENTITY_FIXTURE="$changed"
-		run "$SCRIPTS/runmeta.sh" verify "$run_id"
-		[ "$status" -eq 1 ]
-		[[ "$output" == "identity mismatch: $expected_path "* ]]
-		export BENCHMARK_IDENTITY_FIXTURE="$cpu_identity"
-	done
-}
-
-# Catches an explicit run handle following a pre-existing symlink out of the
-# confined runs tree and treating another directory's manifest as its own.
+# Catches a symlinked run directory escaping the immutable run root.
 @test "explicit create refuses a symlinked run directory" {
 	source_id='20260802T121500Z-deadbeef'
 	link_id='20260802T121501Z-cafef00d'
@@ -441,153 +229,6 @@ diagnostic_expected_panel_sha() {
 	[ "$(run_directory_count)" -eq 1 ]
 }
 
-@test "diagnostics identity binds the bounded panel sources and historical evidence" {
-	prepare_diagnostic_samples
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
-	expected_sources="$(diagnostic_expected_sources)"
-	expected_panel_sha="$(diagnostic_expected_panel_sha)"
-
-	run jq -e \
-		--argjson expected_sources "$expected_sources" \
-		--arg expected_panel_sha "$expected_panel_sha" '
-		.mode == "diagnostics" and
-		.schemaVersion == 2 and
-		.resultsSchemaVersion == 3 and
-		.selectedSettings == [] and
-		.sources == $expected_sources and
-		.encoderCommands == [
-			"ffmpeg -nostdin -ss <clip-start> -i <source> -t 90 -map 0:v:0 -c copy <clip>",
-			"ffmpeg -nostdin -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <clip> -map 0 -c:v hevc_qsv -preset veryslow -global_quality <setting> -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi libvmaf=log_fmt=json:log_path=<window>.json -f null -",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -filter_complex [0:v]setpts=PTS-STARTPTS[source];[1:v]setpts=PTS-STARTPTS[encoded];[source][encoded]libvmaf=log_fmt=json:log_path=<window-reset>.json -f null -",
-			"ffmpeg -nostdin -i <source-clip> -i <encoded-output> -lavfi ssim;[0:v][1:v]psnr -f null -",
-			"ffprobe -show_frames -select_streams v -read_intervals <window> -show_entries frame=best_effort_timestamp_time,pkt_duration_time,key_frame,pict_type <media>",
-			"ffprobe -show_streams -show_frames -show_packets -show_entries stream_side_data,pkt_pts_time,pkt_dts_time <media>",
-			"ffmpeg -nostdin -i <media> -c copy -bsf:v trace_headers -f null -"
-		] and
-		.upstream == {
-			diagnostics: {
-				manifestSchemaVersion: 1,
-				resultSchemaVersion: 1,
-				acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
-				decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
-				historicalQualityRunId: "20260817T233546Z-debc0498",
-				historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
-				panelSha256: $expected_panel_sha
-			}
-		}
-	' "$manifest"
-	[ "$status" -eq 0 ]
-}
-
-@test "diagnostics identity refuses missing command identities" {
-	prepare_diagnostic_samples
-	unset BENCHMARK_ENCODER_COMMANDS_JSON
-
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
-
-	export BENCHMARK_ENCODER_COMMANDS_JSON='[]'
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
-}
-
-@test "diagnostics fixture identity refuses missing command identities" {
-	prepare_diagnostic_samples
-	expected_sources="$(diagnostic_expected_sources)"
-	expected_panel_sha="$(diagnostic_expected_panel_sha)"
-	fixture="$BATS_TEST_TMPDIR/diagnostics-identity-fixture.json"
-	jq \
-		--argjson sources "$expected_sources" \
-		--arg panel_sha "$expected_panel_sha" '
-		.mode = "diagnostics" |
-		.encoderCommands = [] |
-		.sources = $sources |
-		.selectedSettings = [] |
-		.upstream = {
-			diagnostics: {
-				manifestSchemaVersion: 1,
-				resultSchemaVersion: 1,
-				acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
-				decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
-				historicalQualityRunId: "20260817T233546Z-debc0498",
-				historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
-				panelSha256: $panel_sha
-			}
-		}
-	' "$BATS_TEST_DIRNAME/fixtures/manifests/identity.json" >"$fixture"
-	export BENCHMARK_IDENTITY_FIXTURE="$fixture"
-
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[[ "$output" == *'diagnostic command identity is missing or malformed'* ]]
-}
-
-@test "diagnostics create and resume require a canonical diagnostics contract object" {
-	prepare_diagnostic_samples
-	base_samples="$BATS_TEST_TMPDIR/diagnostics-contract-base.json"
-	cp "$BENCHMARK_SAMPLES_FILE" "$base_samples"
-
-	jq 'del(.diagnostics)' "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 65 ]
-	[ "$output" = 'diagnostic contract is missing or malformed' ]
-	[ "$(run_directory_count)" -eq 0 ]
-
-	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 0 ]
-	run_id="$output"
-
-	jq 'del(.diagnostics)' "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-
-	run "$SCRIPTS/runmeta.sh" create diagnostics "$run_id"
-	[ "$status" -eq 73 ]
-	[ "$output" = "diagnostic run already exists: $run_id" ]
-}
-
-@test "diagnostics resume refuses panel timestamp and historical scope drift" {
-	prepare_diagnostic_samples
-	run "$SCRIPTS/runmeta.sh" create diagnostics
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	base_samples="$BATS_TEST_TMPDIR/diagnostic-base-samples.json"
-	cp "$BENCHMARK_SAMPLES_FILE" "$base_samples"
-
-	jq '.diagnostics.vmafPanel[0].observedFrameIndex = 1642' \
-		"$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	run "$SCRIPTS/runmeta.sh" verify "$run_id"
-	[ "$status" -eq 65 ]
-	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
-
-	expression='(.qualityPanel[] | select(.id == "avc-clean-coco") | .clips.motion) = "00:05:01.000"'
-	jq "$expression" "$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	run "$SCRIPTS/runmeta.sh" verify "$run_id"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"identity mismatch: samplesDigest "* ]]
-	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
-
-	jq '.diagnostics.historicalQualityRunId = "20260817T233546Z-aaaaaaaa"' \
-		"$base_samples" >"$BENCHMARK_SAMPLES_FILE.tmp"
-	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
-	run "$SCRIPTS/runmeta.sh" verify "$run_id"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"identity mismatch: upstream.diagnostics.historicalQualityRunId "* ]]
-	cp "$base_samples" "$BENCHMARK_SAMPLES_FILE"
-}
-
-# Catches the race where a concurrent creator wins mkdir after this process has
-# selected the run ID and the losing process removes the winner's empty tree.
 @test "failed concurrent create preserves the winning run directory" {
 	run_id='20260802T120000Z-c4b9c436'
 	collision="$BENCHMARK_OUT/runs/$run_id"
@@ -834,32 +475,6 @@ EOF
 
 # Catches the CPU reference stage resuming from a row with GPU proof values,
 # the old quality panel, a non-CRF setting, or incomplete output evidence.
-@test "completed accepts only a complete x265 CPU result row" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	valid="$BATS_TEST_TMPDIR/valid-x265-row"
-	results_header >"$results"
-	printf '%s\n' "$run_id,x265,sample-avc,avc,abc123,detail,x265,22,CRF,passed,1,100,50,50,1000,500,10,30,1.0,95,90,,,not-applicable,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/a.log,discarded,qsv-hevc-icq-v1,not-applicable,0,," >"$valid"
-	cat "$valid" >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'x265|abc123|detail|x265|22'
-	[ "$status" -eq 0 ]
-
-	for mutation in \
-		's/,x265,sample-avc,/,quality,sample-avc,/' \
-		's/,x265,22,CRF,/,x265,22,LA-ICQ,/' \
-		's/,x265,22,CRF,/,x265,35,CRF,/' \
-		's/,,,not-applicable,passed/,,,passed,passed/' \
-		's/,not-applicable,passed,passed,/,not-applicable,failed,passed,/'; do
-		results_header >"$results"
-		sed "$mutation" "$valid" >>"$results"
-		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'x265|abc123|detail|x265|22'
-		[ "$status" -eq 65 ]
-	done
-}
-
-# Catches a production break where changed executable bytes reuse stale result
-# rows, overwrite the original evidence, leak digest values, or fork silently.
 @test "changed script digest aborts explicit resume with a redacted field diff" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
@@ -882,19 +497,18 @@ EOF
 	[ "$(run_directory_count)" -eq 1 ]
 }
 
-# Catches a production break where a missing nullable identity field is silently
-# normalized to null and an incomplete stored manifest is accepted as exact.
+# Catches an incomplete stored identity being accepted as exact.
 @test "verify rejects a stored manifest with a missing canonical identity field" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	tampered="$BATS_TEST_TMPDIR/tampered-manifest.json"
-	jq -S -c 'del(.clientDevice)' "$manifest" >"$tampered"
+	jq -S -c 'del(.gpu)' "$manifest" >"$tampered"
 	chmod 0444 "$tampered"
 	mv -f "$tampered" "$manifest"
 
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
 	[ "$status" -eq 1 ]
-	[ "$output" = 'identity mismatch: clientDevice (stored=<missing>, current=<redacted>)' ]
+	[ "$output" = $'identity mismatch: gpu (stored=<missing>, current=<redacted>)\nidentity mismatch: gpu.i915 (stored=<missing>, current=<redacted>)\nidentity mismatch: gpu.vpl (stored=<missing>, current=<redacted>)' ]
 }
 
 # Catches a production break where ConfigMap data symlinks are skipped and
@@ -915,96 +529,16 @@ EOF
 	[ "$output" = 'identity mismatch: scriptDigests.benchmark.sh (stored=<redacted>, current=<redacted>)' ]
 }
 
-# Catches a live GPU or CPU run publishing a manifest that has no runtime
-# identity for the environment that produced the measured rows.
+# Catches a live GPU run publishing a manifest without its runtime identity.
 @test "discovery requires execution-class runtime identities" {
 	prepare_configmap_script_mount
 	unset BENCHMARK_I915_VERSION
 	run "$configmap_root/runmeta.sh" create quality
 	[ "$status" -eq 65 ]
 	[ "$output" = 'GPU runtime identity is incomplete' ]
-
-	export BENCHMARK_I915_VERSION='fixture-i915'
-	export BENCHMARK_EXECUTION_CLASS=cpu
-	export BENCHMARK_CPU_MODEL='fixture CPU'
-	export BENCHMARK_FFMPEG_VERSION='8.1.2'
-	unset BENCHMARK_LIBX265_VERSION
-	run "$configmap_root/runmeta.sh" create quality
-	[ "$status" -eq 65 ]
-	[ "$output" = 'CPU runtime identity is incomplete' ]
 }
 
-# Catches CPU identity being collected after directory creation, accepting a
-# missing oracle, or recording caller-provided GPU identity for an x265 run.
-@test "CPU discovery reads model FFmpeg and libx265 before x265 manifest creation" {
-	prepare_configmap_script_mount
-	cpuinfo="$BATS_TEST_TMPDIR/cpuinfo"
-	printf '%s\n' 'processor : 0' 'model name : Fixture CPU Model' >"$cpuinfo"
-	stub_bin="$BATS_TEST_TMPDIR/cpu-bin"
-	mkdir -p "$stub_bin"
-	cat >"$stub_bin/ffmpeg" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"$RUNMETA_CPU_COMMAND_LOG"
-if [[ "$*" == *'-version'* ]]; then
-	[[ "${RUNMETA_MISSING_FFMPEG_VERSION:-0}" != '1' ]] && printf '%s\n' 'ffmpeg version 8.1.2 fixture-build'
-	exit 0
-fi
-if [[ "$*" == *'-c:v libx265 -f null -'* ]]; then
-	[[ "${RUNMETA_MISSING_X265_VERSION:-0}" != '1' ]] && printf '%s\n' 'x265 [info]: HEVC encoder version 4.1+1' >&2
-	exit 0
-fi
-exit 97
-EOF
-	cat >"$stub_bin/uname" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "$*" == '-r' ]] || exit 97
-printf '%s\n' '6.12.0-fixture'
-EOF
-	chmod +x "$stub_bin/ffmpeg" "$stub_bin/uname"
-	export PATH="$stub_bin:$PATH"
-	export RUNMETA_CPU_COMMAND_LOG="$BATS_TEST_TMPDIR/cpu-commands.log"
-	: >"$RUNMETA_CPU_COMMAND_LOG"
-	unset BENCHMARK_IDENTITY_FIXTURE BENCHMARK_CPU_MODEL BENCHMARK_FFMPEG_VERSION BENCHMARK_LIBX265_VERSION
-	unset BENCHMARK_I915_VERSION BENCHMARK_VPL_VERSION
-	export BENCHMARK_EXECUTION_CLASS=cpu
-	export BENCHMARK_CPUINFO_FILE="$cpuinfo"
-	export BENCHMARK_X265_SAMPLE_ID='avc-grain-memento'
-	export NODE_NAME='nuc3'
-
-	run "$configmap_root/runmeta.sh" create x265 '20260815T130000Z-bbbbbbbb'
-	[ "$status" -eq 0 ]
-	manifest="$BENCHMARK_OUT/runs/20260815T130000Z-bbbbbbbb/manifest.json"
-	run jq -e '
-		.mode == "x265" and .gpu == null and
-		.cpu == {ffmpeg:"ffmpeg version 8.1.2 fixture-build",libx265:"4.1+1",model:"Fixture CPU Model"} and
-		.node == {kernel:"6.12.0-fixture",name:"nuc3"}
-	' "$manifest"
-	[ "$status" -eq 0 ]
-	run rg -F -- '-nostdin -v info -f lavfi -i color=size=16x16:rate=1 -frames:v 1 -c:v libx265 -f null -' \
-		"$RUNMETA_CPU_COMMAND_LOG"
-	[ "$status" -eq 0 ]
-
-	for missing in cpu ffmpeg x265; do
-		rm -rf -- "$BENCHMARK_OUT/runs"
-		mkdir -p "$BENCHMARK_OUT/runs"
-		unset RUNMETA_MISSING_FFMPEG_VERSION RUNMETA_MISSING_X265_VERSION
-		printf '%s\n' 'processor : 0' 'model name : Fixture CPU Model' >"$cpuinfo"
-		case "$missing" in
-		cpu) printf '%s\n' 'processor : 0' >"$cpuinfo" ;;
-		ffmpeg) export RUNMETA_MISSING_FFMPEG_VERSION=1 ;;
-		x265) export RUNMETA_MISSING_X265_VERSION=1 ;;
-		esac
-		run "$configmap_root/runmeta.sh" create x265 '20260815T130000Z-bbbbbbbb'
-		[ "$status" -eq 65 ]
-		[ "$output" = 'CPU runtime identity is incomplete' ]
-		[ "$(run_directory_count)" -eq 0 ]
-	done
-}
-
-# Catches a production break where unrecognized stored fields are discarded by
-# normalization even though createdAt is the only field resume may ignore.
+# Catches an unknown field widening the exact stored quality identity.
 @test "verify rejects unknown stored identity fields" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
@@ -1070,9 +604,9 @@ EOF
 @test "explicit resume rejects unsafe run ids and a changed mode" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 
-	run "$SCRIPTS/runmeta.sh" create savings "$run_id"
+	run "$SCRIPTS/runmeta.sh" create capabilities "$run_id"
 	[ "$status" -eq 65 ]
-	[ "$output" = 'identity mismatch: mode (stored=quality, current=savings)' ]
+	[ "$output" = 'identity mismatch: mode (stored=quality, current=capabilities)' ]
 	[ "$(run_directory_count)" -eq 1 ]
 
 	run "$SCRIPTS/runmeta.sh" verify '../escape'
@@ -1143,17 +677,6 @@ EOF
 
 # Catches a production break where any tested command regresses to the shared
 # scaffold after all seven behavior contracts have landed.
-@test "ConfigMap maps all nine tested commands to real scripts" {
-	kustomization="$SCRIPTS/../kustomization.yaml"
-	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
-	[ "$status" -eq 0 ]
-	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,quality-evidence.sh=scripts/quality-evidence.sh,stills.sh=scripts/stills.sh' ]
-	[ ! -e "$SCRIPTS/not-ready.sh" ]
-}
-
-# Catches the two copies of the results schema drifting apart. benchmark.sh
-# writes results.csv and runmeta.sh validates it on resume, so a mismatch would
-# make every resume decision wrong while both scripts looked self-consistent.
 @test "runmeta and benchmark agree on the results schema" {
 	benchmark_header="$("$SCRIPTS/benchmark.sh" _test results-header)"
 	runmeta_header="$(
@@ -1167,25 +690,4 @@ EOF
 	[ -n "$runmeta_header" ]
 	[ "$runmeta_header" = "$benchmark_header" ]
 	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 41 ]
-}
-
-@test "findings identity has no sources and resume binds the input digest" {
-	unset BENCHMARK_IDENTITY_FIXTURE
-	inputs_digest="sha256:$(printf findings-inputs | sha256sum | awk '{print $1}')"
-	export BENCHMARK_FINDINGS_INPUTS_SHA256="$inputs_digest"
-	export BENCHMARK_UPSTREAM_IDENTITY_JSON="$(jq -n --arg digest "$inputs_digest" '{findingsInputsSha256:$digest,quality:{runId:"20260815T120000Z-aaaaaaaa"}}')"
-	export BENCHMARK_EXECUTION_CLASS=cpu BENCHMARK_CPU_MODEL=findings-metadata BENCHMARK_FFMPEG_VERSION=not-applicable BENCHMARK_LIBX265_VERSION=not-applicable
-	export BENCHMARK_DISPATCH_IMAGE="$(jq -r '.runtime.image' "$BENCHMARK_SAMPLES_FILE")"
-	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
-	export BENCHMARK_NOW=20260815T160000Z
-	run "$SCRIPTS/runmeta.sh" create findings
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run jq -e '.mode == "findings" and .sources == [] and .upstream.findingsInputsSha256 == env.BENCHMARK_FINDINGS_INPUTS_SHA256' "$BENCHMARK_OUT/runs/$run_id/manifest.json"
-	[ "$status" -eq 0 ]
-	run "$SCRIPTS/runmeta.sh" create findings "$run_id"
-	[ "$status" -eq 0 ]
-	export BENCHMARK_FINDINGS_INPUTS_SHA256="sha256:$(printf changed | sha256sum | awk '{print $1}')"
-	run "$SCRIPTS/runmeta.sh" create findings "$run_id"
-	[ "$status" -ne 0 ]
 }

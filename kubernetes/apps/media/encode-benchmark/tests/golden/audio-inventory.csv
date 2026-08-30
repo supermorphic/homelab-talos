@@ -1,6 +1,0 @@
-source_path,track_index,codec,channels,channel_layout,language,bit_rate,duration_seconds,audio_bytes,audio_bytes_method
-"/media/Public Cleanup.mkv",1,"ac3",6,"5.1(side)","eng",640000,100,8000000,"reported"
-"/media/Public Cleanup.mkv",2,"aac",2,"stereo","jpn",192000,100,2400000,"estimated"
-"/media/TrueHD Unmatched.mkv",1,"truehd",8,"7.1","eng",,90,,"unknown"
-"/media/Unlinked AVC.mkv",1,"ac3",6,"5.1(side)","eng",640000,100,8000000,"reported"
-"/media/Unlinked AVC.mkv",2,"aac",2,"stereo","jpn",192000,100,2400000,"estimated"

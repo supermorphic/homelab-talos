@@ -670,127 +670,17 @@ encode-benchmark-capabilities: require-bash
       kubernetes/apps/media/encode-benchmark
     scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' capabilities
 
-# Create a suspended census Job, attach its qbit_manage inode inventory through
-# an owned ConfigMap, then unsuspend only after the lifecycle join is complete.
-encode-benchmark-census: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark census' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' census
-
-# Render and create only the selected run-scoped benchmark mode. Confirmation is
-# bound to the exact mode; an optional run ID is an explicit resume handle.
-encode-benchmark-run mode run_id="" sample_id="": require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mode={{quote(mode)}}
-    run_id={{quote(run_id)}}
-    sample_id={{quote(sample_id)}}
-    source scripts/lib/rollout.sh
-    require_deployed_source "encode-benchmark $mode" \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    args=(run "$mode")
-    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
-    if [[ -n "$sample_id" ]]; then
-      [[ -n "$run_id" ]] || {
-        echo 'encode-benchmark-run requires a run ID before a sample ID.' >&2
-        exit 64
-      }
-      args+=("$sample_id")
-    fi
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
-
-# Create a metadata-only findings Job from a local, schema-v1 evidence map.
-# The dispatcher validates the JSON and waits for its owned inputs ConfigMap
-# before unsuspending the Job. This is operator-run and never part of ci.
-encode-benchmark-findings inputs_file run_id="": require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    inputs_file={{quote(inputs_file)}}
-    run_id={{quote(run_id)}}
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark findings' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    args=(findings "$inputs_file")
-    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
-
-# Create one guarded diagnostics Job from the deployed diagnostics contract.
-# Set ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM=run:encode-benchmark:diagnostics.
-encode-benchmark-diagnostics run_id="": require-bash
+# Render and create the quality Job. An optional run ID is an explicit resume handle.
+encode-benchmark-quality run_id="": require-bash
     #!/usr/bin/env bash
     set -euo pipefail
     run_id={{quote(run_id)}}
     source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark diagnostics' \
+    require_deployed_source 'encode-benchmark quality' \
       kubernetes/mod.just \
       scripts/encode-benchmark \
       kubernetes/apps/media/encode-benchmark
-    [[ "${ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM:-}" == 'run:encode-benchmark:diagnostics' ]] || {
-      echo 'Set ENCODE_BENCHMARK_DIAGNOSTICS_CONFIRM=run:encode-benchmark:diagnostics.' >&2
-      exit 64
-    }
-    args=(run diagnostics)
-    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
-
-# Create one read-only collector for an explicitly supplied immutable diagnostics run.
-# Guard: ENCODE_BENCHMARK_DIAGNOSTIC_EVIDENCE_CONFIRM=read:encode-benchmark:diagnostic-evidence:<run-id>.
-encode-benchmark-diagnostic-evidence-reader run_id: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark diagnostic evidence reader' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' evidence-reader {{quote(run_id)}}
-
-# Thin finalist convenience alias. The shared run recipe owns the single source
-# guard and dispatch path; finalist confirmation remains run/sample-bound.
-encode-benchmark-finalist run_id sample_id:
-    @just kube encode-benchmark-run finalist {{quote(run_id)}} {{quote(sample_id)}}
-
-# Create the applicable Plex-contention worker Job or worker pair. The device
-# label and fixed UHD HDR10 playback sample bind the operator observation record.
-encode-benchmark-contention contention_case client_device_label playback_sample_id run_id_or_pair="": require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    contention_case={{quote(contention_case)}}
-    client_device_label={{quote(client_device_label)}}
-    playback_sample_id={{quote(playback_sample_id)}}
-    run_id_or_pair={{quote(run_id_or_pair)}}
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark contention' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    args=(contention "$contention_case" "$client_device_label" "$playback_sample_id")
-    if [[ -n "$run_id_or_pair" ]]; then args+=("$run_id_or_pair"); fi
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
-
-# Create one CPU-only, 60-hour x265 reference Job pinned to the confirmed
-# Ready non-Plex node. An optional run ID resumes only that exact identity.
-encode-benchmark-x265 sample_id node_name run_id="": require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    sample_id={{quote(sample_id)}}
-    node_name={{quote(node_name)}}
-    run_id={{quote(run_id)}}
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark x265' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    args=(run x265 "$sample_id" "$node_name")
+    args=(run quality)
     if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
     scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
 
@@ -798,17 +688,9 @@ encode-benchmark-x265 sample_id node_name run_id="": require-bash
 encode-benchmark-results run_id: require-bash
     @scripts/encode-benchmark/results.sh {{quote(kubeconfig)}} {{quote(run_id)}}
 
-# Read and validate one canonical, redacted diagnostic evidence value.
-encode-benchmark-diagnostic-evidence-results run_id: require-bash
-    @scripts/encode-benchmark/diagnostic-evidence-results.sh {{quote(kubeconfig)}} {{quote(run_id)}}
-
 # Read-only live acceptance for activated inert inputs and ephemeral pod placement.
 encode-benchmark-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.encode-benchmark -- scripts/verify/encode-benchmark.sh {{quote(kubeconfig)}}
-
-# Create one short-lived cleanup Job that can remove only the confirmed run tree.
-encode-benchmark-clean run_id: require-bash
-    @scripts/encode-benchmark/dispatch.sh {{quote(kubeconfig)}} clean {{quote(run_id)}}
 
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.

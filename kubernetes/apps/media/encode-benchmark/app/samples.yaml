@@ -7,10 +7,6 @@
 # invoke. The capability probe reports the full missing set from it in one run,
 # and the offline sandbox contracts execute the scripts against exactly these
 # commands, so an undeclared dependency fails in CI rather than on a node.
-#
-# runtime.optionalCommands is report-only. The probe records which of these the
-# image provides and never fails on an absent one; they exist so that when a
-# required command is missing, the same run answers what could replace it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,13 +20,7 @@ data:
         "resultsSchemaVersion": 3,
         "runManifestSchemaVersion": 2,
         "capabilityProofSchemaVersion": 3,
-        "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30],
-        "x265": {
-          "initialCrfs": [18, 20, 22, 24],
-          "minimumCrf": 10,
-          "maximumCrf": 34,
-          "step": 2
-        }
+        "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30]
       },
       "runtime": {
         "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
@@ -141,37 +131,12 @@ data:
           "tr",
           "uname",
           "wc"
-        ],
-        "optionalCommands": [
-          "busybox",
-          "cmp",
-          "comm",
-          "envsubst",
-          "expr",
-          "gawk",
-          "getopt",
-          "iconv",
-          "mawk",
-          "nproc",
-          "paste",
-          "perl",
-          "python",
-          "python3",
-          "readlink",
-          "seq",
-          "tee",
-          "timeout",
-          "touch",
-          "xargs",
-          "yq"
         ]
       },
-      "savingsSeed": 20260802,
       "qualityPanel": [
         {
           "id": "vc1-fugitive",
           "cohort": "vc1",
-          "x265Reference": false,
           "path": "/media/Fugitive (1993).mkv",
           "sizeBytes": 20911950843,
           "width": 1920,
@@ -186,7 +151,6 @@ data:
         {
           "id": "avc-clean-coco",
           "cohort": "avc",
-          "x265Reference": false,
           "path": "/media/Coco (2017).mkv",
           "sizeBytes": 28598269146,
           "width": 1920,
@@ -201,7 +165,6 @@ data:
         {
           "id": "avc-grain-memento",
           "cohort": "avc",
-          "x265Reference": true,
           "path": "/media/Memento (2000).mkv",
           "sizeBytes": 31129986254,
           "width": 1920,
@@ -216,7 +179,6 @@ data:
         {
           "id": "hdr10-clean-ministry",
           "cohort": "hdr10",
-          "x265Reference": false,
           "path": "/media/Ministry Of Ungentlemanly Warfare (2024).mkv",
           "sizeBytes": 74903823218,
           "width": 3840,
@@ -231,7 +193,6 @@ data:
         {
           "id": "hdr10-grain-goodfellas",
           "cohort": "hdr10",
-          "x265Reference": true,
           "path": "/media/Goodfellas (1990).mkv",
           "sizeBytes": 88003030794,
           "width": 3840,
@@ -246,7 +207,6 @@ data:
         {
           "id": "hdr10-motion-john-wick-2",
           "cohort": "hdr10",
-          "x265Reference": false,
           "path": "/media/John Wick Chapter 2 (2017).mkv",
           "sizeBytes": 77017937124,
           "width": 3840,
@@ -261,7 +221,6 @@ data:
         {
           "id": "dolby-vision-sisu",
           "cohort": "dolby-vision",
-          "x265Reference": false,
           "path": "/media/Sisu (2022).mkv",
           "sizeBytes": 59416136163,
           "width": 3840,
@@ -271,61 +230,6 @@ data:
           "clips": {}
         }
       ],
-      "diagnostics": {
-        "schemaVersion": 1,
-        "resultSchemaVersion": 1,
-        "strategyId": "qsv-hevc-icq-v1",
-        "acceptedFindingsSha256": "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
-        "decisionSha256": "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
-        "historicalQualityRunId": "20260817T233546Z-debc0498",
-        "historicalFindingsRunId": "20260818T214739Z-8bc2de3e",
-        "vmafSettings": [16, 30],
-        "hdrSetting": 16,
-        "frameRadius": 2,
-        "frameOffsets": [-2, -1, 0, 1, 2],
-        "traceWindowSeconds": 10,
-        "vmafPanel": [
-          {
-            "sampleId": "avc-clean-coco",
-            "clipId": "motion",
-            "observedFrameIndex": 1641
-          },
-          {
-            "sampleId": "avc-grain-memento",
-            "clipId": "dark",
-            "observedFrameIndex": 523
-          },
-          {
-            "sampleId": "avc-grain-memento",
-            "clipId": "detail",
-            "observedFrameIndex": 370
-          },
-          {
-            "sampleId": "vc1-fugitive",
-            "clipId": "detail",
-            "observedFrameIndex": 781
-          },
-          {
-            "sampleId": "vc1-fugitive",
-            "clipId": "motion",
-            "observedFrameIndex": 798
-          }
-        ],
-        "hdrPanel": [
-          {
-            "sampleId": "hdr10-clean-ministry",
-            "clipId": "detail"
-          },
-          {
-            "sampleId": "hdr10-grain-goodfellas",
-            "clipId": "detail"
-          },
-          {
-            "sampleId": "hdr10-motion-john-wick-2",
-            "clipId": "detail"
-          }
-        ]
-      },
       "qualityCorrection": {
         "schemaVersion": 1,
         "diagnosticRunId": "20260829T020752Z-43984d8d",
@@ -351,224 +255,5 @@ data:
             "frameIndex": 798
           }
         ]
-      },
-      "savingsPanel": [
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-1872565639d7",
-          "path": "/media/Black Swan (2010).mkv",
-          "sha256": "8d40f6c666fc96f16584185c3e853beb202275228a0df415f51b589c78f4d09e",
-          "sizeBytes": 26058329163,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-18d7b8f7d9c6",
-          "path": "/media/Django Unchained (2012).mkv",
-          "sha256": "dc40ff1fe0486b33282852ed1d930411d196dcd81cf37d5fabd4826a7e5501b1",
-          "sizeBytes": 34973647385,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-0f53e497bc37",
-          "path": "/media/Gravity (2013).mkv",
-          "sha256": "121c23d7304aba8e7eb6ce3133ba52183994a2dfabe1eac174556203d4fe73f9",
-          "sizeBytes": 10165973755,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-0c5013deb1e3",
-          "path": "/media/Kung Fu Panda (2008).mkv",
-          "sha256": "a93bc74636fdf329e3071307741c1e9edbc03fd9ba4c26ce907d3f49a8252703",
-          "sizeBytes": 15098414440,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-0c100403dba5",
-          "path": "/media/Star Wars Rogue One (2016).mkv",
-          "sha256": "f8e594f90fe63c4988ebf4c13ea5aeed85d1384114a7db73dccae2728e433eaf",
-          "sizeBytes": 42345821760,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-109543ad19fc",
-          "path": "/media/Toy Story (1995).mkv",
-          "sha256": "682c50639810e506b859f9a1f360e4e7a8c557879634cce1a5120a946dbfab51",
-          "sizeBytes": 15348240450,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-0358ea4e3f88",
-          "path": "/media/True Grit (2010).mkv",
-          "sha256": "2647e0b90e7f0c95500871e54af7594578f3525e1a6f0e3bcabe55ae1a0f9db8",
-          "sizeBytes": 28954182361,
-          "width": 1920
-        },
-        {
-          "cohort": "avc",
-          "height": 1080,
-          "id": "avc-0f68239e4194",
-          "path": "/media/Vice (2018).mkv",
-          "sha256": "d9df9de90b97c68aa6e2be26a0241fcd158697a141b704752391d934d5f2cfeb",
-          "sizeBytes": 35226193396,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-65e9ed01db41",
-          "path": "/media/Charlie Brown Christmas (1965).mkv",
-          "sha256": "e14c52d4dce8062a33c97c58d03a5cffb3afa9988ea43fc686b11d7565faf622",
-          "sizeBytes": 4569765274,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-02d0f32ab7c9",
-          "path": "/media/Erin Brockovich (2000).mkv",
-          "sha256": "e527e3c29aba80d130f28dbf23551eef6abe68c72bf88978054c54de7c85f6ec",
-          "sizeBytes": 35032754390,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-640c3df5c02f",
-          "path": "/media/Falling Down (1993).mkv",
-          "sha256": "f23ff0cb752149b0dfcd9c7a74bc17817600f62510a1cfc48ce04867937dd00e",
-          "sizeBytes": 18062098070,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-1153b855de1f",
-          "path": "/media/Fugitive (1993).mkv",
-          "sha256": "074f6d6cb5e9e4d8b3d3c58dba52673bdd91beebd6a7d640de056018fa79718c",
-          "sizeBytes": 20911950843,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-becc2bfec8b8",
-          "path": "/media/Hangover (2009).mkv",
-          "sha256": "e306c179c32326c39d1f575dfbc2e378e70defb78e313b5276f93556851175db",
-          "sizeBytes": 14541497418,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-b36e77a2d28d",
-          "path": "/media/Superman Returns (2006).mkv",
-          "sha256": "95c9f06a5144ed87a3c4eca32ed6847fab19c65da23bddc636fe4991fdeb71d3",
-          "sizeBytes": 17899820015,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-59ddfe931f34",
-          "path": "/media/Time Traveler's Wife (2009).mkv",
-          "sha256": "7b9ef2f58446b46d0419467aa8c54b5bdac55c4fcf31b9701817db3a69d7b37e",
-          "sizeBytes": 16578295778,
-          "width": 1920
-        },
-        {
-          "cohort": "vc1",
-          "height": 1080,
-          "id": "vc1-c773dc9d45b3",
-          "path": "/media/Traffic (2000).mkv",
-          "sha256": "344d11867c2aaa217942d9d95b5595416c3d97384b18bc740949fe05b35d9924",
-          "sizeBytes": 40052233173,
-          "width": 1920
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-0ecd964772ae",
-          "path": "/media/Avatar The Way of Water (2022).mkv",
-          "sha256": "468e5a32531d871f92b941a1bf9f429e1b16cadfbbb976028fb995e43e8e9c52",
-          "sizeBytes": 76370397194,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-1391fd2054cd",
-          "path": "/media/Casino (1995).mkv",
-          "sha256": "c798c4bb1becc4c3b8007324b3d01e1471b547abe951a038515b2bc68a309356",
-          "sizeBytes": 83440092490,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-04731ddeeb9a",
-          "path": "/media/Godzilla (2014).mkv",
-          "sha256": "d55816e141d389282ef7730b6df18951128df4075ccaef0235b4cf465435a9e3",
-          "sizeBytes": 69952556196,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-01e06e393b5d",
-          "path": "/media/Harry Potter and the Deathly Hallows Part 1 (2010).mkv",
-          "sha256": "0c996fdbae2ba10ac673480e1e183fd7e104cbf142f3412f63019d4fd26f9bc3",
-          "sizeBytes": 57413636248,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-0b15f14e94c3",
-          "path": "/media/Mad Max Fury Road (2015).mkv",
-          "sha256": "eec909aec4db37074eaec86132086d5606901d7e50b844c9b2b21f21d5f8681a",
-          "sizeBytes": 45758411535,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 1610,
-          "id": "hdr10-0798207caa9f",
-          "path": "/media/Ne Zha 2 (2025).mkv",
-          "sha256": "6d894bcd72caf297b1237b4b6cb9f9a8bd63c113d2eb11a8b34bf0125b6bb43c",
-          "sizeBytes": 9145386184,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-0a2c310a111f",
-          "path": "/media/Oblivion (2013).mkv",
-          "sha256": "dc1a33af14251688036e4ccd3c728279ef00a61bba83954fab8873cacd1cb98e",
-          "sizeBytes": 56272525964,
-          "width": 3840
-        },
-        {
-          "cohort": "hdr10",
-          "height": 2160,
-          "id": "hdr10-0c22a7863f5c",
-          "path": "/media/Twister (1996).mkv",
-          "sha256": "593785875148299ab0057c9cd0e7e5cd8c902fb98ba6e5fe49982f6f2df7b0d1",
-          "sizeBytes": 51444130578,
-          "width": 3840
-        }
-      ],
-      "chosenSettings": {}
+      }
     }
