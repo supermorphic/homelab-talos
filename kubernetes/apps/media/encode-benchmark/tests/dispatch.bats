@@ -639,7 +639,7 @@ produce_capability_evidence() {
 
 # D02: The gate recomputes every schema-3 prerequisite; proofStatus alone is not an oracle.
 @test "quality dispatch requires one current semantically passing capability node" {
-	local producer valid label mutation invalid producer_run
+	local producer valid label mutation invalid producer_run sanitized sanitized_document
 	produce_capability_evidence
 	producer="$CAPABILITY_PRODUCER_OUTPUT"
 	run jq -e '
@@ -677,11 +677,49 @@ produce_capability_evidence() {
 	printf '%s\n' "$producer" >"$STUB_LOGS_FILE"
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$producer_run"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *'capability_evidence={"nodeName":"nuc2","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3'* ]]
-	[[ "$output" != *'ffmpegVersion'* && "$output" != *'configuredImage"'* ]]
+	[ "$(grep -c '^capability_evidence=' <<<"$output")" -eq 1 ]
+	sanitized="$(sed -n 's/^capability_evidence=//p' <<<"$output")"
+	run jq -e '
+		keys == ["configuredImageDigest","decode","diagnosticCapabilities","drmDriver",
+			"encodeFps","encodeSpeed","imageId","initialization","initializationReason",
+			"nodeName","proofReasons","proofSchemaVersion","proofStatus","renderNode",
+			"selectedRateControl","strategyId","telemetryReason","telemetryStatus",
+			"verifiedAt","videoBusyNanoseconds","videoBusyPercent","vmaf"] and
+		.nodeName == "nuc2" and .strategyId == "qsv-hevc-icq-v1" and
+		.proofSchemaVersion == 3 and .initialization == "passed" and
+		.initializationReason == "" and .renderNode == "/dev/dri/renderD128" and
+		.drmDriver == "i915" and .selectedRateControl == "ICQ" and
+		.telemetryStatus == "available" and .telemetryReason == "" and
+		.videoBusyNanoseconds == 800000000 and .videoBusyPercent == 40 and
+		.encodeFps == 72 and .encodeSpeed == 1.25 and .decode == "passed" and
+		.vmaf == "passed" and .proofStatus == "passed" and .proofReasons == "" and
+		.verifiedAt == "2026-08-02T12:01:00Z" and
+		.configuredImageDigest == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
+		.imageId == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
+		.diagnosticCapabilities == {
+			traceHeaders:"passed",libvmaf:"passed",ssim:"passed",psnr:"passed",
+			bestEffortTimestampTime:"passed",packetDurationTime:"passed",
+			keyFrame:"passed",pictType:"passed",
+			imageId:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+			verifiedAt:"2026-08-02T12:01:00Z"
+		}
+	' <<<"$sanitized"
+	[ "$status" -eq 0 ]
+	sanitized_document="$(jq -cn --argjson record "$sanitized" '{nodes:[$record]}')"
 	STUB_PODS_JSON="$BATS_TEST_TMPDIR/default-pods.json"
 	export STUB_PODS_JSON
 	unset STUB_JOBS_JSON STUB_LOGS_FILE STUB_IMAGE_EVIDENCE_DIR
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	set_capability_evidence verified "$sanitized_document"
+	run_dispatch run quality
+	[ "$status" -eq 0 ]
+	[ "$(mutation_count)" -eq 2 ]
+	reset_cluster_stub_state
+	set_capability_evidence verified "$(jq -c '.nodes[0].diagnosticCapabilities.ssim="failed"' \
+		<<<"$sanitized_document")"
+	run_dispatch run quality
+	[ "$status" -ne 0 ]
+	assert_no_mutations
 
 	valid="$(valid_capability_evidence)"
 	run jq -e '
@@ -701,8 +739,6 @@ produce_capability_evidence() {
 			imageId:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
 		}' <<<"$valid"
 	[ "$status" -eq 0 ]
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-
 	while IFS=$'\t' read -r label mutation; do
 		invalid="$(jq -c "$mutation" <<<"$valid")"
 		set_capability_evidence verified "$invalid"
@@ -1268,7 +1304,7 @@ CASES
 			return 1
 		}
 	done
-	for seam in BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW; do
+	for seam in BENCHMARK_OUT BENCHMARK_SAMPLES_FILE BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW; do
 		run env BENCHMARK_TEST_MODE=0 "$seam=$BATS_TEST_TMPDIR/forbidden" "$runmeta" create quality
 		[ "$status" -eq 64 ] || {
 			echo "runmeta test seam passed: $seam/$status" >&3

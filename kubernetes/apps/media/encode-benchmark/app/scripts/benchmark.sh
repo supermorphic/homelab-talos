@@ -2010,12 +2010,50 @@ rank_quality_candidates() {
 	mv -f -- "$staged" "$artifact"
 }
 
+quality_paths_prework_confined() {
+	local explicit_run_id="${1:-}" out_physical runs_physical scratch_physical
+	local run_directory run_physical child run_scratch
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" &&
+		-d "$scratch_root" && ! -L "$scratch_root" ]] || {
+		echo 'quality run hierarchy is not confined' >&2
+		return 65
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	scratch_physical="$(cd -P "$scratch_root" && pwd)"
+	if [[ -e "$benchmark_out/runs" || -L "$benchmark_out/runs" ]]; then
+		[[ -d "$benchmark_out/runs" && ! -L "$benchmark_out/runs" ]] || return 65
+		runs_physical="$(cd -P "$benchmark_out/runs" && pwd)"
+		[[ "$runs_physical" == "$out_physical/runs" ]] || return 65
+	else
+		runs_physical="$out_physical/runs"
+	fi
+	[[ -n "$explicit_run_id" ]] || return 0
+	run_directory="$benchmark_out/runs/$explicit_run_id"
+	if [[ -e "$run_directory" || -L "$run_directory" ]]; then
+		[[ -d "$run_directory" && ! -L "$run_directory" ]] || return 65
+		run_physical="$(cd -P "$run_directory" && pwd)"
+		[[ "$run_physical" == "$runs_physical/$explicit_run_id" ]] || return 65
+		for child in logs quality-evidence; do
+			if [[ -e "$run_directory/$child" || -L "$run_directory/$child" ]]; then
+				[[ -d "$run_directory/$child" && ! -L "$run_directory/$child" &&
+					"$(cd -P "$run_directory/$child" && pwd)" == "$run_physical/$child" ]] || return 65
+			fi
+		done
+	fi
+	run_scratch="$scratch_root/$explicit_run_id"
+	if [[ -e "$run_scratch" || -L "$run_scratch" ]]; then
+		[[ -d "$run_scratch" && ! -L "$run_scratch" &&
+			"$(cd -P "$run_scratch" && pwd)" == "$scratch_physical/$explicit_run_id" ]] || return 65
+	fi
+}
+
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample_id cohort
 	local source sha clip_id timestamp clip encoder setting
 	local rank_status quality_completion_cohorts panel_samples work_plan row fields active_clip=''
 	local out_physical runs_physical run_physical scratch_physical run_scratch_physical
 	local logs_directory evidence_directory
+	quality_paths_prework_confined "$explicit_run_id" || return
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return

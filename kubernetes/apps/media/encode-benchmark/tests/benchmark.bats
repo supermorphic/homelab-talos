@@ -547,12 +547,13 @@ append_representative_plan_row() {
 # D07: Successful and failed rows may retain bounded evidence only inside their run.
 @test "quality output and scratch remain confined and temporary" {
 	local boundary marker_digest run_id run_dir results shape outside before after
+	local measured_before measured_after
 	boundary="$BATS_TEST_TMPDIR/outside-boundary"
 	mkdir -p "$boundary"
 	printf '%s\n' 'outside sentinel' >"$boundary/sentinel"
 	marker_digest="$(sha256sum "$boundary/sentinel" | awk 'NR == 1 {print $1}')"
 
-	for shape in output-root run-tree scratch destination; do
+	for shape in output-root runs-root run-tree scratch-root scratch logs destination; do
 		export BENCHMARK_OUT="$BATS_TEST_TMPDIR/$shape-out"
 		export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/$shape-scratch"
 		outside="$BATS_TEST_TMPDIR/$shape-outside"
@@ -563,6 +564,14 @@ append_representative_plan_row() {
 			ln -s "$outside" "$BENCHMARK_OUT"
 			mkdir -p "$BENCHMARK_SCRATCH"
 			;;
+		runs-root)
+			mkdir -p "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+			ln -s "$outside" "$BENCHMARK_OUT/runs"
+			;;
+		scratch-root)
+			mkdir -p "$BENCHMARK_OUT/runs"
+			ln -s "$outside" "$BENCHMARK_SCRATCH"
+			;;
 		*) mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH" ;;
 		esac
 		prepare_representative_run "sample-$shape" avc "$FIXTURES/media/avc-8bit.mkv"
@@ -571,11 +580,14 @@ append_representative_plan_row() {
 		# Use literal valid IDs; the shape label remains only the case diagnostic.
 		case "$shape" in
 		output-root) run_id='20260802T120000Z-a0000001' ;;
-		run-tree) run_id='20260802T120000Z-a0000002' ;;
-		scratch) run_id='20260802T120000Z-a0000003' ;;
-		destination) run_id='20260802T120000Z-a0000004' ;;
+		runs-root) run_id='20260802T120000Z-a0000002' ;;
+		run-tree) run_id='20260802T120000Z-a0000003' ;;
+		scratch-root) run_id='20260802T120000Z-a0000004' ;;
+		scratch) run_id='20260802T120000Z-a0000005' ;;
+		logs) run_id='20260802T120000Z-a0000006' ;;
+		destination) run_id='20260802T120000Z-a0000007' ;;
 		esac
-		if [[ "$shape" != output-root ]]; then
+		if [[ "$shape" != output-root && "$shape" != runs-root ]]; then
 			if [[ "$shape" == run-tree ]]; then
 				ln -s "$outside" "$BENCHMARK_OUT/runs/$run_id"
 			else
@@ -584,15 +596,23 @@ append_representative_plan_row() {
 				run_dir="$BENCHMARK_OUT/runs/$run_id"
 				if [[ "$shape" == scratch ]]; then
 					ln -s "$outside" "$BENCHMARK_SCRATCH/$run_id"
-				else
+				elif [[ "$shape" == logs ]]; then
+					ln -s "$outside" "$run_dir/logs"
+				elif [[ "$shape" == destination ]]; then
 					ln -s "$outside" "$run_dir/quality-evidence"
 				fi
 			fi
 		fi
 		before="$(find "$outside" -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | LC_ALL=C sort)"
+		measured_before="$(<"$BENCHMARK_COMMAND_LOG")"
 		run "$SCRIPTS/benchmark.sh" quality "$run_id"
 		[ "$status" -ne 0 ] || {
 			echo "symlink escape passed: $shape" >&3
+			return 1
+		}
+		measured_after="$(<"$BENCHMARK_COMMAND_LOG")"
+		[ "$measured_after" = "$measured_before" ] || {
+			echo "symlink escape reached measured work: $shape" >&3
 			return 1
 		}
 		after="$(find "$outside" -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | LC_ALL=C sort)"
