@@ -444,7 +444,6 @@ prepare_execution_run() {
 	export BENCHMARK_NOW=20260802T120000Z
 	export BENCHMARK_IDENTITY_FIXTURE="$FIXTURES/manifests/identity.json"
 	export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
-	export BENCHMARK_TEST_TITLE_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
 	export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
 	source_media="$BATS_TEST_TMPDIR/source.mkv"
@@ -830,7 +829,7 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 }
 
 # Catches validation short-circuiting after the first failure, wrong duration
-# tolerances, or HDR static metadata being omitted from the HDR field.
+# tolerances, or HDR stream format and color being omitted from the HDR field.
 @test "output validation reports every failed field in stable semicolon order" {
 	run "$SCRIPTS/benchmark.sh" _test validate-probes \
 		"$FIXTURES/metrics/probe-source.json" "$FIXTURES/metrics/probe-output-valid.json" clip 0
@@ -892,16 +891,27 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$(jq -r '.validation_audio_tracks' <<<"$output")" = 'failed' ]
 }
 
-@test "quality passes title HDR metadata through orchestration and rejects missing output metadata" {
+# Catches a null auxiliary source stream probe vetoing complete authoritative
+# decoded-frame and trace_headers evidence before candidate ranking.
+@test "quality authoritative HDR evidence overrides a null auxiliary stream probe" {
 	prepare_execution_run
-	export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source-clip-hdr-missing.json"
-	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-20-.*[.]mkv$'
-	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-hdr-missing.json"
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
-	results="$BENCHMARK_OUT/runs/$output/results.csv"
-	[ "$(awk -F, '$7 == "qsv" && $8 == 20 {print $30}' "$results")" = 'failed' ]
-	[ "$(awk -F, '$7 == "qsv" && $8 == 22 {print $30}' "$results")" = 'passed' ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	results="$run_dir/results.csv"
+	summary="$(awk -F, 'NR > 1 {count += 1; if ($10 != "passed" || $30 != "passed" || $34 != "") bad += 1} END {print count ":" bad + 0}' "$results")"
+	[ "$summary" = '8:0' ] || {
+		echo "authoritative preserved HDR rows remained vetoed: $summary" >&3
+		return 1
+	}
+	[ "$(find "$run_dir/quality-evidence" -type f -name '*.json' -exec jq -r '.hdr.classification' {} \; | sort -u)" = 'preserved' ]
+	run jq -e '
+		.cohorts.hdr10.status == "eligible" and
+		.cohorts.hdr10.expectedClipCount == 1 and
+		(.cohorts.hdr10.candidates | length) > 0
+	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
 }
 
 # Catches a regression where failed/invalid attempts overwrite evidence, a

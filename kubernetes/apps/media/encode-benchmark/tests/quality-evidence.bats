@@ -200,8 +200,12 @@ quality_hdr_case() {
 # FFmpeg output as an admissible report-only metric.
 @test "metric parser returns one finite decimal from closed SSIM and PSNR summaries" {
 	local ssim_log="$BATS_TEST_TMPDIR/ssim.log" psnr_log="$BATS_TEST_TMPDIR/psnr.log"
+	local signed_ssim_log="$BATS_TEST_TMPDIR/signed-ssim.log"
+	local signed_psnr_log="$BATS_TEST_TMPDIR/signed-psnr.log"
 	printf '%s\n' '[Parsed_ssim_0 @ 0x3000] SSIM Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >"$ssim_log"
 	printf '%s\n' 'n:1 mse_avg:1.00 average:40.000000 psnr_y:40.000000' >"$psnr_log"
+	printf '%s\n' 'SSIM All:+0.875000 (9.030900)' >"$signed_ssim_log"
+	printf '%s\n' 'PSNR average:-1.250000 min:-2.000000 max:0.000000' >"$signed_psnr_log"
 
 	run bash -c 'source "$1"; quality_parse_metric ssim "$2"' quality-evidence "$QUALITY_EVIDENCE" "$ssim_log"
 	[ "$status" -eq 0 ]
@@ -209,6 +213,18 @@ quality_hdr_case() {
 	run bash -c 'source "$1"; quality_parse_metric psnr "$2"' quality-evidence "$QUALITY_EVIDENCE" "$psnr_log"
 	[ "$status" -eq 0 ]
 	[ "$output" = '40.000000' ]
+	run bash -c 'source "$1"; quality_parse_metric ssim "$2"' quality-evidence "$QUALITY_EVIDENCE" "$signed_ssim_log"
+	[ "$status" -eq 0 ] || {
+		echo "metric parser rejected optional positive sign: status=$status output=$output" >&3
+		return 1
+	}
+	[ "$output" = '0.875000' ]
+	run bash -c 'source "$1"; quality_parse_metric psnr "$2"' quality-evidence "$QUALITY_EVIDENCE" "$signed_psnr_log"
+	[ "$status" -eq 0 ] || {
+		echo "metric parser rejected optional negative sign: status=$status output=$output" >&3
+		return 1
+	}
+	[ "$output" = '-1.250000' ]
 	run "$QUALITY_EVIDENCE" metric ssim "$ssim_log"
 	[ "$status" -eq 64 ]
 	run "$QUALITY_EVIDENCE" _test metric ssim "$ssim_log"
@@ -218,8 +234,9 @@ quality_hdr_case() {
 		quality-evidence "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh" "$QUALITY_EVIDENCE" "$ssim_log"
 	[ "$status" -eq 0 ]
 	[ "$output" = '0.991000' ]
-	for case_name in unknown-kind ssim-malformed ssim-ambiguous ssim-infinite \
-		psnr-malformed psnr-ambiguous psnr-infinite; do
+	for case_name in unknown-kind ssim-false-boundary ssim-suffix-junk ssim-exponent \
+		ssim-malformed ssim-ambiguous ssim-infinite psnr-false-boundary \
+		psnr-suffix-junk psnr-exponent psnr-malformed psnr-ambiguous psnr-infinite; do
 		kind="${case_name%%-*}"
 		log="$BATS_TEST_TMPDIR/$case_name.log"
 		case "$case_name" in
@@ -227,9 +244,15 @@ quality_hdr_case() {
 			kind=unknown
 			printf '%s\n' 'All:0.991000' >"$log"
 			;;
+		ssim-false-boundary) printf '%s\n' 'NotAll:0.991000' >"$log" ;;
+		ssim-suffix-junk) printf '%s\n' 'All:0.991000junk' >"$log" ;;
+		ssim-exponent) printf '%s\n' 'All:4e-1' >"$log" ;;
 		ssim-malformed) printf '%s\n' 'All:.991000' >"$log" ;;
 		ssim-ambiguous) printf '%s\n' 'All:0.991000' 'All:0.992000' >"$log" ;;
 		ssim-infinite) printf '%s\n' 'All:inf' >"$log" ;;
+		psnr-false-boundary) printf '%s\n' 'meanaverage:40.000000' >"$log" ;;
+		psnr-suffix-junk) printf '%s\n' 'average:40.000000junk' >"$log" ;;
+		psnr-exponent) printf '%s\n' 'average:40e2' >"$log" ;;
 		psnr-malformed) printf '%s\n' 'average:.40' >"$log" ;;
 		psnr-ambiguous) printf '%s\n' 'average:40.000000' 'average:41.000000' >"$log" ;;
 		psnr-infinite) printf '%s\n' 'average:nan' >"$log" ;;

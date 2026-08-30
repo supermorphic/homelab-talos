@@ -68,18 +68,31 @@ quality_vmaf_stats() {
 }
 
 quality_parse_metric() {
-	local kind="$1" log_file="$2" pattern
+	local kind="$1" log_file="$2" field value
 	local -a values=()
 	[[ -f "$log_file" && ! -L "$log_file" ]] || return 66
 	case "$kind" in
-	ssim) pattern='All:[0-9]+([.][0-9]+)?' ;;
-	psnr) pattern='average:[0-9]+([.][0-9]+)?' ;;
+	ssim) field='All' ;;
+	psnr) field='average' ;;
 	*) return 64 ;;
 	esac
-	mapfile -t values < <(grep -o -E "$pattern" "$log_file" | cut -d: -f2)
+	mapfile -t values < <(awk -v field="$field" '
+		BEGIN { pattern = "^" field ":[+-]?[0-9]+([.][0-9]+)?$" }
+		{
+			for (position = 1; position <= NF; position += 1) {
+				if ($position ~ pattern) {
+					value = $position
+					sub("^" field ":", "", value)
+					print value
+				}
+			}
+		}
+	' "$log_file")
 	((${#values[@]} == 1)) || return 65
-	[[ "${values[0]}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 65
-	printf '%s\n' "${values[0]}"
+	value="${values[0]#+}"
+	[[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || return 65
+	jq -e -n --arg value "$value" '$value | tonumber | isfinite' >/dev/null || return 65
+	printf '%s\n' "$value"
 }
 
 quality_hdr_probe() {

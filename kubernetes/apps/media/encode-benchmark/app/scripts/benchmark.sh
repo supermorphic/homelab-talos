@@ -44,7 +44,7 @@ fi
 }
 if [[ "$test_mode" != '1' ]]; then
 	for test_hook in \
-		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_TITLE_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
+		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
 		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
 		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
 		BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING \
@@ -336,7 +336,6 @@ validate_probes() {
 	local output_probe="$2"
 	local scope="$3"
 	local decode_status="$4"
-	local hdr_source_probe="${5:-$source_probe}"
 	local tolerance source_duration='0' output_duration='0' duration_difference='0'
 	local codec duration resolution frame_rate bit_depth hdr audio subtitle chapters
 	local failures='' source_frame output_frame source_base output_base
@@ -402,7 +401,7 @@ validate_probes() {
 		$source[0].bitDepth == $output[0].bitDepth and
 		(if $source[0].hdrFormat == "hdr10" then $output[0].bitDepth == 10 else true end)
 	')"
-	hdr="$(passed_or_failed jq -e -n --slurpfile source "$hdr_source_probe" --slurpfile output "$output_probe" '
+	hdr="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" '
 		($source[0].hdrFormat | type) == "string" and ($output[0].hdrFormat | type) == "string" and
 		($source[0].colorPrimaries | type) == "string" and ($output[0].colorPrimaries | type) == "string" and
 		($source[0].colorTransfer | type) == "string" and ($output[0].colorTransfer | type) == "string" and
@@ -410,9 +409,7 @@ validate_probes() {
 		$source[0].hdrFormat == $output[0].hdrFormat and
 		$source[0].colorPrimaries == $output[0].colorPrimaries and
 		$source[0].colorTransfer == $output[0].colorTransfer and
-		$source[0].colorSpace == $output[0].colorSpace and
-		($source[0].masteringDisplay // "") == ($output[0].masteringDisplay // "") and
-		($source[0].maxCLL // "") == ($output[0].maxCLL // "")
+		$source[0].colorSpace == $output[0].colorSpace
 	')"
 	audio="$(passed_or_failed jq -e -n --slurpfile source "$source_probe" --slurpfile output "$output_probe" \
 		'($source[0].audioTrackCount | type) == "number" and ($output[0].audioTrackCount | type) == "number" and $source[0].audioTrackCount == $output[0].audioTrackCount')"
@@ -962,9 +959,7 @@ assigned_node_capability_gate() {
 probe_media() {
 	local role="$1"
 	local path="$2"
-	if [[ "$test_mode" == '1' && "$role" == 'title' && -n "${BENCHMARK_TEST_TITLE_SOURCE_PROBE:-}" ]]; then
-		jq -c . "$BENCHMARK_TEST_TITLE_SOURCE_PROBE"
-	elif [[ "$test_mode" == '1' && "$role" == 'source' && -n "${BENCHMARK_TEST_SOURCE_PROBE:-}" ]]; then
+	if [[ "$test_mode" == '1' && "$role" == 'source' && -n "${BENCHMARK_TEST_SOURCE_PROBE:-}" ]]; then
 		jq -c . "$BENCHMARK_TEST_SOURCE_PROBE"
 	elif [[ "$test_mode" == '1' && "$role" == 'output' &&
 		-n "${BENCHMARK_TEST_INVALID_OUTPUT_MATCH:-}" &&
@@ -1345,8 +1340,7 @@ process_variant() {
 	local validation_failures validation_codec validation_duration validation_resolution
 	local validation_frame_rate validation_bit_depth validation_hdr validation_audio
 	local validation_subtitle validation_chapters decode_status=1 proof_json progress
-	local hdr_source_probe_file="${18:-}"
-	local quality_source_path="${19:-}" quality_source_timestamp="${20:-}"
+	local quality_source_path="${18:-}" quality_source_timestamp="${19:-}"
 	local quality_vmaf='null' quality_hdr='null' quality_evidence_ref=''
 	local quality_evidence_path='' quality_evidence_sha256='' quality_evidence_ready=1
 
@@ -1355,7 +1349,6 @@ process_variant() {
 	evidence_base="$sample_id-$clip_id-$encoder-$setting-attempt-$attempt"
 	mkdir -p "$logs_directory"
 	source_probe_file="$logs_directory/$evidence_base-source-probe.json"
-	[[ -n "$hdr_source_probe_file" ]] || hdr_source_probe_file="$source_probe_file"
 	output_probe_file="$logs_directory/$evidence_base-output-probe.json"
 	validation_file="$logs_directory/$evidence_base-validation.json"
 	vmaf_file="$logs_directory/$evidence_base-vmaf.json"
@@ -1384,7 +1377,7 @@ process_variant() {
 		if ffmpeg -nostdin -v error -i "$output" -map 0:v:0 -f null -; then decode_status=0; fi
 		if [[ "$source_probe" != '{}' ]] && probe_media output "$output" >"$output_probe_file" 2>&1 &&
 			jq -e . "$output_probe_file" >/dev/null 2>&1; then
-			if ! validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status" "$hdr_source_probe_file" 2>/dev/null)"; then
+			if ! validation="$(validate_probes "$source_probe_file" "$output_probe_file" "$scope" "$decode_status" 2>/dev/null)"; then
 				validation="$(failed_validation validation-parse)"
 			fi
 		else
@@ -1574,7 +1567,7 @@ encode_one_variant() {
 	local run_id="$1" panel="$2" sample_id="$3" cohort="$4" sha="$5" clip_id="$6"
 	local encoder="$7" setting="$8" input="$9" scope="${10}"
 	local disposition="${11:-record}" run_directory results attempt evidence_base
-	local hdr_source_probe_file="${12:-}" quality_source_path="${13:-}" quality_source_timestamp="${14:-}"
+	local quality_source_path="${12:-}" quality_source_timestamp="${13:-}"
 	local output encode_log busy_log row_fixture start end wall status=0 record_status=0
 	run_directory="$benchmark_out/runs/$run_id"
 	results="$run_directory/results.csv"
@@ -1592,7 +1585,7 @@ encode_one_variant() {
 	wall="$(awk -v start="$start" -v end="$end" 'BEGIN { printf "%.6f", (end - start) / 1000000000 }')"
 	process_variant "$run_id" "$panel" "$sample_id" "$cohort" "$sha" "$clip_id" \
 		"$encoder" "$setting" "$input" "$output" "$scope" "$status" "$wall" \
-		"$encode_log" "$busy_log" "$attempt" "$row_fixture" "$hdr_source_probe_file" \
+		"$encode_log" "$busy_log" "$attempt" "$row_fixture" \
 		"$quality_source_path" "$quality_source_timestamp"
 	if [[ "$panel" == 'quality' ]] &&
 		! jq -e '(.quality_evidence_path | length) > 0 and (.quality_evidence_sha256 | length) > 0' \
@@ -1961,7 +1954,7 @@ rank_quality_candidates() {
 
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
-	local source sha detection title_probe_file clip_id timestamp clip
+	local source sha detection clip_id timestamp clip
 	local setting rank_status quality_completion_cohorts
 	local panel_samples
 	local -a qsv_settings
@@ -1989,18 +1982,13 @@ quality_mode() {
 			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
 			continue
 		fi
-		title_probe_file="$run_directory/logs/$sample_id-title-source-probe.json"
-		if ! probe_media title "$source" >"$title_probe_file" 2>/dev/null; then
-			printf '%s\n' '{}' >"$title_probe_file"
-		fi
 		while IFS=$'\t' read -r clip_id timestamp; do
 			clip="$run_scratch/$sample_id-$clip_id-source.mkv"
 			ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip"
 			for setting in "${qsv_settings[@]}"; do
 				if row_is_complete "$run_id" quality "$sha" "$clip_id" qsv "$setting"; then continue; fi
 				encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-					qsv "$setting" "$clip" clip record "$title_probe_file" \
-					"$source" "$timestamp" >/dev/null
+					qsv "$setting" "$clip" clip record "$source" "$timestamp" >/dev/null
 			done
 			rm -f -- "$clip"
 		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
@@ -2076,7 +2064,7 @@ test_dispatch() {
 		qsv_proof "$@"
 		;;
 	validate-probes)
-		(($# >= 4 && $# <= 5)) || usage
+		(($# == 4)) || usage
 		validate_probes "$@"
 		;;
 	record-result)

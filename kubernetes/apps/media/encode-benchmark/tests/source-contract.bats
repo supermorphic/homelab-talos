@@ -131,6 +131,19 @@ setup() {
 # Catches a quality worker excluding a frame outside the closed source contract
 # or treating an absent identity as an accepted empty response.
 @test "shared contract returns only the four diagnosed VMAF exclusions" {
+	run jq -e '
+		.qualityCorrection.vmafMeasurementDefects == [
+			{sampleId:"avc-clean-coco",clipId:"motion",frameIndex:1641},
+			{sampleId:"avc-grain-memento",clipId:"dark",frameIndex:523},
+			{sampleId:"avc-grain-memento",clipId:"detail",frameIndex:370},
+			{sampleId:"vc1-fugitive",clipId:"motion",frameIndex:798}
+		]
+	' "$samples_json"
+	[ "$status" -eq 0 ] || {
+		echo "deployed correction array differs from the literal four-entry contract" >&3
+		return 1
+	}
+
 	for identity in \
 		'avc-clean-coco motion 1641' \
 		'avc-grain-memento dark 523' \
