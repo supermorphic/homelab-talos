@@ -546,11 +546,59 @@ append_representative_plan_row() {
 
 # D07: Successful and failed rows may retain bounded evidence only inside their run.
 @test "quality output and scratch remain confined and temporary" {
-	local boundary marker_digest run_id run_dir results
+	local boundary marker_digest run_id run_dir results shape outside before after
 	boundary="$BATS_TEST_TMPDIR/outside-boundary"
 	mkdir -p "$boundary"
 	printf '%s\n' 'outside sentinel' >"$boundary/sentinel"
 	marker_digest="$(sha256sum "$boundary/sentinel" | awk 'NR == 1 {print $1}')"
+
+	for shape in output-root run-tree scratch destination; do
+		export BENCHMARK_OUT="$BATS_TEST_TMPDIR/$shape-out"
+		export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/$shape-scratch"
+		outside="$BATS_TEST_TMPDIR/$shape-outside"
+		mkdir -p "$outside"
+		printf '%s\n' "$shape sentinel" >"$outside/sentinel"
+		case "$shape" in
+		output-root)
+			ln -s "$outside" "$BENCHMARK_OUT"
+			mkdir -p "$BENCHMARK_SCRATCH"
+			;;
+		*) mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH" ;;
+		esac
+		prepare_representative_run "sample-$shape" avc "$FIXTURES/media/avc-8bit.mkv"
+		start_representative_plan
+		append_representative_plan_row "sample-$shape" detail 16
+		# Use literal valid IDs; the shape label remains only the case diagnostic.
+		case "$shape" in
+		output-root) run_id='20260802T120000Z-a0000001' ;;
+		run-tree) run_id='20260802T120000Z-a0000002' ;;
+		scratch) run_id='20260802T120000Z-a0000003' ;;
+		destination) run_id='20260802T120000Z-a0000004' ;;
+		esac
+		if [[ "$shape" != output-root ]]; then
+			if [[ "$shape" == run-tree ]]; then
+				ln -s "$outside" "$BENCHMARK_OUT/runs/$run_id"
+			else
+				run "$SCRIPTS/runmeta.sh" create quality "$run_id"
+				[ "$status" -eq 0 ]
+				run_dir="$BENCHMARK_OUT/runs/$run_id"
+				if [[ "$shape" == scratch ]]; then
+					ln -s "$outside" "$BENCHMARK_SCRATCH/$run_id"
+				else
+					ln -s "$outside" "$run_dir/quality-evidence"
+				fi
+			fi
+		fi
+		before="$(find "$outside" -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | LC_ALL=C sort)"
+		run "$SCRIPTS/benchmark.sh" quality "$run_id"
+		[ "$status" -ne 0 ] || {
+			echo "symlink escape passed: $shape" >&3
+			return 1
+		}
+		after="$(find "$outside" -mindepth 1 -maxdepth 1 -print | sed 's#.*/##' | LC_ALL=C sort)"
+		[ "$after" = "$before" ]
+		[ "$(<"$outside/sentinel")" = "$shape sentinel" ]
+	done
 
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/success-out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/success-scratch"

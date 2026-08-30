@@ -2014,6 +2014,8 @@ quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample_id cohort
 	local source sha clip_id timestamp clip encoder setting
 	local rank_status quality_completion_cohorts panel_samples work_plan row fields active_clip=''
+	local out_physical runs_physical run_physical scratch_physical run_scratch_physical
+	local logs_directory evidence_directory
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
@@ -2027,7 +2029,49 @@ quality_mode() {
 	fi
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
-	mkdir -p "$run_directory/logs" "$run_scratch"
+	logs_directory="$run_directory/logs"
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" &&
+		-d "$benchmark_out/runs" && ! -L "$benchmark_out/runs" &&
+		-d "$run_directory" && ! -L "$run_directory" &&
+		-d "$scratch_root" && ! -L "$scratch_root" ]] || {
+		echo 'quality run hierarchy is not confined' >&2
+		return 65
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	runs_physical="$(cd -P "$benchmark_out/runs" && pwd)"
+	run_physical="$(cd -P "$run_directory" && pwd)"
+	scratch_physical="$(cd -P "$scratch_root" && pwd)"
+	[[ "$runs_physical" == "$out_physical/runs" && "$run_physical" == "$runs_physical/$run_id" ]] || {
+		echo 'quality run hierarchy is not confined' >&2
+		return 65
+	}
+	if [[ -e "$logs_directory" || -L "$logs_directory" ]]; then
+		[[ -d "$logs_directory" && ! -L "$logs_directory" ]] || return 65
+	else
+		mkdir "$logs_directory" || return
+	fi
+	[[ "$(cd -P "$logs_directory" && pwd)" == "$run_physical/logs" ]] || return 65
+	evidence_directory="$run_directory/quality-evidence"
+	if [[ -e "$evidence_directory" || -L "$evidence_directory" ]]; then
+		[[ -d "$evidence_directory" && ! -L "$evidence_directory" &&
+			"$(cd -P "$evidence_directory" && pwd)" == "$run_physical/quality-evidence" ]] || {
+			echo 'quality evidence hierarchy is not confined' >&2
+			return 65
+		}
+	fi
+	if [[ -e "$run_scratch" || -L "$run_scratch" ]]; then
+		[[ -d "$run_scratch" && ! -L "$run_scratch" ]] || {
+			echo 'quality scratch hierarchy is not confined' >&2
+			return 65
+		}
+	else
+		mkdir "$run_scratch" || return
+	fi
+	run_scratch_physical="$(cd -P "$run_scratch" && pwd)"
+	[[ "$run_scratch_physical" == "$scratch_physical/$run_id" ]] || {
+		echo 'quality scratch hierarchy is not confined' >&2
+		return 65
+	}
 	record_quality_skips "$run_directory" || return
 	while IFS= read -r row; do
 		fields="$(jq -e -r '

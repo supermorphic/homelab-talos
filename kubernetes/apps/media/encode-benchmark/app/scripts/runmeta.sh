@@ -30,6 +30,10 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_IDENTITY_FIXTURE+x}" ]]; then
 	echo 'BENCHMARK_IDENTITY_FIXTURE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_NOW+x}" ]]; then
+	echo 'BENCHMARK_NOW requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
 contract_load "$samples_file" || exit $?
 
 cleanup_unpublished_manifest() {
@@ -129,7 +133,7 @@ discover_identity() {
 		echo 'dispatched runtime image evidence is missing or malformed' >&2
 		return 65
 	}
-	running_image="${BENCHMARK_RUNNING_IMAGE:-${BENCHMARK_RUNNING_IMAGE_DIGEST:-}}"
+	running_image="${BENCHMARK_RUNNING_IMAGE:-}"
 	running_digest="$(image_digest "$running_image")" || {
 		echo 'running runtime image evidence is missing or malformed' >&2
 		return 65
@@ -311,7 +315,7 @@ verify_run() {
 create_run() {
 	local mode="$1"
 	local explicit_run_id="${2:-}"
-	local identity='' identity_digest now run_id run_directory manifest
+	local identity='' identity_digest now run_id run_directory manifest out_physical runs_physical
 	validate_mode "$mode" || return
 	if [[ -n "$explicit_run_id" ]]; then
 		validate_run_id "$explicit_run_id" || return
@@ -363,7 +367,24 @@ create_run() {
 		}
 		run_id="$now-$identity_digest"
 	fi
-	mkdir -p "$runs_root"
+	[[ -d "$benchmark_out" && ! -L "$benchmark_out" ]] || {
+		echo 'benchmark output hierarchy is not confined' >&2
+		return 65
+	}
+	out_physical="$(cd -P "$benchmark_out" && pwd)"
+	if [[ -e "$runs_root" || -L "$runs_root" ]]; then
+		[[ -d "$runs_root" && ! -L "$runs_root" ]] || {
+			echo 'benchmark runs hierarchy is not confined' >&2
+			return 65
+		}
+	else
+		mkdir "$runs_root" || return
+	fi
+	runs_physical="$(cd -P "$runs_root" && pwd)"
+	[[ "$runs_physical" == "$out_physical/runs" ]] || {
+		echo 'benchmark runs hierarchy is not confined' >&2
+		return 65
+	}
 	run_directory="$runs_root/$run_id"
 	if ! mkdir "$run_directory"; then
 		echo "run already exists: $run_id" >&2

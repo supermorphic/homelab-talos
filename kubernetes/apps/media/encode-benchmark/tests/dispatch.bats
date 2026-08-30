@@ -95,8 +95,9 @@ if contains create "$@"; then
 		"${STUB_JOB_CREATE_FAIL_AT:-0}" == "$count") ]]; then
 		exit 25
 	fi
-	uid='fixture-job-uid'
-	[[ "$kind" != 'ConfigMap' ]] || uid='fixture-configmap-uid'
+	uid="fixture-${kind,,}-uid-$count"
+	printf '%s\n' "$uid" >"$capture.uid"
+	printf '%s\n' "$uid" >"$STUB_CAPTURE_DIR/$kind-$name.yaml.uid"
 	created="$(RESOURCE_UID="$uid" yq -o=json -I=0 '.metadata.uid = strenv(RESOURCE_UID)' "$capture")"
 	if [[ "${STUB_JOB_CREATE_RESPONSE_METADATA_BAD:-0}" == '1' && "$kind" == 'Job' ]]; then
 		created="$(yq -p=json -o=json -I=0 '.metadata.labels."homelab-talos/benchmark-dispatch" = "20260802T120000Z-deadbeef"' <<<"$created")"
@@ -114,10 +115,16 @@ if contains patch "$@"; then
 fi
 
 if contains delete "$@"; then
-	if [[ "${STUB_CONFIGMAP_REPLACE_BEFORE_DELETE:-0}" == '1' && "$*" == *' configmap/'* &&
-		"$*" != *' --preconditions=uid=fixture-configmap-uid'* ]]; then
-		: >"$STUB_CAPTURE_DIR/unsafe-configmap-delete"
+	if [[ "${STUB_CONFIGMAP_REPLACE_BEFORE_DELETE:-0}" == '1' && "$*" == *' configmap/'* ]]; then
+		resource=''
+		for argument in "$@"; do [[ "$argument" == configmap/* ]] && resource="$argument"; done
+		capture="$STUB_CAPTURE_DIR/ConfigMap-${resource#configmap/}.yaml"
+		expected_uid="$(<"$capture.uid")"
+		[[ "$*" == *" --preconditions=uid=$expected_uid"* ]] ||
+			: >"$STUB_CAPTURE_DIR/unsafe-configmap-delete"
 	fi
+	[[ "$*" != *' secret/unrelated-resource-08'* ]] ||
+		: >"$STUB_CAPTURE_DIR/unsafe-unrelated-delete"
 	printf '%s\n' 'job.batch/fixture deleted'
 	exit 0
 fi
@@ -179,7 +186,8 @@ if contains get "$@" && [[ "$*" == *' job/'* ]]; then
 		exit 0
 	fi
 	capture="$STUB_CAPTURE_DIR/Job-$name.yaml"
-	live_job="$(yq -o=json -I=0 '.metadata.uid = "fixture-job-uid"' "$capture")"
+	uid="$(<"$capture.uid")"
+	live_job="$(RESOURCE_UID="$uid" yq -o=json -I=0 '.metadata.uid = strenv(RESOURCE_UID)' "$capture")"
 	if [[ "${STUB_JOB_REPLACEMENT:-0}" == '1' ]]; then
 		live_job="$(yq -p=json -o=json -I=0 '.metadata.uid = "replacement-job-uid"' <<<"$live_job")"
 	fi
@@ -208,7 +216,7 @@ if contains get "$@" && contains pods "$@"; then
 			else
 				image_id="${STUB_HANDOFF_IMAGE_ID:-containerd://$image}"
 			fi
-			owner_uid='fixture-job-uid'
+			owner_uid="$(<"$job.uid")"
 			[[ "${STUB_HANDOFF_BAD_OWNER:-0}" != '1' ]] || owner_uid='spoofed-owner-uid'
 			jq -n -c --arg job "$job_name" --arg uid "$owner_uid" --arg image "$image_id" \
 				--argjson pending "$( [[ "$sequence_step" == '2' ]] && printf true || printf false )" \
@@ -257,7 +265,12 @@ if contains get "$@" && [[ "$*" == *' configmap/'* ]]; then
 	if [[ ! -f "$capture" && -n "${STUB_IMAGE_EVIDENCE_DIR:-}" ]]; then
 		capture="$STUB_IMAGE_EVIDENCE_DIR/$name.json"
 	fi
-	persisted="$(yq -o=json -I=0 '.metadata.uid = "fixture-configmap-uid"' "$capture")"
+	if [[ -f "$capture.uid" ]]; then
+		uid="$(<"$capture.uid")"
+	else
+		uid='fixture-configmap-uid'
+	fi
+	persisted="$(RESOURCE_UID="$uid" yq -o=json -I=0 '.metadata.uid = strenv(RESOURCE_UID)' "$capture")"
 	if [[ "${STUB_PERSISTED_OWNER_BAD:-0}" == '1' ]]; then
 		persisted="$(yq -p=json -o=json -I=0 '.metadata.ownerReferences[0].uid = "spoofed-owner-uid"' <<<"$persisted")"
 	fi
@@ -321,7 +334,14 @@ if [[ -n "${JOB_NAME:-}" && "${STUB_JOB_RENDER_FAIL_AT:-0}" != '0' ]]; then
 		exit 30
 	fi
 fi
-exec "$REAL_YQ" "$@"
+"$REAL_YQ" "$@"
+status=$?
+if ((status == 0)) && [[ -n "${JOB_NAME:-}" && -n "${STUB_RENDER_DISPATCH_IMAGE:-}" &&
+	" $* " == *' -i '* ]]; then
+	IMAGE="$STUB_RENDER_DISPATCH_IMAGE" "$REAL_YQ" -i \
+		'.spec.template.spec.containers[0].image = strenv(IMAGE)' "${!#}"
+fi
+exit "$status"
 EOF
 
 	cat >"$STUB_BIN/chmod" <<'EOF'
@@ -345,8 +365,19 @@ case "${1:-} ${2:-}" in
 		exit 0
 		;;
 	'cat-file -e') exit 0 ;;
-	'diff --quiet')
-		[[ "${STUB_GIT_STALE:-0}" != '1' ]]
+'diff --quiet')
+		if [[ "${STUB_GIT_STALE:-0}" == '1' ]]; then
+			shift 2
+			[[ "${1:-}" == '--' ]] || exit 97
+			shift
+			for guarded in "$@"; do
+				if [[ "${STUB_GIT_DIFF_PATH:-}" == "$guarded" ||
+					"${STUB_GIT_DIFF_PATH:-}" == "$guarded/"* ]]; then
+					exit 1
+				fi
+			done
+		fi
+		exit 0
 		exit
 		;;
 	'diff --name-only')
@@ -377,9 +408,9 @@ assert_no_mutations() {
 }
 
 reset_cluster_stub_state() {
-	rm -f -- "$STUB_CAPTURE_DIR"/*.yaml "$STUB_CAPTURE_DIR"/.count \
+	rm -f -- "$STUB_CAPTURE_DIR"/*.yaml "$STUB_CAPTURE_DIR"/*.yaml.uid "$STUB_CAPTURE_DIR"/.count \
 		"$STUB_CAPTURE_DIR"/.job-render-count "$STUB_CAPTURE_DIR"/.pod-sequence-* \
-		"$STUB_CAPTURE_DIR"/unsafe-configmap-delete
+		"$STUB_CAPTURE_DIR"/unsafe-configmap-delete "$STUB_CAPTURE_DIR"/unsafe-unrelated-delete
 	: >"$STUB_CALLS"
 	unset STUB_API_SERVER STUB_COLLISION STUB_CONFIGMAP_CREATE_FAIL
 	unset STUB_CONFIGMAP_REPLACE_BEFORE_DELETE STUB_HANDOFF_BAD_OWNER
@@ -387,7 +418,7 @@ reset_cluster_stub_state() {
 	unset STUB_HANDOFF_LOG_READY STUB_HANDOFF_POD_COUNT STUB_HANDOFF_POD_SEQUENCE
 	unset STUB_JOB_CREATE_FAIL STUB_JOB_CREATE_FAIL_AT STUB_JOB_CREATE_RESPONSE_METADATA_BAD
 	unset STUB_JOB_RENDER_FAIL_AT STUB_JOB_REPLACEMENT STUB_PERSISTED_EXTRA_OWNER
-	unset STUB_PERSISTED_OWNER_BAD
+	unset STUB_PERSISTED_OWNER_BAD STUB_RENDER_DISPATCH_IMAGE
 }
 
 write_results_fixtures() {
@@ -500,6 +531,87 @@ valid_capability_evidence() {
 	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","diagnosticCapabilities":{"imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","verifiedAt":"2026-08-14T18:00:00Z","traceHeaders":"passed","libvmaf":"passed","ssim":"passed","psnr":"passed","bestEffortTimestampTime":"passed","packetDurationTime":"passed","keyFrame":"passed","pictType":"passed"},"proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
 }
 
+create_capability_producer_stubs() {
+	local capability_bin="$BATS_TEST_TMPDIR/capability-bin"
+	mkdir -p "$capability_bin"
+	cat >"$capability_bin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ffmpeg\t%s\n' "$*" >>"$CAPABILITY_COMMANDS"
+case "$*" in
+*'-hide_banner -encoders'*)
+	printf '%s\n' ' V..... hevc_qsv Intel Quick Sync Video HEVC encoder'
+	exit 0
+	;;
+*'-hide_banner -filters'*)
+	printf '%s\n' \
+		' ... libvmaf VV->V Calculate VMAF.' \
+		' ... ssim VV->V Calculate SSIM.' \
+		' ... psnr VV->V Calculate PSNR.'
+	exit 0
+	;;
+*'-hide_banner -bsfs'*)
+	printf '%s\n' 'trace_headers'
+	exit 0
+	;;
+*'-version'*)
+	printf '%s\n' 'ffmpeg version 8.1.2 bounded-fixture'
+	exit 0
+	;;
+esac
+if [[ "$*" == *'-c:v hevc_qsv'* ]]; then
+	printf '%s\n' \
+		'[hevc_qsv @ 0x2000] Runtime selected ratecontrol method: ICQ' \
+		'frame= 150 fps=72.0 q=-0.0 size=1024KiB time=00:00:05.00 speed=1.25x' >&2
+fi
+last="${!#}"
+if [[ "$last" != '-' && "$last" != '/dev/null' ]]; then
+	mkdir -p "$(dirname "$last")"
+	printf '%s\n' 'bounded capability media' >"$last"
+fi
+EOF
+	cat >"$capability_bin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ffprobe\t%s\n' "$*" >>"$CAPABILITY_COMMANDS"
+if [[ "${1:-}" == '-version' ]]; then
+	printf '%s\n' 'ffprobe version 8.1.2 bounded-fixture'
+	result=0
+else
+	printf '%s\n' '{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+	result=0
+fi
+exit "$result"
+EOF
+	cat >"$capability_bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == '-u' ]]
+printf '%s\n' '568'
+EOF
+	chmod +x "$capability_bin/ffmpeg" "$capability_bin/ffprobe" "$capability_bin/id"
+	export PATH="$capability_bin:$PATH"
+	export CAPABILITY_COMMANDS="$BATS_TEST_TMPDIR/capability-commands.tsv"
+	: >"$CAPABILITY_COMMANDS"
+}
+
+produce_capability_evidence() {
+	local benchmark samples
+	benchmark="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh"
+	samples="$BATS_TEST_TMPDIR/capability-samples.json"
+	yq -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$samples"
+	create_capability_producer_stubs
+	run env BENCHMARK_TEST_MODE=1 \
+		BENCHMARK_OUT="$BATS_TEST_TMPDIR/capability-out" \
+		BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/capability-scratch" \
+		BENCHMARK_SAMPLES_FILE="$samples" \
+		BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb' \
+		BENCHMARK_TEST_FDINFO_FIXTURE="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/tests/fixtures/logs/drm-fdinfo-active.log" \
+		NODE_NAME=nuc2 "$benchmark" capabilities
+	[ "$status" -eq 0 ]
+	CAPABILITY_PRODUCER_OUTPUT="$output"
+}
+
 # D01: A near-match confirmation must never reach either Job-creation path.
 @test "capability and quality dispatch require exact mode-bound confirmations" {
 	assert_guard_refuses ENCODE_BENCHMARK_CAPABILITIES_CONFIRM \
@@ -527,7 +639,50 @@ valid_capability_evidence() {
 
 # D02: The gate recomputes every schema-3 prerequisite; proofStatus alone is not an oracle.
 @test "quality dispatch requires one current semantically passing capability node" {
-	local valid label mutation invalid
+	local producer valid label mutation invalid producer_run
+	produce_capability_evidence
+	producer="$CAPABILITY_PRODUCER_OUTPUT"
+	run jq -e '
+		keys == ["configuredImage","configuredImageDigest","decode","diagnosticCapabilities",
+			"drmDriver","encodeFps","encodeSpeed","ffmpegVersion","ffprobeVersion","hevcQsv",
+			"initialization","initializationReason","nodeName","proofReasons","proofSchemaVersion",
+			"proofStatus","renderNode","selectedRateControl","status","strategyId","telemetryReason",
+			"telemetryStatus","uid","videoBusyNanoseconds","videoBusyPercent","vmaf"] and
+		.status == "passed" and .strategyId == "qsv-hevc-icq-v1" and
+		.proofSchemaVersion == 3 and .uid == 568 and .initialization == "passed" and
+		.initializationReason == "" and .renderNode == "/dev/dri/renderD128" and
+		.drmDriver == "i915" and .selectedRateControl == "ICQ" and
+		.telemetryStatus == "available" and .telemetryReason == "" and
+		.videoBusyNanoseconds == 800000000 and .videoBusyPercent == 40 and
+		.encodeFps == 72 and .encodeSpeed == 1.25 and .decode == "passed" and
+		.vmaf == "passed" and .diagnosticCapabilities == {
+			traceHeaders:"passed",libvmaf:"passed",ssim:"passed",psnr:"passed",
+			bestEffortTimestampTime:"passed",packetDurationTime:"passed",
+			keyFrame:"passed",pictType:"passed"} and
+		.proofStatus == "passed" and .proofReasons == "" and .hevcQsv == true and
+		.ffmpegVersion == "8.1.2" and .ffprobeVersion == "8.1.2" and
+		.nodeName == "nuc2" and
+		.configuredImage == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
+		.configuredImageDigest == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+	' <<<"$producer"
+	[ "$status" -eq 0 ]
+	run rg -F -- '-global_quality 16 -look_ahead 0 -extbrc 0' "$CAPABILITY_COMMANDS"
+	[ "$status" -eq 0 ]
+	run rg -F -- 'libvmaf=model=version=vmaf_4k_v0.6.1' "$CAPABILITY_COMMANDS"
+	[ "$status" -eq 0 ]
+
+	producer_run='20260802T120000Z-2222aaaa'
+	write_results_fixtures "$producer_run" \
+		'docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	printf '%s\n' "$producer" >"$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$producer_run"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'capability_evidence={"nodeName":"nuc2","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3'* ]]
+	[[ "$output" != *'ffmpegVersion'* && "$output" != *'configuredImage"'* ]]
+	STUB_PODS_JSON="$BATS_TEST_TMPDIR/default-pods.json"
+	export STUB_PODS_JSON
+	unset STUB_JOBS_JSON STUB_LOGS_FILE STUB_IMAGE_EVIDENCE_DIR
+
 	valid="$(valid_capability_evidence)"
 	run jq -e '
 		.nodes | length == 1 and .[0] == {
@@ -594,7 +749,7 @@ CASES
 
 # D03: Four independently located immutable identities and exact ownership form one chain.
 @test "dispatch and results bind configured dispatched running and kubelet image identity" {
-	local run_id expected_image label mutation target bad
+	local run_id expected_image label mutation target bad runtime_samples runtime_evidence
 	expected_image='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
 	run_dispatch run quality 20260802T120000Z-deadbeef
@@ -607,6 +762,64 @@ CASES
 		.configuredImage == $image and .dispatchedImage == $image and .imageId == $image
 	' <<<"$(yq -r '.data."image.json"' "$configmap")"
 	[ "$status" -eq 0 ]
+
+	while IFS=$'\t' read -r label target bad; do
+		reset_cluster_stub_state
+		export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+		case "$target" in
+		dispatched) export STUB_RENDER_DISPATCH_IMAGE="$bad" ;;
+		running) export STUB_HANDOFF_IMAGE_MISSING=1 ;;
+		kubelet) export STUB_HANDOFF_IMAGE_ID="containerd://$bad" ;;
+		owner) export STUB_HANDOFF_BAD_OWNER=1 ;;
+		esac
+		run_dispatch run quality 20260802T120000Z-deadbeef
+		[ "$status" -ne 0 ] || {
+			echo "dispatch handoff mutation passed: $label" >&3
+			return 1
+		}
+		run rg -n $'kubectl\t.* (exec|apply|patch) ' "$STUB_CALLS"
+		[ "$status" -eq 1 ]
+	done <<'CASES'
+configured-dispatched	dispatched	docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+running-handoff	running	unused
+kubelet-image-id	kubelet	docker.io/linuxserver/ffmpeg@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+pod-owner	owner	unused
+CASES
+
+	runtime_samples="$BATS_TEST_TMPDIR/runtime-image-samples.json"
+	yq -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$runtime_samples"
+	runtime_evidence="$BATS_TEST_TMPDIR/runtime-image.json"
+	while IFS=$'\t' read -r label target bad; do
+		jq -n --arg image "$expected_image" '{configuredImage:$image,dispatchedImage:$image,imageId:$image}' \
+			>"$runtime_evidence"
+		dispatch_image="$expected_image"
+		case "$target" in
+		configured) jq --arg bad "$bad" '.runtime.image=$bad' "$runtime_samples" >"$runtime_samples.tmp" && mv "$runtime_samples.tmp" "$runtime_samples" ;;
+		dispatched) jq --arg bad "$bad" '.dispatchedImage=$bad' "$runtime_evidence" >"$runtime_evidence.tmp" && mv "$runtime_evidence.tmp" "$runtime_evidence" ;;
+		running) jq --arg bad "$bad" '.imageId=$bad' "$runtime_evidence" >"$runtime_evidence.tmp" && mv "$runtime_evidence.tmp" "$runtime_evidence" ;;
+		esac
+		runtime_out="$BATS_TEST_TMPDIR/runtime-$label-out"
+		runtime_scratch="$BATS_TEST_TMPDIR/runtime-$label-scratch"
+		run env BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$runtime_out" \
+			BENCHMARK_SCRATCH="$runtime_scratch" BENCHMARK_SAMPLES_FILE="$runtime_samples" \
+			BENCHMARK_DISPATCH_IMAGE="$dispatch_image" BENCHMARK_RUNNING_IMAGE_FILE="$runtime_evidence" \
+			BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 \
+			"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" quality
+		[ "$status" -eq 65 ] || {
+			echo "runtime image mutation did not fail closed: $label/$status" >&3
+			return 1
+		}
+		[ ! -e "$runtime_out" ]
+		[ ! -e "$runtime_scratch" ]
+		# Restore the committed configured image before the next single-field case.
+		jq --arg image "$expected_image" '.runtime.image=$image' "$runtime_samples" \
+			>"$runtime_samples.tmp"
+		mv "$runtime_samples.tmp" "$runtime_samples"
+	done <<'CASES'
+configured-runtime	configured	docker.io/linuxserver/ffmpeg@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+dispatched-runtime	dispatched	docker.io/linuxserver/ffmpeg@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+running-runtime	running	docker.io/linuxserver/ffmpeg@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+CASES
 
 	run_id='20260802T120000Z-1234abcd'
 	reset_cluster_stub_state
@@ -664,19 +877,33 @@ CASES
 
 # D04: Every deployed input is checked by both mutating public recipes before dispatch.
 @test "deployed-source drift refuses capability and quality before mutation" {
-	local label path recipe
-	export STUB_GIT_STALE=1
+	local label path recipe action
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
 	while IFS=$'\t' read -r label path; do
+		# The dispatcher itself intentionally has no Git guard. This control proves that
+		# omitting the recipe guard would reach mutation for this same source case.
+		for action in capabilities 'run quality 20260802T120000Z-deadbeef'; do
+			reset_cluster_stub_state
+			read -r -a arguments <<<"$action"
+			run_dispatch "${arguments[@]}"
+			[ "$status" -eq 0 ]
+			[ "$(mutation_count)" -gt 0 ]
+		done
+
 		export STUB_GIT_DIFF_PATH="$path"
+		export STUB_GIT_STALE=1
 		for recipe in encode-benchmark-capabilities encode-benchmark-quality; do
+			reset_cluster_stub_state
+			export STUB_GIT_DIFF_PATH="$path" STUB_GIT_STALE=1
 			run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" "$recipe"
 			[ "$status" -ne 0 ] || {
 				echo "deployed drift passed: $label/$recipe" >&3
 				return 1
 			}
 			assert_no_mutations
+			run awk -F '\t' '$1 == "git" && $2 == "diff --quiet 1111111111111111111111111111111111111111 -- scripts/lib/rollout.sh kubernetes/mod.just scripts/encode-benchmark kubernetes/apps/media/encode-benchmark" {found=1} END {exit !found}' "$STUB_CALLS"
+			[ "$status" -eq 0 ]
 		done
 	done <<'CASES'
 scripts	scripts/encode-benchmark/dispatch.sh
@@ -685,6 +912,110 @@ template	kubernetes/apps/media/encode-benchmark/templates/job.yaml
 contract	kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh
 recipe	kubernetes/mod.just
 CASES
+}
+
+# D05: Inspect the real dispatch render, raw octal projection, inert Flux inputs, and preflight floor.
+@test "quality Job and preflight preserve the exact finite non-root GPU safety contract" {
+	local app preflight captured rendered preflight_bin preflight_kubeconfig preflight_calls job_contract
+	app="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app"
+	preflight="$PROJECT_ROOT/scripts/encode-benchmark/preflight.sh"
+	reset_cluster_stub_state
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+	run_dispatch run quality 20260802T120000Z-deadbeef
+	[ "$status" -eq 0 ]
+	captured="$(job_capture)"
+	[ -f "$captured" ]
+	[ "$(awk '/^[[:space:]]*defaultMode:/ {count++; if ($0 !~ /defaultMode: 0555$/) bad=1} END {if (count != 1 || bad) exit 1; print count}' "$captured")" -eq 1 ]
+	run rg -n '^[[:space:]]*defaultMode: 555$' "$captured"
+	[ "$status" -eq 1 ]
+	run yq -o=json -I=0 '{
+		"deadline":.spec.activeDeadlineSeconds,"backoff":.spec.backoffLimit,
+		"ttl":.spec.ttlSecondsAfterFinished,"restart":.spec.template.spec.restartPolicy,
+		"priority":.spec.template.spec.priorityClassName,
+		"automount":.spec.template.spec.automountServiceAccountToken,
+		"podSecurity":.spec.template.spec.securityContext,
+		"containerSecurity":.spec.template.spec.containers[0].securityContext,
+		"affinity":.spec.template.spec.affinity,
+		"resources":.spec.template.spec.containers[0].resources,
+		"mounts":[.spec.template.spec.containers[0].volumeMounts[] | select(.name != "media")],
+		"volumes":[.spec.template.spec.volumes[] | select(.name != "media")]
+	}' "$captured"
+	[ "$status" -eq 0 ]
+	job_contract="$output"
+	run jq -e '(.volumes[2].configMap.name | test("^encode-benchmark-scripts-[a-z0-9]{10}$")) and
+		(.volumes[4].configMap.name | test("^encode-benchmark-image-[0-9a-f]{12}$")) and
+		(.volumes[2].configMap.name = "<run-owned-scripts>" |
+		 .volumes[4].configMap.name = "<run-owned-image>" | . == {
+		deadline:129600,backoff:0,ttl:86400,restart:"Never",
+		priority:"encode-benchmark-background",automount:false,
+		podSecurity:{runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,
+			fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}},
+		containerSecurity:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}},
+		affinity:{podAntiAffinity:{requiredDuringSchedulingIgnoredDuringExecution:[{
+			topologyKey:"kubernetes.io/hostname",labelSelector:{matchExpressions:[{
+				key:"app.kubernetes.io/name",operator:"In",values:["plex"]}]}}]}},
+		resources:{requests:{cpu:2,memory:"2Gi","ephemeral-storage":"105Gi","gpu.intel.com/i915":1},
+			limits:{cpu:8,memory:"8Gi","ephemeral-storage":"110Gi","gpu.intel.com/i915":1}},
+		mounts:[
+			{name:"out",mountPath:"/out",subPath:"benchmark"},
+			{name:"scratch",mountPath:"/scratch"},
+			{name:"scripts",mountPath:"/scripts",readOnly:true},
+			{name:"samples",mountPath:"/config/samples.json",subPath:"samples.json",readOnly:true},
+			{name:"image-evidence",mountPath:"/provenance",readOnly:true}],
+		volumes:[
+			{name:"out",persistentVolumeClaim:{claimName:"media-data"}},
+			{name:"scratch",emptyDir:{sizeLimit:"105Gi"}},
+			{name:"scripts",configMap:{name:"<run-owned-scripts>",defaultMode:555}},
+			{name:"samples",configMap:{name:"encode-benchmark-samples",items:[{key:"samples.json",path:"samples.json"}]}},
+			{name:"image-evidence",configMap:{name:"<run-owned-image>",optional:true,
+				items:[{key:"image.json",path:"image.json"}]}}]
+	})' <<<"$output"
+	[ "$status" -eq 0 ] || {
+		echo "captured quality Job contract mismatch: $job_contract" >&3
+		return 1
+	}
+
+	rendered="$BATS_TEST_TMPDIR/d05-rendered.yaml"
+	run kustomize build "$app"
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" >"$rendered"
+	[ "$(yq -N -r 'select(.kind == "Job") | .metadata.name' "$rendered")" = '' ]
+	[ "$(yq -N -r 'select(.kind == "PriorityClass") | [.metadata.name,.value,.preemptionPolicy] | @tsv' "$rendered" | sed '/^$/d')" = $'encode-benchmark-background\t-10\tNever' ]
+	[ "$(yq -N -r 'select(.kind == "ConfigMap") | .metadata.name' "$rendered" | wc -l | tr -d ' ')" -eq 2 ]
+
+	preflight_bin="$BATS_TEST_TMPDIR/preflight-bin"
+	preflight_kubeconfig="$BATS_TEST_TMPDIR/preflight-kubeconfig"
+	preflight_calls="$BATS_TEST_TMPDIR/preflight-calls"
+	mkdir -p "$preflight_bin"
+	printf '%s\n' 'apiVersion: v1' >"$preflight_kubeconfig"
+	: >"$preflight_calls"
+	cat >"$preflight_bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$PREFLIGHT_CALLS"
+case "$*" in
+*' config view '*) printf '%s\n' 'https://192.168.90.20:6443' ;;
+*' get pods --selector app.kubernetes.io/name=plex '*) printf '%s\n' '{"items":[{"spec":{"nodeName":"nuc-plex"},"status":{"phase":"Running"}}]}' ;;
+*' get pvc media-data '*) printf '%s\n' '{"status":{"phase":"Bound"}}' ;;
+*' get kustomization encode-benchmark '*) printf '%s\n' '{"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}' ;;
+*' get nodes '*) printf '%s\n' '{"items":[{"metadata":{"name":"nuc-plex"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc-below"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc-boundary"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}}]}' ;;
+*' get pods --all-namespaces '*) printf '%s\n' '{"items":[]}' ;;
+*'/nodes/nuc-plex/'*) printf '%s\n' '{"node":{"fs":{"availableBytes":123480309760}}}' ;;
+*'/nodes/nuc-below/'*) printf '%s\n' '{"node":{"fs":{"availableBytes":123480309759}}}' ;;
+*'/nodes/nuc-boundary/'*) printf '%s\n' '{"node":{"fs":{"availableBytes":123480309760}}}' ;;
+*) echo "unexpected preflight call: $*" >&2; exit 97 ;;
+esac
+STUB
+	chmod +x "$preflight_bin/kubectl"
+	run env PATH="$preflight_bin:$PATH" PREFLIGHT_CALLS="$preflight_calls" \
+		"$preflight" "$preflight_kubeconfig"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'nuc-plex FAIL plex-node'* ]]
+	[[ "$output" == *'nuc-below FAIL free-nvme-below-115Gi'* ]]
+	[[ "$output" == *'nuc-boundary PASS'* ]]
+	[[ "$output" == *'eligible_nodes=1'* ]]
+	run rg -n '(^| )(create|apply|patch|delete|exec)( |$)' "$preflight_calls"
+	[ "$status" -eq 1 ]
 }
 
 # D08: Rollback uses API-returned ownership and UID preconditions and skips replacements.
@@ -696,13 +1027,19 @@ CASES
 	[ "$status" -ne 0 ]
 	awk -F '\t' '
 		$1 == "kubectl" && $2 ~ / delete job\// {
-			jobs += 1; if ($2 !~ / --preconditions=uid=fixture-job-uid( |$)/) bad=1
+			jobs += 1
+			if ($2 ~ / --preconditions=uid=fixture-job-uid-1( |$)/) job1 += 1
+			else if ($2 ~ / --preconditions=uid=fixture-job-uid-2( |$)/) job2 += 1
+			else bad=1
 		}
 		$1 == "kubectl" && $2 ~ / delete configmap\// {
-			configmaps += 1; if ($2 !~ / --preconditions=uid=fixture-configmap-uid( |$)/) bad=1
+			configmaps += 1
+			if ($2 ~ / --preconditions=uid=fixture-configmap-uid-3( |$)/) configmap3 += 1
+			else bad=1
 		}
 		$1 == "kubectl" && $2 ~ / delete / && $2 !~ /encode-benchmark-(cap|image)-/ {foreign=1}
-		END {exit !(jobs == 2 && configmaps == 1 && !bad && !foreign)}
+		END {exit !(jobs == 2 && job1 == 1 && job2 == 1 && configmaps == 1 &&
+			configmap3 == 1 && !bad && !foreign)}
 	' "$STUB_CALLS"
 	[ ! -e "$STUB_CAPTURE_DIR/unsafe-configmap-delete" ]
 
@@ -710,12 +1047,19 @@ CASES
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	export STUB_HANDOFF_LOG_READY=0
 	export STUB_JOB_REPLACEMENT=1
-	printf '%s\n' 'unrelated-resource' >"$STUB_CAPTURE_DIR/unrelated-resource"
+	printf '%s\n' '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"unrelated-resource-08","uid":"unrelated-resource-uid-08"}}' \
+		>"$STUB_CAPTURE_DIR/Secret-unrelated-resource-08.yaml"
 	run_dispatch capabilities
 	[ "$status" -ne 0 ]
 	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count++} END {print count+0}' \
 		"$STUB_CALLS")" -eq 0 ]
-	[ "$(<"$STUB_CAPTURE_DIR/unrelated-resource")" = 'unrelated-resource' ]
+	run jq -e '.apiVersion == "v1" and .kind == "Secret" and
+		.metadata.name == "unrelated-resource-08" and .metadata.uid == "unrelated-resource-uid-08"' \
+		"$STUB_CAPTURE_DIR/Secret-unrelated-resource-08.yaml"
+	[ "$status" -eq 0 ]
+	[ ! -e "$STUB_CAPTURE_DIR/unsafe-unrelated-delete" ]
+	run rg -F 'secret/unrelated-resource-08' "$STUB_CALLS"
+	[ "$status" -eq 1 ]
 }
 
 # D09: Only one terminal owned quality chain may release one schema-2 bounded line.
@@ -755,12 +1099,16 @@ foreign-runtime	.runtimeRunId="20260802T120000Z-eeeeeeee"
 foreign-artifact	.artifactLocation="/out/runs/20260802T120000Z-eeeeeeee"
 CASES
 
-	for label in extra-job active-job foreign-owner wrong-image; do
+	for label in extra-job extra-pod active-job foreign-owner wrong-image; do
 		write_quality_results_fixtures "$dispatch_id" "$runtime_run_id" "$image_id"
 		case "$label" in
 		extra-job)
 			jq '.items += [.items[0]]' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
 			mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+			;;
+		extra-pod)
+			jq '.items += [.items[0]]' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+			mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
 			;;
 		active-job)
 			jq '.items[0].status={active:1}' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
@@ -793,9 +1141,82 @@ CASES
 
 # D10: Invalid public inputs and retired surfaces stop before every API mutation.
 @test "malformed identities arguments and retired entrypoints fail before mutation" {
-	local label
+	local label surface seam expected_recipes actual_recipes expected_benchmark_actions
+	local actual_benchmark_actions expected_benchmark_modes actual_benchmark_modes
+	local expected_probe_actions actual_probe_actions expected_dispatch_actions actual_dispatch_actions
+	local benchmark probe runmeta
+	benchmark="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh"
+	probe="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/probe.sh"
+	runmeta="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/runmeta.sh"
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
+
+	expected_recipes=$'encode-benchmark-capabilities\nencode-benchmark-preflight\nencode-benchmark-quality\nencode-benchmark-results\nencode-benchmark-validate\nencode-benchmark-verify'
+	actual_recipes="$(awk '
+		/^encode-benchmark-[a-z0-9-]+([^:]*)?:/ {
+			name=$1; sub(/:.*/, "", name); print name
+		}
+	' "$PROJECT_ROOT/kubernetes/mod.just" | LC_ALL=C sort)"
+	[ "$actual_recipes" = "$expected_recipes" ]
+	expected_benchmark_actions=$'commands\ndeclared-commands\ndrm-fdinfo-metrics\nencoder-commands\nicq-setting\nicq-settings\nqsv-proof\nquality-evidence-for-ranking\nquality-work-plan\nrank-quality-candidates\nrecord-quality-skips\nrecord-result\nresults-header\nrunning-image-evidence\nruntime-selection-is-icq\nvalidate-probes\nvmaf-stats'
+	actual_benchmark_actions="$(awk '
+		/^test_dispatch\(\)/ {in_function=1}
+		in_function && /^[[:space:]]*case "\$action" in$/ {in_case=1; next}
+		in_case && /^[[:space:]]*esac$/ {exit}
+		in_case && /^[[:space:]]*[a-z][a-z0-9-]*\)$/ {
+			action=$1; sub(/\)$/, "", action); print action
+		}
+	' "$benchmark" | LC_ALL=C sort)"
+	[ "$actual_benchmark_actions" = "$expected_benchmark_actions" ]
+	expected_benchmark_modes=$'capabilities\nquality'
+	actual_benchmark_modes="$(awk '
+		/^mode="\$1"$/ {in_main=1; next}
+		in_main && /^case "\$mode" in$/ {in_case=1; next}
+		in_case && /^esac$/ {exit}
+		in_case && /^[a-z][a-z0-9-]*\)$/ {mode=$0; sub(/\)$/, "", mode); print mode}
+	' "$benchmark" | LC_ALL=C sort)"
+	[ "$actual_benchmark_modes" = "$expected_benchmark_modes" ]
+	expected_probe_actions=$'quality-hdr-frame\nquality-hdr-normalize-oracle\nquality-hdr-stream\nquality-hdr-trace'
+	actual_probe_actions="$(awk '
+		/^case "\$\{1:-\}" in$/ {in_case=1; next}
+		in_case && /^esac$/ {exit}
+		in_case && /^[a-z][a-z0-9-]*\)$/ {action=$0; sub(/\)$/, "", action); print action}
+	' "$probe" | LC_ALL=C sort)"
+	[ "$actual_probe_actions" = "$expected_probe_actions" ]
+	expected_dispatch_actions=$'capabilities\nrun'
+	actual_dispatch_actions="$(awk '
+		/^case "\$action" in$/ {in_case=1; next}
+		in_case && /^esac$/ {exit}
+		in_case && /^[a-z][a-z0-9-]*\)$/ {action=$0; sub(/\)$/, "", action); print action}
+	' "$DISPATCH" | LC_ALL=C sort)"
+	[ "$actual_dispatch_actions" = "$expected_dispatch_actions" ]
+
+	for surface in diagnostic x265 finalist findings savings contention census selection stills cleanup bootstrap; do
+		run env BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$BATS_TEST_TMPDIR/retired-out" \
+			BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/retired-scratch" \
+			BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/retired-samples.json" \
+			"$benchmark" "$surface"
+		[ "$status" -eq 64 ] || {
+			echo "retired benchmark surface passed: $surface" >&3
+			return 1
+		}
+		run "$probe" "$surface" extra
+		[ "$status" -eq 64 ] || {
+			echo "retired probe surface passed: $surface" >&3
+			return 1
+		}
+		run_dispatch "$surface"
+		[ "$status" -eq 64 ] || {
+			echo "retired dispatch surface passed: $surface" >&3
+			return 1
+		}
+		run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" "encode-benchmark-$surface"
+		[ "$status" -ne 0 ] || {
+			echo "retired recipe surface passed: $surface" >&3
+			return 1
+		}
+		assert_no_mutations
+	done
 
 	while IFS=$'\t' read -r label command_line; do
 		read -r -a arguments <<<"$command_line"
@@ -820,26 +1241,39 @@ collision	run quality 20260802T120000Z-deadbeef
 wrong-api	capabilities
 CASES
 
-	run env BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$BATS_TEST_TMPDIR/retired-out" \
-		BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/retired-scratch" \
-		BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/retired-samples.json" \
-		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" diagnostic
-	[ "$status" -eq 64 ]
-	run "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/probe.sh" \
-		diagnostic-identity source 0 90
-	[ "$status" -eq 64 ]
-	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" encode-benchmark-diagnostic
-	[ "$status" -ne 0 ]
-	assert_no_mutations
+	while IFS=$'\t' read -r seam value; do
+		run env ENCODE_BENCHMARK_TEST_MODE=0 "$seam=$value" \
+			"$DISPATCH" "$KUBECONFIG_FIXTURE" capabilities
+		[ "$status" -eq 64 ] || {
+			echo "dispatch test seam passed: $seam/$status" >&3
+			return 1
+		}
+	done <<CASES
+ENCODE_BENCHMARK_APP_DIR	$BATS_TEST_TMPDIR/foreign-app
+ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS	0
+ENCODE_BENCHMARK_NOW	20260802T120000Z
+CASES
 
-	run env ENCODE_BENCHMARK_TEST_MODE=0 ENCODE_BENCHMARK_APP_DIR="$BATS_TEST_TMPDIR/foreign-app" \
-		"$DISPATCH" "$KUBECONFIG_FIXTURE" capabilities
-	[ "$status" -eq 64 ]
-	run env BENCHMARK_TEST_MODE=0 BENCHMARK_OUT="$BATS_TEST_TMPDIR/foreign-out" \
-		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" quality
-	[ "$status" -eq 64 ]
-	run env BENCHMARK_TEST_MODE=0 BENCHMARK_OUT="$BATS_TEST_TMPDIR/foreign-out" \
-		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/runmeta.sh" create quality
-	[ "$status" -eq 64 ]
+	for seam in BENCHMARK_OUT BENCHMARK_SCRATCH BENCHMARK_SAMPLES_FILE \
+		BENCHMARK_TEST_QUALITY_PLAN_FILE BENCHMARK_RUNNING_IMAGE_FILE \
+		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS BENCHMARK_RUNNING_IMAGE \
+		BENCHMARK_TEST_SOURCE_PROBE BENCHMARK_TEST_OUTPUT_PROBE \
+		BENCHMARK_TEST_FDINFO_FIXTURE BENCHMARK_TEST_INVALID_OUTPUT_MATCH \
+		BENCHMARK_TEST_INVALID_OUTPUT_PROBE BENCHMARK_TEST_FAIL_RESULT_APPEND \
+		BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING \
+		BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE; do
+		run env BENCHMARK_TEST_MODE=0 "$seam=$BATS_TEST_TMPDIR/forbidden" "$benchmark" quality
+		[ "$status" -eq 64 ] || {
+			echo "benchmark test seam passed: $seam/$status" >&3
+			return 1
+		}
+	done
+	for seam in BENCHMARK_IDENTITY_FIXTURE BENCHMARK_NOW; do
+		run env BENCHMARK_TEST_MODE=0 "$seam=$BATS_TEST_TMPDIR/forbidden" "$runmeta" create quality
+		[ "$status" -eq 64 ] || {
+			echo "runmeta test seam passed: $seam/$status" >&3
+			return 1
+		}
+	done
 	assert_no_mutations
 }
