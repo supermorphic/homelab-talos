@@ -2991,14 +2991,14 @@ n8n:
       kubectl --kubeconfig "$kubeconfig" --namespace automation get job "$backup_job" \
         --output json 2>/dev/null | yq -r '
           {
-            name: .metadata.name,
-            active: (.status.active // 0),
-            succeeded: (.status.succeeded // 0),
-            failed: (.status.failed // 0),
-            conditions: [.status.conditions[]? | {
-              type: .type,
-              status: .status,
-              reason: (.reason // "")
+            "name": .metadata.name,
+            "active": (.status.active // 0),
+            "succeeded": (.status.succeeded // 0),
+            "failed": (.status.failed // 0),
+            "conditions": [.status.conditions[]? | {
+              "type": .type,
+              "status": .status,
+              "reason": (.reason // "")
             }]
           }
         ' >&2 || true
