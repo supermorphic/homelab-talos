@@ -459,6 +459,126 @@ request fails with an allowed status; and every non-production path returns `404
 rule first to contain public exposure, then investigate without weakening the exact route
 or negative tests.
 
+## Add a public webhook integration
+
+Use this procedure after the initial public Platform Canary has passed acceptance. The
+UniFi TCP/443 forward, public DNS record, certificate, hostname, and dedicated Envoy data
+plane are shared edge infrastructure. Do not create another port forward or public DNS
+name for each n8n workflow. Each integration instead receives one explicitly reviewed,
+non-overlapping exact path on `hooks.lab.supermorphic.com`.
+
+**Start when:** The existing public edge passes `mise exec -- just kube n8n-verify`, the
+new provider's delivery and authentication contracts are known, and the intended workflow
+can be tested privately. Keep the new path absent from the public HTTPRoute while preparing
+the workflow.
+
+### Prepare and prove the private workflow
+
+1. Select one stable production path. Use an `Exact` match under `/webhook/`; do not add a
+   `/webhook/*`, `PathPrefix`, root, editor, API, metrics, or test-webhook route.
+2. Store the provider credential in the operator password manager and an approved n8n or
+   SOPS-managed credential location. Do not place it in workflow JSON, Git, shell history,
+   command arguments, or test output.
+3. Implement the provider's strongest verified authentication contract. Prefer a signed
+   payload over a static token or source-IP rule. Reject missing or invalid authentication
+   before business processing or a successful response.
+4. Create and publish the workflow through the private editor. Exercise its production
+   webhook path privately with representative authenticated and unauthenticated requests.
+   Require the authenticated execution to be visibly `Succeeded` with the same event or
+   correlation identifier. Require missing or invalid authentication to fail.
+5. Confirm retry, concurrency, and duplicate-event behavior from the provider contract.
+   Use the provider event identifier for idempotency when duplicate delivery is possible.
+
+For TheirStack, follow its
+[signature-verification contract](https://theirstack.com/en/docs/webhooks/verify-webhook-signatures):
+configure a signing secret and validate `X-TheirStack-Signature-256` as the HMAC-SHA256
+signature of the unchanged raw request body. Use a timing-safe comparison. Parsing and
+reserializing JSON before verification can change the signed bytes; do not publish the
+path until the workflow proves the exact raw payload contract. A source-IP allowlist is
+optional defense in depth only when TheirStack publishes stable delivery ranges. Do not
+infer an allowlist from observed addresses.
+
+**Complete when:** The workflow is published privately, its provider authentication and
+duplicate handling are proven, an authenticated execution is visibly successful, and the
+public route still does not contain the new path.
+
+**Stop if:** The provider authentication, raw-body handling, retry behavior, private
+execution, or credential storage is uncertain. Do not compensate with an obscure path or
+a broad public route.
+
+### Add the exact path through Git
+
+Create a dedicated integration activation PR. Add exactly one reviewed path match to
+`kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml`, targeting only
+the intended Service and port. Update the n8n source validator, live verifier, and their
+route-inventory tests in the same PR so the new exact route becomes an explicit invariant
+rather than an unvalidated exception.
+
+The existing `ReferenceGrant` is sufficient when the route remains in
+`networking-public` and targets the existing `automation/n8n` Service. A route to another
+Service or namespace requires its own narrowly scoped grant; do not broaden the n8n grant.
+Add provider-specific monitoring when it supplies an independent delivery or processing
+signal. Do not weaken the Platform Canary, its monitoring, or its negative-path tests.
+
+Run the repository validations required by the changed components:
+
+```bash
+mise exec -- just kube gatus-validate
+mise exec -- just kube n8n-validate
+mise exec -- just kube alerts-validate monitoring
+mise exec -- just ci
+git diff --check
+```
+
+Obtain review and explicit merge authorization. Merge only after required checks pass,
+then wait for Flux source revision parity and current Ready conditions. Publishing the n8n
+workflow alone is not public activation; the reviewed HTTPRoute transition is the public
+allowlist.
+
+**Complete when:** The PR contains one exact new path, its backend and grant are narrow,
+the route inventory and monitoring assertions include it, required validation passes, and
+Flux has reconciled the merged revision.
+
+**Stop if:** The path overlaps an existing route, a validator or verifier needs to be
+bypassed, the backend grant is broader than one intended Service, or Flux does not reach
+the merged revision. Keep or restore the path as absent while correcting the failure.
+
+### Accept the new integration off-network
+
+Use a client outside the LAN and private VPN, or the provider's supported test-delivery
+function. Prove all of the following without printing a credential:
+
+- an authenticated or correctly signed delivery to the new exact path succeeds;
+- its provider event or correlation identifier matches a visibly successful n8n
+  execution;
+- missing, malformed, or invalid authentication fails without successful processing;
+- a neighboring unlisted path and the related test-webhook path return `404`;
+- the editor, API, metrics, and root paths remain unavailable; and
+- the existing Platform Canary and `mise exec -- just kube n8n-verify` remain healthy.
+
+**Complete when:** Both the positive delivery and every negative boundary check pass, the
+matching execution is successful, and any selected integration-specific monitoring
+observes its intended signal.
+
+**Stop if:** Any positive or negative check fails. Remove only the new exact path through a
+reviewed Git change, wait for Flux reconciliation, and prove it absent before
+troubleshooting a publicly reachable workflow. Remove the shared UniFi forward first only
+when broader containment is required.
+
+### Remove one integration
+
+Disable new delivery at the provider first. Preserve its credential through the
+provider's retry window. In one reviewed Git change, remove the exact route match and its
+integration-specific monitoring, then wait for Flux reconciliation and prove that path
+returns `404` while the Platform Canary and other approved paths still work. Remove the
+workflow or credential only after retained deliveries and recovery requirements no longer
+need them.
+
+Keep the shared DNS record, certificate, Gateway, and UniFi TCP/443 forward when another
+approved webhook path remains. If this is the last public integration, use
+[public exposure rollback](#public-exposure-rollback), including route pruning before
+suspension and router-forward removal ordering.
+
 ## Day-2 operation and controlled assurance
 
 Use `mise exec -- just kube n8n-verify` for normal read-only day-2 verification. The
