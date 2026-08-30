@@ -390,6 +390,37 @@ bash "$n8n_verification_contract_test" >/dev/null || {
 # order. The public route is never resumed or reconciled by this recipe.
 just --show bootstrap n8n >"$temp_dir/bootstrap-n8n-source"
 bootstrap_source="$temp_dir/bootstrap-n8n-source"
+for marker in \
+  '"name": .metadata.name,' \
+  '"active": (.status.active // 0),' \
+  '"succeeded": (.status.succeeded // 0),' \
+  '"failed": (.status.failed // 0),' \
+  '"conditions": [.status.conditions[]? | {' \
+  '"type": .type,' \
+  '"status": .status,' \
+  '"reason": (.reason // "")'; do
+  rg -Fq -- "$marker" "$bootstrap_source" || {
+    echo "n8n bootstrap backup diagnostics marker is absent: $marker" >&2
+    exit 1
+  }
+done
+printf '%s\n' '{"metadata":{"name":"backup"},"status":{"failed":1}}' |
+  yq -p=json -o=json -e '{
+    "name": .metadata.name,
+    "active": (.status.active // 0),
+    "succeeded": (.status.succeeded // 0),
+    "failed": (.status.failed // 0),
+    "conditions": [.status.conditions[]? | {
+      "type": .type,
+      "status": .status,
+      "reason": (.reason // "")
+    }]
+  }' >"$temp_dir/bootstrap-backup-summary.json"
+[[ "$(yq -r '[.name, .active, .succeeded, .failed, (.conditions | length)] |
+    join(",")' "$temp_dir/bootstrap-backup-summary.json")" == 'backup,0,0,1,0' ]] || {
+  echo 'The n8n bootstrap backup diagnostic filter does not produce the expected summary.' >&2
+  exit 1
+}
 # shellcheck disable=SC2016 # These are literal markers from the rendered recipe.
 for marker in \
   "expected_confirmation='bootstrap:n8n'" \
@@ -497,7 +528,7 @@ if rg -n 'kubectl[^\n]*(get|describe)[^\n]*secrets?|"kind": "HTTPRoute"|kubectl[
   exit 1
 fi
 # shellcheck disable=SC2016 # These are literal recovery-source markers.
-for marker in 'LC_ALL=C sort -r' 'sha256sum --check' 'pg_restore --list' \
+for marker in 'LC_ALL=C sort -r' 'sha256sum -c' 'pg_restore --list' \
   'pg_restore --dbname=' 'credentialDecryptionProvedByAuthenticatedCanary' \
   'dropdb --if-exists --force' 'write_phase cleanup failed' \
   'automation_policy="$resource_prefix-automation"' \
@@ -511,6 +542,10 @@ for marker in 'LC_ALL=C sort -r' 'sha256sum --check' 'pg_restore --list' \
     exit 1
   }
 done
+! rg -Fq 'sha256sum --check' "$n8n_restore_drill" || {
+  echo 'The Alpine restore container must not use GNU-only sha256sum options.' >&2
+  exit 1
+}
 if rg -n 'SELECT[[:space:]]+([^;]*\.)?data\b|credential\.data' "$n8n_restore_drill"; then
   echo 'The n8n restore drill selects credential ciphertext.' >&2
   exit 1
@@ -1009,7 +1044,7 @@ for marker in \
   'printf '\''%s  %s\n'\'' "$checksum" "$(basename "$final_dump")"' \
   'mv -- "$temporary_dump" "$final_dump"' \
   'mv -- "$temporary_checksum" "$final_checksum"' \
-  '(cd "$backup_dir" && sha256sum --check "$(basename "$final_checksum")")' \
+  '(cd "$backup_dir" && sha256sum -c "$(basename "$final_checksum")")' \
   'psql --set=ON_ERROR_STOP=1 --set=completed_at="$completed_at"'; do
   marker_line="$(rg -n -m 1 -F -- "$marker" "$temp_dir/backup.sh" | cut -d: -f1)"
   [[ -n "$marker_line" && "$marker_line" -gt "$previous_line" ]] || {
@@ -1018,6 +1053,14 @@ for marker in \
   }
   previous_line="$marker_line"
 done
+! rg -Fq 'sha256sum --check' "$temp_dir/backup.sh" || {
+  echo 'The Alpine backup container must not use GNU-only sha256sum options.' >&2
+  exit 1
+}
+[[ "$(rg -c 'sha256sum -c' "$temp_dir/backup.sh")" == '2' ]] || {
+  echo 'Every backup checksum verification must use BusyBox-compatible sha256sum -c.' >&2
+  exit 1
+}
 cleanup_line="$(rg -n -m 1 -F -- 'find "$backup_dir"' "$temp_dir/backup.sh" | cut -d: -f1)"
 [[ -n "$cleanup_line" && "$cleanup_line" -gt "$previous_line" ]] || {
   echo 'Backup cleanup must occur only after the status upsert.' >&2
