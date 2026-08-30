@@ -620,6 +620,44 @@ append_representative_plan_row() {
 		[ "$(<"$outside/sentinel")" = "$shape sentinel" ]
 	done
 
+	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/first-run-out"
+	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/first-run-scratch"
+	outside="$BATS_TEST_TMPDIR/first-run-outside"
+	mkdir -p "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH" "$outside"
+	printf '%s\n' 'first-run outside sentinel' >"$outside/sentinel"
+	[ ! -e "$BENCHMARK_OUT/runs" ]
+	prepare_representative_run sample-first-run avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-first-run detail 16
+	measured_before="$(<"$BENCHMARK_COMMAND_LOG")"
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	[[ "$run_id" =~ ^20260802T120000Z-[0-9a-f]{8}$ ]]
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	[ -d "$BENCHMARK_OUT/runs" ]
+	[ -d "$run_dir" ]
+	[ "$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -eq 1 ]
+	results="$run_dir/results.csv"
+	run awk -F, 'NR == 2 {print $3 ":" $10} END {if (NR != 2) exit 1}' "$results"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'sample-first-run:passed' ]
+	evidence_path="$(awk -F, 'NR == 2 {print $40}' "$results")"
+	[ "$evidence_path" = 'quality-evidence/sample-first-run-detail-qsv-16-attempt-1.json' ]
+	run jq -e --arg run "$run_id" '
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		.runId == $run and .sampleId == "sample-first-run" and
+		.clipId == "detail" and .globalQuality == 16
+	' "$run_dir/$evidence_path"
+	[ "$status" -eq 0 ] || {
+		echo "first-run evidence contract failed: $output" >&3
+		return 1
+	}
+	measured_after="$(<"$BENCHMARK_COMMAND_LOG")"
+	[ "$measured_after" != "$measured_before" ]
+	[[ "$measured_after" == *'-global_quality 16 -look_ahead 0 -extbrc 0'* ]]
+	[ "$(<"$outside/sentinel")" = 'first-run outside sentinel' ]
+
 	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/success-out"
 	export BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/success-scratch"
 	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
