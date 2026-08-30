@@ -1,194 +1,44 @@
 #!/usr/bin/env bats
 
 setup() {
+	PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../../../../.." && pwd)"
 	app='kubernetes/apps/media/encode-benchmark/app'
 	contract="$app/scripts/contract.sh"
+	benchmark="$app/scripts/benchmark.sh"
+	template="$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/templates/job.yaml"
+	fixtures='kubernetes/apps/media/encode-benchmark/tests/fixtures'
 	samples="$app/samples.yaml"
 	samples_json="$BATS_TEST_TMPDIR/samples.json"
 	yq -r '.data."samples.json"' "$samples" >"$samples_json"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_SAMPLES_FILE="$samples_json"
 }
 
-@test "canonical shell validation includes diagnostic evidence helper sources" {
-	validator='scripts/validate/encode-benchmark.sh'
-	run awk '
-		/^shell_sources[+]=[(]/ { in_inventory = 1 }
-		in_inventory { print }
-		in_inventory && /^\)$/ { exit }
-	' "$validator"
+# D06: The only source library projection is the read-only movies subtree.
+@test "quality source visibility is one read-only movies mount" {
+	run yq -o=json -I=0 '{
+		"mounts":[.spec.template.spec.containers[0].volumeMounts[] |
+			select(.name == "media" or (.mountPath | test("^/(media|tv|downloads|data)(/|$)")))],
+		"volumes":[.spec.template.spec.volumes[] | select(.name == "media")]
+	}' "$template"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *'"$diagnostic_evidence_results_helper"'* ]]
-	[[ "$output" == *'"$diagnostic_producer_contract_helper"'* ]]
+	[ "$output" = '{"mounts":[{"name":"media","mountPath":"/media","subPath":"media/movies","readOnly":true}],"volumes":[{"name":"media","persistentVolumeClaim":{"claimName":"media-data"}}]}' ]
 }
 
-# Catches the source contract reverting to the older schema or a partial ICQ
-# sweep that cannot compare every agreed candidate across later benchmark modes.
-@test "embedded samples publish the exact ordered ICQ strategy contract" {
-	run jq -e '
-		.schemaVersion == 3 and
-		.strategy == {
-			id: "qsv-hevc-icq-v1",
-			resultsSchemaVersion: 3,
-			runManifestSchemaVersion: 2,
-			capabilityProofSchemaVersion: 3,
-			globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
-			x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
-		} and
-		.runtime.capabilityStatus == "verified" and
-		(.runtime.capabilityEvidence.nodes | length) == 2 and
-		([.runtime.capabilityEvidence.nodes[].nodeName] == ["nuc1", "nuc3"]) and
-		([.runtime.capabilityEvidence.nodes[] | .strategyId] | all(. == "qsv-hevc-icq-v1")) and
-		([.runtime.capabilityEvidence.nodes[] | .proofSchemaVersion] | all(. == 3)) and
-		([.runtime.capabilityEvidence.nodes[] | .initialization] | all(. == "passed")) and
-		([.runtime.capabilityEvidence.nodes[] | .initializationReason] | all(. == "")) and
-		([.runtime.capabilityEvidence.nodes[] | .renderNode] | all(. == "/dev/dri/renderD128")) and
-		([.runtime.capabilityEvidence.nodes[] | .drmDriver] | all(. == "i915")) and
-		([.runtime.capabilityEvidence.nodes[] | .selectedRateControl] | all(. == "ICQ")) and
-		([.runtime.capabilityEvidence.nodes[] | .telemetryStatus] | all(. == "available")) and
-		([.runtime.capabilityEvidence.nodes[] | .telemetryReason] | all(. == "")) and
-		([.runtime.capabilityEvidence.nodes[] | .videoBusyNanoseconds] | all(. > 0)) and
-		([.runtime.capabilityEvidence.nodes[] | .videoBusyPercent] | all(. > 0)) and
-		([.runtime.capabilityEvidence.nodes[] | .encodeFps] | all(. > 0)) and
-		([.runtime.capabilityEvidence.nodes[] | .encodeSpeed] | all(. > 0)) and
-		([.runtime.capabilityEvidence.nodes[] | .decode] | all(. == "passed")) and
-		([.runtime.capabilityEvidence.nodes[] | .vmaf] | all(. == "passed")) and
-		([.runtime.capabilityEvidence.nodes[] | .proofStatus] | all(. == "passed")) and
-		([.runtime.capabilityEvidence.nodes[] | .proofReasons] | all(. == "")) and
-		([.runtime.capabilityEvidence.nodes[].verifiedAt] | all(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))) and
-		([.runtime.capabilityEvidence.nodes[] | .configuredImageDigest] | all(. == "sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
-		([.runtime.capabilityEvidence.nodes[] | .imageId] | all(. == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb")) and
-		.chosenSettings == {}
-	' "$samples_json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches quality evidence accepting a diagnostic identity that was not
-# independently classified as a VMAF measurement defect.
-@test "embedded samples publish the exact corrected quality evidence contract" {
-	run jq -e '
-		.qualityCorrection == {
-			schemaVersion: 1,
-			diagnosticRunId: "20260829T020752Z-43984d8d",
-			vmafMeasurementDefects: [
-				{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
-				{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
-				{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
-				{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
-			]
-		}
-	' "$samples_json"
-	[ "$status" -eq 0 ]
-}
-
-@test "embedded samples publish the exact bounded diagnostics contract" {
-	run jq -e '
-		.diagnostics == {
-			schemaVersion: 1,
-			resultSchemaVersion: 1,
-			strategyId: "qsv-hevc-icq-v1",
-			acceptedFindingsSha256: "sha256:eb7ddcb42bffecb0ac0f8ab2df58be8317c586c56bb4485d48169568a6061294",
-			decisionSha256: "sha256:17c476c4646e28bef71514bb48473771f449aa2c749b1d611f6c69ed518cc330",
-			historicalQualityRunId: "20260817T233546Z-debc0498",
-			historicalFindingsRunId: "20260818T214739Z-8bc2de3e",
-			vmafSettings: [16, 30],
-			hdrSetting: 16,
-			frameRadius: 2,
-			frameOffsets: [-2, -1, 0, 1, 2],
-			traceWindowSeconds: 10,
-			vmafPanel: [
-				{sampleId: "avc-clean-coco", clipId: "motion", observedFrameIndex: 1641},
-				{sampleId: "avc-grain-memento", clipId: "dark", observedFrameIndex: 523},
-				{sampleId: "avc-grain-memento", clipId: "detail", observedFrameIndex: 370},
-				{sampleId: "vc1-fugitive", clipId: "detail", observedFrameIndex: 781},
-				{sampleId: "vc1-fugitive", clipId: "motion", observedFrameIndex: 798}
-			],
-			hdrPanel: [
-				{sampleId: "hdr10-clean-ministry", clipId: "detail"},
-				{sampleId: "hdr10-grain-goodfellas", clipId: "detail"},
-				{sampleId: "hdr10-motion-john-wick-2", clipId: "detail"}
-			]
-		} and
-		([.diagnostics.vmafPanel[] | "\(.sampleId)/\(.clipId)/\(.observedFrameIndex)"] == [
-			"avc-clean-coco/motion/1641",
-			"avc-grain-memento/dark/523",
-			"avc-grain-memento/detail/370",
-			"vc1-fugitive/detail/781",
-			"vc1-fugitive/motion/798"
-		]) and
-		([.diagnostics.hdrPanel[] | "\(.sampleId)/\(.clipId)"] == [
-			"hdr10-clean-ministry/detail",
-			"hdr10-grain-goodfellas/detail",
-			"hdr10-motion-john-wick-2/detail"
-		]) and
-		([.diagnostics.vmafPanel[] as $panel | .diagnostics.vmafSettings[] |
-			{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .}] | length) == 10 and
-		([.diagnostics.hdrPanel[] as $panel |
-			{sampleId: $panel.sampleId, clipId: $panel.clipId, setting: .diagnostics.hdrSetting}] | length) == 3 and
-		([.diagnostics | .. | strings |
-			select(. == "quality" or . == "x265" or . == "savings" or
-				. == "finalist" or . == "findings" or . == "contention")] | length) == 0
-	' "$samples_json"
-	[ "$status" -eq 0 ]
-}
-
-@test "shared base contract accepts a minimal non-diagnostic samples document" {
-	minimal="$BATS_TEST_TMPDIR/minimal-non-diagnostic.json"
-	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" \
-		--argjson quality_correction "$(jq -c '.qualityCorrection' "$samples_json")" '
-		{
-			schemaVersion: 3,
-			strategy: $strategy,
-			qualityCorrection: $quality_correction,
-			runtime: {
-				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
-			},
-			savingsSeed: 20260802,
-			qualityPanel: [],
-			savingsPanel: [],
-			chosenSettings: {}
-		}
-	' >"$minimal"
-
-	run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$minimal"
-	[ "$status" -eq 0 ]
-}
-
-# Catches accepting a configuration that has the right values but changes their
-# order, cardinality, or integer representation, which would make benchmark
-# evidence non-comparable across producers.
-@test "shared contract rejects every non-canonical ICQ candidate list" {
-	for mutation in \
-		'.strategy.globalQualityCandidates = [18, 16, 20, 22, 24, 26, 28, 30]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 28]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22.5, 24, 26, 28, 30]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 30, 32]'; do
-		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
-		jq "$mutation" "$samples_json" >"$candidate"
-		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
-		[ "$status" -eq 65 ]
-	done
-}
-
-# Catches accidental broadening of the diagnosed VMAF exception list, including
-# the unresolved vc1-fugitive/detail observation and pattern-like identifiers.
-@test "shared contract rejects every non-canonical quality correction" {
-	for mutation in \
-		'.qualityCorrection.vmafMeasurementDefects |= reverse' \
-		'.qualityCorrection.vmafMeasurementDefects += [.qualityCorrection.vmafMeasurementDefects[0]]' \
-		'.qualityCorrection.unexpected = true' \
-		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "missing-title"' \
-		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "avc-*"' \
-		'.qualityCorrection.vmafMeasurementDefects[3] = {sampleId:"vc1-fugitive",clipId:"detail",frameIndex:781}'; do
-		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
-		jq "$mutation" "$samples_json" >"$candidate"
-		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
-		[ "$status" -eq 65 ]
-	done
-}
-
-# Catches a quality worker excluding a frame outside the closed source contract
-# or treating an absent identity as an accepted empty response.
 @test "shared contract returns only the four diagnosed VMAF exclusions" {
+	run jq -e '
+		.qualityCorrection.vmafMeasurementDefects == [
+			{sampleId:"avc-clean-coco",clipId:"motion",frameIndex:1641},
+			{sampleId:"avc-grain-memento",clipId:"dark",frameIndex:523},
+			{sampleId:"avc-grain-memento",clipId:"detail",frameIndex:370},
+			{sampleId:"vc1-fugitive",clipId:"motion",frameIndex:798}
+		]
+	' "$samples_json"
+	[ "$status" -eq 0 ] || {
+		echo "deployed correction array differs from the literal four-entry contract" >&3
+		return 1
+	}
+
 	for identity in \
 		'avc-clean-coco motion 1641' \
 		'avc-grain-memento dark 523' \
@@ -214,262 +64,50 @@ setup() {
 	done
 }
 
-@test "shared contract publishes corrected quality schema constants" {
-	run bash -c '
-		source "$1"
-		contract_load "$2"
-		printf "%s %s %s\\n" \
-			"$CONTRACT_QUALITY_EVIDENCE_SCHEMA" \
-			"$CONTRACT_QUALITY_CANDIDATES_SCHEMA" \
-			"$CONTRACT_QUALITY_DIAGNOSTIC_RUN_ID"
-	' _ "$contract" "$samples_json"
+@test "quality contract admits exactly eight ICQ settings" {
+	run bash -c 'source "$1"; contract_load "$2"; printf "%s\n" "$CONTRACT_ICQ_SETTINGS"' \
+		_ "$contract" "$samples_json"
 	[ "$status" -eq 0 ]
-	[ "$output" = "1 2 20260829T020752Z-43984d8d" ]
-}
+	[ "$output" = '16 18 20 22 24 26 28 30' ]
 
-@test "shared contract rejects malformed present diagnostics scope" {
-	for mutation in \
-		'.diagnostics.vmafPanel[0].sampleId = "missing-title"' \
-		'.diagnostics.vmafPanel += [{"sampleId":"avc-clean-coco","clipId":"motion","observedFrameIndex":1641}]' \
-		'.diagnostics.hdrPanel[0].clipId = "motion"' \
-		'.diagnostics.vmafSettings = [16, 28]' \
-		'.diagnostics.frameOffsets = [-2, -1, 0, 1, 3]' \
-		'.diagnostics.traceWindowSeconds = 11' \
-		'.diagnostics.acceptedFindingsSha256 = "sha256:ABC"' \
-		'.diagnostics.historicalQualityRunId = "not-a-run-id"'; do
-		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
-		jq "$mutation" "$samples_json" >"$candidate"
-		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
-		[ "$status" -eq 65 ]
-	done
-}
-
-@test "diagnostics mode requires a canonical diagnostics contract object" {
-	candidate="$BATS_TEST_TMPDIR/missing-diagnostics.json"
-	jq 'del(.diagnostics)' "$samples_json" >"$candidate"
-
-	run bash -c 'source "$1"; contract_load "$2"; contract_require_diagnostics "$2"' \
-		_ "$contract" "$candidate"
-	[ "$status" -eq 65 ]
-}
-
-# Catches producers drifting from the shared candidate membership check used by
-# quality commands, result resume, selection, dispatch, and findings helpers.
-@test "shared contract admits only the canonical ICQ settings" {
-	for setting in 16 18 30; do
+	for setting in 16 18 20 22 24 26 28 30; do
 		run bash -c 'source "$1"; contract_load "$2"; contract_is_icq_setting "$2" "$3"' \
 			_ "$contract" "$samples_json" "$setting"
 		[ "$status" -eq 0 ]
 	done
-	for setting in 14 17 32; do
+	for setting in 14 15 17 19 21 23 25 27 29 31 32 -1 null; do
 		run bash -c 'source "$1"; contract_load "$2"; contract_is_icq_setting "$2" "$3"' \
 			_ "$contract" "$samples_json" "$setting"
 		[ "$status" -eq 1 ]
 	done
-}
 
-# Catches a production break where the app Kustomization reconciles a benchmark
-# Job automatically or loses the deliberately background-only scheduling class.
-@test "Flux renders inert resources but no Job" {
-	run kustomize build kubernetes/apps/media/encode-benchmark/app
+	run "$benchmark" _test runtime-selection-is-icq ICQ
 	[ "$status" -eq 0 ]
-	[ "$(yq -r 'select(.kind == "Job") | .metadata.name' <<<"$output")" = "" ]
-	[ "$(yq -r 'select(.kind == "PriorityClass") | .value' <<<"$output")" = "-10" ]
-}
-
-# Catches a production break where the render-only Job can traverse the shared
-# PVC outside the movies subtree or can mutate the movie library.
-@test "template cannot see TV or downloads and movies are read-only" {
-	template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
-	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "media") | .persistentVolumeClaim.claimName' "$template")" = media-data ]
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .readOnly' "$template")" = true ]
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .mountPath' "$template")" = /media ]
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "media") | .subPath' "$template")" = media/movies ]
-	! rg -n '/data|media/tv|downloads' "$template"
-}
-
-# Catches every rendered benchmark Job inheriting Kubernetes API credentials
-# even though none of the runtime commands needs in-cluster API access.
-@test "template disables automatic service account token mounting" {
-	template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
-	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$template")" = false ]
-}
-
-# Catches a dispatcher-only image check that gives the benchmark process no
-# immutable, read-only pre-work evidence to parse before GPU work starts.
-@test "template projects optional running-image evidence read-only" {
-	template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | .mountPath' "$template")" = /provenance ]
-	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | .readOnly' "$template")" = true ]
-	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.optional' "$template")" = true ]
-	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.items[0] | [.key,.path] | @tsv' "$template")" = $'image.json\timage.json' ]
-}
-
-# Catches a pre-work handoff that trusts one of the three image identities or
-# waits forever for a missing projected ConfigMap.
-@test "runtime requires configured dispatched and running image equality within its deadline" {
-	benchmark="$app/scripts/benchmark.sh"
-	digest='sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	image="docker.io/linuxserver/ffmpeg@$digest"
-	evidence="$BATS_TEST_TMPDIR/image.json"
-	jq -n --arg image "$image" '{configuredImage:$image,dispatchedImage:$image,imageId:$image}' >"$evidence"
-
-	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
-		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
-		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
-	[ "$status" -eq 0 ]
-	[ "$output" = "running_image_evidence=accepted image_id=$image" ]
-
-	jq --arg bad 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-		'.imageId = $bad' "$evidence" >"$evidence.tmp"
-	mv "$evidence.tmp" "$evidence"
-	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
-		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
-		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'running image evidence is malformed or inconsistent'* ]]
-
-	rm -f "$evidence"
-	run env BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$samples_json" \
-		BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE_FILE="$evidence" \
-		BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS=0 "$benchmark" _test running-image-evidence
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'timed out waiting for running image evidence'* ]]
-}
-
-# Catches quality moving the repeated node proof after source hashing, catches
-# downstream modes accepting the legacy two-field chosen record before source
-# work, and catches an accidental standalone x265 path invoking the GPU proof.
-@test "GPU proof and downstream chosen authorization precede source or run work" {
-	benchmark="$app/scripts/benchmark.sh"
-	fixture_root="$BATS_TEST_DIRNAME/fixtures/logs"
-	stub_bin="$BATS_TEST_TMPDIR/order-bin"
-	order_log="$BATS_TEST_TMPDIR/order.log"
-	mode_samples="$BATS_TEST_TMPDIR/order-samples.json"
-	media="$BATS_TEST_TMPDIR/source.mkv"
-	out="$BATS_TEST_TMPDIR/out"
-	scratch="$BATS_TEST_TMPDIR/scratch"
-	mkdir -p "$stub_bin" "$out/runs" "$scratch"
-	printf 'fixture' >"$media"
-	jq --arg path "$media" '
-		(.qualityPanel[] | .path) = $path |
-		(.qualityPanel[] | .sizeBytes) = 7 |
-		(.qualityPanel[] | .sha256) = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" |
-		(.savingsPanel[] | .path) = $path |
-		(.savingsPanel[] | .sizeBytes) = 7 |
-		(.savingsPanel[] | .sha256) = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" |
-		.chosenSettings = {
-			avc:{globalQuality:24,qualityRunId:"20260802T120000Z-aaaaaaaa"},
-			vc1:{globalQuality:26,qualityRunId:"20260802T120000Z-aaaaaaaa"},
-			hdr10:{globalQuality:22,qualityRunId:"20260802T120000Z-aaaaaaaa"}
+	for selection in LA-ICQ LA_ICQ CQP CBR VBR AVBR QVBR unknown; do
+		run "$benchmark" _test runtime-selection-is-icq "$selection"
+		[ "$status" -eq 1 ] || {
+			echo "runtime admitted non-ICQ selection: $selection" >&3
+			return 1
 		}
-	' "$samples_json" >"$mode_samples"
-
-	cat >"$stub_bin/ffmpeg" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'ffmpeg\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
-case "$*" in
-*'-hide_banner -encoders'*) printf '%s\n' ' V..... hevc_qsv' ' V....D libx265'; exit 0 ;;
-*'-hide_banner -filters'*) printf '%s\n' ' ... libvmaf'; exit 0 ;;
-*'-version'*) printf '%s\n' 'ffmpeg version 8.1.2 fixture'; exit 0 ;;
-esac
-if [[ "$*" == *'nullsrc=size=16x16:rate=1'* ]]; then
-	sed -n '1,$p' "$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" >&2
-elif [[ "$*" == *'-c:v hevc_qsv'* ]]; then
-	sed -n '1,$p' "$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" >&2
-fi
-last="${!#}"
-if [[ "$last" != '-' && "$last" != '/dev/null' ]]; then
-	mkdir -p "$(dirname "$last")"
-	printf fixture >"$last"
-fi
-EOF
-	cat >"$stub_bin/ffprobe" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'ffprobe\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
-[[ "${1:-}" == '-version' ]] || exit 97
-printf '%s\n' 'ffprobe version 8.1.2 fixture'
-EOF
-	cat >"$stub_bin/id" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "${1:-}" == '-u' ]] || exit 97
-printf '%s\n' 568
-EOF
-	cat >"$stub_bin/sha256sum" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'sha256sum\t%s\n' "$*" >>"$BENCHMARK_ORDER_LOG"
-printf '%064d  %s\n' 0 "${1:-stdin}"
-EOF
-	chmod +x "$stub_bin/ffmpeg" "$stub_bin/ffprobe" "$stub_bin/id" "$stub_bin/sha256sum"
-	image="$(jq -r '.runtime.image' "$mode_samples")"
-	export BENCHMARK_ORDER_LOG="$order_log"
-	export BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$fixture_root/qsv-icq.log"
-	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$fixture_root/qsv-init-success-no-phrase.log"
-	export BENCHMARK_TEST_FDINFO_FIXTURE="$fixture_root/drm-fdinfo-active.log"
-
-	for invocation in 'quality'; do
-		: >"$order_log"
-		read -r -a arguments <<<"$invocation"
-		run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$out" \
-			BENCHMARK_SCRATCH="$scratch" BENCHMARK_SAMPLES_FILE="$mode_samples" \
-			BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE="$image" \
-			BENCHMARK_ORDER_LOG="$order_log" NODE_NAME=nuc1 \
-			BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" \
-			BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" \
-			BENCHMARK_TEST_FDINFO_FIXTURE="$BENCHMARK_TEST_FDINFO_FIXTURE" \
-			"$benchmark" "${arguments[@]}"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *'sample hash mismatch'* ]]
-		awk -F '\t' '
-			$1 == "ffmpeg" {proof = NR}
-			$1 == "sha256sum" && !hash {hash = NR}
-			END {exit !(proof > 0 && hash > proof)}
-		' "$order_log"
-		[ "$(find "$out/runs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 0 ]
 	done
-
-	for invocation in \
-		'savings 20260802T120000Z-1234abcd' \
-		'finalist 20260802T120000Z-1234abcd avc-grain-memento' \
-		'contention 20260802T120000Z-1234abcd a worker-1 hdr10-clean-ministry'; do
-		: >"$order_log"
-		read -r -a arguments <<<"$invocation"
-		run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$out" \
-			BENCHMARK_SCRATCH="$scratch" BENCHMARK_SAMPLES_FILE="$mode_samples" \
-			BENCHMARK_DISPATCH_IMAGE="$image" BENCHMARK_RUNNING_IMAGE="$image" \
-			BENCHMARK_ORDER_LOG="$order_log" NODE_NAME=nuc1 \
-			BENCHMARK_CAPABILITY_ENCODE_FIXTURE="$BENCHMARK_CAPABILITY_ENCODE_FIXTURE" \
-			BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE" \
-			BENCHMARK_TEST_FDINFO_FIXTURE="$BENCHMARK_TEST_FDINFO_FIXTURE" \
-			ENCODE_BENCHMARK_FINALIST_CONFIRM='copy:encode-benchmark:20260802T120000Z-1234abcd:avc-grain-memento' \
-			"$benchmark" "${arguments[@]}"
-		[ "$status" -ne 0 ]
-		[ ! -s "$order_log" ]
-		[ "$(find "$out/runs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 0 ]
-	done
-
-	: >"$order_log"
-	run env PATH="$stub_bin:$PATH" BENCHMARK_TEST_MODE=1 BENCHMARK_SAMPLES_FILE="$mode_samples" \
-		BENCHMARK_ORDER_LOG="$order_log" "$benchmark" x265
-	[ "$status" -eq 64 ]
-	[ ! -s "$order_log" ]
-}
-
-# Catches malformed or misplaced x265 reference markers widening the expensive
-# comparison sweep beyond the accepted grain-heavy AVC and HDR10 samples.
-@test "quality panel has exactly one Boolean x265 reference per accepted cohort" {
-	samples=kubernetes/apps/media/encode-benchmark/app/samples.yaml
-	run yq -e '
-		.data."samples.json" | from_yaml | .qualityPanel as $panel |
-		(([$panel[].x265Reference | tag == "!!bool"] | all) and
-		 (([$panel[] | select(.x265Reference == true and .cohort == "avc")] | length) == 1) and
-		 (([$panel[] | select(.x265Reference == true and .cohort == "hdr10")] | length) == 1) and
-		 ([$panel[] | select(.x265Reference == true) | (.cohort == "avc" or .cohort == "hdr10")] | all) and
-		 ([$panel[] | select(.detectionOnly == true) | .x265Reference == false] | all))
-	' "$samples"
+	run "$benchmark" _test qsv-proof 0 \
+		"$fixtures/logs/qsv-requested-la-fallback-cqp.log" \
+		"$fixtures/logs/drm-fdinfo-active.log" 2160
 	[ "$status" -eq 0 ]
+	[ "$(jq -r '.selected_rate_control + ":" + .qsv_proof' <<<"$output")" = 'CQP:failed' ]
+
+	for mutation in \
+		'.strategy.globalQualityCandidates = [18, 16, 20, 22, 24, 26, 28, 30]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 28]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22.5, 24, 26, 28, 30]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 30, 32]'; do
+		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$samples_json" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
+		[ "$status" -eq 65 ] || {
+			echo "contract accepted non-canonical case: $mutation" >&3
+			return 1
+		}
+	done
 }

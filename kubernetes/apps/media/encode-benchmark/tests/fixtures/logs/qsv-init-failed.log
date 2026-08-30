@@ -1,5 +1,0 @@
-ffmpeg version 8.1.2
-[AVHWDeviceContext @ 0x1000] Failed to initialise VAAPI connection: -5 (input/output error).
-Device creation failed: -5.
-Failed to set value 'qsv=hw:/dev/dri/renderD128' for option 'init_hw_device': Input/output error
-Error parsing global options: Input/output error

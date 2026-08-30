@@ -33,6 +33,7 @@ quality_vmaf_stats() {
 	fi
 	jq -e '
 		(.frames | type) == "array" and (.frames | length) > 0 and
+		([.frames[].frameNum] | length) == ([.frames[].frameNum] | unique | length) and
 		all(.frames[];
 			(.frameNum | type) == "number" and (.frameNum | isfinite) and
 			(.frameNum | floor == .) and .frameNum >= 0 and
@@ -44,13 +45,13 @@ quality_vmaf_stats() {
 		allowed_index="$exclusion_index"
 	fi
 
-	jq -c --argjson allowed_index "$allowed_index" '
+	jq -e -c --argjson allowed_index "$allowed_index" '
 		def decimal6: (. * 1000000 | round) / 1000000;
 		[.frames[] | {frameIndex:.frameNum,vmaf:.metrics.vmaf}] as $raw |
 		([$raw[] | select(.frameIndex == $allowed_index)]) as $matches |
 		(if $allowed_index == null then []
 		 elif (($matches | length) == 1 and $matches[0].vmaf == 0) then $matches
-		 else [] end) as $excluded |
+		 else empty end) as $excluded |
 		($excluded | if length == 1 then .[0].frameIndex else null end) as $excluded_index |
 		[$raw[] | select(.frameIndex != $excluded_index) | .vmaf] as $evaluated |
 		($evaluated | length) as $evaluated_count |
@@ -63,19 +64,34 @@ quality_vmaf_stats() {
 			harmonicMean:(if any($evaluated[]; . == 0) then 0 else ($evaluated_count / ($evaluated | map(1 / .) | add) | decimal6) end),
 			onePercentLow:($sorted[0:$low_count] | add / $low_count)
 		}
-	' "$metrics_file"
+	' "$metrics_file" || return 65
 }
 
 quality_parse_metric() {
-	local kind="$1" log_file="$2" pattern value
+	local kind="$1" log_file="$2" field value
+	local -a values=()
 	[[ -f "$log_file" && ! -L "$log_file" ]] || return 66
 	case "$kind" in
-	ssim) pattern='All:[0-9]+([.][0-9]+)?' ;;
-	psnr) pattern='average:[0-9]+([.][0-9]+)?' ;;
+	ssim) field='All' ;;
+	psnr) field='average' ;;
 	*) return 64 ;;
 	esac
-	value="$(grep -o -E "$pattern" "$log_file" | tail -n 1 | cut -d: -f2)" || return 65
-	[[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 65
+	mapfile -t values < <(awk -v field="$field" '
+		BEGIN { prefix = "^" field ":" }
+		{
+			for (position = 1; position <= NF; position += 1) {
+				if ($position ~ prefix) {
+					value = $position
+					sub("^" field ":", "", value)
+					print value
+				}
+			}
+		}
+	' "$log_file")
+	((${#values[@]} == 1)) || return 65
+	value="${values[0]#+}"
+	[[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || return 65
+	jq -e -n --arg value "$value" '$value | tonumber | isfinite' >/dev/null || return 65
 	printf '%s\n' "$value"
 }
 
@@ -91,21 +107,21 @@ quality_hdr_evidence() {
 		[[ -f "$path" && -r "$path" ]] || return 66
 	done
 
-	stream="$(quality_hdr_probe diagnostic-hdr-stream "$source_path" "$source_start" 10)" || return
-	source_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$source_path" "$source_start" 10)" || return
-	source_trace="$(quality_hdr_probe diagnostic-hdr-trace "$source_path" "$source_start" 10)" || return
-	clip_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$clip_path" 0 10)" || return
-	clip_trace="$(quality_hdr_probe diagnostic-hdr-trace "$clip_path" 0 10)" || return
-	encoded_decoded="$(quality_hdr_probe diagnostic-hdr-frame "$output_path" 0 10)" || return
-	encoded_trace="$(quality_hdr_probe diagnostic-hdr-trace "$output_path" 0 10)" || return
+	stream="$(quality_hdr_probe quality-hdr-stream "$source_path" "$source_start" 10)" || return
+	source_decoded="$(quality_hdr_probe quality-hdr-frame "$source_path" "$source_start" 10)" || return
+	source_trace="$(quality_hdr_probe quality-hdr-trace "$source_path" "$source_start" 10)" || return
+	clip_decoded="$(quality_hdr_probe quality-hdr-frame "$clip_path" 0 10)" || return
+	clip_trace="$(quality_hdr_probe quality-hdr-trace "$clip_path" 0 10)" || return
+	encoded_decoded="$(quality_hdr_probe quality-hdr-frame "$output_path" 0 10)" || return
+	encoded_trace="$(quality_hdr_probe quality-hdr-trace "$output_path" 0 10)" || return
 
-	stream="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$stream")" || return
-	source_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$source_decoded")" || return
-	source_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$source_trace")" || return
-	clip_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$clip_decoded")" || return
-	clip_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$clip_trace")" || return
-	encoded_decoded="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$encoded_decoded")" || return
-	encoded_trace="$(quality_hdr_probe diagnostic-hdr-normalize-oracle <<<"$encoded_trace")" || return
+	stream="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$stream")" || return
+	source_decoded="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$source_decoded")" || return
+	source_trace="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$source_trace")" || return
+	clip_decoded="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$clip_decoded")" || return
+	clip_trace="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$clip_trace")" || return
+	encoded_decoded="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$encoded_decoded")" || return
+	encoded_trace="$(quality_hdr_probe quality-hdr-normalize-oracle <<<"$encoded_trace")" || return
 
 	normalized_oracle="$(jq -e -n -c \
 		--argjson stream "$stream" \

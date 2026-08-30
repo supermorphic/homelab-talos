@@ -1,6 +1,0 @@
-0 /sys/class/drm/card0/engine/video0/busy 1000000000
-0 /sys/class/drm/card0/engine/render0/busy 400000000
-1000000000 /sys/class/drm/card0/engine/video0/busy 1000000000
-1000000000 /sys/class/drm/card0/engine/render0/busy 400000000
-2000000000 /sys/class/drm/card0/engine/video0/busy 1000000000
-2000000000 /sys/class/drm/card0/engine/render0/busy 400000000
