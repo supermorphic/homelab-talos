@@ -3304,10 +3304,9 @@ PYTHON
 	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
 }
 
-# Catches a generated quality Job publishing only its runtime run ID as an
-# unstructured log tail. The completion record is the durable dispatch-to-
-# runtime mapping consumed by the guarded results route.
-@test "generated quality publishes an exact dispatch runtime completion record" {
+# Catches a generated quality Job publishing unbounded candidate evidence or
+# omitting one cohort from the authenticated dispatch-to-runtime completion.
+@test "generated quality completion publishes only bounded ranked cohort values" {
 	prepare_execution_run
 	dispatch_id='20260815T121500Z-deadbeef'
 	export BENCHMARK_DISPATCH_CORRELATION_ID="$dispatch_id"
@@ -3315,13 +3314,28 @@ PYTHON
 	run "$SCRIPTS/benchmark.sh" quality "$dispatch_id"
 	[ "$status" -eq 0 ]
 	run jq -e --arg dispatch "$dispatch_id" '
-		type == "object" and keys == ["artifactLocation","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
-		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
+		def cohort:
+			type == "object" and keys == ["candidates","status"] and
+			(.status == "eligible" or .status == "no-go" or .status == "no-verdict") and
+			(.candidates | type == "array" and all(.[];
+				type == "object" and keys == ["globalQuality","medianReductionPercent"]));
+		type == "object" and
+		keys == ["artifactLocation","cohorts","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
+		.schemaVersion == 2 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
 		.dispatchId == $dispatch and
 		(.runtimeRunId | test("^20260815T121500Z-[0-9a-f]{8}$")) and
-		.artifactLocation == ("/out/runs/" + .runtimeRunId)
+		.artifactLocation == ("/out/runs/" + .runtimeRunId) and
+		(.cohorts | type == "object" and keys == ["avc","hdr10","vc1"] and all(.[]; cohort)) and
+		.cohorts.avc == {status:"no-verdict",candidates:[]} and
+		.cohorts.vc1 == {status:"no-verdict",candidates:[]} and
+		.cohorts.hdr10.status == "eligible" and
+		(.cohorts.hdr10.candidates | map(.globalQuality)) == [16,18,20,22,24,26,30]
 	' <<<"$output"
 	[ "$status" -eq 0 ]
+	[[ "$output" != *'sample-hdr'* ]]
+	[[ "$output" != *'source.mkv'* ]]
+	[[ "$output" != *'quality-evidence'* ]]
+	[[ "$output" != *'sha256'* ]]
 }
 
 @test "PGS decode maps video only while probe validation still detects subtitle loss" {

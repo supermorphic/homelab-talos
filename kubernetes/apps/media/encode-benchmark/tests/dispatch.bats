@@ -3845,10 +3845,9 @@ write_diagnostics_custom_summary_fixture() {
 	assert_no_mutations
 }
 
-# Catches treating an explicit quality run's plain exact runtime ID as if it
-# were a generated dispatch mapping. Generated Jobs must still require their
-# strict JSON mapping, while explicit Jobs report their selected run directly.
-@test "results verifies generated and explicit quality completion paths" {
+# Catches a result reader leaking raw candidate evidence or flattening the
+# three independently ranked cohort outcomes into an unauthenticated summary.
+@test "results prints one bounded authenticated quality completion line" {
 	dispatch_id='20260802T120000Z-1234abcd'
 	runtime_run_id='20260802T120000Z-feedface'
 	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
@@ -3869,16 +3868,25 @@ write_diagnostics_custom_summary_fixture() {
 		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
 	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
 	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
-		schemaVersion:1,strategyId:"qsv-hevc-icq-v1",status:"complete",
+		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",status:"complete",
 		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime)
+		,cohorts:{
+			avc:{status:"eligible",candidates:[
+				{globalQuality:16,medianReductionPercent:35},
+				{globalQuality:24,medianReductionPercent:25}]},
+			vc1:{status:"no-verdict",candidates:[]},
+			hdr10:{status:"no-go",candidates:[]}
+		}
 	}' >"$STUB_LOGS_FILE"
 
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id"* ]]
-	[[ "$output" == *"artifact_location=/out/runs/$runtime_run_id"* ]]
+	[ "$output" = "mode=quality phase=Complete dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id artifact_location=/out/runs/$runtime_run_id avc=eligible:16@35,24@25 vc1=no-verdict: hdr10=no-go:" ]
 	[[ "$output" != *'no-sanitized-summary'* ]]
-	[[ "$output" != *"artifact_location=/out/runs/$dispatch_id"* ]]
+	[[ "$output" != *'sampleId'* ]]
+	[[ "$output" != *'sourcePath'* ]]
+	[[ "$output" != *'quality-evidence'* ]]
+	[[ "$output" != *'sha256'* ]]
 
 	# The generated marker must never admit the explicit plain-ID form.
 	printf '%s\n' "$dispatch_id" >"$STUB_LOGS_FILE"
@@ -3905,6 +3913,64 @@ write_diagnostics_custom_summary_fixture() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"dispatch_id=$explicit_run_id runtime_run_id=$explicit_run_id"* ]]
 	[[ "$output" == *"artifact_location=/out/runs/$explicit_run_id"* ]]
+}
+
+# Catches schema widening, path transport, ambiguous settings, non-finite
+# reductions, and foreign runtime identities before any bounded values print.
+@test "quality completion rejects unbounded malformed and incorrectly bound records" {
+	dispatch_id='20260802T120000Z-1234abcd'
+	runtime_run_id='20260802T120000Z-feedface'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	write_results_fixtures "$dispatch_id" "$image_id"
+	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
+		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch |
+		.items[0].spec.template.spec.containers[0].env = [{
+			name:"BENCHMARK_DISPATCH_CORRELATION_ID",value:$dispatch
+		}]' --arg dispatch "$dispatch_id" "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
+		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	base="$BATS_TEST_TMPDIR/quality-completion-base.json"
+	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
+		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",status:"complete",
+		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime),
+		cohorts:{
+			avc:{status:"eligible",candidates:[{globalQuality:16,medianReductionPercent:35}]},
+			vc1:{status:"no-verdict",candidates:[]},
+			hdr10:{status:"no-go",candidates:[]}
+		}
+	}' >"$base"
+
+	for mutation in \
+		'.rawLog="encoder details"' \
+		'.cohorts.avc.sourcePath="/media/private.mkv"' \
+		'.cohorts.avc.candidates[0].evidencePath="quality-evidence/raw.json"' \
+		'del(.cohorts.vc1)' \
+		'.cohorts.avc.candidates += [.cohorts.avc.candidates[0]]' \
+		'.cohorts.avc.candidates[0].globalQuality=17' \
+		'.runtimeRunId="20260802T120000Z-eeeeeeee"' \
+		'.artifactLocation="/out/runs/20260802T120000Z-eeeeeeee"' \
+		'.runtimeRunId="20260803T120000Z-eeeeeeee" | .artifactLocation="/out/runs/20260803T120000Z-eeeeeeee"'; do
+		jq -c "$mutation" "$base" >"$STUB_LOGS_FILE"
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *'quality completion record rejected'* ]]
+		run grep -q '^mode=quality phase=Complete ' <<<"$output"
+		[ "$status" -eq 1 ]
+	done
+
+	sed 's/"medianReductionPercent":35/"medianReductionPercent":1e999/' "$base" >"$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *'quality completion record rejected'* ]]
+	run grep -q '^mode=quality phase=Complete ' <<<"$output"
+	[ "$status" -eq 1 ]
 }
 
 # Catches diagnostics result collection widening into multi-query pod/job/log

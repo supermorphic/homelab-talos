@@ -266,23 +266,49 @@ sanitize_summary() {
 
 sanitize_quality_completion() {
 	local log_line="$1" dispatch_id="$2" record runtime_id artifact_location
-	record="$(jq -e -c --arg dispatch "$dispatch_id" '
+	local avc_status avc_settings vc1_status vc1_settings hdr10_status hdr10_settings
+	record="$(jq -e -c --arg dispatch "$dispatch_id" --arg settings "$CONTRACT_ICQ_SETTINGS" '
+		($settings | split(" ") | map(tonumber)) as $allowed_settings |
+		def candidate:
+			type == "object" and keys == ["globalQuality","medianReductionPercent"] and
+			(.globalQuality | type == "number" and isfinite and floor == .) and
+			(.globalQuality as $setting | $allowed_settings | index($setting) != null) and
+			(.medianReductionPercent | type == "number" and isfinite);
+		def cohort:
+			type == "object" and keys == ["candidates","status"] and
+			(.status == "eligible" or .status == "no-go" or .status == "no-verdict") and
+			(.candidates | type == "array" and length <= ($allowed_settings | length) and
+				all(.[]; candidate) and ([.[].globalQuality] | unique | length) == length and
+				. == sort_by(-.medianReductionPercent, .globalQuality)) and
+			(if .status == "eligible" then (.candidates | length) > 0
+			 else (.candidates | length) == 0 end);
 		select(
 			type == "object" and
-			keys == ["artifactLocation","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
-			.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
+			keys == ["artifactLocation","cohorts","dispatchId","runtimeRunId","schemaVersion","status","strategyId"] and
+			.schemaVersion == 2 and .strategyId == "qsv-hevc-icq-v1" and .status == "complete" and
 			.dispatchId == $dispatch and
 			(.runtimeRunId | type == "string") and
-			.artifactLocation == ("/out/runs/" + .runtimeRunId)
+			.artifactLocation == ("/out/runs/" + .runtimeRunId) and
+			(.cohorts | type == "object" and keys == ["avc","hdr10","vc1"] and all(.[]; cohort))
 		) |
-		{dispatchId,runtimeRunId,artifactLocation}
+		{dispatchId,runtimeRunId,artifactLocation,cohorts}
 	' <<<"$log_line")" || return 65
 	runtime_id="$(jq -r '.runtimeRunId' <<<"$record")"
 	contract_is_run_id "$runtime_id" || return 65
 	[[ "${runtime_id%-*}" == "${dispatch_id%-*}" ]] || return 65
 	artifact_location="$(jq -r '.artifactLocation' <<<"$record")"
-	printf 'dispatch_id=%s runtime_run_id=%s artifact_location=%s\n' \
-		"$dispatch_id" "$runtime_id" "$artifact_location"
+	avc_status="$(jq -r '.cohorts.avc.status' <<<"$record")"
+	avc_settings="$(jq -r '[.cohorts.avc.candidates[] |
+		"\(.globalQuality)@\(.medianReductionPercent)"] | join(",")' <<<"$record")"
+	vc1_status="$(jq -r '.cohorts.vc1.status' <<<"$record")"
+	vc1_settings="$(jq -r '[.cohorts.vc1.candidates[] |
+		"\(.globalQuality)@\(.medianReductionPercent)"] | join(",")' <<<"$record")"
+	hdr10_status="$(jq -r '.cohorts.hdr10.status' <<<"$record")"
+	hdr10_settings="$(jq -r '[.cohorts.hdr10.candidates[] |
+		"\(.globalQuality)@\(.medianReductionPercent)"] | join(",")' <<<"$record")"
+	printf 'mode=quality phase=Complete dispatch_id=%s runtime_run_id=%s artifact_location=%s avc=%s:%s vc1=%s:%s hdr10=%s:%s\n' \
+		"$dispatch_id" "$runtime_id" "$artifact_location" \
+		"$avc_status" "$avc_settings" "$vc1_status" "$vc1_settings" "$hdr10_status" "$hdr10_settings"
 }
 
 sanitize_capability_evidence() {
@@ -422,7 +448,6 @@ fi
 
 evidence_status=0
 quality_completion_count=0
-runtime_artifact_location=''
 while IFS= read -r job_json; do
 	[[ -n "$job_json" ]] || continue
 	name="$(yq -p=json -e -r '.metadata.name | select(test("^encode-benchmark-[a-z0-9.-]+$"))' <<<"$job_json")" || exit 65
@@ -479,8 +504,10 @@ while IFS= read -r job_json; do
 			}
 		fi
 	fi
-	printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
-		"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"
+	if [[ "$mode" != 'quality' ]]; then
+		printf 'job=%s mode=%s phase=%s succeeded=%s failed=%s start=%s completion=%s node=%s\n' \
+			"$name" "$mode" "$phase" "$succeeded" "$failed" "$start" "$completion" "$node"
+	fi
 	normalized_image_id=''
 	if [[ "$phase" == 'Complete' || "$phase" == 'Failed' ]]; then
 		actual_image_id=''
@@ -504,8 +531,10 @@ while IFS= read -r job_json; do
 						normalized_image_id=''
 						continue
 					fi
-					printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
-						"$configured_digest" "$normalized_image_id"
+					if [[ "$mode" != 'quality' ]]; then
+						printf 'configured_image_digest=%s actual_image_id=%s image_evidence=accepted\n' \
+							"$configured_digest" "$normalized_image_id"
+					fi
 					;;
 				*)
 					printf 'configured_image_digest=%s actual_image_id=%s\n' \
@@ -568,7 +597,6 @@ while IFS= read -r job_json; do
 				"$run_id" "$run_id" "$run_id"
 		fi
 		printf '%s\n' "$quality_completion"
-		runtime_artifact_location="${quality_completion##* artifact_location=}"
 		((quality_completion_count += 1))
 	else
 		printf 'summary=%s\n' "$(sanitize_summary "$mode" "$log_line")"
@@ -580,7 +608,6 @@ if ((quality_completion_count > 0)); then
 		echo 'quality completion provenance rejected: expected one exact Job' >&2
 		exit 1
 	}
-	printf 'artifact_location=%s\n' "$runtime_artifact_location"
 else
 	printf 'artifact_location=/out/runs/%s\n' "$run_id"
 fi

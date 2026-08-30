@@ -3996,7 +3996,7 @@ prepare_chosen_upstream() {
 quality_mode() {
 	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
 	local source sha detection title_probe_file clip_id timestamp clip
-	local setting rank_status
+	local setting rank_status quality_completion_cohorts
 	local panel_samples
 	local -a qsv_settings
 	read -r -a qsv_settings <<<"$CONTRACT_ICQ_SETTINGS"
@@ -4045,11 +4045,18 @@ quality_mode() {
 	rm -rf -- "$run_scratch"
 	((${rank_status:-0} == 0)) || return "$rank_status"
 	if [[ -n "${BENCHMARK_DISPATCH_CORRELATION_ID:-}" ]]; then
+		quality_completion_cohorts="$(jq -e -c '
+			.cohorts | {
+				avc:(.avc | {status,candidates:[.candidates[] | {globalQuality,medianReductionPercent}]}),
+				vc1:(.vc1 | {status,candidates:[.candidates[] | {globalQuality,medianReductionPercent}]}),
+				hdr10:(.hdr10 | {status,candidates:[.candidates[] | {globalQuality,medianReductionPercent}]})
+			}
+		' "$run_directory/quality-candidates.json")" || return 65
 		jq -n -c --arg dispatch "$BENCHMARK_DISPATCH_CORRELATION_ID" --arg runtime "$run_id" \
-			--arg strategy "$CONTRACT_STRATEGY_ID" '{
-				schemaVersion:1, strategyId:$strategy, status:"complete",
+			--arg strategy "$CONTRACT_STRATEGY_ID" --argjson cohorts "$quality_completion_cohorts" '{
+				schemaVersion:2, strategyId:$strategy, status:"complete",
 				dispatchId:$dispatch, runtimeRunId:$runtime,
-				artifactLocation:("/out/runs/" + $runtime)
+				artifactLocation:("/out/runs/" + $runtime), cohorts:$cohorts
 			}'
 	else
 		printf '%s\n' "$run_id"
