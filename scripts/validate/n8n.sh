@@ -355,6 +355,26 @@ for marker in \
     exit 1
   }
 done
+python - "$n8n_verifier" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = source.find("prometheus_targets_ready=false")
+end = source.find("rules_response=", start)
+if start == -1 or end == -1:
+    raise SystemExit("The n8n verifier has no bounded Prometheus target stabilization block.")
+block = source[start:end]
+for marker in (
+    "prometheus_targets_api_success=false",
+    "for _attempt in {1..18}",
+    "flux_alerts_prometheus_get",
+    "n8n_prometheus_targets_match_contract",
+    "sleep 10",
+):
+    if marker not in block:
+        raise SystemExit(f"The n8n Prometheus target stabilization block is missing: {marker}")
+PY
 [[ "$(yq -r '[.. | select(type == "!!map") | select(
     .kind == "Secret" or has("script") or has("command") or has("apply") or
     has("create") or has("delete") or has("patch")

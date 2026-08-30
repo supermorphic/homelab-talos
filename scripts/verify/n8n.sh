@@ -131,15 +131,32 @@ monitor_rows="$(yq -r '
   exit 1
 }
 
-targets_response="$(
-  flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
-    '/api/v1/targets?state=active'
-)"
-[[ "$(yq -r '.status // ""' <<<"$targets_response")" == 'success' ]] || {
+prometheus_targets_ready=false
+prometheus_targets_api_success=false
+targets_response=''
+# A reconcile can leave the previous target visible while Prometheus discovers its
+# replacement. Keep the exact uniqueness and health contract, but allow that stale target
+# to age out before rejecting the private platform.
+for _attempt in {1..18}; do
+  if targets_response="$(
+    flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
+      '/api/v1/targets?state=active'
+  )" && [[ "$(yq -r '.status // ""' <<<"$targets_response")" == 'success' ]]; then
+    prometheus_targets_api_success=true
+    if n8n_prometheus_targets_match_contract <(printf '%s\n' "$targets_response"); then
+      prometheus_targets_ready=true
+      break
+    fi
+  fi
+  if (( _attempt < 18 )); then
+    sleep 10
+  fi
+done
+[[ "$prometheus_targets_api_success" == 'true' ]] || {
   echo 'Prometheus targets API did not return success.' >&2
   exit 1
 }
-n8n_prometheus_targets_match_contract <(printf '%s\n' "$targets_response") || {
+[[ "$prometheus_targets_ready" == 'true' ]] || {
   echo 'The exact n8n and n8n-postgresql Prometheus targets are absent, duplicated, or unhealthy.' >&2
   exit 1
 }
