@@ -71,8 +71,8 @@ For a listed identity, the reducer validates the complete raw libvmaf frame arra
 finds exactly one matching frame, and excludes it only when its VMAF value is exactly
 zero. The raw frame remains in bounded evidence. The harmonic mean and one-percent low
 use only the evaluated population. An absent, duplicate, nonnumeric, or nonzero listed
-frame is not excluded; malformed evidence fails. No wildcard, score search, neighboring
-frame, sample, or clip can extend the list.
+frame fails before the reducer returns statistics or admissible ranking evidence. No
+wildcard, score search, neighboring frame, sample, or clip can extend the list.
 
 The unresolved `vc1-fugitive/detail` frame 781 has no correction permission. All
 unlisted exact-zero frames remain in the evaluated population.

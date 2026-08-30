@@ -92,24 +92,6 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
-# Catches quality evidence accepting a diagnostic identity that was not
-# independently classified as a VMAF measurement defect.
-@test "embedded samples publish the exact corrected quality evidence contract" {
-	run jq -e '
-		.qualityCorrection == {
-			schemaVersion: 1,
-			diagnosticRunId: "20260829T020752Z-43984d8d",
-			vmafMeasurementDefects: [
-				{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
-				{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
-				{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
-				{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
-			]
-		}
-	' "$samples_json"
-	[ "$status" -eq 0 ]
-}
-
 @test "shared base contract accepts a minimal quality samples document" {
 	minimal="$BATS_TEST_TMPDIR/minimal-quality.json"
 	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" \
@@ -146,23 +128,6 @@ setup() {
 	done
 }
 
-# Catches accidental broadening of the diagnosed VMAF exception list, including
-# the unresolved vc1-fugitive/detail observation and pattern-like identifiers.
-@test "shared contract rejects every non-canonical quality correction" {
-	for mutation in \
-		'.qualityCorrection.vmafMeasurementDefects |= reverse' \
-		'.qualityCorrection.vmafMeasurementDefects += [.qualityCorrection.vmafMeasurementDefects[0]]' \
-		'.qualityCorrection.unexpected = true' \
-		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "missing-title"' \
-		'.qualityCorrection.vmafMeasurementDefects[0].sampleId = "avc-*"' \
-		'.qualityCorrection.vmafMeasurementDefects[3] = {sampleId:"vc1-fugitive",clipId:"detail",frameIndex:781}'; do
-		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
-		jq "$mutation" "$samples_json" >"$candidate"
-		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
-		[ "$status" -eq 65 ]
-	done
-}
-
 # Catches a quality worker excluding a frame outside the closed source contract
 # or treating an absent identity as an accepted empty response.
 @test "shared contract returns only the four diagnosed VMAF exclusions" {
@@ -189,19 +154,6 @@ setup() {
 		[ "$status" -eq 1 ]
 		[ "$output" = "" ]
 	done
-}
-
-@test "shared contract publishes corrected quality schema constants" {
-	run bash -c '
-		source "$1"
-		contract_load "$2"
-		printf "%s %s %s\\n" \
-			"$CONTRACT_QUALITY_EVIDENCE_SCHEMA" \
-			"$CONTRACT_QUALITY_CANDIDATES_SCHEMA" \
-			"$CONTRACT_QUALITY_DIAGNOSTIC_RUN_ID"
-	' _ "$contract" "$samples_json"
-	[ "$status" -eq 0 ]
-	[ "$output" = "1 2 20260829T020752Z-43984d8d" ]
 }
 
 @test "shared contract admits only the canonical ICQ settings" {

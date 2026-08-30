@@ -11,7 +11,7 @@ setup() {
 	expected_scripts=$'benchmark.sh\ncontract.sh\nprobe.sh\nquality-evidence.sh\nrunmeta.sh'
 	expected_benchmark_modes=$'capabilities\nquality'
 	expected_dispatch_actions=$'capabilities\nrun'
-	expected_probe_actions=$'diagnostic-hdr-frame\ndiagnostic-hdr-normalize-oracle\ndiagnostic-hdr-stream\ndiagnostic-hdr-trace'
+	expected_probe_actions=$'quality-hdr-frame\nquality-hdr-normalize-oracle\nquality-hdr-stream\nquality-hdr-trace'
 
 	actual_recipes="$(awk '
 		/^encode-benchmark-[a-z0-9-]+([^:]*)?:/ {

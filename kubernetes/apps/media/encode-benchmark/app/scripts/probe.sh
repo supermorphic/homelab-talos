@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-diagnostic_validate_interval() {
+quality_validate_interval() {
 	local start="$1" duration="$2"
 	[[ "$start" =~ ^([0-9]+([.][0-9]+)?|[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?)$ ]] || return 64
 	awk -v value="$duration" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value > 0 && value <= 90) }'
 }
 
-# Keep exact HDR values as reduced rationals. Both the diagnostic probes and
-# quality evidence use this boundary, so equivalent ffprobe and trace_headers
+# Keep exact HDR values as reduced rationals. The quality evidence probes use
+# this boundary so equivalent ffprobe and trace_headers
 # representations compare without decimal conversion or rounding.
-diagnostic_hdr_normalize_oracle() {
+quality_hdr_normalize_oracle() {
 	jq -e -c '
 		def exact_keys($wanted): type == "object" and ((keys | sort) == ($wanted | sort));
 		def gcd($a; $b):
@@ -49,7 +49,7 @@ diagnostic_hdr_normalize_oracle() {
 	'
 }
 
-diagnostic_hdr_oracle() {
+quality_hdr_oracle() {
 	local absent_status="$1"
 	jq -e -c --arg absent "$absent_status" '
 		def rational:
@@ -103,27 +103,27 @@ diagnostic_hdr_oracle() {
 	'
 }
 
-diagnostic_hdr_probe() {
+quality_hdr_probe() {
 	local kind="$1" path="$2" start="$3" duration="$4" probe_json
 	[[ -f "$path" && -r "$path" ]] || return 66
-	diagnostic_validate_interval "$start" "$duration" || return
+	quality_validate_interval "$start" "$duration" || return
 	awk -v value="$duration" 'BEGIN { exit !(value <= 10) }' || return 64
 	case "$kind" in
 	stream)
 		probe_json="$(ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
 			-show_streams -show_entries 'stream_side_data' -of json "$path")" || return
-		diagnostic_hdr_oracle null <<<"$probe_json" | diagnostic_hdr_normalize_oracle
+		quality_hdr_oracle null <<<"$probe_json" | quality_hdr_normalize_oracle
 		;;
 	frame)
 		probe_json="$(ffprobe -v error -select_streams v:0 -read_intervals "$start%+$duration" \
 			-show_frames -show_entries 'frame=side_data_list' -of json "$path")" || return
-		diagnostic_hdr_oracle absent <<<"$probe_json" | diagnostic_hdr_normalize_oracle
+		quality_hdr_oracle absent <<<"$probe_json" | quality_hdr_normalize_oracle
 		;;
 	*) return 64 ;;
 	esac
 }
 
-diagnostic_hdr_trace_oracle() {
+quality_hdr_trace_oracle() {
 	local trace_log="$1"
 	jq -Rn -c '
 		def field_event:
@@ -201,11 +201,11 @@ diagnostic_hdr_trace_oracle() {
 	' <"$trace_log"
 }
 
-diagnostic_hdr_trace() {
+quality_hdr_trace() {
 	local path="$1" start="$2" duration="$3" trace_log trace_pid
 	local process_status=0 complete=0 oracle
 	[[ -f "$path" && -r "$path" ]] || return 66
-	diagnostic_validate_interval "$start" "$duration" || return
+	quality_validate_interval "$start" "$duration" || return
 	awk -v value="$duration" 'BEGIN { exit !(value <= 10) }' || return 64
 	trace_log="$(mktemp "${TMPDIR:-/tmp}/encode-benchmark-trace.XXXXXX")" || return
 	: >"$trace_log"
@@ -213,7 +213,7 @@ diagnostic_hdr_trace() {
 		-map 0:v:0 -c:v copy -bsf:v trace_headers -f null - >"$trace_log" 2>&1 &
 	trace_pid=$!
 	while kill -0 "$trace_pid" 2>/dev/null; do
-		if oracle="$(diagnostic_hdr_trace_oracle "$trace_log" 2>/dev/null)" &&
+		if oracle="$(quality_hdr_trace_oracle "$trace_log" 2>/dev/null)" &&
 			jq -e '.status == "ok"' <<<"$oracle" >/dev/null; then
 			complete=1
 			kill "$trace_pid" 2>/dev/null || true
@@ -230,39 +230,39 @@ diagnostic_hdr_trace() {
 		return "$process_status"
 	fi
 	set +e
-	oracle="$(diagnostic_hdr_trace_oracle "$trace_log")"
+	oracle="$(quality_hdr_trace_oracle "$trace_log")"
 	process_status=$?
 	set -e
 	rm -f -- "$trace_log"
 	((process_status == 0)) || return "$process_status"
-	diagnostic_hdr_normalize_oracle <<<"$oracle"
+	quality_hdr_normalize_oracle <<<"$oracle"
 }
 
 case "${1:-}" in
-diagnostic-hdr-stream)
+quality-hdr-stream)
 	(($# == 4)) || exit 64
-	diagnostic_hdr_probe stream "$2" "$3" "$4"
+	quality_hdr_probe stream "$2" "$3" "$4"
 	exit
 	;;
-diagnostic-hdr-frame)
+quality-hdr-frame)
 	(($# == 4)) || exit 64
-	diagnostic_hdr_probe frame "$2" "$3" "$4"
+	quality_hdr_probe frame "$2" "$3" "$4"
 	exit
 	;;
-diagnostic-hdr-trace)
+quality-hdr-trace)
 	(($# == 4)) || exit 64
-	diagnostic_hdr_trace "$2" "$3" "$4"
+	quality_hdr_trace "$2" "$3" "$4"
 	exit
 	;;
-diagnostic-hdr-normalize-oracle)
+quality-hdr-normalize-oracle)
 	(($# == 1)) || exit 64
-	diagnostic_hdr_normalize_oracle
+	quality_hdr_normalize_oracle
 	exit
 	;;
 esac
 
 if (($# != 1)); then
-	echo 'usage: probe.sh <source-path> | diagnostic-hdr-{stream,frame,trace} <source-path> <start> <duration> | diagnostic-hdr-normalize-oracle' >&2
+	echo 'usage: probe.sh <source-path> | quality-hdr-{stream,frame,trace} <source-path> <start> <duration> | quality-hdr-normalize-oracle' >&2
 	exit 64
 fi
 
