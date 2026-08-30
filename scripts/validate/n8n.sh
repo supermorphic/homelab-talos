@@ -791,8 +791,8 @@ yq -e '(.metadata.name == "networking-public") and
   exit 1
 }
 [[ "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | [.spec.dependsOn[].name] | sort | join(",")' "$public_ks")" == 'n8n,public-webhook-gateway' && \
-  "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | .spec.suspend' "$public_ks")" == 'true' ]] || {
-  echo 'The public webhook route must depend on public-webhook-gateway and n8n while suspended.' >&2
+  "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | (.spec.suspend | type)' "$public_ks")" == '!!bool' ]] || {
+  echo 'The public webhook route must depend on public-webhook-gateway and n8n with an explicit suspend state.' >&2
   exit 1
 }
 [[ "$(yq -r '.resources | join(",")' "$public_base/route/kustomization.yaml")" == \
@@ -829,10 +829,10 @@ yq -e '.resources[] | select(. == "./n8n-postgresql/ks.yaml")' \
 [[ "$(yq -r '.metadata.name' "$postgresql_ks")" == 'n8n-postgresql' && \
   "$(yq -r '.metadata.namespace' "$postgresql_ks")" == 'flux-system' && \
   "$(yq -r '.spec.path' "$postgresql_ks")" == './kubernetes/apps/automation/n8n-postgresql/app' && \
-  "$(yq -r '.spec.suspend' "$postgresql_ks")" == 'true' && \
+  "$(yq -r '.spec.suspend | type' "$postgresql_ks")" == '!!bool' && \
   "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$postgresql_ks")" == \
     'automation,cilium,kube-prometheus-stack,longhorn' ]] || {
-  echo 'n8n-postgresql must remain suspended with its complete foundation dependency graph.' >&2
+  echo 'n8n-postgresql must use an explicit suspend state with its complete foundation dependency graph.' >&2
   exit 1
 }
 declare -A postgresql_resource_counts=()
@@ -1105,10 +1105,10 @@ yq -e '.resources[] | select(. == "./n8n/ks.yaml")' "$base/kustomization.yaml" >
 [[ "$(yq -r '.metadata.name' "$n8n_ks")" == 'n8n' && \
   "$(yq -r '.metadata.namespace' "$n8n_ks")" == 'flux-system' && \
   "$(yq -r '.spec.path' "$n8n_ks")" == './kubernetes/apps/automation/n8n/app' && \
-  "$(yq -r '.spec.suspend' "$n8n_ks")" == 'true' && \
+  "$(yq -r '.spec.suspend | type' "$n8n_ks")" == '!!bool' && \
   "$(yq ea -r '[.spec.dependsOn[].name] | sort | join(",")' "$n8n_ks")" == \
     'automation,cilium,internal-gateway,kube-prometheus-stack,longhorn,n8n-postgresql,public-webhook-gateway' ]] || {
-  echo 'n8n must remain suspended with its complete foundation dependency graph.' >&2
+  echo 'n8n must use an explicit suspend state with its complete foundation dependency graph.' >&2
   exit 1
 }
 

@@ -24,6 +24,6 @@ spec:
     name: flux-system
     namespace: flux-system
   # Task 9 selects operator-generated ciphertext before the attended rollout.
-  suspend: true
+  suspend: false
   timeout: 10m
   wait: true
