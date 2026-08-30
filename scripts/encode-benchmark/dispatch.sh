@@ -40,20 +40,7 @@ fi
 source "$app_directory/scripts/contract.sh"
 
 temp_directory=''
-remote_cleanup_armed=0
-remote_job=''
-remote_configmap=''
 cleanup_dispatch() {
-	if [[ "$remote_cleanup_armed" == '1' ]]; then
-		if [[ -n "$remote_configmap" ]]; then
-			kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-				"configmap/$remote_configmap" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
-		fi
-		if [[ -n "$remote_job" ]]; then
-			kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete \
-				"job/$remote_job" --ignore-not-found=true --wait=true >/dev/null 2>&1 || true
-		fi
-	fi
 	if [[ -n "$temp_directory" ]]; then
 		rm -rf -- "$temp_directory"
 	fi
@@ -65,13 +52,6 @@ trap 'exit 143' TERM
 validate_run_id() {
 	contract_is_run_id "$1" || {
 		echo "invalid run id: $1" >&2
-		return 64
-	}
-}
-
-validate_node_name() {
-	[[ "$1" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ && ${#1} -le 253 ]] || {
-		echo "invalid node name: $1" >&2
 		return 64
 	}
 }

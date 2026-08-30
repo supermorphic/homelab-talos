@@ -377,6 +377,38 @@ assert_no_mutations() {
 	[ "$(mutation_count)" -eq 0 ]
 }
 
+write_results_fixtures() {
+	local run_id="$1" image_id="$2"
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/jobs.json"
+	STUB_PODS_JSON="$BATS_TEST_TMPDIR/pods.json"
+	STUB_LOGS_FILE="$BATS_TEST_TMPDIR/logs.txt"
+	STUB_IMAGE_EVIDENCE_DIR="$BATS_TEST_TMPDIR/image-evidence"
+	export STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_FILE STUB_IMAGE_EVIDENCE_DIR
+	unset STUB_LOGS_DIR
+	mkdir -p "$STUB_IMAGE_EVIDENCE_DIR"
+	printf '%s\n' "{\"apiVersion\":\"v1\",\"items\":[{\"metadata\":{\"name\":\"encode-benchmark-capabilities-fixture\",\"uid\":\"fixture-job-uid\",\"labels\":{\"app.kubernetes.io/name\":\"encode-benchmark\",\"homelab-talos/benchmark-run\":\"$run_id\",\"homelab-talos/benchmark-mode\":\"capabilities\"},\"annotations\":{\"homelab-talos/image-evidence-configmap\":\"encode-benchmark-image-fixture\"}},\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"nuc2\"},\"containers\":[{\"name\":\"benchmark\",\"image\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}]}}},\"status\":{\"conditions\":[{\"type\":\"Complete\",\"status\":\"True\"}],\"succeeded\":1,\"failed\":0,\"startTime\":\"2026-08-02T12:00:00Z\",\"completionTime\":\"2026-08-02T12:01:00Z\"}}]}" >"$STUB_JOBS_JSON"
+	printf '%s\n' "{\"apiVersion\":\"v1\",\"items\":[{\"metadata\":{\"name\":\"encode-benchmark-capabilities-fixture-pod\",\"labels\":{\"job-name\":\"encode-benchmark-capabilities-fixture\",\"homelab-talos/benchmark-run\":\"$run_id\"},\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"encode-benchmark-capabilities-fixture\",\"uid\":\"fixture-job-uid\",\"controller\":true,\"blockOwnerDeletion\":true}]},\"spec\":{\"nodeName\":\"nuc2\"},\"status\":{\"phase\":\"Succeeded\",\"containerStatuses\":[{\"name\":\"benchmark\",\"imageID\":\"$image_id\"}]}}]}" >"$STUB_PODS_JSON"
+	printf '%s\n' '{"status":"passed","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","diagnosticCapabilities":{"traceHeaders":"passed","libvmaf":"passed","ssim":"passed","psnr":"passed","bestEffortTimestampTime":"passed","packetDurationTime":"passed","keyFrame":"passed","pictType":"passed"},"proofStatus":"passed","proofReasons":"","uid":568,"hevcQsv":true,"libx265":true,"nodeName":"nuc2","configuredImage":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","sourcePath":"/media/Secret Movie.mkv","source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","credential":"dont-print-me"}' >"$STUB_LOGS_FILE"
+	printf '%s\n' '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"encode-benchmark-image-fixture","ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","controller":true,"blockOwnerDeletion":true}]},"data":{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}' >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+}
+
+write_multi_node_results_fixtures() {
+	local run_id="$1" image_id="$2" lower_run="${1,,}" node
+	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/jobs-multi.json"
+	STUB_PODS_JSON="$BATS_TEST_TMPDIR/pods-multi.json"
+	STUB_LOGS_DIR="$BATS_TEST_TMPDIR/logs-multi"
+	STUB_IMAGE_EVIDENCE_DIR="$BATS_TEST_TMPDIR/image-evidence-multi"
+	export STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
+	unset STUB_LOGS_FILE
+	mkdir -p "$STUB_LOGS_DIR" "$STUB_IMAGE_EVIDENCE_DIR"
+	jq -n --arg run "$run_id" --arg lower "$lower_run" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({metadata:{name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"capabilities"},annotations:{"homelab-talos/image-evidence-configmap":("encode-benchmark-image-" + .)}},spec:{template:{spec:{nodeSelector:{"kubernetes.io/hostname":.},containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0,startTime:"2026-08-14T18:00:00Z",completionTime:"2026-08-14T18:01:00Z"}})}' >"$STUB_JOBS_JSON"
+	jq -n --arg lower "$lower_run" --arg image "$image_id" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({metadata:{name:("capability-pod-" + .),labels:{"job-name":("encode-benchmark-capabilities-" + $lower + "-node-" + .)},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),controller:true,blockOwnerDeletion:true}]},spec:{nodeName:.},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:$image}]}})}' >"$STUB_PODS_JSON"
+	for node in nuc1 nuc3; do
+		printf '%s\n' "{\"status\":\"passed\",\"strategyId\":\"qsv-hevc-icq-v1\",\"proofSchemaVersion\":3,\"initialization\":\"passed\",\"initializationReason\":\"\",\"renderNode\":\"/dev/dri/renderD128\",\"drmDriver\":\"i915\",\"selectedRateControl\":\"ICQ\",\"telemetryStatus\":\"available\",\"telemetryReason\":\"\",\"videoBusyNanoseconds\":800000000,\"videoBusyPercent\":40,\"encodeFps\":72,\"encodeSpeed\":1.25,\"decode\":\"passed\",\"vmaf\":\"passed\",\"diagnosticCapabilities\":{\"traceHeaders\":\"passed\",\"libvmaf\":\"passed\",\"ssim\":\"passed\",\"psnr\":\"passed\",\"bestEffortTimestampTime\":\"passed\",\"packetDurationTime\":\"passed\",\"keyFrame\":\"passed\",\"pictType\":\"passed\"},\"proofStatus\":\"passed\",\"proofReasons\":\"\",\"uid\":568,\"hevcQsv\":true,\"libx265\":true,\"nodeName\":\"$node\",\"configuredImageDigest\":\"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"sourcePath\":\"/media/Secret Movie.mkv\"}" >"$STUB_LOGS_DIR/encode-benchmark-capabilities-$lower_run-node-$node.log"
+		jq -n --arg node "$node" --arg run "$run_id" '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:("encode-benchmark-image-" + $node),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + ($run|ascii_downcase) + "-node-" + $node),uid:("uid-" + $node),controller:true,blockOwnerDeletion:true}]},data:{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}' >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-$node.json"
+	done
+}
+
 run_dispatch() {
 	run "$DISPATCH" "$KUBECONFIG_FIXTURE" "$@"
 }
@@ -745,7 +777,16 @@ two_passing_capability_nodes() {
 		"$(jq -c '.nodes[0].configuredImageDigest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$valid")" \
 		"$(jq -c '.nodes[0].imageId="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$valid")" \
 		"$(jq -c '.nodes[0].videoBusyNanoseconds=0 | .nodes[0].proofStatus="failed" | .nodes[0].proofReasons="telemetry"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].encodeSpeed=0' <<<"$valid")"; do
+		"$(jq -c '.nodes[0].encodeSpeed=0' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.traceHeaders="failed"' <<<"$valid")" \
+		"$(jq -c 'del(.nodes[0].diagnosticCapabilities.libvmaf)' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.ssim=true' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.psnr="unknown"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.bestEffortTimestampTime="failed"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.packetDurationTime="failed"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.keyFrame="failed"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.pictType="failed"' <<<"$valid")" \
+		"$(jq -c '.nodes[0].diagnosticCapabilities.unexpected="passed"' <<<"$valid")"; do
 		set_capability_evidence verified "$invalid"
 		run_dispatch run quality
 		[ "$status" -ne 0 ]
@@ -980,6 +1021,51 @@ two_passing_capability_nodes() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"proofStatus":"harness-blocked","proofReasons":"telemetry"'* ]]
 	assert_no_mutations
+}
+
+# Catches failed, missing, malformed, or expanded diagnostic readiness being
+# republished as a usable committed quality capability record.
+@test "results rejects every non-passing quality diagnostic capability" {
+	run_id='20260802T120000Z-1234abcd'
+	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+
+	write_results_fixtures "$run_id" "$image_id"
+	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] |
+		del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
+		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq -c '.status="failed" | .diagnosticCapabilities.traceHeaders="failed" |
+		.proofStatus="failed" | .proofReasons="quality-capabilities"' \
+		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
+	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"traceHeaders":"failed"'* ]]
+	[[ "$output" == *'"proofStatus":"failed","proofReasons":"quality-capabilities"'* ]]
+	[[ "$output" != *'"proofStatus":"passed"'* ]]
+	assert_no_mutations
+
+	for mutation in \
+		'.diagnosticCapabilities.traceHeaders="failed"' \
+		'del(.diagnosticCapabilities.libvmaf)' \
+		'.diagnosticCapabilities.ssim=true' \
+		'.diagnosticCapabilities.psnr="unknown"' \
+		'.diagnosticCapabilities.bestEffortTimestampTime="failed"' \
+		'.diagnosticCapabilities.packetDurationTime="failed"' \
+		'.diagnosticCapabilities.keyFrame="failed"' \
+		'.diagnosticCapabilities.pictType="failed"' \
+		'.diagnosticCapabilities.unexpected="passed"'; do
+		write_results_fixtures "$run_id" "$image_id"
+		jq -c "$mutation" "$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
+		mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *'capability result schema rejected'* ]]
+		[[ "$output" != *'capability_evidence='* ]]
+		assert_no_mutations
+	done
 }
 
 # Catches accepting legacy schema/mode evidence or trusting a claimed reason

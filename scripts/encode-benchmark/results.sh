@@ -133,6 +133,12 @@ sanitize_capability_evidence() {
 	local log_line="$1" node="$2" verified_at="$3" image_id="$4"
 	jq -e -c --arg node "$node" --arg verified_at "$verified_at" \
 		--arg image_id "$image_id" --arg digest "$configured_digest" '
+		def exact_diagnostic_capabilities:
+			type == "object" and
+			keys == ["bestEffortTimestampTime","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders"] and
+			all(.[]; . == "passed" or . == "failed");
+		def passing_diagnostic_capabilities:
+			exact_diagnostic_capabilities and all(.[]; . == "passed");
 		def reason_list:
 			[]
 			+ (if .initialization == "passed" then [] else ["initialization"] end)
@@ -141,7 +147,9 @@ sanitize_capability_evidence() {
 			+ (if .telemetryStatus == "available" and .videoBusyNanoseconds > 0 then [] else ["telemetry"] end)
 			+ (if .encodeSpeed > 0 then [] else ["progress"] end)
 			+ (if .decode == "passed" then [] else ["decode"] end)
-			+ (if .vmaf == "passed" then [] else ["vmaf"] end);
+			+ (if .vmaf == "passed" then [] else ["vmaf"] end)
+			+ (if (.diagnosticCapabilities | passing_diagnostic_capabilities)
+				then [] else ["quality-capabilities"] end);
 		def expected_status:
 			if .initialization != "passed" then "failed"
 			elif .renderNode == "" or .drmDriver == "" or .selectedRateControl == "unknown" or
@@ -169,9 +177,7 @@ sanitize_capability_evidence() {
 			(.encodeSpeed | type == "number" and . >= 0) and
 			(.decode == "passed" or .decode == "failed") and
 			(.vmaf == "passed" or .vmaf == "failed") and
-			(.diagnosticCapabilities | type == "object" and
-				(keys | sort) == ["bestEffortTimestampTime","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders"] and
-				all(.[]; . == "passed" or . == "failed")) and
+			(.diagnosticCapabilities | exact_diagnostic_capabilities) and
 			.configuredImageDigest == $digest and
 			.proofStatus == expected_status and .status == expected_status and
 			.proofReasons == (reason_list | join(";")) and

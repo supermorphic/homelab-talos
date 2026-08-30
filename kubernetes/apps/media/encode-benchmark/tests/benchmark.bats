@@ -126,14 +126,19 @@ case "$*" in
 	exit 0
 	;;
 *'-hide_banner -filters'*)
-	printf '%s\n' \
-		' ... libvmaf VV->V Calculate the VMAF between two video streams.' \
-		' ... ssim VV->V Calculate the SSIM between two video streams.' \
-		' ... psnr VV->V Calculate the PSNR between two video streams.'
+	if [[ "${BENCHMARK_CAPABILITY_MISSING_FILTER:-}" != 'libvmaf' ]]; then
+		printf '%s\n' ' ... libvmaf VV->V Calculate the VMAF between two video streams.'
+	fi
+	if [[ "${BENCHMARK_CAPABILITY_MISSING_FILTER:-}" != 'ssim' ]]; then
+		printf '%s\n' ' ... ssim VV->V Calculate the SSIM between two video streams.'
+	fi
+	if [[ "${BENCHMARK_CAPABILITY_MISSING_FILTER:-}" != 'psnr' ]]; then
+		printf '%s\n' ' ... psnr VV->V Calculate the PSNR between two video streams.'
+	fi
 	exit 0
 	;;
 *'-hide_banner -bsfs'*)
-	printf '%s\n' 'trace_headers'
+	[[ "${BENCHMARK_CAPABILITY_MISSING_BSF:-0}" == '1' ]] || printf '%s\n' 'trace_headers'
 	exit 0
 	;;
 *'-version'*)
@@ -171,7 +176,11 @@ if [[ "${1:-}" == '-version' ]]; then
 	printf '%s\n' 'ffprobe version 8.1.2 fixture-build'
 	exit 0
 fi
-printf '%s\n' '{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+if [[ -n "${BENCHMARK_CAPABILITY_FRAME_FIXTURE:-}" ]]; then
+	printf '%s\n' "$BENCHMARK_CAPABILITY_FRAME_FIXTURE"
+else
+	printf '%s\n' '{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+fi
 EOF
 	cat >"$stub_bin/id" <<'EOF'
 #!/usr/bin/env bash
@@ -186,6 +195,8 @@ EOF
 	export BENCHMARK_CAPABILITY_INITIALIZATION_FIXTURE="$FIXTURES/logs/qsv-init-success-no-phrase.log"
 	export BENCHMARK_TEST_FDINFO_FIXTURE="$FIXTURES/logs/drm-fdinfo-active.log"
 	unset BENCHMARK_CAPABILITY_DECODE_FAILURE BENCHMARK_CAPABILITY_VMAF_FAILURE
+	unset BENCHMARK_CAPABILITY_MISSING_FILTER BENCHMARK_CAPABILITY_MISSING_BSF
+	unset BENCHMARK_CAPABILITY_FRAME_FIXTURE
 	: >"$BENCHMARK_COMMAND_LOG"
 }
 
@@ -234,7 +245,14 @@ case "$arguments" in
 	exit 0
 	;;
 *'-hide_banner -filters'*)
-	printf '%s\n' ' ... libvmaf VV->V Calculate the VMAF between two video streams.'
+	printf '%s\n' \
+		' ... libvmaf VV->V Calculate the VMAF between two video streams.' \
+		' ... ssim VV->V Calculate the SSIM between two video streams.' \
+		' ... psnr VV->V Calculate the PSNR between two video streams.'
+	exit 0
+	;;
+*'-hide_banner -bsfs'*)
+	printf '%s\n' 'trace_headers'
 	exit 0
 	;;
 *'-version'*)
@@ -359,6 +377,10 @@ if [[ "$*" == *'-show_frames -show_entries frame=side_data_list'* ]]; then
 	]}]}'
 	exit 0
 fi
+if [[ "$*" == *'-read_intervals 0%+1 -show_frames'* ]]; then
+	printf '%s\n' '{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+	exit 0
+fi
 exit 97
 EOF
 	cat >"$stub_bin/id" <<'EOF'
@@ -470,7 +492,7 @@ prepare_quality_panel_with_six_titles_three_clips() {
 		item="$(jq -n --arg id "quality-$index" --arg cohort "$cohort" --arg path "$source" \
 			--arg sha "$sha" --argjson size "$size" '{
 				id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
-				clips: {detail: "00:17:23.456", motion: "00:27:23.456", grain: "00:37:23.456"}
+				clips: {detail: "00:17:23.456", motion: "00:27:23.456", dark: "00:37:23.456"}
 			}')"
 		quality="$(jq -c --argjson item "$item" '. + [$item]' <<<"$quality")"
 	done
@@ -588,6 +610,54 @@ prepare_quality_panel_with_six_titles_three_clips() {
 	run "$SCRIPTS/benchmark.sh" capabilities
 	[ "$status" -eq 2 ]
 	[ "$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")" = 'harness-blocked:telemetry' ]
+}
+
+# Catches a capability producer authorizing quality when the retained HDR,
+# metric, or frame-field tools are absent from the exact runtime image.
+@test "capability proof folds every quality diagnostic readiness failure into status" {
+	create_capability_tools
+	write_capability_samples
+	export BENCHMARK_DISPATCH_IMAGE='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
+	export NODE_NAME='talos-03'
+
+	for mutation in \
+		'missing-bsf' \
+		'missing-libvmaf' \
+		'missing-ssim' \
+		'missing-psnr' \
+		'missing-best-effort-timestamp' \
+		'missing-packet-duration' \
+		'malformed-key-frame' \
+		'malformed-picture-type'; do
+		unset BENCHMARK_CAPABILITY_MISSING_FILTER BENCHMARK_CAPABILITY_MISSING_BSF
+		unset BENCHMARK_CAPABILITY_FRAME_FIXTURE
+		case "$mutation" in
+		missing-bsf) export BENCHMARK_CAPABILITY_MISSING_BSF=1 ;;
+		missing-libvmaf) export BENCHMARK_CAPABILITY_MISSING_FILTER=libvmaf ;;
+		missing-ssim) export BENCHMARK_CAPABILITY_MISSING_FILTER=ssim ;;
+		missing-psnr) export BENCHMARK_CAPABILITY_MISSING_FILTER=psnr ;;
+		missing-best-effort-timestamp)
+			export BENCHMARK_CAPABILITY_FRAME_FIXTURE='{"frames":[{"pkt_duration_time":"0.041667","key_frame":1,"pict_type":"I"}]}'
+			;;
+		missing-packet-duration)
+			export BENCHMARK_CAPABILITY_FRAME_FIXTURE='{"frames":[{"best_effort_timestamp_time":"0.000000","key_frame":1,"pict_type":"I"}]}'
+			;;
+		malformed-key-frame)
+			export BENCHMARK_CAPABILITY_FRAME_FIXTURE='{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":2,"pict_type":"I"}]}'
+			;;
+		malformed-picture-type)
+			export BENCHMARK_CAPABILITY_FRAME_FIXTURE='{"frames":[{"best_effort_timestamp_time":"0.000000","pkt_duration_time":"0.041667","key_frame":1,"pict_type":"X"}]}'
+			;;
+		esac
+		run "$SCRIPTS/benchmark.sh" capabilities
+		[ "$status" -eq 1 ]
+		actual="$(jq -r '.proofStatus + ":" + .proofReasons' <<<"$output")"
+		[ "$actual" = 'failed:quality-capabilities' ] || {
+			echo "unexpected quality capability proof for $mutation: $actual" >&3
+			return 1
+		}
+		[ "$(jq -r '[.diagnosticCapabilities[] | select(. == "failed")] | length' <<<"$output")" -eq 1 ]
+	done
 }
 
 # Catches capability mode running even a synthetic ffmpeg encode before the
@@ -933,7 +1003,7 @@ keys = {(row["sample_id"], row["clip_id"], row["requested_setting"]) for row in 
 expected = {
     (f"quality-{title}", clip, str(setting))
     for title in range(1, 7)
-    for clip in ("detail", "motion", "grain")
+    for clip in ("detail", "motion", "dark")
     for setting in (16, 18, 20, 22, 24, 26, 28, 30)
 }
 print(json.dumps({

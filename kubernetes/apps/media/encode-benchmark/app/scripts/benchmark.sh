@@ -862,7 +862,7 @@ require_running_image_evidence() {
 
 capabilities() (
 	local capability_directory source encode_log fdinfo_log ffmpeg_version ffprobe_version
-	local encoders filters uid configured_image configured_digest dispatch_image node_name
+	local encoders uid configured_image configured_digest dispatch_image node_name
 	local missing proof_json proof_exit
 	local -a required_commands=()
 	# Every check below is written in terms of jq, grep or ffmpeg, so the command
@@ -898,9 +898,7 @@ capabilities() (
 		return 65
 	}
 	encoders="$(ffmpeg -nostdin -hide_banner -encoders)"
-	filters="$(ffmpeg -nostdin -hide_banner -filters)"
 	grep -q -F 'hevc_qsv' <<<"$encoders" || return 1
-	grep -q -F 'libvmaf' <<<"$filters" || return 1
 	uid="$(id -u)"
 	[[ "$uid" == '568' ]] || return 1
 	mkdir -p "$scratch_root"
@@ -1247,6 +1245,12 @@ capability_proof() {
 		reasons="${reasons:+$reasons;}progress"
 	[[ "$decode" == 'passed' ]] || reasons="${reasons:+$reasons;}decode"
 	[[ "$vmaf" == 'passed' ]] || reasons="${reasons:+$reasons;}vmaf"
+	jq -e '
+		type == "object" and
+		keys == ["bestEffortTimestampTime","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders"] and
+		all(.[]; . == "passed")
+	' <<<"$diagnostic_capabilities" >/dev/null 2>&1 ||
+		reasons="${reasons:+$reasons;}quality-capabilities"
 	if [[ "$initialization" != 'passed' ]]; then
 		proof_status='failed'
 	elif [[ "$proof_status" != 'harness-blocked' && -n "$reasons" ]]; then

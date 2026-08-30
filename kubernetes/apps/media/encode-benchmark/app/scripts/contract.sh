@@ -142,6 +142,15 @@ contract_passing_icq_nodes() {
 			(.encodeFps | type == "number" and . >= 0) and
 			(.encodeSpeed | type == "number" and . > 0) and
 			.decode == "passed" and .vmaf == "passed" and
+			. as $node |
+			(.diagnosticCapabilities | type == "object" and
+				keys == ["bestEffortTimestampTime","imageId","keyFrame","libvmaf","packetDurationTime","pictType","psnr","ssim","traceHeaders","verifiedAt"] and
+				.traceHeaders == "passed" and .libvmaf == "passed" and
+				.ssim == "passed" and .psnr == "passed" and
+				.bestEffortTimestampTime == "passed" and .packetDurationTime == "passed" and
+				.keyFrame == "passed" and .pictType == "passed" and
+				.imageId == $node.imageId and .verifiedAt == $node.verifiedAt and
+				(.imageId | immutable_image_id($digest))) and
 			.proofStatus == "passed" and .proofReasons == "" and
 			(.verifiedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
 			.configuredImageDigest == $digest and (.imageId | immutable_image_id($digest));

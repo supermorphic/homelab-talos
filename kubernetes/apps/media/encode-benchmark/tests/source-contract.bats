@@ -45,6 +45,53 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
+# Catches a committed capability record losing any exact runtime prerequisite
+# needed by the retained quality evidence path.
+@test "shared contract authorizes only exact passing quality diagnostic capabilities" {
+	run bash -c 'source "$1"; contract_load "$2"; contract_passing_icq_nodes "$2"' \
+		_ "$contract" "$samples_json"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'nuc1\nnuc3' ]
+
+	for mutation in \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.traceHeaders = "failed"' \
+		'del(.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.libvmaf)' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.ssim = true' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.psnr = "unknown"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.bestEffortTimestampTime = "failed"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.packetDurationTime = "failed"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.keyFrame = "failed"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.pictType = "failed"' \
+		'.runtime.capabilityEvidence.nodes[0].diagnosticCapabilities.unexpected = "passed"'; do
+		candidate="$BATS_TEST_TMPDIR/diagnostic-$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation | .runtime.capabilityEvidence.nodes = [.runtime.capabilityEvidence.nodes[0]]" \
+			"$samples_json" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"; contract_passing_icq_nodes "$2"' \
+			_ "$contract" "$candidate"
+		[ "$status" -eq 0 ]
+		[ "$output" = '' ]
+	done
+}
+
+# Catches any changed or duplicated source region in the committed six-title
+# panel before the benchmark spends GPU time on a non-comparable experiment.
+@test "embedded quality panel is the exact six-title three-region experiment" {
+	run jq -e '
+		[.qualityPanel[] | select(.detectionOnly != true) | {id,clips}] == [
+			{id:"vc1-fugitive",clips:{detail:"01:15:00.000",dark:"00:35:00.000",motion:"01:20:00.000"}},
+			{id:"avc-clean-coco",clips:{detail:"00:10:00.000",dark:"00:45:00.000",motion:"00:05:00.000"}},
+			{id:"avc-grain-memento",clips:{detail:"00:23:00.000",dark:"00:38:00.000",motion:"01:15:30.000"}},
+			{id:"hdr10-clean-ministry",clips:{detail:"01:04:15.000",dark:"01:19:15.000",motion:"00:29:15.000"}},
+			{id:"hdr10-grain-goodfellas",clips:{detail:"01:06:25.000",dark:"00:36:55.000",motion:"00:40:45.000"}},
+			{id:"hdr10-motion-john-wick-2",clips:{detail:"01:04:50.000",dark:"00:06:30.000",motion:"01:38:00.000"}}
+		] and
+		([.qualityPanel[] | select(.detectionOnly != true) | .id] | (length == 6) and ((unique | length) == 6)) and
+		([.qualityPanel[] | select(.detectionOnly != true) | .clips | keys] | all(. == ["dark","detail","motion"])) and
+		([.qualityPanel[] | select(.detectionOnly != true) | .clips | [.dark,.detail,.motion] | unique | length] | all(. == 3))
+	' "$samples_json"
+	[ "$status" -eq 0 ]
+}
+
 # Catches quality evidence accepting a diagnostic identity that was not
 # independently classified as a VMAF measurement defect.
 @test "embedded samples publish the exact corrected quality evidence contract" {
@@ -205,6 +252,52 @@ setup() {
 	[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | .readOnly' "$template")" = true ]
 	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.optional' "$template")" = true ]
 	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | .configMap.items[0] | [.key,.path] | @tsv' "$template")" = $'image.json\timage.json' ]
+}
+
+# One focused, independent projection protects the complete retained quality
+# Job contract. Dispatch tests separately prove dynamic substitutions.
+@test "template preserves the exact quality Job safety and projection contract" {
+	template=kubernetes/apps/media/encode-benchmark/templates/job.yaml
+	run yq -o=json -I=0 '
+		{
+			"ttl": .spec.ttlSecondsAfterFinished,
+			"podSecurity": .spec.template.spec.securityContext,
+			"containerSecurity": .spec.template.spec.containers[0].securityContext,
+			"affinity": .spec.template.spec.affinity,
+			"resources": .spec.template.spec.containers[0].resources,
+			"outMount": (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "out")),
+			"outVolume": (.spec.template.spec.volumes[] | select(.name == "out")),
+			"scratchMount": (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "scratch")),
+			"scratchVolume": (.spec.template.spec.volumes[] | select(.name == "scratch")),
+			"scriptsMount": (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "scripts")),
+			"scriptsVolume": (.spec.template.spec.volumes[] | select(.name == "scripts")),
+			"samplesMount": (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "samples")),
+			"samplesVolume": (.spec.template.spec.volumes[] | select(.name == "samples")),
+			"imageEvidenceMount": (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence")),
+			"imageEvidenceVolume": (.spec.template.spec.volumes[] | select(.name == "image-evidence"))
+		}
+	' "$template"
+	[ "$status" -eq 0 ]
+	run jq -e '
+		. == {
+			ttl:86400,
+			podSecurity:{runAsNonRoot:true,runAsUser:568,runAsGroup:568,fsGroup:568,fsGroupChangePolicy:"OnRootMismatch",seccompProfile:{type:"RuntimeDefault"}},
+			containerSecurity:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}},
+			affinity:{podAntiAffinity:{requiredDuringSchedulingIgnoredDuringExecution:[{topologyKey:"kubernetes.io/hostname",labelSelector:{matchExpressions:[{key:"app.kubernetes.io/name",operator:"In",values:["plex"]}]}}]}},
+			resources:{requests:{cpu:2,memory:"2Gi","ephemeral-storage":"105Gi","gpu.intel.com/i915":1},limits:{cpu:8,memory:"8Gi","ephemeral-storage":"110Gi","gpu.intel.com/i915":1}},
+			outMount:{name:"out",mountPath:"/out",subPath:"benchmark"},
+			outVolume:{name:"out",persistentVolumeClaim:{claimName:"media-data"}},
+			scratchMount:{name:"scratch",mountPath:"/scratch"},
+			scratchVolume:{name:"scratch",emptyDir:{sizeLimit:"105Gi"}},
+			scriptsMount:{name:"scripts",mountPath:"/scripts",readOnly:true},
+			scriptsVolume:{name:"scripts",configMap:{name:"encode-benchmark-scripts-d6ddc44bm8",defaultMode:555}},
+			samplesMount:{name:"samples",mountPath:"/config/samples.json",subPath:"samples.json",readOnly:true},
+			samplesVolume:{name:"samples",configMap:{name:"encode-benchmark-samples",items:[{key:"samples.json",path:"samples.json"}]}},
+			imageEvidenceMount:{name:"image-evidence",mountPath:"/provenance",readOnly:true},
+			imageEvidenceVolume:{name:"image-evidence",configMap:{name:"encode-benchmark-image-template",optional:true,items:[{key:"image.json",path:"image.json"}]}}
+		}
+	' <<<"$output"
+	[ "$status" -eq 0 ]
 }
 
 # Catches a pre-work handoff that trusts one of the three image identities or
