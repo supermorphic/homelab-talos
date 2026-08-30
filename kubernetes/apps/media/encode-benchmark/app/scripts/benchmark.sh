@@ -3514,16 +3514,24 @@ append_comparison_once() {
 	mv -f -- "$staged" "$output"
 }
 
+quality_ranking_file_identity() {
+	local path="$1" identity
+	if identity="$(LC_ALL=C stat -Lc '%d:%i:%s' -- "$path" 2>/dev/null)"; then
+		[[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]] || return 65
+		printf 'gnu:%s\n' "$identity"
+		return
+	fi
+	identity="$(LC_ALL=C stat -f '%i:%z' "$path" 2>/dev/null)" || return 65
+	[[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 65
+	printf 'bsd:%s\n' "$identity"
+}
+
 quality_evidence_for_ranking() (
 	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
 	local clip_id="$6" setting="$7" attempt="$8" evidence_path="$9" evidence_digest="${10}"
 	local evidence_directory evidence_file expected_path actual_digest run_physical
-	local snapshot_directory='' snapshot_file='' evidence_fd='' evidence_snapshot=''
-	trap '
-		if [[ -n "$evidence_fd" ]]; then exec {evidence_fd}<&-; fi
-		if [[ -n "$snapshot_file" ]]; then rm -f -- "$snapshot_file"; fi
-		if [[ -n "$snapshot_directory" ]]; then rmdir -- "$snapshot_directory"; fi
-	' EXIT
+	local evidence_fd current_fd evidence_fd_path current_fd_path opened_identity path_identity
+	local current_identity current_digest evidence_snapshot projection
 	expected_path="quality-evidence/$sample_id-$clip_id-qsv-$setting-attempt-$attempt.json"
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ &&
 		"$evidence_path" == "$expected_path" && "$evidence_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 65
@@ -3535,36 +3543,21 @@ quality_evidence_for_ranking() (
 	[[ -f "$evidence_file" && ! -L "$evidence_file" ]] || return 65
 	[[ "$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
 
-	# Bind a private hard link to the validated evidence inode, then open and
-	# remove that link before reading. The original pathname may change after
-	# this point, but both the digest and parser consume the same bytes captured
-	# from the already-open regular file.
-	snapshot_directory="$(mktemp -d "$evidence_directory/.quality-ranking.XXXXXX")" || return
-	chmod 0700 "$snapshot_directory" || return
-	snapshot_file="$snapshot_directory/evidence.json"
-	ln -T -- "$evidence_file" "$snapshot_file" 2>/dev/null || return 65
-	[[ -f "$evidence_file" && ! -L "$evidence_file" &&
-		-f "$snapshot_file" && ! -L "$snapshot_file" &&
-		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" &&
-		"$evidence_file" -ef "$snapshot_file" ]] || return 65
-	exec {evidence_fd}<"$snapshot_file" || return 65
-	[[ -f "/dev/fd/$evidence_fd" && -f "$snapshot_file" && ! -L "$snapshot_file" &&
-		"$evidence_file" -ef "$snapshot_file" ]] || return 65
-	rm -f -- "$snapshot_file" || return 65
-	snapshot_file=''
-	rmdir -- "$snapshot_directory" || return 65
-	snapshot_directory=''
-	evidence_snapshot=''
-	# A NUL byte cannot occur in a JSON document. A successful NUL-delimited
-	# read therefore rejects the object instead of silently changing its bytes.
-	if IFS= read -r -d '' evidence_snapshot <&"$evidence_fd"; then
-		return 65
-	fi
-	exec {evidence_fd}<&-
-	evidence_fd=''
-	actual_digest="sha256:$(printf '%s' "$evidence_snapshot" | sha256sum | awk 'NR == 1 { print $1 }')"
+	# Open the canonical file directly and tie its descriptor to the confined
+	# pathname. Base64 keeps every byte, including trailing newlines and NULs,
+	# intact while the digest and parser consume one in-memory snapshot.
+	exec {evidence_fd}<"$evidence_file" || return 65
+	evidence_fd_path="/dev/fd/$evidence_fd"
+	[[ -f "$evidence_fd_path" && -f "$evidence_file" && ! -L "$evidence_file" ]] || return 65
+	opened_identity="$(quality_ranking_file_identity "$evidence_fd_path")" || return 65
+	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
+	[[ "$opened_identity" == "$path_identity" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+	evidence_snapshot="$(base64 <&"$evidence_fd")" || return 65
+	actual_digest="sha256:$(printf '%s' "$evidence_snapshot" | base64 --decode |
+		sha256sum | awk 'NR == 1 { print $1 }')"
 	[[ "$actual_digest" == "$evidence_digest" ]] || return 65
-	printf '%s' "$evidence_snapshot" | jq -e -c \
+	projection="$(printf '%s' "$evidence_snapshot" | base64 --decode | jq -e -c \
 		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
 		--arg source_sha "$source_sha" --arg clip "$clip_id" --argjson setting "$setting" \
 		--arg strategy "$CONTRACT_STRATEGY_ID" --argjson schema "$CONTRACT_QUALITY_EVIDENCE_SCHEMA" '
@@ -3605,7 +3598,25 @@ quality_evidence_for_ranking() (
 			psnr:$document.psnr,
 			hdrClassification:($document.hdr.classification // null)
 		}
-	'
+	')" || return 65
+
+	# The snapshot is valid only while the canonical path still names the same
+	# regular inode with the authenticated digest. Reopen it after parsing and
+	# repeat both inode and path checks around the final digest read.
+	[[ -f "$evidence_file" && ! -L "$evidence_file" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+	exec {current_fd}<"$evidence_file" || return 65
+	current_fd_path="/dev/fd/$current_fd"
+	[[ -f "$current_fd_path" ]] || return 65
+	current_identity="$(quality_ranking_file_identity "$current_fd_path")" || return 65
+	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
+	[[ "$current_identity" == "$opened_identity" && "$path_identity" == "$opened_identity" ]] || return 65
+	current_digest="sha256:$(sha256sum <&"$current_fd" | awk 'NR == 1 { print $1 }')"
+	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
+	[[ "$current_digest" == "$evidence_digest" && "$path_identity" == "$opened_identity" &&
+		-f "$evidence_file" && ! -L "$evidence_file" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+	printf '%s\n' "$projection"
 )
 
 rank_quality_candidates() {

@@ -683,12 +683,21 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == '-T' && "${2:-}" == '--' && "$#" -eq 4 ]]; then
-	exec python3 - "$3" "$4" <<'PYTHON'
+	python3 - "$3" "$4" <<'PYTHON'
 import os
 import sys
 
 os.link(sys.argv[1], sys.argv[2])
 PYTHON
+	if [[ -n "${BENCHMARK_TEST_LINK_SWAP_OUTSIDE:-}" &&
+		-n "${BENCHMARK_TEST_LINK_SWAP_MARKER:-}" &&
+		! -e "$BENCHMARK_TEST_LINK_SWAP_MARKER" && "$4" == *'/.quality-ranking.'*'/evidence.json' ]]; then
+		snapshot_directory="${4%/*}"
+		mv -- "$snapshot_directory" "$snapshot_directory.moved"
+		"$REAL_LN" -s "$BENCHMARK_TEST_LINK_SWAP_OUTSIDE" "$snapshot_directory"
+		: >"$BENCHMARK_TEST_LINK_SWAP_MARKER"
+	fi
+	exit 0
 fi
 exec "$REAL_LN" "$@"
 EOF
@@ -3384,9 +3393,9 @@ PYTHON
 	[ "$status" -eq 0 ]
 }
 
-# Catches hashing one pathname read and parsing a replacement pathname read.
-# The sha256sum stub replaces the pathname after it returns the original digest.
-@test "quality candidates hash and parse one stable evidence snapshot" {
+# Catches either parsing replacement bytes or retaining eligibility after the
+# canonical evidence path changes during authentication.
+@test "quality candidates reject canonical replacement after stable evidence capture" {
 	prepare_execution_run
 	prepare_quality_panel_with_six_titles_three_clips
 	run_id='20260815T120000Z-acde0000'
@@ -3406,10 +3415,34 @@ PYTHON
 	[ "$status" -eq 0 ]
 	[ ! -e "$replacement" ]
 	run jq -e '
-		(.cohorts.avc.candidates | map(.globalQuality)) == [16,24,18,26] and
-		.cohorts.avc.candidates[3] == {globalQuality:26, medianReductionPercent:10}
+		.cohorts.avc.status == "eligible" and
+		(.cohorts.avc.candidates | map(.globalQuality)) == [24,18,26] and
+		.cohorts.avc.candidates[2] == {globalQuality:26, medianReductionPercent:10}
 	' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
+}
+
+# Catches cleanup through a private snapshot directory after another process
+# replaces that directory with a symlink to an outside location.
+@test "quality candidate authentication cannot remove through a replaced snapshot path" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0004'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+
+	outside="$BATS_TEST_TMPDIR/outside-snapshot-target"
+	mkdir -p "$outside"
+	printf '%s\n' 'must-survive' >"$outside/evidence.json"
+	export BENCHMARK_TEST_LINK_SWAP_OUTSIDE="$outside"
+	export BENCHMARK_TEST_LINK_SWAP_MARKER="$BATS_TEST_TMPDIR/link-swap-triggered"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ]
+	[ -f "$outside/evidence.json" ]
+	[ "$(<"$outside/evidence.json")" = 'must-survive' ]
 }
 
 # Catches accepting evidence that is not a confined regular file, has a false
