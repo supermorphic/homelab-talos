@@ -16,14 +16,24 @@ contract_diagnostics_terminal_byte_count() {
 contract_load() {
 	local file="$1"
 	jq -e '
-		.schemaVersion == 2 and
+		.schemaVersion == 3 and
 		.strategy.id == "qsv-hevc-icq-v1" and
-		.strategy.resultsSchemaVersion == 2 and
+		.strategy.resultsSchemaVersion == 3 and
 		.strategy.runManifestSchemaVersion == 2 and
 		.strategy.capabilityProofSchemaVersion == 3 and
 		.strategy.globalQualityCandidates == [16, 18, 20, 22, 24, 26, 28, 30] and
 		.strategy.x265 == {
 			initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2
+		} and
+		.qualityCorrection == {
+			schemaVersion: 1,
+			diagnosticRunId: "20260829T020752Z-43984d8d",
+			vmafMeasurementDefects: [
+				{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
+				{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
+				{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
+				{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
+			]
 		}
 	' "$file" >/dev/null || return 65
 	if jq -e 'has("diagnostics")' "$file" >/dev/null; then
@@ -34,8 +44,22 @@ contract_load() {
 	CONTRACT_RESULTS_SCHEMA="$(jq -r '.strategy.resultsSchemaVersion' "$file")"
 	CONTRACT_MANIFEST_SCHEMA="$(jq -r '.strategy.runManifestSchemaVersion' "$file")"
 	CONTRACT_CAPABILITY_SCHEMA="$(jq -r '.strategy.capabilityProofSchemaVersion' "$file")"
+	CONTRACT_QUALITY_EVIDENCE_SCHEMA="$(jq -r '.qualityCorrection.schemaVersion' "$file")"
+	CONTRACT_QUALITY_CANDIDATES_SCHEMA=2
+	CONTRACT_QUALITY_DIAGNOSTIC_RUN_ID="$(jq -r '.qualityCorrection.diagnosticRunId' "$file")"
 	readonly CONTRACT_STRATEGY_ID CONTRACT_ICQ_SETTINGS CONTRACT_RESULTS_SCHEMA
 	readonly CONTRACT_MANIFEST_SCHEMA CONTRACT_CAPABILITY_SCHEMA
+	readonly CONTRACT_QUALITY_EVIDENCE_SCHEMA CONTRACT_QUALITY_CANDIDATES_SCHEMA
+	readonly CONTRACT_QUALITY_DIAGNOSTIC_RUN_ID
+}
+
+contract_quality_vmaf_exclusion() {
+	local file="$1" sample_id="$2" clip_id="$3"
+	jq -e -r --arg sample "$sample_id" --arg clip "$clip_id" '
+		[.qualityCorrection.vmafMeasurementDefects[] |
+			select(.sampleId == $sample and .clipId == $clip)] |
+		if length == 1 then .[0].frameIndex else empty end
+	' "$file" || return 1
 }
 
 contract_validate_diagnostics_scope() {

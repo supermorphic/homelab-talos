@@ -17,6 +17,7 @@ census="$app/scripts/census.sh"
 runmeta="$app/scripts/runmeta.sh"
 benchmark="$app/scripts/benchmark.sh"
 diagnostic_evidence="$app/scripts/diagnostic-evidence.sh"
+quality_evidence="$app/scripts/quality-evidence.sh"
 stills="$app/scripts/stills.sh"
 template="$base/templates/job.yaml"
 tests_dir="$base/tests"
@@ -25,6 +26,7 @@ census_test="$tests_dir/census.bats"
 runmeta_test="$tests_dir/runmeta.bats"
 benchmark_test="$tests_dir/benchmark.bats"
 stills_test="$tests_dir/stills.bats"
+quality_evidence_test="$tests_dir/quality-evidence.bats"
 dispatch_test="$tests_dir/dispatch.bats"
 selection_test="$tests_dir/selection.bats"
 contention_observations_fixture="$tests_dir/fixtures/metrics/contention-observations.json"
@@ -68,6 +70,7 @@ for file in \
 	"$runmeta" \
 	"$benchmark" \
 	"$diagnostic_evidence" \
+	"$quality_evidence" \
 	"$stills" \
 	"$template" \
 	"$contract_test" \
@@ -75,6 +78,7 @@ for file in \
 	"$runmeta_test" \
 	"$benchmark_test" \
 	"$stills_test" \
+	"$quality_evidence_test" \
 	"$dispatch_test" \
 	"$selection_test" \
 	"$contention_observations_fixture" \
@@ -97,6 +101,7 @@ done
 [[ -x "$runmeta" ]] || fail "$runmeta must be executable"
 [[ -x "$benchmark" ]] || fail "$benchmark must be executable"
 [[ -x "$diagnostic_evidence" ]] || fail "$diagnostic_evidence must be executable"
+[[ -x "$quality_evidence" ]] || fail "$quality_evidence must be executable"
 [[ -x "$stills" ]] || fail "$stills must be executable"
 [[ -x "$inventory" ]] || fail "$inventory must be executable"
 [[ -x "$preflight_helper" ]] || fail "$preflight_helper must be executable"
@@ -145,7 +150,7 @@ assert_eq "$(yq -r '.configMapGenerator | length' "$kustomization")" '1' \
 	'scripts ConfigMap generator count'
 assert_eq "$(yq -r '.configMapGenerator[0].name' "$kustomization")" \
 	'encode-benchmark-scripts' 'scripts ConfigMap generator name'
-expected_mappings='contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,stills.sh=scripts/stills.sh'
+expected_mappings='contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,quality-evidence.sh=scripts/quality-evidence.sh,stills.sh=scripts/stills.sh'
 assert_eq "$(yq -r '.configMapGenerator[0].files | join(",")' "$kustomization")" \
 	"$expected_mappings" 'structural command mappings'
 assert_eq "$(yq -r '.generatorOptions.labels."app.kubernetes.io/name"' "$kustomization")" \
@@ -170,7 +175,7 @@ scripts_name="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^
 [[ "$scripts_name" =~ ^encode-benchmark-scripts-[a-z0-9]{10}$ ]] ||
 	fail "rendered scripts ConfigMap is not hash-suffixed: $scripts_name"
 scripts_keys="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .data | keys | sort | join(",")' "$render")"
-assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,diagnostic-contract.jq,diagnostic-evidence.sh,probe.sh,runmeta.sh,stills.sh' \
+assert_eq "$scripts_keys" 'benchmark.sh,census.sh,contract.sh,diagnostic-contract.jq,diagnostic-evidence.sh,probe.sh,quality-evidence.sh,runmeta.sh,stills.sh' \
 	'rendered scripts ConfigMap command keys'
 
 # Scheduling and alerting remain present even though execution is absent.
@@ -208,19 +213,32 @@ assert_eq "$completed_expr" \
 samples_doc="$(yq -r '.data."samples.json"' "$samples")"
 samples_document="$temp_dir/samples.json"
 printf '%s\n' "$samples_doc" >"$samples_document"
-assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '2' 'samples schema version'
+assert_eq "$(yq -r '.schemaVersion' <<<"$samples_doc")" '3' 'samples schema version'
 jq -e '
-	.schemaVersion == 2 and
+	.schemaVersion == 3 and
 	.chosenSettings == {} and
 	.strategy == {
 		id: "qsv-hevc-icq-v1",
-		resultsSchemaVersion: 2,
+		resultsSchemaVersion: 3,
 		runManifestSchemaVersion: 2,
 		capabilityProofSchemaVersion: 3,
 		globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30],
 		x265: {initialCrfs: [18, 20, 22, 24], minimumCrf: 10, maximumCrf: 34, step: 2}
 	}
 ' <<<"$samples_doc" >/dev/null || fail 'samples must publish the exact ICQ strategy contract'
+jq -e '
+	.qualityCorrection == {
+		schemaVersion: 1,
+		diagnosticRunId: "20260829T020752Z-43984d8d",
+		vmafMeasurementDefects: [
+			{sampleId: "avc-clean-coco", clipId: "motion", frameIndex: 1641},
+			{sampleId: "avc-grain-memento", clipId: "dark", frameIndex: 523},
+			{sampleId: "avc-grain-memento", clipId: "detail", frameIndex: 370},
+			{sampleId: "vc1-fugitive", clipId: "motion", frameIndex: 798}
+		]
+	}
+' <<<"$samples_doc" >/dev/null ||
+	fail 'samples must publish the exact corrected quality evidence contract'
 jq -e '
 	.diagnostics == {
 		schemaVersion: 1,

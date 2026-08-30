@@ -17,7 +17,7 @@ manifest_temp=''
 # The resume check validates results.csv against this schema. benchmark.sh holds
 # the same list because it writes the file; an offline contract asserts the two
 # stay identical, since a silent drift would make every resume decision wrong.
-results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
+results_header='run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256'
 
 if [[ "$test_mode" != '1' && -n "${BENCHMARK_OUT+x}" ]]; then
 	echo 'BENCHMARK_OUT requires BENCHMARK_TEST_MODE=1' >&2
@@ -589,10 +589,84 @@ create_run() {
 	printf '%s\n' "$run_id"
 }
 
+validate_completed_quality_evidence() {
+	local run_id="$1" row_number="$2" sample_id="$3" cohort="$4" source_sha="$5"
+	local clip_id="$6" setting="$7" status="$8" vmaf_harmonic="$9" vmaf_low="${10}"
+	local ssim="${11}" validation_hdr="${12}" evidence_path="${13}" evidence_digest="${14}"
+	local run_directory evidence_directory evidence_file expected_path actual_digest
+	run_directory="$runs_root/$run_id"
+	evidence_directory="$run_directory/quality-evidence"
+	expected_path="quality-evidence/$sample_id-$clip_id-qsv-$setting-attempt-${15}.json"
+	if [[ ! "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ || ! "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ ||
+		"$evidence_path" != "$expected_path" || ! "$evidence_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		echo "invalid results CSV: row $row_number has an unsafe quality evidence reference" >&2
+		return 65
+	fi
+	if [[ ! -d "$run_directory" || -L "$run_directory" || ! -d "$evidence_directory" ||
+		-L "$evidence_directory" ]]; then
+		echo "invalid results CSV: row $row_number quality evidence directory is not confined" >&2
+		return 65
+	fi
+	evidence_file="$run_directory/$evidence_path"
+	if [[ ! -f "$evidence_file" || -L "$evidence_file" ]] ||
+		[[ "$(realpath "$evidence_file")" != "$(cd -P "$run_directory" && pwd)/$evidence_path" ]]; then
+		echo "invalid results CSV: row $row_number quality evidence is not a regular confined file" >&2
+		return 65
+	fi
+	actual_digest="$(sha256_file "$evidence_file")"
+	if [[ "$actual_digest" != "$evidence_digest" ]]; then
+		echo "invalid results CSV: row $row_number quality evidence digest does not match" >&2
+		return 65
+	fi
+	if ! jq -e \
+		--arg run "$run_id" --arg sample "$sample_id" --arg cohort "$cohort" \
+		--arg source_sha "$source_sha" --arg clip "$clip_id" --argjson setting "$setting" \
+		--arg row_status "$status" --arg vmaf_harmonic "$vmaf_harmonic" \
+		--arg vmaf_low "$vmaf_low" --arg ssim "$ssim" --arg validation_hdr "$validation_hdr" \
+		--arg strategy "$CONTRACT_STRATEGY_ID" --argjson schema "$CONTRACT_QUALITY_EVIDENCE_SCHEMA" '
+		def exact_keys($wanted): type == "object" and ((keys | sort) == ($wanted | sort));
+		def finite_number: type == "number" and isfinite;
+		def nonnegative_integer: finite_number and floor == . and . >= 0;
+		def excluded_frame:
+			exact_keys(["frameIndex","vmaf"]) and
+			(.frameIndex | nonnegative_integer) and .vmaf == 0;
+		exact_keys(["clipId","cohort","globalQuality","hdr","psnr","runId","sampleId",
+			"schemaVersion","sourceSha256","ssim","strategyId","vmaf"]) and
+		.schemaVersion == $schema and .strategyId == $strategy and .runId == $run and
+		.sampleId == $sample and .cohort == $cohort and .sourceSha256 == $source_sha and
+		.clipId == $clip and .globalQuality == $setting and
+		(.ssim | finite_number) and .ssim == ($ssim | tonumber) and
+		(.psnr | finite_number) and
+		(.vmaf |
+			exact_keys(["evaluatedFrameCount","excludedFrames","harmonicMean","onePercentLow","rawFrameCount"]) and
+			(.rawFrameCount | nonnegative_integer and . > 0) and
+			(.evaluatedFrameCount | nonnegative_integer and . > 0) and
+			(.excludedFrames | type == "array" and length <= 1 and all(.[]; excluded_frame)) and
+			.evaluatedFrameCount == (.rawFrameCount - (.excludedFrames | length)) and
+			(.harmonicMean | finite_number) and .harmonicMean == ($vmaf_harmonic | tonumber) and
+			(.onePercentLow | finite_number) and .onePercentLow == ($vmaf_low | tonumber)) and
+		(if $cohort == "hdr10" then
+			(.hdr |
+				exact_keys(["classification","normalizedOracle","reasons"]) and
+				(.classification as $classification |
+					["preserved","source-oracle-defect","clip-boundary-defect","encoder-output-defect"] |
+					index($classification)) != null and
+				(.reasons | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) and
+				(.normalizedOracle | type == "object")) and
+			(if $row_status == "passed" then
+				$validation_hdr == "passed" and .hdr.classification == "preserved"
+			else true end)
+		else .hdr == null end)
+	' "$evidence_file" >/dev/null; then
+		echo "invalid results CSV: row $row_number quality evidence does not match the result" >&2
+		return 65
+	fi
+}
+
 completed_row() {
 	local run_id="$1"
 	local row_key="$2"
-	local results
+	local results evidence_rows parse_status=0
 	validate_run_id "$run_id" || return
 	if [[ ! "$row_key" =~ ^[^,\|]+\|[^,\|]+\|[^,\|]+\|[^,\|]+\|[^,\|]+$ ]]; then
 		echo 'invalid result row key' >&2
@@ -600,7 +674,8 @@ completed_row() {
 	fi
 	results="$runs_root/$run_id/results.csv"
 	[[ -f "$results" && ! -L "$results" ]] || return 1
-	awk -v expected_run_id="$run_id" -v expected_key="$row_key" \
+	set +e
+	evidence_rows="$(awk -v expected_run_id="$run_id" -v expected_key="$row_key" \
 		-v expected_strategy="$CONTRACT_STRATEGY_ID" -v expected_icq_settings="$CONTRACT_ICQ_SETTINGS" \
 		-v test_mode="$test_mode" -v header_spec="$results_header" \
 		'
@@ -686,6 +761,20 @@ completed_row() {
 					invalid("invalid results CSV: row " record_no " has invalid x265 disposition")
 			}
 		}
+		if (field[2] == "quality") {
+			if (field[7] != "qsv")
+				invalid("invalid results CSV: row " record_no " has an invalid quality encoder")
+			expected_evidence = "quality-evidence/" field[3] "-" field[6] "-qsv-" \
+				field[8] "-attempt-" field[11] ".json"
+			if (field[3] !~ /^[a-z0-9][a-z0-9._-]*$/ || field[6] !~ /^[a-z0-9][a-z0-9._-]*$/ ||
+				field[40] != expected_evidence || field[41] !~ /^sha256:[0-9a-f]{64}$/)
+				invalid("invalid results CSV: row " record_no " has an unsafe quality evidence reference")
+			printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+				record_no, field[3], field[4], field[5], field[6], field[8], field[10], \
+				field[20], field[21], field[22], field[30], field[40], field[41], field[11]
+		} else if (field[40] != "" || field[41] != "") {
+			invalid("invalid results CSV: row " record_no " has unexpected quality evidence")
+		}
 
 		bad = 0
 		candidate = ""
@@ -750,7 +839,18 @@ completed_row() {
 		if (!saw_record) exit 1
 		exit (found ? 0 : 1)
 	}
-	' "$results"
+	' "$results")"
+	parse_status=$?
+	set -e
+	if ((parse_status != 0 && parse_status != 1)); then return "$parse_status"; fi
+	while IFS=$'\t' read -r row_number sample_id cohort source_sha clip_id setting row_status \
+		vmaf_harmonic vmaf_low ssim validation_hdr evidence_path evidence_digest attempt; do
+		[[ -n "$row_number" ]] || continue
+		validate_completed_quality_evidence "$run_id" "$row_number" "$sample_id" "$cohort" \
+			"$source_sha" "$clip_id" "$setting" "$row_status" "$vmaf_harmonic" "$vmaf_low" \
+			"$ssim" "$validation_hdr" "$evidence_path" "$evidence_digest" "$attempt" || return
+	done <<<"$evidence_rows"
+	return "$parse_status"
 }
 
 (($# >= 1)) || usage

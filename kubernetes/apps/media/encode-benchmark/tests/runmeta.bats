@@ -24,19 +24,44 @@ file_mode() {
 }
 
 results_header() {
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds'
+	quality_results_header_v3
 }
 
 results_row() {
 	local run_id="$1" encoder="${2:-qsv}" strategy="${3:-qsv-hevc-icq-v1}"
 	local initialization="${4:-passed}" busy="${5:-800000000}"
-	local selected='ICQ'
+	local selected='ICQ' row
 	if [[ "$encoder" == 'x265' ]]; then
 		selected='CRF'
 		initialization='not-applicable'
 		busy='0'
+		printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,$encoder,22,$selected,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,hdr10,1,2,3,none,logs/a.log,discarded,$strategy,$initialization,$busy,,"
+		return
 	fi
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,$encoder,22,$selected,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,hdr10,1,2,3,none,logs/a.log,discarded,$strategy,$initialization,$busy"
+	row="$(quality_evidence_row_v3 "$run_id" 22 passed "$strategy")"
+	awk -F, -v initialization="$initialization" -v busy="$busy" \
+		'BEGIN {OFS=FS} {$38=initialization; $39=busy; print}' <<<"$row"
+}
+
+quality_results_header_v3() {
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256'
+}
+
+quality_evidence_row_v3() {
+	local run_id="$1" setting="${2:-22}" row_status="${3:-passed}"
+	local strategy="${4:-qsv-hevc-icq-v1}" evidence_path evidence_file evidence_digest
+	evidence_path="quality-evidence/sample-avc-detail-qsv-$setting-attempt-1.json"
+	evidence_file="$BENCHMARK_OUT/runs/$run_id/$evidence_path"
+	mkdir -p "${evidence_file%/*}"
+	jq -S -c -n --arg run "$run_id" --arg strategy "$strategy" --argjson setting "$setting" '{
+		clipId:"detail",cohort:"avc",globalQuality:$setting,hdr:null,psnr:40,
+		runId:$run,sampleId:"sample-avc",schemaVersion:1,sourceSha256:"abc123",
+		ssim:0.99,strategyId:$strategy,
+		vmaf:{rawFrameCount:100,evaluatedFrameCount:100,excludedFrames:[],harmonicMean:95,onePercentLow:90}
+	}' >"$evidence_file"
+	chmod 0600 "$evidence_file"
+	evidence_digest="sha256:$(sha256sum "$evidence_file" | awk 'NR == 1 { print $1 }')"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,$setting,ICQ,$row_status,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,passed,1,2,3,,logs/a.log,discarded,$strategy,passed,800000000,$evidence_path,$evidence_digest"
 }
 
 rewrite_samples_to_test_media() {
@@ -191,11 +216,11 @@ diagnostic_expected_panel_sha() {
 @test "no run id always creates a fresh timestamped immutable identity" {
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120000Z-6cdfc9f3' ]
+	[ "$output" = '20260802T120000Z-c4b9c436' ]
 	first="$output"
 	first_manifest="$BENCHMARK_OUT/runs/$first/manifest.json"
 	expected="$BATS_TEST_TMPDIR/expected-manifest.json"
-	printf '%s\n' '{"clientDevice":null,"cpu":null,"createdAt":"20260802T120000Z","encoderCommands":[],"gpu":{"i915":"fixture-i915","vpl":"fixture-vpl"},"images":{"configured":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","dispatched":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","running":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},"mode":"quality","node":{"kernel":"","name":""},"resultsSchemaVersion":2,"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","savingsSeed":20260802,"schemaVersion":2,"scriptDigests":{},"selectedSettings":[],"sources":[],"strategyId":"qsv-hevc-icq-v1","upstream":{},"vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
+	printf '%s\n' '{"clientDevice":null,"cpu":null,"createdAt":"20260802T120000Z","encoderCommands":[],"gpu":{"i915":"fixture-i915","vpl":"fixture-vpl"},"images":{"configured":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","dispatched":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","running":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"},"mode":"quality","node":{"kernel":"","name":""},"resultsSchemaVersion":3,"samplesDigest":"sha256:9f4e2b20cfb4eaf89f18ba1a3f706d384c450f65a150df41d4e5d50b957f829e","savingsSeed":20260802,"schemaVersion":2,"scriptDigests":{},"selectedSettings":[],"sources":[],"strategyId":"qsv-hevc-icq-v1","upstream":{},"vmaf":{"model":"vmaf_4k_v0.6.1","version":""}}' >"$expected"
 	cmp -s "$expected" "$first_manifest"
 	[ "$(file_mode "$first_manifest")" = '444' ]
 	[ ! -e "$BENCHMARK_OUT/runs/$first/manifest.json.tmp" ]
@@ -203,7 +228,7 @@ diagnostic_expected_panel_sha() {
 	export BENCHMARK_NOW=20260802T120001Z
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '20260802T120001Z-6cdfc9f3' ]
+	[ "$output" = '20260802T120001Z-c4b9c436' ]
 	[ "$output" != "$first" ]
 	[ "$(run_directory_count)" -eq 2 ]
 }
@@ -405,7 +430,7 @@ diagnostic_expected_panel_sha() {
 # Catches a production break where collision cleanup removes an empty run
 # directory that existed before this process attempted its atomic mkdir.
 @test "failed create preserves an existing empty run directory" {
-	run_id='20260802T120000Z-6cdfc9f3'
+	run_id='20260802T120000Z-c4b9c436'
 	collision="$BENCHMARK_OUT/runs/$run_id"
 	mkdir "$collision"
 
@@ -430,7 +455,7 @@ diagnostic_expected_panel_sha() {
 		--arg expected_panel_sha "$expected_panel_sha" '
 		.mode == "diagnostics" and
 		.schemaVersion == 2 and
-		.resultsSchemaVersion == 2 and
+		.resultsSchemaVersion == 3 and
 		.selectedSettings == [] and
 		.sources == $expected_sources and
 		.encoderCommands == [
@@ -564,14 +589,14 @@ diagnostic_expected_panel_sha() {
 # Catches the race where a concurrent creator wins mkdir after this process has
 # selected the run ID and the losing process removes the winner's empty tree.
 @test "failed concurrent create preserves the winning run directory" {
-	run_id='20260802T120000Z-6cdfc9f3'
+	run_id='20260802T120000Z-c4b9c436'
 	collision="$BENCHMARK_OUT/runs/$run_id"
 	stub_bin="$BATS_TEST_TMPDIR/mkdir-bin"
 	mkdir -p "$stub_bin"
 	cat >"$stub_bin/mkdir" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if (($# == 1)) && [[ "$1" == */20260802T120000Z-6cdfc9f3 ]]; then
+if (($# == 1)) && [[ "$1" == */20260802T120000Z-c4b9c436 ]]; then
 	/bin/mkdir "$1"
 	exit 1
 fi
@@ -619,9 +644,9 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,24,ICQ,passed,1,/' >>"$results"
-	results_row "$run_id" | sed 's/,ICQ,passed,1,/,ICQ,failed,1,/' >>"$results"
-	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,24,ICQ,invalid,1,/' >>"$results"
+	quality_evidence_row_v3 "$run_id" 24 passed >>"$results"
+	quality_evidence_row_v3 "$run_id" 22 failed >>"$results"
+	quality_evidence_row_v3 "$run_id" 24 invalid >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 1 ]
@@ -633,6 +658,63 @@ EOF
 	results_row "$run_id" >>"$results"
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
+}
+
+# Catches resume trusting a quality row after its bounded metric evidence is
+# missing, redirected, changed, or rebound to a different row contract.
+@test "quality evidence resume authenticates path digest identity and schema" {
+	run_id="$($SCRIPTS/runmeta.sh create quality)"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	quality_results_header_v3 >"$results"
+	quality_evidence_row_v3 "$run_id" >>"$results"
+	evidence="$BENCHMARK_OUT/runs/$run_id/quality-evidence/sample-avc-detail-qsv-22-attempt-1.json"
+	baseline_results="$BATS_TEST_TMPDIR/quality-evidence-results.csv"
+	baseline_evidence="$BATS_TEST_TMPDIR/quality-evidence.json"
+	cp "$results" "$baseline_results"
+	cp "$evidence" "$baseline_evidence"
+
+	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+	[ "$status" -eq 0 ]
+
+	for mutation in missing symlink escaping mutated wrong-row wrong-schema; do
+		cp "$baseline_results" "$results"
+		rm -f -- "$evidence"
+		cp "$baseline_evidence" "$evidence"
+		case "$mutation" in
+		missing) rm -f -- "$evidence" ;;
+		symlink)
+			outside="$BATS_TEST_TMPDIR/outside-quality-evidence.json"
+			cp "$baseline_evidence" "$outside"
+			rm -f -- "$evidence"
+			ln -s "$outside" "$evidence"
+			;;
+		escaping)
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$40="../quality-evidence.json"} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			;;
+		mutated) printf '%s\n' 'changed' >>"$evidence" ;;
+		wrong-row)
+			jq -S -c '.sampleId = "other-sample"' "$baseline_evidence" >"$evidence"
+			digest="sha256:$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
+			awk -F, -v digest="$digest" 'BEGIN {OFS=FS} NR == 2 {$41=digest} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			;;
+		wrong-schema)
+			jq -S -c '.schemaVersion = 2' "$baseline_evidence" >"$evidence"
+			digest="sha256:$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
+			awk -F, -v digest="$digest" 'BEGIN {OFS=FS} NR == 2 {$41=digest} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			;;
+		esac
+		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+		[ "$status" -eq 65 ] || {
+			echo "resume accepted $mutation quality evidence: status=$status output=$output" >&3
+			return 1
+		}
+	done
 }
 
 # Catches test-only compact rows bypassing the schema-v2 header, strategy, and
@@ -656,7 +738,7 @@ EOF
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 39' ]
+	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 41' ]
 }
 
 # Catches a production break where a header with only the first field correct is
@@ -678,7 +760,10 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,ICQ,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,yes,hevc,10,1920x1080,24,10,hdr10,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000" >>"$results"
+	row="$(quality_evidence_row_v3 "$run_id")"
+	evidence_path="$(awk -F, '{print $40}' <<<"$row")"
+	evidence_digest="$(awk -F, '{print $41}' <<<"$row")"
+	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,ICQ,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,passed,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_path,$evidence_digest" >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
@@ -695,11 +780,11 @@ EOF
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	results_row "$run_id" | sed 's/,qsv-hevc-icq-v1,passed,800000000$//' >>"$results"
+	results_row "$run_id" | cut -d, -f1-36,40-41 >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has 36 columns; expected 39' ]
+	[ "$output" = 'invalid results CSV: row 2 has 38 columns; expected 41' ]
 
 	results_header >"$results"
 	results_row "$run_id" qsv la-hevc-icq-v1 >>"$results"
@@ -715,7 +800,7 @@ EOF
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	for setting in 14 17 32; do
 		results_header >"$results"
-		results_row "$run_id" | sed "s/,qsv,22,ICQ,passed,1,/,qsv,$setting,ICQ,passed,1,/" >>"$results"
+		quality_evidence_row_v3 "$run_id" "$setting" passed >>"$results"
 		run "$SCRIPTS/runmeta.sh" completed "$run_id" "quality|abc123|detail|qsv|$setting"
 		[ "$status" -eq 65 ]
 		[ "$output" = 'invalid results CSV: row 2 has an invalid ICQ setting' ]
@@ -754,7 +839,7 @@ EOF
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	valid="$BATS_TEST_TMPDIR/valid-x265-row"
 	results_header >"$results"
-	printf '%s\n' "$run_id,x265,sample-avc,avc,abc123,detail,x265,22,CRF,passed,1,100,50,50,1000,500,10,30,1.0,95,90,,,not-applicable,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/a.log,discarded,qsv-hevc-icq-v1,not-applicable,0" >"$valid"
+	printf '%s\n' "$run_id,x265,sample-avc,avc,abc123,detail,x265,22,CRF,passed,1,100,50,50,1000,500,10,30,1.0,95,90,,,not-applicable,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/a.log,discarded,qsv-hevc-icq-v1,not-applicable,0,," >"$valid"
 	cat "$valid" >>"$results"
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'x265|abc123|detail|x265|22'
@@ -1058,11 +1143,11 @@ EOF
 
 # Catches a production break where any tested command regresses to the shared
 # scaffold after all seven behavior contracts have landed.
-@test "ConfigMap maps all seven tested commands to real scripts" {
+@test "ConfigMap maps all nine tested commands to real scripts" {
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,stills.sh=scripts/stills.sh' ]
+	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,quality-evidence.sh=scripts/quality-evidence.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
 
@@ -1081,7 +1166,7 @@ EOF
 	[ -n "$benchmark_header" ]
 	[ -n "$runmeta_header" ]
 	[ "$runmeta_header" = "$benchmark_header" ]
-	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 39 ]
+	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 41 ]
 }
 
 @test "findings identity has no sources and resume binds the input digest" {

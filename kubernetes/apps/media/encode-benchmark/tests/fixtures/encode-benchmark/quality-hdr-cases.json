@@ -1,0 +1,135 @@
+{
+  "oracles": {
+    "stream": {
+      "status": "ok",
+      "metadata": {
+        "masteringDisplay": {
+          "displayPrimaries": {
+            "red": {"x": {"numerator": 26500, "denominator": 100000}, "y": {"numerator": 34500, "denominator": 100000}},
+            "green": {"x": {"numerator": 15000, "denominator": 100000}, "y": {"numerator": 60000, "denominator": 100000}},
+            "blue": {"x": {"numerator": 6800, "denominator": 100000}, "y": {"numerator": 3200, "denominator": 100000}}
+          },
+          "whitePoint": {"x": {"numerator": 31270, "denominator": 100000}, "y": {"numerator": 32900, "denominator": 100000}},
+          "luminance": {"min": {"numerator": 50, "denominator": 10000}, "max": {"numerator": 10000000, "denominator": 10000}}
+        },
+        "maxCLL": {"numerator": 1000, "denominator": 1},
+        "maxFALL": {"numerator": 400, "denominator": 1}
+      }
+    },
+    "null": {"status": "null"},
+    "frame": {
+      "status": "ok",
+      "metadata": {
+        "masteringDisplay": {
+          "displayPrimaries": {
+            "red": {"x": {"numerator": 26500, "denominator": 100000}, "y": {"numerator": 34500, "denominator": 100000}},
+            "green": {"x": {"numerator": 15000, "denominator": 100000}, "y": {"numerator": 60000, "denominator": 100000}},
+            "blue": {"x": {"numerator": 6800, "denominator": 100000}, "y": {"numerator": 3200, "denominator": 100000}}
+          },
+          "whitePoint": {"x": {"numerator": 31270, "denominator": 100000}, "y": {"numerator": 32900, "denominator": 100000}},
+          "luminance": {"min": {"numerator": 50, "denominator": 10000}, "max": {"numerator": 10000000, "denominator": 10000}}
+        },
+        "maxCLL": {"numerator": 1000, "denominator": 1},
+        "maxFALL": {"numerator": 400, "denominator": 1}
+      }
+    },
+    "trace": {
+      "status": "ok",
+      "metadata": {
+        "masteringDisplay": {
+          "displayPrimaries": {
+            "red": {"x": {"numerator": 13250, "denominator": 50000}, "y": {"numerator": 17250, "denominator": 50000}},
+            "green": {"x": {"numerator": 7500, "denominator": 50000}, "y": {"numerator": 30000, "denominator": 50000}},
+            "blue": {"x": {"numerator": 3400, "denominator": 50000}, "y": {"numerator": 1600, "denominator": 50000}}
+          },
+          "whitePoint": {"x": {"numerator": 15635, "denominator": 50000}, "y": {"numerator": 16450, "denominator": 50000}},
+          "luminance": {"min": {"numerator": 50, "denominator": 10000}, "max": {"numerator": 10000000, "denominator": 10000}}
+        },
+        "maxCLL": {"numerator": 1000, "denominator": 1},
+        "maxFALL": {"numerator": 400, "denominator": 1}
+      }
+    },
+    "changed-frame": {
+      "status": "ok",
+      "metadata": {
+        "masteringDisplay": {
+          "displayPrimaries": {
+            "red": {"x": {"numerator": 26500, "denominator": 100000}, "y": {"numerator": 34500, "denominator": 100000}},
+            "green": {"x": {"numerator": 15000, "denominator": 100000}, "y": {"numerator": 60000, "denominator": 100000}},
+            "blue": {"x": {"numerator": 6800, "denominator": 100000}, "y": {"numerator": 3200, "denominator": 100000}}
+          },
+          "whitePoint": {"x": {"numerator": 31270, "denominator": 100000}, "y": {"numerator": 32900, "denominator": 100000}},
+          "luminance": {"min": {"numerator": 50, "denominator": 10000}, "max": {"numerator": 10000000, "denominator": 10000}}
+        },
+        "maxCLL": {"numerator": 1000, "denominator": 1},
+        "maxFALL": {"numerator": 401, "denominator": 1}
+      }
+    },
+    "changed-trace": {
+      "status": "ok",
+      "metadata": {
+        "masteringDisplay": {
+          "displayPrimaries": {
+            "red": {"x": {"numerator": 13250, "denominator": 50000}, "y": {"numerator": 17250, "denominator": 50000}},
+            "green": {"x": {"numerator": 7500, "denominator": 50000}, "y": {"numerator": 30000, "denominator": 50000}},
+            "blue": {"x": {"numerator": 3400, "denominator": 50000}, "y": {"numerator": 1600, "denominator": 50000}}
+          },
+          "whitePoint": {"x": {"numerator": 15635, "denominator": 50000}, "y": {"numerator": 16450, "denominator": 50000}},
+          "luminance": {"min": {"numerator": 50, "denominator": 10000}, "max": {"numerator": 10000000, "denominator": 10000}}
+        },
+        "maxCLL": {"numerator": 1000, "denominator": 1},
+        "maxFALL": {"numerator": 401, "denominator": 1}
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "preserved",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "frame", "trace": "trace"},
+      "encoded": {"decoded": "frame", "trace": "trace"},
+      "expected": {"classification": "preserved", "reasons": ["source-clip-encoded-metadata-agree"]}
+    },
+    {
+      "id": "source-oracle-defect",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "changed-trace"},
+      "clip": {"decoded": "frame", "trace": "trace"},
+      "encoded": {"decoded": "frame", "trace": "trace"},
+      "expected": {"classification": "source-oracle-defect", "reasons": ["decoded-trace-disagreement"]}
+    },
+    {
+      "id": "clip-boundary-defect",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "changed-frame", "trace": "changed-trace"},
+      "encoded": {"decoded": "changed-frame", "trace": "changed-trace"},
+      "expected": {"classification": "clip-boundary-defect", "reasons": ["authoritative-source-metadata", "clip-metadata-changed"]}
+    },
+    {
+      "id": "encoder-output-defect",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "frame", "trace": "trace"},
+      "encoded": {"decoded": "changed-frame", "trace": "changed-trace"},
+      "expected": {"classification": "encoder-output-defect", "reasons": ["source-and-clip-metadata-agree", "encoded-metadata-changed"]}
+    },
+    {
+      "id": "masked-encoded-oracle-defect",
+      "stream": "stream",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "changed-frame", "trace": "changed-trace"},
+      "encoded": {"decoded": "changed-frame", "trace": "trace"},
+      "expected": {"classification": "encoder-output-defect", "reasons": ["decoded-trace-disagreement"]}
+    },
+    {
+      "id": "auxiliary-null",
+      "stream": "null",
+      "source": {"decoded": "frame", "trace": "trace"},
+      "clip": {"decoded": "frame", "trace": "trace"},
+      "encoded": {"decoded": "frame", "trace": "trace"},
+      "expected": {"classification": "preserved", "reasons": ["source-clip-encoded-metadata-agree"]}
+    }
+  ]
+}

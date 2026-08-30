@@ -15,6 +15,7 @@ configMapGenerator:
       - runmeta.sh=scripts/runmeta.sh
       - benchmark.sh=scripts/benchmark.sh
       - diagnostic-evidence.sh=scripts/diagnostic-evidence.sh
+      - quality-evidence.sh=scripts/quality-evidence.sh
       - stills.sh=scripts/stills.sh
 generatorOptions:
   labels:
