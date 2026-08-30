@@ -151,6 +151,8 @@ cat >"$temp_dir/targets.json" <<'EOF'
 EOF
 expect_true 'two exact Prometheus targets' n8n_prometheus_targets_match_contract \
   "$temp_dir/targets.json"
+expect_true 'two exact Prometheus targets from a pipe-backed response' \
+  n8n_prometheus_targets_match_contract <(cat "$temp_dir/targets.json")
 yq -p=json -o=json '.data.activeTargets += [.data.activeTargets[0]]' \
   "$temp_dir/targets.json" >"$temp_dir/targets-duplicate.json"
 expect_false 'duplicate exact Prometheus target' n8n_prometheus_targets_match_contract \
