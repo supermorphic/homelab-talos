@@ -107,9 +107,6 @@ if contains create "$@"; then
 fi
 
 if contains patch "$@"; then
-	if [[ "${STUB_PATCH_FAIL:-0}" == '1' ]]; then
-		exit 26
-	fi
 	printf '%s\n' 'job.batch/fixture patched'
 	exit 0
 fi
@@ -178,13 +175,6 @@ if contains get "$@" && [[ "$*" == *' job/'* ]]; then
 		if [[ "$argument" == job/* ]]; then resource="$argument"; fi
 	done
 	name="${resource#job/}"
-	if [[ "$name" == encode-benchmark-evidence-reader-* ]]; then
-		[[ "${STUB_READER_NAME_QUERY_FAIL:-0}" != '1' ]] || exit 27
-		if [[ -n "${STUB_READER_NAME_JOB_JSON:-}" ]]; then
-			sed -n '1,$p' "$STUB_READER_NAME_JOB_JSON"
-		fi
-		exit 0
-	fi
 	capture="$STUB_CAPTURE_DIR/Job-$name.yaml"
 	uid="$(<"$capture.uid")"
 	live_job="$(RESOURCE_UID="$uid" yq -o=json -I=0 '.metadata.uid = strenv(RESOURCE_UID)' "$capture")"
@@ -240,20 +230,7 @@ if contains get "$@" && contains pods "$@"; then
 	exit 0
 fi
 
-if contains get "$@" && contains priorityclass "$@"; then
-	sed -n '1,$p' "${STUB_PRIORITYCLASS_JSON:?}"
-	exit 0
-fi
-
-if contains get "$@" && contains configmaps "$@"; then
-	sed -n '1,$p' "${STUB_CONFIGMAPS_JSON:?}"
-	exit 0
-fi
-
 if contains get "$@" && [[ "$*" == *' configmap/'* ]]; then
-	if [[ "${STUB_CONFIGMAP_GET_FAIL:-0}" == '1' ]]; then
-		exit 27
-	fi
 	resource=''
 	previous=''
 	for argument in "$@"; do
@@ -281,36 +258,8 @@ if contains get "$@" && [[ "$*" == *' configmap/'* ]]; then
 	exit 0
 fi
 
-if contains get "$@" && contains prometheusrule "$@"; then
-	sed -n '1,$p' "${STUB_PROMETHEUSRULE_JSON:?}"
-	exit 0
-fi
-
-if contains get "$@" && contains deployment,statefulset,daemonset,cronjob "$@"; then
-	sed -n '1,$p' "${STUB_PERSISTENT_JSON:?}"
-	exit 0
-fi
-
 if contains get "$@" && contains nodes "$@"; then
 	sed -n '1,$p' "${STUB_NODES_JSON:?}"
-	exit 0
-fi
-
-if contains get "$@" && contains pvc "$@"; then
-	sed -n '1,$p' "${STUB_PVC_JSON:?}"
-	exit 0
-fi
-
-if contains get "$@" && contains kustomization "$@"; then
-	sed -n '1,$p' "${STUB_KUSTOMIZATION_JSON:?}"
-	exit 0
-fi
-
-if contains get "$@" && contains --raw "$@"; then
-	raw="$(argument_after --raw "$@")"
-	node="${raw#*/nodes/}"
-	node="${node%%/*}"
-	sed -n '1,$p' "${STUB_SUMMARY_DIR:?}/$node.json"
 	exit 0
 fi
 
@@ -321,9 +270,6 @@ EOF
 	cat >"$STUB_BIN/yq" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${STUB_CONFIGMAP_RENDER_FAIL:-0}" == '1' && -n "${INVENTORY_FILE:-}" ]]; then
-	exit 28
-fi
 if [[ -n "${JOB_NAME:-}" && "${STUB_JOB_RENDER_FAIL_AT:-0}" != '0' ]]; then
 	count_file="$STUB_CAPTURE_DIR/.job-render-count"
 	count=0
@@ -348,9 +294,6 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'chmod\t%s\n' "$*" >>"$STUB_CALLS"
-if [[ "${STUB_CHMOD_FAIL:-0}" == '1' && "${1:-}" == '0600' ]]; then
-	exit 29
-fi
 exec /bin/chmod "$@"
 EOF
 
@@ -1194,7 +1137,7 @@ CASES
 		}
 	' "$PROJECT_ROOT/kubernetes/mod.just" | LC_ALL=C sort)"
 	[ "$actual_recipes" = "$expected_recipes" ]
-	expected_benchmark_actions=$'commands\ndeclared-commands\ndrm-fdinfo-metrics\nencoder-commands\nicq-setting\nicq-settings\nqsv-proof\nquality-evidence-for-ranking\nquality-work-plan\nrank-quality-candidates\nrecord-quality-skips\nrecord-result\nresults-header\nrunning-image-evidence\nruntime-selection-is-icq\nvalidate-probes\nvmaf-stats'
+	expected_benchmark_actions=$'commands\ndeclared-commands\ndrm-fdinfo-metrics\nencoder-commands\nicq-setting\nicq-settings\nqsv-proof\nquality-evidence-for-ranking\nquality-work-plan\nrank-quality-candidates\nrecord-quality-skips\nrecord-result\nresults-header\nrunning-image-evidence\nruntime-selection-is-icq\nvalidate-probes'
 	actual_benchmark_actions="$(awk '
 		/^test_dispatch\(\)/ {in_function=1}
 		in_function && /^[[:space:]]*case "\$action" in$/ {in_case=1; next}

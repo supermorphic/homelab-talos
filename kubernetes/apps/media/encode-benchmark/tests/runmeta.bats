@@ -230,6 +230,3 @@ quality_evidence_row_v3() {
 		}
 	done
 }
-
-# Catches the CPU reference stage resuming from a row with GPU proof values,
-# the old quality panel, a non-CRF setting, or incomplete output evidence.

@@ -172,41 +172,6 @@ runtime_selection_is_icq() {
 	[[ "$1" == 'ICQ' ]]
 }
 
-vmaf_stats() {
-	local metrics="$1"
-	local -a scores
-	local count harmonic low_count low_mean
-	[[ -f "$metrics" ]] || {
-		echo 'VMAF metrics file not found' >&2
-		return 66
-	}
-	mapfile -t scores < <(jq -e -r '
-		if (.frames | type) != "array" or (.frames | length) == 0 or
-			([.frames[] | .metrics.vmaf | numbers] | length) != (.frames | length)
-		then error("invalid VMAF frames")
-		else .frames[].metrics.vmaf
-		end
-	' "$metrics")
-	count="${#scores[@]}"
-	harmonic="$(printf '%s\n' "${scores[@]}" | awk '
-		BEGIN { sum = 0; count = 0 }
-		{
-			score = $1
-			if (score < 0.000001) score = 0.000001
-			sum += 1 / score
-			count += 1
-		}
-		END { printf "%.6f", count / sum }
-	')"
-	low_count=$(((count + 99) / 100))
-	low_mean="$(printf '%s\n' "${scores[@]}" | sort -n | head -n "$low_count" | awk '
-		{ sum += $1; count += 1 }
-		END { printf "%.6f", sum / count }
-	')"
-	printf '{"frame_count":%s,"harmonic_mean":%s,"one_percent_low":%s}\n' \
-		"$count" "$harmonic" "$low_mean"
-}
-
 drm_fdinfo_metrics() {
 	local fixture="$1"
 	awk '
@@ -1354,18 +1319,6 @@ capability_proof() {
 	esac
 }
 
-encoder_progress() {
-	local encode_log="$1"
-	local fps speed value
-	fps='0.000000'
-	speed='0.000000'
-	value="$(grep -o -E 'fps=[[:space:]]*[0-9]+([.][0-9]+)?' "$encode_log" | tail -n 1 | sed 's/fps=[[:space:]]*//' || true)"
-	[[ -z "$value" ]] || fps="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
-	value="$(grep -o -E 'speed=[[:space:]]*[0-9]+([.][0-9]+)?x' "$encode_log" | tail -n 1 | sed 's/speed=[[:space:]]*//; s/x$//' || true)"
-	[[ -z "$value" ]] || speed="$(awk -v value="$value" 'BEGIN { printf "%.6f", value }')"
-	printf '%s|%s\n' "$fps" "$speed"
-}
-
 failed_validation() {
 	local reason="$1"
 	jq -n -c --arg reason "$reason" '{
@@ -1393,11 +1346,11 @@ process_variant() {
 	local vmaf_file ssim_file psnr_file source_probe validation metrics value height='0'
 	local input_bytes='0' output_bytes='0' duration='0' input_rate='0' output_rate='0'
 	local reduction='0.000000' fps='0.000000' speed='0.000000' vmaf_harmonic=''
-	local vmaf_low='' ssim='' psnr='' gpu_busy='' qsv_status='not-applicable' selected='CRF'
-	local qsv_initialization='not-applicable' video_busy_nanoseconds='0' strategy_id="$CONTRACT_STRATEGY_ID"
+	local vmaf_low='' ssim='' psnr='' gpu_busy='' qsv_status='suspect' selected='unknown'
+	local qsv_initialization='failed' video_busy_nanoseconds='0' strategy_id="$CONTRACT_STRATEGY_ID"
 	local validation_failures validation_codec validation_duration validation_resolution
 	local validation_frame_rate validation_bit_depth validation_hdr validation_audio
-	local validation_subtitle validation_chapters decode_status=1 proof_json progress
+	local validation_subtitle validation_chapters decode_status=1 proof_json
 	local quality_source_path="${18:-}" quality_source_timestamp="${19:-}"
 	local quality_vmaf='null' quality_hdr='null' quality_evidence_ref=''
 	local quality_evidence_path='' quality_evidence_sha256='' quality_evidence_ready=1
@@ -1441,94 +1394,73 @@ process_variant() {
 		else
 			validation="$(failed_validation output-probe)"
 		fi
-		if [[ "$panel" == 'quality' ]]; then
-			if ffmpeg -nostdin -v error -i "$output" -i "$reference" -lavfi \
-				"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
-				-f null - &&
-				if [[ "$panel" == 'quality' ]]; then
-					metrics="$(quality_vmaf_stats "$vmaf_file" "$samples_file" "$sample_id" "$clip_id" 2>/dev/null)" &&
-						vmaf_harmonic="$(jq -e -r '.harmonicMean | numbers' <<<"$metrics" 2>/dev/null)" &&
-						vmaf_low="$(jq -e -r '.onePercentLow | numbers' <<<"$metrics" 2>/dev/null)" &&
-						quality_vmaf="$metrics"
+		if ffmpeg -nostdin -v error -i "$output" -i "$reference" -lavfi \
+			"[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=$vmaf_file" \
+			-f null - &&
+			metrics="$(quality_vmaf_stats "$vmaf_file" "$samples_file" "$sample_id" "$clip_id" 2>/dev/null)" &&
+			vmaf_harmonic="$(jq -e -r '.harmonicMean | numbers' <<<"$metrics" 2>/dev/null)" &&
+			vmaf_low="$(jq -e -r '.onePercentLow | numbers' <<<"$metrics" 2>/dev/null)" &&
+			quality_vmaf="$metrics"; then
+			:
+		else
+			vmaf_harmonic=''
+			vmaf_low=''
+			validation="$(add_validation_failure "$validation" vmaf)"
+			quality_evidence_ready=0
+		fi
+		if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
+			-f null - >"$ssim_file" 2>&1 && value="$(quality_parse_metric ssim "$ssim_file")"; then
+			ssim="$value"
+		else
+			ssim=''
+			validation="$(add_validation_failure "$validation" ssim)"
+			quality_evidence_ready=0
+		fi
+		if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]psnr' \
+			-f null - >"$psnr_file" 2>&1 && value="$(quality_parse_metric psnr "$psnr_file")"; then
+			psnr="$value"
+		else
+			psnr=''
+			validation="$(add_validation_failure "$validation" psnr)"
+			quality_evidence_ready=0
+		fi
+		if [[ "$cohort" == 'hdr10' ]]; then
+			if [[ -n "$quality_source_path" && -n "$quality_source_timestamp" ]] &&
+				quality_hdr="$(quality_hdr_evidence "$quality_source_path" "$quality_source_timestamp" \
+					"$reference" "$output" 2>/dev/null)"; then
+				if [[ "$(jq -r '.classification' <<<"$quality_hdr")" == 'preserved' ]]; then
+					validation="$(jq -c '.validation_hdr = "passed"' <<<"$validation")"
 				else
-					metrics="$(vmaf_stats "$vmaf_file" 2>/dev/null)" &&
-						vmaf_harmonic="$(jq -e -r '.harmonic_mean | numbers' <<<"$metrics" 2>/dev/null)" &&
-						vmaf_low="$(jq -e -r '.one_percent_low | numbers' <<<"$metrics" 2>/dev/null)"
-				fi; then
-				:
+					validation="$(jq -c '.validation_hdr = "failed"' <<<"$validation")"
+					validation="$(add_validation_failure "$validation" hdr)"
+				fi
 			else
-				vmaf_harmonic=''
-				vmaf_low=''
-				validation="$(add_validation_failure "$validation" vmaf)"
-				[[ "$panel" != 'quality' ]] || quality_evidence_ready=0
+				quality_hdr='null'
+				quality_evidence_ready=0
 			fi
-			if [[ "$panel" == 'quality' ]]; then
-				if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]ssim' \
-					-f null - >"$ssim_file" 2>&1 &&
-					value="$(quality_parse_metric ssim "$ssim_file")"; then
-					ssim="$value"
-				else
-					ssim=''
-					validation="$(add_validation_failure "$validation" ssim)"
-					quality_evidence_ready=0
-				fi
-				if ffmpeg -nostdin -v info -i "$output" -i "$reference" -lavfi '[0:v][1:v]psnr' \
-					-f null - >"$psnr_file" 2>&1 &&
-					value="$(quality_parse_metric psnr "$psnr_file")"; then
-					psnr="$value"
-				else
-					psnr=''
-					validation="$(add_validation_failure "$validation" psnr)"
-					quality_evidence_ready=0
-				fi
-				if [[ "$cohort" == 'hdr10' ]]; then
-					if [[ -n "$quality_source_path" && -n "$quality_source_timestamp" ]] &&
-						quality_hdr="$(quality_hdr_evidence "$quality_source_path" "$quality_source_timestamp" \
-							"$reference" "$output" 2>/dev/null)"; then
-						if [[ "$(jq -r '.classification' <<<"$quality_hdr")" == 'preserved' ]]; then
-							validation="$(jq -c '.validation_hdr = "passed"' <<<"$validation")"
-						else
-							validation="$(jq -c '.validation_hdr = "failed"' <<<"$validation")"
-							validation="$(add_validation_failure "$validation" hdr)"
-						fi
-					else
-						quality_hdr='null'
-						quality_evidence_ready=0
-					fi
-				elif [[ -z "$quality_source_path" || -z "$quality_source_timestamp" ]]; then
-					quality_evidence_ready=0
-				fi
-			fi
+		elif [[ -z "$quality_source_path" || -z "$quality_source_timestamp" ]]; then
+			quality_evidence_ready=0
 		fi
 	fi
-	if [[ "$encoder" == 'qsv' ]]; then
-		if proof_json="$(qsv_proof "$encode_status" "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
-			jq -e . <<<"$proof_json" >/dev/null 2>&1; then
-			selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
-			qsv_initialization="$(jq -r '.initialization' <<<"$proof_json")"
-			fps="$(jq -r '.encode_fps' <<<"$proof_json")"
-			speed="$(jq -r '.encode_speed' <<<"$proof_json")"
-			gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
-			qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
-			if metrics="$(drm_fdinfo_metrics "$busy_log" 2>/dev/null)" &&
-				video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | numbers | floor' <<<"$metrics" 2>/dev/null)"; then
-				:
-			else
-				video_busy_nanoseconds='0'
-			fi
+	if proof_json="$(qsv_proof "$encode_status" "$encode_log" "$busy_log" "$height" 2>/dev/null)" &&
+		jq -e . <<<"$proof_json" >/dev/null 2>&1; then
+		selected="$(jq -r '.selected_rate_control' <<<"$proof_json")"
+		qsv_initialization="$(jq -r '.initialization' <<<"$proof_json")"
+		fps="$(jq -r '.encode_fps' <<<"$proof_json")"
+		speed="$(jq -r '.encode_speed' <<<"$proof_json")"
+		gpu_busy="$(jq -r '.gpu_busy_percent' <<<"$proof_json")"
+		qsv_status="$(jq -r '.qsv_proof' <<<"$proof_json")"
+		if metrics="$(drm_fdinfo_metrics "$busy_log" 2>/dev/null)" &&
+			video_busy_nanoseconds="$(jq -e -r '.video_busy_nanoseconds | numbers | floor' <<<"$metrics" 2>/dev/null)"; then
+			:
 		else
-			selected='unknown'
-			qsv_initialization='failed'
-			qsv_status='suspect'
-			validation="$(add_validation_failure "$validation" qsv-proof)"
-			printf '%s\n' "$validation" >"$validation_file"
+			video_busy_nanoseconds='0'
 		fi
 	else
-		if progress="$(encoder_progress "$encode_log" 2>/dev/null)"; then
-			IFS='|' read -r fps speed <<<"$progress"
-		fi
+		validation="$(add_validation_failure "$validation" qsv-proof)"
+		printf '%s\n' "$validation" >"$validation_file"
 	fi
-	if [[ "$panel" == 'quality' && "$quality_evidence_ready" == '0' ]]; then
+	if [[ "$quality_evidence_ready" == '0' ]]; then
 		validation="$(add_validation_failure "$validation" quality-evidence)"
 	fi
 	printf '%s\n' "$validation" >"$validation_file"
@@ -1543,7 +1475,7 @@ process_variant() {
 	validation_subtitle="$(jq -r '.validation_subtitle_tracks // "failed"' <<<"$validation")"
 	validation_chapters="$(jq -r '.validation_chapters // "failed"' <<<"$validation")"
 	validation_failures="$(jq -r '.validation_failures // "processing"' <<<"$validation")"
-	if [[ "$panel" == 'quality' && "$quality_evidence_ready" == '1' ]]; then
+	if [[ "$quality_evidence_ready" == '1' ]]; then
 		if quality_evidence_ref="$(publish_quality_evidence "$run_directory" "$run_id" "$sample_id" \
 			"$cohort" "$source_sha" "$clip_id" "$setting" "$attempt" "$quality_vmaf" \
 			"$ssim" "$psnr" "$quality_hdr" "$validation_hdr")"; then
@@ -2211,10 +2143,6 @@ test_dispatch() {
 	commands)
 		(($# == 6)) || usage
 		build_commands "$@"
-		;;
-	vmaf-stats)
-		(($# == 1)) || usage
-		vmaf_stats "$1"
 		;;
 	drm-fdinfo-metrics)
 		(($# == 1)) || usage

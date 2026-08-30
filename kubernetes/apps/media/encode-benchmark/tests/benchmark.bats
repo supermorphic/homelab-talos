@@ -306,35 +306,14 @@ if [[ "$arguments" == *'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_pa
 	*) score=96 ;;
 	esac
 	mkdir -p "$(dirname "$metrics_path")"
-	if [[ "${BENCHMARK_TEST_VMAF_COMMAND_FAILURE:-0}" == '1' ]]; then
-		exit 88
-	fi
-	if [[ "${BENCHMARK_TEST_VMAF_PARSE_FAILURE:-0}" == '1' ]]; then
-		printf '%s\n' '{"frames":"invalid"}' >"$metrics_path"
-		exit 0
-	fi
 	jq -n --argjson score "$score" '{version:"3.0.0",fps:24,frames:[range(0;4) | {frameNum:.,metrics:{vmaf:$score}}]}' >"$metrics_path"
 	exit 0
 fi
 if [[ "$arguments" == *'[0:v][1:v]ssim'* ]]; then
-	if [[ "${BENCHMARK_TEST_SSIM_COMMAND_FAILURE:-0}" == '1' ]]; then
-		exit 89
-	fi
-	if [[ "${BENCHMARK_TEST_SSIM_PARSE_FAILURE:-0}" == '1' ]]; then
-		printf '%s\n' '[Parsed_ssim_0 @ 0x3000] no aggregate score' >&2
-		exit 0
-	fi
 	printf '%s\n' '[Parsed_ssim_0 @ 0x3000] SSIM Y:0.990000 U:0.995000 V:0.995000 All:0.991000 (20.457575)' >&2
 	exit 0
 fi
 if [[ "$arguments" == *'[0:v][1:v]psnr'* ]]; then
-	if [[ "${BENCHMARK_TEST_PSNR_COMMAND_FAILURE:-0}" == '1' ]]; then
-		exit 90
-	fi
-	if [[ "${BENCHMARK_TEST_PSNR_PARSE_FAILURE:-0}" == '1' ]]; then
-		printf '%s\n' '[Parsed_psnr_0 @ 0x3000] no aggregate score' >&2
-		exit 0
-	fi
 	printf '%s\n' '[Parsed_psnr_0 @ 0x3000] PSNR y:40.000000 u:40.000000 v:40.000000 average:40.000000 min:40.000000 max:40.000000' >&2
 	exit 0
 fi
@@ -355,13 +334,6 @@ if [[ "$arguments" == *'-bsf:v trace_headers'* ]]; then
 		'max_content_light_level = 1000' 'max_pic_average_light_level = 400' >&2
 	exit 0
 fi
-if [[ "${BENCHMARK_TEST_PGS_DECODE:-0}" == '1' && "$arguments" == *'-f null -'* &&
-	"$arguments" != *'libvmaf='* && " $arguments " == *' -map 0 '* ]]; then
-	exit 92
-fi
-if [[ "${BENCHMARK_TEST_FFMPEG_CONSUME_STDIN:-0}" == '1' && " $arguments " != *' -nostdin '* ]]; then
-	while IFS= read -r _line || [[ -n "${_line:-}" ]]; do :; done
-fi
 if [[ "$arguments" == *'-c:v hevc_qsv'* ]]; then
 	printf '%s\n' \
 		'[hevc_qsv @ 0x2000] Using the intelligent constant quality (ICQ) ratecontrol method' \
@@ -381,7 +353,6 @@ if [[ "${1:-}" == '-version' ]]; then
 	exit 0
 fi
 if [[ "$*" == *'-show_packets -select_streams a -show_entries packet=stream_index,size -of csv=p=0'* ]]; then
-	if [[ "${BENCHMARK_TEST_PACKET_FAILURE:-0}" == '1' ]]; then exit 91; fi
 	exec cat "$BENCHMARK_PACKET_FIXTURE"
 fi
 if [[ "$*" == *'-show_streams -show_entries stream_side_data'* ]]; then
@@ -895,9 +866,6 @@ append_representative_plan_row() {
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
-# Catches using percentile interpolation or including an odd population's
-# overall median in both halves. The approved convention is Tukey hinges:
-# median of each half, excluding the overall median when the count is odd.
 @test "quality ranking requires every expected row exactly once" {
 	prepare_execution_run
 	panel="$(jq -n --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '[
@@ -1204,6 +1172,3 @@ assert_quality_evidence_does_not_follow_symlinked_directory() {
 	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
 	[ -z "$(find "$evidence_directory" -maxdepth 1 -type f -name '.*.tmp.*' -print)" ]
 }
-
-# Catches extending the evidence reference to modes that do not produce the
-# bounded quality document.
