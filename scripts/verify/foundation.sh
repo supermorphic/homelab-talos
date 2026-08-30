@@ -71,6 +71,7 @@ scripts/validate/external-dns-provider-revisions.sh \
   kubernetes/apps/networking/external-dns/app/values.yaml "$dns_deployment_file"
 dns_args="$(yq -r '.spec.template.spec.containers[0].args[]' - <<<"$dns_deployment")"
 for argument in \
+  '--source=crd' \
   '--source=gateway-httproute' \
   '--provider=pihole' \
   '--registry=noop' \

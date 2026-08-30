@@ -50,7 +50,8 @@ current phase has reached its completion checkpoint:
 2. **Private workload activation PR:** bootstrap PostgreSQL and n8n privately, complete
    the attended n8n UI setup and private canary checkpoint, then make the two private
    workloads active in Git. Keep the public route suspended.
-3. **Public route + monitoring activation PR:** prepare DNS and router exposure, then
+3. **Public route + monitoring activation PR:** verify the Flux-managed internal DNS
+   record, configure the one UniFi Cloudflare DDNS profile and router exposure, then
    activate the exact public route, Gatus canary, and n8n alerts together through Git.
 
 Every PR requires review, required checks, explicit merge authorization, merge, and Flux
@@ -235,27 +236,56 @@ prepare public exposure until the private phase completes.
 ## Phase 3 — Public route + monitoring activation PR
 
 **Start when:** The Private workload activation PR is complete, PostgreSQL and n8n are
-ready, the private canary checkpoint has passed, and the public route remains suspended.
+ready, the private canary checkpoint has passed, the split-DNS automation change is merged
+at Flux source revision parity, and the public route remains suspended.
 
 ### Network and DNS exposure preparation
 
 Complete these steps in order:
 
-1. In internal Pi-hole DNS, add `hooks.lab.supermorphic.com` as an A record for the
-   dedicated public-webhook VIP `192.168.90.39`. Confirm an internal client resolves that
-   exact address.
-2. In the authoritative public DNS provider, add `hooks.lab.supermorphic.com` for the
-   router's current public address. Do not publish the editor hostname. Confirm an
-   off-network client resolves the public record, not `192.168.90.39`.
-3. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
+First, confirm the merged `public-webhook-gateway` package owns the internal DNS endpoint
+and that ExternalDNS has reconciled it to Pi-hole. This read-only private verification
+also confirms the public HTTPRoute remains absent:
+
+```bash
+N8N_VERIFY_MODE=private mise exec -- just kube n8n-verify
+```
+
+Stop if Pi-hole does not return exactly `192.168.90.39` for
+`hooks.lab.supermorphic.com`. Do not add a manual Pi-hole record as a workaround.
+
+1. In Cloudflare, [create a dedicated API token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+   for UniFi DDNS. Grant only Zone Read and DNS Edit for the `supermorphic.com` zone. Save
+   it in the operator password manager. Do not reuse the cert-manager token, commit this
+   token, or place it in shell history or command output.
+2. Follow the [UniFi Dynamic DNS procedure](https://help.ui.com/hc/en-us/articles/9203184738583-UniFi-Gateway-Dynamic-DNS)
+   on the primary WAN Internet settings and create one entry with these values:
+
+   - Service: `cloudflare`
+   - Hostname: `hooks.lab.supermorphic.com`
+   - Username: `supermorphic.com` (the Cloudflare zone name)
+   - Password/API credential: the dedicated DDNS token
+   - Server: leave unset unless the current UniFi Cloudflare form requires a value
+
+   Cloudflare must be available as a native UniFi service. Stop if it is absent; do not
+   substitute an unreviewed custom update server or hosted worker. After UniFi creates or
+   updates the A record, confirm in Cloudflare that its proxy status is **DNS only** so
+   public TLS terminates at Envoy. This is a one-time shared edge setting, not a step
+   repeated for each webhook workflow.
+3. From an off-network client, confirm `hooks.lab.supermorphic.com` resolves to the current
+   WAN address shown by UniFi. It must not return `192.168.90.39` or another private
+   address. A changing ISP address requires no operator edit; UniFi updates Cloudflare.
+4. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
    forward port 80, 5678, or 5432.
 
-**Complete when:** Internal DNS resolves the dedicated public-webhook VIP, an off-network
-client resolves the public record rather than the private VIP, and the router forwards
-only Internet TCP/443 for this exposure to the dedicated VIP.
+**Complete when:** The private verifier confirms the Git-managed internal DNS endpoint and
+Pi-hole answer, an off-network client resolves the UniFi-maintained Cloudflare record to
+the current WAN address rather than the private VIP, and the router forwards only Internet
+TCP/443 for this exposure to the dedicated VIP.
 
-**Stop if:** Either DNS view is incorrect or the forwarding rule is broader than the exact
-TCP/443 mapping. Keep `public-webhook-route` suspended and do not start the Git activation.
+**Stop if:** The `DNSEndpoint` is absent, either DNS view is incorrect, UniFi DDNS is not
+updating the current WAN address, or the forwarding rule is broader than the exact TCP/443
+mapping. Keep `public-webhook-route` suspended and do not start the Git activation.
 
 ### Git-managed route and monitoring activation
 
@@ -462,10 +492,11 @@ or negative tests.
 ## Add a public webhook integration
 
 Use this procedure after the initial public Platform Canary has passed acceptance. The
-UniFi TCP/443 forward, public DNS record, certificate, hostname, and dedicated Envoy data
-plane are shared edge infrastructure. Do not create another port forward or public DNS
-name for each n8n workflow. Each integration instead receives one explicitly reviewed,
-non-overlapping exact path on `hooks.lab.supermorphic.com`.
+UniFi TCP/443 forward, UniFi Cloudflare DDNS profile, public DNS record, internal
+`DNSEndpoint`, certificate, hostname, and dedicated Envoy data plane are shared edge
+infrastructure. Do not create another port forward, DDNS profile, or DNS name for each n8n
+workflow. Each integration instead receives one explicitly reviewed, non-overlapping
+exact path on `hooks.lab.supermorphic.com`.
 
 **Start when:** The existing public edge passes `mise exec -- just kube n8n-verify`, the
 new provider's delivery and authentication contracts are known, and the intended workflow
@@ -619,7 +650,9 @@ reverting the container image can reverse a database migration.
 incident, failed public acceptance, maintenance boundary, or deliberate removal.
 
 Remove the router TCP/443 forwarding rule first. Confirm an off-network connection can no
-longer reach the host, then remove the public DNS record. Suspension alone does not prune
+longer reach the host, then disable the UniFi DDNS profile and remove the public Cloudflare
+record. Keep the Git-managed internal `DNSEndpoint`; do not replace it with a manual
+Pi-hole record. Suspension alone does not prune
 an already applied route. In the first reviewed containment change, keep
 `public-webhook-route.spec.suspend: false` and change
 `kubernetes/apps/networking/public-webhook-gateway/route/kustomization.yaml` to
@@ -654,9 +687,11 @@ Kustomization in the same reviewed change. To publish again, keep router forward
 disabled while one reviewed Git change re-adds `./httproute.yaml`, sets the child
 Kustomization unsuspended, copies the staged Gatus fragment into active values, and
 selects `./n8n.yaml` exactly once. Wait for current Flux and route acceptance, complete
-off-network tests, and restore forwarding last.
+off-network tests, re-enable and verify the one UniFi DDNS profile, and restore forwarding
+last.
 
-**Complete when:** External forwarding and public DNS are removed, the unsuspended child
+**Complete when:** External forwarding and the UniFi-maintained public DNS record are
+removed, the unsuspended child
 Kustomization has reconciled the empty route source with pruning, the exact HTTPRoute is
 proved absent, and only then the follow-up Git change suspends the child. If exposure will
 stay withdrawn, the Gatus canary and n8n alert selection are removed in that same reviewed

@@ -161,7 +161,7 @@ scripts/validate/external-dns-provider-revisions.sh \
 [[ "$(yq -r '.provider.name' "$dns_values")" == 'pihole' ]]
 [[ "$(yq -r '.registry' "$dns_values")" == 'noop' ]]
 [[ "$(yq -r '.policy' "$dns_values")" == 'upsert-only' ]]
-[[ "$(yq -r '.sources | join(" ")' "$dns_values")" == 'gateway-httproute' ]]
+[[ "$(yq -r '.sources | sort | join(" ")' "$dns_values")" == 'crd gateway-httproute' ]]
 [[ "$(yq -r '.domainFilters | join(" ")' "$dns_values")" == 'lab.supermorphic.com' ]]
 [[ "$(yq -r '.annotationFilter' "$dns_values")" == 'external-dns.k8s.io/audience=internal' ]]
 [[ "$(yq -r '.gatewayNamespace' "$dns_values")" == 'networking' ]]
@@ -254,6 +254,7 @@ rg -q '^  name: gateways.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.ya
 rg -q '^  name: httproutes.gateway.networking.k8s.io$' "$temp_dir/envoy-gateway.yaml"
 rg -q '^  name: envoyproxies.gateway.envoyproxy.io$' "$temp_dir/envoy-gateway.yaml"
 rg -q -- '--source=gateway-httproute' "$temp_dir/external-dns.yaml"
+rg -q -- '--source=crd' "$temp_dir/external-dns.yaml"
 rg -q -- '--provider=pihole' "$temp_dir/external-dns.yaml"
 rg -q -- '--annotation-filter=external-dns.k8s.io/audience=internal' "$temp_dir/external-dns.yaml"
 rg -q -- '--gateway-name=internal' "$temp_dir/external-dns.yaml"

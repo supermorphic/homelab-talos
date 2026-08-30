@@ -7,3 +7,4 @@ resources:
   - ./certificate.yaml
   - ./envoyproxy.yaml
   - ./gateway.yaml
+  - ./internal-dns.yaml

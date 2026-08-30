@@ -105,6 +105,22 @@ n8n_routes_match_contract "$mode" <(printf '%s\n' "$routes_json") || {
   exit 1
 }
 
+internal_dns_endpoint="$(
+  "${kc[@]}" --namespace networking-public get \
+    dnsendpoint.externaldns.k8s.io hooks-lab-supermorphic-com-internal --output json
+)"
+n8n_internal_dns_endpoint_matches_contract <(printf '%s\n' "$internal_dns_endpoint") || {
+  echo 'The live internal public-webhook DNSEndpoint differs from the exact split-DNS contract.' >&2
+  exit 1
+}
+internal_dns_answer="$(
+  dig +short @"$HOMELAB_DNS_RESOLVER" hooks.lab.supermorphic.com A | sort -u
+)"
+[[ "$internal_dns_answer" == "$HOMELAB_PUBLIC_GATEWAY_VIP" ]] || {
+  echo "Pi-hole does not resolve hooks.lab.supermorphic.com to $HOMELAB_PUBLIC_GATEWAY_VIP." >&2
+  exit 1
+}
+
 grant="$(
   "${kc[@]}" --namespace "$namespace" get referencegrant n8n-public-webhooks --output json
 )"

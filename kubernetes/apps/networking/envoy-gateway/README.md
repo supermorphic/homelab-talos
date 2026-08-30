@@ -11,8 +11,10 @@ The `public` access class is used only by the separate public webhook Gateway in
 `192.168.90.39` webhook VIP. Its listener admits routes only from its own
 namespace, so adding an n8n workflow does not add a public route.
 
-The operator owns public DNS and router TCP/443 forwarding for the public VIP.
-The internal ExternalDNS controller does not publish the public hostname.
+The operator owns the UniFi Cloudflare DDNS profile and router TCP/443 forwarding
+for the public VIP. The internal ExternalDNS controller publishes only the Pi-hole
+view of the public hostname from the public Gateway package's annotated
+`DNSEndpoint`; it does not update public Cloudflare DNS.
 
 Applications attach portable HTTPRoutes from explicitly labeled namespaces.
 They do not receive the wildcard TLS private key. Use the guarded foundation Just

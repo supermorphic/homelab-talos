@@ -12,6 +12,7 @@ public_namespace="$public_base/app/namespace.yaml"
 public_pool="$public_base/app/address-pool.yaml"
 public_certificate="$public_base/app/certificate.yaml"
 public_gateway="$public_base/app/gateway.yaml"
+public_internal_dns="$public_base/app/internal-dns.yaml"
 public_route="$public_base/route/httproute.yaml"
 public_ks="$public_base/ks.yaml"
 external_dns='kubernetes/apps/networking/external-dns/app/values.yaml'
@@ -790,6 +791,18 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The public listener must use its exact hostname and Same-namespace route admission.' >&2
   exit 1
 }
+[[ "$(yq -r '.resources | sort | join(",")' "$public_base/app/kustomization.yaml")" == \
+    './address-pool.yaml,./certificate.yaml,./envoyproxy.yaml,./gateway.yaml,./internal-dns.yaml,./namespace.yaml' && \
+  "$(yq -r '.apiVersion' "$public_internal_dns")" == 'externaldns.k8s.io/v1alpha1' && \
+  "$(yq -r '.kind' "$public_internal_dns")" == 'DNSEndpoint' && \
+  "$(yq -r '.metadata | [.name, .namespace, .annotations."external-dns.k8s.io/audience"] | join(",")' "$public_internal_dns")" == \
+    'hooks-lab-supermorphic-com-internal,networking-public,internal' && \
+  "$(yq -r '.spec.endpoints | length' "$public_internal_dns")" == '1' && \
+  "$(yq -r '.spec.endpoints[0] | [.dnsName, .recordType, (.targets | length), .targets[0]] | join(",")' "$public_internal_dns")" == \
+    'hooks.lab.supermorphic.com,A,1,192.168.90.39' ]] || {
+  echo 'The public webhook Gateway package must own the exact internal Pi-hole DNSEndpoint.' >&2
+  exit 1
+}
 [[ "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | [.spec.dependsOn[].name] | sort | join(",")' "$public_ks")" == 'n8n,public-webhook-gateway' && \
   "$(yq ea -r 'select(.metadata.name == "public-webhook-route") | (.spec.suspend | type)' "$public_ks")" == '!!bool' ]] || {
   echo 'The public webhook route must depend on public-webhook-gateway and n8n with an explicit suspend state.' >&2
@@ -816,8 +829,9 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The public webhook route must be the exact platform-canary path to automation/n8n:5678.' >&2
   exit 1
 }
-[[ "$(yq -r '.annotationFilter' "$external_dns")" == 'external-dns.k8s.io/audience=internal' ]] || {
-  echo 'The internal ExternalDNS controller must not publish the public webhook name.' >&2
+[[ "$(yq -r '.annotationFilter' "$external_dns")" == 'external-dns.k8s.io/audience=internal' && \
+  "$(yq -r '.sources | sort | join(",")' "$external_dns")" == 'crd,gateway-httproute' ]] || {
+  echo 'The internal ExternalDNS controller must select only annotated Gateway routes and DNSEndpoints.' >&2
   exit 1
 }
 

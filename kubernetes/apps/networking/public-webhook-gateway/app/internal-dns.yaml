@@ -1,0 +1,14 @@
+---
+apiVersion: externaldns.k8s.io/v1alpha1
+kind: DNSEndpoint
+metadata:
+  name: hooks-lab-supermorphic-com-internal
+  namespace: networking-public
+  annotations:
+    external-dns.k8s.io/audience: internal
+spec:
+  endpoints:
+    - dnsName: hooks.lab.supermorphic.com
+      recordType: A
+      targets:
+        - 192.168.90.39
