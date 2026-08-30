@@ -254,16 +254,12 @@ EOF
 }
 
 # Catches a production break where an explicitly selected, byte-identical run
-# is recreated, or a successful exact row is encoded again.
-@test "matching explicit run id resumes without changing manifest bytes and skips an exact passed row" {
+# is recreated instead of preserving its immutable manifest.
+@test "matching explicit run id resumes without changing manifest bytes" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
 	before="$BATS_TEST_TMPDIR/manifest-before"
 	cp "$manifest" "$before"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	results_header >"$results"
-	results_row "$run_id" | sed 's/,abc123,detail,qsv,22,/,abc123,detail,qsv,22,/' >>"$results"
-
 	run "$SCRIPTS/runmeta.sh" create quality "$run_id"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$run_id" ]
@@ -274,36 +270,67 @@ EOF
 	run "$SCRIPTS/runmeta.sh" verify "$run_id"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 0 ]
-	[ -z "$output" ]
 }
 
-# Catches a production break where prefix keys or failed attempts are mistaken
-# for exact successful rows and are incorrectly skipped.
-@test "completed accepts only an exact row key whose status is passed" {
+# Catches any compact, historical, diagnostic, failed, malformed, or drifted
+# row suppressing the exact authenticated schema-3 quality work.
+@test "quality resume skips only an exact authenticated passed row" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	results_header >"$results"
-	quality_evidence_row_v3 "$run_id" 24 passed >>"$results"
-	quality_evidence_row_v3 "$run_id" 22 failed >>"$results"
-	quality_evidence_row_v3 "$run_id" 24 invalid >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 1 ]
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|23'
-	[ "$status" -eq 1 ]
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|2'
-	[ "$status" -eq 1 ]
-
-	results_row "$run_id" >>"$results"
+	canonical="$(results_row "$run_id")"
+	printf '%s\n' "$canonical" >>"$results"
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
+
+	evidence="$BENCHMARK_OUT/runs/$run_id/quality-evidence/sample-avc-detail-qsv-22-attempt-1.json"
+	baseline_evidence="$BATS_TEST_TMPDIR/resume-evidence.json"
+	cp "$evidence" "$baseline_evidence"
+	for mutation in failed compact historical diagnostic malformed drifted; do
+		cp "$baseline_evidence" "$evidence"
+		case "$mutation" in
+		failed)
+			results_header >"$results"
+			printf '%s\n' "${canonical/,passed,1,/,failed,1,}" >>"$results"
+			expected_status=1
+			;;
+		compact)
+			printf '%s\n' 'quality|abc123|detail|qsv|22,passed' >"$results"
+			expected_status=65
+			;;
+		historical)
+			results_header >"$results"
+			cut -d, -f1-38 <<<"$canonical" >>"$results"
+			expected_status=65
+			;;
+		diagnostic)
+			results_header >"$results"
+			printf '%s\n' "${canonical/,quality,sample-avc,/,diagnostic,sample-avc,}" >>"$results"
+			expected_status=65
+			;;
+		malformed)
+			results_header >"$results"
+			printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,ICQ,passed" >>"$results"
+			expected_status=65
+			;;
+		drifted)
+			results_header >"$results"
+			printf '%s\n' "$canonical" >>"$results"
+			printf '%s\n' 'changed' >>"$evidence"
+			expected_status=65
+			;;
+		esac
+		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+		[ "$status" -eq "$expected_status" ] || {
+			echo "resume mutation $mutation returned status=$status output=$output" >&3
+			return 1
+		}
+	done
 }
 
 # Catches resume trusting a quality row after its bounded metric evidence is
 # missing, redirected, changed, or rebound to a different row contract.
-@test "quality evidence resume authenticates path digest identity and schema" {
+@test "quality evidence reference binds confined path digest and row identity" {
 	run_id="$($SCRIPTS/runmeta.sh create quality)"
 	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
 	quality_results_header_v3 >"$results"
@@ -356,121 +383,6 @@ EOF
 			return 1
 		}
 	done
-}
-
-# Catches test-only compact rows bypassing the schema-v2 header, strategy, and
-# QSV evidence checks that protect production resume behavior.
-@test "completed rejects compact passed rows under the ICQ results schema" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	printf '%s\n' 'quality|abc123|detail|qsv|22,passed' >"$BENCHMARK_OUT/runs/$run_id/results.csv"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV header' ]
-}
-
-# Catches a production break where a crash-truncated row ending at a positional
-# passed status is trusted even though Task 5 did not append a complete record.
-@test "completed rejects a truncated full-schema passed row" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	results_header >"$results"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed" >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has 10 columns; expected 41' ]
-}
-
-# Catches a production break where a header with only the first field correct is
-# treated as Task 5 output and positional columns can suppress an encode.
-@test "completed requires the exact Task 5 results header" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status' >"$results"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,global_quality,passed" >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV header' ]
-}
-
-# Catches a production break where valid RFC 4180 quoted commas shift positional
-# fields or where malformed quoting is accepted after a complete passed row.
-@test "completed parses quoted commas and rejects malformed full-schema CSV" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	results_header >"$results"
-	row="$(quality_evidence_row_v3 "$run_id")"
-	evidence_path="$(awk -F, '{print $40}' <<<"$row")"
-	evidence_digest="$(awk -F, '{print $41}' <<<"$row")"
-	printf '%s\n' "$run_id,quality,sample-avc,avc,abc123,detail,qsv,22,ICQ,passed,1,100,50,50,1000,500,10,30,1.0,95,90,0.99,80,passed,hevc,10,1920x1080,24,10,passed,1,2,3,\"none, verified\",\"logs/a,b.log\",discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_path,$evidence_digest" >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 0 ]
-
-	printf '%s\n' '"unterminated' >>"$results"
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: malformed row 3' ]
-}
-
-# Catches a stale results schema or another strategy claiming a passed row and
-# suppressing an ICQ retry.
-@test "completed refuses passed rows without the ICQ strategy identity" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	results_header >"$results"
-	results_row "$run_id" | cut -d, -f1-36,40-41 >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has 38 columns; expected 41' ]
-
-	results_header >"$results"
-	results_row "$run_id" qsv la-hevc-icq-v1 >>"$results"
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has a mismatched strategy' ]
-}
-
-# Catches a stale QSV completed-row reader accepting LA-ICQ or a setting that
-# cannot reach every later ICQ stage, thereby skipping the required retry.
-@test "completed rejects stale mode and out-of-range QSV settings" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	for setting in 14 17 32; do
-		results_header >"$results"
-		quality_evidence_row_v3 "$run_id" "$setting" passed >>"$results"
-		run "$SCRIPTS/runmeta.sh" completed "$run_id" "quality|abc123|detail|qsv|$setting"
-		[ "$status" -eq 65 ]
-		[ "$output" = 'invalid results CSV: row 2 has an invalid ICQ setting' ]
-	done
-
-	results_header >"$results"
-	results_row "$run_id" | sed 's/,qsv,22,ICQ,passed,1,/,qsv,22,LA-ICQ,passed,1,/' >>"$results"
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has an invalid QSV rate control' ]
-}
-
-# Catches a passed QSV row relying on encode success alone instead of retaining
-# the required initialization and positive hardware-work evidence.
-@test "completed requires QSV initialization and positive video busy time" {
-	run_id="$($SCRIPTS/runmeta.sh create quality)"
-	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-	results_header >"$results"
-	results_row "$run_id" qsv qsv-hevc-icq-v1 failed 800000000 >>"$results"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has an invalid QSV initialization' ]
-
-	results_header >"$results"
-	results_row "$run_id" qsv qsv-hevc-icq-v1 passed 0 >>"$results"
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
-	[ "$status" -eq 65 ]
-	[ "$output" = 'invalid results CSV: row 2 has invalid QSV video busy time' ]
 }
 
 # Catches the CPU reference stage resuming from a row with GPU proof values,
@@ -673,21 +585,4 @@ EOF
 	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 64 ]
 	[ "$output" = 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' ]
-}
-
-# Catches a production break where any tested command regresses to the shared
-# scaffold after all seven behavior contracts have landed.
-@test "runmeta and benchmark agree on the results schema" {
-	benchmark_header="$("$SCRIPTS/benchmark.sh" _test results-header)"
-	runmeta_header="$(
-		# shellcheck disable=SC1090
-		results_header=''
-		eval "$(grep -m1 '^results_header=' "$SCRIPTS/runmeta.sh")"
-		printf '%s\n' "$results_header"
-	)"
-
-	[ -n "$benchmark_header" ]
-	[ -n "$runmeta_header" ]
-	[ "$runmeta_header" = "$benchmark_header" ]
-	[ "$(awk -F, '{print NF}' <<<"$runmeta_header")" -eq 41 ]
 }

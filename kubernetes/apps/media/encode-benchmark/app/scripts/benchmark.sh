@@ -27,6 +27,10 @@ if [[ "$test_mode" != '1' && -n "${BENCHMARK_SAMPLES_FILE+x}" ]]; then
 	echo 'BENCHMARK_SAMPLES_FILE requires BENCHMARK_TEST_MODE=1' >&2
 	exit 64
 fi
+if [[ "$test_mode" != '1' && -n "${BENCHMARK_TEST_QUALITY_PLAN_FILE+x}" ]]; then
+	echo 'BENCHMARK_TEST_QUALITY_PLAN_FILE requires BENCHMARK_TEST_MODE=1' >&2
+	exit 64
+fi
 if [[ "$test_mode" == '1' ]]; then
 	running_image_file="${BENCHMARK_RUNNING_IMAGE_FILE:-$running_image_file}"
 	running_image_wait_seconds="${BENCHMARK_RUNNING_IMAGE_WAIT_SECONDS:-$running_image_wait_seconds}"
@@ -113,6 +117,42 @@ build_commands() {
 	jq -n -c --argjson clip "$clip_json" --argjson qsv "$qsv_json" \
 		--argjson vmaf "$vmaf_json" --argjson ssim "$ssim_json" --argjson psnr "$psnr_json" \
 		'{clip:$clip,qsv:$qsv,vmaf:$vmaf,ssim:$ssim,psnr:$psnr}'
+}
+
+quality_work_plan() {
+	local plan_override="${BENCHMARK_TEST_QUALITY_PLAN_FILE:-}"
+	if [[ -n "$plan_override" ]]; then
+		[[ "$test_mode" == '1' ]] || {
+			echo 'BENCHMARK_TEST_QUALITY_PLAN_FILE requires BENCHMARK_TEST_MODE=1' >&2
+			return 64
+		}
+		[[ -f "$plan_override" && ! -L "$plan_override" ]] || {
+			echo 'quality plan fixture is not a regular file' >&2
+			return 66
+		}
+		while IFS= read -r row; do
+			printf '%s\n' "$row"
+		done <"$plan_override"
+		return
+	fi
+
+	jq -e -c --arg settings "$CONTRACT_ICQ_SETTINGS" '
+		($settings | split(" ") | map(tonumber)) as $settings |
+		.qualityPanel[]? |
+		select((.detectionOnly // false) != true and .cohort != "dolby-vision") as $sample |
+		$sample.clips | to_entries[] as $clip |
+		$settings[] as $setting |
+		{
+			sampleId: $sample.id,
+			cohort: $sample.cohort,
+			sourcePath: $sample.path,
+			sourceSha256: $sample.sha256,
+			clipId: $clip.key,
+			timestamp: $clip.value,
+			encoder: "qsv",
+			requestedSetting: $setting
+		}
+	' "$samples_file"
 }
 vmaf_stats() {
 	local metrics="$1"
@@ -1953,15 +1993,13 @@ rank_quality_candidates() {
 }
 
 quality_mode() {
-	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample sample_id cohort
-	local source sha detection clip_id timestamp clip
-	local setting rank_status quality_completion_cohorts
-	local panel_samples
-	local -a qsv_settings
-	read -r -a qsv_settings <<<"$CONTRACT_ICQ_SETTINGS"
+	local explicit_run_id="${1:-}" run_id run_directory run_scratch sample_id cohort
+	local source sha clip_id timestamp clip encoder setting
+	local rank_status quality_completion_cohorts panel_samples work_plan row fields active_clip=''
 	assigned_node_capability_gate || return
 	panel_samples="$(jq -c '[.qualityPanel[]?]' "$samples_file")"
 	runtime_pre_encode_gate "$panel_samples" || return
+	work_plan="$(quality_work_plan)" || return
 	BENCHMARK_ENCODER_COMMANDS_JSON="$(encoder_commands_for_mode quality)"
 	export BENCHMARK_ENCODER_COMMANDS_JSON
 	if [[ -n "$explicit_run_id" ]]; then
@@ -1972,27 +2010,30 @@ quality_mode() {
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
-	while IFS= read -r sample; do
-		sample_id="$(jq -r '.id' <<<"$sample")"
-		cohort="$(jq -r '.cohort' <<<"$sample")"
-		source="$(jq -r '.path' <<<"$sample")"
-		sha="$(jq -r '.sha256' <<<"$sample")"
-		detection="$(jq -r '.detectionOnly // false' <<<"$sample")"
-		if [[ "$detection" == 'true' || "$cohort" == 'dolby-vision' ]]; then
-			printf '%s,%s,detection-only\n' "$sample_id" "$cohort" >>"$run_directory/skips.csv"
-			continue
-		fi
-		while IFS=$'\t' read -r clip_id timestamp; do
-			clip="$run_scratch/$sample_id-$clip_id-source.mkv"
+	while IFS= read -r row; do
+		fields="$(jq -e -r '
+			select(type == "object" and
+				(keys | sort) == (["clipId","cohort","encoder","requestedSetting","sampleId",
+					"sourcePath","sourceSha256","timestamp"] | sort)) |
+			[.sampleId,.cohort,.sourcePath,.sourceSha256,.clipId,.timestamp,.encoder,
+				(.requestedSetting | tostring)] | @tsv
+		' <<<"$row")" || return 65
+		IFS=$'\t' read -r sample_id cohort source sha clip_id timestamp encoder setting <<<"$fields"
+		validate_sample_id "$sample_id" || return
+		validate_sample_id "$clip_id" || return
+		[[ "$encoder" == 'qsv' ]] || return 65
+		contract_is_icq_setting "$samples_file" "$setting" || return 65
+		if row_is_complete "$run_id" quality "$sha" "$clip_id" "$encoder" "$setting"; then continue; fi
+		clip="$run_scratch/$sample_id-$clip_id-source.mkv"
+		if [[ "$clip" != "$active_clip" ]]; then
+			if [[ -n "$active_clip" ]]; then rm -f -- "$active_clip"; fi
 			ffmpeg -nostdin -v error -ss "$timestamp" -i "$source" -t 90 -map 0 -c copy "$clip"
-			for setting in "${qsv_settings[@]}"; do
-				if row_is_complete "$run_id" quality "$sha" "$clip_id" qsv "$setting"; then continue; fi
-				encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
-					qsv "$setting" "$clip" clip record "$source" "$timestamp" >/dev/null
-			done
-			rm -f -- "$clip"
-		done < <(jq -r '.clips | to_entries[] | [.key, .value] | @tsv' <<<"$sample")
-	done < <(jq -c '.qualityPanel[]?' "$samples_file")
+			active_clip="$clip"
+		fi
+		encode_one_variant "$run_id" quality "$sample_id" "$cohort" "$sha" "$clip_id" \
+			"$encoder" "$setting" "$clip" clip record "$source" "$timestamp" >/dev/null
+	done <<<"$work_plan"
+	if [[ -n "$active_clip" ]]; then rm -f -- "$active_clip"; fi
 	rank_quality_candidates "$run_directory/results.csv" "$samples_file" "$run_id" || rank_status=$?
 	rm -rf -- "$run_scratch"
 	((${rank_status:-0} == 0)) || return "$rank_status"
@@ -2038,6 +2079,16 @@ test_dispatch() {
 		(($# == 1)) || usage
 		contract_load "$samples_file"
 		contract_is_icq_setting "$samples_file" "$1"
+		;;
+	quality-work-plan)
+		(($# == 0)) || usage
+		contract_load "$samples_file"
+		quality_work_plan
+		;;
+	encoder-commands)
+		(($# == 1)) || usage
+		contract_load "$samples_file"
+		encoder_commands_for_mode "$1"
 		;;
 	results-header)
 		(($# == 0)) || usage

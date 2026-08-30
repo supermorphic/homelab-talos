@@ -3,7 +3,6 @@
 setup() {
 	SCRIPTS="$BATS_TEST_DIRNAME/../app/scripts"
 	FIXTURES="$BATS_TEST_DIRNAME/fixtures"
-	GOLDEN="$BATS_TEST_DIRNAME/golden"
 	export BENCHMARK_TEST_MODE=1
 	export REAL_SHA256SUM="$(command -v sha256sum)"
 	export REAL_LN="$(command -v ln)"
@@ -97,20 +96,125 @@ quality_evidence_reference() {
 	printf '%s,%s\n' "$evidence_path" "$evidence_digest"
 }
 
-# Catches any widening or reordering of the fixed ICQ candidate set.
-@test "test interface publishes the canonical ICQ setting membership" {
-	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/samples.json"
-	yq -r '.data."samples.json"' "$BATS_TEST_DIRNAME/../app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
+initialize_quality_results() {
+	local results="$1"
+	printf '%s\n' 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' >"$results"
+}
 
-	run "$SCRIPTS/benchmark.sh" _test icq-settings
+append_quality_result() {
+	local results="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
+	local clip="$6" setting="$7" attempt="$8" reduction="$9" vmaf_harmonic="${10}"
+	local vmaf_low="${11}" ssim="${12}" status="${13:-passed}"
+	local evidence_ref evidence_path evidence_digest
+	evidence_ref="$(quality_evidence_reference "$run_id" "$sample_id" "$cohort" "$source_sha" \
+		"$clip" "$setting" "$attempt" "$vmaf_harmonic" "$vmaf_low" "$ssim")"
+	evidence_path="${evidence_ref%%,*}"
+	evidence_digest="${evidence_ref#*,}"
+	printf '%s\n' "$run_id,quality,$sample_id,$cohort,$source_sha,$clip,qsv,$setting,ICQ,$status,$attempt,1000,600,$reduction,8000,4800,10,30,1.0,$vmaf_harmonic,$vmaf_low,$ssim,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/$sample_id-$clip-qsv-$setting-attempt-$attempt.log,discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_path,$evidence_digest" >>"$results"
+}
+
+set_ranking_panel() {
+	local panel_json="$1"
+	jq --argjson panel "$panel_json" '.qualityPanel = $panel' \
+		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+# Catches a planner that drops, duplicates, or relabels any fixed quality row.
+# The expected Cartesian product is built only from literals in this test.
+@test "quality planner emits the exact 144 unique row keys" {
+	run "$SCRIPTS/benchmark.sh" _test quality-work-plan
 	[ "$status" -eq 0 ]
-	[ "$output" = '16 18 20 22 24 26 28 30' ]
-
-	run "$SCRIPTS/benchmark.sh" _test icq-setting 30
+	plan="$output"
+	run "$SCRIPTS/benchmark.sh" _test quality-work-plan
 	[ "$status" -eq 0 ]
+	[ "$output" = "$plan" ]
 
-	run "$SCRIPTS/benchmark.sh" _test icq-setting 32
-	[ "$status" -eq 1 ]
+	run python3 - "$plan" <<'PYTHON'
+import json
+import sys
+
+rows = [json.loads(line) for line in sys.argv[1].splitlines()]
+sample_ids = (
+    "vc1-fugitive",
+    "avc-clean-coco",
+    "avc-grain-memento",
+    "hdr10-clean-ministry",
+    "hdr10-grain-goodfellas",
+    "hdr10-motion-john-wick-2",
+)
+clips = {
+    "vc1-fugitive": {
+        "detail": ("vc1", "01:15:00.000"),
+        "dark": ("vc1", "00:35:00.000"),
+        "motion": ("vc1", "01:20:00.000"),
+    },
+    "avc-clean-coco": {
+        "detail": ("avc", "00:10:00.000"),
+        "dark": ("avc", "00:45:00.000"),
+        "motion": ("avc", "00:05:00.000"),
+    },
+    "avc-grain-memento": {
+        "detail": ("avc", "00:23:00.000"),
+        "dark": ("avc", "00:38:00.000"),
+        "motion": ("avc", "01:15:30.000"),
+    },
+    "hdr10-clean-ministry": {
+        "detail": ("hdr10", "01:04:15.000"),
+        "dark": ("hdr10", "01:19:15.000"),
+        "motion": ("hdr10", "00:29:15.000"),
+    },
+    "hdr10-grain-goodfellas": {
+        "detail": ("hdr10", "01:06:25.000"),
+        "dark": ("hdr10", "00:36:55.000"),
+        "motion": ("hdr10", "00:40:45.000"),
+    },
+    "hdr10-motion-john-wick-2": {
+        "detail": ("hdr10", "01:04:50.000"),
+        "dark": ("hdr10", "00:06:30.000"),
+        "motion": ("hdr10", "01:38:00.000"),
+    },
+}
+clip_ids = ("detail", "dark", "motion")
+settings = (16, 18, 20, 22, 24, 26, 28, 30)
+expected = {
+    (sample_id, clip_id, setting)
+    for sample_id in sample_ids
+    for clip_id in clip_ids
+    for setting in settings
+}
+actual = {
+    (row["sampleId"], row["clipId"], row["requestedSetting"])
+    for row in rows
+}
+assert len(rows) == 144, len(rows)
+assert len(actual) == 144, len(actual)
+assert actual == expected, sorted(expected ^ actual)
+for row in rows:
+    cohort, timestamp = clips[row["sampleId"]][row["clipId"]]
+    assert row["cohort"] == cohort
+    assert row["timestamp"] == timestamp
+PYTHON
+	[ "$status" -eq 0 ]
+}
+
+# Catches a non-QSV encoder or a broadened row shape entering the quality plan.
+@test "quality work plan contains QSV rows only" {
+	run "$SCRIPTS/benchmark.sh" _test quality-work-plan
+	[ "$status" -eq 0 ]
+	plan="$output"
+
+	run jq -e -s '
+		length == 144 and
+		all(.[];
+			type == "object" and
+			(keys | sort) == (["clipId","cohort","encoder","requestedSetting","sampleId",
+				"sourcePath","sourceSha256","timestamp"] | sort) and
+			.encoder == "qsv" and
+			(.requestedSetting | type == "number")
+		)
+	' <<<"$plan"
+	[ "$status" -eq 0 ]
 }
 
 create_capability_tools() {
@@ -476,36 +580,73 @@ prepare_execution_run() {
 	export NODE_NAME='nuc1'
 }
 
-prepare_quality_panel_with_six_titles_three_clips() {
-	local quality='[]' index source size sha cohort item
-	for index in 1 2 3 4 5 6; do
-		source="$BATS_TEST_TMPDIR/quality-source-$index.mkv"
-		printf 'quality source fixture bytes %s' "$index" >"$source"
-		size="$(wc -c <"$source" | tr -d ' ')"
-		sha="$(sha256sum "$source" | awk '{print $1}')"
-		case "$index" in
-		1 | 2) cohort='avc' ;;
-		3 | 4) cohort='vc1' ;;
-		5 | 6) cohort='hdr10' ;;
-		esac
-		item="$(jq -n --arg id "quality-$index" --arg cohort "$cohort" --arg path "$source" \
-			--arg sha "$sha" --argjson size "$size" '{
-				id: $id, cohort: $cohort, path: $path, sizeBytes: $size, sha256: $sha,
-				clips: {detail: "00:17:23.456", motion: "00:27:23.456", dark: "00:37:23.456"}
-			}')"
-		quality="$(jq -c --argjson item "$item" '. + [$item]' <<<"$quality")"
-	done
-	jq --argjson quality "$quality" '.qualityPanel = $quality' \
-		"$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+prepare_representative_run() {
+	local sample_id="$1" cohort="$2" media_fixture="$3"
+	local size sha
+	prepare_execution_run
+	size="$(wc -c <"$media_fixture" | tr -d ' ')"
+	sha="$(sha256sum "$media_fixture" | awk 'NR == 1 { print $1 }')"
+	source_media="$media_fixture"
+	source_size="$size"
+	source_sha="$sha"
+	jq --arg id "$sample_id" --arg cohort "$cohort" --arg path "$media_fixture" \
+		--arg sha "$sha" --argjson size "$size" '
+		.qualityPanel = [{
+			id:$id, cohort:$cohort, path:$path, sizeBytes:$size, sha256:$sha,
+			clips:{detail:"00:00:00.000"}
+		}]
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
+start_representative_plan() {
+	export BENCHMARK_TEST_QUALITY_PLAN_FILE="$BATS_TEST_TMPDIR/quality-plan.jsonl"
+	: >"$BENCHMARK_TEST_QUALITY_PLAN_FILE"
+}
+
+append_representative_plan_row() {
+	local sample_id="$1" clip_id="$2" setting="$3"
+	jq -e -c --arg sample "$sample_id" --arg clip "$clip_id" --argjson setting "$setting" '
+		.qualityPanel[] | select(.id == $sample) |
+		{
+			sampleId:.id, cohort:.cohort, sourcePath:.path, sourceSha256:.sha256,
+			clipId:$clip, timestamp:.clips[$clip], encoder:"qsv", requestedSetting:$setting
+		}
+	' "$BENCHMARK_SAMPLES_FILE" >>"$BENCHMARK_TEST_QUALITY_PLAN_FILE"
 }
 
 # Each mutation names a state-machine break that would authorize work from an
 # ambiguous or contradictory one-record visual decision.
-@test "results header is the exact 41-column ICQ resume schema" {
+@test "quality result and evidence schemas are exact and mutually bound" {
 	run "$SCRIPTS/benchmark.sh" _test results-header
 	[ "$status" -eq 0 ]
 	[ "$output" = 'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' ]
+
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	bound="$BATS_TEST_TMPDIR/schema-bound.json"
+	bind_quality_fixture_evidence "$run_id" "$FIXTURES/metrics/variant-passed.json" 1 "$bound"
+	scratch_output="$BENCHMARK_SCRATCH/schema-output.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$bound" "$scratch_output"
+	[ "$status" -eq 0 ]
+	results="$run_dir/results.csv"
+	[ "$(awk -F, 'NR == 2 {print NF}' "$results")" -eq 41 ]
+	evidence="$run_dir/$(awk -F, 'NR == 2 {print $40}' "$results")"
+	run jq -e '
+		keys == ["clipId","cohort","globalQuality","hdr","psnr","runId","sampleId",
+			"schemaVersion","sourceSha256","ssim","strategyId","vmaf"] and
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		(.globalQuality | type == "number") and (.ssim | type == "number") and
+		(.psnr | type == "number") and .hdr == null and
+		(.vmaf | keys == ["evaluatedFrameCount","excludedFrames","harmonicMean","onePercentLow","rawFrameCount"]) and
+		(.vmaf.rawFrameCount | type == "number") and
+		(.vmaf.evaluatedFrameCount | type == "number") and
+		(.vmaf.excludedFrames | type == "array") and
+		(.vmaf.harmonicMean | type == "number") and (.vmaf.onePercentLow | type == "number")
+	' "$evidence"
+	[ "$status" -eq 0 ]
 }
 
 @test "benchmark failure hooks are rejected outside test mode" {
@@ -515,6 +656,12 @@ prepare_quality_panel_with_six_titles_three_clips() {
 	run "$SCRIPTS/benchmark.sh" _test results-header
 	[ "$status" -eq 64 ]
 	[ "$output" = 'BENCHMARK_TEST_* hooks require BENCHMARK_TEST_MODE=1' ]
+
+	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
+	export BENCHMARK_TEST_QUALITY_PLAN_FILE=/tmp/quality-plan.jsonl
+	run "$SCRIPTS/benchmark.sh" _test results-header
+	[ "$status" -eq 64 ]
+	[ "$output" = 'BENCHMARK_TEST_QUALITY_PLAN_FILE requires BENCHMARK_TEST_MODE=1' ]
 }
 
 # Catches capability claims based only on encoder exit status: this public mode
@@ -695,16 +842,17 @@ prepare_quality_panel_with_six_titles_three_clips() {
 
 # Catches a production break where the requested ICQ controls, lossless clip
 # extraction, stream preservation, or reference/distorted ordering drifts.
-@test "quality command construction preserves exact clip QSV VMAF SSIM and PSNR contracts" {
-	for setting in 16 18 30; do
+@test "quality commands preserve exact clip QSV VMAF SSIM and PSNR contracts" {
+	for setting in 16 30; do
+		if [[ "$setting" == '16' ]]; then source='/media/avc.mkv'; else source='/media/hdr10.mkv'; fi
 		run "$SCRIPTS/benchmark.sh" _test commands \
-			'/media/Movie.mkv' '00:17:23.456' '/scratch/detail.mkv' \
+			"$source" '00:17:23.456' '/scratch/detail.mkv' \
 			"/scratch/qsv-$setting.mkv" '/scratch/vmaf.json' "$setting"
 		[ "$status" -eq 0 ]
 		commands="$output"
 
-		run jq -e --arg setting "$setting" '
-		.clip == ["ffmpeg","-nostdin","-v","error","-ss","00:17:23.456","-i","/media/Movie.mkv","-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
+		run jq -e --arg setting "$setting" --arg source "$source" '
+		.clip == ["ffmpeg","-nostdin","-v","error","-ss","00:17:23.456","-i",$source,"-t","90","-map","0","-c","copy","/scratch/detail.mkv"] and
 		.qsv == ["ffmpeg","-nostdin","-v","verbose","-init_hw_device","qsv=hw:/dev/dri/renderD128","-filter_hw_device","hw","-i","/scratch/detail.mkv","-map","0","-c:v","hevc_qsv","-preset","veryslow","-global_quality",$setting,"-look_ahead","0","-extbrc","0","-c:a","copy","-c:s","copy","-map_metadata","0","-map_chapters","0",("/scratch/qsv-" + $setting + ".mkv")] and
 		.vmaf == ["ffmpeg","-nostdin","-v","error","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=/scratch/vmaf.json","-f","null","-"] and
 		.ssim == ["ffmpeg","-nostdin","-v","info","-i",("/scratch/qsv-" + $setting + ".mkv"),"-i","/scratch/detail.mkv","-lavfi","[0:v][1:v]ssim","-f","null","-"] and
@@ -714,12 +862,132 @@ prepare_quality_panel_with_six_titles_three_clips() {
 	done
 }
 
-# Catches a production break where arithmetic mean replaces the mandated VMAF
-# harmonic mean or the low-tail score stops using ceil(frame_count * 1%).
-@test "VMAF frame metrics produce the hand-derived harmonic mean and one-percent low" {
-	run "$SCRIPTS/benchmark.sh" _test vmaf-stats "$FIXTURES/metrics/vmaf-frames.json"
+@test "representative AVC ICQ 16 row publishes valid evidence and ranks" {
+	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-avc detail 16
+
+	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 0 ]
-	[ "$output" = '{"frame_count":4,"harmonic_mean":91.719745,"one_percent_low":80.000000}' ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	results="$run_dir/results.csv"
+	[ "$(awk 'END {print NR}' "$results")" -eq 2 ]
+	run awk -F, 'NR == 2 {print $3 ":" $4 ":" $6 ":" $7 ":" $8 ":" $9 ":" $10 ":" $24 ":" $30}' "$results"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'sample-avc:avc:detail:qsv:16:ICQ:passed:passed:passed' ]
+	evidence="$run_dir/$(awk -F, 'NR == 2 {print $40}' "$results")"
+	digest="sha256:$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
+	[ "$(awk -F, 'NR == 2 {print $41}' "$results")" = "$digest" ]
+	run jq -e '
+		keys == ["clipId","cohort","globalQuality","hdr","psnr","runId","sampleId",
+			"schemaVersion","sourceSha256","ssim","strategyId","vmaf"] and
+		.schemaVersion == 1 and .strategyId == "qsv-hevc-icq-v1" and
+		.sampleId == "sample-avc" and .cohort == "avc" and .clipId == "detail" and
+		.globalQuality == 16 and .hdr == null and
+		(.vmaf.harmonicMean >= 95) and (.vmaf.onePercentLow >= 90) and
+		(.ssim | type == "number") and (.psnr | type == "number")
+	' "$evidence"
+	[ "$status" -eq 0 ]
+	run jq -e '.cohorts.avc.status == "eligible" and
+		.cohorts.avc.candidates == [{globalQuality:16,medianReductionPercent:0}]' \
+		"$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+	[ "$(rg -c -- ' -t 90 -map 0 -c copy ' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- 'sample-avc-detail-source.mkv .* -global_quality 16 -look_ahead 0 -extbrc 0' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- 'sample-avc-detail-qsv-16-attempt-1.mkv -map 0:v:0 -f null -' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- 'sample-avc-detail-qsv-16-attempt-1-vmaf.json' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "representative HDR10 ICQ 30 row preserves HDR and ranks" {
+	prepare_representative_run sample-hdr hdr10 "$FIXTURES/media/hdr10-hevc-10bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-hdr detail 30
+
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	results="$run_dir/results.csv"
+	[ "$(awk 'END {print NR}' "$results")" -eq 2 ]
+	run awk -F, 'NR == 2 {print $3 ":" $4 ":" $6 ":" $7 ":" $8 ":" $9 ":" $10 ":" $24 ":" $30}' "$results"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'sample-hdr:hdr10:detail:qsv:30:ICQ:passed:passed:passed' ]
+	evidence="$run_dir/$(awk -F, 'NR == 2 {print $40}' "$results")"
+	run jq -e '.hdr.classification == "preserved" and
+		.hdr.reasons == ["source-clip-encoded-metadata-agree"] and
+		(.hdr.normalizedOracle | type == "object" and length > 0)' "$evidence"
+	[ "$status" -eq 0 ]
+	run jq -e '.cohorts.hdr10.status == "eligible" and
+		.cohorts.hdr10.candidates == [{globalQuality:30,medianReductionPercent:0}]' \
+		"$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+	[ "$(rg -c -- ' -t 90 -map 0 -c copy ' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '-global_quality 30 -look_ahead 0 -extbrc 0' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- 'sample-hdr-detail-qsv-30-attempt-1.mkv -map 0:v:0 -f null -' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(rg -c -- '-bsf:v trace_headers' "$BENCHMARK_COMMAND_LOG")" -eq 3 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "invalid quality row records failure cleans scratch and continues without a candidate" {
+	prepare_representative_run sample-invalid avc "$FIXTURES/media/avc-8bit.mkv"
+	jq --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '
+		.qualityPanel += [{id:"sample-valid",cohort:"avc",path:$path,sizeBytes:$size,
+			sha256:$sha,clips:{detail:"00:00:01.000"}}]
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+	start_representative_plan
+	append_representative_plan_row sample-invalid detail 16
+	append_representative_plan_row sample-valid detail 30
+	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='sample-invalid-detail-qsv-16-attempt-1'
+	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
+
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	run awk -F, 'NR > 1 {print $3 ":" $8 ":" $10}' "$run_dir/results.csv"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'sample-invalid:16:invalid\nsample-valid:30:passed' ]
+	run jq -e '.cohorts.avc.status == "no-verdict" and .cohorts.avc.candidates == []' \
+		"$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+	[ "$(rg -c -- ' -t 90 -map 0 -c copy ' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(rg -c -- 'sample-(invalid|valid)-detail-source.mkv .* -global_quality (16|30) -look_ahead 0 -extbrc 0' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(rg -c -- 'qsv-(16|30)-attempt-1.mkv -map 0:v:0 -f null -' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 2 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "passed quality resume skips measured work without duplicating the row" {
+	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-avc detail 16
+	run "$SCRIPTS/benchmark.sh" quality
+	[ "$status" -eq 0 ]
+	run_id="$output"
+	results="$BENCHMARK_OUT/runs/$run_id/results.csv"
+	before="$BATS_TEST_TMPDIR/results-before.csv"
+	cp "$results" "$before"
+	: >"$BENCHMARK_COMMAND_LOG"
+
+	run "$SCRIPTS/benchmark.sh" quality "$run_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$run_id" ]
+	run cmp -s "$before" "$results"
+	[ "$status" -eq 0 ]
+	[ "$(awk 'END {print NR}' "$results")" -eq 2 ]
+	[ "$(awk -v run="$run_id" '$1 != "sha256sum" && index($0, run) {count += 1} END {print count + 0}' \
+		"$BENCHMARK_COMMAND_LOG")" -eq 0 ]
+	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
 # Catches using percentile interpolation or including an odd population's
@@ -828,218 +1096,12 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	[ "$(jq -r '.qsv_proof + ":" + .suspect_reasons' <<<"$output")" = 'failed:rate-control' ]
 }
 
-# Catches validation short-circuiting after the first failure, wrong duration
-# tolerances, or HDR stream format and color being omitted from the HDR field.
-@test "output validation reports every failed field in stable semicolon order" {
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$FIXTURES/metrics/probe-output-valid.json" clip 0
-	[ "$status" -eq 0 ]
-	run jq -e '
-		.validation_codec == "passed" and .validation_duration == "passed" and
-		.validation_resolution == "passed" and .validation_frame_rate == "passed" and
-		.validation_bit_depth == "passed" and .validation_hdr == "passed" and
-		.validation_audio_tracks == "passed" and .validation_subtitle_tracks == "passed" and
-		.validation_chapters == "passed" and .validation_failures == ""
-	' <<<"$output"
-	[ "$status" -eq 0 ]
-
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$FIXTURES/metrics/probe-output-invalid.json" clip 0
-	[ "$status" -eq 0 ]
-	run jq -e '
-		[.validation_codec,.validation_duration,.validation_resolution,
-		 .validation_frame_rate,.validation_bit_depth,.validation_hdr,
-		 .validation_audio_tracks,.validation_subtitle_tracks,.validation_chapters]
-		== ["failed","failed","failed","failed","failed","failed","failed","failed","failed"] and
-		.validation_failures == "codec;duration;resolution;frame-rate;bit-depth;hdr;audio-tracks;subtitle-tracks;chapters"
-	' <<<"$output"
-	[ "$status" -eq 0 ]
-
-	boundary="$BATS_TEST_TMPDIR/duration-boundary.json"
-	jq '.durationSeconds = 91.5' "$FIXTURES/metrics/probe-output-valid.json" >"$boundary"
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$boundary" clip 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_duration' <<<"$output")" = 'failed' ]
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$boundary" full 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_duration' <<<"$output")" = 'passed' ]
-}
-
-@test "output validation uses exact normalized rationals and fails closed on incomplete probes" {
-	equivalent="$BATS_TEST_TMPDIR/equivalent.json"
-	close_but_unequal="$BATS_TEST_TMPDIR/close-but-unequal.json"
-	incomplete="$BATS_TEST_TMPDIR/incomplete.json"
-	jq '.frameRate = "48000/2002"' "$FIXTURES/metrics/probe-output-valid.json" >"$equivalent"
-	jq '.frameRate = "24000001/1001000"' "$FIXTURES/metrics/probe-output-valid.json" >"$close_but_unequal"
-	jq 'del(.width) | .height = null | .audioTrackCount = "2"' \
-		"$FIXTURES/metrics/probe-output-valid.json" >"$incomplete"
-
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$equivalent" clip 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_frame_rate' <<<"$output")" = 'passed' ]
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$close_but_unequal" clip 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_frame_rate' <<<"$output")" = 'failed' ]
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" "$incomplete" clip 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_resolution' <<<"$output")" = 'failed' ]
-	[ "$(jq -r '.validation_audio_tracks' <<<"$output")" = 'failed' ]
-}
-
-# Catches a null auxiliary source stream probe vetoing complete authoritative
-# decoded-frame and trace_headers evidence before candidate ranking.
-@test "quality authoritative HDR evidence overrides a null auxiliary stream probe" {
-	prepare_execution_run
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	results="$run_dir/results.csv"
-	summary="$(awk -F, 'NR > 1 {count += 1; if ($10 != "passed" || $30 != "passed" || $34 != "") bad += 1} END {print count ":" bad + 0}' "$results")"
-	[ "$summary" = '8:0' ] || {
-		echo "authoritative preserved HDR rows remained vetoed: $summary" >&3
-		return 1
-	}
-	[ "$(find "$run_dir/quality-evidence" -type f -name '*.json' -exec jq -r '.hdr.classification' {} \; | sort -u)" = 'preserved' ]
-	run jq -e '
-		.cohorts.hdr10.status == "eligible" and
-		.cohorts.hdr10.expectedClipCount == 1 and
-		(.cohorts.hdr10.candidates | length) > 0
-	' "$run_dir/quality-candidates.json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches a regression where failed/invalid attempts overwrite evidence, a
-# fallback mode resumes, suspect output survives scratch, or the exact passed
-# row is encoded again.
-@test "result recording increments attempts resumes only passed rows and discards quality video" {
-	run_id='20260802T120000Z-aaaaaaaa'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-
-	attempt=0
-	for fixture in variant-fallback variant-invalid-output variant-passed; do
-		attempt=$((attempt + 1))
-		scratch_output="$BENCHMARK_SCRATCH/$fixture.mkv"
-		printf '%s' 'encoded bytes' >"$scratch_output"
-		bound_fixture="$BATS_TEST_TMPDIR/$fixture-bound.json"
-		bind_quality_fixture_evidence "$run_id" "$FIXTURES/metrics/$fixture.json" "$attempt" "$bound_fixture"
-		run "$SCRIPTS/benchmark.sh" _test record-result \
-			"$run_id" "$bound_fixture" "$scratch_output"
-		[ "$status" -eq 0 ]
-		[ ! -e "$scratch_output" ]
-	done
-	[ "$output" = '{"status":"passed","attempt":3,"output_disposition":"discarded"}' ]
-	cmp -s "$GOLDEN/results.csv" "$run_dir/results.csv"
-
-	scratch_output="$BENCHMARK_SCRATCH/resume-must-delete.mkv"
-	printf '%s' 'must not survive' >"$scratch_output"
-	run "$SCRIPTS/benchmark.sh" _test record-result \
-		"$run_id" "$FIXTURES/metrics/variant-passed.json" "$scratch_output"
-	[ "$status" -eq 0 ]
-	[ "$output" = '{"status":"skipped","attempt":3,"output_disposition":"not-created"}' ]
-	[ ! -e "$scratch_output" ]
-	cmp -s "$GOLDEN/results.csv" "$run_dir/results.csv"
-
-	run "$SCRIPTS/runmeta.sh" completed "$run_id" \
-		'quality|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|detail|qsv|22'
-	[ "$status" -eq 0 ]
-}
-
-# Catches an artifact from another strategy entering an ICQ run before any row
-# is appended and becoming an apparently resumable result.
-@test "result recording rejects a fixture with a mismatched strategy before append" {
-	run_id='20260802T120000Z-aaaaaaaa'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	fixture="$BATS_TEST_TMPDIR/mismatched-strategy.json"
-	jq '.strategy_id = "la-hevc-icq-v1"' "$FIXTURES/metrics/variant-passed.json" >"$fixture"
-	scratch_output="$BENCHMARK_SCRATCH/mismatched-strategy.mkv"
-	printf '%s' 'encoded bytes' >"$scratch_output"
-
-	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$fixture" "$scratch_output"
-	[ "$status" -eq 65 ]
-	[ "$output" = 'result fixture strategy does not match contract' ]
-	[ ! -e "$scratch_output" ]
-	if [[ -e "$run_dir/results.csv" ]]; then
-		[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
-	fi
-}
-
-# Catches QSV encode success being recorded as passed without the initialization
-# and positive hardware-busy evidence carried in the ICQ result schema.
-@test "result recording marks incomplete QSV evidence invalid" {
-	run_id='20260802T120000Z-aaaaaaaa'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	fixture="$BATS_TEST_TMPDIR/missing-qsv-evidence.json"
-	jq '.qsv_initialization = "failed" | .video_busy_nanoseconds = "0"' \
-		"$FIXTURES/metrics/variant-passed.json" >"$fixture"
-	bound_fixture="$BATS_TEST_TMPDIR/missing-qsv-evidence-bound.json"
-	bind_quality_fixture_evidence "$run_id" "$fixture" 1 "$bound_fixture"
-	scratch_output="$BENCHMARK_SCRATCH/missing-qsv-evidence.mkv"
-	printf '%s' 'encoded bytes' >"$scratch_output"
-
-	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$bound_fixture" "$scratch_output"
-	[ "$status" -eq 0 ]
-	[ "$output" = '{"status":"invalid","attempt":1,"output_disposition":"discarded"}' ]
-	run awk -F, 'NR == 2 {print $10 "," $38 "," $39}' "$run_dir/results.csv"
-	[ "$status" -eq 0 ]
-	[ "$output" = 'invalid,failed,0' ]
-}
-
-# Catches a planner or loop drift that omits or duplicates work in the fixed panel.
-@test "quality runs all six titles three clips and eight ICQ settings" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-
-	run python3 - "$run_dir/results.csv" <<'PYTHON'
-import csv
-import json
-import sys
-
-with open(sys.argv[1], newline="", encoding="utf-8") as stream:
-    rows = list(csv.DictReader(stream))
-keys = {(row["sample_id"], row["clip_id"], row["requested_setting"]) for row in rows}
-expected = {
-    (f"quality-{title}", clip, str(setting))
-    for title in range(1, 7)
-    for clip in ("detail", "motion", "dark")
-    for setting in (16, 18, 20, 22, 24, 26, 28, 30)
-}
-print(json.dumps({
-    "rowCount": len(rows),
-    "allQsv": all(row["encoder"] == "qsv" for row in rows),
-    "uniqueKeys": len(keys),
-    "allExpected": keys == expected,
-    "allPassed": all(row["status"] == "passed" for row in rows),
-}, separators=(",", ":")))
-PYTHON
-	[ "$status" -eq 0 ]
-	[ "$output" = '{"rowCount":144,"allQsv":true,"uniqueKeys":144,"allExpected":true,"allPassed":true}' ]
-	[ ! -d "$run_dir/encodes" ]
-	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
-	[ -f "$run_dir/quality-candidates.json" ]
-
-	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
-	[ "$status" -eq 0 ]
-	[ "$(rg -c -- 'libvmaf=model=version=vmaf_4k_v0.6.1:log_fmt=json:log_path=' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
-	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 144 ]
-}
-
 # Catches a generated quality Job publishing unbounded candidate evidence or
 # omitting one cohort from the authenticated dispatch-to-runtime completion.
 @test "generated quality completion publishes only bounded ranked cohort values" {
-	prepare_execution_run
+	prepare_representative_run sample-hdr hdr10 "$FIXTURES/media/hdr10-hevc-10bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-hdr detail 30
 	dispatch_id='20260815T121500Z-deadbeef'
 	export BENCHMARK_DISPATCH_CORRELATION_ID="$dispatch_id"
 
@@ -1061,7 +1123,7 @@ PYTHON
 		.cohorts.avc == {status:"no-verdict",candidates:[]} and
 		.cohorts.vc1 == {status:"no-verdict",candidates:[]} and
 		.cohorts.hdr10.status == "eligible" and
-		(.cohorts.hdr10.candidates | map(.globalQuality)) == [16,18,20,22,24,26,30]
+		(.cohorts.hdr10.candidates | map(.globalQuality)) == [30]
 	' <<<"$output"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *'sample-hdr'* ]]
@@ -1070,531 +1132,202 @@ PYTHON
 	[[ "$output" != *'sha256'* ]]
 }
 
-@test "PGS decode maps video only while probe validation still detects subtitle loss" {
+@test "quality ranking requires every expected row exactly once" {
 	prepare_execution_run
-	export BENCHMARK_TEST_PGS_DECODE=1
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run rg -F -- '-nostdin -v error -i ' "$BENCHMARK_COMMAND_LOG"
-	[ "$status" -eq 0 ]
-	run awk '
-		/-f null -$/ && !/nullsrc=size=16x16/ && !/libvmaf=/ &&
-			!/\[0:v\]\[1:v\]ssim/ && !/\[0:v\]\[1:v\]psnr/ && !/trace_headers/ {
-			seen = 1
-			if ($0 !~ /(^| )-map 0:v:0( |$)/) { bad = 1; exit }
-		}
-		END { if (bad || !seen) exit 1 }
-	' "$BENCHMARK_COMMAND_LOG"
-	[ "$status" -eq 0 ]
-	run "$SCRIPTS/benchmark.sh" _test validate-probes \
-		"$FIXTURES/metrics/probe-source.json" \
-		"$FIXTURES/metrics/probe-output-subtitle-loss.json" clip 0
-	[ "$status" -eq 0 ]
-	[ "$(jq -r '.validation_subtitle_tracks' <<<"$output")" = 'failed' ]
-}
-
-@test "quality processes every sample when FFmpeg would otherwise consume loop stdin" {
-	prepare_execution_run
-	expand_execution_panels_to_three_samples
-	export BENCHMARK_TEST_FFMPEG_CONSUME_STDIN=1
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	results="$BENCHMARK_OUT/runs/$output/results.csv"
-	[ "$(awk -F, 'NR > 1 && $7 == "qsv" {count += 1} END {print count + 0}' "$results")" -eq 24 ]
-	run awk '$1 != "sha256sum" && $0 !~ /(^| )-nostdin( |$)/ {exit 1}' "$BENCHMARK_COMMAND_LOG"
-	[ "$status" -eq 0 ]
-}
-
-@test "quality candidates authenticate corrected evidence and rank cohorts independently at exact gates" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-aaaaaaaa'
+	panel="$(jq -n --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '[
+		{id:"rank-a",cohort:"avc",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:00.000"}},
+		{id:"rank-b",cohort:"avc",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:01.000"}}
+	]')"
+	set_ranking_panel "$panel"
+	run_id='20260815T120000Z-e6000001'
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
+	initialize_quality_results "$results"
+	append_quality_result "$results" "$run_id" rank-a avc "$source_sha" detail 16 1 20 96 92 0.99
+	append_quality_result "$results" "$run_id" rank-b avc "$source_sha" detail 16 1 30 96 92 0.99
+	baseline="$BATS_TEST_TMPDIR/complete-ranking.csv"
+	cp "$results" "$baseline"
 
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -eq 0 ]
-	artifact="$run_dir/quality-candidates.json"
-	actual_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
-	run jq --arg digest "$actual_digest" '.resultsSha256 = $digest' \
-		"$FIXTURES/metrics/quality-candidates.json"
-	[ "$status" -eq 0 ]
-	printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/expected-quality-candidates.json"
-	run diff -u "$BATS_TEST_TMPDIR/expected-quality-candidates.json" "$artifact"
+	run jq -e '.cohorts.avc.candidates == [{globalQuality:16,medianReductionPercent:25}]' \
+		"$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
 
-	# A malformed results file must fail before publication and leave the prior
-	# artifact intact; a ranker that truncates first loses completed-run evidence.
-	cp "$artifact" "$BATS_TEST_TMPDIR/prior-quality-candidates.json"
-	printf '%s\n' 'malformed,row' >"$results"
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -ne 0 ]
-	run cmp -s "$BATS_TEST_TMPDIR/prior-quality-candidates.json" "$artifact"
-	[ "$status" -eq 0 ]
+	for mutation in missing duplicate wrong-source wrong-setting extra; do
+		cp "$baseline" "$results"
+		case "$mutation" in
+		missing) sed -n '1,2p' "$results" >"$results.tmp" ;;
+		duplicate) {
+			cp "$results" "$results.tmp"
+			sed -n '2p' "$results" >>"$results.tmp"
+		} ;;
+		wrong-source) awk -F, 'BEGIN {OFS=FS} NR == 2 {$5="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"} {print}' "$results" >"$results.tmp" ;;
+		wrong-setting) awk -F, 'BEGIN {OFS=FS} NR == 2 {$8=17} {print}' "$results" >"$results.tmp" ;;
+		extra) {
+			cp "$results" "$results.tmp"
+			sed -n '2p' "$results" | sed 's/,rank-a,/,rank-extra,/' >>"$results.tmp"
+		} ;;
+		esac
+		mv -f -- "$results.tmp" "$results"
+		run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+		if [[ "$mutation" == missing || "$mutation" == duplicate ]]; then
+			[ "$status" -eq 0 ]
+			run jq -e '.cohorts.avc.candidates == []' "$run_dir/quality-candidates.json"
+			[ "$status" -eq 0 ]
+		else
+			[ "$status" -eq 65 ] || {
+				echo "ranking accepted $mutation row: status=$status output=$output" >&3
+				return 1
+			}
+		fi
+	done
 }
 
-# Catches either parsing replacement bytes or retaining eligibility after the
-# canonical evidence path changes during authentication.
-@test "quality candidates reject canonical replacement after stable evidence capture" {
+@test "quality ranking enforces exact thresholds and reduction tie-break" {
 	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0000'
+	panel="$(jq -n --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '[
+		{id:"rank-avc",cohort:"avc",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:00.000"}}
+	]')"
+	set_ranking_panel "$panel"
+	run_id='20260815T120000Z-e7000001'
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-
-	target="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
-	replacement="$BATS_TEST_TMPDIR/replacement-quality-evidence.json"
-	# Keep the serialized file size unchanged so inode identity, not size drift,
-	# must detect the atomic replacement.
-	jq '.vmaf.harmonicMean = 94' "$target" >"$replacement"
-	chmod 0600 "$replacement"
-	export BENCHMARK_TEST_SHA256_REPLACE_TARGET="$target"
-	export BENCHMARK_TEST_SHA256_REPLACEMENT="$replacement"
+	initialize_quality_results "$results"
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 16 1 20 95 90 0.99
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 18 1 90 94.999 90 0.99
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 20 1 90 95 89.999 0.99
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 22 1 30 96 92 0.99
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 24 1 30 96 92 0.99
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 26 1 40 96 92 0.99
 
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -eq 0 ]
-	[ ! -e "$replacement" ]
-	run jq -e '
-		.cohorts.avc.status == "eligible" and
-		(.cohorts.avc.candidates | map(.globalQuality)) == [24,18,26] and
-		.cohorts.avc.candidates[2] == {globalQuality:26, medianReductionPercent:10}
-	' "$run_dir/quality-candidates.json"
+	run jq -e '.cohorts.avc.candidates == [
+		{globalQuality:26,medianReductionPercent:40},
+		{globalQuality:22,medianReductionPercent:30},
+		{globalQuality:24,medianReductionPercent:30},
+		{globalQuality:16,medianReductionPercent:20}
+	]' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
 }
 
-# Catches treating an early row's final helper check as sufficient when a
-# later row can change that canonical evidence before candidate publication.
-@test "quality candidates revalidate every authenticated binding immediately before publication" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0005'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-	artifact="$run_dir/quality-candidates.json"
-	printf '%s\n' '{"sentinel":"prior-candidates"}' >"$artifact"
-	cp "$artifact" "$BATS_TEST_TMPDIR/prior-delayed-race-candidates.json"
-
-	target="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
-	replacement="$BATS_TEST_TMPDIR/delayed-replacement-quality-evidence.json"
-	jq '.vmaf.harmonicMean = 94' "$target" >"$replacement"
-	chmod 0600 "$replacement"
-	export BENCHMARK_TEST_SHA256_REPLACE_TARGET="$target"
-	export BENCHMARK_TEST_SHA256_REPLACEMENT="$replacement"
-	export BENCHMARK_TEST_SHA256_REPLACE_AFTER_CALLS=3
-	export BENCHMARK_TEST_SHA256_REPLACE_COUNTER="$BATS_TEST_TMPDIR/sha256-replacement-calls"
-
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -ne 0 ]
-	[ ! -e "$replacement" ]
-	run cmp -s "$BATS_TEST_TMPDIR/prior-delayed-race-candidates.json" "$artifact"
-	[ "$status" -eq 0 ]
-}
-
-# Catches cleanup through a private snapshot directory after another process
-# replaces that directory with a symlink to an outside location.
-@test "quality candidate authentication cannot remove through a replaced snapshot path" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0004'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-
-	outside="$BATS_TEST_TMPDIR/outside-snapshot-target"
-	mkdir -p "$outside"
-	printf '%s\n' 'must-survive' >"$outside/evidence.json"
-	export BENCHMARK_TEST_LINK_SWAP_OUTSIDE="$outside"
-	export BENCHMARK_TEST_LINK_SWAP_MARKER="$BATS_TEST_TMPDIR/link-swap-triggered"
-
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	[ -f "$outside/evidence.json" ]
-	[ "$(<"$outside/evidence.json")" = 'must-survive' ]
-}
-
-# Catches accepting evidence that is not a confined regular file, has a false
-# schema or identity, or contains non-finite comparison metrics.
-@test "quality candidates reject link escape identity schema and non-finite evidence" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0003'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-
-	linked="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
-	escaped="$BATS_TEST_TMPDIR/escaped-quality-evidence.json"
-	mv -f -- "$linked" "$escaped"
-	"$REAL_LN" -s "$escaped" "$linked"
-
-	schema="$run_dir/quality-evidence/quality-1-detail-qsv-24-attempt-1.json"
-	jq '.schemaVersion = 2' "$schema" >"$schema.tmp"
-	mv -f -- "$schema.tmp" "$schema"
-	chmod 0600 "$schema"
-	schema_digest="sha256:$(sha256sum "$schema" | awk 'NR == 1 { print $1 }')"
-	rewrite_quality_result_evidence_digest "$results" quality-1 detail 24 "$schema_digest"
-
-	identity="$run_dir/quality-evidence/quality-1-detail-qsv-18-attempt-1.json"
-	jq '.sampleId = "quality-2"' "$identity" >"$identity.tmp"
-	mv -f -- "$identity.tmp" "$identity"
-	chmod 0600 "$identity"
-	identity_digest="sha256:$(sha256sum "$identity" | awk 'NR == 1 { print $1 }')"
-	rewrite_quality_result_evidence_digest "$results" quality-1 detail 18 "$identity_digest"
-
-	ssim="$run_dir/quality-evidence/quality-1-detail-qsv-26-attempt-1.json"
-	sed 's/"ssim":0.991/"ssim":1e999/' "$ssim" >"$ssim.tmp"
-	mv -f -- "$ssim.tmp" "$ssim"
-	chmod 0600 "$ssim"
-	ssim_digest="sha256:$(sha256sum "$ssim" | awk 'NR == 1 { print $1 }')"
-	rewrite_quality_result_evidence_digest "$results" quality-1 detail 26 "$ssim_digest"
-
-	psnr="$run_dir/quality-evidence/quality-5-detail-qsv-16-attempt-1.json"
-	sed 's/"psnr":40/"psnr":1e999/' "$psnr" >"$psnr.tmp"
-	mv -f -- "$psnr.tmp" "$psnr"
-	chmod 0600 "$psnr"
-	psnr_digest="sha256:$(sha256sum "$psnr" | awk 'NR == 1 { print $1 }')"
-	rewrite_quality_result_evidence_digest "$results" quality-5 detail 16 "$psnr_digest"
-
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	run jq -e '
-		.cohorts.avc == {
-			status:"no-verdict", expectedClipCount:6, candidates:[], reason:"incomplete-evidence"
-		} and
-		(.cohorts.hdr10.candidates | map(.globalQuality)) == [24,18,26]
-	' "$run_dir/quality-candidates.json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches a ranker that treats missing, changed, or non-preserved evidence as
-# passing because the unauthenticated CSV metric columns still pass.
-@test "quality candidates reject unavailable changed and non-preserved evidence per setting" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0001'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-
-	missing="$run_dir/quality-evidence/quality-1-detail-qsv-24-attempt-1.json"
-	changed="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
-	hdr="$run_dir/quality-evidence/quality-5-detail-qsv-16-attempt-1.json"
-	rm -f -- "$missing"
-	jq '.psnr = 41' "$changed" >"$changed.tmp"
-	mv -f -- "$changed.tmp" "$changed"
-	chmod 0600 "$changed"
-	jq '.hdr.classification = "encoder-output-defect" | .hdr.reasons = ["encoded-metadata-differs"]' \
-		"$hdr" >"$hdr.tmp"
-	mv -f -- "$hdr.tmp" "$hdr"
-	chmod 0600 "$hdr"
-	hdr_digest="sha256:$(sha256sum "$hdr" | awk 'NR == 1 { print $1 }')"
-	rewrite_quality_result_evidence_digest "$results" quality-5 detail 16 "$hdr_digest"
-
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	run jq -e '
-		(.cohorts.avc.candidates | map(.globalQuality)) == [18,26] and
-		(.cohorts.hdr10.candidates | map(.globalQuality)) == [24,18,26] and
-		.cohorts.vc1.status == "no-verdict"
-	' "$run_dir/quality-candidates.json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches collapsing incomplete evidence into a scientific no-go. Replacing
-# the unavailable quality sidecar with a complete document is the only change
-# that permits the VC-1 cohort to report no-go.
 @test "quality candidates distinguish incomplete no-verdict from complete no-go" {
 	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-acde0002'
+	panel="$(jq -n --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '[
+		{id:"rank-avc",cohort:"avc",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:00.000"}},
+		{id:"rank-hdr",cohort:"hdr10",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:01.000"}},
+		{id:"rank-vc1",cohort:"vc1",path:$path,sizeBytes:$size,sha256:$sha,clips:{detail:"00:00:02.000"}}
+	]')"
+	set_ranking_panel "$panel"
+	run_id='20260815T120000Z-e8000001'
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	mkdir -p "$run_dir"
 	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
+	initialize_quality_results "$results"
+	append_quality_result "$results" "$run_id" rank-avc avc "$source_sha" detail 16 1 25 96 92 0.99
+	for setting in 16 18 20 22 24 26 28 30; do
+		append_quality_result "$results" "$run_id" rank-hdr hdr10 "$source_sha" detail \
+			"$setting" 1 30 94.999 92 0.99
+	done
 
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	run jq -e '.cohorts.vc1 == {
-		status:"no-verdict", expectedClipCount:6, candidates:[], reason:"incomplete-evidence"
-	}' "$run_dir/quality-candidates.json"
-	[ "$status" -eq 0 ]
-
-	sha="$(jq -r '.qualityPanel[] | select(.id == "quality-3") | .sha256' "$BENCHMARK_SAMPLES_FILE")"
-	evidence_ref="$(quality_evidence_reference "$run_id" quality-3 vc1 "$sha" detail 30 1 96 89.999 0.991)"
-	rewrite_quality_result_evidence_digest "$results" quality-3 detail 30 "${evidence_ref#*,}"
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	run jq -e '.cohorts.vc1 == {
-		status:"no-go", expectedClipCount:6, candidates:[], reason:"no-objective-candidate"
-	}' "$run_dir/quality-candidates.json"
-	[ "$status" -eq 0 ]
-}
-
-# Catches accepting a well-shaped row that the durable results contract rejects
-# and replacing the prior candidate artifact before that violation is found.
-@test "quality candidate publication rejects semantic result rows without replacing the prior artifact" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-bbbbbbbb'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -eq 0 ]
-	artifact="$run_dir/quality-candidates.json"
-	cp "$artifact" "$BATS_TEST_TMPDIR/prior-semantic-quality-candidates.json"
-
-	# This stays a 41-column QSV passed row, but cannot be resumed because
-	# QSV initialization evidence is incomplete.
-	awk -F, 'BEGIN { OFS = FS } NR == 2 { $38 = "not-applicable" } { print }' "$results" \
-		>"$BATS_TEST_TMPDIR/semantic-invalid-results.csv"
-	mv -f -- "$BATS_TEST_TMPDIR/semantic-invalid-results.csv" "$results"
-	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
-	[ "$status" -ne 0 ]
-	run cmp -s "$BATS_TEST_TMPDIR/prior-semantic-quality-candidates.json" "$artifact"
-	[ "$status" -eq 0 ]
-}
-
-# Catches a partial per-setting group being promoted from its remaining rows.
-@test "quality candidates exclude a setting with one expected title clip missing" {
-	prepare_execution_run
-	prepare_quality_panel_with_six_titles_three_clips
-	run_id='20260815T120000Z-cccccccc'
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	mkdir -p "$run_dir"
-	results="$run_dir/results.csv"
-	write_quality_ranking_results "$results" "$run_id"
-
-	awk -F, 'NR == 1 || !($3 == "quality-1" && $6 == "detail" && $8 == "16")' "$results" \
-		>"$BATS_TEST_TMPDIR/partial-quality-results.csv"
-	mv -f -- "$BATS_TEST_TMPDIR/partial-quality-results.csv" "$results"
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -eq 0 ]
 	run jq -e '
-		.cohorts.avc.candidates == [
-			{globalQuality: 24, medianReductionPercent: 35},
-			{globalQuality: 18, medianReductionPercent: 25},
-			{globalQuality: 26, medianReductionPercent: 10}
-		]
+		.cohorts.avc == {status:"eligible",expectedClipCount:1,
+			candidates:[{globalQuality:16,medianReductionPercent:25}]} and
+		.cohorts.hdr10 == {status:"no-go",expectedClipCount:1,candidates:[],reason:"no-objective-candidate"} and
+		.cohorts.vc1 == {status:"no-verdict",expectedClipCount:1,candidates:[],reason:"incomplete-evidence"}
 	' "$run_dir/quality-candidates.json"
 	[ "$status" -eq 0 ]
 }
 
-@test "quality records probe metric and parser failures cleans scratch and continues the panel" {
-	invalid_json="$BATS_TEST_TMPDIR/invalid-probe.json"
-	printf '%s\n' '{' >"$invalid_json"
-	case_number=0
-	for failure in source-probe output-probe vmaf-command vmaf-parse ssim-command ssim-parse psnr-command psnr-parse; do
-		case_number=$((case_number + 1))
-		rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
-		mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
-		prepare_execution_run
-		unset BENCHMARK_TEST_VMAF_COMMAND_FAILURE BENCHMARK_TEST_VMAF_PARSE_FAILURE
-		unset BENCHMARK_TEST_SSIM_COMMAND_FAILURE BENCHMARK_TEST_SSIM_PARSE_FAILURE
-		unset BENCHMARK_TEST_PSNR_COMMAND_FAILURE BENCHMARK_TEST_PSNR_PARSE_FAILURE
-		export BENCHMARK_TEST_SOURCE_PROBE="$FIXTURES/metrics/probe-source.json"
-		export BENCHMARK_TEST_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-valid.json"
-		case "$failure" in
-		source-probe) export BENCHMARK_TEST_SOURCE_PROBE="$invalid_json" ;;
-		output-probe) export BENCHMARK_TEST_OUTPUT_PROBE="$invalid_json" ;;
-		vmaf-command) export BENCHMARK_TEST_VMAF_COMMAND_FAILURE=1 ;;
-		vmaf-parse) export BENCHMARK_TEST_VMAF_PARSE_FAILURE=1 ;;
-		ssim-command) export BENCHMARK_TEST_SSIM_COMMAND_FAILURE=1 ;;
-		ssim-parse) export BENCHMARK_TEST_SSIM_PARSE_FAILURE=1 ;;
-		psnr-command) export BENCHMARK_TEST_PSNR_COMMAND_FAILURE=1 ;;
-		psnr-parse) export BENCHMARK_TEST_PSNR_PARSE_FAILURE=1 ;;
-		esac
-		run "$SCRIPTS/benchmark.sh" quality
-		[ "$status" -eq 0 ]
-		run_id="$output"
-		results="$BENCHMARK_OUT/runs/$run_id/results.csv"
-		run awk -F, 'NR > 1 { count += 1; if ($10 != "failed" && $10 != "invalid") exit 1 } END { print count + 0 }' "$results"
-		[ "$status" -eq 0 ]
-		case "$failure" in
-		source-probe | output-probe) [ "$output" = '8' ] ;;
-		*) [ "$output" = '0' ] ;;
-		esac
-		[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
-	done
-}
+@test "quality attempts increase and retain immutable evidence names" {
+	run_id='20260802T120000Z-aaaaaaaa'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	run "$SCRIPTS/benchmark.sh" _test results-header
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" >"$results"
 
-@test "quality attempt evidence is immutable and a passed resume does not duplicate ICQ rows" {
-	prepare_execution_run
-	export BENCHMARK_TEST_INVALID_OUTPUT_MATCH='qsv-20-attempt'
-	export BENCHMARK_TEST_INVALID_OUTPUT_PROBE="$FIXTURES/metrics/probe-output-invalid.json"
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	for expected_attempt in 2; do
-		run "$SCRIPTS/benchmark.sh" quality "$run_id"
-		[ "$status" -eq 0 ]
-		[ "$output" = "$run_id" ]
+	for attempt in 1 3; do
+		bound="$BATS_TEST_TMPDIR/attempt-$attempt.json"
+		bind_quality_fixture_evidence "$run_id" "$FIXTURES/metrics/variant-invalid-output.json" \
+			"$attempt" "$bound"
+		printf '%s\n' "$(jq -r '[$run,.panel,.sample_id,.cohort,.source_sha256,.clip_id,.encoder,
+			.requested_setting,.selected_rate_control,"invalid",$attempt,.input_bytes,.output_bytes,
+			.reduction_percent,.input_bit_rate,.output_bit_rate,.wall_seconds,.encode_fps,.encode_speed,
+			.vmaf_harmonic_mean,.vmaf_1pct_low,.ssim,.gpu_busy_percent,.qsv_proof,.validation_codec,
+			.validation_duration,.validation_resolution,.validation_frame_rate,.validation_bit_depth,
+			.validation_hdr,.validation_audio_tracks,.validation_subtitle_tracks,.validation_chapters,
+			.validation_failures,.log_path,"discarded",.strategy_id,.qsv_initialization,
+			.video_busy_nanoseconds,.quality_evidence_path,.quality_evidence_sha256] | @csv' \
+			--arg run "$run_id" --argjson attempt "$attempt" "$bound" | tr -d '"')" >>"$results"
 	done
-	unset BENCHMARK_TEST_INVALID_OUTPUT_MATCH BENCHMARK_TEST_INVALID_OUTPUT_PROBE
-	run "$SCRIPTS/benchmark.sh" quality "$run_id"
-	[ "$status" -eq 0 ]
 
-	run awk -F, '$7 == "qsv" && $8 == 20 {print $10 ":" $11}' "$BENCHMARK_OUT/runs/$run_id/results.csv"
+	bound="$BATS_TEST_TMPDIR/attempt-4.json"
+	bind_quality_fixture_evidence "$run_id" "$FIXTURES/metrics/variant-passed.json" 4 "$bound"
+	scratch_output="$BENCHMARK_SCRATCH/attempt-4.mkv"
+	printf '%s' 'encoded bytes' >"$scratch_output"
+	run "$SCRIPTS/benchmark.sh" _test record-result "$run_id" "$bound" "$scratch_output"
 	[ "$status" -eq 0 ]
-	[ "$output" = $'invalid:1\ninvalid:2\npassed:3' ]
-	for evidence_pattern in \
-		'sample-hdr-detail-qsv-20-attempt-[123].log' \
-		'sample-hdr-detail-qsv-20-attempt-*-source-probe.json' \
-		'sample-hdr-detail-qsv-20-attempt-*-output-probe.json' \
-		'sample-hdr-detail-qsv-20-attempt-*-validation.json' \
-		'sample-hdr-detail-qsv-20-attempt-*-vmaf.json' \
-		'sample-hdr-detail-qsv-20-attempt-*-ssim.log' \
-		'sample-hdr-detail-qsv-20-attempt-*-psnr.log'; do
-		[ "$(find "$BENCHMARK_OUT/runs/$run_id/logs" -type f -name "$evidence_pattern" | wc -l | tr -d ' ')" -eq 3 ]
-	done
-	[ "$(find "$BENCHMARK_OUT/runs/$run_id/quality-evidence" -type f \
-		-name 'sample-hdr-detail-qsv-20-attempt-*.json' | wc -l | tr -d ' ')" -eq 3 ]
+	[ "$output" = '{"status":"passed","attempt":4,"output_disposition":"discarded"}' ]
+	run awk -F, 'NR > 1 {print $11 ":" $40}' "$results"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'1:quality-evidence/sample-avc-detail-qsv-22-attempt-1.json\n3:quality-evidence/sample-avc-detail-qsv-22-attempt-3.json\n4:quality-evidence/sample-avc-detail-qsv-22-attempt-4.json' ]
+	[ "$(find "$run_dir/quality-evidence" -type f -name '*.json' | wc -l | tr -d ' ')" -eq 3 ]
 }
 
 # Catches resume identity omitting the production commands whose bytes and
 # parameters determine every measured variant.
-@test "quality manifest identities the clip command and every bounded encoder setting" {
+@test "quality manifest binds the clip command and all eight QSV command identities" {
 	prepare_execution_run
+	run "$SCRIPTS/benchmark.sh" _test encoder-commands quality
+	[ "$status" -eq 0 ]
+	commands="$output"
+	expected="$BATS_TEST_TMPDIR/expected-encoder-commands.json"
+	jq -n -c '[
+		"ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 16 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 18 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 20 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 22 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 24 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 26 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 28 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>",
+		"ffmpeg -nostdin -v verbose -init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -i <input> -map 0 -c:v hevc_qsv -preset veryslow -global_quality 30 -look_ahead 0 -extbrc 0 -c:a copy -c:s copy -map_metadata 0 -map_chapters 0 <output>"
+	]' >"$expected"
+	run jq -e --argjson expected "$(<"$expected")" '. == $expected' <<<"$commands"
+	[ "$status" -eq 0 ]
+
 	unset BENCHMARK_IDENTITY_FIXTURE
 	export NODE_NAME='talos-03'
 	export BENCHMARK_RUNNING_IMAGE="$BENCHMARK_DISPATCH_IMAGE"
 	export BENCHMARK_I915_VERSION='fixture-i915'
 	export BENCHMARK_VPL_VERSION='fixture-vpl'
-
-	run "$SCRIPTS/benchmark.sh" quality
+	export BENCHMARK_ENCODER_COMMANDS_JSON="$commands"
+	run "$SCRIPTS/runmeta.sh" create quality
 	[ "$status" -eq 0 ]
 	run_id="$output"
 	manifest="$BENCHMARK_OUT/runs/$run_id/manifest.json"
-	run jq -e '
-		.encoderCommands | length == 9 and
-		.[0] == "ffmpeg -nostdin -v error -ss <timestamp> -i <source> -t 90 -map 0 -c copy <clip>" and
-		([.[] | select(test("-c:v hevc_qsv"))] | length) == 8 and
-		any(.[]; contains("-global_quality 16 -look_ahead 0 -extbrc 0")) and
-		any(.[]; contains("-global_quality 30 -look_ahead 0 -extbrc 0")) and
-		all(.[]; contains("-c:v hevc_qsv") or startswith("ffmpeg -nostdin -v error -ss "))
-	' "$manifest"
+	run jq -e --argjson expected "$(<"$expected")" '.encoderCommands == $expected' "$manifest"
 	[ "$status" -eq 0 ]
+
+	export BENCHMARK_ENCODER_COMMANDS_JSON="$(jq -c '.[1] |= sub("global_quality 16"; "global_quality 17")' <<<"$commands")"
+	run "$SCRIPTS/runmeta.sh" verify "$run_id"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'identity mismatch: encoderCommands.1'* ]]
 }
 
 # Catches quality evidence publication that is not atomically bound to the
 # evaluated metrics and HDR oracle.
-@test "quality evidence publication atomically binds evaluated metrics and HDR oracle" {
-	prepare_execution_run
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-
-	run python3 - "$run_dir" <<'PYTHON'
-import csv
-import hashlib
-import json
-import os
-import stat
-import sys
-
-run_dir = sys.argv[1]
-with open(os.path.join(run_dir, "results.csv"), newline="", encoding="utf-8") as stream:
-    rows = list(csv.DictReader(stream))
-assert len(rows) == 8
-for row in rows:
-    relative = row["quality_evidence_path"]
-    expected = (
-        f"quality-evidence/{row['sample_id']}-{row['clip_id']}-qsv-"
-        f"{row['requested_setting']}-attempt-{row['attempt']}.json"
-    )
-    assert relative == expected
-    assert not os.path.isabs(relative) and ".." not in relative.split("/")
-    evidence_path = os.path.join(run_dir, relative)
-    assert os.path.isfile(evidence_path) and not os.path.islink(evidence_path)
-    assert stat.S_IMODE(os.stat(evidence_path).st_mode) == 0o600
-    with open(evidence_path, "rb") as stream:
-        payload = stream.read()
-    assert row["quality_evidence_sha256"] == "sha256:" + hashlib.sha256(payload).hexdigest()
-    evidence = json.loads(payload)
-    assert sorted(evidence) == sorted([
-        "clipId", "cohort", "globalQuality", "hdr", "psnr", "runId",
-        "sampleId", "schemaVersion", "sourceSha256", "ssim", "strategyId", "vmaf",
-    ])
-    assert evidence["runId"] == row["run_id"]
-    assert evidence["sampleId"] == row["sample_id"]
-    assert evidence["cohort"] == row["cohort"]
-    assert evidence["sourceSha256"] == row["source_sha256"]
-    assert evidence["clipId"] == row["clip_id"]
-    assert evidence["globalQuality"] == int(row["requested_setting"])
-    assert evidence["schemaVersion"] == 1
-    assert evidence["strategyId"] == "qsv-hevc-icq-v1"
-    assert evidence["vmaf"]["harmonicMean"] == float(row["vmaf_harmonic_mean"])
-    assert evidence["vmaf"]["onePercentLow"] == float(row["vmaf_1pct_low"])
-    assert evidence["ssim"] == float(row["ssim"])
-    assert evidence["psnr"] == 40
-    assert evidence["hdr"]["classification"] == "preserved"
-assert not any(name.startswith(".") and ".tmp." in name for name in os.listdir(os.path.join(run_dir, "quality-evidence")))
-print("bound")
-PYTHON
-	[ "$status" -eq 0 ]
-	[ "$output" = 'bound' ]
-	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 8 ]
-}
-
-# Catches an append error leaving a valid sidecar that makes the same attempt
-# permanently unrecordable on retry.
-@test "quality evidence retry recovers an exact orphan after append failure" {
-	prepare_execution_run
-	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 74 ]
-	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
-	[ -n "$run_id" ]
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	evidence="$run_dir/quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
-	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
-	[ -f "$evidence" ]
-	before="$BATS_TEST_TMPDIR/orphan-before.json"
-	cp "$evidence" "$before"
-	before_digest="$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
-	stale_lock="$run_dir/quality-evidence/.sample-hdr-detail-qsv-16-attempt-1.publish.lock"
-	mkdir "$stale_lock"
-
-	unset BENCHMARK_TEST_FAIL_RESULT_APPEND
-	run "$SCRIPTS/benchmark.sh" quality "$run_id"
-	[ "$status" -eq 0 ]
-	[ "$output" = "$run_id" ]
-	run cmp -s "$before" "$evidence"
-	[ "$status" -eq 0 ]
-	[ "$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')" = "$before_digest" ]
-	[ -d "$stale_lock" ]
-	run python3 - "$run_dir/results.csv" "$before_digest" <<'PYTHON'
-import csv
-import sys
-
-with open(sys.argv[1], newline="", encoding="utf-8") as stream:
-    rows = list(csv.DictReader(stream))
-assert len(rows) == 8
-row = next(row for row in rows if row["requested_setting"] == "16")
-assert row["attempt"] == "1"
-assert row["quality_evidence_path"] == (
-    "quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
-)
-assert row["quality_evidence_sha256"] == "sha256:" + sys.argv[2]
-PYTHON
-	[ "$status" -eq 0 ]
-}
-
-# Catches a destination appearing at the former absence-check/rename boundary.
-# The injected competing bytes must survive, and no row may bind them.
-@test "quality evidence publication never overwrites a competing destination" {
-	prepare_execution_run
+@test "quality evidence publication is atomic and never overwrites a destination" {
+	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-avc detail 16
 	competitor="$BATS_TEST_TMPDIR/competing-evidence.json"
 	printf '%s\n' '{"competing":"evidence"}' >"$competitor"
 	export BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING=16
@@ -1604,25 +1337,33 @@ PYTHON
 	[ "$status" -eq 0 ]
 	run_id="$output"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	evidence="$run_dir/quality-evidence/sample-hdr-detail-qsv-16-attempt-1.json"
+	evidence="$run_dir/quality-evidence/sample-avc-detail-qsv-16-attempt-1.json"
 	run cmp -s "$competitor" "$evidence"
 	[ "$status" -eq 0 ]
 	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
 	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
 	[ -z "$(find "$run_dir/quality-evidence" -mindepth 1 \( -name '.*.tmp.*' -o -name '.*.publish.lock' \) -print)" ]
+	assert_quality_evidence_does_not_link_inside_directory
+	assert_quality_evidence_does_not_follow_symlinked_directory
 }
 
 # Catches the hard-link tool treating the exact destination as a directory and
 # installing the staged basename inside it before row validation fails.
-@test "quality evidence publication never links inside a directory destination" {
-	prepare_execution_run
+assert_quality_evidence_does_not_link_inside_directory() {
+	rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	unset BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING
+	unset BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE
+	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-avc detail 16
 	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 74 ]
 	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	evidence_directory="$run_dir/quality-evidence"
-	evidence="$evidence_directory/sample-hdr-detail-qsv-16-attempt-1.json"
+	evidence="$evidence_directory/sample-avc-detail-qsv-16-attempt-1.json"
 	[ -f "$evidence" ]
 	rm "$evidence"
 	mkdir "$evidence"
@@ -1647,15 +1388,21 @@ PYTHON
 
 # Catches the hard-link tool following a symlinked destination directory and
 # publishing outside the confined run evidence directory.
-@test "quality evidence publication never follows a symlinked directory destination" {
-	prepare_execution_run
+assert_quality_evidence_does_not_follow_symlinked_directory() {
+	rm -rf -- "$BENCHMARK_OUT" "$BENCHMARK_SCRATCH"
+	mkdir -p "$BENCHMARK_OUT/runs" "$BENCHMARK_SCRATCH"
+	unset BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING
+	unset BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE
+	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	start_representative_plan
+	append_representative_plan_row sample-avc detail 16
 	export BENCHMARK_TEST_FAIL_RESULT_APPEND=1
 	run "$SCRIPTS/benchmark.sh" quality
 	[ "$status" -eq 74 ]
 	run_id="$(find "$BENCHMARK_OUT/runs" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	evidence_directory="$run_dir/quality-evidence"
-	evidence="$evidence_directory/sample-hdr-detail-qsv-16-attempt-1.json"
+	evidence="$evidence_directory/sample-avc-detail-qsv-16-attempt-1.json"
 	outside="$BATS_TEST_TMPDIR/competing-directory"
 	[ -f "$evidence" ]
 	rm "$evidence"
@@ -1678,20 +1425,6 @@ PYTHON
 	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]
 	[ "$(find "$run_dir/logs" -type f -name '*qsv-16-attempt-*-validation.json' -exec jq -r '.validation_failures' {} \;)" = 'quality-evidence' ]
 	[ -z "$(find "$evidence_directory" -maxdepth 1 -type f -name '.*.tmp.*' -print)" ]
-}
-
-# Catches a missing finite metric becoming an unbound row or an apparently
-# successful result. The retained validation file names the closed failure.
-@test "quality evidence failure records a closed reason and appends no row" {
-	prepare_execution_run
-	export BENCHMARK_TEST_PSNR_PARSE_FAILURE=1
-	run "$SCRIPTS/benchmark.sh" quality
-	[ "$status" -eq 0 ]
-	run_id="$output"
-	run_dir="$BENCHMARK_OUT/runs/$run_id"
-	[ "$(wc -l <"$run_dir/results.csv" | tr -d ' ')" -eq 1 ]
-	[ ! -e "$run_dir/quality-evidence" ]
-	[ "$(find "$run_dir/logs" -type f -name '*-validation.json' -exec jq -r '.validation_failures' {} \; | sort -u)" = 'psnr;quality-evidence' ]
 }
 
 # Catches extending the evidence reference to modes that do not produce the

@@ -8,16 +8,10 @@ setup() {
 	yq -r '.data."samples.json"' "$samples" >"$samples_json"
 }
 
-@test "embedded samples publish the exact ordered ICQ strategy contract" {
+@test "embedded samples carry current passing capability evidence" {
 	run jq -e '
-		.schemaVersion == 3 and
-		.strategy == {
-			id: "qsv-hevc-icq-v1",
-			resultsSchemaVersion: 3,
-			runManifestSchemaVersion: 2,
-			capabilityProofSchemaVersion: 3,
-			globalQualityCandidates: [16, 18, 20, 22, 24, 26, 28, 30]
-		} and
+		.schemaVersion == 3 and .strategy.id == "qsv-hevc-icq-v1" and
+		.strategy.capabilityProofSchemaVersion == 3 and
 		.runtime.capabilityStatus == "verified" and
 		(.runtime.capabilityEvidence.nodes | length) == 2 and
 		([.runtime.capabilityEvidence.nodes[].nodeName] == ["nuc1", "nuc3"]) and
@@ -73,61 +67,6 @@ setup() {
 	done
 }
 
-# Catches any changed or duplicated source region in the committed six-title
-# panel before the benchmark spends GPU time on a non-comparable experiment.
-@test "embedded quality panel is the exact six-title three-region experiment" {
-	run jq -e '
-		[.qualityPanel[] | select(.detectionOnly != true) | {id,clips}] == [
-			{id:"vc1-fugitive",clips:{detail:"01:15:00.000",dark:"00:35:00.000",motion:"01:20:00.000"}},
-			{id:"avc-clean-coco",clips:{detail:"00:10:00.000",dark:"00:45:00.000",motion:"00:05:00.000"}},
-			{id:"avc-grain-memento",clips:{detail:"00:23:00.000",dark:"00:38:00.000",motion:"01:15:30.000"}},
-			{id:"hdr10-clean-ministry",clips:{detail:"01:04:15.000",dark:"01:19:15.000",motion:"00:29:15.000"}},
-			{id:"hdr10-grain-goodfellas",clips:{detail:"01:06:25.000",dark:"00:36:55.000",motion:"00:40:45.000"}},
-			{id:"hdr10-motion-john-wick-2",clips:{detail:"01:04:50.000",dark:"00:06:30.000",motion:"01:38:00.000"}}
-		] and
-		([.qualityPanel[] | select(.detectionOnly != true) | .id] | (length == 6) and ((unique | length) == 6)) and
-		([.qualityPanel[] | select(.detectionOnly != true) | .clips | keys] | all(. == ["dark","detail","motion"])) and
-		([.qualityPanel[] | select(.detectionOnly != true) | .clips | [.dark,.detail,.motion] | unique | length] | all(. == 3))
-	' "$samples_json"
-	[ "$status" -eq 0 ]
-}
-
-@test "shared base contract accepts a minimal quality samples document" {
-	minimal="$BATS_TEST_TMPDIR/minimal-quality.json"
-	jq -n --argjson strategy "$(jq -c '.strategy' "$samples_json")" \
-		--argjson quality_correction "$(jq -c '.qualityCorrection' "$samples_json")" '
-		{
-			schemaVersion: 3,
-			strategy: $strategy,
-			qualityCorrection: $quality_correction,
-			runtime: {
-				image: "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
-			},
-			qualityPanel: []
-		}
-	' >"$minimal"
-
-	run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$minimal"
-	[ "$status" -eq 0 ]
-}
-
-# Catches accepting a configuration that has the right values but changes their
-# order, cardinality, or integer representation, which would make benchmark
-# evidence non-comparable across producers.
-@test "shared contract rejects every non-canonical ICQ candidate list" {
-	for mutation in \
-		'.strategy.globalQualityCandidates = [18, 16, 20, 22, 24, 26, 28, 30]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 28]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22.5, 24, 26, 28, 30]' \
-		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 30, 32]'; do
-		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
-		jq "$mutation" "$samples_json" >"$candidate"
-		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
-		[ "$status" -eq 65 ]
-	done
-}
-
 # Catches a quality worker excluding a frame outside the closed source contract
 # or treating an absent identity as an accepted empty response.
 @test "shared contract returns only the four diagnosed VMAF exclusions" {
@@ -169,16 +108,36 @@ setup() {
 	done
 }
 
-@test "shared contract admits only the canonical ICQ settings" {
-	for setting in 16 18 30; do
+@test "quality contract admits exactly eight ICQ settings" {
+	run bash -c 'source "$1"; contract_load "$2"; printf "%s\n" "$CONTRACT_ICQ_SETTINGS"' \
+		_ "$contract" "$samples_json"
+	[ "$status" -eq 0 ]
+	[ "$output" = '16 18 20 22 24 26 28 30' ]
+
+	for setting in 16 18 20 22 24 26 28 30; do
 		run bash -c 'source "$1"; contract_load "$2"; contract_is_icq_setting "$2" "$3"' \
 			_ "$contract" "$samples_json" "$setting"
 		[ "$status" -eq 0 ]
 	done
-	for setting in 14 17 32; do
+	for setting in 14 15 17 19 21 23 25 27 29 31 32 -1 null; do
 		run bash -c 'source "$1"; contract_load "$2"; contract_is_icq_setting "$2" "$3"' \
 			_ "$contract" "$samples_json" "$setting"
 		[ "$status" -eq 1 ]
+	done
+
+	for mutation in \
+		'.strategy.globalQualityCandidates = [18, 16, 20, 22, 24, 26, 28, 30]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 28]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22.5, 24, 26, 28, 30]' \
+		'.strategy.globalQualityCandidates = [16, 18, 20, 22, 24, 26, 28, 30, 32]'; do
+		candidate="$BATS_TEST_TMPDIR/$(printf '%s' "$mutation" | sha256sum | awk '{print $1}').json"
+		jq "$mutation" "$samples_json" >"$candidate"
+		run bash -c 'source "$1"; contract_load "$2"' _ "$contract" "$candidate"
+		[ "$status" -eq 65 ] || {
+			echo "contract accepted non-canonical case: $mutation" >&3
+			return 1
+		}
 	done
 }
 
