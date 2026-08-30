@@ -286,12 +286,16 @@ EOF
 	evidence="$BENCHMARK_OUT/runs/$run_id/quality-evidence/sample-avc-detail-qsv-22-attempt-1.json"
 	baseline_evidence="$BATS_TEST_TMPDIR/resume-evidence.json"
 	cp "$evidence" "$baseline_evidence"
-	for mutation in failed compact historical diagnostic malformed drifted; do
+	for mutation in failed compact historical diagnostic malformed drifted rate-la-icq rate-cqp \
+		rate-non-icq strategy qsv-proof initialization zero-video nonnumeric-video invalid-setting; do
 		cp "$baseline_evidence" "$evidence"
+		results_header >"$results"
+		printf '%s\n' "$canonical" >>"$results"
+		completed_key='quality|abc123|detail|qsv|22'
 		case "$mutation" in
 		failed)
-			results_header >"$results"
-			printf '%s\n' "${canonical/,passed,1,/,failed,1,}" >>"$results"
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$10="failed"} {print}' "$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
 			expected_status=1
 			;;
 		compact)
@@ -304,8 +308,8 @@ EOF
 			expected_status=65
 			;;
 		diagnostic)
-			results_header >"$results"
-			printf '%s\n' "${canonical/,quality,sample-avc,/,diagnostic,sample-avc,}" >>"$results"
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$2="diagnostic"} {print}' "$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
 			expected_status=65
 			;;
 		malformed)
@@ -314,13 +318,53 @@ EOF
 			expected_status=65
 			;;
 		drifted)
-			results_header >"$results"
-			printf '%s\n' "$canonical" >>"$results"
 			printf '%s\n' 'changed' >>"$evidence"
 			expected_status=65
 			;;
+		rate-la-icq | rate-cqp | rate-non-icq)
+			case "$mutation" in
+			rate-la-icq) value='LA-ICQ' ;;
+			rate-cqp) value='CQP' ;;
+			rate-non-icq) value='VBR' ;;
+			esac
+			awk -F, -v value="$value" 'BEGIN {OFS=FS} NR == 2 {$9=value} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			expected_status=65
+			;;
+		strategy)
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$37="other-strategy"} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			expected_status=65
+			;;
+		qsv-proof)
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$24="failed"} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			expected_status=65
+			;;
+		initialization)
+			awk -F, 'BEGIN {OFS=FS} NR == 2 {$38="failed"} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			expected_status=65
+			;;
+		zero-video | nonnumeric-video)
+			[[ "$mutation" == zero-video ]] && value=0 || value=unavailable
+			awk -F, -v value="$value" 'BEGIN {OFS=FS} NR == 2 {$39=value} {print}' \
+				"$results" >"$results.tmp"
+			mv -f -- "$results.tmp" "$results"
+			expected_status=65
+			;;
+		invalid-setting)
+			results_header >"$results"
+			quality_evidence_row_v3 "$run_id" 17 >>"$results"
+			completed_key='quality|abc123|detail|qsv|17'
+			expected_status=65
+			;;
 		esac
-		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
+		run "$SCRIPTS/runmeta.sh" completed "$run_id" "$completed_key"
 		[ "$status" -eq "$expected_status" ] || {
 			echo "resume mutation $mutation returned status=$status output=$output" >&3
 			return 1
@@ -340,16 +384,31 @@ EOF
 	baseline_evidence="$BATS_TEST_TMPDIR/quality-evidence.json"
 	cp "$results" "$baseline_results"
 	cp "$evidence" "$baseline_evidence"
+	literal_path='quality-evidence/sample-avc-detail-qsv-22-attempt-1.json'
+	literal_digest="sha256:$(sha256sum "$baseline_evidence" | awk 'NR == 1 { print $1 }')"
+	[ "$(awk -F, 'NR == 2 {print $40}' "$results")" = "$literal_path" ]
+	[ "$(awk -F, 'NR == 2 {print $41}' "$results")" = "$literal_digest" ]
 
 	run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 	[ "$status" -eq 0 ]
+	run "$SCRIPTS/benchmark.sh" _test quality-evidence-for-ranking \
+		"$BENCHMARK_OUT/runs/$run_id" "$run_id" sample-avc avc abc123 detail 22 1 \
+		"$literal_path" "$literal_digest"
+	[ "$status" -eq 0 ]
+	run jq -e '.quality == {vmafHarmonicMean:95,vmafOnePercentLow:90,ssim:0.99,
+		psnr:40,hdrClassification:null} and (.identity | type == "string" and length > 0)' <<<"$output"
+	[ "$status" -eq 0 ]
 
-	for mutation in missing symlink escaping mutated wrong-row wrong-schema; do
+	for mutation in missing replaced symlink escaping digest-drifted wrong-row wrong-schema; do
 		cp "$baseline_results" "$results"
 		rm -f -- "$evidence"
 		cp "$baseline_evidence" "$evidence"
 		case "$mutation" in
 		missing) rm -f -- "$evidence" ;;
+		replaced)
+			rm -f -- "$evidence"
+			jq -S -c '.psnr = 41' "$baseline_evidence" >"$evidence"
+			;;
 		symlink)
 			outside="$BATS_TEST_TMPDIR/outside-quality-evidence.json"
 			cp "$baseline_evidence" "$outside"
@@ -361,7 +420,7 @@ EOF
 				"$results" >"$results.tmp"
 			mv -f -- "$results.tmp" "$results"
 			;;
-		mutated) printf '%s\n' 'changed' >>"$evidence" ;;
+		digest-drifted) printf '%s\n' 'changed' >>"$evidence" ;;
 		wrong-row)
 			jq -S -c '.sampleId = "other-sample"' "$baseline_evidence" >"$evidence"
 			digest="sha256:$(sha256sum "$evidence" | awk 'NR == 1 { print $1 }')"
@@ -380,6 +439,15 @@ EOF
 		run "$SCRIPTS/runmeta.sh" completed "$run_id" 'quality|abc123|detail|qsv|22'
 		[ "$status" -eq 65 ] || {
 			echo "resume accepted $mutation quality evidence: status=$status output=$output" >&3
+			return 1
+		}
+		ranking_path="$(awk -F, 'NR == 2 {print $40}' "$results")"
+		ranking_digest="$(awk -F, 'NR == 2 {print $41}' "$results")"
+		run "$SCRIPTS/benchmark.sh" _test quality-evidence-for-ranking \
+			"$BENCHMARK_OUT/runs/$run_id" "$run_id" sample-avc avc abc123 detail 22 1 \
+			"$ranking_path" "$ranking_digest"
+		[ "$status" -eq 65 ] || {
+			echo "ranking accepted $mutation quality evidence: status=$status output=$output" >&3
 			return 1
 		}
 	done

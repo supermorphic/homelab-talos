@@ -528,6 +528,8 @@ completed_row() {
 				invalid("invalid results CSV: row " record_no " has an invalid ICQ setting")
 			if (field[9] != "ICQ")
 				invalid("invalid results CSV: row " record_no " has an invalid QSV rate control")
+			if (field[24] != "passed")
+				invalid("invalid results CSV: row " record_no " has an invalid QSV proof")
 			if (field[38] != "passed")
 				invalid("invalid results CSV: row " record_no " has an invalid QSV initialization")
 			if (field[39] !~ /^[0-9]+$/ || field[39] + 0 <= 0)

@@ -33,6 +33,19 @@ snapshot_tree_state() {
 	) >"$snapshot"
 }
 
+snapshot_regular_file_state() {
+	local path="$1" snapshot="$2"
+	python3 - "$path" <<'PYTHON' >"$snapshot"
+import os
+import stat
+import sys
+
+value = os.stat(sys.argv[1], follow_symlinks=False)
+print(f"{value.st_dev}:{value.st_ino}:{stat.S_IMODE(value.st_mode):o}:{value.st_size}")
+PYTHON
+	sha256sum "$path" | awk 'NR == 1 { print $1 }' >>"$snapshot"
+}
+
 bind_quality_fixture_evidence() {
 	local run_id="$1" fixture="$2" attempt="$3" output_fixture="$4"
 	local sample_id cohort source_sha clip setting strategy vmaf_harmonic vmaf_low ssim
@@ -215,6 +228,13 @@ PYTHON
 		)
 	' <<<"$plan"
 	[ "$status" -eq 0 ]
+	[ "$(jq -r -s '[.[] | select(.sampleId == "dolby-vision-sisu")] | length' <<<"$plan")" -eq 0 ]
+
+	run_directory="$BENCHMARK_OUT/runs/20260815T120000Z-d0000001"
+	mkdir -p "$run_directory"
+	run "$SCRIPTS/benchmark.sh" _test record-quality-skips "$run_directory"
+	[ "$status" -eq 0 ]
+	[ "$(<"$run_directory/skips.csv")" = 'dolby-vision-sisu,dolby-vision,detection-only' ]
 }
 
 create_capability_tools() {
@@ -599,6 +619,16 @@ prepare_representative_run() {
 	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
 }
 
+append_representative_dv_skip() {
+	jq --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '
+		.qualityPanel += [{
+			id:"dolby-vision-sisu",cohort:"dolby-vision",detectionOnly:true,
+			path:$path,sizeBytes:$size,sha256:$sha,clips:{}
+		}]
+	' "$BENCHMARK_SAMPLES_FILE" >"$BENCHMARK_SAMPLES_FILE.tmp"
+	mv -f -- "$BENCHMARK_SAMPLES_FILE.tmp" "$BENCHMARK_SAMPLES_FILE"
+}
+
 start_representative_plan() {
 	export BENCHMARK_TEST_QUALITY_PLAN_FILE="$BATS_TEST_TMPDIR/quality-plan.jsonl"
 	: >"$BENCHMARK_TEST_QUALITY_PLAN_FILE"
@@ -864,6 +894,7 @@ append_representative_plan_row() {
 
 @test "representative AVC ICQ 16 row publishes valid evidence and ranks" {
 	prepare_representative_run sample-avc avc "$FIXTURES/media/avc-8bit.mkv"
+	append_representative_dv_skip
 	start_representative_plan
 	append_representative_plan_row sample-avc detail 16
 
@@ -899,6 +930,8 @@ append_representative_plan_row() {
 	[ "$(rg -c -- 'sample-avc-detail-qsv-16-attempt-1-vmaf.json' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
 	[ "$(rg -c -- '\[0:v\]\[1:v\]ssim' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
 	[ "$(rg -c -- '\[0:v\]\[1:v\]psnr' "$BENCHMARK_COMMAND_LOG")" -eq 1 ]
+	[ "$(<"$run_dir/skips.csv")" = 'dolby-vision-sisu,dolby-vision,detection-only' ]
+	! rg -Fq 'dolby-vision-sisu' "$BENCHMARK_COMMAND_LOG"
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
@@ -1235,7 +1268,12 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 
 	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
 	[ "$status" -eq 0 ]
-	run jq -e '
+	results_digest="sha256:$(sha256sum "$results" | awk 'NR == 1 { print $1 }')"
+	run jq -e --arg run "$run_id" --arg digest "$results_digest" '
+		keys == ["cohorts","qualityRunId","resultsSchemaVersion","resultsSha256","schemaVersion","strategyId"] and
+		.schemaVersion == 2 and .strategyId == "qsv-hevc-icq-v1" and
+		.qualityRunId == $run and .resultsSchemaVersion == 3 and .resultsSha256 == $digest and
+		(.cohorts | keys == ["avc","hdr10","vc1"]) and
 		.cohorts.avc == {status:"eligible",expectedClipCount:1,
 			candidates:[{globalQuality:16,medianReductionPercent:25}]} and
 		.cohorts.hdr10 == {status:"no-go",expectedClipCount:1,candidates:[],reason:"no-objective-candidate"} and
@@ -1330,6 +1368,10 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	append_representative_plan_row sample-avc detail 16
 	competitor="$BATS_TEST_TMPDIR/competing-evidence.json"
 	printf '%s\n' '{"competing":"evidence"}' >"$competitor"
+	chmod 0640 "$competitor"
+	competitor_before="$BATS_TEST_TMPDIR/competing-evidence-before.txt"
+	competitor_after="$BATS_TEST_TMPDIR/competing-evidence-after.txt"
+	snapshot_regular_file_state "$competitor" "$competitor_before"
 	export BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_SETTING=16
 	export BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE="$competitor"
 
@@ -1338,6 +1380,9 @@ frame= 2160 fps=72.0 speed=1.25x'; do
 	run_id="$output"
 	run_dir="$BENCHMARK_OUT/runs/$run_id"
 	evidence="$run_dir/quality-evidence/sample-avc-detail-qsv-16-attempt-1.json"
+	snapshot_regular_file_state "$evidence" "$competitor_after"
+	run cmp -s "$competitor_before" "$competitor_after"
+	[ "$status" -eq 0 ]
 	run cmp -s "$competitor" "$evidence"
 	[ "$status" -eq 0 ]
 	[ "$(awk -F, 'NR > 1 && $8 == 16 { count += 1 } END { print count + 0 }' "$run_dir/results.csv")" -eq 0 ]

@@ -154,6 +154,24 @@ quality_work_plan() {
 		}
 	' "$samples_file"
 }
+
+record_quality_skips() {
+	local run_directory="$1" skips
+	[[ "$run_directory" == "$benchmark_out/runs/"* && -d "$run_directory" && ! -L "$run_directory" ]] || return 65
+	skips="$(jq -r '
+		.qualityPanel[]? |
+		select((.detectionOnly // false) == true or .cohort == "dolby-vision") |
+		[.id,.cohort,"detection-only"] | join(",")
+	' "$samples_file")" || return 65
+	if [[ -n "$skips" ]]; then
+		printf '%s\n' "$skips" >"$run_directory/skips.csv"
+	fi
+}
+
+runtime_selection_is_icq() {
+	[[ "$1" == 'ICQ' ]]
+}
+
 vmaf_stats() {
 	local metrics="$1"
 	local -a scores
@@ -315,7 +333,7 @@ qsv_proof() {
 	if [[ "$selected" == 'unknown' ]]; then
 		reasons="${reasons:+$reasons;}rate-control"
 		[[ "$initialization" == 'passed' ]] && blocked=1
-	elif [[ "$selected" != 'ICQ' ]]; then
+	elif ! runtime_selection_is_icq "$selected"; then
 		reasons="${reasons:+$reasons;}rate-control"
 	fi
 	if [[ "$telemetry" != 'available' ]]; then
@@ -611,7 +629,7 @@ publish_quality_evidence() (
 		competitor="$BENCHMARK_TEST_QUALITY_EVIDENCE_COMPETITOR_FILE"
 		[[ -f "$competitor" && ! -L "$competitor" ]] || return 65
 		if [[ ! -e "$destination" && ! -L "$destination" ]]; then
-			cp -- "$competitor" "$destination" || return 65
+			ln -T -- "$competitor" "$destination" || return 65
 		fi
 	fi
 	# A hard link publishes the already complete same-filesystem inode only when
@@ -2010,6 +2028,7 @@ quality_mode() {
 	run_directory="$benchmark_out/runs/$run_id"
 	run_scratch="$scratch_root/$run_id"
 	mkdir -p "$run_directory/logs" "$run_scratch"
+	record_quality_skips "$run_directory" || return
 	while IFS= read -r row; do
 		fields="$(jq -e -r '
 			select(type == "object" and
@@ -2085,6 +2104,15 @@ test_dispatch() {
 		contract_load "$samples_file"
 		quality_work_plan
 		;;
+	record-quality-skips)
+		(($# == 1)) || usage
+		contract_load "$samples_file"
+		record_quality_skips "$1"
+		;;
+	runtime-selection-is-icq)
+		(($# == 1)) || usage
+		runtime_selection_is_icq "$1"
+		;;
 	encoder-commands)
 		(($# == 1)) || usage
 		contract_load "$samples_file"
@@ -2125,6 +2153,11 @@ test_dispatch() {
 	rank-quality-candidates)
 		(($# == 3)) || usage
 		rank_quality_candidates "$@"
+		;;
+	quality-evidence-for-ranking)
+		(($# == 10)) || usage
+		contract_load "$samples_file"
+		quality_evidence_for_ranking "$@"
 		;;
 	*) usage ;;
 	esac

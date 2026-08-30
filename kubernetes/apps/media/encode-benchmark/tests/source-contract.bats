@@ -3,9 +3,13 @@
 setup() {
 	app='kubernetes/apps/media/encode-benchmark/app'
 	contract="$app/scripts/contract.sh"
+	benchmark="$app/scripts/benchmark.sh"
+	fixtures='kubernetes/apps/media/encode-benchmark/tests/fixtures'
 	samples="$app/samples.yaml"
 	samples_json="$BATS_TEST_TMPDIR/samples.json"
 	yq -r '.data."samples.json"' "$samples" >"$samples_json"
+	export BENCHMARK_TEST_MODE=1
+	export BENCHMARK_SAMPLES_FILE="$samples_json"
 }
 
 @test "embedded samples carry current passing capability evidence" {
@@ -124,6 +128,21 @@ setup() {
 			_ "$contract" "$samples_json" "$setting"
 		[ "$status" -eq 1 ]
 	done
+
+	run "$benchmark" _test runtime-selection-is-icq ICQ
+	[ "$status" -eq 0 ]
+	for selection in LA-ICQ LA_ICQ CQP CBR VBR AVBR QVBR unknown; do
+		run "$benchmark" _test runtime-selection-is-icq "$selection"
+		[ "$status" -eq 1 ] || {
+			echo "runtime admitted non-ICQ selection: $selection" >&3
+			return 1
+		}
+	done
+	run "$benchmark" _test qsv-proof 0 \
+		"$fixtures/logs/qsv-requested-la-fallback-cqp.log" \
+		"$fixtures/logs/drm-fdinfo-active.log" 2160
+	[ "$status" -eq 0 ]
+	[ "$(jq -r '.selected_rate_control + ":" + .qsv_proof' <<<"$output")" = 'CQP:failed' ]
 
 	for mutation in \
 		'.strategy.globalQualityCandidates = [18, 16, 20, 22, 24, 26, 28, 30]' \
