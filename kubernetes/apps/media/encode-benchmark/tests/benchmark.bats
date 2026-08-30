@@ -676,6 +676,17 @@ printf 'sha256sum %s\n' "$*" >>"$BENCHMARK_COMMAND_LOG"
 if [[ -n "${BENCHMARK_TEST_SHA256_REPLACE_TARGET:-}" &&
 	-n "${BENCHMARK_TEST_SHA256_REPLACEMENT:-}" &&
 	-e "$BENCHMARK_TEST_SHA256_REPLACEMENT" ]]; then
+	if [[ -n "${BENCHMARK_TEST_SHA256_REPLACE_AFTER_CALLS:-}" ]]; then
+		calls=0
+		if [[ -f "$BENCHMARK_TEST_SHA256_REPLACE_COUNTER" ]]; then
+			IFS= read -r calls <"$BENCHMARK_TEST_SHA256_REPLACE_COUNTER"
+		fi
+		calls="$((calls + 1))"
+		printf '%s\n' "$calls" >"$BENCHMARK_TEST_SHA256_REPLACE_COUNTER"
+		if ((calls < BENCHMARK_TEST_SHA256_REPLACE_AFTER_CALLS)); then
+			exit 0
+		fi
+	fi
 	mv -f -- "$BENCHMARK_TEST_SHA256_REPLACEMENT" "$BENCHMARK_TEST_SHA256_REPLACE_TARGET"
 fi
 EOF
@@ -3406,7 +3417,9 @@ PYTHON
 
 	target="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
 	replacement="$BATS_TEST_TMPDIR/replacement-quality-evidence.json"
-	jq '.vmaf.harmonicMean = 1' "$target" >"$replacement"
+	# Keep the serialized file size unchanged so inode identity, not size drift,
+	# must detect the atomic replacement.
+	jq '.vmaf.harmonicMean = 94' "$target" >"$replacement"
 	chmod 0600 "$replacement"
 	export BENCHMARK_TEST_SHA256_REPLACE_TARGET="$target"
 	export BENCHMARK_TEST_SHA256_REPLACEMENT="$replacement"
@@ -3419,6 +3432,36 @@ PYTHON
 		(.cohorts.avc.candidates | map(.globalQuality)) == [24,18,26] and
 		.cohorts.avc.candidates[2] == {globalQuality:26, medianReductionPercent:10}
 	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+}
+
+# Catches treating an early row's final helper check as sufficient when a
+# later row can change that canonical evidence before candidate publication.
+@test "quality candidates revalidate every authenticated binding immediately before publication" {
+	prepare_execution_run
+	prepare_quality_panel_with_six_titles_three_clips
+	run_id='20260815T120000Z-acde0005'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	mkdir -p "$run_dir"
+	results="$run_dir/results.csv"
+	write_quality_ranking_results "$results" "$run_id"
+	artifact="$run_dir/quality-candidates.json"
+	printf '%s\n' '{"sentinel":"prior-candidates"}' >"$artifact"
+	cp "$artifact" "$BATS_TEST_TMPDIR/prior-delayed-race-candidates.json"
+
+	target="$run_dir/quality-evidence/quality-1-detail-qsv-16-attempt-1.json"
+	replacement="$BATS_TEST_TMPDIR/delayed-replacement-quality-evidence.json"
+	jq '.vmaf.harmonicMean = 94' "$target" >"$replacement"
+	chmod 0600 "$replacement"
+	export BENCHMARK_TEST_SHA256_REPLACE_TARGET="$target"
+	export BENCHMARK_TEST_SHA256_REPLACEMENT="$replacement"
+	export BENCHMARK_TEST_SHA256_REPLACE_AFTER_CALLS=3
+	export BENCHMARK_TEST_SHA256_REPLACE_COUNTER="$BATS_TEST_TMPDIR/sha256-replacement-calls"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates "$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -ne 0 ]
+	[ ! -e "$replacement" ]
+	run cmp -s "$BATS_TEST_TMPDIR/prior-delayed-race-candidates.json" "$artifact"
 	[ "$status" -eq 0 ]
 }
 

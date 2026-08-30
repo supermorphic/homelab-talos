@@ -3514,23 +3514,43 @@ append_comparison_once() {
 	mv -f -- "$staged" "$output"
 }
 
-quality_ranking_file_identity() {
-	local path="$1" identity
-	if identity="$(LC_ALL=C stat -Lc '%d:%i:%s' -- "$path" 2>/dev/null)"; then
-		[[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]] || return 65
-		printf 'gnu:%s\n' "$identity"
+quality_ranking_descriptor_identity() {
+	local path="$1" descriptor="$2" directory="$3"
+	local identity directory_device descriptor_identity path_device path_inode_size
+	[[ -f "$path" && ! -L "$path" && -f "$descriptor" ]] || return 65
+	if [[ "$path" -ef "$descriptor" ]]; then
+		if identity="$(LC_ALL=C stat -Lc '%d:%i:%s' -- "$path" 2>/dev/null)"; then
+			[[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+$ && "$path" -ef "$descriptor" ]] || return 65
+			printf 'gnu:%s\n' "$identity"
+			return
+		fi
+		identity="$(LC_ALL=C stat -f '%d:%i:%z' "$path" 2>/dev/null)" || return 65
+		[[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+$ && "$path" -ef "$descriptor" ]] || return 65
+		printf 'bsd:%s\n' "$identity"
 		return
 	fi
-	identity="$(LC_ALL=C stat -f '%i:%z' "$path" 2>/dev/null)" || return 65
-	[[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 65
-	printf 'bsd:%s\n' "$identity"
+
+	# macOS exposes an opened regular file through the synthetic /dev/fd
+	# filesystem, so Bash -ef sees a different device. Bind the inode namespace
+	# to the already-confined parent device, then compare descriptor inode/size.
+	[[ "$(uname -s)" == 'Darwin' ]] || return 65
+	identity="$(LC_ALL=C stat -f '%d:%i:%z' "$path" 2>/dev/null)" || return 65
+	directory_device="$(LC_ALL=C stat -f '%d' "$directory" 2>/dev/null)" || return 65
+	descriptor_identity="$(LC_ALL=C stat -f '%i:%z' "$descriptor" 2>/dev/null)" || return 65
+	[[ "$identity" =~ ^[0-9]+:[0-9]+:[0-9]+$ && "$directory_device" =~ ^[0-9]+$ &&
+		"$descriptor_identity" =~ ^[0-9]+:[0-9]+$ ]] || return 65
+	path_device="${identity%%:*}"
+	path_inode_size="${identity#*:}"
+	[[ "$path_device" == "$directory_device" && "$path_inode_size" == "$descriptor_identity" &&
+		-f "$path" && ! -L "$path" && -f "$descriptor" ]] || return 65
+	printf 'darwin:%s\n' "$identity"
 }
 
 quality_evidence_for_ranking() (
 	local run_directory="$1" run_id="$2" sample_id="$3" cohort="$4" source_sha="$5"
 	local clip_id="$6" setting="$7" attempt="$8" evidence_path="$9" evidence_digest="${10}"
 	local evidence_directory evidence_file expected_path actual_digest run_physical
-	local evidence_fd current_fd evidence_fd_path current_fd_path opened_identity path_identity
+	local evidence_fd current_fd evidence_fd_path current_fd_path opened_identity
 	local current_identity current_digest evidence_snapshot projection
 	expected_path="quality-evidence/$sample_id-$clip_id-qsv-$setting-attempt-$attempt.json"
 	[[ "$sample_id" =~ ^[a-z0-9][a-z0-9._-]*$ && "$clip_id" =~ ^[a-z0-9][a-z0-9._-]*$ &&
@@ -3548,10 +3568,9 @@ quality_evidence_for_ranking() (
 	# intact while the digest and parser consume one in-memory snapshot.
 	exec {evidence_fd}<"$evidence_file" || return 65
 	evidence_fd_path="/dev/fd/$evidence_fd"
-	[[ -f "$evidence_fd_path" && -f "$evidence_file" && ! -L "$evidence_file" ]] || return 65
-	opened_identity="$(quality_ranking_file_identity "$evidence_fd_path")" || return 65
-	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
-	[[ "$opened_identity" == "$path_identity" &&
+	opened_identity="$(quality_ranking_descriptor_identity \
+		"$evidence_file" "$evidence_fd_path" "$evidence_directory")" || return 65
+	[[ -f "$evidence_file" && ! -L "$evidence_file" &&
 		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
 	evidence_snapshot="$(base64 <&"$evidence_fd")" || return 65
 	actual_digest="sha256:$(printf '%s' "$evidence_snapshot" | base64 --decode |
@@ -3607,22 +3626,58 @@ quality_evidence_for_ranking() (
 		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
 	exec {current_fd}<"$evidence_file" || return 65
 	current_fd_path="/dev/fd/$current_fd"
-	[[ -f "$current_fd_path" ]] || return 65
-	current_identity="$(quality_ranking_file_identity "$current_fd_path")" || return 65
-	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
-	[[ "$current_identity" == "$opened_identity" && "$path_identity" == "$opened_identity" ]] || return 65
+	current_identity="$(quality_ranking_descriptor_identity \
+		"$evidence_file" "$current_fd_path" "$evidence_directory")" || return 65
+	[[ "$current_identity" == "$opened_identity" ]] || return 65
 	current_digest="sha256:$(sha256sum <&"$current_fd" | awk 'NR == 1 { print $1 }')"
-	path_identity="$(quality_ranking_file_identity "$evidence_file")" || return 65
-	[[ "$current_digest" == "$evidence_digest" && "$path_identity" == "$opened_identity" &&
+	current_identity="$(quality_ranking_descriptor_identity \
+		"$evidence_file" "$current_fd_path" "$evidence_directory")" || return 65
+	[[ "$current_digest" == "$evidence_digest" && "$current_identity" == "$opened_identity" &&
 		-f "$evidence_file" && ! -L "$evidence_file" &&
 		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
-	printf '%s\n' "$projection"
+	jq -n -c --arg identity "$opened_identity" --argjson quality "$projection" \
+		'{identity:$identity, quality:$quality}'
 )
+
+quality_ranking_binding_current() (
+	local run_directory="$1" evidence_path="$2" evidence_digest="$3" expected_identity="$4"
+	local run_physical evidence_directory evidence_file evidence_fd evidence_fd_path
+	local current_identity current_digest
+	[[ "$evidence_path" =~ ^quality-evidence/[a-z0-9][a-z0-9._-]*-[a-z0-9][a-z0-9._-]*-qsv-[0-9]+-attempt-[0-9]+\.json$ &&
+		"$evidence_digest" =~ ^sha256:[0-9a-f]{64}$ && -n "$expected_identity" ]] || return 65
+	run_physical="$(cd -P "$run_directory" && pwd)" || return 65
+	evidence_directory="$run_directory/quality-evidence"
+	[[ -d "$evidence_directory" && ! -L "$evidence_directory" &&
+		"$(cd -P "$evidence_directory" && pwd)" == "$run_physical/quality-evidence" ]] || return 65
+	evidence_file="$run_directory/$evidence_path"
+	[[ -f "$evidence_file" && ! -L "$evidence_file" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+	exec {evidence_fd}<"$evidence_file" || return 65
+	evidence_fd_path="/dev/fd/$evidence_fd"
+	current_identity="$(quality_ranking_descriptor_identity \
+		"$evidence_file" "$evidence_fd_path" "$evidence_directory")" || return 65
+	[[ "$current_identity" == "$expected_identity" ]] || return 65
+	current_digest="sha256:$(sha256sum <&"$evidence_fd" | awk 'NR == 1 { print $1 }')"
+	current_identity="$(quality_ranking_descriptor_identity \
+		"$evidence_file" "$evidence_fd_path" "$evidence_directory")" || return 65
+	[[ "$current_digest" == "$evidence_digest" && "$current_identity" == "$expected_identity" &&
+		"$(realpath "$evidence_file")" == "$run_physical/$evidence_path" ]] || return 65
+)
+
+quality_ranking_bindings_current() {
+	local run_directory="$1" bindings="$2" binding
+	while IFS= read -r binding; do
+		quality_ranking_binding_current "$run_directory" \
+			"$(jq -r '.path' <<<"$binding")" "$(jq -r '.digest' <<<"$binding")" \
+			"$(jq -r '.identity' <<<"$binding")" || return 65
+	done < <(jq -c '.[]' <<<"$bindings")
+}
 
 rank_quality_candidates() {
 	local results="$1" candidate_samples="$2" run_id="$3"
 	local run_directory artifact staged rows expected settings expected_keys digest candidates
-	local authenticated_rows='[]' row evidence diagnostic_status
+	local authenticated_rows='[]' authenticated_bindings='[]' row evidence binding diagnostic_status
+	local maximum_binding_count binding_groups group_key
 	if [[ ! -v CONTRACT_ICQ_SETTINGS ]]; then
 		contract_load "$candidate_samples" || return
 	fi
@@ -3678,6 +3733,18 @@ rank_quality_candidates() {
 		]
 	' "$candidate_samples")" || return 65
 	settings="$(jq -n -c --arg settings "$CONTRACT_ICQ_SETTINGS" '$settings | split(" ") | map(tonumber)')" || return
+	maximum_binding_count="$(jq -n --argjson expected "$expected" --argjson settings "$settings" \
+		'$expected | length * ($settings | length)')" || return 65
+	[[ "$maximum_binding_count" =~ ^[0-9]+$ ]] || return 65
+	binding_groups="$(jq -n -c \
+		--argjson rows "$rows" --argjson expected "$expected" --argjson settings "$settings" '
+		[ ["avc","vc1","hdr10"][] as $cohort | $settings[] as $setting |
+			($expected | map(select(.cohort == $cohort)) | length) as $expected_count |
+			select($expected_count > 0 and
+				([$rows[] | select(.cohort == $cohort and
+					.requested_setting == ($setting | tostring))] | length) == $expected_count) |
+			($cohort + "|" + ($setting | tostring)) ]
+	')" || return 65
 	expected_keys="$(jq -r '[.[] | [.cohort, .sample_id, .source_sha256, .clip_id] | join("|")] | join("\u001c")' <<<"$expected")"
 	awk -F, -v run_id="$run_id" -v settings="$CONTRACT_ICQ_SETTINGS" \
 		-v strategy="$CONTRACT_STRATEGY_ID" -v expected="$expected_keys" '
@@ -3708,13 +3775,23 @@ rank_quality_candidates() {
 			"$(jq -r '.requested_setting' <<<"$row")" "$(jq -r '.attempt' <<<"$row")" \
 			"$(jq -r '.quality_evidence_path' <<<"$row")" \
 			"$(jq -r '.quality_evidence_sha256' <<<"$row")" 2>/dev/null)"; then
-			row="$(jq -c --argjson evidence "$evidence" '. + {evidenceValid:true,quality:$evidence}' <<<"$row")" || return 65
+			row="$(jq -c --argjson evidence "$evidence" \
+				'. + {evidenceValid:true,quality:$evidence.quality,evidenceIdentity:$evidence.identity}' \
+				<<<"$row")" || return 65
+			group_key="$(jq -r '.cohort + "|" + .requested_setting' <<<"$row")" || return 65
+			if jq -e --arg key "$group_key" 'index($key) != null' <<<"$binding_groups" >/dev/null; then
+				binding="$(jq -c '{path:.quality_evidence_path,digest:.quality_evidence_sha256,
+					identity:.evidenceIdentity}' <<<"$row")" || return 65
+				authenticated_bindings="$(jq -c --argjson binding "$binding" \
+					'. + [$binding]' <<<"$authenticated_bindings")" || return 65
+			fi
 		else
 			row="$(jq -c '. + {evidenceValid:false}' <<<"$row")" || return 65
 		fi
 		authenticated_rows="$(jq -c --argjson row "$row" '. + [$row]' <<<"$authenticated_rows")" || return 65
 	done < <(jq -c '.[]' <<<"$rows")
 	rows="$authenticated_rows"
+	[[ "$(jq 'length' <<<"$authenticated_bindings")" -le "$maximum_binding_count" ]] || return 65
 	digest="$(sha256sum "$results" | awk '{print $1}')"
 	[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 65
 	candidates="$(jq -n -c \
@@ -3786,6 +3863,10 @@ rank_quality_candidates() {
 	')" || return 65
 	staged="$(mktemp "$run_directory/.quality-candidates.XXXXXX")" || return
 	if ! jq -e . <<<"$candidates" >"$staged"; then
+		rm -f -- "$staged"
+		return 65
+	fi
+	if ! quality_ranking_bindings_current "$run_directory" "$authenticated_bindings"; then
 		rm -f -- "$staged"
 		return 65
 	fi
