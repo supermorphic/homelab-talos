@@ -77,7 +77,8 @@ reset_tree() {
     .sops.encrypted_regex = "^(data|stringData)$" |
     .sops.version = "3.11.0"
   ' >"$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml"
-  yq -i '.resources += ["./n8n-canary.sops.yaml"]' \
+  yq -i '.resources = ([.resources[] |
+    select(. != "./n8n-canary.sops.yaml")] + ["./n8n-canary.sops.yaml"])' \
     "$tree_root/kubernetes/apps/monitoring/gatus/app/kustomization.yaml"
 }
 
