@@ -220,8 +220,7 @@ import sys
 from pathlib import Path
 
 document = Path(sys.argv[1]).read_text(encoding="utf-8")
-fenced_blocks = re.findall(r"```(bash|zsh)\n(.*?)\n```", document, re.DOTALL)
-blocks = [block for _, block in fenced_blocks]
+blocks = re.findall(r"```bash\n(.*?)\n```", document, re.DOTALL)
 if not blocks:
     raise SystemExit("The n8n operations guide has no executable shell command blocks.")
 for index, block in enumerate(blocks, start=1):
@@ -247,11 +246,6 @@ for index, block in enumerate(blocks, start=1):
                 raise SystemExit(
                     f"The n8n operations block {index} uses the incompatible read -p option."
                 )
-    if re.search(r"\bfor\s+path\s+in\b", block):
-        raise SystemExit(
-            f"The n8n operations block {index} overwrites zsh's special path array."
-        )
-
 section_match = re.search(
     r"## Off-network acceptance\n(.*?)(?=\n## )", document, re.DOTALL
 )

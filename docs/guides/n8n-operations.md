@@ -25,7 +25,7 @@ Use this guide according to the operation you need:
 The normal day-2 health check is read-only. Run it from a worktree with a current
 `.kube/config`:
 
-```zsh
+```bash
 mise exec -- just kube n8n-verify
 ```
 
@@ -76,7 +76,7 @@ a cleanup trap, or checks the age identity.
 
 Load the values without putting them in shell history:
 
-```zsh
+```bash
 (
   printf '%s' 'Stable N8N encryption key: ' >&2
   IFS= read -r -s N8N_ENCRYPTION_KEY
@@ -131,7 +131,7 @@ activation change.
 Keep `n8n-postgresql`, `n8n`, and `public-webhook-route` at `spec.suspend: true` in the
 Recovery material PR. Validate and review only ciphertext and non-secret structure:
 
-```zsh
+```bash
 mise exec -- just kube n8n-validate
 mise exec -- just repo validate
 git diff --check
@@ -178,7 +178,7 @@ invocation. If it fails or times out, the rollback trap prints only bounded Job 
 the last 80 backup-container log lines, removes and verifies absence of that exact Job,
 then re-suspends the private workloads in reverse order.
 
-```zsh
+```bash
 mise exec -- just talos kubeconfig
 N8N_BOOTSTRAP_CONFIRM='bootstrap:n8n' mise exec -- just bootstrap n8n
 ```
@@ -263,7 +263,7 @@ In the dedicated Public route + monitoring activation PR, copy the staged Gatus 
 values into the active values, change `public-webhook-route.spec.suspend` to `false`, and
 select the staged n8n rule:
 
-```zsh
+```bash
 mise exec -- yq -i '
   .env.GATUS_N8N_CANARY_TOKEN =
     load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").env.GATUS_N8N_CANARY_TOKEN |
@@ -307,7 +307,7 @@ green. Run the full read-only verifier. It requires the exact healthy 15-alert
 `n8n-platform` group, observes the Gatus series, and does not send a webhook request or
 require the canary token:
 
-```zsh
+```bash
 mise exec -- just kube n8n-verify
 ```
 
@@ -328,7 +328,7 @@ The verifier and smoke suite are read-only. The restore drill and persistence te
 temporary or run-owned cluster state, use the shared test Lease, and require their exact
 confirmations:
 
-```zsh
+```bash
 (
   mise exec -- just kube n8n-verify
   mise exec -- just test smoke platform n8n
@@ -384,7 +384,7 @@ Disconnect the test client from the LAN and private VPN. Load the token with a s
 prompt and use a permission-restricted curl configuration so the header value does not
 appear in process arguments:
 
-```zsh
+```bash
 (
   set -euo pipefail
   umask 077
@@ -430,7 +430,7 @@ appear in process arguments:
 The exact webhook without authentication must fail. The editor, API, metrics, test
 webhook, unrelated webhook, and root paths must also stay unavailable:
 
-```zsh
+```bash
 (
   case "$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --connect-timeout 10 --max-time 30 \
@@ -466,7 +466,7 @@ following mutating tests are operator-run, use the shared cluster test Lease, an
 their exact confirmations. Run them for the controlled assurance cases identified above,
 not as routine health checks:
 
-```zsh
+```bash
 (
   printf '%s' 'Platform Canary token: ' >&2
   IFS= read -r -s N8N_CANARY_TOKEN
@@ -510,7 +510,7 @@ unsuspended child reconcile with `prune: true`.
 
 After Flux observes the merged generation, prove the route is absent:
 
-```zsh
+```bash
 route_state="$(mise exec -- kubectl --kubeconfig .kube/config --namespace flux-system \
   get kustomization public-webhook-route --output json)"
 mise exec -- yq -e '
