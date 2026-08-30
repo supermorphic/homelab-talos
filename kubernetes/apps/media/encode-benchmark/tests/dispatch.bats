@@ -3,7 +3,6 @@
 setup() {
 	PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../../../../.." && pwd)"
 	DISPATCH="$PROJECT_ROOT/scripts/encode-benchmark/dispatch.sh"
-	PREFLIGHT="$PROJECT_ROOT/scripts/encode-benchmark/preflight.sh"
 	RESULTS="$PROJECT_ROOT/scripts/encode-benchmark/results.sh"
 	STUB_BIN="$BATS_TEST_TMPDIR/bin"
 	STUB_CAPTURE_DIR="$BATS_TEST_TMPDIR/captures"
@@ -351,7 +350,7 @@ case "${1:-} ${2:-}" in
 		exit
 		;;
 	'diff --name-only')
-		printf '%s\n' 'scripts/encode-benchmark/dispatch.sh'
+		printf '%s\n' "${STUB_GIT_DIFF_PATH:-scripts/encode-benchmark/dispatch.sh}"
 		exit 0
 		;;
 esac
@@ -377,6 +376,20 @@ assert_no_mutations() {
 	[ "$(mutation_count)" -eq 0 ]
 }
 
+reset_cluster_stub_state() {
+	rm -f -- "$STUB_CAPTURE_DIR"/*.yaml "$STUB_CAPTURE_DIR"/.count \
+		"$STUB_CAPTURE_DIR"/.job-render-count "$STUB_CAPTURE_DIR"/.pod-sequence-* \
+		"$STUB_CAPTURE_DIR"/unsafe-configmap-delete
+	: >"$STUB_CALLS"
+	unset STUB_API_SERVER STUB_COLLISION STUB_CONFIGMAP_CREATE_FAIL
+	unset STUB_CONFIGMAP_REPLACE_BEFORE_DELETE STUB_HANDOFF_BAD_OWNER
+	unset STUB_HANDOFF_EXTRA_OWNER STUB_HANDOFF_IMAGE_ID STUB_HANDOFF_IMAGE_MISSING
+	unset STUB_HANDOFF_LOG_READY STUB_HANDOFF_POD_COUNT STUB_HANDOFF_POD_SEQUENCE
+	unset STUB_JOB_CREATE_FAIL STUB_JOB_CREATE_FAIL_AT STUB_JOB_CREATE_RESPONSE_METADATA_BAD
+	unset STUB_JOB_RENDER_FAIL_AT STUB_JOB_REPLACEMENT STUB_PERSISTED_EXTRA_OWNER
+	unset STUB_PERSISTED_OWNER_BAD
+}
+
 write_results_fixtures() {
 	local run_id="$1" image_id="$2"
 	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/jobs.json"
@@ -392,21 +405,43 @@ write_results_fixtures() {
 	printf '%s\n' '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"encode-benchmark-image-fixture","ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"encode-benchmark-capabilities-fixture","uid":"fixture-job-uid","controller":true,"blockOwnerDeletion":true}]},"data":{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}' >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
 }
 
-write_multi_node_results_fixtures() {
-	local run_id="$1" image_id="$2" lower_run="${1,,}" node
-	STUB_JOBS_JSON="$BATS_TEST_TMPDIR/jobs-multi.json"
-	STUB_PODS_JSON="$BATS_TEST_TMPDIR/pods-multi.json"
-	STUB_LOGS_DIR="$BATS_TEST_TMPDIR/logs-multi"
-	STUB_IMAGE_EVIDENCE_DIR="$BATS_TEST_TMPDIR/image-evidence-multi"
-	export STUB_JOBS_JSON STUB_PODS_JSON STUB_LOGS_DIR STUB_IMAGE_EVIDENCE_DIR
-	unset STUB_LOGS_FILE
-	mkdir -p "$STUB_LOGS_DIR" "$STUB_IMAGE_EVIDENCE_DIR"
-	jq -n --arg run "$run_id" --arg lower "$lower_run" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({metadata:{name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),labels:{"app.kubernetes.io/name":"encode-benchmark","homelab-talos/benchmark-run":$run,"homelab-talos/benchmark-mode":"capabilities"},annotations:{"homelab-talos/image-evidence-configmap":("encode-benchmark-image-" + .)}},spec:{template:{spec:{nodeSelector:{"kubernetes.io/hostname":.},containers:[{name:"benchmark",image:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}}},status:{conditions:[{type:"Complete",status:"True"}],succeeded:1,failed:0,startTime:"2026-08-14T18:00:00Z",completionTime:"2026-08-14T18:01:00Z"}})}' >"$STUB_JOBS_JSON"
-	jq -n --arg lower "$lower_run" --arg image "$image_id" '{apiVersion:"v1",items:["nuc1","nuc3"] | map({metadata:{name:("capability-pod-" + .),labels:{"job-name":("encode-benchmark-capabilities-" + $lower + "-node-" + .)},ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + $lower + "-node-" + .),uid:("uid-" + .),controller:true,blockOwnerDeletion:true}]},spec:{nodeName:.},status:{phase:"Succeeded",containerStatuses:[{name:"benchmark",imageID:$image}]}})}' >"$STUB_PODS_JSON"
-	for node in nuc1 nuc3; do
-		printf '%s\n' "{\"status\":\"passed\",\"strategyId\":\"qsv-hevc-icq-v1\",\"proofSchemaVersion\":3,\"initialization\":\"passed\",\"initializationReason\":\"\",\"renderNode\":\"/dev/dri/renderD128\",\"drmDriver\":\"i915\",\"selectedRateControl\":\"ICQ\",\"telemetryStatus\":\"available\",\"telemetryReason\":\"\",\"videoBusyNanoseconds\":800000000,\"videoBusyPercent\":40,\"encodeFps\":72,\"encodeSpeed\":1.25,\"decode\":\"passed\",\"vmaf\":\"passed\",\"diagnosticCapabilities\":{\"traceHeaders\":\"passed\",\"libvmaf\":\"passed\",\"ssim\":\"passed\",\"psnr\":\"passed\",\"bestEffortTimestampTime\":\"passed\",\"packetDurationTime\":\"passed\",\"keyFrame\":\"passed\",\"pictType\":\"passed\"},\"proofStatus\":\"passed\",\"proofReasons\":\"\",\"uid\":568,\"hevcQsv\":true,\"libx265\":true,\"nodeName\":\"$node\",\"configuredImageDigest\":\"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"sourcePath\":\"/media/Secret Movie.mkv\"}" >"$STUB_LOGS_DIR/encode-benchmark-capabilities-$lower_run-node-$node.log"
-		jq -n --arg node "$node" --arg run "$run_id" '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:("encode-benchmark-image-" + $node),ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:("encode-benchmark-capabilities-" + ($run|ascii_downcase) + "-node-" + $node),uid:("uid-" + $node),controller:true,blockOwnerDeletion:true}]},data:{"image.json":"{\"configuredImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"dispatchedImage\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\",\"imageId\":\"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb\"}"}}' >"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-$node.json"
-	done
+write_quality_results_fixtures() {
+	local dispatch_id="$1" runtime_run_id="$2" image_id="$3"
+	write_results_fixtures "$dispatch_id" "$image_id"
+	jq --arg dispatch "$dispatch_id" '
+		.items[0].metadata.name = "encode-benchmark-quality-literal" |
+		.items[0].metadata.uid = "quality-job-uid-09" |
+		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
+		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch |
+		.items[0].spec.template.spec.containers[0].env = [{
+			name:"BENCHMARK_DISPATCH_CORRELATION_ID",value:$dispatch
+		}]' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+	jq '
+		.items[0].metadata.name = "encode-benchmark-quality-literal-pod" |
+		.items[0].metadata.labels."job-name" = "encode-benchmark-quality-literal" |
+		.items[0].metadata.ownerReferences = [{apiVersion:"batch/v1",kind:"Job",
+			name:"encode-benchmark-quality-literal",uid:"quality-job-uid-09",
+			controller:true,blockOwnerDeletion:true}]' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	jq '
+		.metadata.ownerReferences = [{apiVersion:"batch/v1",kind:"Job",
+			name:"encode-benchmark-quality-literal",uid:"quality-job-uid-09",
+			controller:true,blockOwnerDeletion:true}]' \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" \
+		>"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" \
+		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
+		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",status:"complete",
+		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime),
+		cohorts:{
+			avc:{status:"eligible",candidates:[{globalQuality:16,medianReductionPercent:35}]},
+			vc1:{status:"no-verdict",candidates:[]},
+			hdr10:{status:"no-go",candidates:[]}
+		}
+	}' >"$STUB_LOGS_FILE"
 }
 
 run_dispatch() {
@@ -441,40 +476,12 @@ configmap_capture() {
 	find "$STUB_CAPTURE_DIR" -maxdepth 1 -type f -name 'ConfigMap-*.yaml' -print | sort | tail -n 1
 }
 
-assert_hardened_job() {
-	local job="$1" dispatch_id
-	dispatch_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-dispatch" // ""' "$job")"
-	[[ "$dispatch_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]]
-	[ "$(yq -r '.spec.template.metadata.labels."homelab-talos/benchmark-dispatch" // ""' "$job")" = "$dispatch_id" ]
-	[ "$(yq -r '.spec.template.spec.automountServiceAccountToken' "$job")" = 'false' ]
-}
-
 prepare_evidence_source() {
 	evidence_app="$BATS_TEST_TMPDIR/evidence-app"
 	if [[ ! -d "$evidence_app" ]]; then
 		cp -R "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app" "$evidence_app"
 	fi
 	export ENCODE_BENCHMARK_APP_DIR="$evidence_app"
-}
-
-write_deployed_samples_configmap() {
-	local samples_json="$1"
-	DEPLOYED_SAMPLES_JSON="$samples_json" yq -n '
-		.apiVersion = "v1" |
-		.kind = "ConfigMap" |
-		.metadata.name = "encode-benchmark-samples" |
-		.metadata.namespace = "media" |
-		.data."samples.json" = load_str(strenv(DEPLOYED_SAMPLES_JSON))
-	' >"$STUB_CAPTURE_DIR/ConfigMap-encode-benchmark-samples.yaml"
-}
-
-assert_call_precedes_first_create() {
-	local pattern="$1"
-	awk -F '\t' -v pattern="$pattern" '
-		$1 == "kubectl" && $2 ~ /(^| )create( |$)/ && first_create == 0 { first_create = NR }
-		$1 == "kubectl" && $2 ~ pattern && first_match == 0 { first_match = NR }
-		END { exit !(first_match > 0 && (first_create == 0 || first_match < first_create)) }
-	' "$STUB_CALLS"
 }
 
 set_capability_evidence() {
@@ -493,306 +500,91 @@ valid_capability_evidence() {
 	printf '%s\n' '{"nodes":[{"nodeName":"nuc1","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3,"initialization":"passed","initializationReason":"","renderNode":"/dev/dri/renderD128","drmDriver":"i915","selectedRateControl":"ICQ","telemetryStatus":"available","telemetryReason":"","videoBusyNanoseconds":800000000,"videoBusyPercent":40,"encodeFps":72,"encodeSpeed":1.25,"decode":"passed","vmaf":"passed","diagnosticCapabilities":{"imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","verifiedAt":"2026-08-14T18:00:00Z","traceHeaders":"passed","libvmaf":"passed","ssim":"passed","psnr":"passed","bestEffortTimestampTime":"passed","packetDurationTime":"passed","keyFrame":"passed","pictType":"passed"},"proofStatus":"passed","proofReasons":"","verifiedAt":"2026-08-14T18:00:00Z","configuredImageDigest":"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb","imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"}]}'
 }
 
-two_passing_capability_nodes() {
-	jq -c '.nodes += [(.nodes[0] | .nodeName = "nuc3")]' <<<"$(valid_capability_evidence)"
-}
-
-@test "capabilities requires the exact confirmation before creating a Job" {
-	assert_guard_refuses ENCODE_BENCHMARK_CAPABILITIES_CONFIRM wrong:capabilities capabilities
-
+# D01: A near-match confirmation must never reach either Job-creation path.
+@test "capability and quality dispatch require exact mode-bound confirmations" {
+	assert_guard_refuses ENCODE_BENCHMARK_CAPABILITIES_CONFIRM \
+		'run:encode-benchmark:capability' capabilities
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	run_dispatch capabilities
 	[ "$status" -eq 0 ]
 	[ "$(mutation_count)" -eq 4 ]
-}
 
-# Catches capability dispatch proving only a scheduler-selected node instead of
-# every currently eligible non-Plex node with a free i915 slot.
-@test "capability dispatch creates one deterministic targeted Job per eligible node" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	run_dispatch capabilities
-	[ "$status" -eq 0 ]
-	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' | wc -l | tr -d ' ')" -eq 2 ]
-
-	for node in nuc1 nuc3; do
-		job="$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name "Job-*-node-$node.yaml" -print)"
-		[ -n "$job" ]
-		[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "$job")" = "$node" ]
-		name="$(yq -r '.metadata.name' "$job")"
-		[ "${#name}" -le 63 ]
-		[[ "$name" =~ ^encode-benchmark-cap-20260802t120000z-[0-9a-f]{8}-node-$node$ ]]
-	done
-	[[ "$output" == *'nodes=nuc1 nuc3'* ]]
-}
-
-# Catches truncation that either exceeds the Job controller label limit or maps
-# two long node names with the same prefix to one capability Job name.
-@test "capability dispatch bounds and disambiguates long node Job names" {
-	label="$(printf 'a%.0s' {1..59})"
-	tail="$(printf 'b%.0s' {1..53})"
-	first_node="$label.$label.$label.${tail}alpha"
-	second_node="$label.$label.$label.${tail}bravo"
-	jq -n --arg first "$first_node" --arg second "$second_node" '{items:[$first,$second] | map({metadata:{name:.},status:{allocatable:{"gpu.intel.com/i915":"1"}}})}' \
-		>"$STUB_NODES_JSON"
-	printf '%s\n' '{"items":[]}' >"$STUB_PODS_JSON"
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	run_dispatch capabilities
-	[ "$status" -eq 0 ]
-	mapfile -t jobs < <(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'Job-*.yaml' -print | sort)
-	[ "${#jobs[@]}" -eq 2 ]
-
-	first_name="$(yq -r '.metadata.name' "${jobs[0]}")"
-	second_name="$(yq -r '.metadata.name' "${jobs[1]}")"
-	[ "${#first_name}" -le 63 ]
-	[ "${#second_name}" -le 63 ]
-	[ "$first_name" != "$second_name" ]
-	[ "$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[0]}")" != \
-		"$(yq -r '.spec.template.spec.nodeSelector."kubernetes.io/hostname"' "${jobs[1]}")" ]
-}
-
-# Catches creating an earlier node Job before every later node manifest has
-# rendered successfully, which would leave a partial dispatch on local failure.
-@test "capability dispatch renders every node before the first create" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_JOB_RENDER_FAIL_AT=2
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	assert_no_mutations
-}
-
-# Catches broad rollback that deletes pre-existing Jobs or the failed create
-# target instead of only Jobs successfully created by this dispatch.
-@test "partial per-node capability create deletes only Jobs created by that dispatch" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_JOB_CREATE_FAIL_AT=2
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-cap-.*-node-nuc1 / {found=1} END {exit !found}' "$STUB_CALLS"
-	! awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\/encode-benchmark-cap-.*-node-nuc3 / {found=1} END {exit !found}' "$STUB_CALLS"
-}
-
-# Catches a dispatcher that starts benchmark work from its configured image
-# alone instead of binding one exact controlled pod's kubelet imageID through a
-# run-owned, mounted ConfigMap before the runtime proceeds.
-@test "dispatch completes the owned running-image handoff before benchmark work" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	run_dispatch capabilities
-	[ "$status" -eq 0 ]
-
-	for node in nuc1 nuc3; do
-		job="$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name "Job-*-node-$node.yaml" -print)"
-		name="$(yq -r '.metadata.name' "$job")"
-		configmap_name="$(yq -r '.metadata.annotations."homelab-talos/image-evidence-configmap"' "$job")"
-		configmap="$STUB_CAPTURE_DIR/ConfigMap-$configmap_name.yaml"
-		[ -f "$configmap" ]
-		[ "$(yq -r '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "image-evidence") | [.mountPath,.readOnly] | @tsv' "$job")" = $'/provenance\ttrue' ]
-		[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "image-evidence") | [.configMap.name,.configMap.optional,.configMap.items[0].key,.configMap.items[0].path] | @tsv' "$job")" = "$configmap_name"$'\ttrue\timage.json\timage.json' ]
-		[ "$(yq -r '.metadata.ownerReferences[0] | [.apiVersion,.kind,.name,.uid,.controller,.blockOwnerDeletion] | @tsv' "$configmap")" = $'batch/v1\tJob\t'"$name"$'\tfixture-job-uid\ttrue\ttrue' ]
-		run jq -e '
-			keys == ["configuredImage","dispatchedImage","imageId"] and
-			.configuredImage == "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb" and
-			.dispatchedImage == .configuredImage and .imageId == .configuredImage
-		' <<<"$(yq -r '.data."image.json"' "$configmap")"
-		[ "$status" -eq 0 ]
-	done
-	awk -F '\t' '
-		$1 == "kubectl" && $2 ~ / create / && $2 ~ /encode-benchmark-cap-/ {jobs += 1; next}
-		$1 == "kubectl" && $2 ~ / get pods / && jobs == 2 {pod = 1; next}
-		$1 == "kubectl" && $2 ~ / create / && $2 ~ /encode-benchmark-image-/ && pod {configmap = 1; next}
-		$1 == "kubectl" && $2 ~ / logs pod\// && configmap {accepted = 1}
-		END {exit !(jobs == 2 && accepted)}
-	' "$STUB_CALLS"
-}
-
-# Catches an unbounded or fail-open pre-work wait and rollback that leaks
-# sibling Jobs or evidence ConfigMaps from the same multi-Job dispatch.
-@test "running-image handoff failures roll back only resources created by that dispatch" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_HANDOFF_LOG_READY=0
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'running image evidence handoff timed out'* ]]
-	for node in nuc1 nuc3; do
-		awk -F '\t' -v node="$node" '$1 == "kubectl" && $2 ~ (" delete job/encode-benchmark-cap-.*-node-" node " ") {found=1} END {exit !found}' "$STUB_CALLS"
-	done
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete configmap\/encode-benchmark-image-/ {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete / && $2 !~ /encode-benchmark-(cap|image)-/ {found=1} END {exit found}' "$STUB_CALLS"
-}
-
-# Catches the capability rollback path deleting a foreign Job that replaced a
-# successfully created same-name object before a later create failed.
-@test "capability rollback never deletes a replacement Job" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_JOB_CREATE_FAIL_AT=2
-	export STUB_JOB_REPLACEMENT=1
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
-}
-
-# Catches rollback deriving dispatch/run ownership only from the local manifest
-# instead of the API server's captured create response.
-@test "rollback requires exact captured create-response metadata" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_JOB_CREATE_FAIL_AT=2
-	export STUB_JOB_CREATE_RESPONSE_METADATA_BAD=1
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
-}
-
-# Catches multi-worker rollback deleting foreign same-name replacement Jobs.
-@test "single Job rollback never deletes a replacement Job" {
+	reset_cluster_stub_state
+	unset ENCODE_BENCHMARK_CAPABILITIES_CONFIRM
+	assert_guard_refuses ENCODE_BENCHMARK_RUN_CONFIRM \
+		'run:encode-benchmark:quality:20260802T120000Z-deadbeef' \
+		run quality 20260802T120000Z-deadbeef
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	export STUB_HANDOFF_LOG_READY=0
-	export STUB_JOB_REPLACEMENT=1
-	run_dispatch run quality
-	[ "$status" -ne 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
-}
-
-# Catches a read/delete replacement race by requiring the API server to apply
-# the captured UID as an atomic delete precondition for both resource kinds.
-@test "rollback deletes Jobs and ConfigMaps with atomic UID preconditions" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_HANDOFF_LOG_READY=0
-	export STUB_CONFIGMAP_REPLACE_BEFORE_DELETE=1
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	awk -F '\t' '
-		$1 == "kubectl" && $2 ~ / delete job\// {jobs += 1; if ($2 !~ / --preconditions=uid=fixture-job-uid( |$)/) bad=1}
-		$1 == "kubectl" && $2 ~ / delete configmap\// {configmaps += 1; if ($2 !~ / --preconditions=uid=fixture-configmap-uid( |$)/) bad=1}
-		END {exit !(jobs == 2 && configmaps == 1 && !bad)}
-	' "$STUB_CALLS"
-	[ ! -e "$STUB_CAPTURE_DIR/unsafe-configmap-delete" ]
-}
-
-# Catches stopping at the first controlled Pending pod before kubelet has
-# populated its benchmark container status and immutable imageID.
-@test "handoff polls zero pods then Pending status until imageID is populated" {
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	export ENCODE_BENCHMARK_HANDOFF_WAIT_SECONDS=4
-	export STUB_HANDOFF_POD_SEQUENCE=1
-	run_dispatch run quality
+	run_dispatch run quality 20260802T120000Z-deadbeef
 	[ "$status" -eq 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / get pods / && $2 ~ /job-name=/ {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 3 ]
-	awk -F '\t' '
-		$1 == "kubectl" && $2 ~ / get pods / && $2 ~ /job-name=/ {pod_gets += 1; next}
-		$1 == "kubectl" && $2 ~ / create / && $2 ~ /encode-benchmark-image-/ {created=1; if (pod_gets == 3) ordered=1}
-		END {exit !(created && ordered)}
-	' "$STUB_CALLS"
+	[ "$(mutation_count)" -eq 2 ]
+	job="$(job_capture)"
+	[ "$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")" = \
+		'20260802T120000Z-deadbeef' ]
+	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = \
+		'/scripts/benchmark.sh quality 20260802T120000Z-deadbeef' ]
 }
 
-# Catches accepting one matching controller reference while ignoring a second
-# foreign owner on the controlled pod or persisted handoff ConfigMap.
-@test "handoff requires exactly one complete owner reference" {
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	export STUB_HANDOFF_EXTRA_OWNER=1
-	run_dispatch run quality
-	[ "$status" -ne 0 ]
-	[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'ConfigMap-*.yaml' | wc -l | tr -d ' ')" -eq 0 ]
-
-	rm -f "$STUB_CAPTURE_DIR"/Job-*.yaml "$STUB_CAPTURE_DIR"/ConfigMap-*.yaml "$STUB_CAPTURE_DIR"/create-*.yaml "$STUB_CAPTURE_DIR"/.count
-	: >"$STUB_CALLS"
-	unset STUB_HANDOFF_EXTRA_OWNER
-	export STUB_PERSISTED_EXTRA_OWNER=1
-	run_dispatch run quality
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'persisted-ownership'* ]]
-}
-
-# Catches losing the deterministic ConfigMap name when create reports failure
-# after the API server might already have persisted the submitted object.
-@test "ConfigMap create failure rolls back every possibly persisted handoff resource" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_CONFIGMAP_CREATE_FAIL=1
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete configmap\/encode-benchmark-image-/ {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 1 ]
-	for node in nuc1 nuc3; do
-		awk -F '\t' -v node="$node" '$1 == "kubectl" && $2 ~ (" delete job/encode-benchmark-cap-.*-node-" node " ") {found=1} END {exit !found}' "$STUB_CALLS"
-	done
-	awk -F '\t' '$1 == "kubectl" && $2 ~ / delete / && $2 !~ /encode-benchmark-(cap|image)-/ {found=1} END {exit found}' "$STUB_CALLS"
-}
-
-# Catches ambiguous create cleanup deleting a deterministic same-name object
-# that the API server reports with ownership outside this dispatch.
-@test "ConfigMap failure never deletes evidence without exact dispatch ownership" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	export STUB_CONFIGMAP_CREATE_FAIL=1
-	export STUB_PERSISTED_OWNER_BAD=1
-	run_dispatch capabilities
-	[ "$status" -ne 0 ]
-	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete configmap\// {count += 1} END {print count + 0}' "$STUB_CALLS")" -eq 0 ]
-	for node in nuc1 nuc3; do
-		awk -F '\t' -v node="$node" '$1 == "kubectl" && $2 ~ (" delete job/encode-benchmark-cap-.*-node-" node " ") {found=1} END {exit !found}' "$STUB_CALLS"
-	done
-}
-
-# Catches trusting a label-selected pod, a missing imageID, or a different
-# immutable digest before creating the evidence ConfigMap.
-@test "running-image handoff rejects wrong ownership and image identity" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	for failure in owner missing mismatch; do
-		unset STUB_HANDOFF_BAD_OWNER STUB_HANDOFF_IMAGE_ID STUB_HANDOFF_IMAGE_MISSING
-		case "$failure" in
-		owner) export STUB_HANDOFF_BAD_OWNER=1 ;;
-		missing) export STUB_HANDOFF_IMAGE_MISSING=1 ;;
-		mismatch) export STUB_HANDOFF_IMAGE_ID='containerd://docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
-		esac
-		run_dispatch capabilities
-		[ "$status" -ne 0 ]
-		if [[ "$failure" == 'missing' ]]; then
-			[[ "$output" == *'running image evidence handoff timed out'* ]]
-		else
-			[[ "$output" == *'running image evidence handoff rejected'* ]]
-		fi
-		[ "$(find "$STUB_CAPTURE_DIR" -maxdepth 1 -name 'ConfigMap-*.yaml' | wc -l | tr -d ' ')" -eq 0 ]
-		rm -f "$STUB_CAPTURE_DIR"/Job-*.yaml "$STUB_CAPTURE_DIR"/create-*.yaml "$STUB_CAPTURE_DIR"/.count
-		: >"$STUB_CALLS"
-	done
-}
-
-# Catches dispatch trusting capabilityStatus or proofStatus without recomputing
-# every versioned field and matching it to the configured immutable image.
-@test "expensive dispatch requires one current semantically valid capability node" {
-	prepare_evidence_source
+# D02: The gate recomputes every schema-3 prerequisite; proofStatus alone is not an oracle.
+@test "quality dispatch requires one current semantically passing capability node" {
+	local valid label mutation invalid
 	valid="$(valid_capability_evidence)"
+	run jq -e '
+		.nodes | length == 1 and .[0] == {
+			nodeName:"nuc1",strategyId:"qsv-hevc-icq-v1",proofSchemaVersion:3,
+			initialization:"passed",initializationReason:"",renderNode:"/dev/dri/renderD128",
+			drmDriver:"i915",selectedRateControl:"ICQ",telemetryStatus:"available",
+			telemetryReason:"",videoBusyNanoseconds:800000000,videoBusyPercent:40,
+			encodeFps:72,encodeSpeed:1.25,decode:"passed",vmaf:"passed",
+			diagnosticCapabilities:{
+				imageId:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+				verifiedAt:"2026-08-14T18:00:00Z",traceHeaders:"passed",libvmaf:"passed",
+				ssim:"passed",psnr:"passed",bestEffortTimestampTime:"passed",
+				packetDurationTime:"passed",keyFrame:"passed",pictType:"passed"},
+			proofStatus:"passed",proofReasons:"",verifiedAt:"2026-08-14T18:00:00Z",
+			configuredImageDigest:"sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb",
+			imageId:"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"
+		}' <<<"$valid"
+	[ "$status" -eq 0 ]
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
 
-	set_capability_evidence pending '{"digestResolvable":true,"hevcQsv":true,"realQsvEncode":true}'
-	run_dispatch run quality
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability evidence'* ]]
-	assert_no_mutations
-
-	for invalid in \
-		"$(jq -c '.nodes[0].initialization="failed" | .nodes[0].proofStatus="failed" | .nodes[0].proofReasons="initialization"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].telemetryStatus="harness-blocked" | .nodes[0].proofStatus="harness-blocked" | .nodes[0].proofReasons="telemetry"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].proofSchemaVersion=2' <<<"$valid")" \
-		"$(jq -c '.nodes[0].strategyId="qsv-hevc-la-icq-v1"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].selectedRateControl="LA-ICQ" | .nodes[0].proofStatus="failed" | .nodes[0].proofReasons="rate-control"' <<<"$valid")" \
-		"$(jq -c 'del(.nodes[0].renderNode)' <<<"$valid")" \
-		"$(jq -c '.nodes[0].drmDriver="xe"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].configuredImageDigest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].imageId="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].videoBusyNanoseconds=0 | .nodes[0].proofStatus="failed" | .nodes[0].proofReasons="telemetry"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].encodeSpeed=0' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.traceHeaders="failed"' <<<"$valid")" \
-		"$(jq -c 'del(.nodes[0].diagnosticCapabilities.libvmaf)' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.ssim=true' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.psnr="unknown"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.bestEffortTimestampTime="failed"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.packetDurationTime="failed"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.keyFrame="failed"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.pictType="failed"' <<<"$valid")" \
-		"$(jq -c '.nodes[0].diagnosticCapabilities.unexpected="passed"' <<<"$valid")"; do
+	while IFS=$'\t' read -r label mutation; do
+		invalid="$(jq -c "$mutation" <<<"$valid")"
 		set_capability_evidence verified "$invalid"
 		run_dispatch run quality
-		[ "$status" -ne 0 ]
+		[ "$status" -ne 0 ] || {
+			echo "capability mutation passed: $label" >&3
+			return 1
+		}
 		[[ "$output" == *'capability evidence'* ]]
 		assert_no_mutations
-	done
+	done <<'CASES'
+schema	.nodes[0].proofSchemaVersion=2
+strategy	.nodes[0].strategyId="qsv-hevc-la-icq-v1"
+initialization	.nodes[0].initialization="failed"
+render-node	del(.nodes[0].renderNode)
+driver	.nodes[0].drmDriver="xe"
+icq-binding	.nodes[0].selectedRateControl="LA-ICQ"
+telemetry-status	.nodes[0].telemetryStatus="harness-blocked"
+telemetry-work	.nodes[0].videoBusyNanoseconds=0
+telemetry-progress	.nodes[0].encodeSpeed=0
+decode	.nodes[0].decode="failed"
+vmaf	.nodes[0].vmaf="failed"
+configured-image	.nodes[0].configuredImageDigest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+running-image	.nodes[0].imageId="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+freshness	.nodes[0].diagnosticCapabilities.verifiedAt="2026-08-14T18:00:01Z"
+diagnostic-image	.nodes[0].diagnosticCapabilities.imageId="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+trace-headers	.nodes[0].diagnosticCapabilities.traceHeaders="failed"
+libvmaf	del(.nodes[0].diagnosticCapabilities.libvmaf)
+ssim	.nodes[0].diagnosticCapabilities.ssim=true
+psnr	.nodes[0].diagnosticCapabilities.psnr="unknown"
+best-effort-timestamp	.nodes[0].diagnosticCapabilities.bestEffortTimestampTime="failed"
+packet-duration	.nodes[0].diagnosticCapabilities.packetDurationTime="failed"
+key-frame	.nodes[0].diagnosticCapabilities.keyFrame="failed"
+pict-type	.nodes[0].diagnosticCapabilities.pictType="failed"
+diagnostic-expansion	.nodes[0].diagnosticCapabilities.unexpected="passed"
+claimed-proof-only	.nodes[0].encodeSpeed=0 | .nodes[0].proofStatus="passed" | .nodes[0].proofReasons=""
+CASES
 
 	set_capability_evidence verified "$valid"
 	run_dispatch run quality
@@ -800,696 +592,254 @@ two_passing_capability_nodes() {
 	[ "$(mutation_count)" -eq 2 ]
 }
 
-# Catches the quality run bypassing its exact operator confirmation.
-@test "run requires the exact mode-bound confirmation before creating a Job" {
-	assert_guard_refuses ENCODE_BENCHMARK_RUN_CONFIRM wrong:quality run quality
-
+# D03: Four independently located immutable identities and exact ownership form one chain.
+@test "dispatch and results bind configured dispatched running and kubelet image identity" {
+	local run_id expected_image label mutation target bad
+	expected_image='docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	run_dispatch run quality
-	[ "$status" -eq 0 ]
-	[ "$(mutation_count)" -eq 2 ]
-	job="$(job_capture)"
-	assert_hardened_job "$job"
-	run_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-run"' "$job")"
-	[[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]]
-	[ "$(yq -r '.spec.template.metadata.labels."homelab-talos/benchmark-run"' "$job")" = "$run_id" ]
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = "/scripts/benchmark.sh quality $run_id" ]
-	[[ "$output" == *"run_id=$run_id"* ]]
-}
-
-# Catches a generated dispatch ID failing to become the runtime quality identity.
-@test "generated quality dispatch becomes the runtime quality identity" {
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	run_dispatch run quality
+	run_dispatch run quality 20260802T120000Z-deadbeef
 	[ "$status" -eq 0 ]
 	job="$(job_capture)"
-	dispatch_id="$(yq -r '.metadata.labels."homelab-talos/benchmark-dispatch"' "$job")"
-	command_run_id="$(yq -r '.spec.template.spec.containers[0].command[2]' "$job")"
-	correlation_env="$(yq -r '.spec.template.spec.containers[0].env[]? |
-		select(.name == "BENCHMARK_DISPATCH_CORRELATION_ID") | .value' "$job")"
-	[ "$command_run_id" = "$dispatch_id" ]
-	[ "$correlation_env" = "$dispatch_id" ]
-
-	export BENCHMARK_TEST_MODE=1
-	export BENCHMARK_OUT="$BATS_TEST_TMPDIR/runtime-out"
-	export BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/runtime-samples.json"
-	export BENCHMARK_IDENTITY_FIXTURE="$BATS_TEST_DIRNAME/fixtures/manifests/identity.json"
-	export BENCHMARK_DISPATCH_CORRELATION_ID="$correlation_env"
-	mkdir -p "$BENCHMARK_OUT/runs"
-	yq -r '.data."samples.json"' "$evidence_app/samples.yaml" >"$BENCHMARK_SAMPLES_FILE"
-
-	run "$evidence_app/scripts/runmeta.sh" create quality "$command_run_id"
+	configmap="$(configmap_capture)"
+	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = "$expected_image" ]
+	run jq -e --arg image "$expected_image" '
+		keys == ["configuredImage","dispatchedImage","imageId"] and
+		.configuredImage == $image and .dispatchedImage == $image and .imageId == $image
+	' <<<"$(yq -r '.data."image.json"' "$configmap")"
 	[ "$status" -eq 0 ]
-	runtime_run_id="$output"
-	[ "${runtime_run_id%-*}" = "${dispatch_id%-*}" ]
-	manifest="$BENCHMARK_OUT/runs/$runtime_run_id/manifest.json"
-	[ -f "$manifest" ]
-	identity_suffix="$(jq -S -c 'del(.createdAt)' "$manifest" | sha256sum | awk '{print substr($1, 1, 8)}')"
-	[ "${runtime_run_id##*-}" = "$identity_suffix" ]
 
-}
-# Catches malformed quality dispatch inputs reaching a cluster mutation.
-@test "malformed dispatch inputs are refused before every mutation" {
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	run_dispatch run 'QUALITY'
-	[ "$status" -ne 0 ]
+	run_id='20260802T120000Z-1234abcd'
+	reset_cluster_stub_state
+	write_results_fixtures "$run_id" "docker-pullable://$expected_image"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"actual_image_id=$expected_image"* ]]
 	assert_no_mutations
 
-	run_dispatch run quality '../bad-run'
-	[ "$status" -ne 0 ]
+	while IFS=$'\t' read -r label target bad; do
+		write_results_fixtures "$run_id" "docker-pullable://$expected_image"
+		case "$target" in
+		configured)
+			jq --arg bad "$bad" '.items[0].spec.template.spec.containers[0].image=$bad' \
+				"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+			mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+			;;
+		dispatched | running)
+			field=dispatchedImage
+			[[ "$target" != running ]] || field=imageId
+			jq --arg field "$field" --arg bad "$bad" \
+				'.data."image.json" |= (fromjson | .[$field]=$bad | tojson)' \
+				"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" \
+				>"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+			mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" \
+				"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+			;;
+		kubelet)
+			jq --arg bad "containerd://$bad" '.items[0].status.containerStatuses[0].imageID=$bad' \
+				"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+			mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+			;;
+		owner)
+			jq '.metadata.ownerReferences[0].uid="foreign-owner-uid-03"' \
+				"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" \
+				>"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
+			mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" \
+				"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+			;;
+		esac
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
+		[ "$status" -ne 0 ] || {
+			echo "image chain mutation passed: $label" >&3
+			return 1
+		}
+	done <<'CASES'
+configured	configured	docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+dispatched	dispatched	docker.io/linuxserver/ffmpeg@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+running	running	docker.io/linuxserver/ffmpeg@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+kubelet	kubelet	docker.io/linuxserver/ffmpeg@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+ownership	owner	unused
+CASES
 	assert_no_mutations
 }
 
-# Catches regex-only UTC checks accepting impossible supplied and generated
-# dates before cluster calls or resource creation.
-@test "dispatch rejects impossible UTC run timestamps before every mutation" {
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	for invalid in \
-		20261302T120000Z-1234abcd \
-		20260230T120000Z-1234abcd \
-		20260802T250000Z-1234abcd; do
-		run_dispatch run quality "$invalid"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *"invalid run id: $invalid"* ]]
-		assert_no_mutations
-	done
-
-	for invalid in 20261302T120000Z 20260230T120000Z 20260802T250000Z; do
-		export ENCODE_BENCHMARK_NOW="$invalid"
-		run_dispatch run quality
-		[ "$status" -ne 0 ]
-		[[ "$output" == *"invalid benchmark timestamp: $invalid"* ]]
-		assert_no_mutations
-	done
-}
-
-# Catches recipes that consult deployed-source drift only after dispatch. The
-# PATH stub makes a stale origin/main comparison observable without Git or API access.
-@test "deployed-source drift refuses capabilities and quality before dispatch" {
+# D04: Every deployed input is checked by both mutating public recipes before dispatch.
+@test "deployed-source drift refuses capability and quality before mutation" {
+	local label path recipe
 	export STUB_GIT_STALE=1
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
 	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-
-	for recipe in \
-		encode-benchmark-capabilities \
-		encode-benchmark-quality; do
-		read -r -a arguments <<<"$recipe"
-		run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" "${arguments[@]}"
-		[ "$status" -ne 0 ]
-		assert_no_mutations
-	done
+	while IFS=$'\t' read -r label path; do
+		export STUB_GIT_DIFF_PATH="$path"
+		for recipe in encode-benchmark-capabilities encode-benchmark-quality; do
+			run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" "$recipe"
+			[ "$status" -ne 0 ] || {
+				echo "deployed drift passed: $label/$recipe" >&3
+				return 1
+			}
+			assert_no_mutations
+		done
+	done <<'CASES'
+scripts	scripts/encode-benchmark/dispatch.sh
+samples	kubernetes/apps/media/encode-benchmark/app/samples.yaml
+template	kubernetes/apps/media/encode-benchmark/templates/job.yaml
+contract	kubernetes/apps/media/encode-benchmark/app/scripts/contract.sh
+recipe	kubernetes/mod.just
+CASES
 }
 
-# Catches the operator interface swapping the sample/node/run ordering or
-# bypassing the single deployed-source guard before entering dispatch.
-@test "wrong API server is refused before every mutation" {
-	export STUB_API_SERVER='https://example.invalid:6443'
+# D08: Rollback uses API-returned ownership and UID preconditions and skips replacements.
+@test "rollback deletes only current dispatch resources with UID preconditions" {
 	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_HANDOFF_LOG_READY=0
+	export STUB_CONFIGMAP_REPLACE_BEFORE_DELETE=1
 	run_dispatch capabilities
 	[ "$status" -ne 0 ]
-	assert_no_mutations
-}
-
-# Catches creating a second resource set under an ownership handle already
-# present in the cluster instead of refusing the dispatcher correlation collision.
-@test "generated run id collision is refused before resource creation" {
-	export STUB_COLLISION=1
-	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
-	run_dispatch run quality
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'generated benchmark run already has owned Jobs'* ]]
-	assert_no_mutations
-}
-
-# Catches stale hash placeholders, image drift, and an accidental media/output
-# mount in the capability probe's rendered Job.
-@test "capability Job resolves current source identity and mounts only GPU scratch inputs" {
-	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
-	run_dispatch capabilities
-	[ "$status" -eq 0 ]
-	job="$(job_capture)"
-	[ -n "$job" ]
-	assert_hardened_job "$job"
-
-	render="$BATS_TEST_TMPDIR/app-render.yaml"
-	kustomize build "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app" >"$render"
-	expected_scripts="$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("^encode-benchmark-scripts-"))) | .metadata.name' "$render")"
-	expected_image="$(yq -r '.data."samples.json" | from_yaml | .runtime.image' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/samples.yaml")"
-
-	[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' "$job")" = "$expected_scripts" ]
-	[ "$(yq -r '.spec.template.spec.containers[0].image' "$job")" = "$expected_image" ]
-	[ "$(yq -r '.spec.template.spec.containers[0].command | join(" ")' "$job")" = '/scripts/benchmark.sh capabilities' ]
-	[ "$(yq -r '[.spec.template.spec.volumes[].name] | sort | join(",")' "$job")" = 'image-evidence,samples,scratch,scripts' ]
-	[ "$(yq -r '.spec.activeDeadlineSeconds' "$job")" = '900' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915"' "$job")" = '1' ]
-	# The probe writes a five-second synthetic encode, so reserving the benchmark
-	# scratch budget would exceed node allocatable ephemeral storage and leave the
-	# Job permanently Unschedulable while still reporting a clean dispatch.
-	[ "$(yq -r '.spec.template.spec.containers[0].resources.requests."ephemeral-storage" // ""' "$job")" = '' ]
-	[ "$(yq -r '.spec.template.spec.containers[0].resources.limits."ephemeral-storage" // ""' "$job")" = '' ]
-	# Anti-affinity must survive: the probe still needs a GPU on a non-Plex node.
-	[ -n "$(yq -r '.spec.template.spec.affinity // ""' "$job")" ]
-	! yq -e '.. | select(tag == "!!str") | select(test("downloads|/media|/out"))' "$job"
-}
-
-# Catches result output leaking unsanitized capability evidence.
-@test "results accepts matching actual imageID and prints only sanitized evidence" {
-	run_id='20260802T120000Z-1234abcd'
-	write_results_fixtures "$run_id" 'docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'phase=Complete succeeded=1 failed=0'* ]]
-	[[ "$output" == *'node=nuc2'* ]]
-	[[ "$output" == *'actual_image_id=docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'* ]]
-	[[ "$output" == *"artifact_location=/out/runs/$run_id"* ]]
-	[[ "$output" != *'/media/Secret Movie.mkv'* ]]
-	[[ "$output" != *'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'* ]]
-	[[ "$output" != *'dont-print-me'* ]]
-	[[ "$output" == *'capability_evidence={"nodeName":"nuc2","strategyId":"qsv-hevc-icq-v1","proofSchemaVersion":3'* ]]
-	awk -F '\t' -v run_id="$run_id" '$1 == "kubectl" && $2 ~ ("homelab-talos/benchmark-run=" run_id) {selected=1} END {exit !selected}' "$STUB_CALLS"
-	assert_no_mutations
-}
-
-# Catches a collector that assumes one capability Job per dispatch or merges
-# node provenance into one scheduler-selected result.
-@test "results emits one sanitized capability evidence record per targeted node" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	write_multi_node_results_fixtures "$run_id" "$image_id"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[ "$(grep -c '^capability_evidence=' <<<"$output")" -eq 2 ]
-	[[ "$output" == *'"nodeName":"nuc1"'* ]]
-	[[ "$output" == *'"nodeName":"nuc3"'* ]]
-	[[ "$output" == *'"verifiedAt":"2026-08-14T18:01:00Z"'* ]]
-	[[ "$output" == *'"imageId":"docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"'* ]]
-	[[ "$output" != *'/media/Secret Movie.mkv'* ]]
-	assert_no_mutations
-}
-
-# Catches losing capability evidence when its command exits nonzero for a
-# semantic failure or a blocked telemetry oracle.
-@test "results sanitizes terminal failed and harness-blocked capability proofs" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] | del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
-		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq -c '.status="failed" | .initialization="failed" | .proofStatus="failed" | .proofReasons="initialization"' \
-		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
-	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'"proofStatus":"failed","proofReasons":"initialization"'* ]]
-	[[ "$output" == *'"verifiedAt":"2026-08-14T18:01:30Z"'* ]]
-	[[ "$output" != *'Error: no matches found'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] | del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
-		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq -c '.status="harness-blocked" | .telemetryStatus="harness-blocked" | .telemetryReason="malformed-video-counter" | .videoBusyNanoseconds=0 | .videoBusyPercent=0 | .proofStatus="harness-blocked" | .proofReasons="telemetry"' \
-		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
-	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'"proofStatus":"harness-blocked","proofReasons":"telemetry"'* ]]
-	assert_no_mutations
-}
-
-# Catches failed, missing, malformed, or expanded diagnostic readiness being
-# republished as a usable committed quality capability record.
-@test "results rejects every non-passing quality diagnostic capability" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True",lastTransitionTime:"2026-08-14T18:01:30Z"}] |
-		del(.items[0].status.completionTime) | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' \
-		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].status.phase = "Failed"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq -c '.status="failed" | .diagnosticCapabilities.traceHeaders="failed" |
-		.proofStatus="failed" | .proofReasons="quality-capabilities"' \
-		"$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
-	mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'"traceHeaders":"failed"'* ]]
-	[[ "$output" == *'"proofStatus":"failed","proofReasons":"quality-capabilities"'* ]]
-	[[ "$output" != *'"proofStatus":"passed"'* ]]
-	assert_no_mutations
-
-	for mutation in \
-		'.diagnosticCapabilities.traceHeaders="failed"' \
-		'del(.diagnosticCapabilities.libvmaf)' \
-		'.diagnosticCapabilities.ssim=true' \
-		'.diagnosticCapabilities.psnr="unknown"' \
-		'.diagnosticCapabilities.bestEffortTimestampTime="failed"' \
-		'.diagnosticCapabilities.packetDurationTime="failed"' \
-		'.diagnosticCapabilities.keyFrame="failed"' \
-		'.diagnosticCapabilities.pictType="failed"' \
-		'.diagnosticCapabilities.unexpected="passed"'; do
-		write_results_fixtures "$run_id" "$image_id"
-		jq -c "$mutation" "$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
-		mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
-		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *'capability result schema rejected'* ]]
-		[[ "$output" != *'capability_evidence='* ]]
-		assert_no_mutations
-	done
-}
-
-# Catches accepting legacy schema/mode evidence or trusting a claimed reason
-# list instead of recomputing the schema-v3 semantic result.
-@test "results rejects legacy and semantically contradictory capability proofs" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	for mutation in \
-		'.proofSchemaVersion=2' \
-		'.selectedRateControl="LA-ICQ"' \
-		'.renderNode="/dev/dri/renderD129"' \
-		'.videoBusyNanoseconds=0' \
-		'.encodeSpeed=0' \
-		'.proofReasons="decode"'; do
-		write_results_fixtures "$run_id" "$image_id"
-		jq -c "$mutation" "$STUB_LOGS_FILE" >"$STUB_LOGS_FILE.tmp"
-		mv "$STUB_LOGS_FILE.tmp" "$STUB_LOGS_FILE"
-		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *'capability result schema rejected'* ]]
-		assert_no_mutations
-	done
-}
-
-# Catches a collector that compares the live kubelet image only with local
-# source while ignoring the exact Job-owned pre-work evidence or dispatched
-# image recorded in the Job.
-@test "results binds configured dispatched handoff and live image digests" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].spec.template.spec.containers[0].image = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'pre-work image identity evidence rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.metadata.ownerReferences[0].uid = "spoofed-owner-uid"' "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'pre-work image identity evidence rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.data."image.json" |= (fromjson | .imageId = "docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | tojson)' "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'pre-work image identity evidence rejected'* ]]
-	assert_no_mutations
-}
-
-# Catches result collection accepting one matching controller owner while a
-# second owner entry leaves the pod or evidence ConfigMap provenance ambiguous.
-@test "results require exactly one complete owner reference" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	extra_owner='{"apiVersion":"v1","kind":"ConfigMap","name":"foreign-owner","uid":"foreign-owner-uid","controller":false,"blockOwnerDeletion":false}'
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq --argjson owner "$extra_owner" '.items[0].metadata.ownerReferences += [$owner]' \
-		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq --argjson owner "$extra_owner" '.metadata.ownerReferences += [$owner]' \
-		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'pre-work image identity evidence rejected'* ]]
-	assert_no_mutations
-}
-
-# Catches quality result collection accepting an unbounded completion payload.
-@test "results prints one bounded authenticated quality completion line" {
-	dispatch_id='20260802T120000Z-1234abcd'
-	runtime_run_id='20260802T120000Z-feedface'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	write_results_fixtures "$dispatch_id" "$image_id"
-	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
-		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch |
-		.items[0].spec.template.spec.containers[0].env = [{
-			name:"BENCHMARK_DISPATCH_CORRELATION_ID",value:$dispatch
-		}]' \
-		--arg dispatch "$dispatch_id" "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
-	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
-		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",status:"complete",
-		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime)
-		,cohorts:{
-			avc:{status:"eligible",candidates:[
-				{globalQuality:16,medianReductionPercent:35},
-				{globalQuality:24,medianReductionPercent:25}]},
-			vc1:{status:"no-verdict",candidates:[]},
-			hdr10:{status:"no-go",candidates:[]}
+	awk -F '\t' '
+		$1 == "kubectl" && $2 ~ / delete job\// {
+			jobs += 1; if ($2 !~ / --preconditions=uid=fixture-job-uid( |$)/) bad=1
 		}
-	}' >"$STUB_LOGS_FILE"
+		$1 == "kubectl" && $2 ~ / delete configmap\// {
+			configmaps += 1; if ($2 !~ / --preconditions=uid=fixture-configmap-uid( |$)/) bad=1
+		}
+		$1 == "kubectl" && $2 ~ / delete / && $2 !~ /encode-benchmark-(cap|image)-/ {foreign=1}
+		END {exit !(jobs == 2 && configmaps == 1 && !bad && !foreign)}
+	' "$STUB_CALLS"
+	[ ! -e "$STUB_CAPTURE_DIR/unsafe-configmap-delete" ]
 
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
-	[ "$status" -eq 0 ]
-	[ "$output" = "mode=quality phase=Complete dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id artifact_location=/out/runs/$runtime_run_id avc=eligible:16@35,24@25 vc1=no-verdict: hdr10=no-go:" ]
-	[ "$(awk 'END { print NR }' <<<"$output")" -eq 1 ]
-	[[ "$output" != *'job='* ]]
-	[[ "$output" != *'image'* ]]
-	[[ "$output" != *'sha256:'* ]]
-	[[ "$output" != *'no-sanitized-summary'* ]]
-	[[ "$output" != *'sampleId'* ]]
-	[[ "$output" != *'sourcePath'* ]]
-	[[ "$output" != *'rawLog'* ]]
-	[[ "$output" != *'frames'* ]]
-	[[ "$output" != *'.mkv'* ]]
-	[[ "$output" != *'quality-evidence'* ]]
-
-	# The generated marker must never admit the explicit plain-ID form.
-	printf '%s\n' "$dispatch_id" >"$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	reset_cluster_stub_state
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export STUB_HANDOFF_LOG_READY=0
+	export STUB_JOB_REPLACEMENT=1
+	printf '%s\n' 'unrelated-resource' >"$STUB_CAPTURE_DIR/unrelated-resource"
+	run_dispatch capabilities
 	[ "$status" -ne 0 ]
-	[[ "$output" == *'quality completion record rejected'* ]]
-
-	explicit_run_id='20260802T120000Z-abcdef12'
-	write_results_fixtures "$explicit_run_id" "$image_id"
-	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality"' \
-		"$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
-	printf '%s\n' "$explicit_run_id" >"$STUB_LOGS_FILE"
-
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$explicit_run_id"
-	[ "$status" -eq 0 ]
-	[[ "$output" == job=encode-benchmark-quality-fixture\ mode=quality\ phase=Complete* ]]
-	[[ "$output" == *'configured_image_digest=sha256:'* ]]
-	[[ "$output" == *"dispatch_id=$explicit_run_id runtime_run_id=$explicit_run_id"* ]]
-	[[ "$output" == *$'\n'"artifact_location=/out/runs/$explicit_run_id" ]]
+	[ "$(awk -F '\t' '$1 == "kubectl" && $2 ~ / delete job\// {count++} END {print count+0}' \
+		"$STUB_CALLS")" -eq 0 ]
+	[ "$(<"$STUB_CAPTURE_DIR/unrelated-resource")" = 'unrelated-resource' ]
 }
 
-# Catches schema widening, path transport, ambiguous settings, non-finite
-# reductions, and foreign runtime identities before any bounded values print.
-@test "quality completion rejects unbounded malformed and incorrectly bound records" {
+# D09: Only one terminal owned quality chain may release one schema-2 bounded line.
+@test "results returns one bounded authenticated quality completion" {
+	local dispatch_id runtime_run_id image_id base label mutation
 	dispatch_id='20260802T120000Z-1234abcd'
 	runtime_run_id='20260802T120000Z-feedface'
 	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-	write_results_fixtures "$dispatch_id" "$image_id"
-	jq '.items[0].metadata.name = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.labels."homelab-talos/benchmark-mode" = "quality" |
-		.items[0].metadata.labels."homelab-talos/benchmark-dispatch" = $dispatch |
-		.items[0].spec.template.spec.containers[0].env = [{
-			name:"BENCHMARK_DISPATCH_CORRELATION_ID",value:$dispatch
-		}]' --arg dispatch "$dispatch_id" "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	jq '.items[0].metadata.labels."job-name" = "encode-benchmark-quality-fixture" |
-		.items[0].metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	jq '.metadata.ownerReferences[0].name = "encode-benchmark-quality-fixture"' \
-		"$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json" >"$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp"
-	mv "$STUB_IMAGE_EVIDENCE_DIR/evidence.tmp" "$STUB_IMAGE_EVIDENCE_DIR/encode-benchmark-image-fixture.json"
+	write_quality_results_fixtures "$dispatch_id" "$runtime_run_id" "$image_id"
 	base="$BATS_TEST_TMPDIR/quality-completion-base.json"
-	jq -n -c --arg dispatch "$dispatch_id" --arg runtime "$runtime_run_id" '{
-		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",status:"complete",
-		dispatchId:$dispatch,runtimeRunId:$runtime,artifactLocation:("/out/runs/" + $runtime),
-		cohorts:{
-			avc:{status:"eligible",candidates:[{globalQuality:16,medianReductionPercent:35}]},
-			vc1:{status:"no-verdict",candidates:[]},
-			hdr10:{status:"no-go",candidates:[]}
-		}
-	}' >"$base"
+	cp "$STUB_LOGS_FILE" "$base"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	[ "$status" -eq 0 ]
+	[ "$output" = "mode=quality phase=Complete dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id artifact_location=/out/runs/$runtime_run_id avc=eligible:16@35 vc1=no-verdict: hdr10=no-go:" ]
+	[ "$(awk 'END {print NR}' <<<"$output")" -eq 1 ]
+	[[ "$output" != *'job='* && "$output" != *'image'* && "$output" != *'sha256:'* ]]
+	[[ "$output" != *'sourcePath'* && "$output" != *'rawLog'* && "$output" != *'.mkv'* ]]
+	assert_no_mutations
 
-	for mutation in \
-		'.rawLog="encoder details"' \
-		'.cohorts.avc.sourcePath="/media/private.mkv"' \
-		'.cohorts.avc.candidates[0].evidencePath="quality-evidence/raw.json"' \
-		'del(.cohorts.vc1)' \
-		'.cohorts.avc.candidates += [.cohorts.avc.candidates[0]]' \
-		'.cohorts.avc.candidates[0].globalQuality=17' \
-		'.runtimeRunId="20260802T120000Z-eeeeeeee"' \
-		'.artifactLocation="/out/runs/20260802T120000Z-eeeeeeee"' \
-		'.runtimeRunId="20260803T120000Z-eeeeeeee" | .artifactLocation="/out/runs/20260803T120000Z-eeeeeeee"'; do
+	while IFS=$'\t' read -r label mutation; do
+		write_quality_results_fixtures "$dispatch_id" "$runtime_run_id" "$image_id"
 		jq -c "$mutation" "$base" >"$STUB_LOGS_FILE"
 		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *'quality completion record rejected'* ]]
-		run grep -q '^mode=quality phase=Complete ' <<<"$output"
-		[ "$status" -eq 1 ]
-	done
-
-	sed 's/"medianReductionPercent":35/"medianReductionPercent":1e999/' "$base" >"$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'quality completion record rejected'* ]]
-	run grep -q '^mode=quality phase=Complete ' <<<"$output"
-	[ "$status" -eq 1 ]
-
-	# An authenticated completion record cannot print success when the Pod's
-	# immutable image identity does not match the committed runtime digest.
-	jq '.items[0].status.containerStatuses[0].imageID =
-		"docker-pullable://docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
-		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	printf '%s\n' "$(<"$base")" >"$STUB_LOGS_FILE"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
-	[ "$status" -ne 0 ]
-	run grep -q '^mode=quality phase=Complete ' <<<"$output"
-	[ "$status" -eq 1 ]
-	[[ "$output" != *' artifact_location='* ]]
-	[[ "$output" != *' avc='* ]]
-}
-
-# Catches result collection accepting a missing, malformed, or mismatched
-# kubelet image identity.
-@test "results rejects missing malformed and mismatched actual imageID evidence" {
-	run_id='20260802T120000Z-1234abcd'
-	for image_id in \
-		'' \
-		'containerd://not-an-image-digest' \
-		'docker-pullable://docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
-		write_results_fixtures "$run_id" "$image_id"
-		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *'actual image identity evidence rejected'* ]]
-		assert_no_mutations
-	done
-}
-
-# Catches capability evidence being accepted from an unfinished/failed Job or
-# from a label-spoofed pod that is not the one completed pod controlled by the
-# exact selected Job UID.
-@test "capability results require one Complete Job and one Succeeded controlled pod" {
-	run_id='20260802T120000Z-1234abcd'
-	image_id='docker-pullable://docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb'
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status = {active:1,startTime:"2026-08-02T12:00:00Z"}' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.conditions = [{type:"Failed",status:"True"}] | .items[0].status.failed = 1 | .items[0].status.succeeded = 0' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].status.phase = "Running"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	printf '%s\n' '{"apiVersion":"v1","items":[]}' >"$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq 'del(.items[0].metadata.uid)' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq 'del(.items[0].metadata.ownerReferences)' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items[0].metadata.ownerReferences[0].uid = "spoofed-job-uid"' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items += [.items[0]]' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
-	mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-
-	write_results_fixtures "$run_id" "$image_id"
-	jq '.items += [.items[0]]' "$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
-	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
-	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$run_id"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'capability result provenance rejected'* ]]
-	assert_no_mutations
-}
-
-# Catches preflight using allocatable ephemeral-storage as a proxy for current
-# free NVMe, or treating the Plex node as eligible despite available GPU slots.
-@test "preflight reports every node and requires non-Plex GPU plus 115Gi actual free NVMe" {
-	STUB_PODS_JSON="$BATS_TEST_TMPDIR/plex-pods.json"
-	STUB_NODES_JSON="$BATS_TEST_TMPDIR/nodes.json"
-	STUB_PVC_JSON="$BATS_TEST_TMPDIR/pvc.json"
-	STUB_KUSTOMIZATION_JSON="$BATS_TEST_TMPDIR/kustomization.json"
-	STUB_SUMMARY_DIR="$BATS_TEST_TMPDIR/summaries"
-	export STUB_PODS_JSON STUB_NODES_JSON STUB_PVC_JSON STUB_KUSTOMIZATION_JSON STUB_SUMMARY_DIR
-	mkdir -p "$STUB_SUMMARY_DIR"
-	cat >"$STUB_PODS_JSON" <<'EOF'
-{"items":[{"metadata":{"name":"plex-0"},"spec":{"nodeName":"nuc1"},"status":{"phase":"Running"}}]}
-EOF
-	cat >"$STUB_NODES_JSON" <<'EOF'
-{"items":[{"metadata":{"name":"nuc1"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc2"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}},{"metadata":{"name":"nuc3"},"status":{"allocatable":{"gpu.intel.com/i915":"1"}}}]}
-EOF
-	cat >"$STUB_PVC_JSON" <<'EOF'
-{"metadata":{"name":"media-data"},"status":{"phase":"Bound"}}
-EOF
-	cat >"$STUB_KUSTOMIZATION_JSON" <<'EOF'
-{"metadata":{"name":"encode-benchmark"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
-EOF
-	printf '%s\n' '{"node":{"fs":{"availableBytes":146081611776}}}' >"$STUB_SUMMARY_DIR/nuc1.json"
-	printf '%s\n' '{"node":{"fs":{"availableBytes":107374182400}}}' >"$STUB_SUMMARY_DIR/nuc2.json"
-	printf '%s\n' '{"node":{"fs":{"availableBytes":148751507456}}}' >"$STUB_SUMMARY_DIR/nuc3.json"
-
-	run "$PREFLIGHT" "$KUBECONFIG_FIXTURE"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'nuc1 FAIL plex-node'* ]]
-	[[ "$output" == *'nuc2 FAIL free-nvme-below-115Gi'* ]]
-	[[ "$output" == *'nuc3 PASS'* ]]
-	assert_no_mutations
-}
-
-# Catches live verification accepting absent/unscheduled Plex, suspended/unready
-# inert inputs, a standing benchmark workload, or a benchmark pod co-resident
-# with Plex. Every query is read-only.
-@test "verify requires scheduled Running Plex before proving pod separation" {
-	VERIFY="$PROJECT_ROOT/scripts/verify/encode-benchmark.sh"
-	STUB_KUSTOMIZATION_JSON="$BATS_TEST_TMPDIR/verify-kustomization.json"
-	STUB_PRIORITYCLASS_JSON="$BATS_TEST_TMPDIR/priorityclass.json"
-	STUB_CONFIGMAPS_JSON="$BATS_TEST_TMPDIR/configmaps.json"
-	STUB_PROMETHEUSRULE_JSON="$BATS_TEST_TMPDIR/prometheusrule.json"
-	STUB_PERSISTENT_JSON="$BATS_TEST_TMPDIR/persistent.json"
-	STUB_PLEX_PODS_JSON="$BATS_TEST_TMPDIR/verify-plex-pods.json"
-	STUB_BENCHMARK_PODS_JSON="$BATS_TEST_TMPDIR/verify-benchmark-pods.json"
-	export STUB_KUSTOMIZATION_JSON STUB_PRIORITYCLASS_JSON STUB_CONFIGMAPS_JSON
-	export STUB_PROMETHEUSRULE_JSON STUB_PERSISTENT_JSON STUB_PLEX_PODS_JSON STUB_BENCHMARK_PODS_JSON
-	printf '%s\n' '{"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}' >"$STUB_KUSTOMIZATION_JSON"
-	printf '%s\n' '{"metadata":{"name":"encode-benchmark-background"},"value":-10}' >"$STUB_PRIORITYCLASS_JSON"
-	printf '%s\n' '{"items":[{"metadata":{"name":"encode-benchmark-samples"}},{"metadata":{"name":"encode-benchmark-scripts-dd454g82km"}}]}' >"$STUB_CONFIGMAPS_JSON"
-	printf '%s\n' '{"metadata":{"name":"encode-benchmark"}}' >"$STUB_PROMETHEUSRULE_JSON"
-	printf '%s\n' '{"items":[]}' >"$STUB_PERSISTENT_JSON"
-	printf '%s\n' '{"items":[{"metadata":{"name":"encode-benchmark-quality-fixture"},"spec":{"nodeName":"nuc3"},"status":{"phase":"Running"}}]}' >"$STUB_BENCHMARK_PODS_JSON"
-
-	printf '%s\n' '{"items":[]}' >"$STUB_PLEX_PODS_JSON"
-	run "$VERIFY" "$KUBECONFIG_FIXTURE"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'Plex has no Running pod with a scheduled node'* ]]
-	assert_no_mutations
-
-	printf '%s\n' '{"items":[{"metadata":{"name":"plex-0"},"spec":{},"status":{"phase":"Pending"}}]}' >"$STUB_PLEX_PODS_JSON"
-	run "$VERIFY" "$KUBECONFIG_FIXTURE"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'Plex has no Running pod with a scheduled node'* ]]
-	assert_no_mutations
-
-	printf '%s\n' '{"items":[{"metadata":{"name":"plex-0"},"spec":{"nodeName":"nuc1"},"status":{"phase":"Running"}}]}' >"$STUB_PLEX_PODS_JSON"
-	run "$VERIFY" "$KUBECONFIG_FIXTURE"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'encode-benchmark verification passed'* ]]
-	awk -F '\t' '
-		$1 == "kubectl" && $2 ~ / get configmaps / {
-			queried=1
-			if ($2 ~ / --selector /) bad=1
+		[ "$status" -ne 0 ] || {
+			echo "completion mutation passed: $label" >&3
+			return 1
 		}
-		END {exit (!queried || bad)}
-	' "$STUB_CALLS"
-	assert_no_mutations
+		[[ "$output" != mode=quality\ phase=Complete* ]]
+	done <<'CASES'
+schema	.schemaVersion=3
+raw-path	.rawLog="/media/private-title.mkv"
+evidence-path	.cohorts.avc.candidates[0].evidencePath="quality-evidence/raw.json"
+missing-cohort	del(.cohorts.vc1)
+duplicate-candidate	.cohorts.avc.candidates += [.cohorts.avc.candidates[0]]
+invalid-setting	.cohorts.avc.candidates[0].globalQuality=17
+foreign-runtime	.runtimeRunId="20260802T120000Z-eeeeeeee"
+foreign-artifact	.artifactLocation="/out/runs/20260802T120000Z-eeeeeeee"
+CASES
 
-	printf '%s\n' '{"items":[{"metadata":{"name":"encode-benchmark-quality-fixture"},"spec":{"nodeName":"nuc1"},"status":{"phase":"Running"}}]}' >"$STUB_BENCHMARK_PODS_JSON"
-	run "$VERIFY" "$KUBECONFIG_FIXTURE"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *'benchmark pod is co-resident with Plex'* ]]
+	for label in extra-job active-job foreign-owner wrong-image; do
+		write_quality_results_fixtures "$dispatch_id" "$runtime_run_id" "$image_id"
+		case "$label" in
+		extra-job)
+			jq '.items += [.items[0]]' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+			mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+			;;
+		active-job)
+			jq '.items[0].status={active:1}' "$STUB_JOBS_JSON" >"$STUB_JOBS_JSON.tmp"
+			mv "$STUB_JOBS_JSON.tmp" "$STUB_JOBS_JSON"
+			;;
+		foreign-owner)
+			jq '.items[0].metadata.ownerReferences[0].uid="foreign-quality-uid"' \
+				"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+			mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+			;;
+		wrong-image)
+			jq '.items[0].status.containerStatuses[0].imageID="containerd://docker.io/linuxserver/ffmpeg@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"' \
+				"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+			mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+			;;
+		esac
+		run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+		if [[ "$label" == active-job ]]; then
+			[ "$status" -eq 0 ]
+		else
+			[ "$status" -ne 0 ] || {
+				echo "completion provenance mutation passed: $label" >&3
+				return 1
+			}
+		fi
+		[[ "$output" != mode=quality\ phase=Complete* ]]
+	done
 	assert_no_mutations
 }
 
-# Catches a preflight floor that can never be satisfied. The shipped floor was
-# 200Gi against an EPHEMERAL partition Talos caps at 150GiB, so preflight could
-# not pass on any node at any time. Deriving the ceiling from talconfig.yaml
-# rather than restating it keeps the two from drifting apart again.
-@test "preflight free-space floor is satisfiable within the configured EPHEMERAL partition" {
-	floor="$(rg -o '^minimum_available_bytes=([0-9]+)$' --replace '$1' "$PREFLIGHT")"
-	[ -n "$floor" ]
+# D10: Invalid public inputs and retired surfaces stop before every API mutation.
+@test "malformed identities arguments and retired entrypoints fail before mutation" {
+	local label
+	export ENCODE_BENCHMARK_CAPABILITIES_CONFIRM='run:encode-benchmark:capabilities'
+	export ENCODE_BENCHMARK_RUN_CONFIRM='run:encode-benchmark:quality'
 
-	capacity_gib="$(yq -r '
-		.. | select(has("name")) | select(.name == "EPHEMERAL") | .provisioning.maxSize
-	' "$PROJECT_ROOT/talos/talconfig.yaml" | head -n 1)"
-	[ -n "$capacity_gib" ]
-	capacity_bytes=$((${capacity_gib%GiB} * 1024 * 1024 * 1024))
+	while IFS=$'\t' read -r label command_line; do
+		read -r -a arguments <<<"$command_line"
+		case "$label" in
+		collision) export STUB_COLLISION=1 ;;
+		wrong-api) export STUB_API_SERVER='https://example.invalid:6443' ;;
+		esac
+		run_dispatch "${arguments[@]}"
+		[ "$status" -ne 0 ] || {
+			echo "malformed dispatch passed: $label" >&3
+			return 1
+		}
+		assert_no_mutations
+		unset STUB_COLLISION STUB_API_SERVER
+	done <<'CASES'
+traversal	run quality ../bad-run
+impossible-utc	run quality 20260230T120000Z-deadbeef
+wrong-mode	run savings
+extra-argument	run quality 20260802T120000Z-deadbeef extra
+wrong-action	cleanup
+collision	run quality 20260802T120000Z-deadbeef
+wrong-api	capabilities
+CASES
 
-	# Strictly below capacity, or the check is unsatisfiable by construction.
-	[ "$floor" -lt "$capacity_bytes" ]
+	run env BENCHMARK_TEST_MODE=1 BENCHMARK_OUT="$BATS_TEST_TMPDIR/retired-out" \
+		BENCHMARK_SCRATCH="$BATS_TEST_TMPDIR/retired-scratch" \
+		BENCHMARK_SAMPLES_FILE="$BATS_TEST_TMPDIR/retired-samples.json" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" diagnostic
+	[ "$status" -eq 64 ]
+	run "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/probe.sh" \
+		diagnostic-identity source 0 90
+	[ "$status" -eq 64 ]
+	run just --justfile "$PROJECT_ROOT/kubernetes/mod.just" encode-benchmark-diagnostic
+	[ "$status" -ne 0 ]
+	assert_no_mutations
 
-	# Allocatable is materially below the raw partition, so a floor that only just
-	# fits the partition still cannot leave room for a schedulable Job.
-	scratch="$(yq -r '
-		.spec.template.spec.containers[0].resources.requests."ephemeral-storage"
-	' "$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/templates/job.yaml")"
-	scratch_bytes=$((${scratch%Gi} * 1024 * 1024 * 1024))
-	[ "$scratch_bytes" -le "$floor" ]
+	run env ENCODE_BENCHMARK_TEST_MODE=0 ENCODE_BENCHMARK_APP_DIR="$BATS_TEST_TMPDIR/foreign-app" \
+		"$DISPATCH" "$KUBECONFIG_FIXTURE" capabilities
+	[ "$status" -eq 64 ]
+	run env BENCHMARK_TEST_MODE=0 BENCHMARK_OUT="$BATS_TEST_TMPDIR/foreign-out" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/benchmark.sh" quality
+	[ "$status" -eq 64 ]
+	run env BENCHMARK_TEST_MODE=0 BENCHMARK_OUT="$BATS_TEST_TMPDIR/foreign-out" \
+		"$PROJECT_ROOT/kubernetes/apps/media/encode-benchmark/app/scripts/runmeta.sh" create quality
+	[ "$status" -eq 64 ]
+	assert_no_mutations
 }

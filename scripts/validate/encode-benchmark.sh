@@ -31,7 +31,6 @@ required_files=(
 	'scripts/encode-benchmark/preflight.sh'
 	'scripts/encode-benchmark/results.sh'
 	'scripts/verify/encode-benchmark.sh'
-	"$tests_dir/retirement.bats"
 	"$tests_dir/quality-evidence.bats"
 )
 for path in "${required_files[@]}"; do

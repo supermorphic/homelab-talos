@@ -1,3 +1,0 @@
-ffmpeg version 8.1.2
-[hevc_qsv @ 0x2000] Using the intelligent constant quality (ICQ) ratecontrol method
-frame= 2160 fps=72.0 q=-0.0 Lsize= 60123KiB time=00:01:30.00 bitrate=5473.0kbits/s speed=1.25x
