@@ -11,10 +11,12 @@ This specification preserves the corrected quality contract from specification 0
 It retires the completed diagnostic protocol and speculative downstream modes. A later
 FileFlows implementation requires a separate design and operator decision.
 
-The offline encode validator must retain 35-50 high-value Bats identities and have a
-controlled complete-run median of 60-120 seconds. No test simulates 144 encodes; one
-independent planner assertion proves the exact work set, and small integrations exercise
-representative rows.
+The offline encode validator retains exactly 39 high-value Bats identities: 12
+scientific oracles, 17 work-plan/evidence/ranking/resume/representative integrations,
+and 10 dispatch/safety invariants. The work-plan group includes one independent 144-row
+planner assertion and four representative integrations; no test simulates all 144
+encodes. Three controlled complete runs took 78.25, 77.10, and 77.42 seconds, for a
+77.42-second median.
 
 ## Fixed strategy and work plan
 

@@ -105,7 +105,7 @@ yq -e '
 	.spec.template.spec.securityContext.runAsUser == 568 and
 	.spec.template.spec.securityContext.runAsGroup == 568 and
 	.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false and
-	.spec.template.spec.containers[0].securityContext.capabilities.drop == ["ALL"] and
+	(.spec.template.spec.containers[0].securityContext.capabilities.drop | join(",")) == "ALL" and
 	.spec.template.spec.containers[0].resources.requests."gpu.intel.com/i915" == 1 and
 	.spec.template.spec.containers[0].resources.requests."ephemeral-storage" == "105Gi" and
 	.spec.template.spec.containers[0].resources.limits."ephemeral-storage" == "110Gi" and
