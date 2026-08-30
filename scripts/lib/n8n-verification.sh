@@ -46,8 +46,9 @@ n8n_statefulset_current_ready() {
 }
 
 n8n_prometheus_targets_match_contract() {
-  local input="$1" service endpoint pool
-  yq -p=json -o=json -e '.status == "success"' "$input" >/dev/null 2>&1 || return 1
+  local input="$1" service endpoint pool response
+  response="$(cat -- "$input")" || return 1
+  yq -p=json -o=json -e '.status == "success"' - <<<"$response" >/dev/null 2>&1 || return 1
   for service in n8n n8n-postgresql; do
     endpoint='http'
     [[ "$service" == 'n8n' ]] || endpoint='metrics'
@@ -65,7 +66,7 @@ n8n_prometheus_targets_match_contract() {
         ($pool_targets | length) == 1 and
         $identity_targets[0].scrapePool == strenv(POOL) and
         $identity_targets[0].health == "up")
-      ' "$input" >/dev/null 2>&1 || return 1
+      ' - <<<"$response" >/dev/null 2>&1 || return 1
   done
 }
 
