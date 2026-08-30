@@ -2710,15 +2710,26 @@ EOF
 	[ "${runtime_run_id##*-}" = "$identity_suffix" ]
 
 	results="$BENCHMARK_OUT/runs/$runtime_run_id/results.csv"
+	evidence_path='quality-evidence/avc-grain-memento-detail-qsv-22-attempt-1.json'
+	evidence="$BENCHMARK_OUT/runs/$runtime_run_id/$evidence_path"
+	mkdir -p "${evidence%/*}"
+	jq -S -c -n --arg run "$runtime_run_id" '{
+		clipId:"detail",cohort:"avc",globalQuality:22,hdr:null,psnr:40,
+		runId:$run,sampleId:"avc-grain-memento",schemaVersion:1,
+		sourceSha256:("a" * 64),ssim:0.99,strategyId:"qsv-hevc-icq-v1",
+		vmaf:{rawFrameCount:100,evaluatedFrameCount:100,excludedFrames:[],
+			harmonicMean:96,onePercentLow:92}
+	}' >"$evidence"
+	evidence_digest="sha256:$(sha256sum "$evidence" | awk '{print $1}')"
 	printf '%s\n' \
-		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds' \
-		"$runtime_run_id,quality,avc-grain-memento,avc,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,22,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000" \
+		'run_id,panel,sample_id,cohort,source_sha256,clip_id,encoder,requested_setting,selected_rate_control,status,attempt,input_bytes,output_bytes,reduction_percent,input_bit_rate,output_bit_rate,wall_seconds,encode_fps,encode_speed,vmaf_harmonic_mean,vmaf_1pct_low,ssim,gpu_busy_percent,qsv_proof,validation_codec,validation_duration,validation_resolution,validation_frame_rate,validation_bit_depth,validation_hdr,validation_audio_tracks,validation_subtitle_tracks,validation_chapters,validation_failures,log_path,output_disposition,strategy_id,qsv_initialization,video_busy_nanoseconds,quality_evidence_path,quality_evidence_sha256' \
+		"$runtime_run_id,quality,avc-grain-memento,avc,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,detail,qsv,22,ICQ,passed,1,1000,600,40,8000,4800,10,30,1,96,92,0.99,50,passed,passed,passed,passed,passed,passed,passed,passed,passed,passed,,logs/fixture.log,discarded,qsv-hevc-icq-v1,passed,800000000,$evidence_path,$evidence_digest" \
 		>"$results"
 	results_digest="sha256:$(sha256sum "$results" | awk '{print $1}')"
 	candidates="$BENCHMARK_OUT/runs/$runtime_run_id/quality-candidates.json"
 	jq -n -c --arg run "$runtime_run_id" --arg digest "$results_digest" '{
-		schemaVersion:1,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
-		resultsSchemaVersion:2,resultsSha256:$digest,
+		schemaVersion:2,strategyId:"qsv-hevc-icq-v1",qualityRunId:$run,
+		resultsSchemaVersion:3,resultsSha256:$digest,
 		cohorts:{avc:{status:"eligible",expectedClipCount:1,
 			candidates:[{globalQuality:22,medianReductionPercent:40}]}}
 	}' >"$candidates"
@@ -3174,10 +3185,10 @@ metadata:
 data:
   samples.json: |
     {
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "strategy": {
         "id": "qsv-hevc-icq-v1",
-        "resultsSchemaVersion": 2,
+        "resultsSchemaVersion": 3,
         "runManifestSchemaVersion": 2,
         "capabilityProofSchemaVersion": 3,
         "globalQualityCandidates": [16, 18, 20, 22, 24, 26, 28, 30],
@@ -3187,6 +3198,16 @@ data:
           "maximumCrf": 34,
           "step": 2
         }
+      },
+      "qualityCorrection": {
+        "schemaVersion": 1,
+        "diagnosticRunId": "20260829T020752Z-43984d8d",
+        "vmafMeasurementDefects": [
+          {"sampleId": "avc-clean-coco", "clipId": "motion", "frameIndex": 1641},
+          {"sampleId": "avc-grain-memento", "clipId": "dark", "frameIndex": 523},
+          {"sampleId": "avc-grain-memento", "clipId": "detail", "frameIndex": 370},
+          {"sampleId": "vc1-fugitive", "clipId": "motion", "frameIndex": 798}
+        ]
       },
       "runtime": {
         "image": "docker.io/linuxserver/ffmpeg@sha256:4a4ed3a9242b51ab7821c611b4101a6a7dd72517f7f19e3a7b1833cae5020ecb"

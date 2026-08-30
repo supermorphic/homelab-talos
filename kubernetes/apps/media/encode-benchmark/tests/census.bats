@@ -348,8 +348,8 @@ run_inventory_to_fixture() {
 		[ "$status" -eq 0 ]
 		run jq -e '
 			.status == "ok" and
-			.metadata.masteringDisplay.displayPrimaries.red.x == {numerator:34000,denominator:50000} and
-			.metadata.masteringDisplay.luminance.max == {numerator:10000000,denominator:10000} and
+			.metadata.masteringDisplay.displayPrimaries.red.x == {numerator:17,denominator:25} and
+			.metadata.masteringDisplay.luminance.max == {numerator:1000,denominator:1} and
 			.metadata.maxCLL == {numerator:1000,denominator:1} and
 			.metadata.maxFALL == {numerator:400,denominator:1}
 		' <<<"$output"
@@ -360,9 +360,9 @@ run_inventory_to_fixture() {
 	[ "$status" -eq 0 ]
 	run jq -e '
 		.status == "ok" and
-		.metadata.masteringDisplay.displayPrimaries.green.x == {numerator:13250,denominator:50000} and
-		.metadata.masteringDisplay.displayPrimaries.blue.y == {numerator:3000,denominator:50000} and
-		.metadata.masteringDisplay.whitePoint.y == {numerator:16450,denominator:50000} and
+		.metadata.masteringDisplay.displayPrimaries.green.x == {numerator:53,denominator:200} and
+		.metadata.masteringDisplay.displayPrimaries.blue.y == {numerator:3,denominator:50} and
+		.metadata.masteringDisplay.whitePoint.y == {numerator:329,denominator:1000} and
 		.metadata.maxFALL == {numerator:400,denominator:1}
 	' <<<"$output"
 	[ "$status" -eq 0 ]
@@ -782,7 +782,7 @@ print(json.dumps(row["torrent_tags"]))
 	kustomization="$SCRIPTS/../kustomization.yaml"
 	run yq -r '.configMapGenerator[0].files | join(",")' "$kustomization"
 	[ "$status" -eq 0 ]
-	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,stills.sh=scripts/stills.sh' ]
+	[ "$output" = 'contract.sh=scripts/contract.sh,diagnostic-contract.jq=scripts/diagnostic-contract.jq,probe.sh=scripts/probe.sh,census.sh=scripts/census.sh,runmeta.sh=scripts/runmeta.sh,benchmark.sh=scripts/benchmark.sh,diagnostic-evidence.sh=scripts/diagnostic-evidence.sh,quality-evidence.sh=scripts/quality-evidence.sh,stills.sh=scripts/stills.sh' ]
 	[ ! -e "$SCRIPTS/not-ready.sh" ]
 }
 
