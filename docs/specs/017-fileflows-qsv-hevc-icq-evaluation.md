@@ -12,9 +12,11 @@ valid setting selection. Bounded diagnostics are now complete. Their accepted re
 supports one fresh quality sweep under the corrected evidence contract in this
 specification. No further anomaly diagnostic is required.
 
-This evaluation can select an ICQ setting per supported source cohort and then measure
-visual quality, x265 efficiency, storage savings, and Plex contention. It does not by
-itself authorize FileFlows deployment or media replacement.
+The retained harness now has one purpose: run the corrected 144-row quality evaluation
+and rank ICQ settings independently for AVC, VC-1, and HDR10. It does not select a
+setting automatically, authorize FileFlows deployment, or replace media. If the
+evaluation produces a usable setting, FileFlows implementation requires a later design
+and operator decision.
 
 ## Historical boundary
 
@@ -57,16 +59,14 @@ The encoder command remains:
 ```
 
 The runtime must select exactly `ICQ`. LA-ICQ, CQP, another known mode, or unknown mode
-evidence fails the row. The same committed setting list controls command construction,
-validation, candidate ranking, selected-setting state, x265 comparison, savings,
-contention, resume, and findings.
+evidence fails the row. The same committed setting list controls the quality work plan,
+command construction, validation, candidate ranking, and resume.
 
 The corrected contract uses samples schema version 3, capability proof schema version 3,
 run-manifest schema version 2, results schema version 3, quality-evidence schema version
 1, and quality-candidates schema version 2. A quality result row adds
-`quality_evidence_path` and `quality_evidence_sha256`; those fields are empty for modes
-that do not produce quality evidence. Existing schema-version-2 results remain readable
-as historical evidence but cannot satisfy the corrected quality gate.
+`quality_evidence_path` and `quality_evidence_sha256`. Existing schema-version-2 results
+remain historical evidence but cannot satisfy the corrected quality gate.
 
 ## Harness and safety boundary
 
@@ -90,10 +90,10 @@ The workload boundary is unchanged:
   priority; and
 - Jobs use finite deadlines, `restartPolicy: Never`, and `backoffLimit: 0`.
 
-The source library is never writable. Clip sweeps and savings outputs remain temporary.
-Only an operator-confirmed finalist can enter a durable benchmark `encodes/` directory.
-Resume requires an explicit run ID and exact manifest identity. A completed row skips
-only when its full schema and referenced evidence remain valid. Every FFmpeg command uses
+The source library is never writable. Quality video and temporary clips remain in
+scratch and are discarded; only bounded run evidence persists under `/out`. Resume
+requires an explicit run ID and exact manifest identity. A completed row skips only when
+its full schema and referenced evidence remain valid. Every FFmpeg command uses
 `-nostdin`, and decode validation maps only the primary video before independent stream
 and metadata checks.
 
@@ -111,13 +111,12 @@ A node has passing ICQ capability only when all of these are true:
 8. The configured metric command executes successfully.
 
 Missing identity, telemetry, or oracle evidence is `harness-blocked`, not an encoder
-failure. Expensive GPU stages repeat the short proof on their assigned node before source
-hashing or run-directory creation. Two-worker contention additionally requires two
-distinct eligible nodes.
+failure. The quality Job repeats the short proof on its assigned node before source
+hashing or run-directory creation.
 
-Dispatch revalidates deployed source, contract, image, node capability, run identity,
-and upstream selected-setting state. It authenticates the kubelet's immutable `imageID`;
-the runtime display-only `status.image` value is not a registry-identity oracle.
+Dispatch revalidates deployed source, contract, image, node capability, and run identity.
+It authenticates the kubelet's immutable `imageID`; the runtime display-only
+`status.image` value is not a registry-identity oracle.
 Kubernetes-projected scripts may use only the canonical `..data/<same-name>` link shape,
 must resolve inside the scripts mount, and must match the manifest digest.
 
@@ -254,39 +253,24 @@ outside the selected strategy.
 The fresh quality run and candidate artifact move the evaluation from diagnostics to
 encoding selection. They do not automatically choose a setting.
 
-## Visual and downstream selection
+## Decision boundary
 
-Objective candidates enter 1:1 source/output crop review in rank order. A crop pass makes
-the setting provisional. A full-title Plex review then checks Direct Play, HDR behavior,
-motion, grain retention, banding, and blocking. A Plex pass makes the setting final. A
-failure records the rejected candidate and advances to the next ranked candidate. The
-fixed list is exhausted rather than widened.
+Ranking produces evidence only. A complete cohort with no qualifying setting is
+`no-go`; an incomplete or scientifically unresolved cohort is `no-verdict`; a cohort
+with candidates is `eligible`. One cohort can advance while another does not. The
+evaluation stops after reporting these outcomes and the ranked candidates.
 
-Only a provisional setting can authorize its finalist encode. Only a final setting can
-authorize the later stages:
-
-- x265 matched-quality comparison on the fixed grain-heavy AVC and HDR10 references;
-- full-title savings measurement on the stratified cohort samples; and
-- Plex contention measurement under the fixed playback cases.
-
-The x265 curve remains measured, bounded to CRF 10 through 34, and never extrapolated.
-The existing premium bands remain: at most 15 percent favors QSV, more than 15 through
-30 percent is acceptable with a recorded cost, and more than 30 percent is materially
-worse.
-
-Savings remains cohort-scoped. Median reduction of at least 25 percent is GO, 15 to less
-than 25 percent is MARGINAL and requires an operator decision, and less than 15 percent
-is NO-GO. Contention continues to compare fixed playback and seek cases with the worst
-matching baseline.
-
-FileFlows implementation and media replacement require a later explicit operator
-decision based on final quality, savings, comparison, and contention evidence.
+The harness does not perform visual finalist selection, x265 comparison, savings
+projection, Plex contention testing, or durable finalist publication. If the operator
+accepts an ICQ setting after reviewing the quality evidence, FileFlows implementation
+and media replacement require a separate specification and explicit authorization.
 
 ## Evidence and failure handling
 
-Every run is immutable and isolated by mode and run ID. Corrected quality evidence cannot
-resume from schema-version-2 rows or consume diagnostic files at runtime. The committed
-diagnostic decision supplies only the closed correction identities and oracle semantics.
+Capability and quality runs are immutable and isolated by run ID. Corrected quality
+evidence cannot resume from schema-version-2 rows or consume diagnostic files at runtime.
+The committed diagnostic decision supplies only the closed correction identities and
+oracle semantics.
 
 The producer publishes canonical results and candidate artifacts only after validating
 their complete schemas. A scientific no-go or harness-blocked outcome can still complete
@@ -294,43 +278,49 @@ the evidence protocol. Missing, malformed, ambiguous, foreign, or partially publ
 evidence fails closed. Kubernetes Job completion indicates protocol completion, not an
 encoder verdict.
 
-Readers authenticate Job, Pod, owner, imageID, script, command, volume, security, node,
-run, artifact, and termination identities before returning bounded results. Raw logs,
-source paths, runtime details, and unrestricted retained files do not cross the bounded
-reader interface.
+The result command authenticates Job, Pod, owner, imageID, script, command, volume,
+security, node, run, artifact, and termination identities before returning one bounded
+quality completion. Raw logs, source paths, runtime details, and unrestricted retained
+files do not cross that interface.
 
-## Validation requirements
+## Retired evaluation surfaces
 
-Executable tests must prove at least:
+The completed diagnostic producer, collector, reader, terminal transport, historical
+protocols, and operator recipes are removed. The same retirement applies to x265
+comparison, finalist and durable finalist publication, savings and audio inventory,
+contention and playback observation, findings rendering, census and sample selection,
+stills, and generalized cleanup or compatibility helpers without a current quality
+consumer.
 
-- only the four closed frame identities can be excluded;
-- an allowed exact-zero frame is retained raw and excluded exactly once;
-- absent, duplicate, nonnumeric, nonzero, and unlisted frames cannot be excluded;
-- corrected harmonic mean and one-percent low use the evaluated frame population;
-- raw/evaluated counts, evidence paths, and SHA-256 bindings fail closed on drift;
-- whole-clip SSIM and PSNR are required and finite without becoming new thresholds;
-- HDR decoded-frame and trace evidence normalize and agree across source, clip, and
-  output;
-- source-oracle, clip-boundary, and encoder-output HDR failures remain distinct;
-- a null auxiliary source stream probe does not invalidate a complete authoritative HDR
-  oracle;
-- historical schema-version-2 rows cannot satisfy the corrected gate;
-- a complete fresh panel has exactly 144 unique QSV rows;
-- one cohort can advance while another remains without a candidate;
-- candidate thresholds and ranking are unchanged; and
-- diagnostic artifacts cannot enter quality, selected-setting, or findings inputs.
+Their removal does not change the encoder, settings, quality panel, source identities,
+correction list, HDR oracle, evidence schemas, objective thresholds, ranking, resume
+semantics, dispatch guards, or workload boundary in this specification.
 
-Run focused source-contract, runmeta, benchmark, dispatch, probe, and result-reader suites.
-Then run `mise exec -- just kube encode-benchmark-validate` and
-`mise exec -- just ci` before publication. After any required rebase, rerun affected
-validation including `mise exec -- just ci`.
+## Validation requirements and result
+
+The offline encode validator contains exactly 39 high-value Bats identities:
+
+| Group | Tests | Required proof |
+| --- | ---: | --- |
+| Scientific quality | 12 | Closed VMAF corrections, evaluated statistics, finite SSIM/PSNR, and authoritative HDR classifications |
+| Work plan, evidence, ranking, resume, and integration | 17 | Exact 144-row plan, QSV commands, evidence authentication, ranking outcomes, resume, and four representative rows |
+| Dispatch and safety | 10 | Confirmation, capability, provenance, source drift, safe Job rendering, confinement, rollback, and bounded results |
+
+No test simulates all 144 encodes. One independent planner assertion proves the exact
+`6 x 3 x 8` set. Four representative integrations cover AVC ICQ 16, HDR10 ICQ 30, row
+failure and cleanup, and authenticated resume.
+
+Three controlled complete-validator runs took 78.25, 77.10, and 77.42 seconds. The
+77.42-second median meets the 60-to-120-second target and is 91.3 percent below the
+inherited 894.01-second median. Final canonical `mise exec -- just ci` validation passed
+780 tests with no failures.
 
 ## Current next action and exclusions
 
-The next implementation updates the quality evidence schema, VMAF reducer, HDR oracle,
-resume validation, candidate ranker, bounded results, fixtures, and tests. After merge
-and natural Flux reconciliation, one fresh preflight and one fresh quality run may
-exercise the corrected contract. Do not run another anomaly diagnostic.
+The corrected harness and focused offline QA are implemented. After merge and natural
+Flux reconciliation, run one fresh preflight and one fresh 144-row quality evaluation.
+Use its authenticated results to rank ICQ settings for AVC and HDR10; keep VC-1 separate
+unless it produces complete valid evidence. Do not run another anomaly diagnostic.
 
 This design does not relabel LA-ICQ evidence, change the encoder, add AV1, deploy
 FileFlows, replace media, alter Talos/Kubernetes/Cilium/GPU infrastructure, access TV or
