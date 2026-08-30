@@ -113,7 +113,41 @@ assert_rendered_rule_count() {
 case_production() {
   reset_tree
   assert_rendered_rule_count 0
-  expect_pass 'production pre-activation source'
+  expect_pass 'production private-activation source'
+}
+
+case_all_suspended() {
+  reset_tree
+  yq -i '.spec.suspend = true' "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  yq -i '.spec.suspend = true' \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
+  expect_pass 'fully suspended pre-activation source'
+}
+
+case_n8n_active_without_postgresql() {
+  reset_tree
+  yq -i '.spec.suspend = true' \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
+  expect_fail 'n8n active without PostgreSQL' \
+    'n8n and n8n-postgresql must be suspended or active together.'
+}
+
+case_postgresql_active_without_n8n() {
+  reset_tree
+  yq -i '.spec.suspend = true' "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  expect_fail 'PostgreSQL active without n8n' \
+    'n8n and n8n-postgresql must be suspended or active together.'
+}
+
+case_public_route_active_without_private_workloads() {
+  reset_tree
+  yq -i '.spec.suspend = true' "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  yq -i '.spec.suspend = true' \
+    "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
+  yq -i '(select(.metadata.name == "public-webhook-route") | .spec.suspend) = false' \
+    "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
+  expect_fail 'public route active without private workloads' \
+    'The public webhook route cannot be active while n8n or n8n-postgresql is suspended.'
 }
 
 case_unsafe_selection() {
@@ -194,6 +228,10 @@ case_canonical_alias_duplicate_selection() {
 
 case "${1:-all}" in
   production) case_production ;;
+  all-suspended) case_all_suspended ;;
+  n8n-active-without-postgresql) case_n8n_active_without_postgresql ;;
+  postgresql-active-without-n8n) case_postgresql_active_without_n8n ;;
+  public-route-active-without-private-workloads) case_public_route_active_without_private_workloads ;;
   unsafe-selection) case_unsafe_selection ;;
   unsafe-path) case_unsafe_path ;;
   parent-alias) case_parent_alias ;;
@@ -204,6 +242,10 @@ case "${1:-all}" in
   canonical-alias-duplicate-selection) case_canonical_alias_duplicate_selection ;;
   all)
     case_production
+    case_all_suspended
+    case_n8n_active_without_postgresql
+    case_postgresql_active_without_n8n
+    case_public_route_active_without_private_workloads
     case_unsafe_selection
     case_unsafe_path
     case_parent_alias

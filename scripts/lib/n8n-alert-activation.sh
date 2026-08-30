@@ -44,6 +44,32 @@ n8n_normalise_relative_path() {
   fi
 }
 
+validate_n8n_activation_lifecycle() {
+  local n8n_suspended="$1"
+  local postgresql_suspended="$2"
+  local public_route_suspended="$3"
+  local state
+
+  for state in "$n8n_suspended" "$postgresql_suspended" "$public_route_suspended"; do
+    case "$state" in
+      true | false) ;;
+      *)
+        echo 'n8n activation suspend fields must contain explicit booleans.' >&2
+        return 1
+        ;;
+    esac
+  done
+
+  [[ "$n8n_suspended" == "$postgresql_suspended" ]] || {
+    echo 'n8n and n8n-postgresql must be suspended or active together.' >&2
+    return 1
+  }
+  [[ "$public_route_suspended" != false || "$n8n_suspended" == false ]] || {
+    echo 'The public webhook route cannot be active while n8n or n8n-postgresql is suspended.' >&2
+    return 1
+  }
+}
+
 validate_n8n_alert_activation() {
   local alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomization.yaml'
   local n8n_ks='kubernetes/apps/automation/n8n/ks.yaml'
@@ -84,6 +110,8 @@ validate_n8n_alert_activation() {
   public_route_suspended="$(yq ea -r \
     'select(.metadata.name == "public-webhook-route") | .spec.suspend // false' \
     "$public_route_ks")"
+  validate_n8n_activation_lifecycle \
+    "$n8n_suspended" "$postgresql_suspended" "$public_route_suspended"
 
   if [[ "$canary_secret_count" == '1' && "$canary_env_count" == '1' && \
     "$canary_endpoint_count" == '1' && "$n8n_suspended" == 'false' && \
