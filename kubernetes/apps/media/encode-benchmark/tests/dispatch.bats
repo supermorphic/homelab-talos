@@ -3882,11 +3882,17 @@ write_diagnostics_custom_summary_fixture() {
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
 	[ "$status" -eq 0 ]
 	[ "$output" = "mode=quality phase=Complete dispatch_id=$dispatch_id runtime_run_id=$runtime_run_id artifact_location=/out/runs/$runtime_run_id avc=eligible:16@35,24@25 vc1=no-verdict: hdr10=no-go:" ]
+	[ "$(awk 'END { print NR }' <<<"$output")" -eq 1 ]
+	[[ "$output" != *'job='* ]]
+	[[ "$output" != *'image'* ]]
+	[[ "$output" != *'sha256:'* ]]
 	[[ "$output" != *'no-sanitized-summary'* ]]
 	[[ "$output" != *'sampleId'* ]]
 	[[ "$output" != *'sourcePath'* ]]
+	[[ "$output" != *'rawLog'* ]]
+	[[ "$output" != *'frames'* ]]
+	[[ "$output" != *'.mkv'* ]]
 	[[ "$output" != *'quality-evidence'* ]]
-	[[ "$output" != *'sha256'* ]]
 
 	# The generated marker must never admit the explicit plain-ID form.
 	printf '%s\n' "$dispatch_id" >"$STUB_LOGS_FILE"
@@ -3911,8 +3917,10 @@ write_diagnostics_custom_summary_fixture() {
 
 	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$explicit_run_id"
 	[ "$status" -eq 0 ]
+	[[ "$output" == job=encode-benchmark-quality-fixture\ mode=quality\ phase=Complete* ]]
+	[[ "$output" == *'configured_image_digest=sha256:'* ]]
 	[[ "$output" == *"dispatch_id=$explicit_run_id runtime_run_id=$explicit_run_id"* ]]
-	[[ "$output" == *"artifact_location=/out/runs/$explicit_run_id"* ]]
+	[[ "$output" == *$'\n'"artifact_location=/out/runs/$explicit_run_id" ]]
 }
 
 # Catches schema widening, path transport, ambiguous settings, non-finite
@@ -3971,6 +3979,20 @@ write_diagnostics_custom_summary_fixture() {
 	[[ "$output" == *'quality completion record rejected'* ]]
 	run grep -q '^mode=quality phase=Complete ' <<<"$output"
 	[ "$status" -eq 1 ]
+
+	# An authenticated completion record cannot print success when the Pod's
+	# immutable image identity does not match the committed runtime digest.
+	jq '.items[0].status.containerStatuses[0].imageID =
+		"docker-pullable://docker.io/linuxserver/ffmpeg@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+		"$STUB_PODS_JSON" >"$STUB_PODS_JSON.tmp"
+	mv "$STUB_PODS_JSON.tmp" "$STUB_PODS_JSON"
+	printf '%s\n' "$(<"$base")" >"$STUB_LOGS_FILE"
+	run "$RESULTS" "$KUBECONFIG_FIXTURE" "$dispatch_id"
+	[ "$status" -ne 0 ]
+	run grep -q '^mode=quality phase=Complete ' <<<"$output"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *' artifact_location='* ]]
+	[[ "$output" != *' avc='* ]]
 }
 
 # Catches diagnostics result collection widening into multi-query pod/job/log
