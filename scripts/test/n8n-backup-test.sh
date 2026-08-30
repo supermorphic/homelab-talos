@@ -77,7 +77,7 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == --check ]]; then
+if [[ "${1:-}" == -c ]]; then
   printf 'final-check\t%s\n' "$2" >>"$FAKE_LOG"
   [[ "${FAIL_STAGE:-}" != final_check ]] || exit 51
 else
