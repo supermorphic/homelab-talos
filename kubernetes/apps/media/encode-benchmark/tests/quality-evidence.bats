@@ -235,8 +235,10 @@ quality_hdr_case() {
 	[ "$status" -eq 0 ]
 	[ "$output" = '0.991000' ]
 	for case_name in unknown-kind ssim-false-boundary ssim-suffix-junk ssim-exponent \
-		ssim-malformed ssim-ambiguous ssim-infinite psnr-false-boundary \
-		psnr-suffix-junk psnr-exponent psnr-malformed psnr-ambiguous psnr-infinite; do
+		ssim-malformed ssim-ambiguous ssim-infinite ssim-valid-then-infinite \
+		ssim-infinite-then-valid ssim-valid-then-exponent psnr-false-boundary \
+		psnr-suffix-junk psnr-exponent psnr-malformed psnr-ambiguous psnr-infinite \
+		psnr-exponent-then-valid psnr-valid-then-suffix psnr-suffix-then-valid; do
 		kind="${case_name%%-*}"
 		log="$BATS_TEST_TMPDIR/$case_name.log"
 		case "$case_name" in
@@ -250,12 +252,18 @@ quality_hdr_case() {
 		ssim-malformed) printf '%s\n' 'All:.991000' >"$log" ;;
 		ssim-ambiguous) printf '%s\n' 'All:0.991000' 'All:0.992000' >"$log" ;;
 		ssim-infinite) printf '%s\n' 'All:inf' >"$log" ;;
+		ssim-valid-then-infinite) printf '%s\n' 'All:0.991000 All:inf' >"$log" ;;
+		ssim-infinite-then-valid) printf '%s\n' 'All:inf All:0.991000' >"$log" ;;
+		ssim-valid-then-exponent) printf '%s\n' 'All:0.991000 All:4e-1' >"$log" ;;
 		psnr-false-boundary) printf '%s\n' 'meanaverage:40.000000' >"$log" ;;
 		psnr-suffix-junk) printf '%s\n' 'average:40.000000junk' >"$log" ;;
 		psnr-exponent) printf '%s\n' 'average:40e2' >"$log" ;;
 		psnr-malformed) printf '%s\n' 'average:.40' >"$log" ;;
 		psnr-ambiguous) printf '%s\n' 'average:40.000000' 'average:41.000000' >"$log" ;;
 		psnr-infinite) printf '%s\n' 'average:nan' >"$log" ;;
+		psnr-exponent-then-valid) printf '%s\n' 'average:40e2 average:40.000000' >"$log" ;;
+		psnr-valid-then-suffix) printf '%s\n' 'average:40.000000 average:41junk' >"$log" ;;
+		psnr-suffix-then-valid) printf '%s\n' 'average:41junk average:40.000000' >"$log" ;;
 		esac
 		run bash -c 'source "$1"; quality_parse_metric "$2" "$3"' quality-evidence "$QUALITY_EVIDENCE" "$kind" "$log"
 		[ "$status" -ne 0 ] || {

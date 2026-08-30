@@ -77,10 +77,10 @@ quality_parse_metric() {
 	*) return 64 ;;
 	esac
 	mapfile -t values < <(awk -v field="$field" '
-		BEGIN { pattern = "^" field ":[+-]?[0-9]+([.][0-9]+)?$" }
+		BEGIN { prefix = "^" field ":" }
 		{
 			for (position = 1; position <= NF; position += 1) {
-				if ($position ~ pattern) {
+				if ($position ~ prefix) {
 					value = $position
 					sub("^" field ":", "", value)
 					print value
