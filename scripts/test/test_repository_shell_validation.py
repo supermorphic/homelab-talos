@@ -58,8 +58,9 @@ class RepositoryShellValidationTests(unittest.TestCase):
             ["git", "config", "user.name", "Repository Shell Tests"], cwd=root, check=True
         )
         (root / "scripts/test").mkdir(parents=True)
+        (root / ".mise.toml").write_text('[tools]\nshellcheck = "fake-1.0"\n')
         (root / "scripts/test/ok.sh").write_text("#!/usr/bin/env bash\necho ok\n")
-        subprocess.run(["git", "add", "scripts/test/ok.sh"], cwd=root, check=True)
+        subprocess.run(["git", "add", ".mise.toml", "scripts/test/ok.sh"], cwd=root, check=True)
         subprocess.run(["git", "commit", "--quiet", "-m", "fixture"], cwd=root, check=True)
 
     def fake_tools(self, root: Path, *, bash_failure: bool = False) -> tuple[Path, Path]:
@@ -241,7 +242,7 @@ exit 0
             )
             self.assertEqual(
                 shellcheck_sentinel.read_text(encoding="utf-8"),
-                "--external-sources --format=json scripts/test/ok.sh\n--version\n",
+                "--external-sources --format=json scripts/test/ok.sh\n",
             )
             self.assertTrue(junit.is_file())
 
@@ -283,6 +284,68 @@ exit 0
                     2,
                 )
             self.assertEqual(artifact.read_text(encoding="utf-8"), '{"previous":"artifact"}\n')
+
+    def test_consume_missing_artifact_stops_at_bash_before_shellcheck(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            (root / "scripts/test/bad.sh").write_text("#!/usr/bin/env bash\n")
+            subprocess.run(["git", "add", "scripts/test/bad.sh"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "--quiet", "-m", "bad"], cwd=root, check=True)
+            tools, shellcheck_sentinel = self.fake_tools(root, bash_failure=True)
+            environment = {**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}"}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(
+                    repository_shell_validation.consume(
+                        root=root,
+                        suite="validation.test-harness",
+                        artifact_path=root / "missing.json",
+                        run_id="run-1",
+                        junit_path=None,
+                    ),
+                    2,
+                )
+            self.assertFalse(shellcheck_sentinel.exists())
+
+    def test_consume_recomputes_when_run_id_does_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            tools, shellcheck_sentinel = self.fake_tools(root)
+            artifact = root / "artifact.json"
+            environment = {**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}"}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                (tools / "shellcheck").write_text(
+                    "#!/bin/sh\n"
+                    f"printf '%s\\n' \"$*\" >> {shellcheck_sentinel}\n"
+                    "printf '[]\\n'\nexit 0\n"
+                )
+                (tools / "shellcheck").chmod(0o755)
+                self.assertEqual(
+                    repository_shell_validation.produce(
+                        root=root,
+                        suite="validation.repo-validate",
+                        run_id="run-1",
+                        artifact_path=artifact,
+                        junit_path=None,
+                    ),
+                    0,
+                )
+                shellcheck_sentinel.unlink()
+                self.assertEqual(
+                    repository_shell_validation.consume(
+                        root=root,
+                        suite="validation.test-harness",
+                        artifact_path=artifact,
+                        run_id="other-run",
+                        junit_path=None,
+                    ),
+                    0,
+                )
+            self.assertEqual(
+                shellcheck_sentinel.read_text(encoding="utf-8"),
+                "--external-sources --format=json scripts/test/ok.sh\n",
+            )
 
     def test_consume_reuses_only_matching_passed_artifact_and_recomputes_otherwise(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -362,6 +425,10 @@ exit 0
                     (
                         "tool mismatch",
                         lambda document: document.__setitem__("bash_version", "other"),
+                    ),
+                    (
+                        "ShellCheck tool mismatch",
+                        lambda document: document.__setitem__("shellcheck_version", "other"),
                     ),
                     (
                         "argv mismatch",

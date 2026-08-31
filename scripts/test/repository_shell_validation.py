@@ -37,6 +37,7 @@ SHELLCHECK_NOT_RUN = "not-run"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+SHELLCHECK_PIN = re.compile(r'(?m)^shellcheck\s*=\s*"([^"]+)"\s*$')
 
 
 def discover_shell_sources(root: Path) -> list[Path]:
@@ -74,6 +75,14 @@ def command_version(command: str) -> str:
     if not version:
         raise ValueError(f"{command} --version returned no output")
     return version
+
+
+def pinned_shellcheck_version(root: Path) -> str:
+    """Read the repository's ShellCheck tool identity without executing ShellCheck."""
+    match = SHELLCHECK_PIN.search((root / ".mise.toml").read_text(encoding="utf-8"))
+    if match is None:
+        raise ValueError(".mise.toml must pin ShellCheck")
+    return match.group(1)
 
 
 def head_sha(root: Path) -> str:
@@ -245,7 +254,7 @@ def expected_identity(root: Path, suite: str, run_id: str | None) -> dict[str, A
         "source_set_sha256": source_set_digest(root, sources),
         "sorted_files": [relative.as_posix() for relative in sources],
         "bash_version": command_version("bash"),
-        "shellcheck_version": command_version("shellcheck"),
+        "shellcheck_version": pinned_shellcheck_version(root),
         "bash_argv": BASH_ARGV,
         "shellcheck_argv": SHELLCHECK_ARGV,
         "producer_suite": PRODUCER_SUITE,
@@ -305,7 +314,7 @@ def produce_document(root: Path, run_id: str) -> dict[str, Any]:
         findings = normalized_findings(completed.stdout)
     shellcheck_version = SHELLCHECK_NOT_RUN
     if bash_status == 0:
-        shellcheck_version = command_version("shellcheck")
+        shellcheck_version = pinned_shellcheck_version(root)
     return {
         "schema_version": 1,
         "run_id": run_id,
