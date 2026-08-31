@@ -25,6 +25,7 @@ REPOSITORY_DIRS = (
     "scripts/hooks",
     "scripts/repository",
     "scripts/secrets",
+    "scripts/talos",
     "scripts/validate",
     "scripts/verify",
     "scripts/test",

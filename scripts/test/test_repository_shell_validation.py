@@ -24,6 +24,7 @@ REPOSITORY_DIRS = (
     "scripts/hooks",
     "scripts/repository",
     "scripts/secrets",
+    "scripts/talos",
     "scripts/validate",
     "scripts/verify",
     "scripts/test",
@@ -105,6 +106,7 @@ exit 0
         expected = git_shell_oracle(REPO_ROOT)
         self.assertEqual(repository_shell_validation.discover_shell_sources(REPO_ROOT), expected)
         self.assertTrue(all(type(relative) is Path for relative in expected))
+        self.assertIn(Path("scripts/talos/apply-live.sh"), expected)
 
         ignored = REPO_ROOT / "scripts/test/ignored-plan-fixture.sh"
         ignore_file = REPO_ROOT / ".gitignore"
@@ -120,6 +122,12 @@ exit 0
         finally:
             ignored.unlink(missing_ok=True)
             ignore_file.write_text(original_ignore, encoding="utf-8")
+
+    def test_discovers_tracked_talos_shell_source(self) -> None:
+        self.assertIn(
+            Path("scripts/talos/apply-live.sh"),
+            repository_shell_validation.discover_shell_sources(REPO_ROOT),
+        )
 
     def test_source_set_digest_changes_for_added_removed_and_changed_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
