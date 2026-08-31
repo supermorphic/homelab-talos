@@ -74,6 +74,103 @@ def inspect_report(input_path: Path) -> dict[str, int]:
     return _validated_counts(ET.parse(input_path).getroot())
 
 
+def console_summary(input_path: Path, label: str) -> int:
+    """Print a human-readable summary of an existing JUnit document."""
+    try:
+        root = ET.parse(input_path).getroot()
+    except (ET.ParseError, OSError) as error:
+        print(f"JUnit adapter error: {error}", file=sys.stderr)
+        return 2
+    counts = _validated_counts(root)
+    print(
+        f"{label}: {counts['tests']} tests, {counts['passed']} passed, "
+        f"{counts['failures']} failures, {counts['errors']} errors, "
+        f"{counts['skipped']} skipped"
+    )
+    cases = []
+    for case in root.iter("testcase"):
+        classname = case.get("classname", "")
+        name = case.get("name", "")
+        identity = f"{classname}.{name}" if classname else name
+        for outcome in ("failure", "error"):
+            node = case.find(outcome)
+            if node is not None:
+                detail = node.text or node.get("message", "")
+                cases.append((classname, name, outcome, identity, detail))
+    for _, _, outcome, identity, detail in sorted(cases):
+        suffix = f": {detail}" if detail else ""
+        print(f"{outcome}: {identity}{suffix}")
+    return 0
+
+
+def repository_shell_report(
+    output: Path,
+    suite_name: str,
+    result_path: Path,
+) -> int:
+    """Render the repository validator's native JSON result as JUnit."""
+    try:
+        document = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"JUnit adapter error: {error}", file=sys.stderr)
+        return 2
+    if not isinstance(document, dict):
+        raise TypeError("repository result must be an object")
+    result = document["result"]
+    findings = document["findings"]
+    if not isinstance(result, dict) or not isinstance(findings, list):
+        raise TypeError("repository result has invalid result/findings")
+
+    suite = ET.Element("testsuite", {"name": suite_name})
+    bash = ET.SubElement(
+        suite,
+        "testcase",
+        {"classname": suite_name, "name": "bash", "time": "0"},
+    )
+    bash_status = result["bash_status"]
+    if bash_status not in (0, None):
+        first = result.get("bash_first_failure")
+        if not isinstance(first, dict):
+            raise ValueError("failed Bash result is missing bash_first_failure")
+        file_name = first["file"]
+        stderr = first["stderr"]
+        failure = ET.SubElement(
+            bash,
+            "failure",
+            {"message": f"Bash syntax check failed: {file_name}: {stderr}"},
+        )
+        failure.text = f"{file_name}: {stderr}"
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise TypeError("ShellCheck finding must be an object")
+        path = str(finding["file"])
+        code = f"SC{finding['code']}"
+        case = ET.SubElement(
+            suite,
+            "testcase",
+            {
+                "classname": suite_name,
+                "name": f"{path}:{finding['line']}:{finding['column']}:{code}",
+                "time": "0",
+            },
+        )
+        message = str(finding["message"])
+        failure = ET.SubElement(
+            case,
+            "failure",
+            {"message": f"{code} {finding['level']}: {message}", "type": "shellcheck"},
+        )
+        failure.text = message
+
+    _set_counts(suite)
+    root = ET.Element("testsuites", {"name": suite_name})
+    root.append(suite)
+    _set_counts(root)
+    _write_xml(root, output)
+    return 0
+
+
 def write_case(
     output: Path,
     suite_name: str,

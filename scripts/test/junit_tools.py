@@ -10,8 +10,10 @@ from pathlib import Path
 
 from junit_report import (
     append_lifecycle,
+    console_summary,
     inspect_report,
     merge_reports,
+    repository_shell_report,
     shellcheck_report,
     unittest_report,
     write_case,
@@ -60,6 +62,15 @@ def parse_args() -> argparse.Namespace:
     shellcheck.add_argument("--suite", required=True)
     shellcheck.add_argument("--findings", type=Path, required=True)
     shellcheck.add_argument("files", nargs="+")
+
+    summary = subparsers.add_parser("summary")
+    summary.add_argument("--input", type=Path, required=True)
+    summary.add_argument("--label", required=True)
+
+    repository_shell = subparsers.add_parser("repository-shell")
+    repository_shell.add_argument("--output", type=Path, required=True)
+    repository_shell.add_argument("--suite", required=True)
+    repository_shell.add_argument("--result", type=Path, required=True)
 
     unit = subparsers.add_parser("unittest")
     unit.add_argument("--output", type=Path, required=True)
@@ -110,6 +121,10 @@ def main() -> int:
                 args.findings,
                 args.files,
             )
+        if args.command == "summary":
+            return console_summary(args.input, args.label)
+        if args.command == "repository-shell":
+            return repository_shell_report(args.output, args.suite, args.result)
         if args.command == "unittest":
             return unittest_report(
                 args.output,
