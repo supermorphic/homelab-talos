@@ -29,7 +29,7 @@ The normal day-2 health check is read-only. Run it from a worktree with a curren
 mise exec -- just kube n8n-verify
 ```
 
-It observes readiness, routes, monitoring, backup freshness, and the Gatus canary series.
+It observes readiness, routes, monitoring, backup freshness, and both Gatus n8n series.
 It does not send a webhook request. The restore drill and persistence test are controlled,
 mutating assurance tests. Do not use them as routine health checks.
 
@@ -52,7 +52,8 @@ current phase has reached its completion checkpoint:
    workloads active in Git. Keep the public route suspended.
 3. **Public route + monitoring activation PR:** verify the Flux-managed internal DNS
    record, configure the one UniFi Cloudflare DDNS profile and router exposure, then
-   activate the exact public route, Gatus canary, and n8n alerts together through Git.
+   activate the exact public route, Gatus webhook E2E check, and n8n alerts together
+   through Git.
 
 Every PR requires review, required checks, explicit merge authorization, merge, and Flux
 source revision parity with the merged `origin/main` before the procedure advances.
@@ -290,15 +291,15 @@ mapping. Keep `public-webhook-route` suspended and do not start the Git activati
 
 ### Git-managed route and monitoring activation
 
-In the dedicated Public route + monitoring activation PR, copy the staged Gatus canary
-values into the active values, change `public-webhook-route.spec.suspend` to `false`, and
-select the staged n8n rule:
+In the dedicated Public route + monitoring activation PR, copy the staged Gatus webhook
+E2E values into the active values, change `public-webhook-route.spec.suspend` to `false`,
+and select the staged n8n rule:
 
 ```bash
 mise exec -- yq -i '
   .env.GATUS_N8N_CANARY_TOKEN =
     load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").env.GATUS_N8N_CANARY_TOKEN |
-  del(.config.endpoints[] | select(.name == "n8n-platform-canary")) |
+  del(.config.endpoints[] | select(.name == "n8n-webhook-e2e")) |
   .config.endpoints +=
     load("kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml").config.endpoints
 ' kubernetes/apps/monitoring/gatus/app/values.yaml
@@ -310,11 +311,12 @@ mise exec -- yq -i '
 ' kubernetes/apps/monitoring/alerts/app/kustomization.yaml
 ```
 
-The Gatus validator rejects partial activation, duplicate canary entries, an unselected
-canary Secret, or active canary values while n8n, PostgreSQL, or the public route is
-suspended. The alerts and n8n validators resolve every resource path from the alerts
-Kustomization directory. They reject early or missing n8n rule selection, aliases, and
-canonical or mixed duplicates; complete activation requires one literal `./n8n.yaml`.
+The Gatus validator rejects partial activation, duplicate webhook E2E entries, an
+unselected canary Secret, or an active webhook E2E check while n8n, PostgreSQL, or the
+public route is suspended. The alerts and n8n validators resolve every resource path from
+the alerts Kustomization directory. They reject early or missing n8n rule selection,
+aliases, and canonical or mixed duplicates; complete activation requires one literal
+`./n8n.yaml`.
 Run `mise exec -- just kube gatus-validate`,
 `mise exec -- just kube n8n-validate`, and
 `mise exec -- just kube alerts-validate monitoring`; obtain review and explicit merge
@@ -333,17 +335,18 @@ verification.
 
 ### Monitoring and route verification
 
-Confirm Gatus has loaded `Platform / n8n-platform-canary` and its five-minute probe is
-green. Run the full read-only verifier. It requires the exact healthy 15-alert
-`n8n-platform` group, observes the Gatus series, and does not send a webhook request or
-require the canary token:
+Confirm Gatus has loaded both `Automation / n8n-readiness` and
+`Automation / n8n-webhook-e2e`. Require the one-minute readiness check and five-minute
+webhook E2E check to be green. Run the full read-only verifier. It requires the exact
+healthy 15-alert `n8n-platform` group, observes both Gatus series, and does not send a
+webhook request or require the canary token:
 
 ```bash
 mise exec -- just kube n8n-verify
 ```
 
-**Complete when:** The five-minute Gatus probe is green and `n8n-verify` confirms the exact
-healthy 15-alert group, expected route state, monitoring series, and backup freshness.
+**Complete when:** Both Gatus checks are green and `n8n-verify` confirms the exact healthy
+15-alert group, expected route state, monitoring series, and backup freshness.
 
 **Stop if:** Gatus or `n8n-verify` fails. Keep the failure evidence, correct the route,
 monitoring, workload, or backup fault, and do not proceed to activation acceptance.
@@ -380,8 +383,8 @@ confirmations:
 )
 ```
 
-`n8n-verify` observes readiness, routes, monitoring, backup freshness, and the Gatus
-canary series. The smoke suite checks the stable n8n resources without mutation. The
+`n8n-verify` observes readiness, routes, monitoring, backup freshness, and both Gatus n8n
+series. The smoke suite checks the stable n8n resources without mutation. The
 restore drill proves a temporary PostgreSQL restore can decrypt retained credentials. The
 persistence test recreates the n8n and PostgreSQL pods and proves volume, canary, and
 backup recovery. This is a focused acceptance sequence, not a new campaign.
@@ -550,7 +553,8 @@ The existing `ReferenceGrant` is sufficient when the route remains in
 `networking-public` and targets the existing `automation/n8n` Service. A route to another
 Service or namespace requires its own narrowly scoped grant; do not broaden the n8n grant.
 Add provider-specific monitoring when it supplies an independent delivery or processing
-signal. Do not weaken the Platform Canary, its monitoring, or its negative-path tests.
+signal. Do not weaken the Platform Canary workflow, the `n8n-webhook-e2e` check, or the
+negative-path tests.
 
 Run the repository validations required by the changed components:
 
@@ -681,7 +685,7 @@ test -z "$(mise exec -- kubectl --kubeconfig .kube/config \
 
 Only after that proof may a second reviewed Git change set
 `public-webhook-route.spec.suspend: true`. If the public path will stay withdrawn, remove
-both `GATUS_N8N_CANARY_TOKEN` and the `n8n-platform-canary` endpoint from active
+both `GATUS_N8N_CANARY_TOKEN` and the `n8n-webhook-e2e` endpoint from active
 `values.yaml`; keep the exact reactivation source in
 `n8n-canary-activation.values.yaml`, and remove `./n8n.yaml` from the monitoring alerts
 Kustomization in the same reviewed change. To publish again, keep router forwarding
@@ -695,8 +699,8 @@ last.
 removed, the unsuspended child
 Kustomization has reconciled the empty route source with pruning, the exact HTTPRoute is
 proved absent, and only then the follow-up Git change suspends the child. If exposure will
-stay withdrawn, the Gatus canary and n8n alert selection are removed in that same reviewed
-change as described above.
+stay withdrawn, the Gatus webhook E2E check and n8n alert selection are removed in that
+same reviewed change as described above. Keep the private `n8n-readiness` check active.
 
 **Stop if:** The off-network containment check or route-absence proof fails. Do not suspend
 the child Kustomization before pruning is observed, and do not delete the retained claims

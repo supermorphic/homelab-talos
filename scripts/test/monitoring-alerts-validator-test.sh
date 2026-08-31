@@ -80,11 +80,22 @@ set_alert_selection() {
   [[ "$selected" != true ]] || yq -i '.resources += ["./n8n.yaml"]' "$kustomization"
 }
 
+deactivate_webhook_e2e() {
+  local values
+  values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  yq -i 'del(.env.GATUS_N8N_CANARY_TOKEN) |
+    del(.config.endpoints[] | select(.name == "n8n-webhook-e2e"))' "$values"
+  yq -i '(select(.metadata.name == "public-webhook-route") | .spec.suspend) = true' \
+    "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
+  set_alert_selection false
+}
+
 activate_platform() {
   local values activation candidate
   values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
   activation="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
   candidate="$test_dir/activated-values.yaml"
+  deactivate_webhook_e2e
   # shellcheck disable=SC2016 # yq expands $item inside its expression.
   yq ea '. as $item ireduce ({}; . *+ $item)' "$values" "$activation" >"$candidate"
   mv -- "$candidate" "$values"
@@ -112,12 +123,13 @@ assert_rendered_rule_count() {
 
 case_production() {
   reset_tree
-  assert_rendered_rule_count 0
-  expect_pass 'production private-activation source'
+  assert_rendered_rule_count 1
+  expect_pass 'production public-activation source'
 }
 
 case_all_suspended() {
   reset_tree
+  deactivate_webhook_e2e
   yq -i '.spec.suspend = true' "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
   yq -i '.spec.suspend = true' \
     "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
@@ -152,6 +164,7 @@ case_public_route_active_without_private_workloads() {
 
 case_unsafe_selection() {
   reset_tree
+  deactivate_webhook_e2e
   set_alert_selection true
   expect_fail 'pre-activation n8n alert selection' \
     'Pre-activation n8n alerts must select no resource path resolving to n8n.yaml; found 1.'
@@ -160,6 +173,7 @@ case_unsafe_selection() {
 case_unsafe_path() {
   local kustomization
   reset_tree
+  deactivate_webhook_e2e
   set_alert_selection false
   kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
   yq -i '.resources += ["n8n.yaml"]' "$kustomization"
@@ -170,6 +184,7 @@ case_unsafe_path() {
 case_parent_alias() {
   local kustomization
   reset_tree
+  deactivate_webhook_e2e
   set_alert_selection false
   kustomization="$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
   yq -i '.resources += ["../app/n8n.yaml"]' "$kustomization"

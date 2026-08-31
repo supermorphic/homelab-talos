@@ -1320,7 +1320,7 @@ mapfile -t public_route_contracts < <(
 }
 validate_n8n_alert_activation
 
-expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nContainerRestarting,N8nExecutionFailures,N8nPersistentVolumeClaimNotBound,N8nPersistentVolumeUsageCritical,N8nPersistentVolumeUsageWarning,N8nPostgresqlBackupJobFailed,N8nPostgresqlBackupJobOverdue,N8nPostgresqlBackupStale,N8nPostgresqlUnavailable,N8nPostgresqlWorkloadUnavailable,N8nUnavailable,N8nWorkloadUnavailable'
+expected_alerts='N8nContainerOomKilled,N8nContainerRestarting,N8nExecutionFailures,N8nPersistentVolumeClaimNotBound,N8nPersistentVolumeUsageCritical,N8nPersistentVolumeUsageWarning,N8nPostgresqlBackupJobFailed,N8nPostgresqlBackupJobOverdue,N8nPostgresqlBackupStale,N8nPostgresqlUnavailable,N8nPostgresqlWorkloadUnavailable,N8nUnavailable,N8nWebhookE2EDown,N8nWebhookE2EProbeMissing,N8nWorkloadUnavailable'
 [[ "$(yq -r '[.spec.groups[].rules[] | select(has("alert")) | .alert] | sort | join(",")' \
     "$n8n_alerts")" == \
   "$expected_alerts" ]] || {
@@ -1333,7 +1333,7 @@ expected_alerts='N8nCanaryDown,N8nCanaryProbeMissing,N8nContainerOomKilled,N8nCo
   exit 1
 }
 
-expected_panels='Authenticated public canary|Container restarts|Execution duration p95|Execution success and failure rate|OOM termination state|Persistent volume utilization|Platform CPU|Platform memory|PostgreSQL connections|PostgreSQL database size|Ready replicas|Validated logical backup age|Validated logical backup status'
+expected_panels='Authenticated webhook E2E|Container restarts|Execution duration p95|Execution success and failure rate|OOM termination state|Persistent volume utilization|Platform CPU|Platform memory|PostgreSQL connections|PostgreSQL database size|Ready replicas|Validated logical backup age|Validated logical backup status'
 [[ "$(jq -r '.uid' "$n8n_dashboard")" == 'n8n-postgresql' && \
   "$(jq -r '[.templating.list[] | select(.name == "datasource" and .type == "datasource" and .query == "prometheus")] | length' "$n8n_dashboard")" == '1' && \
   "$(jq -r '.templating.list | length' "$n8n_dashboard")" == '1' && \
@@ -1344,7 +1344,7 @@ expected_panels='Authenticated public canary|Container restarts|Execution durati
   exit 1
 }
 
-canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' "$gatus_canary_activation")"
+canary_endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.group == "Automation" and .name == "n8n-webhook-e2e")' "$gatus_canary_activation")"
 canary_group="$(yq -r '.group' - <<<"$canary_endpoint")"
 canary_name="$(yq -r '.name' - <<<"$canary_endpoint")"
 canary_correlation="$(yq -r '.body | from_json | .correlation' - <<<"$canary_endpoint")"
@@ -1353,7 +1353,7 @@ expected_canary_url="https://$(yq -r '.spec.dnsNames[0]' "$public_certificate")$
   "$(yq -r '.method' - <<<"$canary_endpoint")" == 'POST' && \
   "$(yq -r '.interval' - <<<"$canary_endpoint")" == '5m' && \
   "$canary_correlation" == 'gatus-platform-canary' ]] || {
-  echo 'The Gatus canary URL must match the dedicated public certificate and exact route.' >&2
+  echo 'The Gatus webhook E2E URL must match the dedicated public certificate and exact route.' >&2
   exit 1
 }
 # shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
@@ -1361,19 +1361,19 @@ expected_canary_url="https://$(yq -r '.spec.dnsNames[0]' "$public_certificate")$
     "$gatus_canary_activation")" == 'n8n-canary,token' && \
   "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" == \
     '${GATUS_N8N_CANARY_TOKEN}' ]] || {
-  echo 'The Gatus canary authentication must consume only gatus/n8n-canary token.' >&2
+  echo 'The Gatus webhook E2E authentication must consume only gatus/n8n-canary token.' >&2
   exit 1
 }
-canary_down_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nCanaryDown") | .expr' "$n8n_alerts")"
-canary_missing_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nCanaryProbeMissing") | .expr' "$n8n_alerts")"
-canary_dashboard_expr="$(jq -r '.panels[] | select(.title == "Authenticated public canary") | .targets[].expr' "$n8n_dashboard")"
+canary_down_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nWebhookE2EDown") | .expr' "$n8n_alerts")"
+canary_missing_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "N8nWebhookE2EProbeMissing") | .expr' "$n8n_alerts")"
+canary_dashboard_expr="$(jq -r '.panels[] | select(.title == "Authenticated webhook E2E") | .targets[].expr' "$n8n_dashboard")"
 canary_matcher="group=\"$canary_group\",name=\"$canary_name\""
 [[ "$canary_down_expr" == *"group=\"$canary_group\""* && \
   "$canary_down_expr" == *"name=\"$canary_name\""* && \
   "$canary_missing_expr" == *"group=\"$canary_group\""* && \
   "$canary_missing_expr" == *"name=\"$canary_name\""* && \
   "$canary_dashboard_expr" == *"$canary_matcher"* ]] || {
-  echo 'The Gatus canary, Prometheus alerts, and dashboard must use one endpoint identity.' >&2
+  echo 'The Gatus webhook E2E check, Prometheus alerts, and dashboard must use one endpoint identity.' >&2
   exit 1
 }
 

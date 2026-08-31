@@ -430,14 +430,17 @@ operator creates the n8n owner account through the private UI, imports the templ
 creates and binds its header-auth credential using the SOPS-managed canary value, and
 publishes it. This one-time bootstrap avoids a persistent privileged bootstrap API key.
 
-Gatus calls `/webhook/platform-canary` every five minutes from its normal monitoring
-context with the same SOPS-managed header value after public activation. Before
-activation, the active Gatus Helm values contain neither the required Secret reference nor
-the endpoint. Their complete exact values remain in a Git-owned staged activation fragment
-and are copied into active values only in the reviewed public-route activation change.
-Gatus then verifies the status and correlation response. A separate negative acceptance
-request without valid authentication must fail. Gatus never checks the public n8n UI
-because no such route exists.
+Gatus checks `https://n8n.lab.supermorphic.com/healthz/readiness` every minute as
+`Automation / n8n-readiness`. It requires HTTP 200 and `status: ok`, which proves that the
+internal HTTPS route reaches an n8n instance whose database is connected and migrated.
+Gatus also calls `/webhook/platform-canary` every five minutes as
+`Automation / n8n-webhook-e2e`, using the same SOPS-managed header value after public
+activation. Before activation, the active Gatus Helm values contain neither the required
+Secret reference nor the webhook E2E endpoint. Their complete exact values remain in a
+Git-owned staged activation fragment and are copied into active values only in the
+reviewed public-route activation change. Gatus then verifies the status and correlation
+response. A separate negative acceptance request without valid authentication must fail.
+Gatus never checks the public n8n UI because no such route exists.
 
 ## Error and retry behavior
 
@@ -509,15 +512,15 @@ PrometheusRules cover:
 - a sustained increase in failed n8n executions over a 15-minute window;
 - absent or stale logical-backup freshness;
 - failed or overdue backup Jobs;
-- Gatus failure of the authenticated public canary;
+- Gatus failure of the authenticated public webhook E2E check;
 - unready public Envoy backends and certificate expiry through existing platform
   signals; and
 - claim use for the n8n, PostgreSQL, and logical-backup claims.
 
-The monitoring alerts package owns `n8n.yaml`, but the active pre-activation alerts
-Kustomization does not select any resource path that resolves to it. The reviewed public
-activation change selects it exactly once with the literal path `./n8n.yaml`, together
-with the public route and Gatus canary. Aliases and canonical or mixed duplicates fail
+The monitoring alerts package owns `n8n.yaml`. Before public activation, its
+Kustomization selects no resource path that resolves to that file. Complete public
+activation selects it exactly once with the literal path `./n8n.yaml`, together with the
+public route and Gatus webhook E2E check. Aliases and canonical or mixed duplicates fail
 source validation. Git resource selection is the durable activation identity; runtime
 Flux health is not an alert-evaluation gate. Once
 selected, the rules stay loaded through reconciliation failures and missing Flux metric
@@ -531,7 +534,7 @@ All three claims use the established repository thresholds:
 - critical above 85 percent used for 5 minutes.
 
 A compact Grafana dashboard shows n8n/PostgreSQL resource use, execution health,
-restarts, storage growth, backup freshness, and webhook-canary health. Alertmanager
+restarts, storage growth, backup freshness, and webhook E2E health. Alertmanager
 remains the only alert-delivery path.
 
 ## Rollout
@@ -539,8 +542,8 @@ remains the only alert-delivery path.
 The rollout follows dependency order:
 
 1. Reconcile the public Gateway, dedicated certificate, routing namespace, internal
-   `DNSEndpoint`, inactive Gatus canary contract, and monitoring package with the n8n rule
-   file staged but unselected. Reconcile the Pi-hole ExternalDNS CRD source. Do not
+   `DNSEndpoint`, inactive Gatus webhook E2E contract, and monitoring package with the n8n
+   rule file staged but unselected. Reconcile the Pi-hole ExternalDNS CRD source. Do not
    publish router forwarding.
 2. Reconcile the PostgreSQL claims, StatefulSet, Service, backup job, and SQL Exporter.
 3. Reconcile n8n with queue mode disabled and confirm database migrations and private UI
@@ -602,10 +605,11 @@ Focused tests and rendered-manifest assertions verify:
 - resource and execution-retention settings match this specification;
 - the backup script cannot update freshness before final artifact validation; and
 - Prometheus alert expressions cover absent metrics and both storage thresholds;
-- the active pre-activation Gatus render has no required n8n Secret reference or canary
-  endpoint, while the staged activation fragment renders their complete exact contract;
-- the active pre-activation monitoring render omits the n8n rule, complete Git activation
-  selects it exactly once as literal `./n8n.yaml`, and incomplete, early, aliased, or
+- the active production Gatus render contains the exact `Automation / n8n-readiness` and
+  `Automation / n8n-webhook-e2e` contracts, while a synthetic pre-activation fixture
+  proves the webhook E2E Secret reference and endpoint can remain absent;
+- the active production monitoring render selects the n8n rule exactly once as literal
+  `./n8n.yaml`, while synthetic lifecycle fixtures prove incomplete, early, aliased, or
   duplicate selection fails source validation;
 - selected n8n rules remain evaluable when Flux readiness metrics are false or absent; and
 - zero-valued and fully absent n8n and PostgreSQL scrape-target and workload-replica
@@ -616,8 +620,9 @@ requires unsuspended current-generation Flux resources, complete current workloa
 rollouts, one exact healthy Prometheus target for each ServiceMonitor, and the complete
 canonical shape of every route to the n8n Service. Private bootstrap verification requires
 the staged `n8n-platform` rule group to be absent; a stale or early group fails. Full
-verification requires the exact 15-alert group and healthy evaluation for every rule. It
-does not read Secrets, access the database, use pod exec, or send a canary request.
+verification requires the exact 15-alert group, healthy evaluation for every rule, and
+green `n8n-readiness` and `n8n-webhook-e2e` Gatus series. It does not read Secrets, access
+the database, use pod exec, or send a webhook request.
 Authenticated canary execution belongs to the attended mutating persistence, restore,
 and off-network acceptance paths.
 

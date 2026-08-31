@@ -93,10 +93,23 @@ n8n_prometheus_targets_match_contract() {
   done
 }
 
+n8n_gatus_result_matches_contract() {
+  local expected_group="$1" expected_name="$2" input="$3" response
+  response="$(cat -- "$input")" || return 1
+  EXPECTED_GROUP="$expected_group" EXPECTED_NAME="$expected_name" \
+    yq -p=json -o=json -e '
+      .status == "success" and
+      (.data.result | length) == 1 and
+      .data.result[0].metric.group == strenv(EXPECTED_GROUP) and
+      .data.result[0].metric.name == strenv(EXPECTED_NAME) and
+      .data.result[0].value[1] == "1"
+    ' - <<<"$response" >/dev/null 2>&1
+}
+
 n8n_expected_prometheus_alert_rules() {
   printf '%s\n' \
-    N8nCanaryDown \
-    N8nCanaryProbeMissing \
+    N8nWebhookE2EDown \
+    N8nWebhookE2EProbeMissing \
     N8nContainerOomKilled \
     N8nContainerRestarting \
     N8nExecutionFailures \
