@@ -244,22 +244,23 @@ done
 }
 
 if [[ "$mode" == 'full' ]]; then
-  gatus_response="$(
-    flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
-      'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
-  )"
-  [[ "$(yq -r '.status // ""' <<<"$gatus_response")" == 'success' && \
-    "$(yq -r '.data.result | length' <<<"$gatus_response")" == '1' && \
-    "$(yq -r '.data.result[0].value[1]' <<<"$gatus_response")" == '1' ]] || {
-    echo 'The authenticated Gatus n8n canary series is absent or not green.' >&2
-    exit 1
-  }
+  for gatus_name in n8n-readiness n8n-webhook-e2e; do
+    gatus_response="$(
+      flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
+        "gatus_results_endpoint_success{group=\"Automation\",name=\"$gatus_name\"}"
+    )"
+    n8n_gatus_result_matches_contract Automation "$gatus_name" \
+      <(printf '%s\n' "$gatus_response") || {
+      echo "The Automation/$gatus_name Gatus series is absent or not green." >&2
+      exit 1
+    }
+  done
 
 fi
 
 echo "n8n $mode acceptance passed: Flux and workloads are Ready, all claims are Bound, routes and grants are exact, Prometheus targets and backup metrics are healthy, and the dashboard and certificate are loaded."
 if [[ "$mode" == 'full' ]]; then
-  echo 'The exact 15-alert n8n rule group is healthy and the observational Gatus canary series is green; this verifier sent no canary request.'
+  echo 'The exact 15-alert n8n rule group is healthy and both observational Gatus n8n series are green; this verifier sent no webhook request.'
 else
   echo 'The n8n rule group and public route remain absent; no canary credential was required.'
 fi

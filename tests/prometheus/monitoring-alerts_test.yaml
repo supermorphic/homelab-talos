@@ -429,55 +429,55 @@ tests:
         alertname: N8nPostgresqlBackupJobOverdue
         exp_alerts: []
 
-  - name: n8n canary down series fires without cross-firing the missing-series alert and recovers
+  - name: n8n webhook E2E down series fires without cross-firing the missing-series alert and recovers
     interval: 1m
     input_series:
       - *n8n_flux_ready
       - *n8n_postgresql_flux_ready
       - *n8n_public_route_flux_ready
-      - series: 'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="n8n-webhook-e2e"}'
         values: '1x3 0x8 1x5'
     alert_rule_test:
       - eval_time: 9m
-        alertname: N8nCanaryDown
+        alertname: N8nWebhookE2EDown
         exp_alerts:
-          - exp_labels: {severity: critical, group: Platform, name: n8n-platform-canary}
+          - exp_labels: {severity: critical, group: Automation, name: n8n-webhook-e2e}
             exp_annotations:
-              summary: n8n authenticated public canary is down
-              description: The Platform/n8n-platform-canary probe has failed for more than five minutes.
+              summary: n8n authenticated webhook E2E check is down
+              description: The Automation/n8n-webhook-e2e check has failed for more than five minutes.
       - eval_time: 9m
-        alertname: N8nCanaryProbeMissing
+        alertname: N8nWebhookE2EProbeMissing
         exp_alerts: []
       - eval_time: 14m
-        alertname: N8nCanaryDown
+        alertname: N8nWebhookE2EDown
         exp_alerts: []
 
-  - name: absent n8n canary series fires only missing then exact healthy series clears it
+  - name: absent n8n webhook E2E series fires only missing then exact healthy series clears it
     interval: 1m
     input_series:
       - *n8n_flux_ready
       - *n8n_postgresql_flux_ready
       - *n8n_public_route_flux_ready
-      - series: 'gatus_results_endpoint_success{group="Platform",name="n8n-platform-canary"}'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="n8n-webhook-e2e"}'
         values: '_x18 1x6'
       - series: 'gatus_results_endpoint_success{group="Platform",name="echo"}'
         values: '1x24'
     alert_rule_test:
       - eval_time: 16m
-        alertname: N8nCanaryProbeMissing
+        alertname: N8nWebhookE2EProbeMissing
         exp_alerts:
-          - exp_labels: {severity: warning, group: Platform, name: n8n-platform-canary}
+          - exp_labels: {severity: warning, group: Automation, name: n8n-webhook-e2e}
             exp_annotations:
-              summary: n8n authenticated public canary metric is missing
-              description: The Platform/n8n-platform-canary success series has been absent for more than 15 minutes.
+              summary: n8n authenticated webhook E2E metric is missing
+              description: The Automation/n8n-webhook-e2e success series has been absent for more than 15 minutes.
       - eval_time: 16m
-        alertname: N8nCanaryDown
+        alertname: N8nWebhookE2EDown
         exp_alerts: []
       - eval_time: 19m
-        alertname: N8nCanaryProbeMissing
+        alertname: N8nWebhookE2EProbeMissing
         exp_alerts: []
       - eval_time: 19m
-        alertname: N8nCanaryDown
+        alertname: N8nWebhookE2EDown
         exp_alerts: []
 
   - name: one exact n8n platform claim leaves Bound and recovers

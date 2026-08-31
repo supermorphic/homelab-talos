@@ -237,7 +237,7 @@
     },
     {
       "id": 13,
-      "title": "Authenticated public canary",
+      "title": "Authenticated webhook E2E",
       "type": "stat",
       "gridPos": {"h": 5, "w": 8, "x": 16, "y": 33},
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -252,7 +252,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(gatus_results_endpoint_success{group=\"Platform\",name=\"n8n-platform-canary\"})"
+          "expr": "max(gatus_results_endpoint_success{group=\"Automation\",name=\"n8n-webhook-e2e\"})"
         }
       ]
     }

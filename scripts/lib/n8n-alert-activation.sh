@@ -103,7 +103,7 @@ validate_n8n_alert_activation() {
   canary_env_count="$(yq -r '[.env.GATUS_N8N_CANARY_TOKEN | select(. != null)] | length' \
     "$gatus_values")"
   canary_endpoint_count="$(yq -r \
-    '[.config.endpoints[]? | select(.group == "Platform" and .name == "n8n-platform-canary")] | length' \
+    '[.config.endpoints[]? | select(.group == "Automation" and .name == "n8n-webhook-e2e")] | length' \
     "$gatus_values")"
   n8n_suspended="$(yq -r '.spec.suspend // false' "$n8n_ks")"
   postgresql_suspended="$(yq -r '.spec.suspend // false' "$postgresql_ks")"

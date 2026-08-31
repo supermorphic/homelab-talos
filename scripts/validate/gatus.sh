@@ -153,16 +153,16 @@ validate_selected_sops_secret "$base/app/kustomization.yaml" './n8n-canary.sops.
 active_canary_env_count="$(yq -r \
   '[.env.GATUS_N8N_CANARY_TOKEN | select(. != null)] | length' "$values")"
 active_canary_endpoint_count="$(yq -r \
-  '[.config.endpoints[] | select(.name == "n8n-platform-canary")] | length' "$values")"
+  '[.config.endpoints[] | select(.name == "n8n-webhook-e2e")] | length' "$values")"
 [[ "$active_canary_env_count" == "$active_canary_endpoint_count" && \
   ("$active_canary_env_count" == '0' || "$active_canary_env_count" == '1') ]] || {
-  echo 'Active Gatus n8n canary values must be entirely absent or entirely activated.' >&2
+  echo 'Active Gatus n8n webhook E2E values must be entirely absent or entirely activated.' >&2
   exit 1
 }
 canary_active=false
 [[ "$active_canary_env_count" == '0' ]] || canary_active=true
 if [[ "$canary_active" == true ]]; then
-  require_equal 'Activated Gatus n8n canary Secret selection' \
+  require_equal 'Activated Gatus n8n webhook E2E Secret selection' \
     "${resource_counts[n8n-canary.sops.yaml]:-0}" '1'
   require_equal 'Activated Gatus n8n Kustomization state' \
     "$(yq -r '.spec.suspend // false' "$n8n_ks")" 'false'
@@ -256,7 +256,7 @@ require_equal 'Media Integration endpoint methods and bodies' \
 legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
-    .name != "n8n-platform-canary") | .name] | sort | join(",")' "$values")" \
+    .name != "n8n-readiness" and .name != "n8n-webhook-e2e") | .name] | sort | join(",")' "$values")" \
   "$legacy_endpoint_names"
 while IFS='|' read -r name group url interval conditions; do
   require_equal "Existing Level 1 endpoint $name group" \
@@ -288,37 +288,43 @@ flaresolverr|Media|http://flaresolverr.media.svc.cluster.local:8191/|1m|[STATUS]
 letsencrypt-acme|External|https://acme-v02.api.letsencrypt.org/directory|10m|[STATUS] == 200
 EOF
 
+readiness_endpoint="$(yq -o=json -I=0 \
+  '.config.endpoints[] | select(.group == "Automation" and .name == "n8n-readiness")' \
+  "$values")"
+require_equal 'Gatus n8n readiness endpoint contract' "$readiness_endpoint" \
+  '{"name":"n8n-readiness","group":"Automation","url":"https://n8n.lab.supermorphic.com/healthz/readiness","method":"GET","interval":"1m","conditions":["[STATUS] == 200","[BODY].status == ok"]}'
+
 canary_endpoint="$(yq -o=json -I=0 \
-  '.config.endpoints[] | select(.group == "Platform" and .name == "n8n-platform-canary")' \
+  '.config.endpoints[] | select(.group == "Automation" and .name == "n8n-webhook-e2e")' \
   "$canary_activation_values")"
-require_equal 'Staged Gatus n8n canary environment contract' \
+require_equal 'Staged Gatus n8n webhook E2E environment contract' \
   "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$canary_activation_values")" \
   '{"valueFrom":{"secretKeyRef":{"name":"n8n-canary","key":"token"}}}'
-require_equal 'Staged Gatus n8n canary endpoint contract' \
-  "$(yq -r '[.config.endpoints[] | select(.name == "n8n-platform-canary")] | length' \
+require_equal 'Staged Gatus n8n webhook E2E endpoint contract' \
+  "$(yq -r '[.config.endpoints[] | select(.name == "n8n-webhook-e2e")] | length' \
     "$canary_activation_values")" '1'
-require_equal 'Platform n8n canary endpoint method' \
+require_equal 'Automation n8n webhook E2E endpoint method' \
   "$(yq -r '.method' - <<<"$canary_endpoint")" 'POST'
 # shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
-require_equal 'Platform n8n canary endpoint authentication header' \
+require_equal 'Automation n8n webhook E2E endpoint authentication header' \
   "$(yq -r '.headers."X-Platform-Canary"' - <<<"$canary_endpoint")" \
   '${GATUS_N8N_CANARY_TOKEN}'
-require_equal 'Platform n8n canary endpoint header inventory' \
+require_equal 'Automation n8n webhook E2E endpoint header inventory' \
   "$(yq -r '.headers | keys | sort | join(",")' - <<<"$canary_endpoint")" \
   'Content-Type,X-Platform-Canary'
-require_equal 'Platform n8n canary endpoint content type' \
+require_equal 'Automation n8n webhook E2E endpoint content type' \
   "$(yq -r '.headers."Content-Type"' - <<<"$canary_endpoint")" 'application/json'
-require_equal 'Platform n8n canary endpoint body' \
+require_equal 'Automation n8n webhook E2E endpoint body' \
   "$(yq -r '.body' - <<<"$canary_endpoint")" '{"correlation":"gatus-platform-canary"}'
-require_equal 'Platform n8n canary endpoint hides errors' \
+require_equal 'Automation n8n webhook E2E endpoint hides errors' \
   "$(yq -r '.ui."hide-errors"' - <<<"$canary_endpoint")" 'true'
 
 if [[ "$canary_active" == true ]]; then
-  require_equal 'Activated Gatus n8n canary environment contract' \
+  require_equal 'Activated Gatus n8n webhook E2E environment contract' \
     "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$values")" \
     "$(yq -o=json -I=0 '.env.GATUS_N8N_CANARY_TOKEN' "$canary_activation_values")"
-  require_equal 'Activated Gatus n8n canary endpoint contract' \
-    "$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "n8n-platform-canary")' \
+  require_equal 'Activated Gatus n8n webhook E2E endpoint contract' \
+    "$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "n8n-webhook-e2e")' \
       "$values")" "$canary_endpoint"
 fi
 
@@ -350,13 +356,13 @@ rendered_canary_env_count="$(yq ea -r \
   '[select(.kind == "Deployment" and .metadata.name == "gatus") |
     .spec.template.spec.containers[] | select(.name == "gatus") | .env[]? |
     select(.name == "GATUS_N8N_CANARY_TOKEN")] | length' "$rendered")"
-require_equal 'Rendered active Gatus n8n canary environment count' \
+require_equal 'Rendered active Gatus n8n webhook E2E environment count' \
   "$rendered_canary_env_count" "$active_canary_env_count"
 rendered_canary_endpoint_count="$(yq ea -r \
   '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
     .data."config.yaml" | from_yaml | .endpoints[]? |
-    select(.name == "n8n-platform-canary")] | length' "$rendered")"
-require_equal 'Rendered active Gatus n8n canary endpoint count' \
+    select(.name == "n8n-webhook-e2e")] | length' "$rendered")"
+require_equal 'Rendered active Gatus n8n webhook E2E endpoint count' \
   "$rendered_canary_endpoint_count" "$active_canary_endpoint_count"
 if [[ "$canary_active" == true ]]; then
   require_equal 'Rendered Gatus GATUS_N8N_CANARY_TOKEN Secret name' \
@@ -369,4 +375,4 @@ fi
 require_equal 'Rendered Gatus container envFrom Secret references' \
   "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .envFrom[]? | select(has("secretRef"))] | length' "$rendered")" '0'
 
-echo 'Gatus source, staged n8n canary activation contract, encrypted media API-key Secret, exact silent media-integration probes, active Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'
+echo 'Gatus source, n8n readiness and staged webhook E2E contracts, encrypted media API-key Secret, exact silent media-integration probes, active Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'

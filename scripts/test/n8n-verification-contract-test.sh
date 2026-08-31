@@ -181,6 +181,26 @@ yq -p=json -o=json '(.data.activeTargets[] | select(.labels.service == "n8n") |
 expect_false 'substring-only Prometheus target' n8n_prometheus_targets_match_contract \
   "$temp_dir/targets-substring.json"
 
+cat >"$temp_dir/gatus-result.json" <<'EOF'
+{
+  "status": "success",
+  "data": {
+    "result": [{
+      "metric": {"group": "Automation", "name": "n8n-readiness"},
+      "value": [1788200000, "1"]
+    }]
+  }
+}
+EOF
+expect_true 'exact healthy n8n readiness Gatus result' \
+  n8n_gatus_result_matches_contract Automation n8n-readiness "$temp_dir/gatus-result.json"
+expect_false 'wrong n8n Gatus identity' \
+  n8n_gatus_result_matches_contract Automation n8n-webhook-e2e "$temp_dir/gatus-result.json"
+yq -p=json -o=json '.data.result[0].value[1] = "0"' "$temp_dir/gatus-result.json" \
+  >"$temp_dir/gatus-result-down.json"
+expect_false 'exact unhealthy n8n readiness Gatus result' \
+  n8n_gatus_result_matches_contract Automation n8n-readiness "$temp_dir/gatus-result-down.json"
+
 cat >"$temp_dir/rules-absent.json" <<'EOF'
 {
   "status": "success",
@@ -194,8 +214,8 @@ cat >"$temp_dir/rules-exact.json" <<'EOF'
     "groups": [{
       "name": "n8n-platform",
       "rules": [
-        {"name": "N8nCanaryDown", "health": "ok", "lastError": ""},
-        {"name": "N8nCanaryProbeMissing", "health": "ok", "lastError": ""},
+        {"name": "N8nWebhookE2EDown", "health": "ok", "lastError": ""},
+        {"name": "N8nWebhookE2EProbeMissing", "health": "ok", "lastError": ""},
         {"name": "N8nContainerOomKilled", "health": "ok", "lastError": ""},
         {"name": "N8nContainerRestarting", "health": "ok", "lastError": ""},
         {"name": "N8nExecutionFailures", "health": "ok", "lastError": ""},

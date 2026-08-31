@@ -12,24 +12,30 @@ run_production_validator() {
   (cd "$repo_root" && "$validator") 2>&1
 }
 
-assert_production_pre_activation_render() {
+assert_production_activated_render() {
   local values chart_version render
   values="$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
   chart_version="$(yq -r '.spec.chart.spec.version' \
     "$repo_root/kubernetes/apps/monitoring/gatus/app/helmrelease.yaml")"
-  render="$test_dir/production-pre-activation.yaml"
+  render="$test_dir/production-activated.yaml"
   helm template gatus gatus --repo https://twin.github.io/helm-charts \
     --version "$chart_version" --namespace gatus --values "$values" >"$render"
   [[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") |
     .spec.template.spec.containers[] | select(.name == "gatus") | .env[]? |
-    select(.name == "GATUS_N8N_CANARY_TOKEN")] | length' "$render")" == '0' ]] || {
-    echo 'Pre-activation Gatus must not render the required n8n canary Secret reference.' >&2
+    select(.name == "GATUS_N8N_CANARY_TOKEN")] | length' "$render")" == '1' ]] || {
+    echo 'Activated Gatus must render exactly one n8n webhook E2E Secret reference.' >&2
     exit 1
   }
   [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
     .data."config.yaml" | from_yaml | .endpoints[]? |
-    select(.name == "n8n-platform-canary")] | length' "$render")" == '0' ]] || {
-    echo 'Pre-activation Gatus must not render the unavailable n8n canary endpoint.' >&2
+    select(.name == "n8n-webhook-e2e")] | length' "$render")" == '1' ]] || {
+    echo 'Activated Gatus must render exactly one n8n webhook E2E endpoint.' >&2
+    exit 1
+  }
+  [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
+    .data."config.yaml" | from_yaml | .endpoints[]? |
+    select(.name == "n8n-readiness")] | length' "$render")" == '1' ]] || {
+    echo 'Activated Gatus must render exactly one n8n readiness endpoint.' >&2
     exit 1
   }
 }
@@ -86,11 +92,19 @@ run_validator() {
   (cd "$tree_root" && "$validator") 2>&1
 }
 
-activate_canary_values() {
+deactivate_webhook_e2e_values() {
+  local values
+  values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+  yq -i 'del(.env.GATUS_N8N_CANARY_TOKEN) |
+    del(.config.endpoints[] | select(.name == "n8n-webhook-e2e"))' "$values"
+}
+
+activate_webhook_e2e_values() {
   local values activation candidate
   values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
   activation="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
   candidate="$test_dir/activated-values.yaml"
+  deactivate_webhook_e2e_values
   # shellcheck disable=SC2016 # yq expands $item inside its expression.
   yq ea '. as $item ireduce ({}; . *+ $item)' "$values" "$activation" >"$candidate"
   mv -- "$candidate" "$values"
@@ -188,8 +202,8 @@ for native_endpoint in \
 done
 
 # The production source must pass before mutation cases begin. The rendered assertion
-# independently proves that the active Helm release has no pre-activation n8n dependency.
-assert_production_pre_activation_render
+# independently proves that both active n8n monitoring signals reach the Helm release.
+assert_production_activated_render
 expect_pass 'production Gatus source'
 
 values="$tree_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
@@ -206,11 +220,11 @@ expect_fail 'active HelmRelease selects staged n8n canary values directly' \
   'Active Gatus Helm values source:'
 
 reset_tree
-activate_canary_values
+activate_webhook_e2e_values
 expect_fixture_pass 'complete activated n8n canary values'
 
 reset_tree
-activate_canary_values
+activate_webhook_e2e_values
 yq -i '(select(.metadata.name == "public-webhook-route") | .spec.suspend) = true' \
   "$tree_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml"
 expect_fail 'activated n8n canary with suspended public route' \
@@ -220,13 +234,13 @@ reset_tree
 yq -i 'del(.env.GATUS_N8N_CANARY_TOKEN)' \
   "$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
 expect_fail 'staged n8n canary missing Secret reference' \
-  'Staged Gatus n8n canary environment contract:'
+  'Staged Gatus n8n webhook E2E environment contract:'
 
 reset_tree
-yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary"))' \
+yq -i 'del(.config.endpoints[] | select(.name == "n8n-webhook-e2e"))' \
   "$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml"
 expect_fail 'staged n8n canary missing endpoint' \
-  'Staged Gatus n8n canary endpoint contract:'
+  'Staged Gatus n8n webhook E2E endpoint contract:'
 
 reset_tree
 rm -f -- "$canary_secret"
@@ -244,24 +258,37 @@ expect_fail 'incomplete selected n8n canary SOPS value envelope' \
   'Selected Gatus SOPS Secret is not encrypted:'
 
 reset_tree
-activate_canary_values
-yq -i 'del(.config.endpoints[] | select(.name == "n8n-platform-canary") | .headers."X-Platform-Canary")' \
+activate_webhook_e2e_values
+yq -i 'del(.config.endpoints[] | select(.name == "n8n-webhook-e2e") | .headers."X-Platform-Canary")' \
   "$values"
 expect_fail 'n8n canary missing authentication header' \
-  'Activated Gatus n8n canary endpoint contract:'
+  'Activated Gatus n8n webhook E2E endpoint contract:'
 
 reset_tree
-activate_canary_values
-yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .url) = "https://*.lab.supermorphic.com/webhook/platform-canary"' \
+activate_webhook_e2e_values
+yq -i '(.config.endpoints[] | select(.name == "n8n-webhook-e2e") | .url) = "https://*.lab.supermorphic.com/webhook/platform-canary"' \
   "$values"
-expect_fail 'n8n canary wildcard URL' 'Activated Gatus n8n canary endpoint contract:'
+expect_fail 'n8n webhook E2E wildcard URL' \
+  'Activated Gatus n8n webhook E2E endpoint contract:'
 
 reset_tree
-activate_canary_values
-yq -i '(.config.endpoints[] | select(.name == "n8n-platform-canary") | .interval) = "1m"' \
+activate_webhook_e2e_values
+yq -i '(.config.endpoints[] | select(.name == "n8n-webhook-e2e") | .interval) = "1m"' \
   "$values"
 expect_fail 'n8n canary one-minute interval' \
-  'Activated Gatus n8n canary endpoint contract:'
+  'Activated Gatus n8n webhook E2E endpoint contract:'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "n8n-readiness") | .url) = "https://n8n.lab.supermorphic.com/healthz"' \
+  "$values"
+expect_fail 'n8n readiness using liveness endpoint' \
+  'Gatus n8n readiness endpoint contract:'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "n8n-readiness") | .conditions) = ["[STATUS] == 200"]' \
+  "$values"
+expect_fail 'n8n readiness missing body status condition' \
+  'Gatus n8n readiness endpoint contract:'
 
 reset_tree
 yq -i 'del(.config.endpoints[] | select(.name == "prowlarr-native-health"))' "$values"

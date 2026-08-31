@@ -264,8 +264,16 @@ config:
       interval: 10m
       conditions:
         - "[STATUS] == 200"
-    - name: n8n-platform-canary
-      group: Platform
+    - name: n8n-readiness
+      group: Automation
+      url: "https://n8n.lab.supermorphic.com/healthz/readiness"
+      method: GET
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].status == ok"
+    - name: n8n-webhook-e2e
+      group: Automation
       url: "https://hooks.lab.supermorphic.com/webhook/platform-canary"
       method: POST
       interval: 5m
