@@ -81,8 +81,7 @@ spec:
                 namespace: automation
               (metadata.generation == status.observedGeneration): true
               ([metadata.generation] == status.conditions[?type == 'Ready'].observedGeneration): true
-              spec:
-                suspend: false
+              (spec.suspend || `false`): false
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"

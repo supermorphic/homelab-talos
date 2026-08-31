@@ -87,6 +87,33 @@ yq -p=json -o=json -i '.status.conditions[0].observedGeneration = 6' \
 expect_false 'Chainsaw stale retained Ready expression' chainsaw_assert_file \
   "$temp_dir/chainsaw-kustomization.json" "$temp_dir/chainsaw-current-ready.yaml"
 
+yq '.spec.steps[].try[].assert.resource | select(.kind == "HelmRelease")' \
+  "$repo_root/tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml" \
+  >"$temp_dir/chainsaw-helmrelease-ready.yaml"
+cat >"$temp_dir/chainsaw-helmrelease.json" <<'EOF'
+{
+  "apiVersion": "helm.toolkit.fluxcd.io/v2",
+  "kind": "HelmRelease",
+  "metadata": {
+    "name": "n8n",
+    "namespace": "automation",
+    "generation": 4
+  },
+  "status": {
+    "observedGeneration": 4,
+    "conditions": [{"type": "Ready", "status": "True", "observedGeneration": 4}]
+  }
+}
+EOF
+expect_true 'Chainsaw active HelmRelease with omitted suspend field' chainsaw_assert_file \
+  "$temp_dir/chainsaw-helmrelease.json" "$temp_dir/chainsaw-helmrelease-ready.yaml"
+yq -p=json -o=json -i '.spec.suspend = false' "$temp_dir/chainsaw-helmrelease.json"
+expect_true 'Chainsaw active HelmRelease with explicit false suspend field' chainsaw_assert_file \
+  "$temp_dir/chainsaw-helmrelease.json" "$temp_dir/chainsaw-helmrelease-ready.yaml"
+yq -p=json -o=json -i '.spec.suspend = true' "$temp_dir/chainsaw-helmrelease.json"
+expect_false 'Chainsaw suspended HelmRelease' chainsaw_assert_file \
+  "$temp_dir/chainsaw-helmrelease.json" "$temp_dir/chainsaw-helmrelease-ready.yaml"
+
 cat >"$temp_dir/deployment.json" <<'EOF'
 {
   "metadata": {"generation": 8},
