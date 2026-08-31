@@ -152,6 +152,9 @@ assert_declared_reads "$observer"
 assert_declared_reads "$diagnostic"
 for context in "$observer" "$diagnostic"; do
   assert_can_i "$context" yes list dnsendpoints.externaldns.k8s.io ''
+  for verb in get list watch; do
+    assert_can_i "$context" yes "$verb" referencegrants.gateway.networking.k8s.io automation
+  done
 done
 
 # Observer: Secret bodies, interactive subresources, and mutations stay denied.

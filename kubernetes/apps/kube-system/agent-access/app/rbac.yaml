@@ -72,7 +72,7 @@ rules:
     resources: [dnsendpoints]
     verbs: [get, list, watch]
   - apiGroups: [gateway.networking.k8s.io]
-    resources: [gatewayclasses, gateways, httproutes]
+    resources: [gatewayclasses, gateways, httproutes, referencegrants]
     verbs: [get, list, watch]
   - apiGroups: [helm.toolkit.fluxcd.io]
     resources: [helmreleases]
