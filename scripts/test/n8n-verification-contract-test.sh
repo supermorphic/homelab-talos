@@ -114,6 +114,32 @@ yq -p=json -o=json -i '.spec.suspend = true' "$temp_dir/chainsaw-helmrelease.jso
 expect_false 'Chainsaw suspended HelmRelease' chainsaw_assert_file \
   "$temp_dir/chainsaw-helmrelease.json" "$temp_dir/chainsaw-helmrelease-ready.yaml"
 
+yq '.spec.steps[].try[].assert.resource | select(.kind == "ConfigMap")' \
+  "$repo_root/tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml" \
+  >"$temp_dir/chainsaw-dashboard-loaded.yaml"
+cat >"$temp_dir/chainsaw-dashboard-configmap.json" <<'EOF'
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "n8n-postgresql-dashboard-fixture",
+    "namespace": "monitoring",
+    "labels": {"grafana_dashboard": "1"}
+  },
+  "data": {"n8n-postgresql.json": "{\"title\":\"n8n / PostgreSQL\"}"}
+}
+EOF
+expect_true 'Chainsaw non-empty n8n dashboard' chainsaw_assert_file \
+  "$temp_dir/chainsaw-dashboard-configmap.json" "$temp_dir/chainsaw-dashboard-loaded.yaml"
+yq -p=json -o=json -i '.data."n8n-postgresql.json" = ""' \
+  "$temp_dir/chainsaw-dashboard-configmap.json"
+expect_false 'Chainsaw empty n8n dashboard' chainsaw_assert_file \
+  "$temp_dir/chainsaw-dashboard-configmap.json" "$temp_dir/chainsaw-dashboard-loaded.yaml"
+yq -p=json -o=json -i 'del(.data."n8n-postgresql.json")' \
+  "$temp_dir/chainsaw-dashboard-configmap.json"
+expect_false 'Chainsaw missing n8n dashboard' chainsaw_assert_file \
+  "$temp_dir/chainsaw-dashboard-configmap.json" "$temp_dir/chainsaw-dashboard-loaded.yaml"
+
 cat >"$temp_dir/deployment.json" <<'EOF'
 {
   "metadata": {"generation": 8},
