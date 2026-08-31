@@ -364,6 +364,7 @@ confirmations:
 
 ```bash
 (
+  set -euo pipefail
   mise exec -- just kube n8n-verify
   mise exec -- just test smoke platform n8n
   N8N_RESTORE_DRILL_CONFIRM='restore:n8n-postgresql:temporary' \
