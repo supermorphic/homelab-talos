@@ -1633,7 +1633,21 @@ validate-shell-scripts:
     for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/talos/*.sh scripts/validate/*.sh scripts/verify/*.sh; do
       test -x "$script"
     done
-    artifact_root="${TEST_SHARED_RESULT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/repo-shell.XXXXXX")}"
+    artifact_root="${TEST_SHARED_RESULT_DIR:-}"
+    artifact_root_created=false
+    if [[ -z "$artifact_root" ]]; then
+      artifact_root="$(mktemp -d "${TMPDIR:-/tmp}/repo-shell.XXXXXX")"
+      artifact_root_created=true
+    fi
+    cleanup_artifact_root() {
+      local exit_status="$?"
+      trap - EXIT
+      if [[ "$artifact_root_created" == true ]]; then
+        rm -rf -- "$artifact_root"
+      fi
+      exit "$exit_status"
+    }
+    trap cleanup_artifact_root EXIT
     args=(produce --suite validation.repo-validate \
       --artifact "$artifact_root/repository-shell-validation.json" \
       --run-id "${TEST_RUN_ID:-standalone}")

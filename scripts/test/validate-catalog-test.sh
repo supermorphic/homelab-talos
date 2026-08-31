@@ -251,6 +251,12 @@ expected_shellcheck_finding="${shellcheck_fixture}"$'\t3\t6\tinfo\t2086\tDouble 
 rm -f -- "$shellcheck_fixture" "$artifact" "$fragment"
 shellcheck_fixture_created=false
 
+standalone_success_tmp="$fixture_root/standalone-success-tmp"
+mkdir -p "$standalone_success_tmp"
+TMPDIR="$standalone_success_tmp" mise exec -- just repo validate-shell-scripts \
+	>"$fixture_root/standalone-success.log" 2>&1
+[[ -z "$(find "$standalone_success_tmp" -mindepth 1 -print -quit)" ]]
+
 inconsistent_tool_root="$fixture_root/inconsistent-tools"
 mkdir -p "$inconsistent_tool_root"
 cat >"$inconsistent_tool_root/shellcheck" <<'EOF'
@@ -272,6 +278,31 @@ set -e
 [[ "$inconsistent_shellcheck_status" -ne 0 ]]
 [[ ! -e "$artifact" ]]
 [[ ! -e "$fragment" ]]
+
+standalone_failure_tmp="$fixture_root/standalone-failure-tmp"
+mkdir -p "$standalone_failure_tmp"
+set +e
+# shellcheck disable=SC2016 # The child Bash expands its injected tool path.
+FAKE_TOOL_ROOT="$inconsistent_tool_root" TMPDIR="$standalone_failure_tmp" \
+	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate-shell-scripts' \
+	>"$fixture_root/standalone-failure.log" 2>&1
+standalone_failure_status="$?"
+set -e
+[[ "$standalone_failure_status" -ne 0 ]]
+[[ -z "$(find "$standalone_failure_tmp" -mindepth 1 -print -quit)" ]]
+
+caller_artifact_root="$fixture_root/caller-artifact-root"
+mkdir -p "$caller_artifact_root"
+printf '%s\n' preserved >"$caller_artifact_root/sentinel"
+set +e
+# shellcheck disable=SC2016 # The child Bash expands its injected tool path.
+FAKE_TOOL_ROOT="$inconsistent_tool_root" TEST_SHARED_RESULT_DIR="$caller_artifact_root" \
+	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate-shell-scripts' \
+	>"$fixture_root/caller-artifact.log" 2>&1
+caller_artifact_status="$?"
+set -e
+[[ "$caller_artifact_status" -ne 0 ]]
+[[ "$(cat "$caller_artifact_root/sentinel")" == preserved ]]
 
 legacy_fixture_created=true
 printf '%s\n' '#!/usr/bin/env bash' 'true' >"$legacy_fixture"
