@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path as NativePath
@@ -253,6 +254,53 @@ exit 0
                 "--external-sources --format=json scripts/test/ok.sh\n",
             )
             self.assertTrue(junit.is_file())
+
+    def test_produce_refuses_publication_when_validation_identity_changes(self) -> None:
+        mutations = {
+            "source bytes": "printf '%s\\n' '#!/usr/bin/env bash' 'echo changed' > scripts/test/ok.sh",
+            "source added": "printf '%s\\n' '#!/usr/bin/env bash' > scripts/test/added.sh",
+            "source removed": "rm scripts/test/ok.sh",
+            "HEAD": "git commit --quiet --allow-empty -m validation-head-drift",
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.make_repository(root)
+                tools, _ = self.fake_tools(root)
+                (tools / "shellcheck").write_text(
+                    f"#!/bin/sh\nset -eu\n{mutation}\nprintf '[]\\n'\nexit 0\n"
+                )
+                (tools / "shellcheck").chmod(0o755)
+                artifact = root / "artifact.json"
+                junit = root / "result.xml"
+                environment = {
+                    **os.environ,
+                    "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+                }
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(MODULE_PATH),
+                        "produce",
+                        "--suite",
+                        "validation.repo-validate",
+                        "--run-id",
+                        "run-1",
+                        "--artifact",
+                        str(artifact),
+                        "--junit",
+                        str(junit),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("changed during validation", completed.stderr)
+                self.assertFalse(artifact.exists())
+                self.assertFalse(junit.exists())
 
     def test_discovery_excludes_a_tracked_shell_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

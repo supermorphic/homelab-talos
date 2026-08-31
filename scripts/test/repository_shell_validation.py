@@ -285,8 +285,10 @@ def artifact_matches(artifact_path: Path, expected: dict[str, Any]) -> bool:
 
 def produce_document(root: Path, run_id: str) -> dict[str, Any]:
     """Run Bash first, then one batched ShellCheck command when Bash passes."""
+    validated_head_sha = head_sha(root)
     sorted_files = discover_shell_sources(root)
     serialized_files = [relative.as_posix() for relative in sorted_files]
+    validated_source_set_sha256 = source_set_digest(root, sorted_files)
     findings: list[dict[str, Any]] = []
     bash_status = 0
     bash_first_failure: dict[str, str] | None = None
@@ -316,11 +318,22 @@ def produce_document(root: Path, run_id: str) -> dict[str, Any]:
     shellcheck_version = SHELLCHECK_NOT_RUN
     if bash_status == 0:
         shellcheck_version = pinned_shellcheck_version(root)
+
+    current_head_sha = head_sha(root)
+    current_files = discover_shell_sources(root)
+    current_source_set_sha256 = source_set_digest(root, current_files)
+    if (
+        current_head_sha != validated_head_sha
+        or current_files != sorted_files
+        or current_source_set_sha256 != validated_source_set_sha256
+    ):
+        raise ValueError("repository shell sources or HEAD changed during validation")
+
     return {
         "schema_version": 1,
         "run_id": run_id,
-        "head_sha": head_sha(root),
-        "source_set_sha256": source_set_digest(root, sorted_files),
+        "head_sha": validated_head_sha,
+        "source_set_sha256": validated_source_set_sha256,
         "bash_version": command_version("bash"),
         "shellcheck_version": shellcheck_version,
         "bash_argv": BASH_ARGV,
