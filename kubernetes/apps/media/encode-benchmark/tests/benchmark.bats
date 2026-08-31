@@ -866,6 +866,80 @@ append_representative_plan_row() {
 	[ "$(find "$BENCHMARK_SCRATCH" -type f | wc -l | tr -d ' ')" -eq 0 ]
 }
 
+# Catches passing the complete production-sized result set as one jq argument.
+# Linux rejects a single argument at 128 KiB even when the total ARG_MAX is larger.
+@test "quality ranking streams the complete 144-row result set" {
+	run_id='20260831T120000Z-f0000001'
+	run_dir="$BENCHMARK_OUT/runs/$run_id"
+	results="$run_dir/results.csv"
+	mkdir -p "$run_dir"
+	initialize_quality_results "$results"
+
+	python3 - "$BENCHMARK_SAMPLES_FILE" "$results" "$run_id" <<'PYTHON'
+import csv
+import json
+import sys
+
+samples_path, results_path, run_id = sys.argv[1:]
+with open(samples_path, encoding="utf-8") as handle:
+    samples = json.load(handle)["qualityPanel"]
+
+settings = (16, 18, 20, 22, 24, 26, 28, 30)
+rows = []
+for sample in samples:
+    if sample.get("detectionOnly") or sample["cohort"] == "dolby-vision":
+        continue
+    for clip_id in sample["clips"]:
+        for setting in settings:
+            evidence_path = (
+                f"quality-evidence/{sample['id']}-{clip_id}-qsv-{setting}-attempt-1.json"
+            )
+            rows.append([
+                run_id, "quality", sample["id"], sample["cohort"], sample["sha256"],
+                clip_id, "qsv", setting, "ICQ", "passed", 1, 1000, 600, 40,
+                8000, 4800, 10, 30, 1, 96, 92, 0.99, 50, "passed", "passed",
+                "passed", "passed", "passed", "passed", "passed", "passed",
+                "passed", "passed", "", f"logs/{sample['id']}-{clip_id}-qsv-{setting}-attempt-1.log",
+                "discarded", "qsv-hevc-icq-v1", "passed", 800000000,
+                evidence_path, "sha256:" + ("a" * 64),
+            ])
+
+assert len(rows) == 144, len(rows)
+with open(results_path, "a", newline="", encoding="utf-8") as handle:
+    csv.writer(handle, lineterminator="\n").writerows(rows)
+PYTHON
+
+	real_jq="$(command -v jq)"
+	stub_bin="$BATS_TEST_TMPDIR/argv-limit-bin"
+	mkdir -p "$stub_bin"
+	cat >"$stub_bin/jq" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+	if ((${#argument} >= 131072)); then
+		echo 'jq: simulated Linux single-argument limit exceeded' >&2
+		exit 126
+	fi
+done
+exec "$REAL_JQ" "$@"
+EOF
+	chmod +x "$stub_bin/jq"
+	export REAL_JQ="$real_jq"
+	export PATH="$stub_bin:$PATH"
+
+	run "$SCRIPTS/benchmark.sh" _test rank-quality-candidates \
+		"$results" "$BENCHMARK_SAMPLES_FILE" "$run_id"
+	[ "$status" -eq 0 ] || {
+		echo "144-row ranking failed: status=$status output=$output" >&3
+		return 1
+	}
+	run jq -e '
+		all(.cohorts[];
+			.status == "no-verdict" and .candidates == [] and .reason == "incomplete-evidence")
+	' "$run_dir/quality-candidates.json"
+	[ "$status" -eq 0 ]
+}
+
 @test "quality ranking requires every expected row exactly once" {
 	prepare_execution_run
 	panel="$(jq -n --arg path "$source_media" --arg sha "$source_sha" --argjson size "$source_size" '[
