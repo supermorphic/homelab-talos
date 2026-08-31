@@ -117,6 +117,18 @@ expect_false 'Chainsaw suspended HelmRelease' chainsaw_assert_file \
 yq '.spec.steps[].try[].assert.resource | select(.kind == "ConfigMap")' \
   "$repo_root/tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml" \
   >"$temp_dir/chainsaw-dashboard-loaded.yaml"
+kustomize build \
+  "$repo_root/kubernetes/apps/monitoring/kube-prometheus-stack/config" \
+  >"$temp_dir/monitoring-config.yaml"
+[[ "$(yq ea -r '[select(
+    .kind == "ConfigMap" and
+    (.metadata.name | test("^n8n-postgresql-dashboard-")) and
+    .metadata.labels."app.kubernetes.io/name" == "n8n-postgresql-dashboard" and
+    .data."n8n-postgresql.json" != null
+  )] | length' "$temp_dir/monitoring-config.yaml")" == '1' ]] || {
+  echo 'The rendered n8n dashboard must carry its unique smoke selector label.' >&2
+  exit 1
+}
 cat >"$temp_dir/chainsaw-dashboard-configmap.json" <<'EOF'
 {
   "apiVersion": "v1",
@@ -124,13 +136,23 @@ cat >"$temp_dir/chainsaw-dashboard-configmap.json" <<'EOF'
   "metadata": {
     "name": "n8n-postgresql-dashboard-fixture",
     "namespace": "monitoring",
-    "labels": {"grafana_dashboard": "1"}
+    "labels": {
+      "app.kubernetes.io/name": "n8n-postgresql-dashboard",
+      "grafana_dashboard": "1"
+    }
   },
   "data": {"n8n-postgresql.json": "{\"title\":\"n8n / PostgreSQL\"}"}
 }
 EOF
 expect_true 'Chainsaw non-empty n8n dashboard' chainsaw_assert_file \
   "$temp_dir/chainsaw-dashboard-configmap.json" "$temp_dir/chainsaw-dashboard-loaded.yaml"
+yq -p=json -o=json -i 'del(.metadata.labels."app.kubernetes.io/name")' \
+  "$temp_dir/chainsaw-dashboard-configmap.json"
+expect_false 'Chainsaw unrelated Grafana dashboard' chainsaw_assert_file \
+  "$temp_dir/chainsaw-dashboard-configmap.json" "$temp_dir/chainsaw-dashboard-loaded.yaml"
+yq -p=json -o=json -i \
+  '.metadata.labels."app.kubernetes.io/name" = "n8n-postgresql-dashboard"' \
+  "$temp_dir/chainsaw-dashboard-configmap.json"
 yq -p=json -o=json -i '.data."n8n-postgresql.json" = ""' \
   "$temp_dir/chainsaw-dashboard-configmap.json"
 expect_false 'Chainsaw empty n8n dashboard' chainsaw_assert_file \

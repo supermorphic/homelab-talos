@@ -291,6 +291,7 @@ spec:
               metadata:
                 namespace: monitoring
                 labels:
+                  app.kubernetes.io/name: n8n-postgresql-dashboard
                   grafana_dashboard: "1"
               data:
                 (length("n8n-postgresql.json") > `0`): true
