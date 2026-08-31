@@ -29,6 +29,11 @@ env:
       secretKeyRef:
         name: gatus-media-integration-api-keys
         key: seerr_api_key
+  GATUS_N8N_CANARY_TOKEN:
+    valueFrom:
+      secretKeyRef:
+        name: n8n-canary
+        key: token
 serviceMonitor:
   enabled: true
   interval: 1m
@@ -259,3 +264,19 @@ config:
       interval: 10m
       conditions:
         - "[STATUS] == 200"
+    - name: n8n-platform-canary
+      group: Platform
+      url: "https://hooks.lab.supermorphic.com/webhook/platform-canary"
+      method: POST
+      interval: 5m
+      headers:
+        Content-Type: application/json
+        X-Platform-Canary: "${GATUS_N8N_CANARY_TOKEN}"
+      body: '{"correlation":"gatus-platform-canary"}'
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].status == ok"
+        - "[BODY].correlation == gatus-platform-canary"
+        - "len([BODY].executionId) > 0"
+      ui:
+        hide-errors: true
