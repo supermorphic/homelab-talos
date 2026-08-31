@@ -47,20 +47,22 @@ scripts/test/run-native-junit-validator.sh \
   tests/config/chainsaw.yaml tests/chainsaw/smoke
 
 test_count=0
-while IFS= read -r test_file; do
-  chainsaw lint test --file "$test_file"
-  test_count=$((test_count + 1))
-done < <(
-  chainsaw_test_files "$repo_root"
-)
+test_files="$(chainsaw_test_files "$repo_root")"
+if [[ -n "$test_files" ]]; then
+  while IFS= read -r test_file; do
+    chainsaw lint test --file "$test_file"
+    test_count=$((test_count + 1))
+  done <<<"$test_files"
+fi
 
 yaml_count=0
-while IFS= read -r yaml_file; do
-  yq eval-all 'true' "$yaml_file" >/dev/null
-  yaml_count=$((yaml_count + 1))
-done < <(
-  chainsaw_yaml_support_files "$repo_root"
-)
+support_files="$(chainsaw_yaml_support_files "$repo_root")"
+if [[ -n "$support_files" ]]; then
+  while IFS= read -r yaml_file; do
+    yq eval-all 'true' "$yaml_file" >/dev/null
+    yaml_count=$((yaml_count + 1))
+  done <<<"$support_files"
+fi
 
 consume_args=(consume --suite validation.test-harness)
 [[ -n "${TEST_SHARED_RESULT_DIR:-}" ]] && \

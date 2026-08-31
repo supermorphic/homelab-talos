@@ -56,9 +56,12 @@ ln -s 'chainsaw-test.yml' \
 	"$synthetic_root/tests/chainsaw/nested path/symlink.yaml"
 git -C "$synthetic_root" add .
 git -C "$synthetic_root" commit -qm 'synthetic chainsaw inputs'
+mkdir -p "$synthetic_root/tests/chainsaw/untracked"
+printf '%s\n' 'apiVersion: chainsaw.kyverno.io/v1alpha1' \
+	'kind: Test' >"$synthetic_root/tests/chainsaw/untracked/chainsaw-test.yaml"
 
 mapfile -t synthetic_tests < <(chainsaw_test_files "$synthetic_root")
-[[ "$(printf '%s\n' "${synthetic_tests[@]}")" == $'tests/chainsaw/nested path/chainsaw-test.yml\ntests/chainsaw/z-last/chainsaw-test.yaml' ]]
+[[ "$(printf '%s\n' "${synthetic_tests[@]}")" == $'tests/chainsaw/nested path/chainsaw-test.yml\ntests/chainsaw/untracked/chainsaw-test.yaml\ntests/chainsaw/z-last/chainsaw-test.yaml' ]]
 mapfile -t synthetic_support < <(chainsaw_yaml_support_files "$synthetic_root")
 [[ "$(printf '%s\n' "${synthetic_support[@]}")" == $'tests/chainsaw/nested path/malformed-test.yaml\ntests/fixtures/chainsaw/support files/support.yaml' ]]
 for test_file in "${synthetic_tests[@]}"; do
@@ -72,6 +75,25 @@ if printf '%s\n' "${synthetic_tests[@]}" "${synthetic_support[@]}" |
 	echo 'Ignored or symlinked YAML input was discovered.' >&2
 	exit 1
 fi
+
+failing_git_root="$fixture_root/failing git"
+mkdir -p "$failing_git_root"
+cat >"$failing_git_root/git" <<'EOF'
+#!/usr/bin/env bash
+exit 61
+EOF
+chmod +x "$failing_git_root/git"
+for discovery_function in chainsaw_test_files chainsaw_yaml_support_files; do
+	set +e
+	PATH="$failing_git_root:$PATH" "$discovery_function" "$synthetic_root" \
+		>"$fixture_root/${discovery_function}.out" 2>&1
+	discovery_status="$?"
+	set -e
+	[[ "$discovery_status" -ne 0 ]] || {
+		echo "$discovery_function accepted a failed Git discovery." >&2
+		exit 1
+	}
+done
 
 validator_root="$fixture_root/validator repository"
 mkdir -p "$validator_root/scripts/test/lib" "$validator_root/tests/chainsaw/nested" \
@@ -123,8 +145,11 @@ cat >"$validator_root/bin/chainsaw" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf '%s\n' "$*" >>"${CHAINSAW_LOG:?}"
-if [[ "$1 $2" == 'lint test' && "$4" == 'tests/chainsaw/nested/chainsaw-test.yaml' && \
+if [[ "$1 $2" == 'lint test' ]]; then
+	printf '%q\t' "$@" >>"${CHAINSAW_LOG:?}"
+	printf '\n' >>"${CHAINSAW_LOG:?}"
+fi
+if [[ "$1 $2" == 'lint test' && "$4" == 'tests/chainsaw/with space/chainsaw-test.yml' && \
 	"${CHAINSAW_FAIL_MALFORMED:-false}" == true ]]; then
 	printf '%s: malformed test document\n' "$4" >&2
 	exit 37
@@ -144,8 +169,16 @@ cat >"$validator_root/bin/uv" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
+real_git="$(command -v git)"
+cat >"$validator_root/bin/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\${CHAINSAW_GIT_FAIL:-false}" == true ]]; then
+  exit 61
+fi
+exec "$real_git" "\$@"
+EOF
 chmod +x "$validator_root/bin/chainsaw" "$validator_root/bin/yq" \
-	"$validator_root/bin/python" "$validator_root/bin/uv"
+	"$validator_root/bin/python" "$validator_root/bin/uv" "$validator_root/bin/git"
 git -C "$validator_root" init -q
 git -C "$validator_root" config user.email test@example.invalid
 git -C "$validator_root" config user.name 'Chainsaw Validator Test'
@@ -162,8 +195,11 @@ PATH="$validator_root/bin:$PATH" \
 malformed_status="$?"
 set -e
 [[ "$malformed_status" -eq 37 ]]
-rg -F 'tests/chainsaw/nested/chainsaw-test.yaml: malformed test document' "$malformed_output"
-[[ "$(rg -c '^lint test --file ' "$chainsaw_log")" -eq 1 ]]
+rg -F 'tests/chainsaw/with space/chainsaw-test.yml: malformed test document' "$malformed_output"
+mapfile -t malformed_lints <"$chainsaw_log"
+[[ "${#malformed_lints[@]}" -eq 2 ]]
+[[ "${malformed_lints[0]}" == $'lint\ttest\t--file\ttests/chainsaw/nested/chainsaw-test.yaml\t' ]]
+[[ "${malformed_lints[1]}" == $'lint\ttest\t--file\ttests/chainsaw/with\\ space/chainsaw-test.yml\t' ]]
 [[ ! -s "$yq_log" ]]
 
 : >"$chainsaw_log"
@@ -171,11 +207,27 @@ rg -F 'tests/chainsaw/nested/chainsaw-test.yaml: malformed test document' "$malf
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >/dev/null
-[[ "$(rg -c '^lint test --file ' "$chainsaw_log")" -eq 2 ]]
+mapfile -t passing_lints <"$chainsaw_log"
+[[ "${#passing_lints[@]}" -eq 2 ]]
+[[ "${passing_lints[0]}" == $'lint\ttest\t--file\ttests/chainsaw/nested/chainsaw-test.yaml\t' ]]
+[[ "${passing_lints[1]}" == $'lint\ttest\t--file\ttests/chainsaw/with\\ space/chainsaw-test.yml\t' ]]
 [[ "$(cat "$yq_log")" == 'tests/fixtures/chainsaw/support/values.yaml' ]]
 if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
+
+: >"$chainsaw_log"
+: >"$yq_log"
+git_failure_output="$fixture_root/git-failure.out"
+set +e
+PATH="$validator_root/bin:$PATH" \
+	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_GIT_FAIL=true \
+	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$git_failure_output" 2>&1
+git_failure_status="$?"
+set -e
+[[ "$git_failure_status" -ne 0 ]]
+[[ ! -s "$chainsaw_log" ]]
+[[ ! -s "$yq_log" ]]
 
 echo 'Chainsaw input discovery tests passed.'
