@@ -4,6 +4,8 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
+# shellcheck source=scripts/test/lib/job.sh
+source scripts/test/lib/job.sh
 source scripts/test/lib/lease.sh
 require_bash
 
@@ -176,7 +178,7 @@ run_sentinel_job() {
     return 1
   }
   job_manifest "$name" "$node" "$operation" | "${kc[@]}" create --filename - >/dev/null
-  "${kc[@]}" wait --for=condition=Complete "job/$name" --timeout=5m >/dev/null
+  wait_for_job_terminal "$name" 300 2 "${kc[@]}"
   "${kc[@]}" delete job "$name" --wait=true --timeout=2m >/dev/null
   job_absent "$name"
 }
@@ -235,7 +237,7 @@ cleanup() {
     node="$(current_n8n_node 2>/dev/null)"
     if [[ -n "$node" ]]; then
       job_manifest "$cleanup_job" "$node" cleanup | "${kc[@]}" create --filename - >/dev/null 2>&1 &&
-        "${kc[@]}" wait --for=condition=Complete "job/$cleanup_job" --timeout=5m >/dev/null 2>&1 &&
+        wait_for_job_terminal "$cleanup_job" 300 2 "${kc[@]}" >/dev/null 2>&1 &&
         "${kc[@]}" delete job "$cleanup_job" --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
     else
       cleanup_ok=false

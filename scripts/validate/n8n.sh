@@ -55,6 +55,8 @@ catalog='tests/catalog.yaml'
 n8n_verifier='scripts/verify/n8n.sh'
 n8n_verification_lib='scripts/lib/n8n-verification.sh'
 n8n_verification_contract_test='scripts/test/n8n-verification-contract-test.sh'
+n8n_job_wait_lib='scripts/test/lib/job.sh'
+n8n_job_wait_test='scripts/test/n8n-job-wait-test.sh'
 n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
 n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
@@ -178,6 +180,7 @@ for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$n8n_alert_activat
   [[ -f "$file" ]] || { echo "Missing n8n observability source: $file" >&2; exit 1; }
 done
 for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
+  "$n8n_job_wait_lib" "$n8n_job_wait_test" \
   "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
   "$n8n_operations" "$n8n_recovery" "$catalog" "$bootstrap_just" \
   "$kubernetes_just"; do
@@ -407,6 +410,14 @@ bash "$n8n_verification_contract_test" >/dev/null || {
   echo 'The n8n verification semantic API fixtures failed.' >&2
   exit 1
 }
+bash "$n8n_job_wait_test" >/dev/null || {
+  echo 'The n8n assurance Job terminal-state fixtures failed.' >&2
+  exit 1
+}
+if rg -Fq 'wait --for=condition=Complete' "$n8n_restore_drill" "$n8n_persistence"; then
+  echo 'n8n assurance Jobs must stop on both Complete and Failed terminal conditions.' >&2
+  exit 1
+fi
 
 # Inspect the parsed Just recipe source and require its safety state transitions in
 # order. The public route is never resumed or reconciled by this recipe.

@@ -3,6 +3,8 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/lib/n8n-verification.sh
+# shellcheck source=scripts/test/lib/job.sh
+source scripts/test/lib/job.sh
 source scripts/test/lib/lease.sh
 require_bash
 
@@ -473,7 +475,7 @@ cleanup() {
   if [[ "$database_possible" == 'true' ]]; then
     "${k_auto[@]}" delete job "$drop_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
     if database_job_manifest "$drop_job" drop | "${k_auto[@]}" create --filename - >/dev/null 2>&1 &&
-      "${k_auto[@]}" wait --for=condition=Complete "job/$drop_job" --timeout=10m >/dev/null 2>&1; then
+      wait_for_job_terminal "$drop_job" 600 2 "${k_auto[@]}" >/dev/null 2>&1; then
       :
     else
       cleanup_ok=false
@@ -533,7 +535,7 @@ policy_manifest | "${k_cluster[@]}" create --filename - >/dev/null
 verify_lease
 database_possible=true
 database_job_manifest "$restore_job" restore | "${k_auto[@]}" create --filename - >/dev/null
-"${k_auto[@]}" wait --for=condition=Complete "job/$restore_job" --timeout=30m >/dev/null
+wait_for_job_terminal "$restore_job" 1800 2 "${k_auto[@]}"
 selected_dump="$("${k_auto[@]}" logs "job/$restore_job" | sed -n 's/^selected_dump=//p' | tail -n 1)"
 [[ "$selected_dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
   echo 'The restore Job did not report one checksum-valid final dump.' >&2
@@ -554,7 +556,7 @@ fi
 
 verify_lease
 request_job_manifest | "${k_request[@]}" create --filename - >/dev/null
-"${k_request[@]}" wait --for=condition=Complete "job/$request_job" --timeout=10m >/dev/null
+wait_for_job_terminal "$request_job" 600 2 "${k_request[@]}"
 
 RUN_HASH="$run_hash" DATABASE_NAME="$database_name" SELECTED_DUMP="$selected_dump" \
   yq --null-input --output-format json '{
