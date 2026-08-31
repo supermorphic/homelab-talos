@@ -10,20 +10,60 @@ trap 'rm -rf -- "$result_root"' EXIT
 entry_json="$(catalog_dispatch_entry tests/catalog.yaml smoke cluster flux-ready)"
 export TEST_EXECUTION_ORIGIN=agent
 [[ "$(GITHUB_HEAD_REF=feat/ci-fixture GITHUB_REF_NAME='' \
-  resolve_git_branch '')" == 'feat/ci-fixture' ]]
+	resolve_git_branch '')" == 'feat/ci-fixture' ]]
 [[ "$(GITHUB_HEAD_REF='' GITHUB_REF_NAME=main \
-  resolve_git_branch '')" == 'main' ]]
+	resolve_git_branch '')" == 'main' ]]
 [[ "$(GITHUB_HEAD_REF='' GITHUB_REF_NAME='' resolve_git_branch '')" == 'detached' ]]
 run_dir="$(create_run_directory "$result_root" "$(resolve_execution_origin)")"
 run_id="$(basename "$run_dir")"
 
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-agent-[0-9a-f]{8}$ ]]
 for required in logs diagnostics evidence.json; do
-  [[ -e "$run_dir/$required" ]] || {
-    echo "Run initialization omitted $required." >&2
-    exit 1
-  }
+	[[ -e "$run_dir/$required" ]] || {
+		echo "Run initialization omitted $required." >&2
+		exit 1
+	}
 done
+[[ ! -e "$run_dir/diagnostics/shared" ]] || {
+	echo 'Standalone run initialization must not create the CI shared-result boundary.' >&2
+	exit 1
+}
+
+ci_catalog="$result_root/ci-catalog.yaml"
+ci_fake_just="$result_root/ci-fake-just.sh"
+ci_fake_log="$result_root/ci-fake-just.log"
+cp tests/fixtures/result-coordinator/catalog.yaml "$ci_catalog"
+# shellcheck disable=SC2016
+printf '%s\n' \
+	'#!/usr/bin/env bash' \
+	'set -euo pipefail' \
+	'printf "%s\\t%s\\n" "${TEST_SHARED_RESULT_DIR:?}" "${TEST_RUN_ID:?}" >>"${FAKE_JUST_LOG:?}"' \
+	'case "$*" in' \
+	'  fixture-pass|fixture-fail|fixture-skipped) exit 0 ;;' \
+	'  *) exit 2 ;;' \
+	'esac' >"$ci_fake_just"
+chmod +x "$ci_fake_just"
+FAKE_JUST_LOG="$ci_fake_log" \
+	TEST_CATALOG_PATH="$ci_catalog" \
+	TEST_RESULTS_ROOT="$result_root/ci-results" \
+	TEST_JUST_BIN="$ci_fake_just" \
+	TEST_EXECUTION_ORIGIN=agent \
+	TEST_SHARED_RESULT_DIR="$result_root/caller-shared" \
+	TEST_RUN_ID=caller-run-id \
+	scripts/test/run-ci.sh >/dev/null
+mapfile -t ci_runs < <(find "$result_root/ci-results" -mindepth 1 -maxdepth 1 -type d)
+[[ "${#ci_runs[@]}" -eq 1 ]]
+ci_run_dir="$(cd "${ci_runs[0]}" && pwd)"
+captured_children=0
+while IFS=$'\t' read -r captured_shared captured_run_id; do
+	[[ "$captured_shared" == "$ci_run_dir/diagnostics/shared" ]]
+	[[ "$captured_run_id" == "$(basename "$ci_run_dir")" ]]
+	captured_children=$((captured_children + 1))
+done <"$ci_fake_log"
+[[ "$captured_children" -eq 3 ]]
+[[ -d "$ci_run_dir/diagnostics/shared" ]]
+[[ -z "$(find "$ci_run_dir/diagnostics/shared" -mindepth 1 -print -quit)" ]]
+[[ ! -e "$result_root/caller-shared" ]]
 
 started_at='2026-07-27T00:00:00Z'
 finished_at='2026-07-27T00:00:03Z'
@@ -33,23 +73,23 @@ printf '%s\n' '{"observation":"sanitized fixture"}' >"$run_dir/evidence.json"
 printf '%s\n' '{"status":"passed","reason":"fixture cleanup"}' >"$run_dir/recovery.json"
 cp "$run_dir/junit.xml" "$run_dir/diagnostics/chainsaw-junit.xml"
 append_lifecycle_junit "$run_dir/junit.xml" chainsaw.smoke.cluster.flux-ready \
-  not-applicable passed passed passed passed
+	not-applicable passed passed passed passed
 
 [[ "$(recorded_recovery_status "$run_dir")" == 'passed' ]]
 normalize_native_artifacts "$run_dir" "$run_id"
 write_evidence_index "$run_dir" "$run_id"
 write_environment "$run_dir" "$run_id" "$entry_json" agent \
-  "$started_at" "$finished_at" flux-system "$result_root/no-kubeconfig" none
+	"$started_at" "$finished_at" flux-system "$result_root/no-kubeconfig" none
 write_summary "$run_dir" "$run_id" "$entry_json" agent \
-  "$started_at" "$finished_at" 3 passed 0 passed passed passed passed \
-  not-applicable unavailable
+	"$started_at" "$finished_at" 3 passed 0 passed passed passed passed \
+	not-applicable unavailable
 scripts/test/validate-run.sh "$run_dir" >/dev/null
 
 for required in junit.xml summary.json environment.json evidence.json logs diagnostics; do
-  [[ -e "$run_dir/$required" ]] || {
-    echo "Canonical run omitted $required." >&2
-    exit 1
-  }
+	[[ -e "$run_dir/$required" ]] || {
+		echo "Canonical run omitted $required." >&2
+		exit 1
+	}
 done
 
 yq -e '
@@ -103,31 +143,31 @@ yq -e '
 cp "$run_dir/summary.json" "$result_root/summary.valid.json"
 yq -i '.junit.tests = 2' "$run_dir/summary.json"
 if scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
-  echo 'Run validation must reject summary/JUnit count disagreement.' >&2
-  exit 1
+	echo 'Run validation must reject summary/JUnit count disagreement.' >&2
+	exit 1
 fi
 cp "$result_root/summary.valid.json" "$run_dir/summary.json"
 
 yq -i '.result = "broken" | .suites[0].result = "broken"' "$run_dir/summary.json"
 if scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
-  echo 'Run validation must reject a broken result without a JUnit error.' >&2
-  exit 1
+	echo 'Run validation must reject a broken result without a JUnit error.' >&2
+	exit 1
 fi
 cp "$result_root/summary.valid.json" "$run_dir/summary.json"
 
 exact_entry_json="$(yq -o=json -I=0 \
-  '.suites[] | select(.metadata.id == "test.e2e.qbit-manage-policy")' \
-  tests/catalog.yaml)"
+	'.suites[] | select(.metadata.id == "test.e2e.qbit-manage-policy")' \
+	tests/catalog.yaml)"
 secret_environment_dir="$result_root/secret-environment"
 mkdir "$secret_environment_dir"
 export CLUSTER_E2E_CONFIRM='must-not-appear-in-test-artifacts'
 write_environment "$secret_environment_dir" secret-environment "$exact_entry_json" agent \
-  "$started_at" "$finished_at" media "$result_root/no-kubeconfig" CLUSTER_E2E_CONFIRM
+	"$started_at" "$finished_at" media "$result_root/no-kubeconfig" CLUSTER_E2E_CONFIRM
 yq -e '.confirmation_variable == "CLUSTER_E2E_CONFIRM"' \
-  "$secret_environment_dir/environment.json" >/dev/null
+	"$secret_environment_dir/environment.json" >/dev/null
 if rg -q 'must-not-appear-in-test-artifacts' "$secret_environment_dir"; then
-  echo 'Confirmation values must never be written to test artifacts.' >&2
-  exit 1
+	echo 'Confirmation values must never be written to test artifacts.' >&2
+	exit 1
 fi
 unset CLUSTER_E2E_CONFIRM
 
@@ -147,10 +187,10 @@ write_single_case_junit "$lifecycle_junit" cluster primary passed 1
 # Offline cleanup-failure regression: the primary assertion remains passed while
 # cleanup/recovery/finalization are separately represented as harness errors.
 append_lifecycle_junit "$lifecycle_junit" chainsaw.e2e.fixture \
-  not-applicable failed failed passed broken
+	not-applicable failed failed passed broken
 [[ "$(read_junit_counts "$lifecycle_junit")" == '6 0 3 1 2' ]]
 yq --input-format xml --output-format json '.' "$lifecycle_junit" |
-  yq -e '
+	yq -e '
     .testsuites."+@tests" == "6" and
     .testsuites."+@errors" == "3" and
     .testsuites."+@skipped" == "1" and
@@ -162,33 +202,33 @@ yq --input-format xml --output-format json '.' "$lifecycle_junit" |
 
 attribute_free_junit="$result_root/attribute-free.xml"
 printf '%s\n' \
-  '<testsuites><testsuite>' \
-  '<testcase name="failed"><failure message="assertion"/></testcase>' \
-  '<testcase name="broken"><error message="harness"/></testcase>' \
-  '<testcase name="skipped"><skipped/></testcase>' \
-  '</testsuite></testsuites>' >"$attribute_free_junit"
+	'<testsuites><testsuite>' \
+	'<testcase name="failed"><failure message="assertion"/></testcase>' \
+	'<testcase name="broken"><error message="harness"/></testcase>' \
+	'<testcase name="skipped"><skipped/></testcase>' \
+	'</testsuite></testsuites>' >"$attribute_free_junit"
 [[ "$(read_junit_counts "$attribute_free_junit")" == '3 1 1 1 0' ]]
 
 zero_junit="$result_root/zero.xml"
 printf '%s\n' '<testsuites tests="0" failures="0" errors="0" skipped="0"/>' >"$zero_junit"
 if read_junit_counts "$zero_junit" >/dev/null 2>&1; then
-  echo 'A zero-test JUnit document must be rejected.' >&2
-  exit 1
+	echo 'A zero-test JUnit document must be rejected.' >&2
+	exit 1
 fi
 
 ln -s ../junit.xml "$run_dir/diagnostics/unsafe-link"
 if write_evidence_index "$run_dir" "$run_id" >/dev/null 2>&1; then
-  echo 'Evidence indexing must reject symlinks.' >&2
-  exit 1
+	echo 'Evidence indexing must reject symlinks.' >&2
+	exit 1
 fi
 rm "$run_dir/diagnostics/unsafe-link"
 
 printf 'oversized-fixture' >"$run_dir/diagnostics/oversized"
 write_evidence_index "$run_dir" "$run_id"
 if TEST_RESULT_MAX_FILE_BYTES=8 \
-  scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
-  echo 'Run validation must reject oversized evidence files.' >&2
-  exit 1
+	scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
+	echo 'Run validation must reject oversized evidence files.' >&2
+	exit 1
 fi
 rm "$run_dir/diagnostics/oversized"
 write_evidence_index "$run_dir" "$run_id"
@@ -196,8 +236,8 @@ write_evidence_index "$run_dir" "$run_id"
 TEST_EXECUTION_ORIGIN=unknown
 export TEST_EXECUTION_ORIGIN
 if resolve_execution_origin >/dev/null 2>&1; then
-  echo 'Unknown execution origins must be rejected.' >&2
-  exit 1
+	echo 'Unknown execution origins must be rejected.' >&2
+	exit 1
 fi
 
 echo 'Canonical result contract tests passed.'
