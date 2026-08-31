@@ -483,13 +483,21 @@ duplication, and maintenance value.
 
 ### Reviewed Stage 1 backlog and savings semantics
 
-Stage 1 first implements the six lifecycle removals above. Their focused local costs are
-30.384ms for the Chainsaw Conftest console rerun, 145.830ms for generic YAML parsing,
-621.190ms for the harness Bash subset, 10.103s for per-file harness ShellCheck, 8.164s
-for the harness ShellCheck JSON rerun, and 81.295ms for focused qbit-manage policy
-ShellCheck. These are separate command measurements. They are not added into one savings
-claim because focused profiles overlap other views and were not measured as a combined
-in-run delta.
+Stage 1 first implements the six lifecycle removals above. At quiet window QW-4, the
+focused pre-change local distributions (three sorted real-second samples each) were:
+
+| Removed duplicate execution | Samples | Median |
+| --- | --- | ---: |
+| Chainsaw Conftest console rerun | 0.04, 0.04, 0.16 | 0.04s |
+| Generic YAML parse | 0.13, 0.13, 0.15 | 0.13s |
+| Harness Bash subset | 0.47, 0.48, 0.54 | 0.48s |
+| Harness per-file ShellCheck | 10.27, 10.28, 10.30 | 10.28s |
+| Harness ShellCheck JSON | 8.28, 8.36, 8.37 | 8.36s |
+| Focused qbit-manage policy ShellCheck | 0.09, 0.10, 0.10 | 0.10s |
+
+These are separate command measurements. They are not added into one savings claim
+because focused profiles overlap other views and were not measured as a combined in-run
+delta.
 
 The focused ICQ harness reduction is complete. Remaining semantic-preserving runtime work
 addresses:
@@ -567,6 +575,57 @@ continue strengthening it.
 Correctness verification includes representative positive and negative fixtures,
 focused suite execution, and the complete canonical `mise exec -- just ci` gate. No live
 cluster test enters `just ci`.
+
+### 023c duplicate-removal result
+
+At commit `2cc7e3e`, Task 8 independently verified the current canonical repository
+shell source set against `git ls-files --cached --others --exclude-standard`: 181 regular,
+non-symlinked shell files, including `scripts/talos`, with the 107-file harness set as a
+strict subset. All five shell files added by plan 023c are in the canonical set. The
+current Chainsaw owner is 20 documents (19 under `tests/chainsaw` and one under
+`tests/fixtures/chainsaw`), with no current YAML support-file difference. This is the
+implemented current boundary; it does not alter the explicitly historical 166-file and
+19-document audit observations above.
+
+The historical plan-023a inventory remains exactly 500 entries: 494 Active and six
+Removed. Plan 023c removes exactly those six reviewed duplicate executions:
+`harness:conftest-console`, `harness:yaml-parse`, `harness:bash-syntax`,
+`harness:shellcheck-per-file`, `harness:shellcheck-json`, and
+`shell:qbit-manage-policy-shellcheck`. Issue-330 encode removals are a separate lifecycle
+decision and are not included in this count. Focused positive and negative checks proved
+the canonical ownership, exact first-Bash failure behavior, exact ShellCheck findings,
+rejection and one-time recomputation of invalid artifacts, producer-failure harness skip,
+one Conftest evaluation, 20 Chainsaw lints, and no generic reparse of Chainsaw test
+documents.
+
+Quiet windows QW-5 through QW-8 collected same-commit, same-host, pinned-toolchain
+post-change local samples. Every accepted command passed. Harness and complete-gate logs
+reported `configurations=1 tests=20 yaml_files=0 python_test_dirs=2`; complete CI also
+reported zero failures, errors, and skips. The three-sample distributions below compare
+the QW-4 pre-change values with the accepted post-change values. They report medians only;
+three samples do not establish a p95.
+
+| Command | Pre-change samples | Pre median | Post-change samples | Post median | Median delta |
+| --- | --- | ---: | --- | ---: | ---: |
+| `mise exec -- just repo validate` | 21.16, 21.22, 22.09 | 21.22s | 19.70, 19.99, 21.74 | 19.99s | -1.23s (-5.8%) |
+| `mise exec -- just test validate` | 553.68, 554.15, 560.02 | 554.15s | 631.99, 637.66, 691.62 | 637.66s | +83.51s (+15.1%) |
+| `mise exec -- just ci` | 707.08, 744.41, 769.10 | 744.41s | 813.27, 889.29, 906.64 | 889.29s | +144.88s (+19.5%) |
+
+QW-5 accepted repository samples 1--3 and harness sample 1 before a foreign worktree
+started CI; its later harness sample 2 was preserved but excluded. QW-6 accepted harness
+sample 2 before a guard false-positive on the task's own harness; its later harness sample
+3 was preserved but excluded. QW-7 excluded harness sample 3 after a guard race on the
+task's own exited ShellCheck. QW-8 accepted harness sample 3 and complete-CI samples
+1--3; its final guard was clean. Excluded samples do not enter any distribution.
+
+The six duplicate removals and their canonical owners are correctness-verified. No
+end-to-end speedup is claimed: the modest repository-validation improvement is outweighed
+by retained-harness variance and regression in both the harness and full gate. Stage 1 is
+not complete. Continue intrinsic optimization and profiling of retained Active heavy
+harnesses and the remaining Stage 1 backlog, then collect controlled local and repeated
+GitHub measurements. Stage 2 is not authorized: ordinary latency is unacceptable, but the
+four-part Stage 2 decision gate remains unmet because Stage 1 is incomplete and the
+residual impact and deterministic-selection case are not yet established.
 
 ## Stage 2 decision gate
 
