@@ -36,6 +36,22 @@ case "${FAKE_VALIDATOR_MODE:?}" in
     sleep 0.1
     printf '%s\n' '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite name="fake" tests="1" failures="0" errors="0" skipped="0"><testcase classname="fake" name="late"/></testsuite></testsuites>'
     ;;
+  term-forward)
+    printf '%s\n' "$BASHPID" >"${FAKE_CHILD_PID:?}"
+    printf '%s\n' started >"${FAKE_TERM_READY:?}"
+    trap 'printf "%s\\n" terminated >"${FAKE_CHILD_TERM:?}"; exit 0' TERM
+    while true; do
+      sleep 1
+    done
+    ;;
+  race)
+    printf '%s\n' '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite name="fake" tests="1" failures="0" errors="0" skipped="0"><testcase classname="fake" name="race"/></testsuite></testsuites>'
+    printf '%s\n' ready >"${FAKE_RACE_READY:?}"
+    while [[ ! -e "${FAKE_RACE_RELEASE:?}" ]]; do
+      sleep 0.01
+    done
+    exit "${FAKE_RACE_STATUS:?}"
+    ;;
   *)
     exit 99
     ;;
@@ -62,6 +78,16 @@ assert_no_temporary_files() {
 		echo 'Native JUnit wrapper left a temporary fragment behind.' >&2
 		exit 1
 	}
+}
+
+wait_for_file() {
+	local path="$1"
+	local attempt
+	for ((attempt = 0; attempt < 40; attempt++)); do
+		[[ -e "$path" ]] && return 0
+		sleep 0.05
+	done
+	return 1
 }
 
 [[ -x "$wrapper" ]]
@@ -150,6 +176,60 @@ run_wrapper pass "$collision_output" collision.xml Chainsaw
 assert_no_temporary_files
 
 : >"$invocations"
+race_target="$fragment_root/race-failure.xml"
+race_ready="$fixture_root/race-failure-ready"
+race_release="$fixture_root/race-failure-release"
+race_output="$fixture_root/race-failure.out"
+set +e
+FAKE_INVOCATIONS="$invocations" \
+	FAKE_RACE_READY="$race_ready" \
+	FAKE_RACE_RELEASE="$race_release" \
+	FAKE_RACE_STATUS=41 \
+	FAKE_VALIDATOR_MODE=race \
+	TEST_RESULT_FRAGMENT_DIR="$fragment_root" \
+	"$wrapper" --suite validation.test-harness --fragment race-failure.xml --label Chainsaw -- \
+	"$fake_validator" >"$race_output" 2>&1 &
+race_wrapper_pid="$!"
+set -e
+wait_for_file "$race_ready"
+printf '%s\n' preserved >"$race_target"
+: >"$race_release"
+set +e
+wait "$race_wrapper_pid"
+race_status="$?"
+set -e
+[[ "$race_status" -eq 41 ]]
+[[ "$(cat "$race_target")" == preserved ]]
+assert_no_temporary_files
+
+: >"$invocations"
+race_target="$fragment_root/race-success.xml"
+race_ready="$fixture_root/race-success-ready"
+race_release="$fixture_root/race-success-release"
+race_output="$fixture_root/race-success.out"
+set +e
+FAKE_INVOCATIONS="$invocations" \
+	FAKE_RACE_READY="$race_ready" \
+	FAKE_RACE_RELEASE="$race_release" \
+	FAKE_RACE_STATUS=0 \
+	FAKE_VALIDATOR_MODE=race \
+	TEST_RESULT_FRAGMENT_DIR="$fragment_root" \
+	"$wrapper" --suite validation.test-harness --fragment race-success.xml --label Chainsaw -- \
+	"$fake_validator" >"$race_output" 2>&1 &
+race_wrapper_pid="$!"
+set -e
+wait_for_file "$race_ready"
+printf '%s\n' preserved >"$race_target"
+: >"$race_release"
+set +e
+wait "$race_wrapper_pid"
+race_status="$?"
+set -e
+[[ "$race_status" -eq 2 ]]
+[[ "$(cat "$race_target")" == preserved ]]
+assert_no_temporary_files
+
+: >"$invocations"
 term_ready="$fixture_root/term-ready"
 term_output="$fixture_root/term.out"
 set +e
@@ -164,6 +244,41 @@ set -e
 [[ -f "$term_ready" ]]
 [[ "$term_status" -eq 143 ]]
 [[ ! -e "$fragment_root/term.xml" ]]
+[[ "$(wc -l <"$invocations")" -eq 1 ]]
+assert_no_temporary_files
+
+: >"$invocations"
+term_ready="$fixture_root/term-forward-ready"
+child_pid_file="$fixture_root/term-forward-child-pid"
+child_term="$fixture_root/term-forward-child-term"
+term_output="$fixture_root/term-forward.out"
+set +e
+FAKE_CHILD_PID="$child_pid_file" \
+	FAKE_CHILD_TERM="$child_term" \
+	FAKE_INVOCATIONS="$invocations" \
+	FAKE_TERM_READY="$term_ready" \
+	FAKE_VALIDATOR_MODE=term-forward \
+	TEST_RESULT_FRAGMENT_DIR="$fragment_root" \
+	"$wrapper" --suite validation.test-harness --fragment term-forward.xml --label Chainsaw -- \
+	"$fake_validator" >"$term_output" 2>&1 &
+term_wrapper_pid="$!"
+set -e
+wait_for_file "$term_ready"
+kill -TERM "$term_wrapper_pid"
+if ! wait_for_file "$child_term"; then
+	kill -TERM "$(cat "$child_pid_file")"
+	set +e
+	wait "$term_wrapper_pid"
+	set -e
+	echo 'TERM was not forwarded promptly to the native JUnit validator.' >&2
+	exit 1
+fi
+set +e
+wait "$term_wrapper_pid"
+term_status="$?"
+set -e
+[[ "$term_status" -eq 143 ]]
+[[ ! -e "$fragment_root/term-forward.xml" ]]
 [[ "$(wc -l <"$invocations")" -eq 1 ]]
 assert_no_temporary_files
 
