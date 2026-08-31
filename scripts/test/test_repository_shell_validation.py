@@ -137,26 +137,29 @@ exit 0
         (tools / "shellcheck").chmod(0o755)
         return tools, shellcheck_sentinel
 
-    def test_discovers_exact_current_git_shell_set_and_excludes_ignored_shell_files(self) -> None:
+    def test_discovers_exact_current_git_shell_set(self) -> None:
         expected = git_shell_oracle(REPO_ROOT)
         self.assertEqual(repository_shell_validation.discover_shell_sources(REPO_ROOT), expected)
         self.assertTrue(all(type(relative) is Path for relative in expected))
         self.assertIn(Path("scripts/talos/apply-live.sh"), expected)
 
-        ignored = REPO_ROOT / "scripts/test/ignored-plan-fixture.sh"
-        ignore_file = REPO_ROOT / ".gitignore"
-        original_ignore = ignore_file.read_text(encoding="utf-8")
-        try:
-            with ignore_file.open("a", encoding="utf-8") as stream:
-                stream.write("scripts/test/ignored-plan-fixture.sh\n")
+    def test_temporary_repository_discovery_excludes_ignored_and_includes_untracked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            ignored = root / "scripts/test/ignored.sh"
+            untracked = root / "scripts/test/untracked.sh"
+            (root / ".gitignore").write_text("scripts/test/ignored.sh\n", encoding="utf-8")
             ignored.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            untracked.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            expected = git_shell_oracle(root)
+
+            self.assertEqual(repository_shell_validation.discover_shell_sources(root), expected)
             self.assertNotIn(
-                Path("scripts/test/ignored-plan-fixture.sh"),
-                repository_shell_validation.discover_shell_sources(REPO_ROOT),
+                Path("scripts/test/ignored.sh"),
+                expected,
             )
-        finally:
-            ignored.unlink(missing_ok=True)
-            ignore_file.write_text(original_ignore, encoding="utf-8")
+            self.assertIn(Path("scripts/test/untracked.sh"), expected)
 
     def test_discovers_tracked_talos_shell_source(self) -> None:
         self.assertIn(
