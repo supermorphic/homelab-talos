@@ -33,6 +33,7 @@ REPOSITORY_DIRS = (
 PRODUCER_SUITE = "validation.repo-validate"
 BASH_ARGV = ["bash", "-n"]
 SHELLCHECK_ARGV = ["shellcheck", "--external-sources", "--format=json"]
+SHELLCHECK_NOT_RUN = "not-run"
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -180,6 +181,8 @@ def validate_result_schema(document: object) -> None:
         raise TypeError("sorted_files must contain non-empty strings")
     if result["sorted_files"] != sorted(result["sorted_files"]):
         raise ValueError("sorted_files must be sorted")
+    if len(result["sorted_files"]) != len(set(result["sorted_files"])):
+        raise ValueError("sorted_files must not contain duplicates")
     if not isinstance(result["completed_at"], str) or not RFC3339_UTC.fullmatch(
         result["completed_at"]
     ):
@@ -240,6 +243,7 @@ def expected_identity(root: Path, suite: str, run_id: str | None) -> dict[str, A
         "run_id": run_id,
         "head_sha": head_sha(root),
         "source_set_sha256": source_set_digest(root, sources),
+        "sorted_files": [relative.as_posix() for relative in sources],
         "bash_version": command_version("bash"),
         "shellcheck_version": command_version("shellcheck"),
         "bash_argv": BASH_ARGV,
@@ -256,9 +260,11 @@ def artifact_matches(artifact_path: Path, expected: dict[str, Any]) -> bool:
         document = load_exact_schema(artifact_path)
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         return False
-    if any(document[field] != expected[field] for field in expected):
+    if any(document[field] != expected[field] for field in expected if field != "sorted_files"):
         return False
     result = document["result"]
+    if result["sorted_files"] != expected["sorted_files"]:
+        return False
     return (
         result["bash_status"] == 0
         and result["bash_first_failure"] is None
@@ -297,13 +303,16 @@ def produce_document(root: Path, run_id: str) -> dict[str, Any]:
         )
         shellcheck_status = completed.returncode
         findings = normalized_findings(completed.stdout)
+    shellcheck_version = SHELLCHECK_NOT_RUN
+    if bash_status == 0:
+        shellcheck_version = command_version("shellcheck")
     return {
         "schema_version": 1,
         "run_id": run_id,
         "head_sha": head_sha(root),
         "source_set_sha256": source_set_digest(root, sorted_files),
         "bash_version": command_version("bash"),
-        "shellcheck_version": command_version("shellcheck"),
+        "shellcheck_version": shellcheck_version,
         "bash_argv": BASH_ARGV,
         "shellcheck_argv": SHELLCHECK_ARGV,
         "producer_suite": PRODUCER_SUITE,

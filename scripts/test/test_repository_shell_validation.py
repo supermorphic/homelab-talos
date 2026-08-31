@@ -85,11 +85,11 @@ exit 0
         shellcheck_body = "\n".join(
             [
                 "#!/bin/sh",
+                f"printf '%s\\n' \"$*\" >> {shellcheck_sentinel}",
                 'if [ "$1" = "--version" ]; then',
                 "  printf '%s\\n' 'ShellCheck fake 1.0'",
                 "  exit 0",
                 "fi",
-                f"printf '%s\\n' \"$*\" >> {shellcheck_sentinel}",
                 'printf \'%s\\n\' \'[{"file":"scripts/test/ok.sh","line":2,"column":1,"level":"warning","code":2086,"message":"quote this"}]\'',
                 "exit 1",
                 "",
@@ -165,7 +165,9 @@ exit 0
                 "bad.sh: line 2: syntax error",
             )
             self.assertIsNone(result["result"]["shellcheck_status"])
-            self.assertFalse(shellcheck_sentinel.exists())
+            self.assertFalse(
+                shellcheck_sentinel.exists(), "Bash failure must not execute ShellCheck"
+            )
             self.assertEqual(result["findings"], [])
 
     def test_produce_runs_shellcheck_once_after_bash_and_writes_exact_finding_fields(self) -> None:
@@ -239,9 +241,48 @@ exit 0
             )
             self.assertEqual(
                 shellcheck_sentinel.read_text(encoding="utf-8"),
-                "--external-sources --format=json scripts/test/ok.sh\n",
+                "--external-sources --format=json scripts/test/ok.sh\n--version\n",
             )
             self.assertTrue(junit.is_file())
+
+    def test_discovery_excludes_a_tracked_shell_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            (root / "scripts/test/symlinked.sh").symlink_to("ok.sh")
+            subprocess.run(["git", "add", "scripts/test/symlinked.sh"], cwd=root, check=True)
+            self.assertNotIn(
+                Path("scripts/test/symlinked.sh"),
+                repository_shell_validation.discover_shell_sources(root),
+            )
+
+    def test_produce_keeps_existing_artifact_when_junit_adapter_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            tools, _ = self.fake_tools(root)
+            artifact = root / "artifact.json"
+            artifact.write_text('{"previous":"artifact"}\n', encoding="utf-8")
+            environment = {**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}"}
+            with (
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(
+                    repository_shell_validation.junit_report,
+                    "repository_shell_report",
+                    return_value=2,
+                ),
+            ):
+                self.assertEqual(
+                    repository_shell_validation.produce(
+                        root=root,
+                        suite="validation.repo-validate",
+                        run_id="run-1",
+                        artifact_path=artifact,
+                        junit_path=root / "result.xml",
+                    ),
+                    2,
+                )
+            self.assertEqual(artifact.read_text(encoding="utf-8"), '{"previous":"artifact"}\n')
 
     def test_consume_reuses_only_matching_passed_artifact_and_recomputes_otherwise(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -279,32 +320,83 @@ exit 0
                     0,
                 )
                 self.assertFalse(shellcheck_sentinel.exists())
-                result = json.loads(artifact.read_text(encoding="utf-8"))
-                result["unexpected"] = True
-                artifact.write_text(json.dumps(result), encoding="utf-8")
-                self.assertEqual(
-                    repository_shell_validation.consume(
-                        root=root,
-                        suite="validation.test-harness",
-                        artifact_path=artifact,
-                        run_id="run-1",
-                        junit_path=None,
+                baseline = artifact.read_text(encoding="utf-8")
+
+                def mutate_artifact(transform: object) -> None:
+                    document = json.loads(baseline)
+                    assert callable(transform)
+                    transform(document)
+                    artifact.write_text(json.dumps(document), encoding="utf-8")
+
+                def failed(document: dict[str, object]) -> None:
+                    document["result"] = {
+                        "bash_status": 2,
+                        "bash_first_failure": {"file": "scripts/test/ok.sh", "stderr": "bad"},
+                        "shellcheck_status": None,
+                        "sorted_files": ["scripts/test/ok.sh"],
+                        "completed_at": document["result"]["completed_at"],
+                    }
+                    document["findings"] = []
+
+                def status_inconsistent(document: dict[str, object]) -> None:
+                    document["findings"] = [
+                        {
+                            "file": "scripts/test/ok.sh",
+                            "line": 1,
+                            "column": 1,
+                            "level": "warning",
+                            "code": 2086,
+                            "message": "unexpected with success",
+                        }
+                    ]
+
+                cases = (
+                    ("missing", None),
+                    ("truncated", "{"),
+                    ("failed", failed),
+                    (
+                        "stale digest",
+                        lambda document: document.__setitem__("source_set_sha256", "0" * 64),
                     ),
-                    0,
-                )
-                self.assertTrue(shellcheck_sentinel.exists())
-                shellcheck_sentinel.unlink()
-                self.assertEqual(
-                    repository_shell_validation.consume(
-                        root=root,
-                        suite="validation.test-harness",
-                        artifact_path=artifact,
-                        run_id="other-run",
-                        junit_path=None,
+                    ("stale HEAD", lambda document: document.__setitem__("head_sha", "0" * 40)),
+                    (
+                        "tool mismatch",
+                        lambda document: document.__setitem__("bash_version", "other"),
                     ),
-                    0,
+                    (
+                        "argv mismatch",
+                        lambda document: document.__setitem__("bash_argv", ["bash", "-x"]),
+                    ),
+                    ("status inconsistent", status_inconsistent),
+                    (
+                        "tampered sorted files",
+                        lambda document: document["result"].__setitem__(
+                            "sorted_files", ["scripts/test/ok.sh", "scripts/test/ok.sh"]
+                        ),
+                    ),
+                    ("corrupt", "["),
                 )
-            self.assertTrue(shellcheck_sentinel.exists())
+                for name, mutation in cases:
+                    with self.subTest(name=name):
+                        artifact.write_text(baseline, encoding="utf-8")
+                        if mutation is None:
+                            artifact.unlink()
+                        elif isinstance(mutation, str):
+                            artifact.write_text(mutation, encoding="utf-8")
+                        else:
+                            mutate_artifact(mutation)
+                        shellcheck_sentinel.unlink(missing_ok=True)
+                        self.assertEqual(
+                            repository_shell_validation.consume(
+                                root=root,
+                                suite="validation.test-harness",
+                                artifact_path=artifact,
+                                run_id="run-1",
+                                junit_path=None,
+                            ),
+                            0,
+                        )
+                        self.assertTrue(shellcheck_sentinel.exists())
 
 
 if __name__ == "__main__":
