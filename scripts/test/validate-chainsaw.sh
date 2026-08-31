@@ -38,27 +38,12 @@ unset SOPS_AGE_KEY SOPS_AGE_KEY_FILE
 
 scripts/test/validate-catalog.sh
 chainsaw lint configuration --file tests/config/chainsaw.yaml
-set +e
-conftest test --all-namespaces \
+scripts/test/run-native-junit-validator.sh \
+  --suite validation.test-harness --fragment conftest-chainsaw.xml \
+  --label Chainsaw -- conftest test --all-namespaces \
   --policy tests/policy/chainsaw \
+  --output junit \
   tests/config/chainsaw.yaml tests/chainsaw/smoke
-conftest_exit_code="$?"
-set -e
-if [[ -n "$fragment_root" ]]; then
-  set +e
-  conftest test --all-namespaces \
-    --policy tests/policy/chainsaw \
-    --output junit \
-    tests/config/chainsaw.yaml tests/chainsaw/smoke \
-    >"$fragment_root/conftest-chainsaw.xml"
-  conftest_report_exit_code="$?"
-  set -e
-  [[ "$conftest_report_exit_code" -eq "$conftest_exit_code" ]] || {
-    echo 'Conftest console and JUnit executions disagreed.' >&2
-    exit 2
-  }
-fi
-[[ "$conftest_exit_code" -eq 0 ]] || exit "$conftest_exit_code"
 
 test_count=0
 while IFS= read -r test_file; do

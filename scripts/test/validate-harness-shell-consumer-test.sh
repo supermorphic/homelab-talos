@@ -13,6 +13,7 @@ matching_fragments="$fixture_root/matching-fragments"
 fallback_fragments="$fixture_root/fallback-fragments"
 bash_log="$fixture_root/bash.log"
 shellcheck_log="$fixture_root/shellcheck.log"
+conftest_log="$fixture_root/conftest.log"
 real_bash="$(command -v bash)"
 run_id='bounded-harness-run'
 
@@ -28,6 +29,8 @@ mkdir -p \
 	"$tool_root" "$shared_root" "$producer_fragments"
 
 cp scripts/test/validate-chainsaw.sh "$fixture_root/scripts/test/"
+cp scripts/test/run-native-junit-validator.sh \
+	"$fixture_root/scripts/test/"
 cp scripts/test/repository_shell_validation.py scripts/test/junit_report.py \
 	scripts/test/junit_tools.py \
 	"$fixture_root/scripts/test/"
@@ -60,13 +63,15 @@ exit 0
 EOF
 cat >"$tool_root/conftest" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"${CONFTEST_LOG:?}"
 case " $* " in
-*' --output junit '*) printf '%s\n' '<testsuites tests="0" failures="0" errors="0" skipped="0" />' ;;
+*' --output junit '*) printf '%s\n' '<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite name="fake" tests="1" failures="0" errors="0" skipped="0"><testcase classname="fake" name="pass"/></testsuite></testsuites>' ;;
 esac
 exit 0
 EOF
 chmod +x \
 	"$fixture_root/scripts/test/validate-chainsaw.sh" \
+	"$fixture_root/scripts/test/run-native-junit-validator.sh" \
 	"$fixture_root/scripts/test/validate-catalog.sh" \
 	"$fixture_root/scripts/test/safety/require-chaos-confirmation-test.sh" \
 	"$tool_root/bash" "$tool_root/shellcheck" "$tool_root/chainsaw" "$tool_root/conftest"
@@ -109,6 +114,7 @@ run_bounded_harness() {
 	env "$@" \
 		PATH="$tool_root:$PATH" \
 		BASH_VALIDATION_LOG="$bash_log" \
+		CONFTEST_LOG="$conftest_log" \
 		SHELLCHECK_VALIDATION_LOG="$shellcheck_log" \
 		"$fixture_root/scripts/test/validate-chainsaw.sh" >"$output" 2>&1
 	local status="$?"
@@ -122,6 +128,7 @@ run_bounded_harness() {
 
 : >"$bash_log"
 : >"$shellcheck_log"
+: >"$conftest_log"
 mkdir "$matching_fragments"
 run_bounded_harness "$fixture_root/matching.log" \
 	TEST_SHARED_RESULT_DIR="$shared_root" \
@@ -141,9 +148,13 @@ if [[ -e "$matching_fragments/repository-shell-validation.xml" ]]; then
 	echo 'Matching harness pass must not create a consumer fragment.' >&2
 	exit 1
 fi
+[[ "$(wc -l <"$conftest_log")" -eq 1 ]]
+[[ "$(cat "$conftest_log")" == \
+  'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
 
 : >"$bash_log"
 : >"$shellcheck_log"
+: >"$conftest_log"
 mkdir "$fallback_fragments"
 run_bounded_harness "$fixture_root/fallback.log" \
 	-u TEST_SHARED_RESULT_DIR \
@@ -156,5 +167,8 @@ mapfile -t shellcheck_invocations <"$shellcheck_log"
 [[ "${#shellcheck_invocations[@]}" -eq 1 ]]
 [[ "${shellcheck_invocations[0]}" == "$expected_shellcheck_argv" ]]
 [[ -s "$fallback_fragments/repository-shell-validation.xml" ]]
+[[ "$(wc -l <"$conftest_log")" -eq 1 ]]
+[[ "$(cat "$conftest_log")" == \
+  'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
 
 echo 'Bounded harness repository-shell consumer tests passed.'
