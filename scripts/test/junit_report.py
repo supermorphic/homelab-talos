@@ -107,7 +107,7 @@ def console_summary(input_path: Path, label: str) -> int:
     return 0
 
 
-def repository_shell_report(
+def _repository_shell_report(
     output: Path,
     suite_name: str,
     result_path: Path,
@@ -177,6 +177,19 @@ def repository_shell_report(
     _set_counts(root)
     _write_xml(root, output)
     return 0
+
+
+def repository_shell_report(
+    output: Path,
+    suite_name: str,
+    result_path: Path,
+) -> int:
+    """Render a native result, returning status 2 for any invalid artifact."""
+    try:
+        return _repository_shell_report(output, suite_name, result_path)
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        print(f"JUnit adapter error: {error}", file=sys.stderr)
+        return 2
 
 
 def write_case(

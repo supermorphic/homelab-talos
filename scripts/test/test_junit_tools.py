@@ -72,6 +72,23 @@ class JUnitToolsTests(unittest.TestCase):
                 junit_tools.repository_shell_report(root / "out.xml", "suite", result), 2
             )
 
+    def test_repository_shell_returns_two_for_nested_invalid_result_schema(self) -> None:
+        cases = [
+            {"result": {}, "findings": []},
+            {"result": {"bash_status": 2}, "findings": []},
+            {"result": {"bash_status": 2, "bash_first_failure": {}}, "findings": []},
+            {"result": {"bash_status": 0}, "findings": [None]},
+            {"result": {"bash_status": 0}, "findings": [{"file": "bad.sh"}]},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, payload in enumerate(cases):
+                result = root / f"result-{index}.json"
+                output = root / f"output-{index}.xml"
+                result.write_text(json.dumps(payload))
+                self.assertEqual(junit_tools.repository_shell_report(output, "suite", result), 2)
+                self.assertFalse(output.exists())
+
     def test_repository_shell_clean_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
