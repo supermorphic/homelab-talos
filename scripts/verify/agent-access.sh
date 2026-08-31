@@ -106,6 +106,7 @@ namespaced_read_resources=(
   certificates.cert-manager.io
   ciliumendpoints.cilium.io
   ciliumnetworkpolicies.cilium.io
+  dnsendpoints.externaldns.k8s.io
   gateways.gateway.networking.k8s.io
   httproutes.gateway.networking.k8s.io
   helmreleases.helm.toolkit.fluxcd.io
@@ -149,6 +150,9 @@ assert_declared_reads() {
 }
 assert_declared_reads "$observer"
 assert_declared_reads "$diagnostic"
+for context in "$observer" "$diagnostic"; do
+  assert_can_i "$context" yes list dnsendpoints.externaldns.k8s.io ''
+done
 
 # Observer: Secret bodies, interactive subresources, and mutations stay denied.
 assert_can_i "$observer" no get secrets kube-system

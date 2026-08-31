@@ -21,6 +21,7 @@ required_read_rules := {
 	"aquasecurity.github.io": {"vulnerabilityreports"},
 	"cert-manager.io": {"certificates", "clusterissuers"},
 	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
+	"externaldns.k8s.io": {"dnsendpoints"},
 	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes"},
 	"helm.toolkit.fluxcd.io": {"helmreleases"},
 	"kustomize.toolkit.fluxcd.io": {"kustomizations"},

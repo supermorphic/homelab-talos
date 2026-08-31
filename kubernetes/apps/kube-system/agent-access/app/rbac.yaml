@@ -68,6 +68,9 @@ rules:
       - ciliumnetworkpolicies
       - ciliumnodes
     verbs: [get, list, watch]
+  - apiGroups: [externaldns.k8s.io]
+    resources: [dnsendpoints]
+    verbs: [get, list, watch]
   - apiGroups: [gateway.networking.k8s.io]
     resources: [gatewayclasses, gateways, httproutes]
     verbs: [get, list, watch]
