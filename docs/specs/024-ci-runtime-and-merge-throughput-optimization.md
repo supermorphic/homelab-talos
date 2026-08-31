@@ -100,9 +100,8 @@ The Stage 1 audit fixed the local baseline at commit
 | 2 | 1,276s |
 | 3 | 1,352s |
 
-The distribution is count 3, minimum 1,276s, median 1,352s, provisional p95 1,352s,
-and maximum 1,352s. The p95 is explicitly provisional because three samples cannot
-establish a stable tail distribution. These measurements are local fixed-commit
+The distribution is count 3, minimum 1,276s, median 1,352s, and maximum 1,352s. No p95
+is established from three samples. These measurements are historical local fixed-commit
 observations, not a claim about GitHub-hosted performance.
 
 The fixed-commit suite medians confirm the concentration:
@@ -598,12 +597,17 @@ rejection and one-time recomputation of invalid artifacts, producer-failure harn
 one Conftest evaluation, 20 Chainsaw lints, and no generic reparse of Chainsaw test
 documents.
 
-Quiet windows QW-5 through QW-8 collected same-commit, same-host, pinned-toolchain
-post-change local samples. Every accepted command passed. Harness and complete-gate logs
-reported `configurations=1 tests=20 yaml_files=0 python_test_dirs=2`; complete CI also
-reported zero failures, errors, and skips. The three-sample distributions below compare
-the QW-4 pre-change values with the accepted post-change values. They report medians only;
-three samples do not establish a p95.
+The QW-4 pre-change samples used revision
+`d310285731fdb242fab27986ea334678001c6044`; accepted post-change samples used revision
+`2cc7e3e78e61025f01297f1af5d54c9b38c192a4`. Both revisions were measured from the same
+linked checkout on the same Darwin 25.6.0 arm64 host with the pinned toolchain, ordinary
+warm-cache protocol, sequential samples, Time Machine idle or paused, sleep inhibited,
+and process guarding. Accepted post-change samples span QW-5, QW-6, and QW-8; they do not
+represent one continuous quiet window. Every accepted command passed. Harness and
+complete-gate logs reported `configurations=1 tests=20 yaml_files=0 python_test_dirs=2`;
+complete CI also reported zero failures, errors, and skips. The three-sample distributions
+below compare the QW-4 pre-change values with the accepted post-change values. They report
+medians only; three samples do not establish a p95.
 
 | Command | Pre-change samples | Pre median | Post-change samples | Post median | Median delta |
 | --- | --- | ---: | --- | ---: | ---: |
@@ -619,9 +623,9 @@ task's own exited ShellCheck. QW-8 accepted harness sample 3 and complete-CI sam
 1--3; its final guard was clean. Excluded samples do not enter any distribution.
 
 The six duplicate removals and their canonical owners are correctness-verified. No
-end-to-end speedup is claimed: the modest repository-validation improvement is outweighed
-by retained-harness variance and regression in both the harness and full gate. Stage 1 is
-not complete. Continue intrinsic optimization and profiling of retained Active heavy
+end-to-end speedup is claimed: the observed repository-validation median decrease is
+outweighed by observed median increases for both the retained harness and full gate. Stage
+1 is not complete. Continue intrinsic optimization and profiling of retained Active heavy
 harnesses and the remaining Stage 1 backlog, then collect controlled local and repeated
 GitHub measurements. Stage 2 is not authorized: ordinary latency is unacceptable, but the
 four-part Stage 2 decision gate remains unmet because Stage 1 is incomplete and the
