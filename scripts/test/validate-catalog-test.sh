@@ -25,10 +25,20 @@ legacy_fixture='scripts/test/.repository-shell-validation-shellcheck-fixture.sh'
 bash_fixture_created=false
 bash_second_fixture_created=false
 shellcheck_fixture_created=false
+legacy_fixture_created=false
 tool_root="$fixture_root/tools"
 bash_log="$fixture_root/bash.log"
 shellcheck_log="$fixture_root/shellcheck.log"
 real_bash="$(command -v bash)"
+
+cleanup() {
+	[[ "$bash_fixture_created" == true ]] && rm -f -- "$bash_fixture"
+	[[ "$bash_second_fixture_created" == true ]] && rm -f -- "$bash_second_fixture"
+	[[ "$shellcheck_fixture_created" == true ]] && rm -f -- "$shellcheck_fixture"
+	[[ "$legacy_fixture_created" == true ]] && rm -f -- "$legacy_fixture"
+	rm -rf -- "$fixture_root"
+}
+trap cleanup EXIT
 
 for fixture in "$bash_fixture" "$bash_second_fixture" "$shellcheck_fixture" "$legacy_fixture"; do
 	[[ ! -e "$fixture" ]] || {
@@ -36,14 +46,6 @@ for fixture in "$bash_fixture" "$bash_second_fixture" "$shellcheck_fixture" "$le
 		exit 1
 	}
 done
-
-cleanup() {
-	[[ "$bash_fixture_created" == true ]] && rm -f -- "$bash_fixture"
-	[[ "$bash_second_fixture_created" == true ]] && rm -f -- "$bash_second_fixture"
-	[[ "$shellcheck_fixture_created" == true ]] && rm -f -- "$shellcheck_fixture"
-	rm -rf -- "$fixture_root"
-}
-trap cleanup EXIT
 
 run_repository_validation() {
 	local output="$1"
@@ -247,10 +249,15 @@ set -e
 expected_shellcheck_finding="${shellcheck_fixture}"$'\t3\t6\tinfo\t2086\tDouble quote to prevent globbing and word splitting.'
 [[ "$(yq -r '.findings[0] | [.file, .line, .column, .level, .code, .message] | @tsv' "$artifact")" == "$expected_shellcheck_finding" ]]
 
+legacy_fixture_created=true
 printf '%s\n' '#!/usr/bin/env bash' 'true' >"$legacy_fixture"
-cleanup
+(
+	legacy_fixture_created=false
+	cleanup
+)
 [[ "$(cat "$legacy_fixture")" == $'#!/usr/bin/env bash\ntrue' ]]
 rm -f -- "$legacy_fixture"
+legacy_fixture_created=false
 trap - EXIT
 
 if rg -n 'bash -n.*\$|find scripts/secrets scripts/test tests/probes' \
