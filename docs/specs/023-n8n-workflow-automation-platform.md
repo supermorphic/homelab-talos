@@ -224,15 +224,32 @@ The synthetic canary uses n8n header authentication. The later TheirStack integr
 must use the provider's verified signing or authentication contract once that contract is
 confirmed.
 
-Publishing the edge also requires operator-managed public DNS and router TCP/443
-forwarding to the dedicated public LoadBalancer address. Those changes remain outside
-Flux. No live public address is recorded in the repository.
+The cluster's internal DNS answer for `hooks.lab.supermorphic.com` resolves to the
+dedicated public Envoy LoadBalancer, not the internal Gateway. The always-active public
+Gateway package owns one `DNSEndpoint` for the stable `192.168.90.39` target. The existing
+Pi-hole ExternalDNS release reads that explicitly annotated CRD in addition to internal
+Gateway routes. This keeps the record in Git and makes it available before the public n8n
+HTTPRoute is activated. ExternalDNS remains `upsert-only`, uses the existing verified
+Pi-hole connection, and does not manage public Cloudflare DNS. The CRD source has
+cluster-wide read access, so repository and live validation permit only the
+`networking-public/hooks-lab-supermorphic-com-internal` object to carry the internal DNS
+audience. Live acceptance also requires ExternalDNS to have observed its current
+generation before accepting the Pi-hole answer.
 
-The cluster's internal DNS answer for `hooks.lab.supermorphic.com` must resolve to the
-dedicated public Envoy LoadBalancer, not the internal Gateway. This makes the in-cluster
-Gatus check exercise the correct Envoy data plane. It does not prove that public DNS,
-router forwarding, or the residential Internet path works; the attended off-network
-acceptance test covers that separate path.
+The public Cloudflare A record remains external infrastructure, but it is not a manually
+maintained address. UniFi is the authoritative observer of the router's WAN address and
+updates `hooks.lab.supermorphic.com` through its Cloudflare Dynamic DNS integration. The
+operator creates one dedicated DDNS API token with Zone Read and DNS Edit restricted to
+`supermorphic.com`, stores it in the password manager and UniFi, and does not reuse the
+cert-manager token or commit it to Git. The record starts in DNS-only mode so public TLS
+continues to terminate on the dedicated Envoy data plane. No live public address is
+recorded in the repository.
+
+Router TCP/443 forwarding to the dedicated public LoadBalancer remains operator-managed
+external state. The internal DNS answer makes the in-cluster Gatus check exercise the
+correct Envoy data plane. It does not prove that UniFi DDNS, public DNS, router forwarding,
+or the residential Internet path works; the attended off-network acceptance test covers
+that separate path.
 
 ## Network policy
 
@@ -521,18 +538,21 @@ remains the only alert-delivery path.
 
 The rollout follows dependency order:
 
-1. Reconcile the public Gateway, dedicated certificate, routing namespace, inactive
-   Gatus canary contract, and monitoring package with the n8n rule file staged but
-   unselected. Do not publish router forwarding.
+1. Reconcile the public Gateway, dedicated certificate, routing namespace, internal
+   `DNSEndpoint`, inactive Gatus canary contract, and monitoring package with the n8n rule
+   file staged but unselected. Reconcile the Pi-hole ExternalDNS CRD source. Do not
+   publish router forwarding.
 2. Reconcile the PostgreSQL claims, StatefulSet, Service, backup job, and SQL Exporter.
 3. Reconcile n8n with queue mode disabled and confirm database migrations and private UI
    readiness.
 4. Complete the owner and synthetic-canary bootstrap through the private UI.
-5. Add operator-managed public DNS and TCP/443 router forwarding. In one reviewed Git
-   change, unsuspend the exact public route, copy the staged Gatus Secret reference and
-   endpoint into the active values, and select `./n8n.yaml` in the monitoring alerts
-   Kustomization. The encrypted canary Secret and both private workload Kustomizations
-   must already be selected, unsuspended, and ready.
+5. Verify that the Git-managed internal record resolves to `192.168.90.39`. Configure the
+   one UniFi Cloudflare DDNS profile with its dedicated token, verify from off-network that
+   the public DNS-only record resolves to the current WAN address, and add only the
+   TCP/443 router forward. In one reviewed Git change, unsuspend the exact public route,
+   copy the staged Gatus Secret reference and endpoint into the active values, and select
+   `./n8n.yaml` in the monitoring alerts Kustomization. The encrypted canary Secret and
+   both private workload Kustomizations must already be selected, unsuspended, and ready.
 6. Wait for the public route, Gatus probe, and selected n8n rule group to become current,
    then run off-network positive and negative webhook acceptance tests.
 
@@ -623,10 +643,11 @@ Combined read-only and attended live acceptance verifies:
 9. An off-network client reaches the authenticated public webhook while public editor,
    API, metrics, and unrelated paths remain unavailable.
 
-Secret generation, the owner and canary credential bootstrap, public DNS and router
-changes, controlled restart testing, and the restore drill are operator actions whenever
-they require credential or live-mutation authority outside the agent's approved scoped
-workflow. Independent repository and read-only cluster validation remains agent-owned.
+Secret generation, the owner and canary credential bootstrap, creation of the dedicated
+Cloudflare DDNS token, UniFi DDNS and router changes, controlled restart testing, and the
+restore drill are operator actions whenever they require credential or live-mutation
+authority outside the agent's approved scoped workflow. The internal `DNSEndpoint` is
+Flux-managed. Independent repository and read-only cluster validation remains agent-owned.
 
 ## Rejected alternatives
 

@@ -50,7 +50,8 @@ current phase has reached its completion checkpoint:
 2. **Private workload activation PR:** bootstrap PostgreSQL and n8n privately, complete
    the attended n8n UI setup and private canary checkpoint, then make the two private
    workloads active in Git. Keep the public route suspended.
-3. **Public route + monitoring activation PR:** prepare DNS and router exposure, then
+3. **Public route + monitoring activation PR:** verify the Flux-managed internal DNS
+   record, configure the one UniFi Cloudflare DDNS profile and router exposure, then
    activate the exact public route, Gatus canary, and n8n alerts together through Git.
 
 Every PR requires review, required checks, explicit merge authorization, merge, and Flux
@@ -235,27 +236,57 @@ prepare public exposure until the private phase completes.
 ## Phase 3 — Public route + monitoring activation PR
 
 **Start when:** The Private workload activation PR is complete, PostgreSQL and n8n are
-ready, the private canary checkpoint has passed, and the public route remains suspended.
+ready, the private canary checkpoint has passed, the split-DNS automation change is merged
+at Flux source revision parity, and the public route remains suspended.
 
 ### Network and DNS exposure preparation
 
 Complete these steps in order:
 
-1. In internal Pi-hole DNS, add `hooks.lab.supermorphic.com` as an A record for the
-   dedicated public-webhook VIP `192.168.90.39`. Confirm an internal client resolves that
-   exact address.
-2. In the authoritative public DNS provider, add `hooks.lab.supermorphic.com` for the
-   router's current public address. Do not publish the editor hostname. Confirm an
-   off-network client resolves the public record, not `192.168.90.39`.
-3. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
+First, confirm the merged `public-webhook-gateway` package owns the only internally
+published DNS endpoint and that ExternalDNS has observed its current generation and
+reconciled it to Pi-hole. This read-only private verification also confirms the public
+HTTPRoute remains absent:
+
+```bash
+N8N_VERIFY_MODE=private mise exec -- just kube n8n-verify
+```
+
+Stop if Pi-hole does not return exactly `192.168.90.39` for
+`hooks.lab.supermorphic.com`. Do not add a manual Pi-hole record as a workaround.
+
+1. In Cloudflare, [create a dedicated API token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+   for UniFi DDNS. Grant only Zone Read and DNS Edit for the `supermorphic.com` zone. Save
+   it in the operator password manager. Do not reuse the cert-manager token, commit this
+   token, or place it in shell history or command output.
+2. Follow the [UniFi Dynamic DNS procedure](https://help.ui.com/hc/en-us/articles/9203184738583-UniFi-Gateway-Dynamic-DNS)
+   on the primary WAN Internet settings and create one entry with these values:
+
+   - Service: `cloudflare`
+   - Hostname: `hooks.lab.supermorphic.com`
+   - Username: `supermorphic.com` (the Cloudflare zone name)
+   - Password/API credential: the dedicated DDNS token
+   - Server: leave unset unless the current UniFi Cloudflare form requires a value
+
+   Cloudflare must be available as a native UniFi service. Stop if it is absent; do not
+   substitute an unreviewed custom update server or hosted worker. After UniFi creates or
+   updates the A record, confirm in Cloudflare that its proxy status is **DNS only** so
+   public TLS terminates at Envoy. This is a one-time shared edge setting, not a step
+   repeated for each webhook workflow.
+3. From an off-network client, confirm `hooks.lab.supermorphic.com` resolves to the current
+   WAN address shown by UniFi. It must not return `192.168.90.39` or another private
+   address. A changing ISP address requires no operator edit; UniFi updates Cloudflare.
+4. Add one router port-forward rule: Internet TCP/443 to `192.168.90.39` TCP/443. Do not
    forward port 80, 5678, or 5432.
 
-**Complete when:** Internal DNS resolves the dedicated public-webhook VIP, an off-network
-client resolves the public record rather than the private VIP, and the router forwards
-only Internet TCP/443 for this exposure to the dedicated VIP.
+**Complete when:** The private verifier confirms the Git-managed internal DNS endpoint and
+Pi-hole answer, an off-network client resolves the UniFi-maintained Cloudflare record to
+the current WAN address rather than the private VIP, and the router forwards only Internet
+TCP/443 for this exposure to the dedicated VIP.
 
-**Stop if:** Either DNS view is incorrect or the forwarding rule is broader than the exact
-TCP/443 mapping. Keep `public-webhook-route` suspended and do not start the Git activation.
+**Stop if:** The `DNSEndpoint` is absent, either DNS view is incorrect, UniFi DDNS is not
+updating the current WAN address, or the forwarding rule is broader than the exact TCP/443
+mapping. Keep `public-webhook-route` suspended and do not start the Git activation.
 
 ### Git-managed route and monitoring activation
 
@@ -459,6 +490,127 @@ request fails with an allowed status; and every non-production path returns `404
 rule first to contain public exposure, then investigate without weakening the exact route
 or negative tests.
 
+## Add a public webhook integration
+
+Use this procedure after the initial public Platform Canary has passed acceptance. The
+UniFi TCP/443 forward, UniFi Cloudflare DDNS profile, public DNS record, internal
+`DNSEndpoint`, certificate, hostname, and dedicated Envoy data plane are shared edge
+infrastructure. Do not create another port forward, DDNS profile, or DNS name for each n8n
+workflow. Each integration instead receives one explicitly reviewed, non-overlapping
+exact path on `hooks.lab.supermorphic.com`.
+
+**Start when:** The existing public edge passes `mise exec -- just kube n8n-verify`, the
+new provider's delivery and authentication contracts are known, and the intended workflow
+can be tested privately. Keep the new path absent from the public HTTPRoute while preparing
+the workflow.
+
+### Prepare and prove the private workflow
+
+1. Select one stable production path. Use an `Exact` match under `/webhook/`; do not add a
+   `/webhook/*`, `PathPrefix`, root, editor, API, metrics, or test-webhook route.
+2. Store the provider credential in the operator password manager and an approved n8n or
+   SOPS-managed credential location. Do not place it in workflow JSON, Git, shell history,
+   command arguments, or test output.
+3. Implement the provider's strongest verified authentication contract. Prefer a signed
+   payload over a static token or source-IP rule. Reject missing or invalid authentication
+   before business processing or a successful response.
+4. Create and publish the workflow through the private editor. Exercise its production
+   webhook path privately with representative authenticated and unauthenticated requests.
+   Require the authenticated execution to be visibly `Succeeded` with the same event or
+   correlation identifier. Require missing or invalid authentication to fail.
+5. Confirm retry, concurrency, and duplicate-event behavior from the provider contract.
+   Use the provider event identifier for idempotency when duplicate delivery is possible.
+
+For TheirStack, follow its
+[signature-verification contract](https://theirstack.com/en/docs/webhooks/verify-webhook-signatures):
+configure a signing secret and validate `X-TheirStack-Signature-256` as the HMAC-SHA256
+signature of the unchanged raw request body. Use a timing-safe comparison. Parsing and
+reserializing JSON before verification can change the signed bytes; do not publish the
+path until the workflow proves the exact raw payload contract. A source-IP allowlist is
+optional defense in depth only when TheirStack publishes stable delivery ranges. Do not
+infer an allowlist from observed addresses.
+
+**Complete when:** The workflow is published privately, its provider authentication and
+duplicate handling are proven, an authenticated execution is visibly successful, and the
+public route still does not contain the new path.
+
+**Stop if:** The provider authentication, raw-body handling, retry behavior, private
+execution, or credential storage is uncertain. Do not compensate with an obscure path or
+a broad public route.
+
+### Add the exact path through Git
+
+Create a dedicated integration activation PR. Add exactly one reviewed path match to
+`kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml`, targeting only
+the intended Service and port. Update the n8n source validator, live verifier, and their
+route-inventory tests in the same PR so the new exact route becomes an explicit invariant
+rather than an unvalidated exception.
+
+The existing `ReferenceGrant` is sufficient when the route remains in
+`networking-public` and targets the existing `automation/n8n` Service. A route to another
+Service or namespace requires its own narrowly scoped grant; do not broaden the n8n grant.
+Add provider-specific monitoring when it supplies an independent delivery or processing
+signal. Do not weaken the Platform Canary, its monitoring, or its negative-path tests.
+
+Run the repository validations required by the changed components:
+
+```bash
+mise exec -- just kube gatus-validate
+mise exec -- just kube n8n-validate
+mise exec -- just kube alerts-validate monitoring
+mise exec -- just ci
+git diff --check
+```
+
+Obtain review and explicit merge authorization. Merge only after required checks pass,
+then wait for Flux source revision parity and current Ready conditions. Publishing the n8n
+workflow alone is not public activation; the reviewed HTTPRoute transition is the public
+allowlist.
+
+**Complete when:** The PR contains one exact new path, its backend and grant are narrow,
+the route inventory and monitoring assertions include it, required validation passes, and
+Flux has reconciled the merged revision.
+
+**Stop if:** The path overlaps an existing route, a validator or verifier needs to be
+bypassed, the backend grant is broader than one intended Service, or Flux does not reach
+the merged revision. Keep or restore the path as absent while correcting the failure.
+
+### Accept the new integration off-network
+
+Use a client outside the LAN and private VPN, or the provider's supported test-delivery
+function. Prove all of the following without printing a credential:
+
+- an authenticated or correctly signed delivery to the new exact path succeeds;
+- its provider event or correlation identifier matches a visibly successful n8n
+  execution;
+- missing, malformed, or invalid authentication fails without successful processing;
+- a neighboring unlisted path and the related test-webhook path return `404`;
+- the editor, API, metrics, and root paths remain unavailable; and
+- the existing Platform Canary and `mise exec -- just kube n8n-verify` remain healthy.
+
+**Complete when:** Both the positive delivery and every negative boundary check pass, the
+matching execution is successful, and any selected integration-specific monitoring
+observes its intended signal.
+
+**Stop if:** Any positive or negative check fails. Remove only the new exact path through a
+reviewed Git change, wait for Flux reconciliation, and prove it absent before
+troubleshooting a publicly reachable workflow. Remove the shared UniFi forward first only
+when broader containment is required.
+
+### Remove one integration
+
+Disable new delivery at the provider first. Preserve its credential through the
+provider's retry window. In one reviewed Git change, remove the exact route match and its
+integration-specific monitoring, then wait for Flux reconciliation and prove that path
+returns `404` while the Platform Canary and other approved paths still work. Remove the
+workflow or credential only after retained deliveries and recovery requirements no longer
+need them.
+
+Keep the shared DNS record, certificate, Gateway, and UniFi TCP/443 forward when another
+approved webhook path remains. If this is the last public integration, use
+[public exposure rollback](#public-exposure-rollback), including route pruning before
+suspension and router-forward removal ordering.
+
 ## Day-2 operation and controlled assurance
 
 Use `mise exec -- just kube n8n-verify` for normal read-only day-2 verification. The
@@ -499,7 +651,9 @@ reverting the container image can reverse a database migration.
 incident, failed public acceptance, maintenance boundary, or deliberate removal.
 
 Remove the router TCP/443 forwarding rule first. Confirm an off-network connection can no
-longer reach the host, then remove the public DNS record. Suspension alone does not prune
+longer reach the host, then disable the UniFi DDNS profile and remove the public Cloudflare
+record. Keep the Git-managed internal `DNSEndpoint`; do not replace it with a manual
+Pi-hole record. Suspension alone does not prune
 an already applied route. In the first reviewed containment change, keep
 `public-webhook-route.spec.suspend: false` and change
 `kubernetes/apps/networking/public-webhook-gateway/route/kustomization.yaml` to
@@ -534,9 +688,11 @@ Kustomization in the same reviewed change. To publish again, keep router forward
 disabled while one reviewed Git change re-adds `./httproute.yaml`, sets the child
 Kustomization unsuspended, copies the staged Gatus fragment into active values, and
 selects `./n8n.yaml` exactly once. Wait for current Flux and route acceptance, complete
-off-network tests, and restore forwarding last.
+off-network tests, re-enable and verify the one UniFi DDNS profile, and restore forwarding
+last.
 
-**Complete when:** External forwarding and public DNS are removed, the unsuspended child
+**Complete when:** External forwarding and the UniFi-maintained public DNS record are
+removed, the unsuspended child
 Kustomization has reconciled the empty route source with pruning, the exact HTTPRoute is
 proved absent, and only then the follow-up Git change suspends the child. If exposure will
 stay withdrawn, the Gatus canary and n8n alert selection are removed in that same reviewed

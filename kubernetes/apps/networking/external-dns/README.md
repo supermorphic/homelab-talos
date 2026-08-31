@@ -1,12 +1,21 @@
 # ExternalDNS Internal
 
-ExternalDNS app `v0.21.0` (chart `1.21.1`) publishes internal Gateway API routes
-to Pi-hole v6 at `https://pi.hole` (`192.168.90.2`). The deployment mounts the
+ExternalDNS app `v0.21.0` (chart `1.21.1`) publishes internal Gateway API routes and
+explicitly annotated `DNSEndpoint` resources to Pi-hole v6 at `https://pi.hole`
+(`192.168.90.2`). The deployment mounts the
 reviewed public Pi-hole CA and verifies the server name; TLS verification is not
 skipped. It is constrained to
-`lab.supermorphic.com`, the `networking/internal` Gateway, and routes annotated
-`external-dns.k8s.io/audience=internal`. Pi-hole has no TXT registry support, so
+`lab.supermorphic.com`, the `networking/internal` Gateway for route sources, and source
+objects annotated `external-dns.k8s.io/audience=internal`. The public webhook Gateway
+package uses one `DNSEndpoint` to publish its stable private VIP without publishing its
+suspended HTTPRoute. Pi-hole has no TXT registry support, so
 the controller uses `registry=noop` and `policy=upsert-only`.
+
+The CRD source watches `DNSEndpoint` objects cluster-wide because the same release also
+watches routes outside `networking-public`. Repository and live n8n validation therefore
+reject any second `DNSEndpoint` carrying the internal audience annotation. The one allowed
+object must report its current generation as observed before live verification accepts
+the Pi-hole answer.
 
 The Pi-hole application password is stored only as SOPS ciphertext in Git. Use
 `just repo foundation-provider-secrets` to create it and update its rollout stamp,

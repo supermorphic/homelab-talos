@@ -5,7 +5,9 @@ This package owns the isolated public Envoy data plane for
 VIP, with the route reconciliation kept suspended until the operator publishes
 and authenticates the canary.
 
-The operator owns public DNS and router TCP/443 forwarding to this VIP. The
-internal ExternalDNS controller does not publish the public name. Adding an n8n
-workflow does not add a public route: each webhook path needs an explicitly
-reviewed HTTPRoute and any required ReferenceGrant.
+The package also owns an annotated `DNSEndpoint` that makes the internal Pi-hole
+answer resolve this hostname to the dedicated VIP before route activation. The
+operator owns the one UniFi Cloudflare DDNS profile and router TCP/443 forwarding;
+the public WAN address is never stored in Git. Adding an n8n workflow does not add
+a DNS record or public route: each webhook path needs an explicitly reviewed
+HTTPRoute and any required ReferenceGrant.

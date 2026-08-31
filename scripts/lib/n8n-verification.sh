@@ -45,6 +45,29 @@ n8n_statefulset_current_ready() {
   ' "$input" >/dev/null 2>&1
 }
 
+n8n_internal_dns_endpoints_match_contract() {
+  local input="$1"
+  yq -p=json -o=json -e '
+    [.items[]? | select(
+      .metadata.annotations."external-dns.k8s.io/audience" == "internal"
+    )] as $internal |
+    [
+      (($internal | length) == 1),
+      ($internal[0].apiVersion == "externaldns.k8s.io/v1alpha1"),
+      ($internal[0].kind == "DNSEndpoint"),
+      ($internal[0].metadata.name == "hooks-lab-supermorphic-com-internal"),
+      ($internal[0].metadata.namespace == "networking-public"),
+      ($internal[0].metadata.generation | type == "!!int"),
+      ($internal[0].status.observedGeneration == $internal[0].metadata.generation),
+      (($internal[0].spec.endpoints | length) == 1),
+      ($internal[0].spec.endpoints[0].dnsName == "hooks.lab.supermorphic.com"),
+      ($internal[0].spec.endpoints[0].recordType == "A"),
+      (($internal[0].spec.endpoints[0].targets | length) == 1),
+      ($internal[0].spec.endpoints[0].targets[0] == "192.168.90.39")
+    ] | all
+  ' "$input" >/dev/null 2>&1
+}
+
 n8n_prometheus_targets_match_contract() {
   local input="$1" service endpoint pool response
   response="$(cat -- "$input")" || return 1

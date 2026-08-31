@@ -6,7 +6,7 @@ Pi-hole provides DNS for the LAN. ExternalDNS connects Kubernetes routes to that
 external DNS service:
 
 ```text
-annotated HTTPRoutes on the networking/internal Gateway
+annotated HTTPRoutes and DNSEndpoints
         ↓
 ExternalDNS in Kubernetes
         ↓
@@ -19,11 +19,21 @@ Pi-hole custom DNS
 lab.supermorphic.com names resolve to the internal Gateway on the LAN
 ```
 
-ExternalDNS watches only Gateway API routes in the `networking` namespace that:
+ExternalDNS watches Gateway API routes that:
 
 - attach to the `internal` Gateway;
 - use a name under `lab.supermorphic.com`; and
 - carry `external-dns.k8s.io/audience=internal`.
+
+It also watches `DNSEndpoint` resources carrying the same audience annotation. The
+public webhook Gateway package uses this source for
+`hooks.lab.supermorphic.com -> 192.168.90.39` because its public HTTPRoute remains absent
+until activation. The domain filter and managed A-record restriction apply to both
+source types. The CRD source has cluster-wide read access, so repository and live n8n
+validation allow only this exact object to carry the internal audience annotation. Live
+acceptance requires ExternalDNS to report the current object generation as observed and
+then checks the actual Pi-hole answer. This internal record does not update the public
+Cloudflare DNS zone.
 
 It manages only A records. Its `upsert-only` policy permits record creation and
 updates, but not deletion. This protects manually managed Pi-hole records. It also
@@ -40,7 +50,8 @@ the configured SSH alias `p1`; the API endpoint is `https://pi.hole`.
 `homelab-talos` owns:
 
 - the ExternalDNS deployment and provider settings;
-- the annotated Kubernetes routes that become internal DNS records;
+- the annotated Kubernetes routes and `DNSEndpoint` resources that become internal DNS
+  records;
 - the reviewed public Pi-hole CA used as a trust anchor;
 - the SOPS-encrypted Pi-hole application password; and
 - rollout stamps that replace the ExternalDNS Pod when the password or CA changes.
