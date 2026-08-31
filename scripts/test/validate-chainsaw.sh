@@ -214,6 +214,8 @@ uv run --locked ruff check \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
+  scripts/test/repository_shell_validation.py \
+  scripts/test/test_repository_shell_validation.py \
   scripts/test/test_github_protection.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/resilience_support.py \
@@ -238,6 +240,8 @@ uv run --locked ruff format --check \
   scripts/test/junit_report.py \
   scripts/test/junit_tools.py \
   scripts/test/test_junit_tools.py \
+  scripts/test/repository_shell_validation.py \
+  scripts/test/test_repository_shell_validation.py \
   scripts/test/test_github_protection.py \
   scripts/test/helpers/qbit_manage_policy_api.py \
   scripts/test/scenarios/resilience_support.py \
