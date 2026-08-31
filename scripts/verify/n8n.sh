@@ -27,6 +27,12 @@ kc=(kubectl --kubeconfig "$kubeconfig")
   echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
   exit 1
 }
+if ! dns_endpoint_access="$(
+  "${kc[@]}" auth can-i list dnsendpoints.externaldns.k8s.io --all-namespaces
+)" || [[ "$dns_endpoint_access" != 'yes' ]]; then
+  echo 'n8n verification requires read-only cluster-wide DNSEndpoint access.' >&2
+  exit 1
+fi
 
 require_ready_kustomization() {
   local name="$1" state

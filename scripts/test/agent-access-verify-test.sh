@@ -82,6 +82,13 @@ case "$resource" in
       exit 65
     }
     ;;
+  dnsendpoints.externaldns.k8s.io)
+    if [[ -n "$namespace" ]]; then
+      [[ "$all_namespaces" == false ]] || exit 66
+    else
+      [[ "$all_namespaces" == true ]] || exit 66
+    fi
+    ;;
   *)
     [[ -n "$namespace" && "$all_namespaces" == false ]] || {
       echo "namespaced resource $resource did not receive only its namespace" >&2
@@ -150,6 +157,8 @@ for context in homelab-observer homelab-diagnostic; do
   for verb in get list watch; do
     rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
   done
+  rg -q -- "--context $context auth can-i list dnsendpoints.externaldns.k8s.io --all-namespaces" \
+    "$named_log"
 done
 
 admin_log="$(run_layout admin)"

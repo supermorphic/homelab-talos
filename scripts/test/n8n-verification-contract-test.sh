@@ -347,4 +347,31 @@ yq -p=json -o=json '.items += [{
 expect_false 'second internally published DNS endpoint authority' \
   n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-second-authority.json"
 
+mkdir -p "$temp_dir/bin"
+cat >"$temp_dir/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ " $* " == *' auth can-i list dnsendpoints.externaldns.k8s.io --all-namespaces '* ]]; then
+  printf '%s\n' 'no'
+  exit 1
+fi
+echo "unexpected kubectl call: $*" >&2
+exit 64
+EOF
+chmod +x "$temp_dir/bin/kubectl"
+touch "$temp_dir/kubeconfig"
+if PATH="$temp_dir/bin:$PATH" N8N_VERIFY_MODE=private \
+  scripts/verify/n8n.sh "$temp_dir/kubeconfig" \
+  >"$temp_dir/n8n-access.out" 2>&1; then
+  echo 'n8n verification unexpectedly continued without DNSEndpoint read access.' >&2
+  exit 1
+fi
+rg -q 'n8n verification requires read-only cluster-wide DNSEndpoint access' \
+  "$temp_dir/n8n-access.out" || {
+  echo 'n8n verification did not explain the missing DNSEndpoint read permission.' >&2
+  cat "$temp_dir/n8n-access.out" >&2
+  exit 1
+}
+
 echo 'n8n verification readiness, target, and route fixtures passed.'
