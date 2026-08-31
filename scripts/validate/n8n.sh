@@ -394,7 +394,7 @@ PY
 }
 [[ "$(yq -r '[.spec.steps[].try[].assert.resource |
     select(.kind == "HelmRelease") |
-    select(.spec.suspend == false and
+    select(.["(spec.suspend || `false`)"] == false and
       has("(metadata.generation == status.observedGeneration)") and
       has("([metadata.generation] == status.conditions[?type == '\''Ready'\''].observedGeneration)"))] | length' \
     "$n8n_smoke")" == '1' ]] || {
