@@ -1806,7 +1806,12 @@ rank_quality_candidates() {
 		'$expected | length * ($settings | length)')" || return 65
 	[[ "$maximum_binding_count" =~ ^[0-9]+$ ]] || return 65
 	binding_groups="$(jq -n -c \
-		--argjson rows "$rows" --argjson expected "$expected" --argjson settings "$settings" '
+		--slurpfile rows_input <(printf '%s\n' "$rows") \
+		--slurpfile expected_input <(printf '%s\n' "$expected") \
+		--slurpfile settings_input <(printf '%s\n' "$settings") '
+		($rows_input[0]) as $rows |
+		($expected_input[0]) as $expected |
+		($settings_input[0]) as $settings |
 		[ ["avc","vc1","hdr10"][] as $cohort | $settings[] as $setting |
 			($expected | map(select(.cohort == $cohort)) | length) as $expected_count |
 			select($expected_count > 0 and
