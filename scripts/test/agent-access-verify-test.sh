@@ -156,6 +156,8 @@ rg -q -- '--context homelab-diagnostic' "$named_log"
 for context in homelab-observer homelab-diagnostic; do
   for verb in get list watch; do
     rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
+    rg -q -- "--context $context auth can-i $verb referencegrants.gateway.networking.k8s.io --namespace automation" \
+      "$named_log"
   done
   rg -q -- "--context $context auth can-i list dnsendpoints.externaldns.k8s.io --all-namespaces" \
     "$named_log"
@@ -172,6 +174,12 @@ while IFS= read -r call; do
   rg -q -- '--as-group=system:serviceaccounts ' <<<"$call"
   rg -q -- '--as-group=system:serviceaccounts:kube-system' <<<"$call"
 done <"$admin_log"
+for context in homelab-observer homelab-diagnostic; do
+  for verb in get list watch; do
+    rg -q -- "--as=system:serviceaccount:kube-system:$context .* auth can-i $verb referencegrants.gateway.networking.k8s.io --namespace automation" \
+      "$admin_log"
+  done
+done
 
 if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial.log" \
   "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >"$fixture/partial.out" 2>&1; then

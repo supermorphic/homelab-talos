@@ -40,7 +40,7 @@ read_requirements := {
 	"cert-manager.io": {"certificates", "clusterissuers"},
 	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
 	"externaldns.k8s.io": {"dnsendpoints"},
-	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes"},
+	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes", "referencegrants"},
 	"helm.toolkit.fluxcd.io": {"helmreleases"},
 	"kustomize.toolkit.fluxcd.io": {"kustomizations"},
 	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "volumes"},
