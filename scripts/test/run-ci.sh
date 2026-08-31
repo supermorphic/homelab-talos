@@ -83,6 +83,7 @@ while IFS= read -r suite_id; do
 	[[ -n "$suite_id" ]] || continue
 	entry="$(catalog_entry_by_id "$catalog" "$suite_id")"
 	command="$(yq -r '.runner.command' - <<<"$entry")"
+	native_strategy="$(yq -r '.native_results.strategy' - <<<"$entry")"
 	command_args="${command#mise exec -- just }"
 	[[ "$command_args" != "$command" && "$command_args" =~ ^[a-zA-Z0-9_.-]+([[:space:]][a-zA-Z0-9_.-]+)*$ ]] || {
 		echo "Unsafe CI catalog command for $suite_id: $command" >&2
@@ -148,6 +149,10 @@ while IFS= read -r suite_id; do
 		fi
 	elif [[ "$signal_exit_code" -ne 0 ]]; then
 		write_result_case_junit "$suite_report" "$suite_id" signal broken \
+			"$suite_duration_seconds"
+		suite_result='broken'
+	elif [[ "$command_exit_code" -eq 0 && "$native_strategy" == 'native-junit' ]]; then
+		write_result_case_junit "$suite_report" "$suite_id" missing-native-junit broken \
 			"$suite_duration_seconds"
 		suite_result='broken'
 	elif [[ "$command_exit_code" -eq 0 ]]; then

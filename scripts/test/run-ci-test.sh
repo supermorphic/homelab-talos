@@ -88,4 +88,50 @@ if scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1; then
 	exit 1
 fi
 
+native_catalog="$fixture_root/native-catalog.yaml"
+native_fake_just="$fixture_root/native-fake-just.sh"
+native_fake_just_log="$fixture_root/native-fake-just.log"
+native_run_id_file="$fixture_root/native-ci.run-id"
+cp tests/fixtures/result-coordinator/catalog.yaml "$native_catalog"
+yq -i '
+  .suites[1].native_results.strategy = "wrapper-junit" |
+  .suites[2].native_results.strategy = "native-junit" |
+  .suites[3].native_results.strategy = "wrapper-junit"
+' "$native_catalog"
+# shellcheck disable=SC2016
+printf '%s\n' \
+	'#!/usr/bin/env bash' \
+	'set -euo pipefail' \
+	'printf "%s\\n" "$*" >>"${FAKE_JUST_LOG:?}"' \
+	'exit 0' >"$native_fake_just"
+chmod +x "$native_fake_just"
+
+set +e
+FAKE_JUST_LOG="$native_fake_just_log" \
+	UV_CACHE_DIR="$fixture_root/uv-cache" \
+	TEST_CATALOG_PATH="$native_catalog" \
+	TEST_RESULTS_ROOT="$fixture_root/native-results" \
+	TEST_JUST_BIN="$native_fake_just" \
+	TEST_EXECUTION_ORIGIN=agent \
+	TEST_RUN_ID_FILE="$native_run_id_file" \
+	scripts/test/run-ci.sh >/dev/null 2>&1
+native_runner_exit="$?"
+set -e
+[[ "$native_runner_exit" -ne 0 ]]
+
+mapfile -t native_runs < <(
+	find "$fixture_root/native-results" -mindepth 1 -maxdepth 1 -type d
+)
+[[ "${#native_runs[@]}" -eq 1 ]]
+native_run_dir="$(cd "${native_runs[0]}" && pwd)"
+[[ "$(wc -l <"$native_fake_just_log" | tr -d ' ')" -eq 2 ]]
+[[ "$(sed -n '1p' "$native_fake_just_log")" == 'fixture-pass' ]]
+[[ "$(sed -n '2p' "$native_fake_just_log")" == 'fixture-fail' ]]
+scripts/test/validate-run.sh "$native_run_dir" >/dev/null
+[[ "$(yq -r '.result' "$native_run_dir/summary.json")" == 'broken' ]]
+[[ "$(yq -r '.suites[0].result' "$native_run_dir/summary.json")" == 'passed' ]]
+[[ "$(yq -r '.suites[1].result' "$native_run_dir/summary.json")" == 'broken' ]]
+[[ "$(yq -r '.suites[1].errors' "$native_run_dir/summary.json")" == '1' ]]
+[[ "$(yq -r '.suites[2].result' "$native_run_dir/summary.json")" == 'skipped' ]]
+
 echo 'CI result coordinator fail-fast tests passed.'
