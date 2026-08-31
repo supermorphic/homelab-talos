@@ -21,7 +21,7 @@ fixture_prefix="scripts/test/.repository-shell-validation-${fixture_token}"
 bash_fixture="${fixture_prefix}-bash-first.sh"
 bash_second_fixture="${fixture_prefix}-bash-second.sh"
 shellcheck_fixture="${fixture_prefix}-shellcheck.sh"
-legacy_fixture='scripts/test/.repository-shell-validation-shellcheck-fixture.sh'
+legacy_fixture="${fixture_prefix}-legacy-preserved.sh"
 bash_fixture_created=false
 bash_second_fixture_created=false
 shellcheck_fixture_created=false
@@ -252,10 +252,31 @@ rm -f -- "$shellcheck_fixture" "$artifact" "$fragment"
 shellcheck_fixture_created=false
 
 standalone_success_tmp="$fixture_root/standalone-success-tmp"
+enclosing_artifact_root="$fixture_root/enclosing-artifacts"
+enclosing_fragment_root="$fixture_root/enclosing-fragments"
+enclosing_artifact="$enclosing_artifact_root/repository-shell-validation.json"
+enclosing_fragment="$enclosing_fragment_root/repository-shell-validation.xml"
+mkdir -p "$enclosing_artifact_root" "$enclosing_fragment_root"
+printf '%s\n' preserved-artifact >"$enclosing_artifact"
+printf '%s\n' preserved-fragment >"$enclosing_fragment"
+
+assert_enclosing_results_unchanged() {
+	[[ "$(cat "$enclosing_artifact")" == preserved-artifact ]]
+	[[ "$(cat "$enclosing_fragment")" == preserved-fragment ]]
+	[[ "$(find "$enclosing_artifact_root" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1 ]]
+	[[ "$(find "$enclosing_fragment_root" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1 ]]
+}
+
 mkdir -p "$standalone_success_tmp"
-TMPDIR="$standalone_success_tmp" mise exec -- just repo validate-shell-scripts \
+TEST_SHARED_RESULT_DIR="$enclosing_artifact_root" \
+	TEST_RUN_ID='enclosing-harness-run' \
+	TEST_RESULT_FRAGMENT_DIR="$enclosing_fragment_root" \
+	env -u TEST_SHARED_RESULT_DIR -u TEST_RUN_ID -u TEST_RESULT_FRAGMENT_DIR \
+	TMPDIR="$standalone_success_tmp" \
+	mise exec -- just repo validate \
 	>"$fixture_root/standalone-success.log" 2>&1
-[[ -z "$(find "$standalone_success_tmp" -mindepth 1 -print -quit)" ]]
+[[ -z "$(find "$standalone_success_tmp" -mindepth 1 -maxdepth 1 -type d -name 'repo-shell.*' -print -quit)" ]]
+assert_enclosing_results_unchanged
 
 inconsistent_tool_root="$fixture_root/inconsistent-tools"
 mkdir -p "$inconsistent_tool_root"
@@ -283,26 +304,38 @@ standalone_failure_tmp="$fixture_root/standalone-failure-tmp"
 mkdir -p "$standalone_failure_tmp"
 set +e
 # shellcheck disable=SC2016 # The child Bash expands its injected tool path.
-FAKE_TOOL_ROOT="$inconsistent_tool_root" TMPDIR="$standalone_failure_tmp" \
-	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate-shell-scripts' \
+TEST_SHARED_RESULT_DIR="$enclosing_artifact_root" \
+	TEST_RUN_ID='enclosing-harness-run' \
+	TEST_RESULT_FRAGMENT_DIR="$enclosing_fragment_root" \
+	env -u TEST_SHARED_RESULT_DIR -u TEST_RUN_ID -u TEST_RESULT_FRAGMENT_DIR \
+	FAKE_TOOL_ROOT="$inconsistent_tool_root" \
+	TMPDIR="$standalone_failure_tmp" \
+	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate' \
 	>"$fixture_root/standalone-failure.log" 2>&1
 standalone_failure_status="$?"
 set -e
 [[ "$standalone_failure_status" -ne 0 ]]
-[[ -z "$(find "$standalone_failure_tmp" -mindepth 1 -print -quit)" ]]
+[[ -z "$(find "$standalone_failure_tmp" -mindepth 1 -maxdepth 1 -type d -name 'repo-shell.*' -print -quit)" ]]
+assert_enclosing_results_unchanged
 
 caller_artifact_root="$fixture_root/caller-artifact-root"
 mkdir -p "$caller_artifact_root"
 printf '%s\n' preserved >"$caller_artifact_root/sentinel"
 set +e
 # shellcheck disable=SC2016 # The child Bash expands its injected tool path.
-FAKE_TOOL_ROOT="$inconsistent_tool_root" TEST_SHARED_RESULT_DIR="$caller_artifact_root" \
-	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate-shell-scripts' \
+TEST_RUN_ID='enclosing-harness-run' \
+	TEST_RESULT_FRAGMENT_DIR="$enclosing_fragment_root" \
+	env -u TEST_RUN_ID -u TEST_RESULT_FRAGMENT_DIR \
+	FAKE_TOOL_ROOT="$inconsistent_tool_root" \
+	TEST_SHARED_RESULT_DIR="$caller_artifact_root" \
+	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate' \
 	>"$fixture_root/caller-artifact.log" 2>&1
 caller_artifact_status="$?"
 set -e
 [[ "$caller_artifact_status" -ne 0 ]]
 [[ "$(cat "$caller_artifact_root/sentinel")" == preserved ]]
+[[ "$(find "$caller_artifact_root" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1 ]]
+assert_enclosing_results_unchanged
 
 legacy_fixture_created=true
 printf '%s\n' '#!/usr/bin/env bash' 'true' >"$legacy_fixture"
