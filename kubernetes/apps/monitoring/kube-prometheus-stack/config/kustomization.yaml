@@ -17,6 +17,7 @@ configMapGenerator:
       - dashboards/n8n-postgresql.json
     options:
       labels:
+        app.kubernetes.io/name: n8n-postgresql-dashboard
         grafana_dashboard: "1"
   - name: trivy-operator-dashboard
     files:
