@@ -5,6 +5,7 @@ source scripts/test/lib/results.sh
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
+source scripts/test/lib/chainsaw-inputs.sh
 fragment_root="${TEST_RESULT_FRAGMENT_DIR:-}"
 shell_case_index=0
 
@@ -50,9 +51,7 @@ while IFS= read -r test_file; do
   chainsaw lint test --file "$test_file"
   test_count=$((test_count + 1))
 done < <(
-  find tests/chainsaw tests/fixtures/chainsaw -type f \
-    \( -name 'chainsaw-test.yaml' -o -name 'chainsaw-test.yml' \) \
-    -print | LC_ALL=C sort
+  chainsaw_test_files "$repo_root"
 )
 
 yaml_count=0
@@ -60,9 +59,7 @@ while IFS= read -r yaml_file; do
   yq eval-all 'true' "$yaml_file" >/dev/null
   yaml_count=$((yaml_count + 1))
 done < <(
-  find tests/chainsaw tests/fixtures/chainsaw -type f \
-    \( -name '*.yaml' -o -name '*.yml' \) \
-    -print | LC_ALL=C sort
+  chainsaw_yaml_support_files "$repo_root"
 )
 
 consume_args=(consume --suite validation.test-harness)

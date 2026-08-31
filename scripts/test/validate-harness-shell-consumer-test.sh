@@ -29,6 +29,7 @@ mkdir -p \
 	"$tool_root" "$shared_root" "$producer_fragments"
 
 cp scripts/test/validate-chainsaw.sh "$fixture_root/scripts/test/"
+cp scripts/test/lib/chainsaw-inputs.sh "$fixture_root/scripts/test/lib/"
 cp scripts/test/run-native-junit-validator.sh \
 	"$fixture_root/scripts/test/"
 cp scripts/test/repository_shell_validation.py scripts/test/junit_report.py \
