@@ -1628,12 +1628,23 @@ require-bash:
 # entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
 validate-shell-scripts:
-    @for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/talos/*.sh scripts/validate/*.sh scripts/verify/*.sh; do test -x "$script"; done
-    @for script in $(find scripts/hooks scripts/repository scripts/secrets scripts/talos scripts/validate scripts/verify scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort); do \
-      bash -n "$script"; \
-      shellcheck --external-sources "$script"; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/talos/*.sh scripts/validate/*.sh scripts/verify/*.sh; do
+      test -x "$script"
     done
-    @if rg -n 'shellcheck disable=SC2251' scripts/validate scripts/verify; then echo 'SC2251 suppressions can hide non-gating absence assertions.' >&2; exit 1; fi
+    artifact_root="${TEST_SHARED_RESULT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/repo-shell.XXXXXX")}"
+    args=(produce --suite validation.repo-validate \
+      --artifact "$artifact_root/repository-shell-validation.json" \
+      --run-id "${TEST_RUN_ID:-standalone}")
+    if [[ -n "${TEST_RESULT_FRAGMENT_DIR:-}" ]]; then
+      args+=(--junit "$TEST_RESULT_FRAGMENT_DIR/repository-shell-validation.xml")
+    fi
+    python scripts/test/repository_shell_validation.py "${args[@]}"
+    if rg -n 'shellcheck disable=SC2251' scripts/validate scripts/verify; then
+      echo 'SC2251 suppressions can hide non-gating absence assertions.' >&2
+      exit 1
+    fi
 
 # Verify ignore boundaries and SOPS policy.
 validate-files: require-bash

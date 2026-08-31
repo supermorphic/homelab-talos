@@ -269,7 +269,7 @@ suites:
   - metadata: {id: validation.repo-validate, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo validate", implementation: .just/repository.just}
-    native_results: {strategy: wrapper-junit}
+    native_results: {strategy: native-junit}
   - metadata: {id: validation.links, source: validation, framework: bash, suite: ci, tier: offline, target: documentation, scenario: links, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo links-validate", implementation: scripts/validate/links.sh}
