@@ -126,11 +126,12 @@ n8n_expected_prometheus_alert_rules() {
 }
 
 n8n_prometheus_rule_group_matches_contract() {
-  local mode="$1" input="$2" group_count actual_rules expected_rules rule rule_row
+  local mode="$1" input="$2" response group_count actual_rules expected_rules rule rule_row
 
-  yq -p=json -o=json -e '.status == "success"' "$input" >/dev/null 2>&1 || return 1
+  response="$(cat -- "$input")" || return 1
+  yq -p=json -o=json -e '.status == "success"' - <<<"$response" >/dev/null 2>&1 || return 1
   group_count="$(yq -p=json -o=json -r \
-    '[.data.groups[]? | select(.name == "n8n-platform")] | length' "$input")"
+    '[.data.groups[]? | select(.name == "n8n-platform")] | length' - <<<"$response")"
   case "$mode" in
     private) [[ "$group_count" == '0' ]] ;;
     full)
@@ -138,7 +139,7 @@ n8n_prometheus_rule_group_matches_contract() {
       actual_rules="$(yq -p=json -o=json -r '
         [.data.groups[]? | select(.name == "n8n-platform") | .rules[]?.name] |
         sort | .[]
-      ' "$input")"
+      ' - <<<"$response")"
       expected_rules="$(n8n_expected_prometheus_alert_rules | LC_ALL=C sort)"
       [[ "$actual_rules" == "$expected_rules" ]] || return 1
       while IFS= read -r rule; do
@@ -148,7 +149,7 @@ n8n_prometheus_rule_group_matches_contract() {
             select(.name == strenv(RULE)) |
             [(.health // ""), (.lastError // "")] | join("|")
           ] | join(",")
-        ' "$input")"
+        ' - <<<"$response")"
         [[ "$rule_row" == 'ok|' ]] || return 1
       done < <(n8n_expected_prometheus_alert_rules)
       ;;

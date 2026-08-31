@@ -242,6 +242,8 @@ expect_false 'full verifier rejects a missing n8n rule group' \
   n8n_prometheus_rule_group_matches_contract full "$temp_dir/rules-absent.json"
 expect_true 'full verifier accepts the exact 15-rule n8n group' \
   n8n_prometheus_rule_group_matches_contract full "$temp_dir/rules-exact.json"
+expect_true 'full verifier accepts the exact 15-rule group from a pipe-backed response' \
+  n8n_prometheus_rule_group_matches_contract full <(cat "$temp_dir/rules-exact.json")
 yq -p=json -o=json '(.data.groups[0].rules[] | select(.name == "N8nUnavailable") |
   .health) = "err"' "$temp_dir/rules-exact.json" >"$temp_dir/rules-unhealthy.json"
 expect_false 'full verifier rejects an unhealthy rule in the exact n8n group' \
