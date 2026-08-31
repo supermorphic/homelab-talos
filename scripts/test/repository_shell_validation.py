@@ -393,7 +393,7 @@ def consume(
     """Reuse a matching passed artifact or recompute in a private directory."""
     expected = expected_identity(root=root, suite=suite, run_id=run_id)
     if artifact_path is not None and artifact_matches(artifact_path, expected):
-        return publish_junit_if_requested(artifact_path, suite, junit_path)
+        return 0
     with tempfile.TemporaryDirectory(prefix="repository-shell-consume-") as private:
         return produce(
             root=root,

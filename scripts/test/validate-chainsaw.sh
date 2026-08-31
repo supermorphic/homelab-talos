@@ -80,36 +80,13 @@ done < <(
     -print | LC_ALL=C sort
 )
 
-script_count=0
-declare -a shell_scripts=()
-while IFS= read -r script_file; do
-  bash -n "$script_file"
-  shell_scripts+=("$script_file")
-  script_count=$((script_count + 1))
-done < <(find scripts/secrets scripts/test tests/probes -type f -name '*.sh' -print | LC_ALL=C sort)
-
-shellcheck_exit_code=0
-for script_file in "${shell_scripts[@]}"; do
-  shellcheck --external-sources "$script_file" || shellcheck_exit_code="$?"
-done
-if [[ -n "$fragment_root" ]]; then
-  set +e
-  shellcheck --external-sources --format=json "${shell_scripts[@]}" \
-    >"$fragment_root/shellcheck.json"
-  shellcheck_json_exit_code="$?"
-  uv run --locked python scripts/test/junit_tools.py shellcheck \
-    --output "$fragment_root/shellcheck.xml" \
-    --suite validation.test-harness.shellcheck \
-    --findings "$fragment_root/shellcheck.json" \
-    "${shell_scripts[@]}"
-  shellcheck_adapter_exit_code="$?"
-  set -e
-  [[ "$shellcheck_json_exit_code" -eq "$shellcheck_adapter_exit_code" ]] || {
-    echo 'ShellCheck JSON and JUnit adapter outcomes disagreed.' >&2
-    exit 2
-  }
-fi
-[[ "$shellcheck_exit_code" -eq 0 ]] || exit "$shellcheck_exit_code"
+consume_args=(consume --suite validation.test-harness)
+[[ -n "${TEST_SHARED_RESULT_DIR:-}" ]] && \
+  consume_args+=(--artifact "$TEST_SHARED_RESULT_DIR/repository-shell-validation.json")
+[[ -n "${TEST_RUN_ID:-}" ]] && consume_args+=(--run-id "$TEST_RUN_ID")
+[[ -n "$fragment_root" ]] && \
+  consume_args+=(--junit "$fragment_root/repository-shell-validation.xml")
+python scripts/test/repository_shell_validation.py "${consume_args[@]}"
 
 run_shell_case chaos-confirmation \
   scripts/test/safety/require-chaos-confirmation-test.sh
@@ -159,8 +136,6 @@ run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
 run_shell_case allure-report scripts/test/allure-report-test.sh
 run_shell_case report-publish-install scripts/test/report-publish-install-test.sh
 run_shell_case report-publish-guard scripts/test/report-publish-guard-test.sh
-run_shell_case qbit-manage-policy-shellcheck \
-  shellcheck scripts/validate/qbit-manage-policy.sh
 run_shell_case qbit-manage-policy-validator \
   scripts/test/qbit-manage-policy-validator-test.sh
 run_shell_case arr-validator scripts/test/arr-validator-test.sh
@@ -256,5 +231,5 @@ uv run --locked ruff format --check \
   scripts/test/scenarios/test_resilience_controllers.py \
   scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
 
-printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d shell_scripts=%d python_test_dirs=%d.\n' \
-  "$test_count" "$yaml_count" "$script_count" "$py_test_dirs"
+printf 'Chainsaw offline validation passed: configurations=1 tests=%d yaml_files=%d python_test_dirs=%d.\n' \
+  "$test_count" "$yaml_count" "$py_test_dirs"

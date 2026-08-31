@@ -391,6 +391,10 @@ exit 0
                     0,
                 )
                 self.assertFalse(shellcheck_sentinel.exists())
+                self.assertFalse(
+                    (root / "reused.xml").exists(),
+                    "a reused producer result must not create a duplicate consumer fragment",
+                )
                 baseline = artifact.read_text(encoding="utf-8")
 
                 def mutate_artifact(transform: object) -> None:
