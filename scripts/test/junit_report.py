@@ -129,13 +129,30 @@ def _repository_shell_report(
         print(f"JUnit adapter error: {error}", file=sys.stderr)
         return 2
 
+    bash_status = result["bash_status"]
+    shellcheck_status = result.get("shellcheck_status")
+    if bash_status == 0:
+        if (
+            not isinstance(shellcheck_status, int)
+            or isinstance(shellcheck_status, bool)
+            or shellcheck_status < 0
+        ):
+            raise TypeError("passed Bash result must have a ShellCheck status")
+        if shellcheck_status == 0 and findings:
+            raise ValueError("passed ShellCheck result must not have findings")
+        if shellcheck_status == 1 and not findings:
+            raise ValueError("ShellCheck finding status must have findings")
+        if shellcheck_status > 1 and findings:
+            raise ValueError("ShellCheck infrastructure error must not have findings")
+    elif shellcheck_status is not None or findings:
+        raise ValueError("failed Bash result must not have a ShellCheck result")
+
     suite = ET.Element("testsuite", {"name": suite_name})
     bash = ET.SubElement(
         suite,
         "testcase",
         {"classname": suite_name, "name": "bash", "time": "0"},
     )
-    bash_status = result["bash_status"]
     if bash_status not in (0, None):
         first = result.get("bash_first_failure")
         if not isinstance(first, dict):
@@ -148,6 +165,25 @@ def _repository_shell_report(
             {"message": f"Bash syntax check failed: {file_name}: {stderr}"},
         )
         failure.text = f"{file_name}: {stderr}"
+
+    if shellcheck_status is not None and shellcheck_status > 1:
+        shellcheck = ET.SubElement(
+            suite,
+            "testcase",
+            {
+                "classname": suite_name,
+                "name": "shellcheck-infrastructure",
+                "time": "0",
+            },
+        )
+        ET.SubElement(
+            shellcheck,
+            "error",
+            {
+                "message": f"ShellCheck infrastructure error: exit status {shellcheck_status}",
+                "type": "shellcheck",
+            },
+        )
 
     for finding in findings:
         if not isinstance(finding, dict):

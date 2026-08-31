@@ -248,6 +248,30 @@ set -e
 [[ "$(yq -r '.findings | length' "$artifact")" == 1 ]]
 expected_shellcheck_finding="${shellcheck_fixture}"$'\t3\t6\tinfo\t2086\tDouble quote to prevent globbing and word splitting.'
 [[ "$(yq -r '.findings[0] | [.file, .line, .column, .level, .code, .message] | @tsv' "$artifact")" == "$expected_shellcheck_finding" ]]
+rm -f -- "$shellcheck_fixture" "$artifact" "$fragment"
+shellcheck_fixture_created=false
+
+inconsistent_tool_root="$fixture_root/inconsistent-tools"
+mkdir -p "$inconsistent_tool_root"
+cat >"$inconsistent_tool_root/shellcheck" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"file":"scripts/test/run-ci.sh","line":1,"column":1,"level":"warning","code":2086,"message":"inconsistent fixture"}]'
+exit 0
+EOF
+chmod +x "$inconsistent_tool_root/shellcheck"
+set +e
+# shellcheck disable=SC2016 # The child Bash expands its injected tool path.
+FAKE_TOOL_ROOT="$inconsistent_tool_root" \
+	TEST_SHARED_RESULT_DIR="$artifact_root" \
+	TEST_RESULT_FRAGMENT_DIR="$fragment_root" \
+	TEST_RUN_ID="$run_id" \
+	mise exec -- bash -c 'PATH="$FAKE_TOOL_ROOT:$PATH" just repo validate' \
+	>"$fixture_root/inconsistent-shellcheck.log" 2>&1
+inconsistent_shellcheck_status="$?"
+set -e
+[[ "$inconsistent_shellcheck_status" -ne 0 ]]
+[[ ! -e "$artifact" ]]
+[[ ! -e "$fragment" ]]
 
 legacy_fixture_created=true
 printf '%s\n' '#!/usr/bin/env bash' 'true' >"$legacy_fixture"

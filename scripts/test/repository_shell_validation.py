@@ -223,6 +223,13 @@ def validate_result_schema(document: object) -> None:
             raise ValueError("passed Bash result must not have a first failure")
         if not is_integer(result["shellcheck_status"]) or result["shellcheck_status"] < 0:
             raise TypeError("passed Bash result must have a ShellCheck status")
+        shellcheck_status = result["shellcheck_status"]
+        if shellcheck_status == 0 and findings:
+            raise ValueError("passed ShellCheck result must not have findings")
+        if shellcheck_status == 1 and not findings:
+            raise ValueError("ShellCheck finding status must have findings")
+        if shellcheck_status > 1 and findings:
+            raise ValueError("ShellCheck infrastructure error must not have findings")
     else:
         first_failure = result["bash_first_failure"]
         if not isinstance(first_failure, dict):

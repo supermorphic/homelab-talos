@@ -50,6 +50,40 @@ def git_shell_oracle(root: Path) -> list[Path]:
     )
 
 
+def shell_result_document(
+    shellcheck_status: int, findings: list[dict[str, object]]
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "head_sha": "0" * 40,
+        "source_set_sha256": "1" * 64,
+        "bash_version": "GNU bash fake 1.0",
+        "shellcheck_version": "fake-1.0",
+        "bash_argv": ["bash", "-n"],
+        "shellcheck_argv": ["shellcheck", "--external-sources", "--format=json"],
+        "producer_suite": "validation.repo-validate",
+        "result": {
+            "bash_status": 0,
+            "bash_first_failure": None,
+            "shellcheck_status": shellcheck_status,
+            "sorted_files": ["scripts/test/ok.sh"],
+            "completed_at": "2026-08-31T00:00:00Z",
+        },
+        "findings": findings,
+    }
+
+
+SHELLCHECK_FINDING: dict[str, object] = {
+    "file": "scripts/test/ok.sh",
+    "line": 2,
+    "column": 1,
+    "level": "warning",
+    "code": 2086,
+    "message": "quote this",
+}
+
+
 class RepositoryShellValidationTests(unittest.TestCase):
     def make_repository(self, root: Path) -> None:
         subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
@@ -146,6 +180,22 @@ exit 0
             self.assertNotEqual(before, added)
             self.assertNotEqual(added, changed)
             self.assertNotEqual(changed, removed)
+
+    def test_schema_enforces_shellcheck_status_and_findings_contract(self) -> None:
+        repository_shell_validation.validate_result_schema(shell_result_document(0, []))
+        repository_shell_validation.validate_result_schema(
+            shell_result_document(1, [SHELLCHECK_FINDING])
+        )
+        repository_shell_validation.validate_result_schema(shell_result_document(2, []))
+
+        impossible_results = (
+            shell_result_document(0, [SHELLCHECK_FINDING]),
+            shell_result_document(1, []),
+            shell_result_document(2, [SHELLCHECK_FINDING]),
+        )
+        for document in impossible_results:
+            with self.subTest(document=document), self.assertRaises(ValueError):
+                repository_shell_validation.validate_result_schema(document)
 
     def test_produce_stops_before_shellcheck_on_first_bash_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -301,6 +351,93 @@ exit 0
                 self.assertIn("changed during validation", completed.stderr)
                 self.assertFalse(artifact.exists())
                 self.assertFalse(junit.exists())
+
+    def test_produce_enforces_shellcheck_status_and_report_consistency(self) -> None:
+        impossible_results = (
+            (0, [SHELLCHECK_FINDING]),
+            (1, []),
+            (2, [SHELLCHECK_FINDING]),
+        )
+        for status, findings in impossible_results:
+            with (
+                self.subTest(status=status, findings=findings),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.make_repository(root)
+                tools, _ = self.fake_tools(root)
+                (tools / "shellcheck").write_text(
+                    f"#!/bin/sh\nprintf '%s\\n' '{json.dumps(findings)}'\nexit {status}\n"
+                )
+                (tools / "shellcheck").chmod(0o755)
+                artifact = root / "artifact.json"
+                junit = root / "result.xml"
+                environment = {
+                    **os.environ,
+                    "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+                }
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(MODULE_PATH),
+                        "produce",
+                        "--suite",
+                        "validation.repo-validate",
+                        "--run-id",
+                        "run-1",
+                        "--artifact",
+                        str(artifact),
+                        "--junit",
+                        str(junit),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertFalse(artifact.exists())
+                self.assertFalse(junit.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            tools, _ = self.fake_tools(root)
+            (tools / "shellcheck").write_text("#!/bin/sh\nprintf '[]\\n'\nexit 2\n")
+            (tools / "shellcheck").chmod(0o755)
+            artifact = root / "artifact.json"
+            junit = root / "result.xml"
+            environment = {
+                **os.environ,
+                "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            }
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "produce",
+                    "--suite",
+                    "validation.repo-validate",
+                    "--run-id",
+                    "run-1",
+                    "--artifact",
+                    str(artifact),
+                    "--junit",
+                    str(junit),
+                ],
+                cwd=root,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(
+                repository_shell_validation.junit_report.inspect_report(junit),
+                {"tests": 2, "failures": 0, "errors": 1, "skipped": 0, "passed": 1},
+            )
 
     def test_discovery_excludes_a_tracked_shell_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -473,6 +610,14 @@ exit 0
                         }
                     ]
 
+                def shellcheck_findings(document: dict[str, object]) -> None:
+                    document["result"]["shellcheck_status"] = 1
+                    document["findings"] = [SHELLCHECK_FINDING]
+
+                def shellcheck_infrastructure(document: dict[str, object]) -> None:
+                    document["result"]["shellcheck_status"] = 2
+                    document["findings"] = []
+
                 cases = (
                     ("missing", None),
                     ("truncated", "{"),
@@ -495,6 +640,8 @@ exit 0
                         lambda document: document.__setitem__("bash_argv", ["bash", "-x"]),
                     ),
                     ("status inconsistent", status_inconsistent),
+                    ("ShellCheck findings", shellcheck_findings),
+                    ("ShellCheck infrastructure", shellcheck_infrastructure),
                     (
                         "tampered sorted files",
                         lambda document: document["result"].__setitem__(

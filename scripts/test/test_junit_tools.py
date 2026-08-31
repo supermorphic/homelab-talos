@@ -180,6 +180,64 @@ class JUnitToolsTests(unittest.TestCase):
             self.assertEqual(failure.text, "quote & <it>")
             self.assertIn("SC2086", output.read_text())
 
+    def test_repository_shell_classifies_tool_errors_and_rejects_impossible_results(
+        self,
+    ) -> None:
+        finding = {
+            "file": "bad.sh",
+            "line": 3,
+            "column": 2,
+            "code": 2086,
+            "level": "warning",
+            "message": "quote this",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = root / "result.json"
+            output = root / "output.xml"
+            result.write_text(
+                json.dumps(
+                    {
+                        "result": {
+                            "bash_status": 0,
+                            "shellcheck_status": 2,
+                            "sorted_files": ["bad.sh"],
+                        },
+                        "findings": [],
+                    }
+                )
+            )
+            self.assertEqual(junit_tools.repository_shell_report(output, "suite", result), 0)
+            self.assertEqual(
+                junit_tools.inspect_report(output),
+                {"tests": 2, "failures": 0, "errors": 1, "skipped": 0, "passed": 1},
+            )
+
+            impossible_results = (
+                (0, [finding]),
+                (1, []),
+                (2, [finding]),
+            )
+            for status, findings in impossible_results:
+                with self.subTest(status=status, findings=findings):
+                    output.unlink(missing_ok=True)
+                    result.write_text(
+                        json.dumps(
+                            {
+                                "result": {
+                                    "bash_status": 0,
+                                    "shellcheck_status": status,
+                                    "sorted_files": ["bad.sh"],
+                                },
+                                "findings": findings,
+                            }
+                        )
+                    )
+                    self.assertEqual(
+                        junit_tools.repository_shell_report(output, "suite", result), 2
+                    )
+                    self.assertFalse(output.exists())
+
     def test_merge_recalculates_counts_and_rejects_zero_cases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
