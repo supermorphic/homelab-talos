@@ -81,7 +81,11 @@ def console_summary(input_path: Path, label: str) -> int:
     except (ET.ParseError, OSError) as error:
         print(f"JUnit adapter error: {error}", file=sys.stderr)
         return 2
-    counts = _validated_counts(root)
+    try:
+        counts = _validated_counts(root)
+    except (TypeError, ValueError) as error:
+        print(f"JUnit adapter error: {error}", file=sys.stderr)
+        return 2
     print(
         f"{label}: {counts['tests']} tests, {counts['passed']} passed, "
         f"{counts['failures']} failures, {counts['errors']} errors, "
@@ -114,12 +118,16 @@ def repository_shell_report(
     except (OSError, json.JSONDecodeError) as error:
         print(f"JUnit adapter error: {error}", file=sys.stderr)
         return 2
-    if not isinstance(document, dict):
-        raise TypeError("repository result must be an object")
-    result = document["result"]
-    findings = document["findings"]
-    if not isinstance(result, dict) or not isinstance(findings, list):
-        raise TypeError("repository result has invalid result/findings")
+    try:
+        if not isinstance(document, dict):
+            raise TypeError("repository result must be an object")
+        result = document["result"]
+        findings = document["findings"]
+        if not isinstance(result, dict) or not isinstance(findings, list):
+            raise TypeError("repository result has invalid result/findings")
+    except (KeyError, TypeError, ValueError) as error:
+        print(f"JUnit adapter error: {error}", file=sys.stderr)
+        return 2
 
     suite = ET.Element("testsuite", {"name": suite_name})
     bash = ET.SubElement(

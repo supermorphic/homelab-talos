@@ -57,6 +57,21 @@ class JUnitToolsTests(unittest.TestCase):
             invalid.write_text("not xml")
             self.assertEqual(junit_tools.console_summary(invalid, "label"), 2)
 
+    def test_console_summary_returns_two_for_invalid_junit_document(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.xml"
+            report.write_text("<root/>")
+            self.assertEqual(junit_tools.console_summary(report, "label"), 2)
+
+    def test_repository_shell_returns_two_for_invalid_result_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = root / "result.json"
+            result.write_text(json.dumps({"result": {"bash_status": 0}}))
+            self.assertEqual(
+                junit_tools.repository_shell_report(root / "out.xml", "suite", result), 2
+            )
+
     def test_repository_shell_clean_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -133,7 +148,7 @@ class JUnitToolsTests(unittest.TestCase):
                                 "column": 2,
                                 "code": 2086,
                                 "level": "warning",
-                                "message": "quote it",
+                                "message": "quote & <it>",
                             }
                         ],
                     }
@@ -142,6 +157,10 @@ class JUnitToolsTests(unittest.TestCase):
             self.assertEqual(junit_tools.repository_shell_report(output, "suite", result), 0)
             document = ET.parse(output).getroot()
             self.assertEqual(len(list(document.iter("testcase"))), 2)
+            parsed = ET.parse(output).getroot()
+            failure = parsed.find("testsuite/testcase/failure")
+            assert failure is not None
+            self.assertEqual(failure.text, "quote & <it>")
             self.assertIn("SC2086", output.read_text())
 
     def test_merge_recalculates_counts_and_rejects_zero_cases(self) -> None:
