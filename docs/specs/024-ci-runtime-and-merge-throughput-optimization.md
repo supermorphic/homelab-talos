@@ -609,6 +609,11 @@ complete CI also reported zero failures, errors, and skips. The three-sample dis
 below compare the QW-4 pre-change values with the accepted post-change values. They report
 medians only; three samples do not establish a p95.
 
+The recorded post-change distributions and harness case inventory are fixed at
+`2cc7e3e`. Later branch-review hardening, including permanent execution of two existing
+behavior suites, was not included in those samples. It does not change the accepted timing
+values or establish performance for the later branch head.
+
 | Command | Pre-change samples | Pre median | Post-change samples | Post median | Median delta |
 | --- | --- | ---: | --- | ---: | ---: |
 | `mise exec -- just repo validate` | 21.16, 21.22, 22.09 | 21.22s | 19.70, 19.99, 21.74 | 19.99s | -1.23s (-5.8%) |
