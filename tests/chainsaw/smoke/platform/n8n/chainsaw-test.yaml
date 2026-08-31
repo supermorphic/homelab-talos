@@ -293,7 +293,7 @@ spec:
                 labels:
                   grafana_dashboard: "1"
               data:
-                n8n-postgresql.json: (length(@) > `0`)
+                (length("n8n-postgresql.json") > `0`): true
       catch:
         - events:
             namespace: monitoring
