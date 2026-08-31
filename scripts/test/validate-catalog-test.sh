@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 uv run --locked --no-dev python scripts/test/catalog_compatibility.py
+scripts/test/validate-harness-shell-consumer-test.sh
 
 [[ "$(yq -r '.suites[] | select(.metadata.id == "validation.repo-validate") | .native_results.strategy' tests/catalog.yaml)" == native-junit ]]
 

@@ -41,7 +41,7 @@ Repository validation owns Bash syntax and one batched machine-readable
 ShellCheck execution. The historical audit count of 166 shell files is audit
 history, not a fixed contract. The current sorted set is derived independently
 from tracked and unignored `.sh` files under the repository shell directories,
-including `scripts/talos` and shell files added by the 023b and 023c work. Bash
+including `scripts/talos` and current shell files added by the 023c work. Bash
 checks run first and stop at the first exact file and stderr failure; ShellCheck
 runs only after Bash passes. During one full CI run, the harness reuses only the
 matching passed repository artifact and does not emit a duplicate JUnit
