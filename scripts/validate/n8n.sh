@@ -392,6 +392,7 @@ PY
   echo 'The n8n Chainsaw smoke must reject suspended or stale Kustomizations.' >&2
   exit 1
 }
+# shellcheck disable=SC2016 # Backticks are JMESPath literals in the assertion key.
 [[ "$(yq -r '[.spec.steps[].try[].assert.resource |
     select(.kind == "HelmRelease") |
     select(.["(spec.suspend || `false`)"] == false and
