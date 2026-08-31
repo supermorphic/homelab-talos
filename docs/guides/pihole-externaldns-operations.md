@@ -29,7 +29,11 @@ It also watches `DNSEndpoint` resources carrying the same audience annotation. T
 public webhook Gateway package uses this source for
 `hooks.lab.supermorphic.com -> 192.168.90.39` because its public HTTPRoute remains absent
 until activation. The domain filter and managed A-record restriction apply to both
-source types. This internal record does not update the public Cloudflare DNS zone.
+source types. The CRD source has cluster-wide read access, so repository and live n8n
+validation allow only this exact object to carry the internal audience annotation. Live
+acceptance requires ExternalDNS to report the current object generation as observed and
+then checks the actual Pi-hole answer. This internal record does not update the public
+Cloudflare DNS zone.
 
 It manages only A records. Its `upsert-only` policy permits record creation and
 updates, but not deletion. This protects manually managed Pi-hole records. It also

@@ -230,7 +230,11 @@ Gateway package owns one `DNSEndpoint` for the stable `192.168.90.39` target. Th
 Pi-hole ExternalDNS release reads that explicitly annotated CRD in addition to internal
 Gateway routes. This keeps the record in Git and makes it available before the public n8n
 HTTPRoute is activated. ExternalDNS remains `upsert-only`, uses the existing verified
-Pi-hole connection, and does not manage public Cloudflare DNS.
+Pi-hole connection, and does not manage public Cloudflare DNS. The CRD source has
+cluster-wide read access, so repository and live validation permit only the
+`networking-public/hooks-lab-supermorphic-com-internal` object to carry the internal DNS
+audience. Live acceptance also requires ExternalDNS to have observed its current
+generation before accepting the Pi-hole answer.
 
 The public Cloudflare A record remains external infrastructure, but it is not a manually
 maintained address. UniFi is the authoritative observer of the router's WAN address and

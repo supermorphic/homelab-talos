@@ -105,12 +105,11 @@ n8n_routes_match_contract "$mode" <(printf '%s\n' "$routes_json") || {
   exit 1
 }
 
-internal_dns_endpoint="$(
-  "${kc[@]}" --namespace networking-public get \
-    dnsendpoint.externaldns.k8s.io hooks-lab-supermorphic-com-internal --output json
+internal_dns_endpoints="$(
+  "${kc[@]}" get dnsendpoints.externaldns.k8s.io --all-namespaces --output json
 )"
-n8n_internal_dns_endpoint_matches_contract <(printf '%s\n' "$internal_dns_endpoint") || {
-  echo 'The live internal public-webhook DNSEndpoint differs from the exact split-DNS contract.' >&2
+n8n_internal_dns_endpoints_match_contract <(printf '%s\n' "$internal_dns_endpoints") || {
+  echo 'The live internally published DNSEndpoint inventory is not the one observed public-webhook contract.' >&2
   exit 1
 }
 internal_dns_answer="$(

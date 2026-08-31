@@ -11,6 +11,12 @@ package uses one `DNSEndpoint` to publish its stable private VIP without publish
 suspended HTTPRoute. Pi-hole has no TXT registry support, so
 the controller uses `registry=noop` and `policy=upsert-only`.
 
+The CRD source watches `DNSEndpoint` objects cluster-wide because the same release also
+watches routes outside `networking-public`. Repository and live n8n validation therefore
+reject any second `DNSEndpoint` carrying the internal audience annotation. The one allowed
+object must report its current generation as observed before live verification accepts
+the Pi-hole answer.
+
 The Pi-hole application password is stored only as SOPS ciphertext in Git. Use
 `just repo foundation-provider-secrets` to create it and update its rollout stamp,
 then use the guarded foundation Just workflows in

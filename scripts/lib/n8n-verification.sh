@@ -45,19 +45,26 @@ n8n_statefulset_current_ready() {
   ' "$input" >/dev/null 2>&1
 }
 
-n8n_internal_dns_endpoint_matches_contract() {
+n8n_internal_dns_endpoints_match_contract() {
   local input="$1"
   yq -p=json -o=json -e '
-    .apiVersion == "externaldns.k8s.io/v1alpha1" and
-    .kind == "DNSEndpoint" and
-    .metadata.name == "hooks-lab-supermorphic-com-internal" and
-    .metadata.namespace == "networking-public" and
-    .metadata.annotations."external-dns.k8s.io/audience" == "internal" and
-    (.spec.endpoints | length) == 1 and
-    .spec.endpoints[0].dnsName == "hooks.lab.supermorphic.com" and
-    .spec.endpoints[0].recordType == "A" and
-    (.spec.endpoints[0].targets | length) == 1 and
-    .spec.endpoints[0].targets[0] == "192.168.90.39"
+    [.items[]? | select(
+      .metadata.annotations."external-dns.k8s.io/audience" == "internal"
+    )] as $internal |
+    [
+      (($internal | length) == 1),
+      ($internal[0].apiVersion == "externaldns.k8s.io/v1alpha1"),
+      ($internal[0].kind == "DNSEndpoint"),
+      ($internal[0].metadata.name == "hooks-lab-supermorphic-com-internal"),
+      ($internal[0].metadata.namespace == "networking-public"),
+      ($internal[0].metadata.generation | type == "!!int"),
+      ($internal[0].status.observedGeneration == $internal[0].metadata.generation),
+      (($internal[0].spec.endpoints | length) == 1),
+      ($internal[0].spec.endpoints[0].dnsName == "hooks.lab.supermorphic.com"),
+      ($internal[0].spec.endpoints[0].recordType == "A"),
+      (($internal[0].spec.endpoints[0].targets | length) == 1),
+      ($internal[0].spec.endpoints[0].targets[0] == "192.168.90.39")
+    ] | all
   ' "$input" >/dev/null 2>&1
 }
 

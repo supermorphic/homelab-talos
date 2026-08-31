@@ -243,9 +243,10 @@ at Flux source revision parity, and the public route remains suspended.
 
 Complete these steps in order:
 
-First, confirm the merged `public-webhook-gateway` package owns the internal DNS endpoint
-and that ExternalDNS has reconciled it to Pi-hole. This read-only private verification
-also confirms the public HTTPRoute remains absent:
+First, confirm the merged `public-webhook-gateway` package owns the only internally
+published DNS endpoint and that ExternalDNS has observed its current generation and
+reconciled it to Pi-hole. This read-only private verification also confirms the public
+HTTPRoute remains absent:
 
 ```bash
 N8N_VERIFY_MODE=private mise exec -- just kube n8n-verify

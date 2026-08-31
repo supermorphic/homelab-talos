@@ -299,35 +299,52 @@ expect_false 'unrelated Service is not found for no-route safety' \
 
 cat >"$temp_dir/internal-dns.json" <<'EOF'
 {
-  "apiVersion": "externaldns.k8s.io/v1alpha1",
-  "kind": "DNSEndpoint",
-  "metadata": {
-    "name": "hooks-lab-supermorphic-com-internal",
-    "namespace": "networking-public",
-    "annotations": {"external-dns.k8s.io/audience": "internal"}
-  },
-  "spec": {
-    "endpoints": [{
-      "dnsName": "hooks.lab.supermorphic.com",
-      "recordType": "A",
-      "targets": ["192.168.90.39"]
-    }]
-  }
+  "items": [{
+    "apiVersion": "externaldns.k8s.io/v1alpha1",
+    "kind": "DNSEndpoint",
+    "metadata": {
+      "name": "hooks-lab-supermorphic-com-internal",
+      "namespace": "networking-public",
+      "generation": 3,
+      "annotations": {"external-dns.k8s.io/audience": "internal"}
+    },
+    "spec": {
+      "endpoints": [{
+        "dnsName": "hooks.lab.supermorphic.com",
+        "recordType": "A",
+        "targets": ["192.168.90.39"]
+      }]
+    },
+    "status": {"observedGeneration": 3}
+  }]
 }
 EOF
 expect_true 'exact internal public-webhook DNS endpoint' \
-  n8n_internal_dns_endpoint_matches_contract "$temp_dir/internal-dns.json"
-yq -p=json -o=json '.spec.endpoints[0].targets = ["192.168.90.30"]' \
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns.json"
+yq -p=json -o=json '.items[0].spec.endpoints[0].targets = ["192.168.90.30"]' \
   "$temp_dir/internal-dns.json" >"$temp_dir/internal-dns-wrong-target.json"
 expect_false 'internal public-webhook DNS endpoint with the internal Gateway target' \
-  n8n_internal_dns_endpoint_matches_contract "$temp_dir/internal-dns-wrong-target.json"
-yq -p=json -o=json '.spec.endpoints += [.spec.endpoints[0]]' \
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-wrong-target.json"
+yq -p=json -o=json '.items += [.items[0]]' \
   "$temp_dir/internal-dns.json" >"$temp_dir/internal-dns-duplicate.json"
 expect_false 'duplicate internal public-webhook DNS endpoint' \
-  n8n_internal_dns_endpoint_matches_contract "$temp_dir/internal-dns-duplicate.json"
-yq -p=json -o=json 'del(.metadata.annotations."external-dns.k8s.io/audience")' \
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-duplicate.json"
+yq -p=json -o=json 'del(.items[0].metadata.annotations."external-dns.k8s.io/audience")' \
   "$temp_dir/internal-dns.json" >"$temp_dir/internal-dns-unselected.json"
 expect_false 'unselected internal public-webhook DNS endpoint' \
-  n8n_internal_dns_endpoint_matches_contract "$temp_dir/internal-dns-unselected.json"
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-unselected.json"
+yq -p=json -o=json '.items[0].status.observedGeneration = 2' \
+  "$temp_dir/internal-dns.json" >"$temp_dir/internal-dns-stale.json"
+expect_false 'unobserved current internal public-webhook DNS endpoint generation' \
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-stale.json"
+yq -p=json -o=json '.items += [{
+  "apiVersion":"externaldns.k8s.io/v1alpha1", "kind":"DNSEndpoint",
+  "metadata":{"name":"second-internal", "namespace":"other", "generation":1,
+    "annotations":{"external-dns.k8s.io/audience":"internal"}},
+  "spec":{"endpoints":[{"dnsName":"other.lab.supermorphic.com", "recordType":"A",
+    "targets":["192.168.90.39"]}]}, "status":{"observedGeneration":1}
+}]' "$temp_dir/internal-dns.json" >"$temp_dir/internal-dns-second-authority.json"
+expect_false 'second internally published DNS endpoint authority' \
+  n8n_internal_dns_endpoints_match_contract "$temp_dir/internal-dns-second-authority.json"
 
 echo 'n8n verification readiness, target, and route fixtures passed.'
