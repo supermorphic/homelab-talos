@@ -32,18 +32,26 @@ done
 ci_catalog="$result_root/ci-catalog.yaml"
 ci_fake_just="$result_root/ci-fake-just.sh"
 ci_fake_log="$result_root/ci-fake-just.log"
+ci_initial_log="$result_root/ci-initial.log"
+touch "$ci_initial_log"
 cp tests/fixtures/result-coordinator/catalog.yaml "$ci_catalog"
 # shellcheck disable=SC2016
 printf '%s\n' \
 	'#!/usr/bin/env bash' \
 	'set -euo pipefail' \
-	'printf "%s\\t%s\\n" "${TEST_SHARED_RESULT_DIR:?}" "${TEST_RUN_ID:?}" >>"${FAKE_JUST_LOG:?}"' \
 	'case "$*" in' \
-	'  fixture-pass|fixture-fail|fixture-skipped) exit 0 ;;' \
+	'  fixture-pass)' \
+	'    [[ -z "$(find "${TEST_SHARED_RESULT_DIR:?}" -mindepth 1 -print -quit)" ]]' \
+	'    printf "%s\\t%s\\n" "${TEST_SHARED_RESULT_DIR:?}" "${TEST_RUN_ID:?}" >>"${FAKE_INITIAL_LOG:?}"' \
+	'    ;;' \
+	'  fixture-fail|fixture-skipped) ;;' \
 	'  *) exit 2 ;;' \
-	'esac' >"$ci_fake_just"
+	'esac' \
+	'printf "%s\\n" "$*" >"${TEST_SHARED_RESULT_DIR:?}/$1.marker"' \
+	'printf "%s\\t%s\\n" "${TEST_SHARED_RESULT_DIR:?}" "${TEST_RUN_ID:?}" >>"${FAKE_JUST_LOG:?}"' >"$ci_fake_just"
 chmod +x "$ci_fake_just"
 FAKE_JUST_LOG="$ci_fake_log" \
+	FAKE_INITIAL_LOG="$ci_initial_log" \
 	TEST_CATALOG_PATH="$ci_catalog" \
 	TEST_RESULTS_ROOT="$result_root/ci-results" \
 	TEST_JUST_BIN="$ci_fake_just" \
@@ -51,19 +59,57 @@ FAKE_JUST_LOG="$ci_fake_log" \
 	TEST_SHARED_RESULT_DIR="$result_root/caller-shared" \
 	TEST_RUN_ID=caller-run-id \
 	scripts/test/run-ci.sh >/dev/null
+FAKE_JUST_LOG="$ci_fake_log" \
+	FAKE_INITIAL_LOG="$ci_initial_log" \
+	TEST_CATALOG_PATH="$ci_catalog" \
+	TEST_RESULTS_ROOT="$result_root/ci-results" \
+	TEST_JUST_BIN="$ci_fake_just" \
+	TEST_EXECUTION_ORIGIN=agent \
+	TEST_SHARED_RESULT_DIR="$result_root/caller-shared-second" \
+	TEST_RUN_ID=caller-run-id-second \
+	scripts/test/run-ci.sh >/dev/null
 mapfile -t ci_runs < <(find "$result_root/ci-results" -mindepth 1 -maxdepth 1 -type d)
-[[ "${#ci_runs[@]}" -eq 1 ]]
-ci_run_dir="$(cd "${ci_runs[0]}" && pwd)"
-captured_children=0
+[[ "${#ci_runs[@]}" -eq 2 ]]
+ci_first_run_dir="$(cd "${ci_runs[0]}" && pwd)"
+ci_second_run_dir="$(cd "${ci_runs[1]}" && pwd)"
+ci_first_shared="$ci_first_run_dir/diagnostics/shared"
+ci_second_shared="$ci_second_run_dir/diagnostics/shared"
+ci_first_run_id="$(basename "$ci_first_run_dir")"
+ci_second_run_id="$(basename "$ci_second_run_dir")"
+[[ "$ci_first_shared" != "$ci_second_shared" ]]
+[[ "$ci_first_run_id" != "$ci_second_run_id" ]]
+ci_first_children=0
+ci_second_children=0
 while IFS=$'\t' read -r captured_shared captured_run_id; do
-	[[ "$captured_shared" == "$ci_run_dir/diagnostics/shared" ]]
-	[[ "$captured_run_id" == "$(basename "$ci_run_dir")" ]]
-	captured_children=$((captured_children + 1))
+	if [[ "$captured_shared" == "$ci_first_shared" && "$captured_run_id" == "$ci_first_run_id" ]]; then
+		ci_first_children=$((ci_first_children + 1))
+	elif [[ "$captured_shared" == "$ci_second_shared" && "$captured_run_id" == "$ci_second_run_id" ]]; then
+		ci_second_children=$((ci_second_children + 1))
+	else
+		echo 'CI child received an unexpected shared-result boundary.' >&2
+		exit 1
+	fi
 done <"$ci_fake_log"
-[[ "$captured_children" -eq 3 ]]
-[[ -d "$ci_run_dir/diagnostics/shared" ]]
-[[ -z "$(find "$ci_run_dir/diagnostics/shared" -mindepth 1 -print -quit)" ]]
+[[ "$ci_first_children" -eq 3 ]]
+[[ "$ci_second_children" -eq 3 ]]
+mapfile -t ci_initial_boundaries <"$ci_initial_log"
+[[ "${#ci_initial_boundaries[@]}" -eq 2 ]]
+ci_first_initial=0
+ci_second_initial=0
+for ci_initial_boundary in "${ci_initial_boundaries[@]}"; do
+	if [[ "$ci_initial_boundary" == "$ci_first_shared"$'\t'"$ci_first_run_id" ]]; then
+		ci_first_initial=$((ci_first_initial + 1))
+	elif [[ "$ci_initial_boundary" == "$ci_second_shared"$'\t'"$ci_second_run_id" ]]; then
+		ci_second_initial=$((ci_second_initial + 1))
+	else
+		echo 'CI fixture observed an unexpected initial shared-result boundary.' >&2
+		exit 1
+	fi
+done
+[[ "$ci_first_initial" -eq 1 ]]
+[[ "$ci_second_initial" -eq 1 ]]
 [[ ! -e "$result_root/caller-shared" ]]
+[[ ! -e "$result_root/caller-shared-second" ]]
 
 started_at='2026-07-27T00:00:00Z'
 finished_at='2026-07-27T00:00:03Z'
