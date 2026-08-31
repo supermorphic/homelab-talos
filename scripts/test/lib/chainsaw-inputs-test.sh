@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 helper="$repo_root/scripts/test/lib/chainsaw-inputs.sh"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/chainsaw-inputs-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
+[[ -x "$repo_root/scripts/test/lib/chainsaw-inputs-test.sh" ]]
 
 # The production change that must make these tests fail is discovering ignored,
 # symlinked, non-test, unsorted, or non-repository YAML inputs.
@@ -114,7 +115,11 @@ chmod +x "$validator_root/scripts/test/run-native-junit-validator.sh" \
 while IFS= read -r test_script; do
 	[[ "$test_script" == 'scripts/test/validate-chainsaw.sh' ]] && continue
 	mkdir -p "$validator_root/$(dirname -- "$test_script")"
-	printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$validator_root/$test_script"
+	{
+		printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+		# shellcheck disable=SC2016 # The generated stub expands its own log path.
+		printf 'printf "%%s\\n" %q >>"${SHELL_CASE_LOG:?}"\n' "$test_script"
+	} >"$validator_root/$test_script"
 	chmod +x "$validator_root/$test_script"
 done < <(
 	awk '
@@ -187,6 +192,7 @@ git -C "$validator_root" commit -qm 'validator fixture'
 
 chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"
+shell_case_log="$fixture_root/shell-cases.log"
 malformed_output="$fixture_root/malformed.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
@@ -204,8 +210,9 @@ mapfile -t malformed_lints <"$chainsaw_log"
 
 : >"$chainsaw_log"
 : >"$yq_log"
+: >"$shell_case_log"
 PATH="$validator_root/bin:$PATH" \
-	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" \
+	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" SHELL_CASE_LOG="$shell_case_log" \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >/dev/null
 mapfile -t passing_lints <"$chainsaw_log"
 [[ "${#passing_lints[@]}" -eq 2 ]]
@@ -216,6 +223,18 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
+for expected_case in \
+	scripts/test/lib/chainsaw-inputs-test.sh \
+	scripts/test/run-native-junit-validator-test.sh; do
+	invocation_count=0
+	while IFS= read -r invoked_case; do
+		[[ "$invoked_case" == "$expected_case" ]] && invocation_count=$((invocation_count + 1))
+	done <"$shell_case_log"
+	[[ "$invocation_count" -eq 1 ]] || {
+		echo "$expected_case must appear exactly once in the real harness inventory." >&2
+		exit 1
+	}
+done
 
 : >"$chainsaw_log"
 : >"$yq_log"

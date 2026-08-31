@@ -78,6 +78,8 @@ run_shell_case e2e-confirmation \
   scripts/test/safety/require-e2e-confirmation-test.sh
 run_shell_case common-library scripts/test/lib/common-test.sh
 run_shell_case result-contract scripts/test/lib/results-test.sh
+run_shell_case chainsaw-inputs scripts/test/lib/chainsaw-inputs-test.sh
+run_shell_case native-junit-validator scripts/test/run-native-junit-validator-test.sh
 run_shell_case catalog-negative scripts/test/validate-catalog-test.sh
 run_shell_case flux-alerts-diagnostics \
   scripts/test/flux-alerts-diagnostics-test.sh
