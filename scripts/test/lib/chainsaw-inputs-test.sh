@@ -3,9 +3,20 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 helper="$repo_root/scripts/test/lib/chainsaw-inputs.sh"
+validator="$repo_root/scripts/test/validate-chainsaw.sh"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/chainsaw-inputs-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
 [[ -x "$repo_root/scripts/test/lib/chainsaw-inputs-test.sh" ]]
+
+# The production change that must make this assertion fail is recording a literal
+# JUnit duration instead of the measured shell-case duration.
+run_shell_case_source="$(sed -n '/^run_shell_case() {/,/^}/p' "$validator")"
+[[ "$run_shell_case_source" == *'write_result_case_junit'* ]]
+[[ "$run_shell_case_source" == *'"$case_duration"'* ]]
+if rg -q '^[[:space:]]*0$' <<<"$run_shell_case_source"; then
+	echo 'Shell case JUnit results must not use a literal zero duration.' >&2
+	exit 1
+fi
 
 # The production change that must make these tests fail is discovering ignored,
 # symlinked, non-test, unsorted, or non-repository YAML inputs.
