@@ -45,6 +45,11 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '[.spec.template.spec.containers[0].env[] | select(.name == "HOMEPAGE_ALLOWED_HOSTS") | .value] | .[0]' "$dep")" == 'homepage.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'homepage.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
+[[ "$(yq -r '[.layout[] | keys | .[0]] | join(",")' "$base/app/config/settings.yaml")" == \
+  'Media,Monitoring & Testing,Platform' ]] || {
+  echo 'Homepage groups must use the explicit Media, Monitoring & Testing, Platform order.' >&2
+  exit 1
+}
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
 [[ "$(yq -r '[.metadata.annotations."gethomepage.dev/enabled",
     .metadata.annotations."gethomepage.dev/name",
