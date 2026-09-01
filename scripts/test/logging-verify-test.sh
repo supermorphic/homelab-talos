@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 verifier="$repo_root/scripts/verify/logging.sh"
+real_python="$(command -v python)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/logging-verify-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -315,6 +316,17 @@ esac
 EOF
 chmod +x "$fixture/bin/curl"
 
+cat >"$fixture/bin/python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'python' >>"$FAKE_PYTHON_LOG"
+printf ' %s' "$@" >>"$FAKE_PYTHON_LOG"
+printf '\n' >>"$FAKE_PYTHON_LOG"
+exec "$REAL_PYTHON" "$@"
+EOF
+chmod +x "$fixture/bin/python"
+
 cat >"$fixture/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 /bin/sleep 0.001
@@ -326,12 +338,14 @@ run_case() {
   local case_root="$fixture/$layout" output status
   mkdir -p "$case_root"
   : >"$case_root/kubectl.log"; : >"$case_root/curl.log"; : >"$case_root/process.log"
+  : >"$case_root/python.log"
   output="$case_root/output"
 
   set +e
   PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
     FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
     FAKE_PROCESS_LOG="$case_root/process.log" \
+    FAKE_PYTHON_LOG="$case_root/python.log" REAL_PYTHON="$real_python" \
     "$verifier" "$fixture/kubeconfig" >"$output" 2>&1
   status="$?"
   set -e
@@ -368,6 +382,7 @@ if case_selected all-evidence-present; then
   rg -F -q -- '/config/tenant/v1/limits' "$fixture/all-evidence-present/curl.log"
   rg -F -q -- '/config?mode=diffs' "$fixture/all-evidence-present/curl.log"
   rg -F -q -- 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}' "$fixture/all-evidence-present/curl.log"
+  [[ "$(rg -c -- '--kind topology --input .*loki-statefulset\.json' "$fixture/all-evidence-present/python.log")" -eq 1 ]]
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/labels$' "$fixture/all-evidence-present/curl.log")" -eq 3 ]]
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/query$' "$fixture/all-evidence-present/curl.log")" -eq 4 ]]
   if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$|query=sum\(count_over_time\(\{source="talos",service!="kernel"\}' "$fixture/all-evidence-present/curl.log"; then

@@ -41,9 +41,10 @@ def array_value(kind: str, value: Any, reason: str) -> list[Any]:
     return value
 
 
-def optional_object(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
-    nested = value.get(name, {})
-    return nested if isinstance(nested, Mapping) else {}
+def optional_object(kind: str, value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    if name not in value:
+        return {}
+    return object_value(kind, value[name], f"{name} must be an object")
 
 
 def pod_projection(kind: str, response: Mapping[str, Any]) -> dict[str, Any]:
@@ -51,9 +52,9 @@ def pod_projection(kind: str, response: Mapping[str, Any]) -> dict[str, Any]:
     pods = []
     for item in items:
         pod = object_value(kind, item, "item must be an object")
-        metadata = optional_object(pod, "metadata")
-        specification = optional_object(pod, "spec")
-        status = optional_object(pod, "status")
+        metadata = optional_object(kind, pod, "metadata")
+        specification = optional_object(kind, pod, "spec")
+        status = optional_object(kind, pod, "status")
         node = specification.get("nodeName", "")
         deletion_timestamp = metadata.get("deletionTimestamp", "")
         phase = status.get("phase", "")
@@ -90,7 +91,9 @@ def pod_projection(kind: str, response: Mapping[str, Any]) -> dict[str, Any]:
             kind, specification.get("volumes", []), "volumes must be an array"
         ):
             volume_object = object_value(kind, volume, "volume must be an object")
-            claim = optional_object(volume_object, "persistentVolumeClaim").get("claimName", "")
+            claim = optional_object(kind, volume_object, "persistentVolumeClaim").get(
+                "claimName", ""
+            )
             volume_name = volume_object.get("name", "")
             if not isinstance(claim, str) or not isinstance(volume_name, str):
                 fail(kind, "volume field must be a string")
@@ -110,8 +113,81 @@ def pod_projection(kind: str, response: Mapping[str, Any]) -> dict[str, Any]:
     return {"pods": sorted(pods, key=lambda pod: pod["node"])}
 
 
+def integer_value(kind: str, value: Any, reason: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(kind, reason)
+    return value
+
+
+def statefulset_projection(kind: str, response: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = object_value(kind, field(kind, response, "metadata"), "metadata must be an object")
+    specification = object_value(kind, field(kind, response, "spec"), "spec must be an object")
+    status = object_value(kind, field(kind, response, "status"), "status must be an object")
+    claim_templates = array_value(
+        kind,
+        field(kind, specification, "volumeClaimTemplates"),
+        "volumeClaimTemplates must be an array",
+    )
+    claim_template_names = []
+    for template in claim_templates:
+        template_object = object_value(kind, template, "volumeClaimTemplate must be an object")
+        template_metadata = object_value(
+            kind,
+            field(kind, template_object, "metadata"),
+            "volumeClaimTemplate metadata must be an object",
+        )
+        claim_template_names.append(
+            string_value(
+                kind,
+                field(kind, template_metadata, "name"),
+                "volumeClaimTemplate name must be a string",
+            )
+        )
+    values = {
+        "available_replicas": integer_value(
+            kind, field(kind, status, "availableReplicas"), "availableReplicas must be an integer"
+        ),
+        "claim_template_names": claim_template_names,
+        "current_replicas": integer_value(
+            kind, field(kind, status, "currentReplicas"), "currentReplicas must be an integer"
+        ),
+        "current_revision": string_value(
+            kind, field(kind, status, "currentRevision"), "currentRevision must be a string"
+        ),
+        "generation": integer_value(
+            kind, field(kind, metadata, "generation"), "generation must be an integer"
+        ),
+        "name": string_value(kind, field(kind, metadata, "name"), "name must be a string"),
+        "observed_generation": integer_value(
+            kind,
+            field(kind, status, "observedGeneration"),
+            "observedGeneration must be an integer",
+        ),
+        "ready_replicas": integer_value(
+            kind, field(kind, status, "readyReplicas"), "readyReplicas must be an integer"
+        ),
+        "replicas": integer_value(
+            kind, field(kind, status, "replicas"), "replicas must be an integer"
+        ),
+        "spec_replicas": integer_value(
+            kind, field(kind, specification, "replicas"), "replicas must be an integer"
+        ),
+        "uid": string_value(kind, field(kind, metadata, "uid"), "uid must be a string"),
+        "update_revision": string_value(
+            kind, field(kind, status, "updateRevision"), "updateRevision must be a string"
+        ),
+        "updated_replicas": integer_value(
+            kind, field(kind, status, "updatedReplicas"), "updatedReplicas must be an integer"
+        ),
+    }
+    return {"statefulset": values}
+
+
 def project_topology(response: Any) -> dict[str, Any]:
-    return pod_projection("topology", object_value("topology", response))
+    document = object_value("topology", response)
+    if "items" in document:
+        return pod_projection("topology", document)
+    return statefulset_projection("topology", document)
 
 
 def recurring_labels(kind: str, metadata: Mapping[str, Any]) -> list[str]:
@@ -130,17 +206,20 @@ def project_storage(response: Any) -> dict[str, Any]:
     kind = "storage"
     document = object_value(kind, response)
     if "items" not in document:
-        return {"recurring_labels": recurring_labels(kind, optional_object(document, "metadata"))}
+        return {
+            "recurring_labels": recurring_labels(kind, optional_object(kind, document, "metadata"))
+        }
     items = array_value(kind, document["items"], "items must be an array")
     if any(
-        "kubernetesStatus" in optional_object(object_value(kind, item), "status") for item in items
+        "kubernetesStatus" in optional_object(kind, object_value(kind, item), "status")
+        for item in items
     ):
         volumes = []
         for item in items:
             volume = object_value(kind, item, "item must be an object")
-            metadata = optional_object(volume, "metadata")
-            status = optional_object(volume, "status")
-            kubernetes_status = optional_object(status, "kubernetesStatus")
+            metadata = optional_object(kind, volume, "metadata")
+            status = optional_object(kind, volume, "status")
+            kubernetes_status = optional_object(kind, status, "kubernetesStatus")
             values = {
                 "name": metadata.get("name", ""),
                 "namespace": kubernetes_status.get("namespace", ""),
@@ -154,10 +233,12 @@ def project_storage(response: Any) -> dict[str, Any]:
     claims = []
     for item in items:
         claim = object_value(kind, item, "item must be an object")
-        metadata = optional_object(claim, "metadata")
-        specification = optional_object(claim, "spec")
-        status = optional_object(claim, "status")
-        requests = optional_object(optional_object(specification, "resources"), "requests")
+        metadata = optional_object(kind, claim, "metadata")
+        specification = optional_object(kind, claim, "spec")
+        status = optional_object(kind, claim, "status")
+        requests = optional_object(
+            kind, optional_object(kind, specification, "resources"), "requests"
+        )
         values = {
             "deleting": bool(metadata.get("deletionTimestamp", "")),
             "name": metadata.get("name", ""),
@@ -258,8 +339,8 @@ def project_targets(response: Any) -> dict[str, Any]:
     identities = set()
     for target in active_targets:
         target_object = object_value(kind, target, "target must be an object")
-        discovered_labels = optional_object(target_object, "discoveredLabels")
-        labels = optional_object(target_object, "labels")
+        discovered_labels = optional_object(kind, target_object, "discoveredLabels")
+        labels = optional_object(kind, target_object, "labels")
         compact = {
             "health": target_object.get("health", "unknown"),
             "job": labels.get("job", ""),
@@ -307,7 +388,9 @@ def project_rules(response: Any) -> dict[str, Any]:
     names = set()
     for group in groups:
         group_object = object_value(kind, group, "group must be an object")
-        for rule in array_value(kind, group_object.get("rules", []), "rules must be an array"):
+        for rule in array_value(
+            kind, field(kind, group_object, "rules"), "rules must be an array"
+        ):
             rule_object = object_value(kind, rule, "rule must be an object")
             compact = {
                 "health": rule_object.get("health", "unknown"),

@@ -153,20 +153,25 @@ yq -e '
   exit 1
 }
 
-loki_statefulset_json="$("${kc[@]}" --namespace "$ns" \
-  get statefulset loki --output json)"
+loki_statefulset_file="$temp_dir/loki-statefulset.json"
+"${kc[@]}" --namespace "$ns" get statefulset loki --output json >"$loki_statefulset_file"
+loki_statefulset_projection="$(python scripts/verify/logging_projection.py \
+  --kind topology --input "$loki_statefulset_file" 2>/dev/null)" || {
+  echo 'Loki topology does not have exactly one fully available instance.' >&2
+  exit 1
+}
 yq -e '
-  .metadata.generation == .status.observedGeneration and
-  .spec.replicas == 1 and
-  .status.replicas == 1 and
-  .status.currentReplicas == 1 and
-  .status.updatedReplicas == 1 and
-  .status.readyReplicas == 1 and
-  .status.availableReplicas == 1 and
-  ((.status.currentRevision | type) == "!!str" and
-    (.status.currentRevision | length) > 0) and
-  .status.currentRevision == .status.updateRevision
-' >/dev/null 2>&1 <<<"$loki_statefulset_json" || {
+  .statefulset.generation == .statefulset.observed_generation and
+  .statefulset.spec_replicas == 1 and
+  .statefulset.replicas == 1 and
+  .statefulset.current_replicas == 1 and
+  .statefulset.updated_replicas == 1 and
+  .statefulset.ready_replicas == 1 and
+  .statefulset.available_replicas == 1 and
+  ((.statefulset.current_revision | type) == "!!str" and
+    (.statefulset.current_revision | length) > 0) and
+  .statefulset.current_revision == .statefulset.update_revision
+' >/dev/null 2>&1 <<<"$loki_statefulset_projection" || {
   echo 'Loki topology does not have exactly one fully available instance.' >&2
   exit 1
 }
@@ -195,8 +200,8 @@ yq -e '
 
 # Bind storage verification to the sole Ready Pod and the StatefulSet that owns it.
 # Identities stay internal and are never included in diagnostics.
-loki_statefulset_name="$(yq -r '.metadata.name // ""' <<<"$loki_statefulset_json")"
-loki_statefulset_uid="$(yq -r '.metadata.uid // ""' <<<"$loki_statefulset_json")"
+loki_statefulset_name="$(yq -r '.statefulset.name' <<<"$loki_statefulset_projection")"
+loki_statefulset_uid="$(yq -r '.statefulset.uid' <<<"$loki_statefulset_projection")"
 [[ -n "$loki_statefulset_name" && -n "$loki_statefulset_uid" ]] || {
   echo 'Verified Loki StatefulSet identity is incomplete.' >&2
   exit 1
@@ -215,8 +220,7 @@ STS_NAME="$loki_statefulset_name" STS_UID="$loki_statefulset_uid" yq -e '
   exit 1
 }
 mapfile -t loki_claim_template_names < <(
-  yq -r '.spec.volumeClaimTemplates[]?.metadata.name // ""' \
-    <<<"$loki_statefulset_json"
+  yq -r '.statefulset.claim_template_names[]?' <<<"$loki_statefulset_projection"
 )
 mapfile -t loki_pvc_mount_rows < <(
   yq -r '

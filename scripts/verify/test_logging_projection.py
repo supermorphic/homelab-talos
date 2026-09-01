@@ -49,6 +49,60 @@ class LoggingProjectionTest(unittest.TestCase):
             },
         )
 
+    def test_topology_projects_statefulset_fields_once(self) -> None:
+        result = project(
+            "topology",
+            {
+                "metadata": {"generation": 9, "name": "loki", "uid": "private-statefulset"},
+                "spec": {
+                    "replicas": 1,
+                    "volumeClaimTemplates": [{"metadata": {"name": "storage"}}],
+                },
+                "status": {
+                    "availableReplicas": 1,
+                    "currentReplicas": 1,
+                    "currentRevision": "revision-a",
+                    "observedGeneration": 9,
+                    "readyReplicas": 1,
+                    "replicas": 1,
+                    "updateRevision": "revision-a",
+                    "updatedReplicas": 1,
+                },
+            },
+        )
+        self.assertEqual(
+            result,
+            {
+                "statefulset": {
+                    "available_replicas": 1,
+                    "claim_template_names": ["storage"],
+                    "current_replicas": 1,
+                    "current_revision": "revision-a",
+                    "generation": 9,
+                    "name": "loki",
+                    "observed_generation": 9,
+                    "ready_replicas": 1,
+                    "replicas": 1,
+                    "spec_replicas": 1,
+                    "uid": "private-statefulset",
+                    "update_revision": "revision-a",
+                    "updated_replicas": 1,
+                }
+            },
+        )
+
+    def test_topology_rejects_malformed_statefulset_shape_without_identity(self) -> None:
+        with self.assertRaisesRegex(ProjectionError, "invalid topology response") as raised:
+            project(
+                "topology",
+                {
+                    "metadata": {"generation": 9, "name": "private-statefulset"},
+                    "spec": {"replicas": 1, "volumeClaimTemplates": [{"metadata": "broken"}]},
+                    "status": "broken",
+                },
+            )
+        self.assertNotIn("private-statefulset", str(raised.exception))
+
     def test_storage_projects_sorted_claim_fields(self) -> None:
         result = project(
             "storage",
@@ -186,6 +240,35 @@ class LoggingProjectionTest(unittest.TestCase):
                     {"health": "ok", "last_error": "", "name": "RuleB"},
                 ]
             },
+        )
+
+    def assert_rules_rejected(self, document: object) -> None:
+        with self.assertRaisesRegex(ProjectionError, "invalid rules response") as raised:
+            project("rules", document)
+        self.assertNotIn("private-rule-value", str(raised.exception))
+
+    def test_rules_reject_non_object_group(self) -> None:
+        self.assert_rules_rejected(
+            {"status": "success", "data": {"groups": ["private-rule-value"]}}
+        )
+
+    def test_rules_reject_missing_rules(self) -> None:
+        self.assert_rules_rejected({"status": "success", "data": {"groups": [{}]}})
+
+    def test_rules_reject_non_array_rules(self) -> None:
+        self.assert_rules_rejected(
+            {"status": "success", "data": {"groups": [{"rules": "private-rule-value"}]}}
+        )
+
+    def test_rules_reject_malformed_extra_group_after_expected_rules(self) -> None:
+        expected_rules = [
+            {"health": "ok", "lastError": "", "name": f"Rule{index}"} for index in range(8)
+        ]
+        self.assert_rules_rejected(
+            {
+                "status": "success",
+                "data": {"groups": [{"rules": expected_rules}, {"private-rule-value": True}]},
+            }
         )
 
     def test_rejects_wrong_top_level_type(self) -> None:
