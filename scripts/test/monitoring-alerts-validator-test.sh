@@ -4,6 +4,8 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 validator="$repo_root/scripts/validate/alerts.sh"
+# shellcheck source=scripts/lib/n8n-alert-activation.sh
+source "$repo_root/scripts/lib/n8n-alert-activation.sh"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-monitoring-alerts-validator-test.XXXXXX")"
 trap 'rm -rf -- "$test_dir"' EXIT
 tree_root="$test_dir/tree"
@@ -42,13 +44,17 @@ reset_tree() {
   ))' "$tree_root/tests/prometheus/monitoring-alerts_test.yaml"
 }
 
-run_validator() {
+run_activation_validator() {
+  (cd "$tree_root" && validate_n8n_alert_activation) 2>&1
+}
+
+run_full_validator() {
   (cd "$tree_root" && "$validator" monitoring) 2>&1
 }
 
 expect_pass() {
   local description="$1" output
-  output="$(run_validator)" || {
+  output="$(run_activation_validator)" || {
     echo "$description: expected monitoring alerts validation to pass." >&2
     echo "$output" >&2
     exit 1
@@ -58,7 +64,7 @@ expect_pass() {
 expect_fail() {
   local description="$1" expected_message="$2" output exit_code
   set +e
-  output="$(run_validator)"
+  output="$(run_activation_validator)"
   exit_code="$?"
   set -e
   [[ "$exit_code" -eq 1 ]] || {
@@ -68,6 +74,33 @@ expect_fail() {
   }
   rg -Fq -- "$expected_message" <<<"$output" || {
     echo "$description: missing expected failure message: $expected_message" >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+
+expect_full_pass() {
+  local description="$1" output
+  output="$(run_full_validator)" || {
+    echo "$description: expected full monitoring alerts validation to pass." >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+
+expect_full_fail() {
+  local description="$1" expected_message="$2" output exit_code
+  set +e
+  output="$(run_full_validator)"
+  exit_code="$?"
+  set -e
+  [[ "$exit_code" -eq 1 ]] || {
+    echo "$description: expected full validator exit 1, got $exit_code." >&2
+    echo "$output" >&2
+    exit 1
+  }
+  rg -Fq -- "$expected_message" <<<"$output" || {
+    echo "$description: full validator omitted expected failure: $expected_message" >&2
     echo "$output" >&2
     exit 1
   }
@@ -125,6 +158,7 @@ case_production() {
   reset_tree
   assert_rendered_rule_count 1
   expect_pass 'production public-activation source'
+  expect_full_pass 'production public-activation integration'
 }
 
 case_all_suspended() {
@@ -141,6 +175,8 @@ case_n8n_active_without_postgresql() {
   yq -i '.spec.suspend = true' \
     "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
   expect_fail 'n8n active without PostgreSQL' \
+    'n8n and n8n-postgresql must be suspended or active together.'
+  expect_full_fail 'n8n/PostgreSQL lifecycle integration' \
     'n8n and n8n-postgresql must be suspended or active together.'
 }
 

@@ -14,6 +14,7 @@ custom_js="$base/app/config/custom.js"
 allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/README.md"
 seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
+n8n_route='kubernetes/apps/automation/n8n/app/httproute.yaml'
 gatus_route='kubernetes/apps/monitoring/gatus/app/httproute.yaml'
 longhorn_route='kubernetes/apps/storage/longhorn/config/httproute.yaml'
 monitoring_routes='kubernetes/apps/monitoring/kube-prometheus-stack/config/httproutes.yaml'
@@ -27,7 +28,7 @@ for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.ya
   "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
   "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$custom_js" \
   "$allure_icon" \
-  "$allure_provenance" "$seerr_route" "$gatus_route" "$longhorn_route" \
+  "$allure_provenance" "$seerr_route" "$n8n_route" "$gatus_route" "$longhorn_route" \
   "$monitoring_routes" "$portainer_route" "$ntfy_route" "$test_reports_route"; do
   [[ -f "$f" ]] || { echo "Missing Homepage source: $f" >&2; exit 1; }
 done
@@ -45,6 +46,15 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.spec.hostnames[0]' "$route")" == 'homepage.lab.supermorphic.com' ]]
 [[ "$(yq -r '.spec.parentRefs[0].name' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
+[[ "$(yq -r '[.metadata.annotations."gethomepage.dev/enabled",
+    .metadata.annotations."gethomepage.dev/name",
+    .metadata.annotations."gethomepage.dev/description",
+    .metadata.annotations."gethomepage.dev/group",
+    .metadata.annotations."gethomepage.dev/icon",
+    .metadata.annotations."gethomepage.dev/href",
+    .metadata.annotations."gethomepage.dev/pod-selector"] | join(",")' \
+  "$n8n_route")" == \
+  'true,n8n,Workflow automation,Platform,n8n.svg,https://n8n.lab.supermorphic.com,app.kubernetes.io/name=n8n' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$portainer_route")" == 'portainer-dark.svg' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$ntfy_route")" == 'ntfy' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$ntfy_route")" == \
