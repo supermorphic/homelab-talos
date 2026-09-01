@@ -201,8 +201,11 @@ these attended steps:
    manager.
 2. Import
    `kubernetes/apps/automation/n8n/app/workflows/platform-canary.json`.
-3. Create one Header Auth credential named `Platform Canary Header`. Set the header name
-   to `X-Platform-Canary` and paste the saved Platform Canary token as its value.
+3. Create one Header Auth credential. n8n initially shows `Header Auth account` as the
+   credential title at the top of its editor; rename that title exactly
+   `Platform Canary Header`. In the **Connection** section, set **Name** to
+   `X-Platform-Canary` and paste the saved Platform Canary token into **Value**. The
+   credential title and the HTTP header name are different fields.
 4. Bind `Platform Canary Header` to the imported workflow's `Webhook` node. Do not add
    the value to the workflow JSON.
 5. Publish the `Platform Canary` workflow.
@@ -217,6 +220,11 @@ until the authenticated private request has returned the expected response and t
 matching execution is visibly `Succeeded` with the same correlation in n8n execution
 history. If either check fails, stop with `public-webhook-route` suspended, correct the
 private workflow or runtime fault, and repeat both checks.
+
+The bootstrap logical backup predates this attended workflow and credential setup. Before
+running the restore drill in activation acceptance, require a later successful scheduled
+logical backup created after the credential was named, bound, and proven by the private
+canary request. Do not use the bootstrap artifact to validate state created afterward.
 
 ### Make private workload activation permanent
 
