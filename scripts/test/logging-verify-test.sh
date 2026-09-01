@@ -187,22 +187,22 @@ case " $* " in
   *' http://127.0.0.1:23100/ready '*) printf 'ready\n' ;;
   *' http://127.0.0.1:23100/config/tenant/v1/limits '*)
     case "$FAKE_LAYOUT" in
-      wrong-runtime-retention) printf 'retention_period: 13d\nretention_stream: []\ndiscover_service_name: []\n' ;;
-      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\nretention_stream: []\ndiscover_service_name: []\n' ;;
-      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\ndiscover_service_name: []\n' ;;
-      runtime-discover-service-name-nonempty) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: [service]\n' ;;
-      runtime-discover-service-name-missing) printf 'retention_period: 2w\nretention_stream: []\n' ;;
-      runtime-discover-service-name-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: service\n' ;;
-      *) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      wrong-runtime-retention) printf '{"retention_period":"13d","retention_stream":[],"discover_service_name":[]}\n' ;;
+      malformed-runtime-retention) printf '{"retention_period":["not-a-duration"],"retention_stream":[],"discover_service_name":[]}\n' ;;
+      runtime-retention-stream-override) printf '{"retention_period":"2w","retention_stream":[{"selector":"{namespace=\\"short\\"}","priority":1,"period":"1d"}],"discover_service_name":[]}\n' ;;
+      runtime-discover-service-name-nonempty) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":["service"]}\n' ;;
+      runtime-discover-service-name-missing) printf '{"retention_period":"2w","retention_stream":[]}\n' ;;
+      runtime-discover-service-name-malformed) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":"service"}\n' ;;
+      *) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":[]}\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/config?mode=diffs '*)
     case "$FAKE_LAYOUT" in
       runtime-config-unavailable) exit 22 ;;
-      runtime-shard-streams-enabled) printf 'limits_config:\n  shard_streams:\n    enabled: true\n' ;;
-      runtime-shard-streams-missing) printf 'limits_config: {}\n' ;;
-      runtime-shard-streams-malformed) printf 'limits_config:\n  shard_streams: disabled\n' ;;
-      *) printf 'limits_config:\n  shard_streams:\n    enabled: false\n' ;;
+      runtime-shard-streams-enabled) printf '{"limits_config":{"shard_streams":{"enabled":true}}}\n' ;;
+      runtime-shard-streams-missing) printf '{"limits_config":{}}\n' ;;
+      runtime-shard-streams-malformed) printf '{"limits_config":{"shard_streams":"disabled"}}\n' ;;
+      *) printf '{"limits_config":{"shard_streams":{"enabled":false}}}\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/loki/api/v1/labels '*)
@@ -317,7 +317,7 @@ chmod +x "$fixture/bin/curl"
 
 cat >"$fixture/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
-exit 0
+/bin/sleep 0.001
 EOF
 chmod +x "$fixture/bin/sleep"
 

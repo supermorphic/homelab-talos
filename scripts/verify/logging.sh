@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck disable=SC1091  # Repository-relative source is resolved by the verifier.
 source scripts/lib/flux-alerts.sh
 
 [[ "$#" -eq 1 ]] || {
@@ -22,6 +23,26 @@ kc=(kubectl --kubeconfig "$kubeconfig")
   exit 2
 }
 kc+=(--context homelab-diagnostic)
+
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/logging-verify.XXXXXX")"
+loki_pf_pid=''
+prometheus_pf_pid=''
+cleanup() {
+  local status="$?"
+  trap - EXIT INT TERM HUP
+  for pid in "$loki_pf_pid" "$prometheus_pf_pid"; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" 2>/dev/null || true
+  done
+  for pid in "$loki_pf_pid" "$prometheus_pf_pid"; do
+    [[ -n "$pid" ]] || continue
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf -- "$temp_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 
 for resource in loki alloy-logs alloy-events; do
   "${kc[@]}" --namespace flux-system wait \
@@ -68,27 +89,30 @@ yq -e '
   echo 'Alloy Logs topology does not have exactly three fully available scheduled instances.' >&2
   exit 1
 }
-alloy_logs_pods_json="$("${kc[@]}" --namespace "$ns" get pods \
+alloy_logs_pods_file="$temp_dir/alloy-logs-pods.json"
+"${kc[@]}" --namespace "$ns" get pods \
   --selector app.kubernetes.io/instance=alloy-logs,app.kubernetes.io/name=alloy \
-  --output json)"
-yq -e '
-  ((.items | type) == "!!seq" and (.items | length) == 3) and
-  ([
-    .items[] |
-    select((.metadata.deletionTimestamp // "") == "") |
-    select(.status.phase == "Running") |
-    select((.spec.nodeName // "") != "") |
-    select([
-      .status.conditions[]? |
-      select(.type == "Ready" and .status == "True")
-    ] | length == 1)
-  ] | length == 3) and
-  ([.items[].spec.nodeName] | unique | length) == 3
-' >/dev/null 2>&1 <<<"$alloy_logs_pods_json" || {
+  --output json >"$alloy_logs_pods_file"
+alloy_logs_pods_projection="$(python scripts/verify/logging_projection.py \
+  --kind topology --input "$alloy_logs_pods_file" 2>/dev/null)" || {
   echo 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' >&2
   exit 1
 }
-alloy_logs_nodes="$(yq -r '.items[].spec.nodeName' <<<"$alloy_logs_pods_json" | LC_ALL=C sort)"
+yq -e '
+  ((.pods | type) == "!!seq" and (.pods | length) == 3) and
+  ([
+    .pods[] |
+    select(.deleting == false) |
+    select(.running == true) |
+    select(.node != "") |
+    select(.ready == true)
+  ] | length == 3) and
+  ([.pods[].node] | unique | length) == 3
+' >/dev/null 2>&1 <<<"$alloy_logs_pods_projection" || {
+  echo 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' >&2
+  exit 1
+}
+alloy_logs_nodes="$(yq -r '.pods[].node' <<<"$alloy_logs_pods_projection" | LC_ALL=C sort)"
 production_node_set="$(printf '%s\n' "${production_nodes[@]}" | LC_ALL=C sort)"
 [[ "$alloy_logs_nodes" == "$production_node_set" ]] || {
   echo 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' >&2
@@ -146,22 +170,25 @@ yq -e '
   echo 'Loki topology does not have exactly one fully available instance.' >&2
   exit 1
 }
-loki_pods_json="$("${kc[@]}" --namespace "$ns" get pods \
+loki_pods_file="$temp_dir/loki-pods.json"
+"${kc[@]}" --namespace "$ns" get pods \
   --selector app.kubernetes.io/instance=loki,app.kubernetes.io/name=loki \
-  --output json)"
+  --output json >"$loki_pods_file"
+loki_pods_projection="$(python scripts/verify/logging_projection.py \
+  --kind topology --input "$loki_pods_file" 2>/dev/null)" || {
+  echo 'Loki does not have exactly one Ready pod.' >&2
+  exit 1
+}
 yq -e '
-  ((.items | type) == "!!seq" and (.items | length) == 1) and
+  ((.pods | type) == "!!seq" and (.pods | length) == 1) and
   ([
-    .items[] |
-    select((.metadata.deletionTimestamp // "") == "") |
-    select(.status.phase == "Running") |
-    select((.spec.nodeName // "") != "") |
-    select([
-      .status.conditions[]? |
-      select(.type == "Ready" and .status == "True")
-    ] | length == 1)
+    .pods[] |
+    select(.deleting == false) |
+    select(.running == true) |
+    select(.node != "") |
+    select(.ready == true)
   ] | length == 1)
-' >/dev/null 2>&1 <<<"$loki_pods_json" || {
+' >/dev/null 2>&1 <<<"$loki_pods_projection" || {
   echo 'Loki does not have exactly one Ready pod.' >&2
   exit 1
 }
@@ -176,14 +203,14 @@ loki_statefulset_uid="$(yq -r '.metadata.uid // ""' <<<"$loki_statefulset_json")
 }
 STS_NAME="$loki_statefulset_name" STS_UID="$loki_statefulset_uid" yq -e '
   [
-    .items[0].metadata.ownerReferences[]? |
-    select(.apiVersion == "apps/v1") |
+    (.pods[0].owners // [])[] |
+    select(.api_version == "apps/v1") |
     select(.kind == "StatefulSet") |
     select(.name == strenv(STS_NAME)) |
     select(.uid == strenv(STS_UID)) |
     select(.controller == true)
   ] | length == 1
-' >/dev/null 2>&1 <<<"$loki_pods_json" || {
+' >/dev/null 2>&1 <<<"$loki_pods_projection" || {
   echo 'Loki Ready pod is not controlled by the verified StatefulSet.' >&2
   exit 1
 }
@@ -193,11 +220,10 @@ mapfile -t loki_claim_template_names < <(
 )
 mapfile -t loki_pvc_mount_rows < <(
   yq -r '
-    .items[0].spec.volumes[]? |
-    select((.persistentVolumeClaim.claimName // "") != "") |
-    [(.name // ""), .persistentVolumeClaim.claimName] |
+    (.pods[0].mounts // [])[] |
+    [.name, .claim] |
     @tsv
-  ' <<<"$loki_pods_json"
+  ' <<<"$loki_pods_projection"
 )
 [[ "${#loki_claim_template_names[@]}" -eq 1 &&
   "${#loki_pvc_mount_rows[@]}" -eq 1 ]] || {
@@ -212,64 +238,73 @@ IFS=$'\t' read -r loki_pvc_volume_name loki_pvc \
   exit 1
 }
 
-pvc_json="$("${kc[@]}" --namespace "$ns" get pvc --output json)"
+pvc_file="$temp_dir/pvc.json"
+"${kc[@]}" --namespace "$ns" get pvc --output json >"$pvc_file"
+pvc_projection="$(python scripts/verify/logging_projection.py \
+  --kind storage --input "$pvc_file" 2>/dev/null)" || {
+  echo 'The mounted Loki claim does not resolve to exactly one current PVC; found 0.' >&2
+  exit 1
+}
 pvc_match_count="$(PVC_NAME="$loki_pvc" yq -r '
   [
-    .items[]? |
-    select(.metadata.name == strenv(PVC_NAME)) |
-    select((.metadata.deletionTimestamp // "") == "")
+    .claims[]? |
+    select(.name == strenv(PVC_NAME)) |
+    select(.deleting == false)
   ] | length
-' <<<"$pvc_json")"
+' <<<"$pvc_projection")"
 [[ "$pvc_match_count" == '1' ]] || {
   echo "The mounted Loki claim does not resolve to exactly one current PVC; found $pvc_match_count." >&2
   exit 1
 }
 mounted_pvc_recurring_labels="$(PVC_NAME="$loki_pvc" yq -r '
   [
-    .items[] |
-    select(.metadata.name == strenv(PVC_NAME)) |
-    (.metadata.labels // {}) | to_entries[] |
-    select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/")) |
-    "\(.key)=\(.value)"
-  ] | sort | join(",")
-' <<<"$pvc_json")"
+    .claims[] |
+    select(.name == strenv(PVC_NAME)) |
+    .recurring_labels[]
+  ] | join(",")
+' <<<"$pvc_projection")"
 [[ "$mounted_pvc_recurring_labels" == \
   'recurring-job.longhorn.io/loki-filesystem-trim=enabled,recurring-job.longhorn.io/source=enabled' ]] || {
   echo 'The mounted Loki claim does not have the exact recurring-job intent labels.' >&2
   exit 1
 }
 pvc_phase="$(PVC_NAME="$loki_pvc" yq -r '
-  .items[] | select(.metadata.name == strenv(PVC_NAME)) | .status.phase // ""
-' <<<"$pvc_json")"
+  .claims[] | select(.name == strenv(PVC_NAME)) | .phase
+' <<<"$pvc_projection")"
 [[ "$pvc_phase" == 'Bound' ]] || {
   echo 'The selected Loki claim is not Bound.' >&2
   exit 1
 }
 pvc_request="$(PVC_NAME="$loki_pvc" yq -r '
-  .items[] | select(.metadata.name == strenv(PVC_NAME)) |
-  .spec.resources.requests.storage // ""
-' <<<"$pvc_json")"
+  .claims[] | select(.name == strenv(PVC_NAME)) | .request
+' <<<"$pvc_projection")"
 [[ "$pvc_request" == '50Gi' ]] || {
   echo 'The selected Loki claim does not request 50 GiB.' >&2
   exit 1
 }
 pv_name="$(PVC_NAME="$loki_pvc" yq -r '
-  .items[] | select(.metadata.name == strenv(PVC_NAME)) | .spec.volumeName // ""
-' <<<"$pvc_json")"
+  .claims[] | select(.name == strenv(PVC_NAME)) | .volume_name
+' <<<"$pvc_projection")"
 [[ -n "$pv_name" ]] || {
   echo 'The bound Loki claim has no PersistentVolume identity.' >&2
   exit 1
 }
-longhorn_volumes_json="$("${kc[@]}" --namespace "$longhorn_ns" \
-  get volumes.longhorn.io --output json)"
+longhorn_volumes_file="$temp_dir/longhorn-volumes.json"
+"${kc[@]}" --namespace "$longhorn_ns" get volumes.longhorn.io --output json \
+  >"$longhorn_volumes_file"
+longhorn_volumes_projection="$(python scripts/verify/logging_projection.py \
+  --kind storage --input "$longhorn_volumes_file" 2>/dev/null)" || {
+  echo 'Expected exactly one actual Longhorn Volume with complete bound-claim identity; found 0.' >&2
+  exit 1
+}
 mapfile -t matching_longhorn_volumes < <(
   PV_NAME="$pv_name" PVC_NAME="$loki_pvc" PVC_NAMESPACE="$ns" yq -r '
-    .items[]? |
-    select((.status.kubernetesStatus.pvName // "") == strenv(PV_NAME)) |
-    select((.status.kubernetesStatus.pvcName // "") == strenv(PVC_NAME)) |
-    select((.status.kubernetesStatus.namespace // "") == strenv(PVC_NAMESPACE)) |
-    .metadata.name
-  ' <<<"$longhorn_volumes_json"
+    .volumes[]? |
+    select(.pv_name == strenv(PV_NAME)) |
+    select(.pvc_name == strenv(PVC_NAME)) |
+    select(.namespace == strenv(PVC_NAMESPACE)) |
+    .name
+  ' <<<"$longhorn_volumes_projection"
 )
 [[ "${#matching_longhorn_volumes[@]}" -eq 1 ]] || {
   echo "Expected exactly one actual Longhorn Volume with complete bound-claim identity; found ${#matching_longhorn_volumes[@]}." >&2
@@ -278,19 +313,17 @@ mapfile -t matching_longhorn_volumes < <(
 longhorn_volume="${matching_longhorn_volumes[0]}"
 
 trim_label='recurring-job.longhorn.io/loki-filesystem-trim'
-volume_json=''
+volume_projection=''
+volume_file="$temp_dir/longhorn-volume.json"
 volume_labels_synchronized=false
 for _ in {1..30}; do
-  if volume_json="$("${kc[@]}" --namespace "$longhorn_ns" \
-    get volumes.longhorn.io "$longhorn_volume" --output json 2>/dev/null)" && \
+  if "${kc[@]}" --namespace "$longhorn_ns" \
+    get volumes.longhorn.io "$longhorn_volume" --output json >"$volume_file" 2>/dev/null && \
+    volume_projection="$(python scripts/verify/logging_projection.py \
+      --kind storage --input "$volume_file" 2>/dev/null)" && \
     TRIM_LABEL="$trim_label" yq -e '
-      [
-        (.metadata.labels // {}) | to_entries[] |
-        select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/")) |
-        "\(.key)=\(.value)"
-      ] |
-      sort == ["\(strenv(TRIM_LABEL))=enabled"]
-    ' >/dev/null 2>&1 <<<"$volume_json"; then
+      (.recurring_labels | join(",")) == "\(strenv(TRIM_LABEL))=enabled"
+    ' >/dev/null 2>&1 <<<"$volume_projection"; then
     volume_labels_synchronized=true
     break
   fi
@@ -298,8 +331,8 @@ for _ in {1..30}; do
 done
 if [[ "$volume_labels_synchronized" != 'true' ]] && ! \
   TRIM_LABEL="$trim_label" yq -e '
-    (.metadata.labels // {})[strenv(TRIM_LABEL)] == "enabled"
-  ' >/dev/null 2>&1 <<<"$volume_json"; then
+    .recurring_labels[]? | select(. == "\(strenv(TRIM_LABEL))=enabled")
+  ' >/dev/null 2>&1 <<<"$volume_projection"; then
   echo 'Actual Longhorn Volume does not have the required filesystem-trim assignment after synchronization retries.' >&2
   exit 1
 fi
@@ -309,22 +342,16 @@ for forbidden_label in \
   'recurring-job.longhorn.io/daily-snapshot' \
   'recurring-job.longhorn.io/daily-backup'; do
   if LABEL_KEY="$forbidden_label" yq -e '
-    (.metadata.labels // {}) | has(strenv(LABEL_KEY))
-  ' >/dev/null 2>&1 <<<"$volume_json"; then
+    .recurring_labels[]? | select((split("=")[0]) == strenv(LABEL_KEY))
+  ' >/dev/null 2>&1 <<<"$volume_projection"; then
     echo "Actual Longhorn Volume has forbidden recurring-job assignment $forbidden_label." >&2
     exit 1
   fi
 done
 
 actual_recurring_labels="$(yq -r '
-  [
-    (.metadata.labels // {}) | to_entries[] |
-    select(.key | test("^recurring-job(-group)?\\.longhorn\\.io/")) |
-    "\(.key)=\(.value)"
-  ] |
-  sort |
-  join(",")
-' <<<"$volume_json")"
+  .recurring_labels | join(",")
+' <<<"$volume_projection")"
 [[ "$actual_recurring_labels" == "$trim_label=enabled" ]] || {
   echo 'Actual Longhorn Volume has an unexpected recurring-job assignment after synchronization retries.' >&2
   exit 1
@@ -337,26 +364,6 @@ trim_task="$("${kc[@]}" --namespace "$longhorn_ns" \
   echo 'RecurringJob loki-filesystem-trim is not a filesystem-trim job.' >&2
   exit 1
 }
-
-temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/logging-verify.XXXXXX")"
-loki_pf_pid=''
-prometheus_pf_pid=''
-cleanup() {
-  local status="$?"
-  trap - EXIT INT TERM HUP
-  for pid in "$loki_pf_pid" "$prometheus_pf_pid"; do
-    [[ -n "$pid" ]] || continue
-    kill "$pid" 2>/dev/null || true
-  done
-  for pid in "$loki_pf_pid" "$prometheus_pf_pid"; do
-    [[ -n "$pid" ]] || continue
-    wait "$pid" 2>/dev/null || true
-  done
-  rm -rf -- "$temp_dir"
-  exit "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT TERM HUP
 
 start_port_forward() {
   local service_name="$1"
@@ -412,26 +419,26 @@ done
 # Loki 3.6.11 publishes the resolved per-tenant limits at this endpoint. The
 # prometheus/common duration serializer reports 336h canonically as 2w. Checking this
 # surface, rather than only the rendered ConfigMap, includes any runtime override.
-runtime_limits_response=''
-if ! runtime_limits_response="$(curl --silent --show-error --fail --max-time 20 \
+runtime_limits_file="$temp_dir/runtime-limits.json"
+if ! curl --silent --show-error --fail --max-time 20 \
   --header 'X-Scope-OrgID: fake' \
-  "$loki_base_url/config/tenant/v1/limits")"; then
+  "$loki_base_url/config/tenant/v1/limits" >"$runtime_limits_file"; then
   echo 'Loki effective runtime limits endpoint was unavailable.' >&2
   exit 1
 fi
-yq -e '
-  (. | type == "!!map") and
-  .retention_period == "2w" and
-  (((.retention_stream // []) | type) == "!!seq" and
-    ((.retention_stream // []) | length) == 0)
-' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+runtime_limits_projection="$(python scripts/verify/logging_projection.py \
+  --kind runtime-limits --input "$runtime_limits_file" 2>/dev/null)" || {
   echo 'Loki effective runtime retention is not exactly 336h with no stream override.' >&2
   exit 1
 }
 yq -e '
-  ((.discover_service_name | type) == "!!seq") and
-  (.discover_service_name | length) == 0
-' >/dev/null 2>&1 <<<"$runtime_limits_response" || {
+  .retention_period == "2w" and .retention_stream_count == 0
+' >/dev/null 2>&1 <<<"$runtime_limits_projection" || {
+  echo 'Loki effective runtime retention is not exactly 336h with no stream override.' >&2
+  exit 1
+}
+yq -e '.discover_service_name_disabled == true' >/dev/null 2>&1 \
+  <<<"$runtime_limits_projection" || {
   echo 'Loki effective runtime service-name discovery is not disabled.' >&2
   exit 1
 }
@@ -439,16 +446,19 @@ yq -e '
 # Disabled stream sharding is omitted from the tenant-limits response. Loki's resolved
 # configuration endpoint retains the explicit false value and proves what the process
 # loaded after chart rendering and rollout.
-runtime_config_response=''
-if ! runtime_config_response="$(curl --silent --show-error --fail --max-time 20 \
-  "$loki_base_url/config?mode=diffs")"; then
+runtime_config_file="$temp_dir/runtime-config.json"
+if ! curl --silent --show-error --fail --max-time 20 \
+  "$loki_base_url/config?mode=diffs" >"$runtime_config_file"; then
   echo 'Loki resolved runtime configuration endpoint was unavailable.' >&2
   exit 1
 fi
-yq -e '
-  ((.limits_config.shard_streams | type) == "!!map") and
-  (.limits_config.shard_streams.enabled == false)
-' >/dev/null 2>&1 <<<"$runtime_config_response" || {
+runtime_config_projection="$(python scripts/verify/logging_projection.py \
+  --kind runtime-limits --input "$runtime_config_file" 2>/dev/null)" || {
+  echo 'Loki effective runtime automatic stream sharding is not disabled.' >&2
+  exit 1
+}
+yq -e '.shard_streams_enabled == false' >/dev/null 2>&1 \
+  <<<"$runtime_config_projection" || {
   echo 'Loki effective runtime automatic stream sharding is not disabled.' >&2
   exit 1
 }
@@ -460,27 +470,24 @@ verify_exact_label_names() {
   local selector="$1"
   local description="$2"
   local expected_csv="$3"
-  local response actual_csv
+  local response_file projection actual_csv
 
-  if ! response="$(curl --silent --show-error --fail --max-time 20 \
+  response_file="$temp_dir/labels.json"
+  if ! curl --silent --show-error --fail --max-time 20 \
     --get \
     --data-urlencode "start=${start_seconds}000000000" \
     --data-urlencode "end=${end_seconds}000000000" \
     --data-urlencode "query=$selector" \
-    "$loki_base_url/loki/api/v1/labels")"; then
+    "$loki_base_url/loki/api/v1/labels" >"$response_file"; then
     echo "$description label-name API request failed." >&2
     return 1
   fi
-  yq -e '
-    .status == "success" and
-    ((.data | type) == "!!seq" and (.data | length) > 0) and
-    ([.data[] | select(type != "!!str" or length == 0)] | length == 0) and
-    (.data | length) == (.data | unique | length)
-  ' >/dev/null 2>&1 <<<"$response" || {
+  projection="$(python scripts/verify/logging_projection.py \
+    --kind labels --input "$response_file" 2>/dev/null)" || {
     echo "$description label-name API response is malformed." >&2
     return 1
   }
-  actual_csv="$(yq -r '.data | sort | join(",")' <<<"$response")"
+  actual_csv="$(yq -r '.labels | join(",")' <<<"$projection")"
   [[ "$actual_csv" == "$expected_csv" ]] || {
     echo "$description indexed-label names do not exactly match the approved set." >&2
     return 1
@@ -502,17 +509,15 @@ verify_exact_label_names \
 
 loki_count_nonzero() {
   local selector="$1"
-  local response
-  response="$(curl --silent --show-error --fail --max-time 20 \
+  local response_file projection
+  response_file="$temp_dir/count.json"
+  curl --silent --show-error --fail --max-time 20 \
     --get \
     --data-urlencode "query=sum(count_over_time(${selector}[30m]))" \
-    "$loki_base_url/loki/api/v1/query" 2>/dev/null)" || return 1
-  yq -e '
-    .status == "success" and
-    .data.resultType == "vector" and
-    (.data.result | length == 1) and
-    ((.data.result[0].value[1] | tonumber) > 0)
-  ' >/dev/null 2>&1 <<<"$response"
+    "$loki_base_url/loki/api/v1/query" >"$response_file" 2>/dev/null || return 1
+  projection="$(python scripts/verify/logging_projection.py \
+    --kind counts --input "$response_file" 2>/dev/null)" || return 1
+  yq -e '.count > 0' >/dev/null 2>&1 <<<"$projection"
 }
 
 count_selectors=(
@@ -550,11 +555,11 @@ fi
 
 prometheus_base_url="http://127.0.0.1:$prometheus_port"
 prometheus_resolve="127.0.0.1:${prometheus_port}:127.0.0.1"
-targets_response="$(
-  flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
-    '/api/v1/targets?state=active'
-)"
-[[ "$(yq -r '.status // ""' <<<"$targets_response")" == 'success' ]] || {
+targets_file="$temp_dir/targets.json"
+flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
+  '/api/v1/targets?state=active' >"$targets_file"
+targets_projection="$(python scripts/verify/logging_projection.py \
+  --kind targets --input "$targets_file" 2>/dev/null)" || {
   echo 'Prometheus targets API did not return status=success.' >&2
   exit 1
 }
@@ -575,17 +580,14 @@ for service_name in loki alloy-logs alloy-events; do
   mapfile -t exact_target_rows < <(
     SERVICE_NAME="$service_name" SCRAPE_POOL="$scrape_pool" \
       PROMETHEUS_JOB="$prometheus_job" yq -r '
-        .data.activeTargets[]? |
-        select((.scrapePool // "") == strenv(SCRAPE_POOL)) |
-        select(
-          (.discoveredLabels.__meta_kubernetes_service_name // "") ==
-          strenv(SERVICE_NAME)
-        ) |
-        select((.labels.service // "") == strenv(SERVICE_NAME)) |
-        select((.labels.job // "") == strenv(PROMETHEUS_JOB)) |
-        [(.health // "unknown"), (.lastError // "")] |
+        .targets[]? |
+        select(.scrape_pool == strenv(SCRAPE_POOL)) |
+        select(.service_name == strenv(SERVICE_NAME)) |
+        select(.service == strenv(SERVICE_NAME)) |
+        select(.job == strenv(PROMETHEUS_JOB)) |
+        [.health, .last_error] |
         @tsv
-      ' <<<"$targets_response"
+      ' <<<"$targets_projection"
   )
   target_noun='targets'
   [[ "$expected_target_count" -ne 1 ]] || target_noun='target'
@@ -603,21 +605,19 @@ for service_name in loki alloy-logs alloy-events; do
 done
 
 compaction_query='time() - loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}'
-compaction_response=''
-if ! compaction_response="$(flux_alerts_prometheus_query \
-  "$prometheus_base_url" "$prometheus_resolve" "$compaction_query")"; then
+compaction_file="$temp_dir/compaction.json"
+if ! flux_alerts_prometheus_query \
+  "$prometheus_base_url" "$prometheus_resolve" "$compaction_query" >"$compaction_file"; then
   echo 'Prometheus compaction-freshness query failed.' >&2
   exit 1
 fi
-yq -e '
-  .status == "success" and
-  .data.resultType == "vector" and
-  (.data.result | length == 1) and
-  ((.data.result[0].value | type) == "!!seq" and
-    (.data.result[0].value | length) == 2) and
-  ((.data.result[0].value[1] | tonumber) >= 0) and
-  ((.data.result[0].value[1] | tonumber) <= 10800)
-' >/dev/null 2>&1 <<<"$compaction_response" || {
+compaction_projection="$(python scripts/verify/logging_projection.py \
+  --kind compaction --input "$compaction_file" 2>/dev/null)" || {
+  echo 'Loki does not report exactly one fresh successful compaction timestamp.' >&2
+  exit 1
+}
+yq -e '.age_seconds >= 0 and .age_seconds <= 10800' >/dev/null 2>&1 \
+  <<<"$compaction_projection" || {
   echo 'Loki does not report exactly one fresh successful compaction timestamp.' >&2
   exit 1
 }
@@ -632,11 +632,11 @@ expected_rules=(
   LokiStorageUsageHigh
   LokiStorageUsageCritical
 )
-rules_response="$(
-  flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
-    '/api/v1/rules?type=alert'
-)"
-[[ "$(yq -r '.status // ""' <<<"$rules_response")" == 'success' ]] || {
+rules_file="$temp_dir/rules.json"
+flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
+  '/api/v1/rules?type=alert' >"$rules_file"
+rules_projection="$(python scripts/verify/logging_projection.py \
+  --kind rules --input "$rules_file" 2>/dev/null)" || {
   echo 'Prometheus rules API did not return status=success.' >&2
   exit 1
 }
@@ -644,11 +644,11 @@ expected_rules_csv="$(IFS=,; echo "${expected_rules[*]}")"
 mapfile -t logging_rule_rows < <(
   # shellcheck disable=SC2016  # $name is a yq expression variable.
   EXPECTED_RULES="$expected_rules_csv" yq -r '
-    .data.groups[]?.rules[]? |
+    .rules[]? |
     select(.name as $name | (strenv(EXPECTED_RULES) | split(",") | contains([$name]))) |
-    [.name, (.health // "unknown"), (.lastError // "")] |
+    [.name, .health, .last_error] |
     @tsv
-  ' <<<"$rules_response"
+  ' <<<"$rules_projection"
 )
 [[ "${#logging_rule_rows[@]}" -eq "${#expected_rules[@]}" ]] || {
   echo "Prometheus has not loaded all ${#expected_rules[@]} logging alert rules." >&2

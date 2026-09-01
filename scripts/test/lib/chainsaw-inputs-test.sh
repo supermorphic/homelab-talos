@@ -234,6 +234,7 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
+
 for expected_case in \
 	scripts/test/lib/chainsaw-inputs-test.sh \
 	scripts/test/run-native-junit-validator-test.sh; do
@@ -246,6 +247,25 @@ for expected_case in \
 		exit 1
 	}
 done
+
+for projection_source in \
+	scripts/verify/logging_projection.py \
+	scripts/verify/test_logging_projection.py; do
+	for ruff_command in 'ruff check' 'ruff format --check'; do
+		projection_count="$(awk -v command="$ruff_command" -v source="$projection_source" '
+			$0 ~ command { in_command = 1; next }
+			in_command && $0 ~ /^uv run --locked / { in_command = 0 }
+			in_command && index($0, source) { count++ }
+			END { print count + 0 }
+		' "$validator")"
+		[[ "$projection_count" -eq 1 ]] || {
+			echo "$projection_source must appear exactly once in $ruff_command." >&2
+			exit 1
+		}
+	done
+done
+[[ "$(rg -c -F -- "--start-directory scripts/verify" "$validator")" -eq 1 ]]
+[[ "$(rg -c -F -- "--pattern 'test_logging_projection.py'" "$validator")" -eq 1 ]]
 
 : >"$chainsaw_log"
 : >"$yq_log"
