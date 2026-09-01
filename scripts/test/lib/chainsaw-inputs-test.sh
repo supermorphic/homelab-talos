@@ -11,8 +11,9 @@ trap 'rm -rf -- "$fixture_root"' EXIT
 # The production change that must make this assertion fail is recording a literal
 # JUnit duration instead of the measured shell-case duration.
 run_shell_case_source="$(sed -n '/^run_shell_case() {/,/^}/p' "$validator")"
+case_duration_literal="\"\$case_duration\""
 [[ "$run_shell_case_source" == *'write_result_case_junit'* ]]
-[[ "$run_shell_case_source" == *'"$case_duration"'* ]]
+[[ "$run_shell_case_source" == *"$case_duration_literal"* ]]
 if rg -q '^[[:space:]]*0$' <<<"$run_shell_case_source"; then
 	echo 'Shell case JUnit results must not use a literal zero duration.' >&2
 	exit 1
