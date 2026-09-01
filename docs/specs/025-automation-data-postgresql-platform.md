@@ -124,7 +124,7 @@ private operator
       v
 dedicated n8n provisioning workflow
       |-- automation-data provisioner credential
-      |-- scoped n8n credential API key
+      |-- full-access Community-edition n8n API key
       |
       +--> automation-data-postgresql.automation-data.svc.cluster.local
       |       |-- platform control database
@@ -183,11 +183,24 @@ The platform has three operator-visible authority levels.
 
 The dedicated provisioning workflow uses a PostgreSQL login with the create-database and
 role-management authority needed to create and reconcile domains. It also uses an n8n API
-key limited to the credential operations needed for creation, update, and testing. These
-two credentials are referenced only by the dedicated private provisioning workflow.
-Normal domain workflows are configured only with their domain migrator or runtime
-credential. The design does not claim that n8n supplies a workflow-level cryptographic
-boundary around credentials available to the same authorized n8n project operator.
+key to create, find, update, and test n8n PostgreSQL credentials.
+
+The deployed chart has `license.enabled: false` and runs the self-hosted Community
+edition. n8n 2.36.7 supports API-key authentication and credential API operations, but
+n8n's documented narrow API-key scopes are an Enterprise feature. A Community-edition
+API key has the full resources and capabilities of its owning account. The implementation
+therefore treats this as a full-access n8n API key, not a credential-only key. The
+workflow uses only credential create, list, read, update, and test behavior, but that is a
+workflow contract rather than an enforceable key boundary.
+
+The PostgreSQL provisioner and full-access n8n API credentials are referenced only by the
+dedicated private provisioning workflow. Normal domain workflows are configured only
+with their domain migrator or runtime credential. The design does not claim that n8n
+supplies a workflow-level cryptographic boundary around credentials available to the
+same authorized n8n project operator. A compromise of the n8n API key can affect the
+complete n8n account as well as automation-data credentials. Private UI access, encrypted
+credential storage, local-only API calls, disabled execution persistence, and key
+rotation reduce exposure but do not reduce that authority.
 
 PostgreSQL cannot grant general database and role creation while cryptographically
 preventing every destructive statement available through related ownership authority.
@@ -197,9 +210,11 @@ private n8n access, no arbitrary platform SQL input, credential isolation, stric
 validation, disabled execution-data persistence, network policy, audit metadata, and a
 separate attended decommission boundary.
 
-Compromise of the provisioning credential can affect every automation-data domain. This
-is an accepted residual risk of using the direct n8n provisioning approach instead of a
-separate broker or PostgreSQL operator.
+Compromise of the PostgreSQL provisioning credential can affect every automation-data
+domain, and compromise of the n8n API key can affect the full n8n account. These are
+accepted residual risks of using the direct n8n provisioning approach instead of a
+separate broker or PostgreSQL operator. If a later licensed n8n edition enables scoped
+keys, the key should be reduced to the exact credential scopes after live verification.
 
 ### Domain migration
 
@@ -235,7 +250,9 @@ the stable `NOLOGIN` role across login-password rotation.
 The runtime role receives `CONNECT` only to its database, `USAGE` on approved application
 schemas, CRUD privileges on current tables and sequences, and matching default
 privileges for later owner-created objects. `PUBLIC` does not retain database-connect or
-schema-create authority that bypasses this model.
+schema-create authority that bypasses this model. `PUBLIC` also has no `CONNECT` authority
+on the platform control database. Domain owner, migrator, and runtime roles cannot connect
+to that database.
 
 The platform creates both n8n credentials automatically. It never returns a generated
 password to the operator. Domain credentials are stored only as PostgreSQL password
@@ -245,8 +262,8 @@ verifiers and n8n ciphertext.
 
 The secret-free workflow template is imported into the private n8n instance during
 platform bootstrap. Flux does not manage the live workflow or later domain workflows.
-The operator binds the PostgreSQL provisioning credential and scoped n8n credential API
-key once.
+The operator binds the PostgreSQL provisioning credential and full-access n8n API key
+once.
 
 The workflow accepts structured domain identifiers and supported operations. It does not
 accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
@@ -256,8 +273,10 @@ accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
 3. Compare the registry record with PostgreSQL catalogs.
 4. Create or reconcile the owner, migrator, and runtime roles.
 5. Create or reconcile the database, initial schema, grants, and default privileges.
-6. Generate migrator and runtime passwords.
-7. Create or update the corresponding encrypted n8n credentials through n8n's local API.
+6. For initial creation only, generate migrator and runtime passwords and create the
+   corresponding encrypted n8n credentials through n8n's local API.
+7. For an existing `ready` domain, retain both PostgreSQL password verifiers and both n8n
+   credential objects unchanged.
 8. Test authentication and verify the expected privilege matrix.
 9. Mark the registry record `ready` only after every required check succeeds.
 10. Return only non-secret object identifiers and validation results.
@@ -267,17 +286,22 @@ and n8n receive them. The workflow disables saved manual, successful, and failed
 execution data. Secret-bearing intermediate values do not appear in final outputs or
 logs.
 
-Provisioning never compensates for failure by dropping resources. A partial operation
-remains visible as `provisioning` or `error`. A retry reconciles the same canonical names
-and completes the operation. Backup and monitoring treat unresolved registry/catalog
-disagreement as unhealthy.
+Provisioning never compensates for failure by dropping resources. A partial initial
+creation remains visible as `provisioning` or `error`. Its retry may generate replacement
+credentials while the domain has never reached `ready`, because no completed credential
+contract exists yet. Once a domain reaches `ready`, ordinary provisioning and structural
+reconciliation never alter role passwords, rotate credentials, replace credential IDs,
+or update credential ciphertext. Missing login roles or n8n credentials on a `ready`
+domain are errors that require the explicit credential-repair or rotation operation;
+ordinary reconciliation does not silently replace them.
 
-Credential rotation changes one scoped login and its existing n8n credential, tests the
-result, and records completion. Rotation is convergent but not a distributed transaction.
-An interruption between the PostgreSQL and n8n updates can temporarily break that
-credential. Retrying generates another password and brings both sides back into
-agreement. The provisioning credential remains the recovery authority, so the absent
-plaintext password does not strand the domain.
+Credential rotation is an explicit operation separate from provision or reconcile. It
+changes one scoped login and its existing n8n credential, tests the result, and records
+completion. Rotation is convergent but not a distributed transaction. An interruption
+between the PostgreSQL and n8n updates can temporarily break that credential. Retrying
+generates another password and brings both sides back into agreement. The provisioning
+credential remains the recovery authority, so the absent plaintext password does not
+strand the domain.
 
 ## Destructive operations
 
@@ -326,9 +350,23 @@ than the n8n single-database backup role; that authority is never available to n
 workflows.
 
 At the start of one run, the backup job reads the PostgreSQL database catalog and the
-runtime managed-domain registry. It fails when those sources disagree or contain an
-incomplete provisioning state. It freezes the sorted managed database set for that
-bundle. The set is never read from Git.
+runtime managed-domain registry. The PostgreSQL catalog is the fail-safe source for the
+set of actual non-template databases: an unregistered or partially registered database
+is still included rather than silently omitted. The captured manifest also records every
+registry row and its state. The set is never read from Git.
+
+Active provisioning coordinates with backup through platform operation state and a
+bounded stability check. The backup captures the catalog and registry generation before
+dumping and checks them again before publication. A concurrent set change causes a
+bounded retry rather than publication against an ambiguous set. The backup waits only a
+bounded interval for a currently progressing operation; after that interval it captures
+the recoverable state that actually exists. A stable `error`, stale `provisioning`, or
+other incomplete registry record does not indefinitely block backup publication for
+healthy domains. If that record has a database, the database is dumped with the captured
+set; if it has no database yet, its recoverable metadata is preserved in the platform
+control database and any created roles are preserved in the globals dump.
+Registry/catalog disagreement remains an alerting and repair condition, not an automatic
+reason to discard an otherwise complete recoverable bundle.
 
 One successful backup performs these steps:
 
@@ -342,10 +380,12 @@ One successful backup performs these steps:
    dump.
 6. Inspect every database archive with `pg_restore`, calculate checksums for every
    artifact, and write a manifest containing the captured set and artifact metadata.
-7. Rename the complete bundle to its final name on the same filesystem.
-8. Recheck the published artifacts and update the operational freshness row only after
+7. Re-read the catalog and registry generation; retry the run when the captured database
+   set changed during backup.
+8. Rename the complete bundle to its final name on the same filesystem.
+9. Recheck the published artifacts and update the operational freshness row only after
    final validation.
-9. Retain the newest seven complete bundles and remove incomplete temporary artifacts.
+10. Retain the newest seven complete bundles and remove incomplete temporary artifacts.
 
 The bundle is the retention and recovery unit. Individual files are never considered
 healthy or pruned independently. A Kubernetes Job success is diagnostic evidence, not
@@ -442,8 +482,8 @@ Rollout follows dependency order:
    through the guarded repository workflow.
 4. Reconcile PostgreSQL through Flux and verify storage, workload, exporter, and backup
    target health.
-5. Import the provisioning template into private n8n and bind its provisioning and
-   credential-API credentials.
+5. Import the provisioning template into private n8n and bind its PostgreSQL provisioner
+   and full-access Community-edition n8n API credentials.
 6. Provision a runtime acceptance domain through the workflow. It is not declared in
    Git.
 7. Run provisioning, permission, rotation, persistence, backup, and recovery acceptance.
@@ -471,7 +511,9 @@ contracts that those checks do not cover:
 - deterministic role and grant templates;
 - the provisioning workflow's fixed operation surface and absence of destructive
   database or role operations;
+- ordinary reconciliation's prohibition on password or n8n credential changes;
 - runtime backup discovery rather than a Git-managed database list;
+- recoverable backup publication when a stable incomplete or error record exists;
 - exact `pg_dumpall --globals-only` use and absence of `--no-role-passwords`;
 - atomic bundle publication and freshness ordering; and
 - the two approved monitoring signals.
@@ -499,20 +541,24 @@ Registered attended workflows prove:
 1. Flux reconciles the private PostgreSQL service and monitoring resources.
 2. n8n provisions a new domain without a repository, SOPS, Flux, or NetworkPolicy
    change.
-3. Repeating the same request reconciles the domain without duplication.
+3. Repeating an unchanged request reconciles the domain without duplication and without
+   changing role password verifiers, n8n credential IDs, or n8n credential update state.
 4. The owner is `NOLOGIN`, and the migrator can explicitly assume it for reviewed DDL.
 5. The migrator can create, alter, and drop a test table only inside its database.
 6. The runtime credential performs expected CRUD but cannot perform DDL, assume the owner
    role, manage roles, or access another domain database.
-7. Credential rotation restores a working n8n connection without operator knowledge of
+7. Neither the migrator nor runtime role can connect to the platform control database.
+8. Credential rotation restores a working n8n connection without operator knowledge of
    the generated password.
-8. A logical backup publishes one complete globals-plus-databases bundle and advances
+9. A stable incomplete or error provisioning record does not prevent a complete backup
+   of every actual database in the captured catalog set.
+10. A logical backup publishes one complete globals-plus-databases bundle and advances
    freshness only after final validation.
-9. The isolated full-chain drill restores n8n with its encryption key, restores
+11. The isolated full-chain drill restores n8n with its encryption key, restores
    automation-data globals and databases, and proves restored n8n credentials authenticate
    against restored role password verifiers.
-10. The restored instance creates and validates a fresh post-recovery backup.
-11. All temporary resources are removed and their absence is verified.
+12. The restored instance creates and validates a fresh post-recovery backup.
+13. All temporary resources are removed and their absence is verified.
 
 Provisioning, rotation, privilege enforcement, backup generation, and the restore drill
 remain live acceptance because static or synthetic CI checks cannot reproduce their
@@ -570,6 +616,7 @@ runbook, validation commands, and observed live acceptance result.
 - [PostgreSQL 17 `pg_dumpall`](https://www.postgresql.org/docs/17/app-pg-dumpall.html)
 - [PostgreSQL 17 SQL dump backup](https://www.postgresql.org/docs/17/backup-dump.html)
 - [PostgreSQL 17 database roles](https://www.postgresql.org/docs/17/database-roles.html)
+- [n8n API authentication and edition-specific scopes](https://docs.n8n.io/api/authentication/)
 - [n8n 2.36.7 credential API](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/public-api/v1/handlers/credentials/credentials.handler.ts)
 - [n8n workflow automation platform specification](023-n8n-workflow-automation-platform.md)
 - [CI runtime and merge-throughput specification](024-ci-runtime-and-merge-throughput-optimization.md)
