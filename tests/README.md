@@ -31,11 +31,24 @@ confirmation, evidence, cleanup, and recovery controls.
 
 `mise exec -- just test validate` is the complete cluster-independent command in
 this module. It validates `catalog.yaml`, lints Chainsaw configuration and tests,
-parses their YAML assets, runs ShellCheck over `scripts/test/` and
-`tests/probes/`, executes the shell unit-test suites, and runs Python unit tests
-via `uv run --locked python -m unittest`. It deliberately uses a nonexistent
-kubeconfig and unsets SOPS age-key variables. `mise exec -- just test
-catalog-validate` runs only the catalog checks.
+parses their YAML assets, validates the canonical repository shell source set,
+executes the shell unit-test suites, and runs Python unit tests via `uv run
+--locked python -m unittest`. It deliberately uses a nonexistent kubeconfig and
+unsets SOPS age-key variables. `mise exec -- just test catalog-validate` runs
+only the catalog checks.
+
+Repository validation owns Bash syntax and one batched machine-readable
+ShellCheck execution. The historical audit count of 166 shell files is audit
+history, not a fixed contract. The current sorted set is derived independently
+from tracked and unignored `.sh` files under the repository shell directories,
+including `scripts/talos` and current shell files added by the 023c work. Bash
+checks run first and stop at the first exact file and stderr failure; ShellCheck
+runs only after Bash passes. During one full CI run, the harness reuses only the
+matching passed repository artifact and does not emit a duplicate JUnit
+fragment. A standalone harness run, or any missing, failed, stale, malformed,
+truncated, schema-invalid, status-inconsistent, or corrupt artifact, always
+recomputes the complete canonical validation and writes its harness JUnit
+fragment when result fragments are enabled.
 
 For routine grouped execution and automatic Allure publication, use
 `mise exec -- just test campaign-plan <name>` followed by its printed
