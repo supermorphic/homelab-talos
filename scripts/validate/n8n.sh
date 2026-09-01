@@ -57,6 +57,8 @@ n8n_verification_lib='scripts/lib/n8n-verification.sh'
 n8n_verification_contract_test='scripts/test/n8n-verification-contract-test.sh'
 n8n_job_wait_lib='scripts/test/lib/job.sh'
 n8n_job_wait_test='scripts/test/n8n-job-wait-test.sh'
+n8n_restore_command_lib='scripts/test/lib/n8n-restore-command.sh'
+n8n_restore_command_test='scripts/test/n8n-restore-command-test.sh'
 n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
 n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
@@ -181,6 +183,7 @@ for file in "$monitoring_alerts_kustomization" "$n8n_alerts" "$n8n_alert_activat
 done
 for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
   "$n8n_job_wait_lib" "$n8n_job_wait_test" \
+  "$n8n_restore_command_lib" "$n8n_restore_command_test" \
   "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
   "$n8n_operations" "$n8n_recovery" "$catalog" "$bootstrap_just" \
   "$kubernetes_just"; do
@@ -414,6 +417,10 @@ bash "$n8n_job_wait_test" >/dev/null || {
   echo 'The n8n assurance Job terminal-state fixtures failed.' >&2
   exit 1
 }
+bash "$n8n_restore_command_test" >/dev/null || {
+  echo 'The n8n restore command stage diagnostics failed.' >&2
+  exit 1
+}
 if rg -Fq 'wait --for=condition=Complete' "$n8n_restore_drill" "$n8n_persistence"; then
   echo 'n8n assurance Jobs must stop on both Complete and Failed terminal conditions.' >&2
   exit 1
@@ -562,8 +569,15 @@ if rg -n 'kubectl[^\n]*(get|describe)[^\n]*secrets?|"kind": "HTTPRoute"|kubectl[
 fi
 # shellcheck disable=SC2016 # These are literal recovery-source markers.
 for marker in 'LC_ALL=C sort -r' 'sha256sum -c' 'pg_restore --list' \
-  'pg_restore --dbname=' 'credentialDecryptionProvedByAuthenticatedCanary' \
-  'dropdb --if-exists --force' 'write_phase cleanup failed' \
+  'pg_restore --dbname=' 'dropdb --if-exists --force'; do
+  rg -Fq "$marker" "$n8n_restore_command_lib" || {
+    echo "n8n restore command safety invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+# shellcheck disable=SC2016 # These are literal recovery-source markers.
+for marker in 'credentialDecryptionProvedByAuthenticatedCanary' \
+  'write_phase cleanup failed' \
   'automation_policy="$resource_prefix-automation"' \
   'request_policy="$resource_prefix-request"' \
   'policy_manifest | "${k_cluster[@]}" create --filename -' \
@@ -575,11 +589,12 @@ for marker in 'LC_ALL=C sort -r' 'sha256sum -c' 'pg_restore --list' \
     exit 1
   }
 done
-! rg -Fq 'sha256sum --check' "$n8n_restore_drill" || {
+! rg -Fq 'sha256sum --check' "$n8n_restore_command_lib" || {
   echo 'The Alpine restore container must not use GNU-only sha256sum options.' >&2
   exit 1
 }
-if rg -n 'SELECT[[:space:]]+([^;]*\.)?data\b|credential\.data' "$n8n_restore_drill"; then
+if rg -n 'SELECT[[:space:]]+([^;]*\.)?data\b|credential\.data' \
+  "$n8n_restore_command_lib" "$n8n_restore_drill"; then
   echo 'The n8n restore drill selects credential ciphertext.' >&2
   exit 1
 fi
@@ -605,9 +620,11 @@ done
 bash -n "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
   "$n8n_persistence" "$n8n_restore_drill"
 shellcheck --external-sources "$n8n_verifier" "$n8n_verification_lib" \
-  "$n8n_verification_contract_test" "$n8n_persistence" "$n8n_restore_drill"
+  "$n8n_verification_contract_test" "$n8n_job_wait_lib" "$n8n_job_wait_test" \
+  "$n8n_restore_command_lib" "$n8n_restore_command_test" \
+  "$n8n_persistence" "$n8n_restore_drill"
 for file in "$n8n_verifier" "$n8n_verification_contract_test" "$n8n_persistence" \
-  "$n8n_restore_drill"; do
+  "$n8n_job_wait_test" "$n8n_restore_command_test" "$n8n_restore_drill"; do
   [[ -x "$file" ]] || { echo "n8n operations script is not executable: $file" >&2; exit 1; }
 done
 
@@ -631,6 +648,8 @@ sed -n '/^job_manifest()/,/^}/p' "$n8n_persistence" \
 sed -n '/^policy_manifest()/,/^}/p; /^database_job_manifest()/,/^}/p; /^application_manifests()/,/^}/p; /^request_job_manifest()/,/^}/p' \
   "$n8n_restore_drill" >"$temp_dir/restore-manifest-functions.sh"
 (
+  # shellcheck disable=SC1090,SC1091 # Validated source and generated named functions.
+  source "$n8n_restore_command_lib"
   # shellcheck disable=SC1091 # Generated from named functions in validated source.
   source "$temp_dir/restore-manifest-functions.sh"
   deployment='n8n-restore-0123456789ab'
