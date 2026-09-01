@@ -2,3 +2,7 @@
 title: "Homelab Dashboard"
 theme: dark
 iconStyle: theme
+layout:
+  - Media:
+  - "Monitoring & Testing":
+  - Platform:
