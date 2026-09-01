@@ -182,19 +182,7 @@ if [[ -n "$fragment_root" ]]; then
 else
 	uv run --locked python -m unittest discover -s scripts/test -p 'test_*.py'
 fi
-if [[ -n "$fragment_root" ]]; then
-	uv run --locked python scripts/test/junit_tools.py unittest \
-		--output "$fragment_root/python-logging-projection.xml" \
-		--suite validation.test-harness.logging-projection \
-		--start-directory scripts/verify \
-		--pattern 'test_logging_projection.py'
-else
-	uv run --locked python -m unittest discover -s scripts/verify \
-		-p 'test_logging_projection.py'
-fi
 uv run --locked ruff check \
-	scripts/verify/logging_projection.py \
-	scripts/verify/test_logging_projection.py \
 	scripts/repository/github_protection.py \
 	scripts/test/catalog_compatibility.py \
 	scripts/test/catalog_validator.py \
@@ -221,8 +209,6 @@ uv run --locked ruff check \
 	scripts/test/scenarios/test_resilience_controllers.py \
 	scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
 uv run --locked ruff format --check \
-	scripts/verify/logging_projection.py \
-	scripts/verify/test_logging_projection.py \
 	scripts/repository/github_protection.py \
 	scripts/test/catalog_compatibility.py \
 	scripts/test/catalog_validator.py \

@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 verifier="$repo_root/scripts/verify/logging.sh"
-real_python="$(command -v python)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/logging-verify-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -188,22 +187,22 @@ case " $* " in
   *' http://127.0.0.1:23100/ready '*) printf 'ready\n' ;;
   *' http://127.0.0.1:23100/config/tenant/v1/limits '*)
     case "$FAKE_LAYOUT" in
-      wrong-runtime-retention) printf '{"retention_period":"13d","retention_stream":[],"discover_service_name":[]}\n' ;;
-      malformed-runtime-retention) printf '{"retention_period":["not-a-duration"],"retention_stream":[],"discover_service_name":[]}\n' ;;
-      runtime-retention-stream-override) printf '{"retention_period":"2w","retention_stream":[{"selector":"{namespace=\\"short\\"}","priority":1,"period":"1d"}],"discover_service_name":[]}\n' ;;
-      runtime-discover-service-name-nonempty) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":["service"]}\n' ;;
-      runtime-discover-service-name-missing) printf '{"retention_period":"2w","retention_stream":[]}\n' ;;
-      runtime-discover-service-name-malformed) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":"service"}\n' ;;
-      *) printf '{"retention_period":"2w","retention_stream":[],"discover_service_name":[]}\n' ;;
+      wrong-runtime-retention) printf 'retention_period: 13d\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      malformed-runtime-retention) printf 'retention_period: [not-a-duration]\nretention_stream: []\ndiscover_service_name: []\n' ;;
+      runtime-retention-stream-override) printf 'retention_period: 2w\nretention_stream:\n  - selector: "{namespace=\\"short\\"}"\n    priority: 1\n    period: 1d\ndiscover_service_name: []\n' ;;
+      runtime-discover-service-name-nonempty) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: [service]\n' ;;
+      runtime-discover-service-name-missing) printf 'retention_period: 2w\nretention_stream: []\n' ;;
+      runtime-discover-service-name-malformed) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: service\n' ;;
+      *) printf 'retention_period: 2w\nretention_stream: []\ndiscover_service_name: []\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/config?mode=diffs '*)
     case "$FAKE_LAYOUT" in
       runtime-config-unavailable) exit 22 ;;
-      runtime-shard-streams-enabled) printf '{"limits_config":{"shard_streams":{"enabled":true}}}\n' ;;
-      runtime-shard-streams-missing) printf '{"limits_config":{}}\n' ;;
-      runtime-shard-streams-malformed) printf '{"limits_config":{"shard_streams":"disabled"}}\n' ;;
-      *) printf '{"limits_config":{"shard_streams":{"enabled":false}}}\n' ;;
+      runtime-shard-streams-enabled) printf 'limits_config:\n  shard_streams:\n    enabled: true\n' ;;
+      runtime-shard-streams-missing) printf 'limits_config: {}\n' ;;
+      runtime-shard-streams-malformed) printf 'limits_config:\n  shard_streams: disabled\n' ;;
+      *) printf 'limits_config:\n  shard_streams:\n    enabled: false\n' ;;
     esac
     ;;
   *' http://127.0.0.1:23100/loki/api/v1/labels '*)
@@ -316,20 +315,9 @@ esac
 EOF
 chmod +x "$fixture/bin/curl"
 
-cat >"$fixture/bin/python" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-printf 'python' >>"$FAKE_PYTHON_LOG"
-printf ' %s' "$@" >>"$FAKE_PYTHON_LOG"
-printf '\n' >>"$FAKE_PYTHON_LOG"
-exec "$REAL_PYTHON" "$@"
-EOF
-chmod +x "$fixture/bin/python"
-
 cat >"$fixture/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
-/bin/sleep 0.001
+exit 0
 EOF
 chmod +x "$fixture/bin/sleep"
 
@@ -338,14 +326,12 @@ run_case() {
   local case_root="$fixture/$layout" output status
   mkdir -p "$case_root"
   : >"$case_root/kubectl.log"; : >"$case_root/curl.log"; : >"$case_root/process.log"
-  : >"$case_root/python.log"
   output="$case_root/output"
 
   set +e
   PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
     FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
     FAKE_PROCESS_LOG="$case_root/process.log" \
-    FAKE_PYTHON_LOG="$case_root/python.log" REAL_PYTHON="$real_python" \
     "$verifier" "$fixture/kubeconfig" >"$output" 2>&1
   status="$?"
   set -e
@@ -382,7 +368,6 @@ if case_selected all-evidence-present; then
   rg -F -q -- '/config/tenant/v1/limits' "$fixture/all-evidence-present/curl.log"
   rg -F -q -- '/config?mode=diffs' "$fixture/all-evidence-present/curl.log"
   rg -F -q -- 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}' "$fixture/all-evidence-present/curl.log"
-  [[ "$(rg -c -- '--kind topology --input .*loki-statefulset\.json' "$fixture/all-evidence-present/python.log")" -eq 1 ]]
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/labels$' "$fixture/all-evidence-present/curl.log")" -eq 3 ]]
   [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/query$' "$fixture/all-evidence-present/curl.log")" -eq 4 ]]
   if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$|query=sum\(count_over_time\(\{source="talos",service!="kernel"\}' "$fixture/all-evidence-present/curl.log"; then
