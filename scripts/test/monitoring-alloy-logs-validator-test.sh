@@ -9,16 +9,17 @@ test_dir="$(mktemp -d "${TMPDIR:-/tmp}/monitoring-alloy-logs-validator-test.XXXX
 trap 'rm -rf -- "$test_dir"' EXIT
 
 tree_root="$test_dir/tree"
+template_root="$test_dir/template"
 config="$tree_root/kubernetes/apps/monitoring/alloy-logs/app/config.alloy"
 values="$tree_root/kubernetes/apps/monitoring/alloy-logs/app/values.yaml"
 
+source "$repo_root/scripts/test/lib/monitoring-fixtures.sh"
+monitoring_fixture_prepare "$repo_root" "$template_root" "$tree_root"
+
 reset_tree() {
-  rm -rf -- "$tree_root"
-  mkdir -p "$tree_root"
-  cp "$repo_root/.sops.yaml" "$tree_root/.sops.yaml"
-  cp -R "$repo_root/kubernetes" "$tree_root/kubernetes"
-  cp -R "$repo_root/scripts" "$tree_root/scripts"
-  cp -R "$repo_root/tests" "$tree_root/tests"
+  monitoring_fixture_reset "$template_root" "$tree_root" \
+    kubernetes/apps/monitoring/alloy-logs/app/config.alloy \
+    kubernetes/apps/monitoring/alloy-logs/app/values.yaml
 }
 
 run_validator() { (cd "$tree_root" && "$validator") 2>&1; }

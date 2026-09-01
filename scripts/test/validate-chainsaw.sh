@@ -119,6 +119,7 @@ run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
 run_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
 run_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 run_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
+run_shell_case monitoring-fixtures scripts/test/lib/monitoring-fixtures-test.sh
 run_shell_case monitoring-alloy-logs-validator \
 	scripts/test/monitoring-alloy-logs-validator-test.sh
 run_shell_case monitoring-loki-validator \
