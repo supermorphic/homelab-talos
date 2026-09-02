@@ -184,27 +184,40 @@ run_sentinel_job() {
 }
 
 canary_check() {
-  local correlation response_file curl_config
+  local correlation response_file curl_config attempt deadline remaining transfer_timeout
   correlation="n8n-persistence-$run_hash-$(date -u +%Y%m%dT%H%M%SZ)"
-  response_file="$tmp_dir/canary-response.json"
   curl_config="$tmp_dir/canary.curl"
   {
-    printf '%s\n' 'silent' 'show-error' 'fail' 'max-time = 30' 'request = "POST"'
-    printf '%s\n' 'retry = 12'
-    printf '%s\n' 'retry-all-errors'
-    printf '%s\n' 'retry-delay = 5'
-    printf '%s\n' 'retry-max-time = 90'
+    printf '%s\n' 'silent' 'show-error' 'fail' 'request = "POST"'
     printf 'resolve = "hooks.lab.supermorphic.com:443:%s"\n' "$HOMELAB_PUBLIC_GATEWAY_VIP"
     printf '%s\n' 'header = "Content-Type: application/json"'
     printf 'header = "X-Platform-Canary: %s"\n' "$token"
     printf 'data = "{\\"correlation\\":\\"%s\\"}"\n' "$correlation"
     printf '%s\n' 'url = "https://hooks.lab.supermorphic.com/webhook/platform-canary"'
-    printf 'output = "%s"\n' "$response_file"
   } >"$curl_config"
-  curl --config "$curl_config"
-  [[ "$(yq -r '.status // ""' "$response_file")" == 'ok' && \
-    "$(yq -r '.correlation // ""' "$response_file")" == "$correlation" && \
-    -n "$(yq -r '.executionId // ""' "$response_file")" ]]
+
+  deadline=$((SECONDS + 90))
+  for attempt in {1..13}; do
+    response_file="$tmp_dir/canary-response-$correlation-$attempt.json"
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || break
+    transfer_timeout=30
+    ((transfer_timeout <= remaining)) || transfer_timeout="$remaining"
+
+    if curl --config "$curl_config" --max-time "$transfer_timeout" --output "$response_file" && \
+      [[ "$(yq -r '.status // ""' "$response_file" 2>/dev/null)" == 'ok' && \
+        "$(yq -r '.correlation // ""' "$response_file" 2>/dev/null)" == "$correlation" && \
+        -n "$(yq -r '.executionId // ""' "$response_file" 2>/dev/null)" ]]; then
+      return 0
+    fi
+
+    remaining=$((deadline - SECONDS))
+    ((attempt < 13 && remaining > 5)) || break
+    sleep 5
+  done
+
+  echo 'The authenticated n8n canary did not return its exact response contract within 90 seconds.' >&2
+  return 1
 }
 
 backup_freshness_check() {
