@@ -8,6 +8,7 @@ resources:
   - ./persistentvolumeclaims.yaml
   - ./postgresql-credentials.sops.yaml
   - ./service.yaml
+  - ./servicemonitor.yaml
   - ./statefulset.yaml
 configMapGenerator:
   - name: automation-data-postgresql-init
@@ -18,6 +19,9 @@ configMapGenerator:
     files:
       - backup.sh=scripts/backup.sh
       - update-backup-status.sql=scripts/update-backup-status.sql
+  - name: automation-data-postgresql-sql-exporter
+    files:
+      - sql-exporter.yml
 generatorOptions:
   labels:
     reconcile.fluxcd.io/watch: Enabled

@@ -121,6 +121,43 @@ spec:
               mountPath: /var/run/postgresql
             - name: tmp
               mountPath: /tmp
+        - name: sql-exporter
+          image: burningalchemist/sql_exporter:0.24.6
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/config/sql-exporter.yml
+            - --web.listen-address=:9399
+          env:
+            - name: SQLEXPORTER_TARGET_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-credentials
+                  key: exporter-dsn
+          ports:
+            - name: metrics
+              containerPort: 9399
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+          volumeMounts:
+            - name: sql-exporter
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -131,5 +168,9 @@ spec:
             defaultMode: 0555
         - name: postgresql-run
           emptyDir: {}
+        - name: sql-exporter
+          configMap:
+            name: automation-data-postgresql-sql-exporter
+            defaultMode: 0444
         - name: tmp
           emptyDir: {}

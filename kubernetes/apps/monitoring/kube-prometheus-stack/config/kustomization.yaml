@@ -12,6 +12,13 @@ resources:
 # variable (auto-selects the default Prometheus datasource), so no datasource
 # substitution is needed.
 configMapGenerator:
+  - name: automation-data-postgresql-dashboard
+    files:
+      - dashboards/automation-data-postgresql.json
+    options:
+      labels:
+        app.kubernetes.io/name: automation-data-postgresql-dashboard
+        grafana_dashboard: "1"
   - name: n8n-postgresql-dashboard
     files:
       - dashboards/n8n-postgresql.json
