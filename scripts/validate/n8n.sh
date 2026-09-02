@@ -624,6 +624,7 @@ done
   exit 1
 }
 for marker in "printf '%s\\n' 'retry = 12'" \
+  "printf '%s\\n' 'retry-all-errors'" \
   "printf '%s\\n' 'retry-delay = 5'" \
   "printf '%s\\n' 'retry-max-time = 90'"; do
   rg -Fq "$marker" "$n8n_persistence" || {
