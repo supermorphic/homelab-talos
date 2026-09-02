@@ -8,15 +8,12 @@ harness to select settings before building FileFlows automation or changing prod
 media.
 
 The first quality sweep completed, but VMAF and HDR source-probe defects prevented a
-valid setting selection. Bounded diagnostics are now complete. Their accepted result
-supports one fresh quality sweep under the corrected evidence contract in this
-specification. No further anomaly diagnostic is required.
+valid setting selection. Bounded diagnostics corrected those evidence defects, and one
+fresh 144-row quality sweep then completed under the corrected contract.
 
-The retained harness now has one purpose: run the corrected 144-row quality evaluation
-and rank ICQ settings independently for AVC, VC-1, and HDR10. It does not select a
-setting automatically, authorize FileFlows deployment, or replace media. If the
-evaluation produces a usable setting, FileFlows implementation requires a later design
-and operator decision.
+The corrected run produced no qualifying setting for AVC, VC-1, or HDR10. This closes
+`qsv-hevc-icq-v1` as a no-go movie-compression strategy under the approved quality gate.
+It does not authorize FileFlows deployment, media replacement, or another ICQ run.
 
 ## Historical boundary
 
@@ -246,19 +243,61 @@ once and independently satisfies all of these conditions:
 
 Qualifying settings are ranked within each cohort by median clip-size reduction. Lower
 `global_quality` wins an exact reduction tie. Cohorts are independent: AVC or HDR10 can
-advance even if VC-1 has no admissible candidate. If the unresolved VC-1 frame continues
-to prevent a complete passing setting, VC-1 remains `no verdict` and those titles remain
-outside the selected strategy.
+advance even if VC-1 has no admissible candidate. An incomplete or scientifically
+unresolved cohort remains `no-verdict` when the missing answer could change whether a
+setting qualifies. A complete cohort is `no-go` when independent valid failures rule out
+every setting despite a separate unresolved measurement.
 
-The fresh quality run and candidate artifact move the evaluation from diagnostics to
+The fresh quality run and candidate artifact complete the move from diagnostics to
 encoding selection. They do not automatically choose a setting.
+
+## Terminal quality outcome
+
+Corrected quality run `20260830T234607Z-069d1e12` completed on `nuc1`. The authenticated
+result contains all 144 unique row identities and uses results schema version 3. Its
+results digest is
+`sha256:93fc25df1f3c30432acece0896cb3233a49d80300b9e365f95fbac2a30ebc07e`.
+The candidate artifact binds that digest and reports no objective candidate:
+
+| Cohort | Candidate result | Closest ICQ setting | Passing clips at that setting | Median reduction |
+| --- | --- | ---: | ---: | ---: |
+| AVC | `no-go` | 16 | 2 of 6 | 66.44% |
+| VC-1 | `no-go` | 16 | 0 of 3 | 54.74% |
+| HDR10 | `no-go` | 16 | 3 of 9 | 77.69% |
+
+All 144 rows selected ICQ, initialized QSV, passed output validation, and retained a
+bounded quality-evidence reference. Of those rows, 143 passed QSV proof with positive
+GPU work. One HDR10 row at ICQ 20 was invalid because its GPU-work evidence was zero.
+That isolated telemetry failure does not change the cohort result.
+
+The AVC result is not borderline. At ICQ 16, clean detail and dark clips passed, while
+clean motion and all three grain-heavy clips failed. Several failures were far below
+both VMAF thresholds. Higher settings reduced quality further: ICQ 18 through 22 still
+passed only two clips, ICQ 24 passed one, and ICQ 26 through 30 passed none.
+
+HDR10 also has no viable setting. At ICQ 16, six of nine clips failed. One high-motion
+clip contained exact-zero harmonic VMAF at every setting outside the closed correction
+list, but five other clips also failed at ICQ 16. The cohort therefore remains no-go
+without relying on that anomaly. ICQ 18 and 20 passed two clips, ICQ 22 passed one, and
+ICQ 24 through 30 passed none.
+
+VC-1 remains separate but reaches the same terminal result. The unresolved detail clip
+retained exact-zero VMAF at every setting. Independently, its dark clip missed the
+one-percent-low threshold at ICQ 16 and its motion clip failed both VMAF thresholds by
+large margins. Correcting or excluding the unresolved frame would not produce a
+qualifying setting.
+
+Because no complete cohort has an admissible candidate, reduction ranking cannot select
+a setting and visual review is not applicable. No further ICQ diagnostic or quality run
+is justified.
 
 ## Decision boundary
 
 Ranking produces evidence only. A complete cohort with no qualifying setting is
-`no-go`; an incomplete or scientifically unresolved cohort is `no-verdict`; a cohort
-with candidates is `eligible`. One cohort can advance while another does not. The
-evaluation stops after reporting these outcomes and the ranked candidates.
+`no-go`; an incomplete or outcome-determinative scientifically unresolved cohort is
+`no-verdict`; a cohort with candidates is `eligible`. One cohort can advance while
+another does not. The evaluation stops after reporting these outcomes and the ranked
+candidates.
 
 The harness does not perform visual finalist selection, x265 comparison, savings
 projection, Plex contention testing, or durable finalist publication. If the operator
@@ -315,13 +354,31 @@ Three controlled complete-validator runs took 78.25, 77.10, and 77.42 seconds. T
 inherited 894.01-second median. Final canonical `mise exec -- just ci` validation passed
 780 tests with no failures.
 
-## Current next action and exclusions
+## Closure and future strategy boundary
 
-The corrected harness and focused offline QA are implemented. After merge and natural
-Flux reconciliation, run one fresh preflight and one fresh 144-row quality evaluation.
-Use its authenticated results to rank ICQ settings for AVC and HDR10; keep VC-1 separate
-unless it produces complete valid evidence. Do not run another anomaly diagnostic.
+The corrected evaluation is complete. Do not implement `qsv-hevc-icq-v1` in FileFlows,
+relax its thresholds after the outcome, extend its setting range, or run another anomaly
+diagnostic. After this terminal reconciliation, specification 017 is the historical
+record for this strategy.
 
-This design does not relabel LA-ICQ evidence, change the encoder, add AV1, deploy
+Specification 024 recorded `encode-benchmark` as Active while this corrected evaluation
+was still pending. That statement is historical and does not authorize another run. The
+terminal result leaves the runnable harness pending a separate removal change under the
+repository lifecycle policy; retaining it temporarily does not create another evaluation
+stage.
+
+An eventual FileFlows encoder requires a new strategy decision and a new numbered
+specification. The recommended next investigation is a small, stop-early software x265
+evaluation over representative AVC and HDR10 clips. It must define quality and throughput
+gates before execution and expand to full-title operational evidence only if a candidate
+passes. A read-only QSV AV1 hardware and playback-client compatibility check may determine
+whether AV1 merits a separate evaluation; it does not itself authorize one. If no new
+strategy passes its predeclared gates, retain the original media.
+
+Only after a strategy produces an accepted encoder setting should a separate FileFlows
+implementation specification define deployment, library scope, scheduling, failure
+handling, rollback, validation, and media-replacement authority.
+
+This design does not relabel LA-ICQ evidence, add AV1 or x265 implementation, deploy
 FileFlows, replace media, alter Talos/Kubernetes/Cilium/GPU infrastructure, access TV or
 downloads data, or authorize unbounded live operations.
