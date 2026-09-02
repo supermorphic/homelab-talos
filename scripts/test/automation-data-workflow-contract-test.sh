@@ -3,15 +3,21 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json"
+recovery_workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json"
 kustomization="$repo_root/kubernetes/apps/automation/n8n/app/kustomization.yaml"
 
 [[ -f "$workflow" ]] || {
   echo 'The automation-data provisioning workflow template is missing.' >&2
   exit 1
 }
+[[ -f "$recovery_workflow" ]] || {
+  echo 'The automation-data recovery canary workflow template is missing.' >&2
+  exit 1
+}
 
 # Use the pinned YAML/JSON parser before the structural graph checks below.
 yq -p=json -o=json '.' "$workflow" >/dev/null
+yq -p=json -o=json '.' "$recovery_workflow" >/dev/null
 
 python - "$workflow" <<'PY'
 import json
@@ -215,12 +221,55 @@ for label in (
 print("automation-data workflow contract: PASS")
 PY
 
+python - "$recovery_workflow" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+workflow = json.loads(Path(sys.argv[1]).read_text())
+nodes = workflow.get("nodes", [])
+by_name = {node.get("name"): node for node in nodes}
+if workflow.get("name") != "Automation Data Recovery Canary" or workflow.get("active") is not False:
+    raise SystemExit("The recovery canary must be the inactive exact workflow.")
+settings = workflow.get("settings", {})
+if (
+    settings.get("saveDataErrorExecution") != "none"
+    or settings.get("saveDataSuccessExecution") != "none"
+    or settings.get("saveManualExecutions") is not False
+    or settings.get("saveExecutionProgress") is not False
+):
+    raise SystemExit("The recovery canary must not persist execution data.")
+webhook = by_name.get("Recovery Webhook", {}).get("parameters", {})
+if (
+    webhook.get("httpMethod") != "POST"
+    or webhook.get("path") != "automation-data-recovery-canary"
+    or webhook.get("authentication") != "headerAuth"
+):
+    raise SystemExit("The recovery canary webhook contract is not exact.")
+postgres = by_name.get("Test Restored Runtime Credential", {}).get("parameters", {})
+if postgres.get("query") != "SELECT current_database() AS database, current_user AS role;":
+    raise SystemExit("The recovery canary query is not the bounded identity query.")
+code = by_name.get("Bounded Recovery Response", {}).get("parameters", {}).get("jsCode", "")
+for value in ("status", "database", "role", "executionId", "issue317_acceptance_runtime"):
+    if value not in code:
+        raise SystemExit(f"The recovery response omits {value}.")
+serialized = json.dumps(workflow)
+if any("credentials" in node for node in nodes) or '"password"' in serialized.lower():
+    raise SystemExit("The recovery template embeds credential data or bindings.")
+notes = by_name.get("Recovery Setup", {}).get("parameters", {}).get("content", "")
+for value in ("Platform Canary Header", "automation-data/issue317_acceptance/runtime", "N8N_ENCRYPTION_KEY"):
+    if value not in notes:
+        raise SystemExit(f"The recovery setup note omits {value}.")
+PY
+
 mapfile -t packaged_workflows < <(
   yq -r '.configMapGenerator[] | select(.name == "n8n-workflow-templates") | .files[]' \
     "$kustomization" | LC_ALL=C sort
 )
 expected_workflows=(
   'automation-data-provisioner.json=workflows/automation-data-provisioner.json'
+  'automation-data-recovery-canary.json=workflows/automation-data-recovery-canary.json'
   'platform-canary.json=workflows/platform-canary.json'
 )
 [[ "${packaged_workflows[*]}" == "${expected_workflows[*]}" ]] || {

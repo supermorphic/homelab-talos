@@ -80,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=118.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=119.\n"
     assert completed.stderr == ""
 
 
@@ -596,17 +596,19 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "Campaign integration ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,8 +1,8 @@\n"
+        "@@ -1,9 +1,9 @@\n"
         "-test.cilium-connectivity\n"
         "-test.storage-provisioning\n"
         "-test.flux-canary\n"
         "-test.n8n-restore-drill\n"
         "-test.automation-data-provisioning\n"
+        "-test.automation-data-restore-drill\n"
         "-test.integration.media-hardlink\n"
         "-test.plex-network-policy\n"
         " test.ntfy-publish\n"
         "+test.plex-network-policy\n"
         "+test.integration.media-hardlink\n"
+        "+test.automation-data-restore-drill\n"
         "+test.automation-data-provisioning\n"
         "+test.n8n-restore-drill\n"
         "+test.flux-canary\n"
@@ -1030,7 +1032,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=118.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=119.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

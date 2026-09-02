@@ -41,6 +41,11 @@ automation-data-verify: require-bash
 automation-data-provisioning-test: require-bash
     @scripts/test/run-catalog-suite.sh test.automation-data-provisioning -- scripts/test/scenarios/automation-data-provisioning.sh {{quote(kubeconfig)}}
 
+# Restore n8n plus every automation-data database into run-owned isolated services,
+# prove the restored encrypted runtime credential, and create a fresh recovery backup.
+automation-data-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(kubeconfig)}}
+
 # Run the observational n8n live acceptance contract. It sends no canary request;
 # private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash

@@ -190,6 +190,7 @@ campaigns:
       - test.flux-canary
       - test.n8n-restore-drill
       - test.automation-data-provisioning
+      - test.automation-data-restore-drill
       - test.integration.media-hardlink
       - test.plex-network-policy
       - test.ntfy-publish
@@ -625,6 +626,11 @@ suites:
     runner: {command: "AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test", implementation: scripts/test/scenarios/automation-data-provisioning.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-provisioning.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.automation-data-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: automation-data-restore-drill, scenario: full-chain, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: AUTOMATION_DATA_RESTORE_CONFIRM, expected: "restore:automation-data:full-chain"}
+    runner: {command: "AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill", implementation: scripts/test/scenarios/automation-data-restore-drill.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-restore-drill.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
     runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}

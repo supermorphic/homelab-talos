@@ -1,0 +1,90 @@
+{
+  "name": "Automation Data Recovery Canary",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## One-time recovery-drill binding\n\nKeep this template inactive until the staged rollout. Bind the existing **Platform Canary Header** credential to **Recovery Webhook** and the generated `automation-data/issue317_acceptance/runtime` Postgres credential to **Test Restored Runtime Credential**. The full-chain restore drill uses the restored encrypted bindings and retained `N8N_ENCRYPTION_KEY`; it never reads the domain password.",
+        "height": 300,
+        "width": 560
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-600, -360],
+      "id": "00000000-0000-4000-8000-000000000061",
+      "name": "Recovery Setup"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "automation-data-recovery-canary",
+        "authentication": "headerAuth",
+        "responseMode": "usingRespondToWebhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-520, 0],
+      "id": "00000000-0000-4000-8000-000000000062",
+      "name": "Recovery Webhook"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT current_database() AS database, current_user AS role;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 0],
+      "id": "00000000-0000-4000-8000-000000000063",
+      "name": "Test Restored Runtime Credential"
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.database !== 'issue317_acceptance' || $json.role !== 'issue317_acceptance_runtime') throw new Error('restored_runtime_identity_mismatch');\nreturn [{ json: { status: 'ok', database: $json.database, role: $json.role, executionId: String($execution.id) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 0],
+      "id": "00000000-0000-4000-8000-000000000064",
+      "name": "Bounded Recovery Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [320, 0],
+      "id": "00000000-0000-4000-8000-000000000065",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Recovery Webhook": {
+      "main": [[{"node": "Test Restored Runtime Credential", "type": "main", "index": 0}]]
+    },
+    "Test Restored Runtime Credential": {
+      "main": [[{"node": "Bounded Recovery Response", "type": "main", "index": 0}]]
+    },
+    "Bounded Recovery Response": {
+      "main": [[{"node": "Respond", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "versionId": "00000000-0000-4000-8000-000000000066",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

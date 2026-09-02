@@ -16,6 +16,7 @@ scripts/test/automation-data-secrets-test.sh
 scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 scripts/test/automation-data-backup-test.sh
+scripts/test/automation-data-restore-command-test.sh
 
 [[ "$(yq -r '[.resources[] | select(. == "./automation-data")] | length' \
   kubernetes/apps/kustomization.yaml)" == 1 ]] ||
@@ -89,6 +90,8 @@ just --dry-run kube automation-data-verify >/dev/null 2>&1 ||
   fail 'the read-only automation-data verification recipe is missing'
 just --dry-run kube automation-data-provisioning-test >/dev/null 2>&1 ||
   fail 'the attended automation-data provisioning recipe is missing'
+just --dry-run kube automation-data-restore-drill >/dev/null 2>&1 ||
+  fail 'the attended automation-data restore drill recipe is missing'
 
 catalog='tests/catalog.yaml'
 verification_contract="$(yq -o=json -I=0 '
@@ -121,9 +124,26 @@ provisioning_contract="$(yq -o=json -I=0 '
   '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":[".kube/config"],"selector":null}}' ]] ||
   fail 'the attended automation-data provisioning catalog contract is missing or unsafe'
 
+restore_contract="$(yq -o=json -I=0 '
+  .suites[] | select(.metadata.id == "test.automation-data-restore-drill") |
+  {
+    "mutates": .metadata.mutates_cluster,
+    "owner": .metadata.execution_owner,
+    "confirmation": .confirmation,
+    "command": .runner.command,
+    "implementation": .runner.implementation,
+    "dispatch": .dispatch
+  }
+' "$catalog")"
+[[ "$restore_contract" == \
+  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  fail 'the attended automation-data restore catalog contract is missing or unsafe'
+
 verifier='scripts/verify/automation-data.sh'
 scenario='scripts/test/scenarios/automation-data-provisioning.sh'
-[[ -x "$verifier" && -x "$scenario" ]] ||
+restore_scenario='scripts/test/scenarios/automation-data-restore-drill.sh'
+restore_test='scripts/test/automation-data-restore-command-test.sh'
+[[ -x "$verifier" && -x "$scenario" && -x "$restore_scenario" && -x "$restore_test" ]] ||
   fail 'automation-data live verification implementations must be executable'
 ! rg -n 'kubectl[^\n]*((get|describe)[[:space:]]+secrets?|exec|port-forward)|psql|/api/v1/credentials|/webhook/' \
   "$verifier" >/dev/null ||
@@ -157,5 +177,85 @@ done
 ! rg -n 'echo[^\n]*(provisioning_token|PGPASSWORD)|printf[^\n]*PGPASSWORD|globals\.sql[^\n]*(cat|less|head|tail)' \
   "$scenario" >/dev/null ||
   fail 'the attended provisioning scenario can print a credential or globals dump'
+
+for restore_contract_value in \
+  "expected_confirmation='restore:automation-data:full-chain'" \
+  'n8n_restore_job_command' \
+  'automation_data_restore_job_command' \
+  'automation-data-postgresql-backups' \
+  'n8n-postgresql-backups' \
+  'N8N_ENCRYPTION_KEY' \
+  'automation-data-recovery-canary' \
+  'restored_runtime_credential=authenticated' \
+  'n8n_routes_target_service' \
+  'storage": "20Gi"'; do
+  rg -Fq -- "$restore_contract_value" "$restore_scenario" ||
+    fail "the full-chain restore scenario omits $restore_contract_value"
+done
+! rg -n 'echo[^\n]*(PGPASSWORD|CANARY_TOKEN)|printf[^\n]*(PGPASSWORD|CANARY_TOKEN)|globals\.sql[^\n]*(cat|less|head|tail)' \
+  "$restore_scenario" >/dev/null ||
+  fail 'the full-chain restore scenario can print a credential or globals dump'
+
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-validate.XXXXXX")"
+trap 'rm -rf -- "$temp_dir"' EXIT
+sed -n '/^platform_manifests()/,/^}/p; /^policy_manifests()/,/^}/p; /^restore_job_manifest()/,/^}/p; /^n8n_application_manifests()/,/^}/p; /^request_job_manifest()/,/^}/p' \
+  "$restore_scenario" >"$temp_dir/restore-functions.sh"
+# shellcheck source=scripts/test/lib/n8n-restore-command.sh
+source scripts/test/lib/n8n-restore-command.sh
+# shellcheck source=scripts/test/lib/automation-data-restore-command.sh
+source scripts/test/lib/automation-data-restore-command.sh
+# shellcheck disable=SC1091 # generated from the bounded function definitions above.
+source "$temp_dir/restore-functions.sh"
+run_hash='123456789abc'
+prefix="ad-restore-$run_hash"
+ad_namespace='automation-data'
+n8n_namespace='automation'
+request_namespace='gatus'
+ad_database="$prefix-db"
+ad_service="$prefix-db"
+ad_data_pvc="$prefix-ad-data"
+n8n_database="$prefix-n8n-db"
+n8n_service="$prefix-n8n-db"
+n8n_data_pvc="$prefix-n8n-data"
+n8n_app="$prefix-n8n"
+ad_restore_job="$prefix-ad-load"
+n8n_restore_job="$prefix-n8n-load"
+request_job="$prefix-request"
+ad_policy="$prefix-ad-policy"
+n8n_policy="$prefix-n8n-policy"
+request_policy="$prefix-request-policy"
+# The extracted manifest functions consume these globals. Exporting also makes that
+# generated-source boundary explicit to ShellCheck's repository-wide batch.
+export run_hash prefix ad_namespace n8n_namespace request_namespace ad_database \
+  ad_service ad_data_pvc n8n_database n8n_service n8n_data_pvc n8n_app \
+  ad_restore_job n8n_restore_job request_job ad_policy n8n_policy request_policy
+platform_manifests >"$temp_dir/platform.yaml"
+policy_manifests >"$temp_dir/policies.yaml"
+restore_job_manifest automation-data >"$temp_dir/automation-data-job.yaml"
+restore_job_manifest n8n >"$temp_dir/n8n-job.yaml"
+n8n_application_manifests '192.0.2.10' >"$temp_dir/n8n.yaml"
+request_job_manifest >"$temp_dir/request.yaml"
+kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/null
+
+[[ "$(yq -r '.spec.template.spec.containers[0].env[].name' \
+  "$temp_dir/automation-data-job.yaml" | LC_ALL=C sort | paste -sd, -)" == \
+  'AUTOMATION_DATA_BACKUP_PASSWORD,BACKUP_DIR,PGHOST,PGPASSWORD,PGPORT,PGUSER,POST_RECOVERY_BACKUP_DIR' ]] ||
+  fail 'the automation-data restore Job environment is not narrowly scoped'
+[[ "$(yq -r '.spec.template.spec.containers[0].env[].name' \
+  "$temp_dir/n8n-job.yaml" | LC_ALL=C sort | paste -sd, -)" == \
+  'PGHOST,PGPASSWORD,PGPORT,PGUSER,RESTORE_DATABASE' ]] ||
+  fail 'the n8n restore Job environment is not narrowly scoped'
+[[ "$(yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' \
+  "$temp_dir/platform.yaml" | sed '/^---$/d' | LC_ALL=C sort -u | paste -sd, -)" == '20Gi' ]] ||
+  fail 'both isolated restore data claims must start at 20Gi'
+[[ "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.hostAliases[0].hostnames[]' \
+  "$temp_dir/n8n.yaml" | sed '/^---$/d' | paste -sd, -)" == \
+  'automation-data-postgresql,automation-data-postgresql.automation-data.svc.cluster.local' ]] ||
+  fail 'the restored n8n instance does not target the isolated automation-data Service'
+[[ "$(yq -r 'select(.kind == "HTTPRoute") | .kind' "$temp_dir"/*.yaml | sed '/^---$/d' | wc -l | tr -d ' ')" == 0 ]] ||
+  fail 'the isolated restore manifests must not expose an HTTPRoute'
+
+shellcheck -x scripts/test/lib/automation-data-restore-command.sh \
+  scripts/test/automation-data-restore-command-test.sh "$restore_scenario"
 
 echo 'automation-data offline source contracts passed.'
