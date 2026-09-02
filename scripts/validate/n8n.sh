@@ -334,7 +334,7 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
   exit 1
 }
 [[ "$(yq -r '.campaigns.integration.members | join(",")' "$catalog")" == \
-    'test.cilium-connectivity,test.storage-provisioning,test.flux-canary,test.n8n-restore-drill,test.integration.media-hardlink,test.plex-network-policy,test.ntfy-publish' && \
+    'test.cilium-connectivity,test.storage-provisioning,test.flux-canary,test.n8n-restore-drill,test.automation-data-provisioning,test.automation-data-restore-drill,test.integration.media-hardlink,test.plex-network-policy,test.ntfy-publish' && \
   "$(yq -r '.campaigns.resilience.members | join(",")' "$catalog")" == \
     'test.flux-restart,test.portainer-persistence,test.n8n-persistence,chainsaw.resilience.qbittorrent-vpn-disconnect,chainsaw.resilience.qbittorrent-pod-recreation,chainsaw.resilience.plex-cross-node-reschedule,chainsaw.resilience.test-reports-persistence,chainsaw.resilience.tailscale-subnet-router-replica-recovery,test.resilience.plex-node-reboot' && \
   "$(yq -r '[.campaigns.verification.members[] | select(. == "verification.n8n")] | length' \
@@ -1276,14 +1276,14 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
-expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
+expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-recovery-canary.json=workflows/automation-data-recovery-canary.json","platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
 actual_n8n_configmaps="$(yq -o=json -I=0 '
   [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
 ' "$n8n_kustomization")"
 [[ "${n8n_resource_counts[n8n-runtime.sops.yaml]:-0}" -le 1 && \
   "$actual_n8n_configmaps" == "$expected_n8n_configmaps" && \
   "$(yq -r '.generatorOptions.disableNameSuffixHash' "$n8n_kustomization")" == 'true' ]] || {
-  echo 'The n8n app must package the stable values and inactive Platform Canary template ConfigMaps.' >&2
+  echo 'The n8n app must package the stable values and exact inactive workflow template ConfigMaps.' >&2
   exit 1
 }
 
