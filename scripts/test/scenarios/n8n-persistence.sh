@@ -191,6 +191,7 @@ canary_check() {
   {
     printf '%s\n' 'silent' 'show-error' 'fail' 'max-time = 30' 'request = "POST"'
     printf '%s\n' 'retry = 12'
+    printf '%s\n' 'retry-all-errors'
     printf '%s\n' 'retry-delay = 5'
     printf '%s\n' 'retry-max-time = 90'
     printf 'resolve = "hooks.lab.supermorphic.com:443:%s"\n' "$HOMELAB_PUBLIC_GATEWAY_VIP"
