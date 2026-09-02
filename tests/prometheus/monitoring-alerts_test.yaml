@@ -1,4 +1,5 @@
 rule_files:
+  - automation-data.yaml
   - flux.yaml
   - gatus.yaml
   - logging.yaml
@@ -1412,4 +1413,235 @@ tests:
                 minutes. Retention and ingestion are at immediate risk.
       - eval_time: 14m
         alertname: LokiStorageUsageCritical
+        exp_alerts: []
+
+  # --- automation-data PostgreSQL ---
+
+  - name: automation-data scrape and StatefulSet absence fire and recover
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="automation-data",service="automation-data-postgresql",instance="postgresql:9399"}'
+        values: '_x8 1x4'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="automation-data",statefulset="automation-data-postgresql"}'
+        values: '_x8 1x4'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AutomationDataPostgresqlUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data PostgreSQL metrics target is unavailable
+              description: The automation-data/automation-data-postgresql SQL Exporter target has been down or missing for more than five minutes.
+      - eval_time: 6m
+        alertname: AutomationDataPostgresqlWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, statefulset: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data PostgreSQL workload is unavailable
+              description: The automation-data/automation-data-postgresql StatefulSet has reported no ready replicas or no replica metric for more than five minutes.
+      - eval_time: 9m
+        alertname: AutomationDataPostgresqlUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: AutomationDataPostgresqlWorkloadUnavailable
+        exp_alerts: []
+
+  - name: automation-data container restart and OOM alerts recover independently
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation-data",pod="automation-data-postgresql-0",container="postgresql"}'
+        values: '0x2 1x2 2x2 3x10 3x12'
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation-data",pod="automation-data-postgresql-0",container="sql-exporter"}'
+        values: '0x3 1x19'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="automation-data",pod="automation-data-postgresql-0",container="sql-exporter",reason="OOMKilled"}'
+        values: '0x3 1x19'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AutomationDataPostgresqlContainerRestarting
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, pod: automation-data-postgresql-0, container: postgresql}
+            exp_annotations:
+              summary: automation-data PostgreSQL container is restarting repeatedly
+              description: The automation-data/automation-data-postgresql-0 postgresql container restarted more than twice in 15 minutes.
+      - eval_time: 25m
+        alertname: AutomationDataPostgresqlContainerRestarting
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: AutomationDataPostgresqlContainerOomKilled
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, pod: automation-data-postgresql-0, container: sql-exporter}
+            exp_annotations:
+              summary: automation-data PostgreSQL container was OOM killed
+              description: The automation-data/automation-data-postgresql-0 sql-exporter container was OOM killed during the last 15 minutes.
+      - eval_time: 20m
+        alertname: AutomationDataPostgresqlContainerOomKilled
+        exp_alerts: []
+
+  - name: automation-data logical backup staleness fires and a fresh marker recovers
+    interval: 1m
+    input_series:
+      - series: 'automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="automation-data",service="automation-data-postgresql"}'
+        values: '0x2400 144000x240'
+    alert_rule_test:
+      - eval_time: 36h
+        alertname: AutomationDataPostgresqlBackupStale
+        exp_alerts: []
+      - eval_time: 38h
+        alertname: AutomationDataPostgresqlBackupStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data PostgreSQL logical backup is stale or missing
+              description: No validated automation-data logical backup has reported success within 36 hours.
+      - eval_time: 41h
+        alertname: AutomationDataPostgresqlBackupStale
+        exp_alerts: []
+
+  - name: absent automation-data logical backup marker fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="automation-data",service="automation-data-postgresql"}'
+        values: '_x18 1080x6'
+      - series: 'automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="other",service="automation-data-postgresql"}'
+        values: '0x24'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: AutomationDataPostgresqlBackupStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data PostgreSQL logical backup is stale or missing
+              description: No validated automation-data logical backup has reported success within 36 hours.
+      - eval_time: 19m
+        alertname: AutomationDataPostgresqlBackupStale
+        exp_alerts: []
+
+  - name: automation-data failed and overdue backup Jobs fire and recover
+    interval: 1m
+    input_series:
+      - series: 'kube_job_failed{namespace="automation-data",job_name="automation-data-postgresql-backup-old",condition="true"}'
+        values: '1x15'
+      - series: 'kube_job_status_start_time{namespace="automation-data",job_name="automation-data-postgresql-backup-old"}'
+        values: '60x15'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="automation-data",cronjob="automation-data-postgresql-backup"}'
+        values: '_x8 480x7'
+      - series: 'kube_cronjob_next_schedule_time{namespace="automation-data",cronjob="automation-data-postgresql-backup"}'
+        values: '-7200x10 72000x5'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AutomationDataPostgresqlBackupJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, job_name: automation-data-postgresql-backup-old}
+            exp_annotations:
+              summary: automation-data PostgreSQL backup Job failed
+              description: The automation-data/automation-data-postgresql-backup-old Job has remained failed for more than five minutes.
+      - eval_time: 9m
+        alertname: AutomationDataPostgresqlBackupJobFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AutomationDataPostgresqlBackupJobOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, cronjob: automation-data-postgresql-backup}
+            exp_annotations:
+              summary: automation-data PostgreSQL backup schedule is overdue
+              description: The automation-data/automation-data-postgresql-backup CronJob is more than one hour past its next scheduled run.
+      - eval_time: 12m
+        alertname: AutomationDataPostgresqlBackupJobOverdue
+        exp_alerts: []
+
+  - name: automation-data claim availability fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-data",phase="Bound"}'
+        values: '1x12'
+      - series: 'kube_persistentvolumeclaim_status_phase{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-backups",phase="Bound"}'
+        values: '_x8 1x4'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AutomationDataPostgresqlPersistentVolumeClaimNotBound
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, persistentvolumeclaim: automation-data-postgresql-backups, phase: Bound}
+            exp_annotations:
+              summary: automation-data PostgreSQL claim is absent or unbound
+              description: The automation-data/automation-data-postgresql-backups PVC has not reported Bound for more than five minutes.
+      - eval_time: 9m
+        alertname: AutomationDataPostgresqlPersistentVolumeClaimNotBound
+        exp_alerts: []
+
+  - name: automation-data PVC warning is strict above seventy percent and recovers
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-data"}'
+        values: '30x3 29x18 40x5'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-data"}'
+        values: '100x26'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageWarning
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, persistentvolumeclaim: automation-data-postgresql-data}
+            exp_annotations:
+              summary: automation-data PostgreSQL PVC use is above 70 percent
+              description: The automation-data/automation-data-postgresql-data PVC has remained above 70 percent used for more than 15 minutes.
+      - eval_time: 23m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageWarning
+        exp_alerts: []
+
+  - name: automation-data PVC critical is strict above eighty five percent and recovers
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-backups"}'
+        values: '15x3 14x8 25x5'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="automation-data",persistentvolumeclaim="automation-data-postgresql-backups"}'
+        values: '100x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageCritical
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, persistentvolumeclaim: automation-data-postgresql-backups}
+            exp_annotations:
+              summary: automation-data PostgreSQL PVC use is above 85 percent
+              description: The automation-data/automation-data-postgresql-backups PVC has remained above 85 percent used for more than five minutes.
+      - eval_time: 14m
+        alertname: AutomationDataPostgresqlPersistentVolumeUsageCritical
+        exp_alerts: []
+
+  - name: automation-data registry catalog disagreement fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'automation_data_postgresql_registry_catalog_consistent{namespace="automation-data",service="automation-data-postgresql"}'
+        values: '1x3 0x13 1x5'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: AutomationDataPostgresqlRegistryCatalogInconsistent
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data registry and PostgreSQL catalog disagree
+              description: A ready automation-data domain is missing its recorded database or role objects.
+      - eval_time: 18m
+        alertname: AutomationDataPostgresqlRegistryCatalogInconsistent
+        exp_alerts: []
+
+  - name: automation-data incomplete provisioning age fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'automation_data_postgresql_oldest_incomplete_provisioning_age_seconds{namespace="automation-data",service="automation-data-postgresql"}'
+        values: '0x3 3600x18 0x5'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: AutomationDataPostgresqlProvisioningStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data provisioning operation is incomplete
+              description: The oldest active automation-data provisioning or rotation operation has exceeded 30 minutes.
+      - eval_time: 23m
+        alertname: AutomationDataPostgresqlProvisioningStuck
         exp_alerts: []

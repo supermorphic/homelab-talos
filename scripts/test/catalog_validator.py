@@ -42,6 +42,8 @@ EXPECTED_INTEGRATION = [
     "test.storage-provisioning",
     "test.flux-canary",
     "test.n8n-restore-drill",
+    "test.automation-data-provisioning",
+    "test.automation-data-restore-drill",
     "test.integration.media-hardlink",
     "test.plex-network-policy",
     "test.ntfy-publish",

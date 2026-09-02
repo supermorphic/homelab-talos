@@ -200,6 +200,144 @@ gatus-media-integration-secrets:
     mv -- "$candidate" "$target"
     echo "Wrote SOPS-encrypted $target (gatus-media-integration-api-keys in gatus)."
 
+# Write the SOPS-encrypted automation-data PostgreSQL Secret from operator-supplied
+# platform values. Domain passwords and n8n API keys are intentionally excluded.
+automation-data-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:automation-data:postgresql:sops'
+    target='kubernetes/apps/automation-data/postgresql/app/postgresql-credentials.sops.yaml'
+    [[ -n "${AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD:-}" ]] || {
+      echo 'Set AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD to the PostgreSQL superuser password.' >&2
+      exit 1
+    }
+    [[ -n "${AUTOMATION_DATA_PROVISIONER_PASSWORD:-}" ]] || {
+      echo 'Set AUTOMATION_DATA_PROVISIONER_PASSWORD to the platform provisioner password.' >&2
+      exit 1
+    }
+    [[ -n "${AUTOMATION_DATA_BACKUP_PASSWORD:-}" ]] || {
+      echo 'Set AUTOMATION_DATA_BACKUP_PASSWORD to the protected globals-backup password.' >&2
+      exit 1
+    }
+    [[ -n "${AUTOMATION_DATA_EXPORTER_PASSWORD:-}" ]] || {
+      echo 'Set AUTOMATION_DATA_EXPORTER_PASSWORD to the SQL Exporter password.' >&2
+      exit 1
+    }
+    [[ "${AUTOMATION_DATA_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the automation-data PostgreSQL Secret.' >&2
+      echo "Set AUTOMATION_DATA_SECRETS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
+      exit 1
+    }
+    for secret_variable in AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD \
+      AUTOMATION_DATA_PROVISIONER_PASSWORD AUTOMATION_DATA_BACKUP_PASSWORD \
+      AUTOMATION_DATA_EXPORTER_PASSWORD; do
+      secret_value="${!secret_variable}"
+      [[ "${#secret_value}" -ge 32 ]] || {
+        echo "Refusing: $secret_variable must be at least 32 characters." >&2
+        exit 1
+      }
+    done
+
+    committed=false
+    replaced=false
+    retained_stage=false
+    stage_directory=''
+    backup=''
+    umask 077
+    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-automation-data-secrets.XXXXXX")"
+    cleanup() {
+      local result="$?" rollback_failed=false
+      trap - EXIT
+      if [[ "$committed" != true && -n "$backup" && -e "$backup" ]]; then
+        if ! mv -- "$backup" "$target"; then
+          rollback_failed=true
+          retained_stage=true
+        fi
+      elif [[ "$committed" != true && "$replaced" == true ]]; then
+        rm -f -- "$target" || rollback_failed=true
+      fi
+      rm -rf -- "$temp_dir"
+      if [[ -n "$stage_directory" && "$retained_stage" == true ]]; then
+        echo "Recovery ciphertext retained at $stage_directory for $target." >&2
+      elif [[ -n "$stage_directory" ]]; then
+        rm -rf -- "$stage_directory"
+      fi
+      if [[ "$rollback_failed" == true ]]; then
+        echo 'Failed to restore the previous automation-data PostgreSQL Secret.' >&2
+        result=1
+      fi
+      exit "$result"
+    }
+    trap cleanup EXIT
+
+    just repo secrets
+    mapfile -t expected_recipients < <(
+      target="$target" yq -r \
+        '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+        .sops.yaml
+    )
+    [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+      "${expected_recipients[0]}" != null ]] || {
+      echo "Unable to select exactly one SOPS age recipient for $target." >&2
+      exit 1
+    }
+    expected_recipient="${expected_recipients[0]}"
+
+    export AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD
+    export AUTOMATION_DATA_PROVISIONER_PASSWORD AUTOMATION_DATA_BACKUP_PASSWORD
+    export AUTOMATION_DATA_EXPORTER_PASSWORD
+    exporter_password_encoded="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["AUTOMATION_DATA_EXPORTER_PASSWORD"], safe=""))')"
+    export exporter_password_encoded
+    plaintext="$temp_dir/postgresql-credentials.yaml"
+    candidate="$temp_dir/postgresql-credentials.sops.yaml"
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "postgresql-credentials" |
+       .metadata.namespace = "automation-data" |
+       .type = "Opaque" |
+       .stringData."postgres-superuser-password" = strenv(AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD) |
+       .stringData."provisioner-password" = strenv(AUTOMATION_DATA_PROVISIONER_PASSWORD) |
+       .stringData."backup-password" = strenv(AUTOMATION_DATA_BACKUP_PASSWORD) |
+       .stringData."exporter-password" = strenv(AUTOMATION_DATA_EXPORTER_PASSWORD) |
+       .stringData."exporter-dsn" = "postgresql://automation_data_exporter:" + strenv(exporter_password_encoded) + "@127.0.0.1:5432/automation_data_control?sslmode=disable"' \
+      >"$plaintext"
+    sops --encrypt --filename-override "$target" "$plaintext" >"$candidate"
+
+    [[ "$(sops filestatus "$candidate" | yq -r '.encrypted')" == true ]]
+    mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$candidate" | sort -u)
+    [[ "${#candidate_recipients[@]}" -eq 1 && \
+      "${candidate_recipients[0]}" == "$expected_recipient" ]]
+    [[ "$(yq -r 'keys | sort | join(",")' "$candidate")" == \
+      'apiVersion,kind,metadata,sops,stringData,type' ]]
+    [[ "$(yq -r '.metadata | keys | sort | join(",")' "$candidate")" == \
+      'name,namespace' ]]
+    [[ "$(yq -r '.apiVersion' "$candidate")" == v1 ]]
+    [[ "$(yq -r '.kind' "$candidate")" == Secret ]]
+    [[ "$(yq -r '.metadata.name' "$candidate")" == postgresql-credentials ]]
+    [[ "$(yq -r '.metadata.namespace' "$candidate")" == automation-data ]]
+    [[ "$(yq -r '.type' "$candidate")" == Opaque ]]
+    [[ "$(yq -r 'has("data") | not' "$candidate")" == true ]]
+    [[ "$(yq -r '.stringData | keys | sort | join(",")' "$candidate")" == \
+      'backup-password,exporter-dsn,exporter-password,postgres-superuser-password,provisioner-password' ]]
+    for supplied_value in "$AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD" \
+      "$AUTOMATION_DATA_PROVISIONER_PASSWORD" "$AUTOMATION_DATA_BACKUP_PASSWORD" \
+      "$AUTOMATION_DATA_EXPORTER_PASSWORD"; do
+      ! rg -Fq -- "$supplied_value" "$candidate"
+    done
+
+    mkdir -p "$(dirname -- "$target")"
+    stage_directory="$(mktemp -d "$(dirname -- "$target")/.automation-data-secrets.XXXXXX")"
+    stage="$stage_directory/candidate"
+    backup="$stage_directory/previous"
+    cp -- "$candidate" "$stage"
+    [[ ! -e "$target" ]] || cp -- "$target" "$backup"
+    mv -- "$stage" "$target"
+    replaced=true
+    committed=true
+    echo "Wrote SOPS-encrypted $target."
+
 # Write the three SOPS-encrypted n8n platform Secrets from operator-supplied values.
 # The stable n8n encryption key and database passwords must be retained for recovery.
 n8n-secrets:
@@ -1681,7 +1819,7 @@ validate-files: require-bash
     @rg -q '^require_deployed_source\(\)' scripts/lib/rollout.sh
     @if rg -q '^require_deployed_source\(\)' scripts/lib/common.sh; then echo "rollout guards belong in scripts/lib/rollout.sh, not the validator-safe common library" >&2; exit 1; fi
     @if rg -n "git branch --show-current.*main|local HEAD and origin/main differ|checked-out branch is not main" .just/bootstrap.just kubernetes/mod.just; then echo "cluster rollout guards must be branch-agnostic and compare their deployed source paths with origin/main" >&2; exit 1; fi
-    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 29  # Update when adding/removing a guarded rollout recipe.
+    @test "$(rg -c 'require_deployed_source ' .just/bootstrap.just kubernetes/mod.just | awk -F: '{sum += $2} END {print sum}')" -eq 30  # Update when adding/removing a guarded rollout recipe.
     @agent_access_recipe="$(just --dry-run bootstrap agent-access 2>&1)"; \
       normalized_recipe="$(tr '\n\t' '  ' <<<"$agent_access_recipe" | sed -E 's/\\[[:space:]]+/ /g; s/[[:space:]]+/ /g')"; \
       matrix_contract="scripts/verify/agent-access.sh \"\$kubeconfig\" '.talos/config'"; \

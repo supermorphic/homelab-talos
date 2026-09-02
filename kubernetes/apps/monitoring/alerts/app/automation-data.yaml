@@ -1,0 +1,291 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: automation-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: automation-data-postgresql
+spec:
+  groups:
+    - name: automation-data-postgresql
+      rules:
+        - alert: AutomationDataPostgresqlUnavailable
+          expr: >-
+            (
+              up{namespace="automation-data",service="automation-data-postgresql"} == 0
+              or
+              absent(up{namespace="automation-data",service="automation-data-postgresql"})
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL metrics target is unavailable
+            description: >-
+              The automation-data/automation-data-postgresql SQL Exporter target has been
+              down or missing for more than five minutes.
+        - alert: AutomationDataPostgresqlWorkloadUnavailable
+          expr: >-
+            (
+              kube_statefulset_status_replicas_ready{
+                namespace="automation-data",
+                statefulset="automation-data-postgresql"
+              } == 0
+              or
+              absent(
+                kube_statefulset_status_replicas_ready{
+                  namespace="automation-data",
+                  statefulset="automation-data-postgresql"
+                }
+              )
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL workload is unavailable
+            description: >-
+              The automation-data/automation-data-postgresql StatefulSet has reported no
+              ready replicas or no replica metric for more than five minutes.
+        - alert: AutomationDataPostgresqlContainerRestarting
+          expr: >-
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="automation-data",
+                container=~"postgresql|sql-exporter"
+              }[15m]
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data PostgreSQL container is restarting repeatedly
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.pod }} {{ $labels.container }}
+              container restarted more than twice in 15 minutes.
+        - alert: AutomationDataPostgresqlContainerOomKilled
+          expr: >-
+            (
+              increase(
+                kube_pod_container_status_restarts_total{
+                  namespace="automation-data",
+                  container=~"postgresql|sql-exporter"
+                }[15m]
+              ) > 0
+              and on (namespace, pod, container)
+              kube_pod_container_status_last_terminated_reason{
+                namespace="automation-data",
+                container=~"postgresql|sql-exporter",
+                reason="OOMKilled"
+              } == 1
+            )
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL container was OOM killed
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.pod }} {{ $labels.container }}
+              container was OOM killed during the last 15 minutes.
+        - alert: AutomationDataPostgresqlBackupStale
+          expr: >-
+            (
+              (
+                time() - max by (namespace, service) (
+                  automation_data_postgresql_backup_last_success_timestamp_seconds{
+                    namespace="automation-data",
+                    service="automation-data-postgresql"
+                  }
+                )
+              ) > 36 * 60 * 60
+              or
+              absent(
+                automation_data_postgresql_backup_last_success_timestamp_seconds{
+                  namespace="automation-data",
+                  service="automation-data-postgresql"
+                }
+              )
+            )
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL logical backup is stale or missing
+            description: >-
+              No validated automation-data logical backup has reported success within 36
+              hours.
+        - alert: AutomationDataPostgresqlBackupJobFailed
+          expr: >-
+            (
+              (
+                max by (namespace, job_name) (
+                  kube_job_failed{
+                    namespace="automation-data",
+                    job_name=~"automation-data-postgresql-backup-.*",
+                    condition="true"
+                  } == 1
+                )
+                and on (namespace, job_name)
+                kube_job_status_start_time{
+                  namespace="automation-data",
+                  job_name=~"automation-data-postgresql-backup-.*"
+                }
+              )
+              and on (namespace, job_name)
+              (
+                kube_job_status_start_time{
+                  namespace="automation-data",
+                  job_name=~"automation-data-postgresql-backup-.*"
+                }
+                > on (namespace) group_left
+                kube_cronjob_status_last_successful_time{
+                  namespace="automation-data",
+                  cronjob="automation-data-postgresql-backup"
+                }
+                or
+                kube_job_status_start_time{
+                  namespace="automation-data",
+                  job_name=~"automation-data-postgresql-backup-.*"
+                }
+                unless on (namespace)
+                kube_cronjob_status_last_successful_time{
+                  namespace="automation-data",
+                  cronjob="automation-data-postgresql-backup"
+                }
+              )
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data PostgreSQL backup Job failed
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.job_name }} Job has remained failed
+              for more than five minutes.
+        - alert: AutomationDataPostgresqlBackupJobOverdue
+          expr: >-
+            time() - kube_cronjob_next_schedule_time{
+              namespace="automation-data",
+              cronjob="automation-data-postgresql-backup"
+            } > 60 * 60
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data PostgreSQL backup schedule is overdue
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.cronjob }} CronJob is more than one
+              hour past its next scheduled run.
+        - alert: AutomationDataPostgresqlPersistentVolumeClaimNotBound
+          expr: >-
+            (
+              kube_persistentvolumeclaim_status_phase{
+                namespace="automation-data",
+                persistentvolumeclaim=~"automation-data-postgresql-data|automation-data-postgresql-backups",
+                phase="Bound"
+              } == 0
+              or absent(
+                kube_persistentvolumeclaim_status_phase{
+                  namespace="automation-data",
+                  persistentvolumeclaim="automation-data-postgresql-data",
+                  phase="Bound"
+                }
+              )
+              or absent(
+                kube_persistentvolumeclaim_status_phase{
+                  namespace="automation-data",
+                  persistentvolumeclaim="automation-data-postgresql-backups",
+                  phase="Bound"
+                }
+              )
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL claim is absent or unbound
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has not
+              reported Bound for more than five minutes.
+        - alert: AutomationDataPostgresqlPersistentVolumeUsageWarning
+          expr: >-
+            (
+              (
+                100 * (
+                  1 - max by (namespace, persistentvolumeclaim) (
+                    kubelet_volume_stats_available_bytes{
+                      namespace="automation-data",
+                      persistentvolumeclaim=~"automation-data-postgresql-data|automation-data-postgresql-backups"
+                    }
+                  )
+                  /
+                  max by (namespace, persistentvolumeclaim) (
+                    kubelet_volume_stats_capacity_bytes{
+                      namespace="automation-data",
+                      persistentvolumeclaim=~"automation-data-postgresql-data|automation-data-postgresql-backups"
+                    }
+                  )
+                ) > 70
+              ) <= 85
+            )
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data PostgreSQL PVC use is above 70 percent
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has
+              remained above 70 percent used for more than 15 minutes.
+        - alert: AutomationDataPostgresqlPersistentVolumeUsageCritical
+          expr: >-
+            100 * (
+              1 - max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_available_bytes{
+                  namespace="automation-data",
+                  persistentvolumeclaim=~"automation-data-postgresql-data|automation-data-postgresql-backups"
+                }
+              )
+              /
+              max by (namespace, persistentvolumeclaim) (
+                kubelet_volume_stats_capacity_bytes{
+                  namespace="automation-data",
+                  persistentvolumeclaim=~"automation-data-postgresql-data|automation-data-postgresql-backups"
+                }
+              )
+            ) > 85
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data PostgreSQL PVC use is above 85 percent
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} PVC has
+              remained above 85 percent used for more than five minutes.
+        - alert: AutomationDataPostgresqlRegistryCatalogInconsistent
+          expr: >-
+            automation_data_postgresql_registry_catalog_consistent{
+              namespace="automation-data",
+              service="automation-data-postgresql"
+            } == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data registry and PostgreSQL catalog disagree
+            description: >-
+              A ready automation-data domain is missing its recorded database or role
+              objects.
+        - alert: AutomationDataPostgresqlProvisioningStuck
+          expr: >-
+            automation_data_postgresql_oldest_incomplete_provisioning_age_seconds{
+              namespace="automation-data",
+              service="automation-data-postgresql"
+            } > 30 * 60
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data provisioning operation is incomplete
+            description: >-
+              The oldest active automation-data provisioning or rotation operation has
+              exceeded 30 minutes.

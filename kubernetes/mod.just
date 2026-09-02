@@ -26,6 +26,26 @@ cilium-validate: require-bash
 n8n-validate: require-bash
     @scripts/validate/n8n.sh
 
+# Validate the unique specification 025 automation-data contracts. This remains a fast,
+# cluster-independent, secret-free source check and does not start PostgreSQL or n8n.
+automation-data-validate: require-bash
+    @scripts/validate/automation-data.sh
+
+# Observe the deployed automation-data platform without reading Secrets, querying
+# PostgreSQL, invoking n8n, execing into a Pod, or opening a port-forward.
+automation-data-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.automation-data -- scripts/verify/automation-data.sh {{quote(kubeconfig)}}
+
+# Exercise dynamic provisioning, least-privilege enforcement, explicit credential
+# rotation, and recoverable backup behavior after exact attended confirmation.
+automation-data-provisioning-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.automation-data-provisioning -- scripts/test/scenarios/automation-data-provisioning.sh {{quote(kubeconfig)}}
+
+# Restore n8n plus every automation-data database into run-owned isolated services,
+# prove the restored encrypted runtime credential, and create a fresh recovery backup.
+automation-data-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(kubeconfig)}}
+
 # Run the observational n8n live acceptance contract. It sends no canary request;
 # private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash

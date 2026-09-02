@@ -1,0 +1,107 @@
+global:
+  scrape_timeout_offset: 500ms
+  min_interval: 0s
+  max_connections: 3
+  max_idle_connections: 3
+target:
+  name: automation-data
+  # Required by SQL Exporter; SQLEXPORTER_TARGET_DSN replaces this password-free value.
+  data_source_name: postgresql://automation_data_exporter@127.0.0.1:5432/automation_data_control?sslmode=disable
+  collectors:
+    - automation_data_postgresql
+collectors:
+  - collector_name: automation_data_postgresql
+    metrics:
+      - metric_name: automation_data_postgresql_connections
+        type: gauge
+        help: PostgreSQL connections by database and state.
+        key_labels:
+          - database
+          - state
+        values:
+          - connections
+        query: |
+          SELECT COALESCE(datname, 'cluster')::text AS database,
+                 COALESCE(state, 'unknown')::text AS state,
+                 count(*)::double precision AS connections
+          FROM pg_stat_activity
+          GROUP BY COALESCE(datname, 'cluster'), COALESCE(state, 'unknown')
+      - metric_name: automation_data_postgresql_transactions_total
+        type: counter
+        help: PostgreSQL transactions by database and result.
+        key_labels:
+          - database
+          - result
+        values:
+          - transactions
+        query: |
+          SELECT datname::text AS database,
+                 'committed'::text AS result,
+                 xact_commit::double precision AS transactions
+          FROM pg_stat_database
+          WHERE datname IS NOT NULL
+          UNION ALL
+          SELECT datname::text AS database,
+                 'rolled_back'::text AS result,
+                 xact_rollback::double precision AS transactions
+          FROM pg_stat_database
+          WHERE datname IS NOT NULL
+      - metric_name: automation_data_postgresql_database_size_bytes
+        type: gauge
+        help: PostgreSQL storage used by each connectable non-template database.
+        key_labels:
+          - database
+        values:
+          - database_size_bytes
+        query: |
+          SELECT datname::text AS database,
+                 pg_database_size(datname)::double precision AS database_size_bytes
+          FROM pg_database
+          WHERE datallowconn AND NOT datistemplate
+      - metric_name: automation_data_postgresql_backup_last_success_timestamp_seconds
+        type: gauge
+        help: Unix timestamp of the newest validated automation-data logical backup.
+        values:
+          - completed_at_seconds
+        query: |
+          SELECT extract(epoch FROM completed_at)::double precision
+                 AS completed_at_seconds
+          FROM platform_operations.logical_backup_status
+          WHERE singleton = true
+      - metric_name: automation_data_postgresql_registry_catalog_consistent
+        type: gauge
+        help: Whether every ready managed domain has its recorded database and roles.
+        values:
+          - consistent
+        query: |
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM platform_operations.managed_domains AS managed
+            WHERE managed.state = 'ready'
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM pg_database WHERE datname = managed.database_name
+                )
+                OR NOT EXISTS (
+                  SELECT 1 FROM pg_roles WHERE rolname = managed.owner_role
+                )
+                OR NOT EXISTS (
+                  SELECT 1 FROM pg_roles WHERE rolname = managed.migrator_role
+                )
+                OR NOT EXISTS (
+                  SELECT 1 FROM pg_roles WHERE rolname = managed.runtime_role
+                )
+              )
+          ) THEN 1::double precision ELSE 0::double precision END AS consistent
+      - metric_name: automation_data_postgresql_oldest_incomplete_provisioning_age_seconds
+        type: gauge
+        help: Age in seconds of the oldest active provisioning or rotation operation.
+        values:
+          - age_seconds
+        query: |
+          SELECT COALESCE(
+            extract(epoch FROM clock_timestamp() - min(operation_started_at)),
+            0
+          )::double precision AS age_seconds
+          FROM platform_operations.managed_domains
+          WHERE state IN ('provisioning', 'rotating')

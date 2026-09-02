@@ -80,7 +80,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=115.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=119.\n"
     assert completed.stderr == ""
 
 
@@ -210,8 +210,8 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
         "@@ -1,4 +1,3 @@\n"
         "-verification.agent-access\n"
         " verification.alertmanager-ntfy\n"
-        " verification.cilium\n"
-        " verification.csi-driver-smb\n",
+        " verification.automation-data\n"
+        " verification.cilium\n",
         normalize_diff=True,
     )
     expect_rejection(
@@ -596,16 +596,20 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "Campaign integration ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,7 +1,7 @@\n"
+        "@@ -1,9 +1,9 @@\n"
         "-test.cilium-connectivity\n"
         "-test.storage-provisioning\n"
         "-test.flux-canary\n"
         "-test.n8n-restore-drill\n"
+        "-test.automation-data-provisioning\n"
+        "-test.automation-data-restore-drill\n"
         "-test.integration.media-hardlink\n"
         "-test.plex-network-policy\n"
         " test.ntfy-publish\n"
         "+test.plex-network-policy\n"
         "+test.integration.media-hardlink\n"
+        "+test.automation-data-restore-drill\n"
+        "+test.automation-data-provisioning\n"
         "+test.n8n-restore-drill\n"
         "+test.flux-canary\n"
         "+test.storage-provisioning\n"
@@ -661,7 +665,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=41 ci=40.\n",
+        "Validation catalog/executions.ci count differs: catalog=42 ci=41.\n",
     )
     expect_rejection(
         root,
@@ -1028,7 +1032,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=115.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=119.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

@@ -3118,3 +3118,225 @@ n8n:
     Stop here. Public DNS, router TCP/443 forwarding, route activation, and Gatus activation
     are separate reviewed operator steps. Durable suspend:false changes must go through Git.
     EOF
+
+# Reconcile the staged automation-data PostgreSQL platform, create its first validated
+# logical backup, and leave n8n workflow and credential setup to the attended UI.
+automation-data:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    kubeconfig='{{kubeconfig}}'
+    expected_origin='https://github.com/supermorphic/homelab-talos.git'
+    expected_confirmation='bootstrap:automation-data'
+    postgresql_ks='kubernetes/apps/automation-data/postgresql/ks.yaml'
+    database_secret='kubernetes/apps/automation-data/postgresql/app/postgresql-credentials.sops.yaml'
+    bootstrap_run_id="$(date -u +%Y%m%d%H%M%S)-$$"
+    backup_job="automation-data-backup-bootstrap-$bootstrap_run_id"
+    backup_job_created=false
+    resumed_postgresql=false
+    bootstrap_complete=false
+
+    backup_job_absent() {
+      local resource
+      resource="$(kubectl --kubeconfig "$kubeconfig" --namespace automation-data \
+        get job "$backup_job" --ignore-not-found --output name)" || return 1
+      [[ -z "$resource" ]]
+    }
+    report_backup_job_failure() {
+      echo "Initial automation-data backup Job automation-data/$backup_job did not complete." >&2
+      kubectl --kubeconfig "$kubeconfig" --namespace automation-data get job "$backup_job" \
+        --output json 2>/dev/null | yq -r '
+          {
+            "name": .metadata.name,
+            "active": (.status.active // 0),
+            "succeeded": (.status.succeeded // 0),
+            "failed": (.status.failed // 0),
+            "conditions": [.status.conditions[]? | {
+              "type": .type,
+              "status": .status,
+              "reason": (.reason // "")
+            }]
+          }
+        ' >&2 || true
+      kubectl --kubeconfig "$kubeconfig" --namespace automation-data logs \
+        "job/$backup_job" --container backup --tail=80 --limit-bytes=16384 \
+        --timestamps=true >&2 || true
+    }
+    wait_for_backup_job() {
+      local deadline=$((SECONDS + 1800)) state
+      while (( SECONDS < deadline )); do
+        if ! state="$(kubectl --kubeconfig "$kubeconfig" --namespace automation-data \
+          get job "$backup_job" --output json)"; then
+          report_backup_job_failure
+          return 1
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Complete" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          return 0
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Failed" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          report_backup_job_failure
+          return 1
+        fi
+        sleep 5
+      done
+      report_backup_job_failure
+      return 1
+    }
+    cleanup_automation_data_bootstrap() {
+      local original_exit="$?" cleanup_failed=false
+      trap - EXIT
+      if [[ "$bootstrap_complete" != 'true' ]]; then
+        set +e
+        if [[ "$backup_job_created" == 'true' ]]; then
+          echo "automation-data acceptance did not pass; deleting run-owned Job automation-data/$backup_job." >&2
+          kubectl --kubeconfig "$kubeconfig" --namespace automation-data delete job \
+            "$backup_job" --ignore-not-found --wait=true --timeout=2m >/dev/null || \
+            cleanup_failed=true
+          backup_job_absent || cleanup_failed=true
+        fi
+        if [[ "$resumed_postgresql" == 'true' ]]; then
+          echo 'automation-data acceptance did not pass; re-suspending automation-data-postgresql while preserving its resources and claims.' >&2
+          flux suspend kustomization automation-data-postgresql --namespace flux-system \
+            --kubeconfig "$kubeconfig" >/dev/null || cleanup_failed=true
+        fi
+        set -e
+      fi
+      if [[ "$cleanup_failed" == 'true' ]]; then
+        echo 'Failed to remove the bootstrap Job or re-suspend automation-data-postgresql.' >&2
+        exit 1
+      fi
+      exit "$original_exit"
+    }
+    trap cleanup_automation_data_bootstrap EXIT
+
+    [[ -f "$kubeconfig" ]] || {
+      echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+      exit 1
+    }
+    [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
+      echo "Refusing automation-data bootstrap: origin must be $expected_origin." >&2
+      exit 1
+    }
+    source scripts/lib/rollout.sh
+    require_deployed_source 'automation-data bootstrap' \
+      .just/bootstrap.just kubernetes/mod.just tests/catalog.yaml \
+      scripts/validate/automation-data.sh scripts/verify/automation-data.sh \
+      scripts/test/scenarios/automation-data-provisioning.sh \
+      scripts/test/scenarios/automation-data-restore-drill.sh \
+      scripts/test/lib/automation-data-restore-command.sh \
+      kubernetes/apps/automation-data \
+      kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json \
+      kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json \
+      kubernetes/apps/monitoring/alerts/app/automation-data.yaml
+
+    [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == 'true' ]] || {
+      echo 'Refusing automation-data bootstrap: PostgreSQL must be staged suspended in Git.' >&2
+      exit 1
+    }
+    just kube automation-data-validate
+    just kube alerts-validate monitoring
+    git cat-file -e "origin/main:$database_secret" 2>/dev/null || {
+      echo "Refusing automation-data bootstrap: deployed Git does not contain $database_secret." >&2
+      exit 1
+    }
+    yq -e '.resources[] | select(. == "./postgresql-credentials.sops.yaml")' \
+      kubernetes/apps/automation-data/postgresql/app/kustomization.yaml >/dev/null
+
+    [[ "${AUTOMATION_DATA_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to reconcile the automation-data PostgreSQL platform.' >&2
+      echo "Set AUTOMATION_DATA_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the staged source and encrypted recovery material." >&2
+      exit 1
+    }
+
+    flux reconcile source git flux-system --kubeconfig "$kubeconfig"
+    remote_main="$(git rev-parse origin/main)"
+    deployed_revision="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get gitrepository flux-system --output jsonpath='{.status.artifact.revision}')"
+    [[ "$deployed_revision" == *"$remote_main"* ]] || {
+      echo "Refusing automation-data bootstrap: Flux revision $deployed_revision does not match origin/main $remote_main." >&2
+      exit 1
+    }
+    just kube flux-verify
+    flux reconcile kustomization cluster-apps --namespace flux-system --with-source \
+      --kubeconfig "$kubeconfig" --timeout 10m
+
+    [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+      get kustomization automation-data-postgresql \
+      --output jsonpath='{.spec.suspend}')" == 'true' ]] || {
+      echo 'Refusing automation-data bootstrap: automation-data-postgresql is not suspended in the live cluster.' >&2
+      exit 1
+    }
+
+    echo 'Reconciling the automation-data namespace.'
+    flux reconcile kustomization automation-data --namespace flux-system --with-source \
+      --kubeconfig "$kubeconfig" --timeout 10m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/automation-data --timeout=10m
+
+    echo 'Reconciling automation-data-postgresql.'
+    resumed_postgresql=true
+    flux resume kustomization automation-data-postgresql --namespace flux-system \
+      --kubeconfig "$kubeconfig"
+    flux reconcile kustomization automation-data-postgresql --namespace flux-system \
+      --with-source --kubeconfig "$kubeconfig" --timeout 15m
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
+      --for=condition=Ready kustomization/automation-data-postgresql --timeout=15m
+
+    backup_job_absent || {
+      echo "Refusing automation-data bootstrap: automation-data/$backup_job exists or its absence cannot be proved." >&2
+      exit 1
+    }
+    echo 'Creating the first validated automation-data logical backup from the reconciled CronJob.'
+    backup_job_created=true
+    kubectl --kubeconfig "$kubeconfig" --namespace automation-data create job \
+      "$backup_job" --from=cronjob/automation-data-postgresql-backup \
+      --dry-run=client --output yaml | \
+      BOOTSTRAP_RUN_ID="$bootstrap_run_id" yq '
+        .metadata.labels."app.kubernetes.io/name" = "automation-data-postgresql-backup" |
+        .metadata.labels."homelab-talos/test" = "automation-data-bootstrap" |
+        .metadata.labels."homelab-talos/run-id" = strenv(BOOTSTRAP_RUN_ID) |
+        .metadata.labels."homelab-talos/role" = "initial-backup" |
+        .spec.template.metadata.labels = .metadata.labels
+      ' | kubectl --kubeconfig "$kubeconfig" --namespace automation-data create \
+        --filename - >/dev/null
+    wait_for_backup_job
+    kubectl --kubeconfig "$kubeconfig" --namespace automation-data delete job \
+      "$backup_job" --wait=true --timeout=2m >/dev/null
+    backup_job_absent || {
+      echo "Failed to remove run-owned Job automation-data/$backup_job." >&2
+      exit 1
+    }
+    backup_job_created=false
+
+    just kube automation-data-verify
+
+    bootstrap_complete=true
+    trap - EXIT
+    cat <<'EOF'
+    automation-data PostgreSQL acceptance passed. The first complete logical backup is
+    current, and PostgreSQL remains private. Complete these attended steps in the private
+    n8n UI without sending any credential value to an agent or placing it in Git:
+
+    1. Create a Postgres credential named "Automation Data Provisioner" for database
+       automation_data_control and login automation_data_provisioner. Use the same
+       operator-held provisioner password represented by the encrypted PostgreSQL Secret.
+    2. Create one full-access Community-edition n8n API key. Store it in a Header Auth
+       credential named "Automation Data n8n API" with header X-N8N-API-KEY.
+    3. Create a separate Header Auth credential named
+       "Automation Data Provisioning Header" with header
+       X-Automation-Data-Provisioning. Retain its private value outside Git.
+    4. Import automation-data-provisioner.json. Bind the three credentials exactly as its
+       setup note specifies, then publish the provisioning workflow.
+    5. Run the attended provisioning test. It creates issue317_acceptance and the scoped
+       n8n migrator/runtime credentials without returning either generated password.
+    6. Import automation-data-recovery-canary.json. Bind Platform Canary Header to its
+       Webhook and automation-data/issue317_acceptance/runtime to its Postgres node, then
+       publish it.
+    7. Run the full-chain restore drill only after a later complete n8n dump and
+       automation-data bundle include those published bindings.
+
+    Durable suspend:false changes remain Git-managed. Do not activate a destructive
+    database or role decommission path as part of this bootstrap.
+    EOF
