@@ -623,15 +623,22 @@ done
   echo 'n8n persistence must wait for n8n at every recovery boundary and identify all three canary stages.' >&2
   exit 1
 }
-for marker in "printf '%s\\n' 'retry = 12'" \
-  "printf '%s\\n' 'retry-all-errors'" \
-  "printf '%s\\n' 'retry-delay = 5'" \
-  "printf '%s\\n' 'retry-max-time = 90'"; do
+# shellcheck disable=SC2016 # These are literal source markers, not shell expressions.
+for marker in \
+  'deadline=$((SECONDS + 90))' \
+  'for attempt in {1..13}; do' \
+  'response_file="$tmp_dir/canary-response-$correlation-$attempt.json"' \
+  'curl --config "$curl_config" --max-time "$transfer_timeout" --output "$response_file"' \
+  'sleep 5'; do
   rg -Fq "$marker" "$n8n_persistence" || {
-    echo "n8n persistence canary retry invariant is absent: $marker" >&2
+    echo "n8n persistence explicit canary retry invariant is absent: $marker" >&2
     exit 1
   }
 done
+if rg -q "printf .*'retry(-all-errors|-delay|-max-time| = )" "$n8n_persistence"; then
+  echo 'n8n persistence must not delegate retry state or response-file reuse to curl.' >&2
+  exit 1
+fi
 postgresql_recovery_line="$(rg -n -F 'rollout status statefulset/n8n-postgresql --timeout=10m' \
   "$n8n_persistence" | tail -n 1 | cut -d: -f1)"
 final_n8n_recovery_line="$(rg -n -F 'rollout status deployment/n8n --timeout=10m' \
