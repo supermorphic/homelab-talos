@@ -1,0 +1,17 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: automation-data
+resources:
+  - ./persistentvolumeclaims.yaml
+  - ./postgresql-credentials.sops.yaml
+  - ./service.yaml
+  - ./statefulset.yaml
+configMapGenerator:
+  - name: automation-data-postgresql-init
+    files:
+      - init-platform.sh=scripts/init-platform.sh
+      - platform-control.sql=scripts/platform-control.sql
+generatorOptions:
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
