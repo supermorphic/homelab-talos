@@ -171,9 +171,10 @@ diagnosis to one corrected quality selection. Issue 330 commit
 `022787bedfd3e32365c3de1701966240e579c045` then applied the lifecycle rule before any
 additional scheduling work. It removed completed diagnostics, comparison modes,
 historical protocols, unused fixtures, and their operator and source surfaces. The
-retained offline validator contains exactly 39 high-value Bats tests across five files:
+then-retained offline validator contained exactly 39 high-value Bats tests across five
+files:
 
-| Bats file | Current tests |
+| Bats file | Tests at the issue-330 boundary |
 | --- | ---: |
 | `benchmark.bats` | 15 |
 | `dispatch.bats` | 8 |
@@ -181,7 +182,7 @@ retained offline validator contains exactly 39 high-value Bats tests across five
 | `runmeta.bats` | 2 |
 | `source-contract.bats` | 3 |
 
-The retained evidence groups are:
+The then-retained evidence groups were:
 
 | Group | Tests | Required proof |
 | --- | ---: | --- |
@@ -189,10 +190,11 @@ The retained evidence groups are:
 | Work plan, evidence, ranking, resume, and integration | 17 | Exact 144-row plan, QSV commands, evidence authentication, ranking outcomes, resume, and four representative rows |
 | Dispatch and safety | 10 | Confirmation, capability, provenance, source drift, safe Job rendering, confinement, rollback, and bounded results |
 
-No retained offline test simulates all 144 encodes. One independent planner assertion
-proves the exact `6 x 3 x 8` work set. Four representative integration cases cover AVC
-ICQ 16, HDR10 ICQ 30, row failure and cleanup, and authenticated resume. Focused oracles
-cover the remaining scientific, identity, ranking, and safety invariants.
+At that boundary, no retained offline test simulated all 144 encodes. One independent
+planner assertion proved the exact `6 x 3 x 8` work set. Four representative integration
+cases covered AVC ICQ 16, HDR10 ICQ 30, row failure and cleanup, and authenticated resume.
+Focused oracles covered the remaining scientific, identity, ranking, and safety
+invariants.
 
 Three controlled complete-validator runs took 78.25s, 77.10s, and 77.42s. The 77.42s
 median is 91.3 percent below the inherited 894.01s median and meets the 60-to-120-second
@@ -204,7 +206,9 @@ The issue-330 result demonstrates the governing optimization order: close the ev
 lifecycle, remove work without a current consumer, and retain cheaper independent
 oracles before adding runners or selective execution. It does not establish the final
 required-check p95 because the complete Stage 1 gate and GitHub execution distribution
-still require remeasurement after the remaining CI work is integrated.
+still require remeasurement after the remaining CI work is integrated. Specification 017
+subsequently recorded the completed 144-row evaluation and terminal no-go decision, so
+these 39 identities and their operational surfaces no longer have a current consumer.
 
 ## Staged decision model
 
@@ -228,14 +232,15 @@ specification when its measured decision is material enough to require implement
 The reviewed execution boundary is:
 
 - Plan 023a produced the historical audit and controlled baseline.
-- Issues 325 and 330 completed the encode evidence-lifecycle decision and focused the
-  offline harness. They supersede Plan 023b's proposed split runner, runner-contract
-  fixes, and fixture micro-optimizations. None of that runner code remains.
+- Issues 325 and 330 focused the encode harness while the corrected evaluation remained
+  pending. Specification 017 subsequently closed that evaluation. Stage 1 therefore
+  removes the remaining harness instead of optimizing or scheduling it. This also
+  supersedes Plan 023b's proposed split runner, runner-contract fixes, and fixture
+  micro-optimizations.
 - The remaining Stage 1 work removes duplicate repository and general-harness work,
   optimizes retained slow cases, and remeasures the complete gate.
 - Bounded concurrency is considered only when retained independent work still dominates
-  the measured critical path. The focused encode harness does not justify a custom
-  per-file runner.
+  the measured critical path.
 - Stage 2 gets a plan only if the post-Stage-1 result still justifies impact selection.
 - Stage 3 remains gated by issue 275 and its later decision gate.
 
@@ -296,18 +301,14 @@ encode harness and its then-current operational surfaces. Those totals describe 
 fixed audit commit only. Active experimental evidence remains maintained and runnable for
 its current consumer; Active does not mean permanently required.
 
-Issues 325 and 330 completed the encode lifecycle review. The bounded diagnostic stage
-has a committed terminal decision. The diagnostic producer, collector, reader, terminal
-transport, historical protocols, and operator recipes are Removed. The same disposition
-applies to x265 comparison, finalist publication, savings and audio inventory, contention
-and playback observation, findings rendering, census and sample selection, stills, and
-generalized compatibility helpers without a current quality consumer.
-
-The retained `validation.encode-benchmark` owner has 39 Bats identities and only the
-source, quality, evidence, run, dispatch, result, verification, and workload surfaces
-needed for the corrected quality selection. Exact current repository-wide inventory and
-shell-source totals still require regeneration after all Stage 1 branches are integrated;
-historical totals cannot be used as current acceptance evidence.
+Issues 325 and 330 first removed completed diagnostic and unused evaluation work, leaving
+39 Bats identities for the pending corrected quality selection. Specification 017 then
+recorded the complete corrected 144-row evidence and terminal no-go decision. The
+remaining `validation.encode-benchmark` owner and its source, fixture, quality, evidence,
+run, dispatch, result, verification, workload, alert, and toolchain surfaces are therefore
+Removed by this Stage 1 change. Exact current repository-wide inventory and shell-source
+totals still require regeneration after all Stage 1 branches are integrated; historical
+totals cannot be used as current acceptance evidence.
 
 ### Lifecycle states
 
@@ -333,55 +334,24 @@ must still identify a current consumer or permanent safety invariant.
 
 ## `encode-benchmark` disposition and boundary
 
-`encode-benchmark` is Active. Specification 017 records a terminal diagnostic decision
-and one remaining purpose: run the corrected 144-row quality evaluation and rank ICQ
-settings independently for AVC, VC-1, and HDR10. No further anomaly diagnostic is
-required.
+`encode-benchmark` is Removed. Specification 017 records the completed corrected 144-row
+evaluation, independent AVC, VC-1, and HDR10 rankings, and the terminal no-go strategy
+decision. It explicitly states that no further ICQ diagnostic or quality run is
+justified. The evidence lifecycle is complete and no current feature, operator workflow,
+or safety invariant consumes the runnable harness.
 
-The harness originated during the FileFlows movie-encoding strategy work, but its current
-purpose is the distinct QSV HEVC ICQ evaluation in specification 017. FileFlows is not
-deployed, and the harness does not authorize a FileFlows deployment.
+The harness originated during the FileFlows movie-encoding strategy work, but its final
+purpose was the distinct QSV HEVC ICQ evaluation in specification 017. FileFlows is not
+deployed, and the completed harness does not authorize a FileFlows deployment.
 
-During Stage 1, `encode-benchmark` remains part of every required `just ci` run. Issue 330
-reduced its intrinsic offline cost before changing when it runs. The retained quality,
-identity, resume, evidence, dispatch, rollback, confinement, and workload contracts stay
-Active. Completed diagnostic and unused evaluation surfaces are Removed.
+The removal boundary deletes the application source and fixtures, offline validator,
+live verifier, dispatcher and result scripts, catalog identities, general-harness case,
+operator recipes, Flux Kustomization, PrometheusRule and its rule tests, and the now-unused
+FFmpeg toolchain entry. Removing the parent media Kustomization reference lets Flux prune
+the Git-managed inert ConfigMaps, PriorityClass, alert rule, and child Kustomization after
+merge. This change does not perform a live mutation or delete evidence outside Git.
 
-### Offline-CI scope
-
-Issue 303 may change:
-
-- Bats tests, fixtures, and test-specific setup;
-- offline source validation, parsing, rendering, and linting;
-- offline report generation and adapters;
-- duplicated test cases or completed historical paths;
-- repeated process and tool invocation;
-- test decomposition and safe offline parallelism; and
-- behavior-neutral test interfaces that do not change live semantics.
-
-Issue 303 does not optimize or alter:
-
-- live ICQ quality Job runtime;
-- encoding parameters or quality methodology;
-- run identity or evidence comparability;
-- quality dispatch authority;
-- live operational behavior; or
-- production evidence contracts.
-
-The audit groups current encode coverage by consumer:
-
-- exact ICQ quality work planning and selection correctness;
-- corrected VMAF and authoritative HDR quality oracles;
-- bounded per-row quality evidence;
-- immutable run identity, provenance, and resume behavior;
-- dispatch authorization, ownership, rollback, and cleanup safety; and
-- rendered workload and runtime-contract validation.
-
-Each retained group identifies the corrected quality selection, reproducibility need, or
-permanent safety invariant that consumes it. Old LA-ICQ-only cases and completed ICQ
-modes are not retained merely for history.
-
-### Implemented encode optimization
+### Pre-removal optimization and evidence
 
 Issue 330 removed approximately 29,751 net lines from the encode application, tests,
 fixtures, helpers, and validation surface. It replaced repeated full-path simulations
@@ -394,8 +364,14 @@ The earlier split-runner implementation and its report-boundary tests are supers
 Removed. The five-file, approximately 77-second validator does not justify restoring that
 custom runner. The unaccepted immutable dispatch-fixture experiment is also superseded:
 its target helpers and 120-test structure no longer exist, and it claims zero retained
-savings. Any future encode optimization starts from the current 39-test surface and fresh
-measurements.
+savings.
+
+The 78.96s, 76.45s, and 76.72s controlled samples below establish the cost of the final
+pre-removal harness. Its removal should eliminate approximately that focused work from a
+warm local full gate, but this is an expectation rather than a measured end-to-end saving.
+The post-removal controlled baseline supplies the actual result. A future encoding
+strategy starts from a new design and current requirements; it does not restore this
+completed harness by default.
 
 ## Stage 1 optimization design
 
@@ -498,8 +474,8 @@ These are separate command measurements. They are not added into one savings cla
 because focused profiles overlap other views and were not measured as a combined in-run
 delta.
 
-The focused ICQ harness reduction is complete. Remaining semantic-preserving runtime work
-addresses:
+The completed ICQ harness is Removed rather than optimized further. Remaining
+semantic-preserving runtime work addresses:
 
 - one native-result evaluation for the remaining Conftest and kubeconform console/JUnit
   pairs;
@@ -522,12 +498,8 @@ suite, file, shell-case, and focused profiles are never summed.
 
 After work removal and intrinsic optimization, retained suites may run concurrently in
 bounded groups. This remains full-suite execution in Stage 1: every retained Active suite
-runs for every pull request.
-
-The encode validator uses the repository's ordinary suite-level native-result wrapper and
-runs its five Bats files together. The discarded split runner provides no current
-execution or reporting dependency. Any future decomposition must be justified by a fresh
-profile and must preserve deterministic reporting, cancellation, and failure behavior.
+runs for every pull request. `encode-benchmark` has no current execution or reporting
+dependency because its complete lifecycle is Removed.
 
 Cheap, high-signal repository invariants run first where ordering materially improves
 failure latency. Concurrent execution must preserve deterministic reports, results for
@@ -536,11 +508,11 @@ required suite causing the complete gate to fail.
 
 ## Stage 1 verification and measurement
 
-The pre-issue-330 observational and controlled baselines remain historical context. The
-issue-330 encode distribution is current focused evidence, but it is not a complete
-Stage 1 gate or GitHub p95. After the remaining Stage 1 branches finish, rebase onto final
-current `main`, regenerate the exact inventory, and collect controlled complete-gate and
-GitHub measurements. Historical and current samples must not be combined.
+The pre-issue-330 observational and controlled baselines and the issue-330 encode
+distribution remain historical pre-removal evidence. They are not a complete Stage 1
+gate or GitHub p95. After the remaining Stage 1 branches finish, rebase onto final current
+`main`, regenerate the exact inventory, and collect controlled complete-gate and GitHub
+measurements. Historical and current samples must not be combined.
 
 The 2026-08-31 quiet-window remeasurement on the rebased issue-303 branch independently
 confirmed the focused encode result. Three complete `encode-benchmark-validate` runs
@@ -551,10 +523,11 @@ process guard found no foreign CI or benchmark work during the samples.
 One clean complete `mise exec -- just ci` run then passed in 727.76s on the same host and
 conditions. This single 12m07.76s observation is not a p95 and does not replace the
 required repeated GitHub measurements. It does show that the complete offline gate still
-misses the approximately two-minute objective after the encode harness fell below 80
-seconds. Stage 1 must therefore continue by profiling and reducing the remaining Active
-validation and harness costs. This result does not by itself justify Stage 2 target
-selection.
+missed the approximately two-minute objective while the encode harness remained in the
+gate. The later lifecycle removal is expected to eliminate its approximately 77-second
+focused cost, but the actual full-gate change must be measured. Stage 1 must continue by
+profiling and reducing the remaining Active validation and harness costs. This result does
+not by itself justify Stage 2 target selection.
 
 Measurements separate:
 
@@ -590,8 +563,9 @@ The historical plan-023a inventory remains exactly 500 entries: 494 Active and s
 Removed. Plan 023c removes exactly those six reviewed duplicate executions:
 `harness:conftest-console`, `harness:yaml-parse`, `harness:bash-syntax`,
 `harness:shellcheck-per-file`, `harness:shellcheck-json`, and
-`shell:qbit-manage-policy-shellcheck`. Issue-330 encode removals are a separate lifecycle
-decision and are not included in this count. Focused positive and negative checks proved
+`shell:qbit-manage-policy-shellcheck`. Issue-330 encode reductions and the later complete
+encode lifecycle removal are separate decisions and are not included in this historical
+count. Focused positive and negative checks proved
 the canonical ownership, exact first-Bash failure behavior, exact ShellCheck findings,
 rejection and one-time recomputation of invalid artifacts, producer-failure harness skip,
 one Conftest evaluation, 20 Chainsaw lints, and no generic reparse of Chainsaw test
@@ -879,20 +853,16 @@ Stage 1 is complete when:
 2. Removed work and its operational surfaces are deleted.
 3. Retained work has no known duplicate execution without a documented independent
    invariant.
-4. The encode harness remains Active for the corrected ICQ quality selection. Completed
-   diagnostics and unused evaluation modes remain Removed.
-5. The encode validator retains exactly 39 high-value Bats identities across the five
-   current files, unless a later reviewed consumer change updates that boundary.
-6. Its planner proves the exact 144-row work set without simulating all 144 encodes, and
-   representative integration tests cover AVC, HDR10, row failure, cleanup, and resume.
-7. The discarded split runner and immutable dispatch-fixture experiment remain absent.
-8. Live ICQ quality behavior and evidence contracts remain unchanged.
-9. Representative positive and negative coverage passes.
-10. The complete `mise exec -- just ci` gate passes.
-11. Controlled post-change timing separates validation, setup, queue, and reporting
+4. Specification 017 preserves the terminal ICQ evidence and no executable encode source,
+   fixture, CI, catalog, GitOps, alert, operator, verification, or dedicated toolchain
+   surface remains.
+5. The discarded split runner and immutable dispatch-fixture experiment remain absent.
+6. Retained representative positive and negative coverage passes.
+7. The complete `mise exec -- just ci` gate passes.
+8. Controlled post-change timing separates validation, setup, queue, and reporting
    costs, reports sample sizes with its percentiles, and evaluates the ordinary gate
    against the approximately two-minute p95 objective.
-12. The Stage 2 decision gate is evaluated explicitly rather than assumed.
+9. The Stage 2 decision gate is evaluated explicitly rather than assumed.
 
 If later stages proceed, their implementation specifications and plans must reconcile
 their measured results, provider trust model, and runner-placement decision before merge.

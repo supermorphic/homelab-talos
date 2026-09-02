@@ -4,7 +4,6 @@ kind: Kustomization
 resources:
   - ./namespace/ks.yaml
   - ./storage/ks.yaml
-  - ./encode-benchmark/ks.yaml
   - ./flaresolverr/ks.yaml
   - ./plex/ks.yaml
   - ./qbittorrent/ks.yaml

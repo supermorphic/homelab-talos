@@ -669,49 +669,6 @@ flaresolverr-verify: require-bash
 qbit-manage-validate: require-bash
     @scripts/validate/qbit-manage.sh
 
-# Validate the suspended, inert encoding benchmark sources without contacting the cluster.
-encode-benchmark-validate: require-bash
-    @scripts/validate/encode-benchmark.sh
-
-# Read-only cluster placement check: reports every node and requires one non-Plex
-# node with a free i915 slot and at least 115Gi actual node.fs.availableBytes.
-encode-benchmark-preflight: require-bash
-    @scripts/encode-benchmark/preflight.sh {{quote(kubeconfig)}}
-
-# Create one run-owned capability Job after exact confirmation and proof that the
-# renderer/runtime sources match the deployed origin/main boundary.
-encode-benchmark-capabilities: require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark capabilities' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' capabilities
-
-# Render and create the quality Job. An optional run ID is an explicit resume handle.
-encode-benchmark-quality run_id="": require-bash
-    #!/usr/bin/env bash
-    set -euo pipefail
-    run_id={{quote(run_id)}}
-    source scripts/lib/rollout.sh
-    require_deployed_source 'encode-benchmark quality' \
-      kubernetes/mod.just \
-      scripts/encode-benchmark \
-      kubernetes/apps/media/encode-benchmark
-    args=(run quality)
-    if [[ -n "$run_id" ]]; then args+=("$run_id"); fi
-    scripts/encode-benchmark/dispatch.sh '{{kubeconfig}}' "${args[@]}"
-
-# Read-only Job phase, pod node, sanitized summary, and actual kubelet imageID evidence.
-encode-benchmark-results run_id: require-bash
-    @scripts/encode-benchmark/results.sh {{quote(kubeconfig)}} {{quote(run_id)}}
-
-# Read-only live acceptance for activated inert inputs and ephemeral pod placement.
-encode-benchmark-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.encode-benchmark -- scripts/verify/encode-benchmark.sh {{quote(kubeconfig)}}
-
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash

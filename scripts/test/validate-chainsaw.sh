@@ -132,7 +132,6 @@ run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.s
 run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
 run_shell_case ntfy-publish scripts/test/ntfy-publish-test.sh
 run_shell_case security-alerts-verifier scripts/test/security-alerts-verify-test.sh
-run_shell_case encode-benchmark-verifier scripts/test/encode-benchmark-verify-test.sh
 run_shell_case plex-verifier scripts/test/plex-verify-test.sh
 run_shell_case plex-validator scripts/test/plex-validator-test.sh
 run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh

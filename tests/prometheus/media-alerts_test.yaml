@@ -1,5 +1,4 @@
 rule_files:
-  - encode-benchmark.yaml
   - media.yaml
   - qbittorrent.yaml
 evaluation_interval: 1m
@@ -699,51 +698,3 @@ tests:
               summary: qBittorrent VPN health probe metric is missing
               description: >-
                 gatus_results_endpoint_success for the qbittorrent-vpn probe is absent for >15m, so the QbittorrentVpnDown alert cannot fire. Check Gatus and the qbittorrent-gluetun-control Service.
-
-  # --- encode-benchmark Job outcome coverage ---
-
-  # EncodeBenchmarkJobFailed fires per failing Job and stays silent on a healthy one.
-  # Both annotations template {{ $labels.job_name }}, so the expected text is rendered.
-  - interval: 1m
-    input_series:
-      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run1"}'
-        values: '0x3 1x10'
-      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run2"}'
-        values: '0x13'
-    alert_rule_test:
-      - eval_time: 2m
-        alertname: EncodeBenchmarkJobFailed
-        exp_alerts: []
-      - eval_time: 6m
-        alertname: EncodeBenchmarkJobFailed
-        exp_alerts:
-          - exp_labels: {severity: warning, namespace: media, job_name: encode-benchmark-run1}
-            exp_annotations:
-              summary: Encoding benchmark Job encode-benchmark-run1 failed
-              description: >-
-                Job encode-benchmark-run1 failed. Inspect the run with `mise exec -- just kube encode-benchmark-results <run-id>`.
-
-  # EncodeBenchmarkJobCompleted watches the succeeded counter, so a failed Job must not
-  # trip it and a succeeded one must not trip EncodeBenchmarkJobFailed. Pairing the two
-  # catches the metric being swapped between them.
-  - interval: 1m
-    input_series:
-      - series: 'kube_job_status_succeeded{namespace="media", job_name="encode-benchmark-run3"}'
-        values: '0x3 1x10'
-      - series: 'kube_job_status_failed{namespace="media", job_name="encode-benchmark-run3"}'
-        values: '0x13'
-    alert_rule_test:
-      - eval_time: 2m
-        alertname: EncodeBenchmarkJobCompleted
-        exp_alerts: []
-      - eval_time: 6m
-        alertname: EncodeBenchmarkJobCompleted
-        exp_alerts:
-          - exp_labels: {severity: warning, namespace: media, job_name: encode-benchmark-run3}
-            exp_annotations:
-              summary: Encoding benchmark Job encode-benchmark-run3 completed
-              description: >-
-                Job encode-benchmark-run3 completed. Review the run with `mise exec -- just kube encode-benchmark-results <run-id>`.
-      - eval_time: 6m
-        alertname: EncodeBenchmarkJobFailed
-        exp_alerts: []
