@@ -209,6 +209,7 @@ malformed_output="$fixture_root/malformed.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_FAIL_MALFORMED=true \
+	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$malformed_output" 2>&1
 malformed_status="$?"
 set -e
@@ -225,6 +226,7 @@ mapfile -t malformed_lints <"$chainsaw_log"
 : >"$shell_case_log"
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" SHELL_CASE_LOG="$shell_case_log" \
+	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >/dev/null
 mapfile -t passing_lints <"$chainsaw_log"
 [[ "${#passing_lints[@]}" -eq 2 ]]
@@ -254,6 +256,7 @@ git_failure_output="$fixture_root/git-failure.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_GIT_FAIL=true \
+	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$git_failure_output" 2>&1
 git_failure_status="$?"
 set -e
