@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source scripts/test/lib/results.sh
-
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
+source scripts/test/lib/results.sh
 source scripts/test/lib/chainsaw-inputs.sh
 fragment_root="${TEST_RESULT_FRAGMENT_DIR:-}"
 shell_case_index=0
