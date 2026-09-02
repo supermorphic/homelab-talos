@@ -7,6 +7,8 @@ source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
 source scripts/test/lib/lease.sh
+# shellcheck source=scripts/test/lib/n8n-persistence-query.sh
+source scripts/test/lib/n8n-persistence-query.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -75,9 +77,7 @@ verify_lease() {
 
 current_n8n_node() {
   "${kc[@]}" get pods --selector app.kubernetes.io/name=n8n --output json |
-    yq -r '[.items[] | select(
-      ([.status.conditions[]? | select(.type == "Ready") | .status][0] // "") == "True"
-    ) | .spec.nodeName] | if length == 1 then .[0] else "" end'
+    n8n_single_ready_node
 }
 
 job_manifest() {
@@ -295,9 +295,8 @@ canary_check
 backup_freshness_check
 
 n8n_pod_json="$("${kc[@]}" get pods --selector app.kubernetes.io/name=n8n --output json)"
-n8n_pod="$(yq -r '.items | if length == 1 then .[0].metadata.name else "" end' - <<<"$n8n_pod_json")"
-n8n_uid="$(yq -r '.items | if length == 1 then .[0].metadata.uid else "" end' - <<<"$n8n_pod_json")"
-n8n_node="$(yq -r '.items | if length == 1 then .[0].spec.nodeName else "" end' - <<<"$n8n_pod_json")"
+n8n_identity="$(n8n_single_pod_identity <<<"$n8n_pod_json")"
+IFS=$'\t' read -r n8n_pod n8n_uid n8n_node <<<"$n8n_identity"
 [[ -n "$n8n_pod" && -n "$n8n_uid" && -n "$n8n_node" ]] || {
   echo 'Expected exactly one n8n pod before the disruption.' >&2
   exit 1
@@ -310,8 +309,8 @@ disruption_started=true
 "${kc[@]}" delete pod "$n8n_pod" --wait=true --timeout=5m >/dev/null
 "${kc[@]}" rollout status deployment/n8n --timeout=10m >/dev/null
 new_n8n_json="$("${kc[@]}" get pods --selector app.kubernetes.io/name=n8n --output json)"
-new_n8n_uid="$(yq -r '.items | if length == 1 then .[0].metadata.uid else "" end' - <<<"$new_n8n_json")"
-new_n8n_node="$(yq -r '.items | if length == 1 then .[0].spec.nodeName else "" end' - <<<"$new_n8n_json")"
+new_n8n_identity="$(n8n_single_pod_identity <<<"$new_n8n_json")"
+IFS=$'\t' read -r _new_n8n_pod new_n8n_uid new_n8n_node <<<"$new_n8n_identity"
 [[ -n "$new_n8n_uid" && "$new_n8n_uid" != "$n8n_uid" && -n "$new_n8n_node" ]] || {
   echo 'n8n did not return as a new pod after deletion.' >&2
   exit 1
@@ -322,8 +321,8 @@ canary_check
 backup_freshness_check
 
 postgresql_json="$("${kc[@]}" get pods --selector app.kubernetes.io/name=n8n-postgresql --output json)"
-postgresql_pod="$(yq -r '.items | if length == 1 then .[0].metadata.name else "" end' - <<<"$postgresql_json")"
-postgresql_uid="$(yq -r '.items | if length == 1 then .[0].metadata.uid else "" end' - <<<"$postgresql_json")"
+postgresql_identity="$(n8n_single_pod_identity <<<"$postgresql_json")"
+IFS=$'\t' read -r postgresql_pod postgresql_uid _postgresql_node <<<"$postgresql_identity"
 [[ -n "$postgresql_pod" && -n "$postgresql_uid" ]] || {
   echo 'Expected exactly one n8n PostgreSQL pod before the disruption.' >&2
   exit 1
@@ -331,8 +330,10 @@ postgresql_uid="$(yq -r '.items | if length == 1 then .[0].metadata.uid else "" 
 verify_lease
 "${kc[@]}" delete pod "$postgresql_pod" --wait=true --timeout=5m >/dev/null
 "${kc[@]}" rollout status statefulset/n8n-postgresql --timeout=10m >/dev/null
-new_postgresql_uid="$("${kc[@]}" get pods --selector app.kubernetes.io/name=n8n-postgresql \
-  --output json | yq -r '.items | if length == 1 then .[0].metadata.uid else "" end')"
+new_postgresql_identity="$("${kc[@]}" get pods \
+  --selector app.kubernetes.io/name=n8n-postgresql --output json | n8n_single_pod_identity)"
+IFS=$'\t' read -r _new_postgresql_pod new_postgresql_uid _new_postgresql_node \
+  <<<"$new_postgresql_identity"
 [[ -n "$new_postgresql_uid" && "$new_postgresql_uid" != "$postgresql_uid" ]] || {
   echo 'n8n PostgreSQL did not return as a new pod after deletion.' >&2
   exit 1
