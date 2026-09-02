@@ -101,13 +101,6 @@ run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
 run_shell_case logging-verifier scripts/test/logging-verify-test.sh
 run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
 run_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
-run_shell_case automation-data-secrets \
-  scripts/test/automation-data-secrets-test.sh
-run_shell_case automation-data-control-contract \
-  scripts/test/automation-data-control-contract-test.sh
-run_shell_case automation-data-workflow-contract \
-  scripts/test/automation-data-workflow-contract-test.sh
-run_shell_case automation-data-backup scripts/test/automation-data-backup-test.sh
 run_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 run_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
 run_shell_case monitoring-alloy-logs-validator \

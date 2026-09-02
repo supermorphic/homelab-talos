@@ -26,6 +26,11 @@ cilium-validate: require-bash
 n8n-validate: require-bash
     @scripts/validate/n8n.sh
 
+# Validate the unique specification 025 automation-data contracts. This remains a fast,
+# cluster-independent, secret-free source check and does not start PostgreSQL or n8n.
+automation-data-validate: require-bash
+    @scripts/validate/automation-data.sh
+
 # Run the observational n8n live acceptance contract. It sends no canary request;
 # private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash

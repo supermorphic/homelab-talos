@@ -12,6 +12,7 @@ executions:
     - validation.kubeconform
     - validation.cilium
     - validation.n8n
+    - validation.automation-data
     - validation.metrics-server
     - validation.flux
     - validation.foundation
@@ -293,6 +294,10 @@ suites:
   - metadata: {id: validation.n8n, source: validation, framework: bash, suite: ci, tier: offline, target: n8n, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube n8n-validate", implementation: scripts/validate/n8n.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.automation-data, source: validation, framework: bash, suite: ci, tier: offline, target: automation-data, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube automation-data-validate", implementation: scripts/validate/automation-data.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.metrics-server, source: validation, framework: bash, suite: ci, tier: offline, target: metrics-server, scenario: source, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
