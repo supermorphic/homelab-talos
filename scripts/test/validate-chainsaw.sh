@@ -107,6 +107,7 @@ run_shell_case automation-data-control-contract \
   scripts/test/automation-data-control-contract-test.sh
 run_shell_case automation-data-workflow-contract \
   scripts/test/automation-data-workflow-contract-test.sh
+run_shell_case automation-data-backup scripts/test/automation-data-backup-test.sh
 run_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 run_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
 run_shell_case monitoring-alloy-logs-validator \
