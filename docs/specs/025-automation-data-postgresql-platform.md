@@ -181,9 +181,23 @@ The platform has three operator-visible authority levels.
 
 ### Platform provisioning
 
-The dedicated provisioning workflow uses a PostgreSQL login with the create-database and
-role-management authority needed to create and reconcile domains. It also uses an n8n API
-key to create, find, update, and test n8n PostgreSQL credentials.
+The dedicated provisioning workflow uses the `automation_data_provisioner` PostgreSQL
+login. The login is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`; it does not receive
+general database or role-management attributes. It is granted `CONNECT` to
+`automation_data_control`, can read `platform_operations.managed_domains`, and can
+execute this fixed `SECURITY DEFINER` function boundary:
+
+- `provision_domain(text, text, text)`;
+- `reconcile_domain(text)`;
+- `record_domain_credentials(text, text, text, timestamptz, timestamptz)`;
+- `rotate_domain_credential(text, text, text)`;
+- `record_operation_error(text, text)`; and
+- `validate_domain(text)`.
+
+All public function privileges are revoked, and the login receives no access to the
+`platform_internal` schema. The fixed functions hold the database and role creation
+authority needed to create and reconcile domains. The workflow separately uses an n8n
+API key to create, find, update, and test n8n PostgreSQL credentials.
 
 The deployed chart has `license.enabled: false` and runs the self-hosted Community
 edition. n8n 2.36.7 supports API-key authentication and credential API operations, but
@@ -202,19 +216,18 @@ complete n8n account as well as automation-data credentials. Private UI access, 
 credential storage, local-only API calls, disabled execution persistence, and key
 rotation reduce exposure but do not reduce that authority.
 
-PostgreSQL cannot grant general database and role creation while cryptographically
-preventing every destructive statement available through related ownership authority.
-The platform therefore does not claim that the underlying provisioner credential is
-non-destructive. Its safety boundary combines a fixed workflow operation contract,
-private n8n access, no arbitrary platform SQL input, credential isolation, strict target
-validation, disabled execution-data persistence, network policy, audit metadata, and a
-separate attended decommission boundary.
+The fixed PostgreSQL function boundary does not expose database or role deletion, and the
+workflow does not accept arbitrary platform SQL. Its safety boundary also includes
+private n8n access, credential isolation, strict target validation, disabled
+execution-data persistence, network policy, audit metadata, and a separate attended
+decommission boundary.
 
-Compromise of the PostgreSQL provisioning credential can affect every automation-data
-domain, and compromise of the n8n API key can affect the full n8n account. These are
-accepted residual risks of using the direct n8n provisioning approach instead of a
-separate broker or PostgreSQL operator. If a later licensed n8n edition enables scoped
-keys, the key should be reduced to the exact credential scopes after live verification.
+Compromise of the PostgreSQL provisioning credential can invoke the supported operations
+for every automation-data domain, and compromise of the n8n API key can affect the full
+n8n account. These are accepted residual risks of using direct n8n provisioning instead
+of a separate broker or PostgreSQL operator. If a later licensed n8n edition enables
+scoped keys, the key should be reduced to the exact credential scopes after live
+verification.
 
 ### Domain migration
 
@@ -229,9 +242,9 @@ assume the owner role, manage roles, or connect to another domain database.
 
 ## Domain role and grant model
 
-A valid domain identifier uses a strict lowercase PostgreSQL-safe format and leaves room
-for deterministic suffixes within PostgreSQL's identifier limit. One provisioning
-request creates or reconciles:
+A valid domain identifier matches `^[a-z][a-z0-9_]{0,47}$`. Its 48-character maximum
+leaves room for the longest `_migrator` suffix within PostgreSQL's 63-byte identifier
+limit. One provisioning request creates or reconciles:
 
 | Object | Form | Purpose |
 | --- | --- | --- |
@@ -262,8 +275,16 @@ verifiers and n8n ciphertext.
 
 The secret-free workflow template is imported into the private n8n instance during
 platform bootstrap. Flux does not manage the live workflow or later domain workflows.
-The operator binds the PostgreSQL provisioning credential and full-access n8n API key
-once.
+The operator binds three n8n credentials once: **Automation Data Provisioner** for the
+control database, **Automation Data n8n API** with the full-access key in
+`X-N8N-API-KEY`, and **Automation Data Provisioning Header** for the private webhook's
+`X-Automation-Data-Provisioning` authentication.
+
+The workflow accepts `POST /webhook/automation-data-provision`. It calls only the local
+`http://127.0.0.1:5678/api/v1/credentials` collection and its exact credential-ID and
+`/test` children. Supported operations are `provision`, `reconcile`, `rotate`, and
+`validate`; only `rotate` accepts a `credential` value, which must be `migrator` or
+`runtime`.
 
 The workflow accepts structured domain identifiers and supported operations. It does not
 accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
@@ -283,8 +304,11 @@ accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
 
 Generated passwords necessarily exist transiently in workflow memory while PostgreSQL
 and n8n receive them. The workflow disables saved manual, successful, and failed
-execution data. Secret-bearing intermediate values do not appear in final outputs or
-logs.
+execution data and execution progress. Both the provisioning template and recovery
+canary use execution order `v1`, `saveDataErrorExecution: none`,
+`saveDataSuccessExecution: none`, `saveManualExecutions: false`, and
+`saveExecutionProgress: false`. Secret-bearing intermediate values do not appear in
+final outputs or logs.
 
 Provisioning never compensates for failure by dropping resources. A partial initial
 creation remains visible as `provisioning` or `error`. Its retry may generate replacement
@@ -343,8 +367,10 @@ measured use. Routine Flux pruning does not delete either claim, but deliberate 
 or PVC deletion and storage-system loss remain destructive operations covered by the
 off-cluster backups and recovery procedure.
 
-The daily backup CronJob runs before the established Longhorn snapshot and off-cluster
-backup windows. It uses a dedicated SOPS-managed credential isolated to the Job.
+The daily backup CronJob runs at `00:30 Etc/UTC`, before the established Longhorn
+snapshot and off-cluster backup windows. It uses the dedicated SOPS-managed
+`automation_data_backup` login, which is a superuser isolated to the Job because dumping
+all role password verifiers requires protected-catalog access.
 Preserving global roles and password verifiers requires broader protected-catalog access
 than the n8n single-database backup role; that authority is never available to n8n
 workflows.
@@ -355,18 +381,22 @@ set of actual non-template databases: an unregistered or partially registered da
 is still included rather than silently omitted. The captured manifest also records every
 registry row and its state. The set is never read from Git.
 
-Active provisioning coordinates with backup through platform operation state and a
-bounded stability check. The backup captures the catalog and registry generation before
-dumping and checks them again before publication. A concurrent set change causes a
-bounded retry rather than publication against an ambiguous set. The backup waits only a
-bounded interval for a currently progressing operation; after that interval it captures
-the recoverable state that actually exists. A stable `error`, stale `provisioning`, or
-other incomplete registry record does not indefinitely block backup publication for
+Active provisioning coordinates with backup through a three-attempt stability check.
+The backup captures the catalog set and registry generation before dumping and checks
+them again before publication. A concurrent set or generation change causes a retry
+rather than publication against an ambiguous set. A stable `error`, stale
+`provisioning`, or other incomplete registry record does not block backup publication for
 healthy domains. If that record has a database, the database is dumped with the captured
 set; if it has no database yet, its recoverable metadata is preserved in the platform
 control database and any created roles are preserved in the globals dump.
 Registry/catalog disagreement remains an alerting and repair condition, not an automatic
 reason to discard an otherwise complete recoverable bundle.
+
+Each published `automation-data-YYYYmmddTHHMMSSZ` directory contains `globals.sql`,
+`registry.tsv`, `manifest.tsv`, `SHA256SUMS`, `COMPLETE`, and one
+`databases/db-<base64url-name>.dump` archive for every captured non-template database.
+The manifest format is version 1 and records `captured_at`, `platform_generation`, the
+database-set SHA-256, and the base64 database-name-to-dump mapping.
 
 One successful backup performs these steps:
 
@@ -392,8 +422,9 @@ healthy or pruned independently. A Kubernetes Job success is diagnostic evidence
 the backup-freshness oracle.
 
 Separate `pg_dump` snapshots are not transactionally synchronized across databases. The
-manifest records their times. This is acceptable because domains do not share
-transactions and the off-cluster recovery-point objective is 24 hours.
+manifest records the run capture time, generation, and database set, not a shared
+transaction boundary. This is acceptable because domains do not share transactions and
+the off-cluster recovery-point objective is 24 hours.
 
 ## Recovery
 
@@ -413,12 +444,16 @@ The attended full-chain restore drill:
    `N8N_ENCRYPTION_KEY`.
 7. Redirects only that temporary n8n instance's automation-data hostname to the isolated
    restored PostgreSQL Service.
-8. Uses n8n's credential-testing path to prove that restored migrator and runtime
-   credentials authenticate without revealing their passwords.
-9. Proves that migrator and runtime permissions remain separated.
+8. Calls the restored authenticated
+   `POST /webhook/automation-data-recovery-canary`. Its single Postgres node uses the
+   restored `automation-data/issue317_acceptance/runtime` credential and returns only
+   `status`, `database`, `role`, and `executionId`.
+9. Proves that the runtime credential authenticates without revealing its password and
+   separately validates restored migrator/runtime permission separation for every ready
+   domain.
 10. Creates and validates a fresh logical bundle from the restored instance.
-11. Removes and proves absence of all run-owned workloads, policies, Services, and
-    storage.
+11. Removes and proves absence of all run-owned workloads, policies, Services, and two
+    temporary 20 GiB data claims. It creates no HTTPRoute.
 
 This drill is the independent recovery oracle. Artifact creation, `pg_restore --list`,
 checksums, Longhorn replica health, and retained Secrets do not independently prove the
@@ -433,7 +468,8 @@ metrics never publish its contents.
 Monitoring copies the current n8n PostgreSQL pattern and adds only evidence required by
 dynamic provisioning.
 
-SQL Exporter reports the existing PostgreSQL signals with a database label where needed:
+SQL Exporter exposes exactly six initial metrics. Four retain the established PostgreSQL
+signals, with a database label where needed:
 
 - connections;
 - committed and rolled-back transactions;
@@ -445,15 +481,16 @@ It adds two platform-health signals:
 - registry/catalog consistency; and
 - age of the oldest incomplete provisioning operation.
 
-PrometheusRules cover unavailable scrape and StatefulSet targets, repeated restarts and
-OOM kills, stale or absent logical backups, failed or overdue backup Jobs, the two
-platform-health signals, and the established PVC warning and critical thresholds. The
-initial design does not add speculative connection-pressure alerts or redundant
-domain-count and bundle-count metrics.
+The `automation-data-postgresql` Prometheus rule group contains 12 alerts for unavailable
+scrape and StatefulSet targets, repeated restarts and OOM kills, stale or absent logical
+backups, failed or overdue backup Jobs, the two platform-health signals, and the
+established PVC warning and critical thresholds. The initial implementation does not add
+speculative connection-pressure alerts or redundant domain-count and bundle-count
+metrics.
 
-The Grafana dashboard generalizes the n8n PostgreSQL panels for database-labeled resource
-use, transactions, connections, storage growth, backup freshness, and provisioning
-health.
+The 13-panel `automation-data-postgresql` Grafana dashboard generalizes the n8n
+PostgreSQL panels for database-labeled resource use, transactions, connections, storage
+growth, backup freshness, and provisioning health.
 
 ## Capacity
 
@@ -474,20 +511,27 @@ later resizing or topology changes.
 
 Rollout follows dependency order:
 
-1. Add the namespace, PostgreSQL package, retained claims, Service, policy, backup
-   workflow, exporter, monitoring, guarded Secret workflow, and secret-free provisioning
-   template.
-2. Run cluster-independent validation through `mise exec -- just ci`.
-3. Have the operator create the separate SOPS-encrypted automation-data credentials
-   through the guarded repository workflow.
-4. Reconcile PostgreSQL through Flux and verify storage, workload, exporter, and backup
-   target health.
-5. Import the provisioning template into private n8n and bind its PostgreSQL provisioner
-   and full-access Community-edition n8n API credentials.
-6. Provision a runtime acceptance domain through the workflow. It is not declared in
-   Git.
-7. Run provisioning, permission, rotation, persistence, backup, and recovery acceptance.
-8. Reconcile this specification and the recovery runbook with the validated result.
+1. Merge the namespace, staged PostgreSQL package, two 20 GiB retained claims, Service,
+   policy, backup workflow, exporter, monitoring, guarded Secret writer, and secret-free
+   n8n templates after `mise exec -- just ci` passes.
+2. Create and merge the SOPS-encrypted platform Secret with the guarded
+   `repo automation-data-secrets` recipe while PostgreSQL remains suspended.
+3. Run the guarded `bootstrap automation-data` recipe from deployed `origin/main`. This
+   reconciles the namespace and PostgreSQL, creates the first complete bundle, and runs
+   read-only verification.
+4. In private n8n, create **Automation Data Provisioner**, **Automation Data n8n API**,
+   and **Automation Data Provisioning Header**. Import, bind, and publish
+   `automation-data-provisioner.json`.
+5. Run `test.automation-data-provisioning`. It creates the unlisted
+   `issue317_acceptance` domain, proves idempotent reconcile and role permissions, rotates
+   a credential explicitly, and publishes a later complete bundle.
+6. Import `automation-data-recovery-canary.json`, bind **Platform Canary Header** and
+   `automation-data/issue317_acceptance/runtime`, and publish the recovery canary.
+7. Wait for later complete n8n and automation-data backups that include those bindings,
+   then run `test.automation-data-restore-drill`.
+8. Only after all live acceptance passes, change
+   `automation-data-postgresql.spec.suspend` to `false` through a reviewed Git change and
+   reconcile this specification with the dated result.
 
 Credential creation, initial workflow bootstrap, and live mutation that requires
 operator authority remain attended operator actions. Agent-owned repository work and
@@ -565,6 +609,15 @@ remain live acceptance because static or synthetic CI checks cannot reproduce th
 essential evidence. Conversely, live acceptance does not justify duplicating cheap
 repository contracts already proved by CI.
 
+## Implementation status
+
+As of 2026-09-02, the repository implementation, guarded Secret, documentation, offline
+contracts, and attended command surfaces are present. The
+`automation-data-postgresql` Flux Kustomization remains staged with
+`spec.suspend: true`. The live bootstrap, n8n credential bindings, provisioning test,
+and full-chain restore drill have not run. Recovery therefore remains unproved, and this
+specification does not claim Issue 317 is complete.
+
 ## Rejected alternatives
 
 ### Internal provisioning service
@@ -607,9 +660,10 @@ number of domains makes direct workflow provisioning or per-database dumps opera
 unwieldy; when n8n credential API behavior changes; or when a dedicated provisioning
 broker or PostgreSQL operator becomes simpler than the retained custom lifecycle.
 
-Before merge, reconcile this specification with the implemented PostgreSQL and exporter
-versions, actual n8n API scopes and workflow settings, backup artifact format, recovery
-runbook, validation commands, and observed live acceptance result.
+After each live rollout or recovery change, reconcile this specification with the
+implemented PostgreSQL and exporter versions, actual n8n API scopes and workflow
+settings, backup artifact format, recovery runbook, validation commands, and observed
+live acceptance result.
 
 ## External references
 
