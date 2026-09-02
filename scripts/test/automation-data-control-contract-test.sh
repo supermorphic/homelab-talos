@@ -159,7 +159,10 @@ rg -Fq 'REVOKE ALL ON SCHEMA platform_operations FROM PUBLIC' "$control_sql" || 
 ! rg -q 'GRANT EXECUTE ON ALL FUNCTIONS|DROP[[:space:]]+(DATABASE|ROLE)' "$control_sql" || \
   fail 'control SQL exposes broad execution or destructive cluster operations'
 for validation_field in runtimePrivilegesValid defaultPrivilegesValid \
-  crossDomainConnectDenied; do
+  crossDomainConnectDenied migratorCredentialId runtimeCredentialId \
+  migratorCredentialUpdatedAt runtimeCredentialUpdatedAt migratorDdlValid \
+  runtimeCrudValid runtimeDdlDenied runtimeOwnerAssumptionDenied \
+  runtimeRoleManagementDenied; do
   rg -Fq "'$validation_field'" "$control_sql" || \
     fail "validate_domain omits $validation_field"
 done

@@ -177,6 +177,26 @@ for forbidden in ("password", "apiKey", "headers", "credentialData"):
     require(forbidden not in response_body, f"Final response references secret-bearing field {forbidden}.")
 require(response.get("parameters", {}).get("respondWith") == "json", "The final response must be JSON.")
 
+success_code = by_name.get("Prepare Success Response", {}).get("parameters", {}).get("jsCode", "")
+for field in (
+    "migratorCredentialId",
+    "runtimeCredentialId",
+    "migratorCredentialUpdatedAt",
+    "runtimeCredentialUpdatedAt",
+    "passwordsUnchanged",
+):
+    require(field in success_code, f"Successful responses must expose non-secret {field} evidence.")
+require("migratorPassword" not in success_code and "runtimePassword" not in success_code,
+        "Successful responses must not expose generated passwords.")
+for field in (
+    "migratorDdlValid",
+    "runtimeCrudValid",
+    "runtimeDdlDenied",
+    "runtimeOwnerAssumptionDenied",
+    "runtimeRoleManagementDenied",
+):
+    require(field in success_code, f"Successful responses must expose live {field} evidence.")
+
 notes = "\n".join(
     node.get("parameters", {}).get("content", "")
     for node in nodes
@@ -186,6 +206,7 @@ for label in (
     "Automation Data Provisioner",
     "Automation Data n8n API",
     "Automation Data Provisioning Header",
+    "X-Automation-Data-Provisioning",
     "full-access Community API key",
     "n8n.lab.supermorphic.com",
 ):

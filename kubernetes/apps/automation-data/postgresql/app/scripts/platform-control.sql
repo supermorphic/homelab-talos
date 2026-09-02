@@ -515,6 +515,128 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION platform_internal.validate_role_behavior(
+  p_database text,
+  p_owner text,
+  p_migrator text,
+  p_runtime text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $function$
+DECLARE
+  connection_name text := format('automation_data_permission_%s', pg_backend_pid());
+  probe_table text := format('__automation_data_permission_probe_%s', pg_backend_pid());
+  denied_table text := format('__automation_data_permission_denied_%s', pg_backend_pid());
+  command_status text;
+  runtime_crud_valid boolean := false;
+  runtime_ddl_denied boolean := false;
+  runtime_owner_assumption_denied boolean := false;
+  runtime_role_management_denied boolean := false;
+BEGIN
+  PERFORM public.dblink_connect(
+    connection_name,
+    format('dbname=%L user=%L', p_database, 'postgres')
+  );
+
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('SET SESSION AUTHORIZATION %I', p_migrator)
+  );
+  PERFORM public.dblink_exec(connection_name, format('SET ROLE %I', p_owner));
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('CREATE TABLE app.%I (id bigint PRIMARY KEY, value text NOT NULL)', probe_table)
+  );
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('ALTER TABLE app.%I ADD COLUMN note text', probe_table)
+  );
+  PERFORM public.dblink_exec(connection_name, 'RESET ROLE');
+  PERFORM public.dblink_exec(connection_name, 'RESET SESSION AUTHORIZATION');
+
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('SET SESSION AUTHORIZATION %I', p_runtime)
+  );
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('INSERT INTO app.%I (id, value) VALUES (1, %L)', probe_table, 'created')
+  );
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('UPDATE app.%I SET value = %L WHERE id = 1', probe_table, 'updated')
+  );
+  SELECT response.value INTO STRICT runtime_crud_valid
+  FROM public.dblink(
+    connection_name,
+    format('SELECT count(*) = 1 AND min(value) = %L FROM app.%I', 'updated', probe_table)
+  ) AS response(value boolean);
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('DELETE FROM app.%I WHERE id = 1', probe_table)
+  );
+
+  command_status := public.dblink_exec(
+    connection_name,
+    format('CREATE TABLE app.%I (id bigint)', denied_table),
+    false
+  );
+  runtime_ddl_denied := command_status = 'ERROR';
+  command_status := public.dblink_exec(
+    connection_name,
+    format('SET ROLE %I', p_owner),
+    false
+  );
+  runtime_owner_assumption_denied := command_status = 'ERROR';
+  PERFORM public.dblink_exec(connection_name, 'RESET SESSION AUTHORIZATION');
+
+  SELECT NOT role.rolcreaterole AND NOT role.rolcreatedb AND NOT role.rolsuper
+  INTO STRICT runtime_role_management_denied
+  FROM pg_roles AS role
+  WHERE role.rolname = p_runtime;
+
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('DROP TABLE app.%I', probe_table)
+  );
+  PERFORM public.dblink_exec(
+    connection_name,
+    format('DROP TABLE IF EXISTS app.%I', denied_table)
+  );
+  PERFORM public.dblink_disconnect(connection_name);
+
+  RETURN jsonb_build_object(
+    'migratorDdlValid', true,
+    'runtimeCrudValid', runtime_crud_valid,
+    'runtimeDdlDenied', runtime_ddl_denied,
+    'runtimeOwnerAssumptionDenied', runtime_owner_assumption_denied,
+    'runtimeRoleManagementDenied', runtime_role_management_denied
+  );
+EXCEPTION WHEN OTHERS THEN
+  BEGIN
+    PERFORM public.dblink_exec(connection_name, 'RESET ROLE', false);
+    PERFORM public.dblink_exec(connection_name, 'RESET SESSION AUTHORIZATION', false);
+    PERFORM public.dblink_exec(
+      connection_name,
+      format('DROP TABLE IF EXISTS app.%I', probe_table),
+      false
+    );
+    PERFORM public.dblink_exec(
+      connection_name,
+      format('DROP TABLE IF EXISTS app.%I', denied_table),
+      false
+    );
+    PERFORM public.dblink_disconnect(connection_name);
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+  RAISE;
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION platform_operations.validate_domain(p_domain text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -526,8 +648,10 @@ DECLARE
   runtime_privileges_valid boolean;
   default_privileges_valid boolean;
   cross_domain_connect_denied boolean;
+  role_behavior jsonb;
 BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT managed
   FROM platform_operations.managed_domains
   WHERE domain = p_domain;
@@ -608,9 +732,19 @@ BEGIN
         has_database_privilege(managed.runtime_role, database.datname, 'CONNECT')
       )
   ) INTO cross_domain_connect_denied;
+  role_behavior := platform_internal.validate_role_behavior(
+    managed.database_name,
+    managed.owner_role,
+    managed.migrator_role,
+    managed.runtime_role
+  );
   RETURN jsonb_build_object(
     'domain', p_domain,
     'database', managed.database_name,
+    'migratorCredentialId', managed.migrator_credential_id,
+    'runtimeCredentialId', managed.runtime_credential_id,
+    'migratorCredentialUpdatedAt', managed.migrator_credential_updated_at,
+    'runtimeCredentialUpdatedAt', managed.runtime_credential_updated_at,
     'ownerNoLogin', COALESCE((SELECT NOT rolcanlogin FROM pg_roles WHERE rolname = managed.owner_role), false),
     'migratorCanSetOwner', pg_has_role(managed.migrator_role, managed.owner_role, 'SET'),
     'runtimeCannotSetOwner', NOT pg_has_role(managed.runtime_role, managed.owner_role, 'SET'),
@@ -621,6 +755,11 @@ BEGIN
     'runtimePrivilegesValid', runtime_privileges_valid,
     'defaultPrivilegesValid', default_privileges_valid,
     'crossDomainConnectDenied', cross_domain_connect_denied,
+    'migratorDdlValid', (role_behavior->>'migratorDdlValid')::boolean,
+    'runtimeCrudValid', (role_behavior->>'runtimeCrudValid')::boolean,
+    'runtimeDdlDenied', (role_behavior->>'runtimeDdlDenied')::boolean,
+    'runtimeOwnerAssumptionDenied', (role_behavior->>'runtimeOwnerAssumptionDenied')::boolean,
+    'runtimeRoleManagementDenied', (role_behavior->>'runtimeRoleManagementDenied')::boolean,
     'state', managed.state
   );
 END;

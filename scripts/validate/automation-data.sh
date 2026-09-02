@@ -85,4 +85,77 @@ done
   kubernetes/apps/monitoring/alerts/app/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data PrometheusRule must be selected exactly once'
 
+just --dry-run kube automation-data-verify >/dev/null 2>&1 ||
+  fail 'the read-only automation-data verification recipe is missing'
+just --dry-run kube automation-data-provisioning-test >/dev/null 2>&1 ||
+  fail 'the attended automation-data provisioning recipe is missing'
+
+catalog='tests/catalog.yaml'
+verification_contract="$(yq -o=json -I=0 '
+  .suites[] | select(.metadata.id == "verification.automation-data") |
+  {
+    "mutates": .metadata.mutates_cluster,
+    "owner": .metadata.execution_owner,
+    "access": .access.tier,
+    "confirmation": .confirmation.type,
+    "command": .runner.command,
+    "implementation": .runner.implementation
+  }
+' "$catalog")"
+[[ "$verification_contract" == \
+  '{"mutates":false,"owner":"human","access":"observer","confirmation":"none","command":"mise exec -- just kube automation-data-verify","implementation":"scripts/verify/automation-data.sh"}' ]] ||
+  fail 'the read-only automation-data catalog contract is missing or unsafe'
+
+provisioning_contract="$(yq -o=json -I=0 '
+  .suites[] | select(.metadata.id == "test.automation-data-provisioning") |
+  {
+    "mutates": .metadata.mutates_cluster,
+    "owner": .metadata.execution_owner,
+    "confirmation": .confirmation,
+    "command": .runner.command,
+    "implementation": .runner.implementation,
+    "dispatch": .dispatch
+  }
+' "$catalog")"
+[[ "$provisioning_contract" == \
+  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  fail 'the attended automation-data provisioning catalog contract is missing or unsafe'
+
+verifier='scripts/verify/automation-data.sh'
+scenario='scripts/test/scenarios/automation-data-provisioning.sh'
+[[ -x "$verifier" && -x "$scenario" ]] ||
+  fail 'automation-data live verification implementations must be executable'
+! rg -n 'kubectl[^\n]*((get|describe)[[:space:]]+secrets?|exec|port-forward)|psql|/api/v1/credentials|/webhook/' \
+  "$verifier" >/dev/null ||
+  fail 'the read-only verifier crosses its observer-safe boundary'
+for verifier_contract in \
+  'automation-data-postgresql-data automation-data-postgresql-backups' \
+  "'/api/v1/targets?state=active'" \
+  "'/api/v1/rules?type=alert'" \
+  'automation_data_postgresql_backup_last_success_timestamp_seconds' \
+  'automation_data_postgresql_registry_catalog_consistent' \
+  'automation_data_postgresql_oldest_incomplete_provisioning_age_seconds' \
+  'get volumes.longhorn.io --output json'; do
+  rg -Fq "$verifier_contract" "$verifier" ||
+    fail "the read-only verifier omits $verifier_contract"
+done
+
+for scenario_contract in \
+  "expected_confirmation='test:automation-data:provisioning'" \
+  'X-Automation-Data-Provisioning' \
+  "domain='issue317_acceptance'" \
+  "error_domain='issue317_backup_error'" \
+  'secretKeyRef' \
+  'record_operation_error' \
+  '--from=cronjob/automation-data-postgresql-backup' \
+  'automation-data-postgresql-backups", "readOnly": true' \
+  'backup_timestamp_after' \
+  'credential_signature'; do
+  rg -Fq -- "$scenario_contract" "$scenario" ||
+    fail "the attended provisioning scenario omits $scenario_contract"
+done
+! rg -n 'echo[^\n]*(provisioning_token|PGPASSWORD)|printf[^\n]*PGPASSWORD|globals\.sql[^\n]*(cat|less|head|tail)' \
+  "$scenario" >/dev/null ||
+  fail 'the attended provisioning scenario can print a credential or globals dump'
+
 echo 'automation-data offline source contracts passed.'

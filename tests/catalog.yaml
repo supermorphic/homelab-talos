@@ -64,6 +64,7 @@ campaigns:
       - verification.flux
       - verification.foundation
       - verification.n8n
+      - verification.automation-data
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -125,6 +126,7 @@ campaigns:
       - verification.flux
       - verification.foundation
       - verification.n8n
+      - verification.automation-data
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -187,6 +189,7 @@ campaigns:
       - test.storage-provisioning
       - test.flux-canary
       - test.n8n-restore-drill
+      - test.automation-data-provisioning
       - test.integration.media-hardlink
       - test.plex-network-policy
       - test.ntfy-publish
@@ -453,6 +456,11 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube n8n-verify", implementation: scripts/verify/n8n.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.automation-data, source: verification, framework: bash, suite: platform, tier: verification, target: automation-data, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube automation-data-verify", implementation: scripts/verify/automation-data.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
@@ -612,6 +620,11 @@ suites:
     runner: {command: "N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary mise exec -- just kube n8n-restore-drill", implementation: scripts/test/scenarios/n8n-restore-drill.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/n8n-restore-drill.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.automation-data-provisioning, source: test, framework: bash, suite: platform, tier: integration, target: automation-data, scenario: provisioning, scope: system, intent: feature, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: AUTOMATION_DATA_PROVISIONING_CONFIRM, expected: "test:automation-data:provisioning"}
+    runner: {command: "AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test", implementation: scripts/test/scenarios/automation-data-provisioning.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-provisioning.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
     runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}
