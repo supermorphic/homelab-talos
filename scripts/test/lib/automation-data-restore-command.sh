@@ -75,8 +75,17 @@ initial_database_count="$(psql --dbname=postgres --tuples-only --no-align \
 test "$initial_database_count" = 0 || restore_fail destination-not-empty
 
 printf '%s\n' 'restore_stage=globals-restore'
-psql --dbname=postgres --set=ON_ERROR_STOP=1 --file="$selected/globals.sql" \
+bootstrap_role_declarations="$(awk '$0 == "CREATE ROLE postgres;" { count += 1 } END { print count + 0 }' \
+  "$selected/globals.sql")" || restore_fail globals-bootstrap-inspection
+test "$bootstrap_role_declarations" = 1 || restore_fail globals-bootstrap-declaration
+umask 077
+globals_restore_file=/tmp/restore-globals-without-bootstrap-create.sql
+trap 'rm -f -- "$globals_restore_file"' 0
+awk '$0 != "CREATE ROLE postgres;"' "$selected/globals.sql" > "$globals_restore_file" ||
+  restore_fail globals-bootstrap-filter
+psql --dbname=postgres --set=ON_ERROR_STOP=1 --file="$globals_restore_file" \
   >/tmp/restore-globals.log 2>&1 || restore_fail globals-restore
+rm -f -- "$globals_restore_file"
 
 printf '%s\n' 'restore_stage=database-restore'
 while IFS="$(printf '\t')" read -r record encoded dump_path extra; do

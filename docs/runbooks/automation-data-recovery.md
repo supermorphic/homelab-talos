@@ -86,10 +86,14 @@ verifiers, tablespaces, and related global state. It does not replace the indivi
 database dumps. Each `pg_dump` restores database-local schema, object ownership, ACLs,
 grants, and data.
 
-Restore into a new empty PostgreSQL instance. Restore `globals.sql` first. Then create or
-restore exactly every database recorded in `manifest.tsv`. Compare the restored database
-set and platform registry with the captured artifacts. Validate owner, membership,
-connection, DDL, CRUD, ACL, and default-privilege behavior for every ready domain.
+Restore into a new empty PostgreSQL instance. Restore `globals.sql` first. The initialized
+destination already has the `postgres` bootstrap role. Require exactly one literal
+`CREATE ROLE postgres;` statement in the validated globals dump and omit only that
+statement during restore. Apply every remaining statement with `ON_ERROR_STOP`; this
+includes the restored `postgres` attributes and password verifier. Then create or restore
+exactly every database recorded in `manifest.tsv`. Compare the restored database set and
+platform registry with the captured artifacts. Validate owner, membership, connection,
+DDL, CRUD, ACL, and default-privilege behavior for every ready domain.
 
 Use the registered attended drill for the supported isolated proof:
 

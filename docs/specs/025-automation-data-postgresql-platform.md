@@ -282,9 +282,10 @@ control database, **Automation Data n8n API** with the full-access key in
 
 The workflow accepts `POST /webhook/automation-data-provision`. It calls only the local
 `http://127.0.0.1:5678/api/v1/credentials` collection and its exact credential-ID and
-`/test` children. Supported operations are `provision`, `reconcile`, `rotate`, and
-`validate`; only `rotate` accepts a `credential` value, which must be `migrator` or
-`runtime`.
+`/test` children. Each credential-list operation follows `nextCursor` until the complete
+n8n credential inventory is exhausted before it checks exact domain credential names and
+duplicates. Supported operations are `provision`, `reconcile`, `rotate`, and `validate`;
+only `rotate` accepts a `credential` value, which must be `migrator` or `runtime`.
 
 The workflow accepts structured domain identifiers and supported operations. It does not
 accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
@@ -436,7 +437,11 @@ The attended full-chain restore drill:
 
 1. Selects a complete bundle and validates every checksum.
 2. Starts an isolated empty automation-data PostgreSQL instance using the pinned image.
-3. Restores globals first, including role memberships and password verifiers.
+3. Restores globals first, including role memberships and password verifiers. The empty
+   destination already contains its `postgres` bootstrap role, so the drill requires
+   exactly one `CREATE ROLE postgres;` declaration and omits only that statement. It
+   applies all remaining global statements with `ON_ERROR_STOP`, including the restored
+   `postgres` attributes and password verifier.
 4. Restores the platform control database and every domain database from the manifest.
 5. Verifies that the registry, PostgreSQL catalog, ownership, grants, and restored
    database set agree.

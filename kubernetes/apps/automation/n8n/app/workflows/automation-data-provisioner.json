@@ -123,7 +123,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
         "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
-        "options": {}
+        "options": {"pagination": {"pagination": {"paginationMode": "updateAParameterInEachRequest", "parameters": {"parameters": [{"type": "qs", "name": "cursor", "value": "={{ $response.body.nextCursor }}"}]}, "paginationCompleteWhen": "other", "completeExpression": "={{ !$response.body.nextCursor }}", "limitPagesFetched": false, "requestInterval": 0}}}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -134,7 +134,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst select = (kind) => {\n  const name = `automation-data/${domain}/${kind}`;\n  const matches = $json.data.filter((item) => item.name === name);\n  if (matches.length > 1) throw new Error('duplicate_domain_credential');\n  if (matches[0] && matches[0].type !== 'postgres') throw new Error('wrong_credential_type');\n  return matches[0] || null;\n};\nconst migrator = select('migrator');\nconst runtime = select('runtime');\nreturn [{ json: { domain, migrator, runtime, migratorExists: Boolean(migrator), runtimeExists: Boolean(runtime) } }];"
+        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nconst pages = $input.all().map((item) => item.json);\nif (!pages.length || pages.some((page) => !page || !Array.isArray(page.data)) || pages[pages.length - 1].nextCursor) throw new Error('incomplete_credential_snapshot');\nconst credentials = pages.flatMap((page) => page.data);\nconst select = (kind) => {\n  const name = `automation-data/${domain}/${kind}`;\n  const matches = credentials.filter((item) => item.name === name);\n  if (matches.length > 1) throw new Error('duplicate_domain_credential');\n  if (matches[0] && matches[0].type !== 'postgres') throw new Error('wrong_credential_type');\n  return matches[0] || null;\n};\nconst migrator = select('migrator');\nconst runtime = select('runtime');\nreturn [{ json: { domain, migrator, runtime, migratorExists: Boolean(migrator), runtimeExists: Boolean(runtime) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -410,7 +410,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
         "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
-        "options": {}
+        "options": {"pagination": {"pagination": {"paginationMode": "updateAParameterInEachRequest", "parameters": {"parameters": [{"type": "qs", "name": "cursor", "value": "={{ $response.body.nextCursor }}"}]}, "paginationCompleteWhen": "other", "completeExpression": "={{ !$response.body.nextCursor }}", "limitPagesFetched": false, "requestInterval": 0}}}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -421,7 +421,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst exact = (kind) => $json.data.filter((item) => item.name === `automation-data/${domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('ready_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nreturn [{ json: { domain, migrator: migrators[0], runtime: runtimes[0] } }];"
+        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nconst pages = $input.all().map((item) => item.json);\nif (!pages.length || pages.some((page) => !page || !Array.isArray(page.data)) || pages[pages.length - 1].nextCursor) throw new Error('incomplete_credential_snapshot');\nconst credentials = pages.flatMap((page) => page.data);\nconst exact = (kind) => credentials.filter((item) => item.name === `automation-data/${domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('ready_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nreturn [{ json: { domain, migrator: migrators[0], runtime: runtimes[0] } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -522,7 +522,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
         "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
-        "options": {}
+        "options": {"pagination": {"pagination": {"paginationMode": "updateAParameterInEachRequest", "parameters": {"parameters": [{"type": "qs", "name": "cursor", "value": "={{ $response.body.nextCursor }}"}]}, "paginationCompleteWhen": "other", "completeExpression": "={{ !$response.body.nextCursor }}", "limitPagesFetched": false, "requestInterval": 0}}}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -533,7 +533,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Request').first().json;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst exact = (kind) => $json.data.filter((item) => item.name === `automation-data/${request.domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('rotation_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nconst target = request.credential === 'migrator' ? migrators[0] : runtimes[0];\nreturn [{ json: { domain: request.domain, credential: request.credential, target, migrator: migrators[0], runtime: runtimes[0] } }];"
+        "jsCode": "const request = $('Normalize Request').first().json;\nconst pages = $input.all().map((item) => item.json);\nif (!pages.length || pages.some((page) => !page || !Array.isArray(page.data)) || pages[pages.length - 1].nextCursor) throw new Error('incomplete_credential_snapshot');\nconst credentials = pages.flatMap((page) => page.data);\nconst exact = (kind) => credentials.filter((item) => item.name === `automation-data/${request.domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('rotation_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nconst target = request.credential === 'migrator' ? migrators[0] : runtimes[0];\nreturn [{ json: { domain: request.domain, credential: request.credential, target, migrator: migrators[0], runtime: runtimes[0] } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

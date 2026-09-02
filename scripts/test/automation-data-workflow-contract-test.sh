@@ -120,6 +120,25 @@ for node in http_nodes:
     else:
         require(method == "PATCH", f"{node['name']} must PATCH credential updates.")
 
+for name in ("List Provision Credentials", "List Ready Credentials", "List Rotation Credentials"):
+    parameters = by_name.get(name, {}).get("parameters", {})
+    pagination = parameters.get("options", {}).get("pagination", {}).get("pagination", {})
+    require(
+        pagination.get("paginationMode") == "updateAParameterInEachRequest",
+        f"{name} must follow the complete cursor-paginated credential inventory.",
+    )
+    require(
+        pagination.get("parameters", {}).get("parameters")
+        == [{"type": "qs", "name": "cursor", "value": "={{ $response.body.nextCursor }}"}],
+        f"{name} must pass the API nextCursor as the next request cursor.",
+    )
+    require(
+        pagination.get("paginationCompleteWhen") == "other"
+        and pagination.get("completeExpression") == "={{ !$response.body.nextCursor }}"
+        and pagination.get("limitPagesFetched") is False,
+        f"{name} must continue until the credential API cursor is exhausted.",
+    )
+
 serialized = json.dumps(workflow)
 for forbidden in ("DROP DATABASE", "DROP ROLE", "TRUNCATE", "DELETE FROM", "queryField"):
     require(forbidden.lower() not in serialized.lower(), f"Forbidden operation or request field found: {forbidden}")
@@ -220,6 +239,46 @@ for label in (
 
 print("automation-data workflow contract: PASS")
 PY
+
+node - "$workflow" <<'JS'
+const fs = require('fs');
+const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const byName = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
+const targetPages = [
+  { json: { data: [{ id: 'unrelated', name: 'unrelated', type: 'postgres' }], nextCursor: 'page-two' } },
+  { json: { data: [
+    { id: 'migrator-id', name: 'automation-data/domain_one/migrator', type: 'postgres' },
+    { id: 'runtime-id', name: 'automation-data/domain_one/runtime', type: 'postgres' },
+  ] } },
+];
+const lookup = () => ({ first: () => ({ json: { domain: 'domain_one', credential: 'runtime' } }) });
+const execute = (name, pages = targetPages) => {
+  const code = byName[name]?.parameters?.jsCode;
+  if (!code) throw new Error(`missing code for ${name}`);
+  return new Function('$input', '$', code)({ all: () => pages }, lookup);
+};
+for (const name of ['Analyze Provision Credential Snapshot', 'Ready Credential Set', 'Prepare Rotation']) {
+  const result = execute(name)[0].json;
+  if (result.migrator?.id !== 'migrator-id' || result.runtime?.id !== 'runtime-id') {
+    throw new Error(`${name} did not find exact credentials on a later cursor page`);
+  }
+}
+if (execute('Prepare Rotation')[0].json.target.id !== 'runtime-id') {
+  throw new Error('Rotation did not select its target from the complete credential inventory');
+}
+const duplicatePages = [...targetPages, { json: { data: [
+  { id: 'duplicate-runtime', name: 'automation-data/domain_one/runtime', type: 'postgres' },
+] } }];
+for (const name of ['Analyze Provision Credential Snapshot', 'Ready Credential Set', 'Prepare Rotation']) {
+  let rejected = false;
+  try {
+    execute(name, duplicatePages);
+  } catch (error) {
+    rejected = /duplicate|credential_set_invalid/.test(error.message);
+  }
+  if (!rejected) throw new Error(`${name} accepted a duplicate credential across cursor pages`);
+}
+JS
 
 python - "$recovery_workflow" <<'PY'
 import json

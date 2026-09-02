@@ -20,7 +20,11 @@ create_bundle() {
   local root="$1" timestamp="$2" mutation="${3:-none}" bundle
   bundle="$root/automation-data-$timestamp"
   mkdir -p "$bundle/databases"
-  printf 'synthetic globals with role verifiers\n' >"$bundle/globals.sql"
+  cat >"$bundle/globals.sql" <<'EOF'
+CREATE ROLE postgres;
+ALTER ROLE postgres WITH SUPERUSER LOGIN;
+CREATE ROLE domain_one_owner;
+EOF
   printf '%s\n' "$registry_body" >"$bundle/registry.tsv"
   {
     printf 'bundle_version\t1\n'
@@ -49,6 +53,15 @@ create_bundle() {
   esac
 }
 
+refresh_bundle_checksums() {
+  local bundle="$1"
+  (
+    cd "$bundle"
+    "$real_sha256sum" globals.sql registry.tsv manifest.tsv databases/*.dump >SHA256SUMS
+    "$real_sha256sum" SHA256SUMS | awk '{print $1 "  SHA256SUMS"}' >COMPLETE
+  )
+}
+
 new_case() {
   local name="$1" root
   root="$test_root/$name"
@@ -60,9 +73,21 @@ printf 'psql' >>"$RESTORE_LOG"
 printf '\t%s' "$@" >>"$RESTORE_LOG"
 printf '\n' >>"$RESTORE_LOG"
 command_text=''
+file_input=''
 for argument in "$@"; do
-  case "$argument" in --command=*) command_text="${argument#--command=}" ;; esac
+  case "$argument" in
+    --command=*) command_text="${argument#--command=}" ;;
+    --file=*) file_input="${argument#--file=}" ;;
+  esac
 done
+if [[ -n "$file_input" ]]; then
+  if grep -Fxq 'CREATE ROLE postgres;' "$file_input"; then
+    printf 'bootstrap role already exists\n' >&2
+    exit 29
+  fi
+  grep -Fxq 'ALTER ROLE postgres WITH SUPERUSER LOGIN;' "$file_input"
+  grep -Fxq 'CREATE ROLE domain_one_owner;' "$file_input"
+fi
 if [[ "$command_text" == *"datname <> 'postgres'"* ]]; then
   printf '0\n'
 elif [[ "$command_text" == *'FROM pg_database'* ]]; then
@@ -141,7 +166,7 @@ for stage in artifact-selection globals-restore database-restore catalog-validat
 done
 ! rg -qi 'synthetic globals|synthetic-.*password|credential.*data' "$success/output" ||
   fail 'restore output exposed globals or credential data'
-globals_line="$(rg -n 'globals.sql' "$success/commands.log" | head -n 1 | cut -d: -f1)"
+globals_line="$(rg -n $'^psql\t.*--file=' "$success/commands.log" | head -n 1 | cut -d: -f1)"
 first_database_line="$(rg -n $'^pg_restore\t--exit-on-error' \
   "$success/commands.log" | head -n 1 | cut -d: -f1)"
 [[ "$globals_line" -lt "$first_database_line" ]] || fail 'globals were not restored first'
@@ -157,6 +182,24 @@ for mutation in corrupt extra missing; do
   run_restore "$case_root"
   [[ "$(<"$case_root/status")" != '0' ]] || fail "$mutation bundle was accepted"
   ! rg -q '^backup$' "$case_root/commands.log" || fail "$mutation bundle reached fresh backup"
+done
+
+for mutation in globals-bootstrap-missing globals-bootstrap-duplicate; do
+  case_root="$(new_case "$mutation")"
+  create_bundle "$case_root/backups" 20260827T003000Z
+  bundle="$case_root/backups/automation-data-20260827T003000Z"
+  if [[ "$mutation" == globals-bootstrap-missing ]]; then
+    awk '$0 != "CREATE ROLE postgres;"' "$bundle/globals.sql" >"$bundle/globals.updated"
+    mv "$bundle/globals.updated" "$bundle/globals.sql"
+  else
+    printf 'CREATE ROLE postgres;\n' >>"$bundle/globals.sql"
+  fi
+  refresh_bundle_checksums "$bundle"
+  run_restore "$case_root"
+  [[ "$(<"$case_root/status")" != '0' ]] || fail "$mutation globals were accepted"
+  rg -Fq 'restore_failure=globals-bootstrap-declaration' "$case_root/output" ||
+    fail "$mutation did not fail at the exact bootstrap-role guard"
+  ! rg -q '^backup$' "$case_root/commands.log" || fail "$mutation reached fresh backup"
 done
 
 registry_mismatch="$(new_case registry-mismatch)"
