@@ -335,8 +335,8 @@ The initial retained Longhorn claims follow the n8n PostgreSQL baseline:
 
 | Purpose | Size | Access | Protection |
 | --- | ---: | --- | --- |
-| PostgreSQL data | 10 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
-| logical backup bundles | 10 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
+| PostgreSQL data | 20 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
+| logical backup bundles | 20 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
 
 The established 70% warning and 85% critical storage alerts drive expansion from
 measured use. Routine Flux pruning does not delete either claim, but deliberate namespace
