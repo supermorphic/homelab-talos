@@ -618,6 +618,30 @@ done
   echo 'n8n persistence must prove backup freshness before disruption and after both recoveries.' >&2
   exit 1
 }
+[[ "$(rg -Fc 'rollout status deployment/n8n --timeout=10m' "$n8n_persistence")" == '4' && \
+  "$(rg -Fc "printf '%s\\n' 'persistence_stage=" "$n8n_persistence")" == '3' ]] || {
+  echo 'n8n persistence must wait for n8n at every recovery boundary and identify all three canary stages.' >&2
+  exit 1
+}
+for marker in "printf '%s\\n' 'retry = 12'" \
+  "printf '%s\\n' 'retry-delay = 5'" \
+  "printf '%s\\n' 'retry-max-time = 90'"; do
+  rg -Fq "$marker" "$n8n_persistence" || {
+    echo "n8n persistence canary retry invariant is absent: $marker" >&2
+    exit 1
+  }
+done
+postgresql_recovery_line="$(rg -n -F 'rollout status statefulset/n8n-postgresql --timeout=10m' \
+  "$n8n_persistence" | tail -n 1 | cut -d: -f1)"
+final_n8n_recovery_line="$(rg -n -F 'rollout status deployment/n8n --timeout=10m' \
+  "$n8n_persistence" | tail -n 1 | cut -d: -f1)"
+final_canary_line="$(rg -n '^canary_check$' "$n8n_persistence" | tail -n 1 | cut -d: -f1)"
+[[ -n "$postgresql_recovery_line" && -n "$final_n8n_recovery_line" && \
+  -n "$final_canary_line" && "$postgresql_recovery_line" -lt "$final_n8n_recovery_line" && \
+  "$final_n8n_recovery_line" -lt "$final_canary_line" ]] || {
+  echo 'n8n persistence must restore PostgreSQL, then n8n readiness, before the final canary.' >&2
+  exit 1
+}
 
 bash -n "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test" \
   "$n8n_persistence" "$n8n_restore_drill"

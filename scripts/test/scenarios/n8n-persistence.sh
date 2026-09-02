@@ -190,6 +190,9 @@ canary_check() {
   curl_config="$tmp_dir/canary.curl"
   {
     printf '%s\n' 'silent' 'show-error' 'fail' 'max-time = 30' 'request = "POST"'
+    printf '%s\n' 'retry = 12'
+    printf '%s\n' 'retry-delay = 5'
+    printf '%s\n' 'retry-max-time = 90'
     printf 'resolve = "hooks.lab.supermorphic.com:443:%s"\n' "$HOMELAB_PUBLIC_GATEWAY_VIP"
     printf '%s\n' 'header = "Content-Type: application/json"'
     printf 'header = "X-Platform-Canary: %s"\n' "$token"
@@ -291,6 +294,7 @@ initial_pvc_uids="$(pvc_uids)"
 
 umask 077
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-n8n-persistence.XXXXXX")"
+printf '%s\n' 'persistence_stage=baseline-canary'
 canary_check
 backup_freshness_check
 
@@ -317,6 +321,7 @@ IFS=$'\t' read -r _new_n8n_pod new_n8n_uid new_n8n_node <<<"$new_n8n_identity"
 }
 run_sentinel_job "$reader_job" "$new_n8n_node" verify-remove
 sentinel_possible=false
+printf '%s\n' 'persistence_stage=n8n-recovery-canary'
 canary_check
 backup_freshness_check
 
@@ -330,6 +335,7 @@ IFS=$'\t' read -r postgresql_pod postgresql_uid _postgresql_node <<<"$postgresql
 verify_lease
 "${kc[@]}" delete pod "$postgresql_pod" --wait=true --timeout=5m >/dev/null
 "${kc[@]}" rollout status statefulset/n8n-postgresql --timeout=10m >/dev/null
+"${kc[@]}" rollout status deployment/n8n --timeout=10m >/dev/null
 new_postgresql_identity="$("${kc[@]}" get pods \
   --selector app.kubernetes.io/name=n8n-postgresql --output json | n8n_single_pod_identity)"
 IFS=$'\t' read -r _new_postgresql_pod new_postgresql_uid _new_postgresql_node \
@@ -342,6 +348,7 @@ IFS=$'\t' read -r _new_postgresql_pod new_postgresql_uid _new_postgresql_node \
   echo 'A retained n8n claim UID changed during persistence recovery.' >&2
   exit 1
 }
+printf '%s\n' 'persistence_stage=postgresql-recovery-canary'
 canary_check
 backup_freshness_check
 
