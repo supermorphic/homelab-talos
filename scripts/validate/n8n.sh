@@ -320,6 +320,8 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
      .confirmation.type, .confirmation.variable, .confirmation.expected,
      .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
     'human,true,resilience,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
+    .metadata.scenario == null' "$catalog")" == 'true' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") | .runner.command' \
     "$catalog")" == \
     'CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence mise exec -- just test resilience n8n-persistence' && \

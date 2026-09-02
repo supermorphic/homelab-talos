@@ -51,6 +51,14 @@ integration_entry="$(catalog_dispatch_entry "$catalog" integration media-hardlin
 resilience_entry="$(catalog_dispatch_entry "$catalog" resilience plex-node-reboot '')"
 [[ "$(yq -r '.dispatch.mode' - <<<"$resilience_entry")" == 'direct' ]]
 
+n8n_persistence_entry="$(
+  catalog_dispatch_entry "$catalog" resilience n8n-persistence ''
+)"
+[[ "$(yq -r '.metadata.id' - <<<"$n8n_persistence_entry")" == \
+  'test.n8n-persistence' ]]
+[[ "$(yq -r '.dispatch.path' - <<<"$n8n_persistence_entry")" == \
+  'scripts/test/scenarios/n8n-persistence.sh' ]]
+
 report_persistence_entry="$(
   catalog_dispatch_entry "$catalog" resilience test-reports-persistence ''
 )"
