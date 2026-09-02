@@ -9,6 +9,16 @@ fail() {
   exit 1
 }
 
+operations_guide='docs/guides/automation-data-operations.md'
+recovery_runbook='docs/runbooks/automation-data-recovery.md'
+disaster_runbook='docs/runbooks/platform-disaster-recovery.md'
+docs_index='docs/README.md'
+for required_document in "$operations_guide" "$recovery_runbook"; do
+  [[ -f "$required_document" ]] || fail "required operations document is missing: $required_document"
+done
+just --dry-run bootstrap automation-data >/dev/null 2>&1 ||
+  fail 'the guarded automation-data bootstrap recipe is missing'
+
 # These focused tests are the only merge-gate owners of the issue-specific behavior.
 # Repository-wide lint, schema, policy, SOPS, gitleaks, and Prometheus checks remain in
 # their existing suites and are intentionally not repeated here.
@@ -257,5 +267,106 @@ kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/nu
 
 shellcheck -x scripts/test/lib/automation-data-restore-command.sh \
   scripts/test/automation-data-restore-command-test.sh "$restore_scenario"
+
+# shellcheck disable=SC2016 # Backticks and shell variables are literal document markers.
+for operations_marker in \
+  "AUTOMATION_DATA_SECRETS_CONFIRM='write:automation-data:postgresql:sops'" \
+  'mise exec -- just bootstrap automation-data' \
+  'Automation Data Provisioner' \
+  'Automation Data n8n API' \
+  'Automation Data Provisioning Header' \
+  'Automation Data Recovery Canary' \
+  'Platform Canary Header' \
+  'automation-data/issue317_acceptance/runtime' \
+  'full-access Community' \
+  'Ordinary reconcile never rotates' \
+  '`DROP DATABASE`' \
+  '`DROP ROLE`' \
+  'mise exec -- just kube automation-data-provisioning-test' \
+  'mise exec -- just kube automation-data-restore-drill'; do
+  rg -Fq -- "$operations_marker" "$operations_guide" ||
+    fail "the operations guide omits $operations_marker"
+done
+# shellcheck disable=SC2016 # Backticks are literal document markers.
+for recovery_marker in \
+  '## Pod rescheduling' \
+  '## Longhorn volume recovery' \
+  '## Logical bundle restore' \
+  '## Total-cluster reconstruction' \
+  'SOPS age private key' \
+  'off-cluster backup access' \
+  '`N8N_ENCRYPTION_KEY`' \
+  '`pg_dumpall --globals-only`' \
+  '`--no-role-passwords`' \
+  'role password verifiers' \
+  'AUTOMATION_DATA_RESTORE_CONFIRM=' \
+  'fresh post-recovery backup'; do
+  rg -Fq -- "$recovery_marker" "$recovery_runbook" ||
+    fail "the recovery runbook omits $recovery_marker"
+done
+rg -Fq '[Automation-data PostgreSQL operations](guides/automation-data-operations.md)' \
+  "$docs_index" || fail 'the documentation index omits the automation-data operations guide'
+rg -Fq '[Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md)' \
+  "$docs_index" || fail 'the documentation index omits the automation-data recovery runbook'
+rg -Fq 'automation-data-recovery.md' "$disaster_runbook" ||
+  fail 'the platform disaster runbook does not include automation-data recovery'
+
+just --show bootstrap automation-data >"$temp_dir/bootstrap-source"
+# shellcheck disable=SC2016 # Shell variables are literal rendered-recipe markers.
+for bootstrap_marker in \
+  "expected_confirmation='bootstrap:automation-data'" \
+  "require_deployed_source 'automation-data bootstrap'" \
+  'git cat-file -e "origin/main:$database_secret"' \
+  'flux resume kustomization automation-data-postgresql' \
+  '--from=cronjob/automation-data-postgresql-backup' \
+  'just kube automation-data-verify' \
+  'trap cleanup_automation_data_bootstrap EXIT' \
+  'bootstrap_complete=true'; do
+  rg -Fq -- "$bootstrap_marker" "$temp_dir/bootstrap-source" ||
+    fail "the automation-data bootstrap omits $bootstrap_marker"
+done
+bootstrap_trap_line="$(rg -n -m 1 -F 'trap cleanup_automation_data_bootstrap EXIT' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+deployed_source_line="$(rg -n -m 1 -F "require_deployed_source 'automation-data bootstrap'" \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+secret_commit_line="$(rg -n -m 1 -F 'git cat-file -e "origin/main:$database_secret"' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+confirmation_line="$(rg -n -m 1 -F '[[ "${AUTOMATION_DATA_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]]' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+live_suspend_line="$(rg -n -m 1 -F 'get kustomization automation-data-postgresql' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+namespace_reconcile_line="$(rg -n -m 1 -F 'flux reconcile kustomization automation-data --namespace' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+resume_line="$(rg -n -m 1 -F 'flux resume kustomization automation-data-postgresql' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+create_line="$(rg -n -m 1 -F '"$backup_job" --from=cronjob/automation-data-postgresql-backup' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+wait_line="$(rg -n -F 'wait_for_backup_job' "$temp_dir/bootstrap-source" | tail -n 1 | cut -d: -f1)"
+delete_line="$(rg -n -F 'delete job' "$temp_dir/bootstrap-source" | tail -n 1 | cut -d: -f1)"
+verify_line="$(rg -n -m 1 -F 'just kube automation-data-verify' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+complete_line="$(rg -n -m 1 -F 'bootstrap_complete=true' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+trap_clear_line="$(rg -n -F 'trap - EXIT' "$temp_dir/bootstrap-source" | tail -n 1 | cut -d: -f1)"
+previous_line=0
+for ordered_line in "$bootstrap_trap_line" "$deployed_source_line" \
+  "$secret_commit_line" "$confirmation_line" "$live_suspend_line" \
+  "$namespace_reconcile_line" "$resume_line" "$create_line" "$wait_line" \
+  "$delete_line" "$verify_line" "$complete_line" "$trap_clear_line"; do
+  [[ -n "$ordered_line" && "$ordered_line" -gt "$previous_line" ]] ||
+    fail 'the automation-data bootstrap preflight, mutation, validation, and cleanup order is unsafe'
+  previous_line="$ordered_line"
+done
+cleanup_delete_line="$(rg -n -m 1 -F 'delete job' "$temp_dir/bootstrap-source" | cut -d: -f1)"
+cleanup_suspend_line="$(rg -n -m 1 -F 'flux suspend kustomization automation-data-postgresql' \
+  "$temp_dir/bootstrap-source" | cut -d: -f1)"
+[[ -n "$cleanup_delete_line" && -n "$cleanup_suspend_line" && \
+  "$cleanup_delete_line" -lt "$cleanup_suspend_line" && \
+  "$cleanup_suspend_line" -lt "$deployed_source_line" ]] ||
+  fail 'the automation-data bootstrap rollback does not clean its Job before re-suspending PostgreSQL'
+if rg -n 'kubectl[^\n]*(get|describe)[^\n]*secrets?|kubectl[^\n]*exec|sops[[:space:]]+-d|resume kustomization n8n|create[^\n]*httproute' \
+  "$temp_dir/bootstrap-source"; then
+  fail 'the automation-data bootstrap reads Secrets, execs, or broadens its activation scope'
+fi
 
 echo 'automation-data offline source contracts passed.'

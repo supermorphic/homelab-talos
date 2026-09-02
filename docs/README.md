@@ -3,6 +3,7 @@
 ## Guides
 
 - [Agent cluster access](guides/agent-cluster-access.md) — Install task-scoped read-only Kubernetes and Talos credentials in an agent worktree.
+- [Automation-data PostgreSQL operations](guides/automation-data-operations.md) — Activate and operate dynamic n8n domain provisioning, rotation, backups, and full-chain acceptance.
 - [Media automation greenfield startup](guides/media-automation-setup.md) — Configure qBittorrent, the Servarr applications, Lidarr, and Seerr on new persistent volumes.
 - [n8n operations](guides/n8n-operations.md) — Create the encrypted recovery unit, activate the private platform and exact public webhook, verify it, and roll it back safely.
 - [GitHub main protection](guides/github-main-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
@@ -32,6 +33,7 @@
 ## Runbooks
 
 - [Recover n8n](runbooks/n8n-recovery.md) — Choose pod, Longhorn, logical-restore, or full-reconstruction recovery while preserving the matching encrypted key.
+- [Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md) — Recover the shared domain database platform and prove the restored n8n credential-to-role-verifier chain.
 - [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
 - [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.
 - [Respond to Plex network alerts](runbooks/plex-network-alerts.md) — Diagnose, contain, and recover Plex traffic, telemetry, and workload-policy alerts.
