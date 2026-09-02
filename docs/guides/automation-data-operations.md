@@ -11,6 +11,25 @@ private provisioning workflow creates each domain at runtime.
 The recovery capability in this guide is not established until Issue 317 is merged,
 deployed, and the attended full-chain restore drill passes.
 
+Use [Staged activation](#staged-activation) for the first deployment. Use
+[Routine operation](#routine-operation) for normal operation. For recovery, use
+[Recover automation-data PostgreSQL](../runbooks/automation-data-recovery.md).
+
+## Before you start
+
+Start only when all of these conditions are true:
+
+- Issue 317 is merged and the checkout matches deployed `origin/main`;
+- the feature branch used to create the encrypted Secret is clean;
+- the operator has the SOPS age private key and access to the private n8n UI; and
+- the operator can retain the n8n encryption key and access off-cluster backups.
+
+Stop if the encrypted Secret cannot be reviewed as SOPS ciphertext, Flux does not reach
+source revision parity, a guarded command fails, an expected result is absent, or the
+required private credential cannot be handled without exposing it. Do not bypass a
+guard, broaden cluster credentials, or continue to the next activation step after a
+failure.
+
 ## Recovery roots
 
 Keep these operator-held recovery roots outside the cluster:
@@ -58,6 +77,9 @@ The writer produces only SOPS ciphertext in
 Validate, review, merge, and wait for Flux source revision parity while
 `automation-data-postgresql` remains suspended.
 
+**Expected result:** The committed Secret contains only SOPS ciphertext, Flux reports
+the merged source revision, and `automation-data-postgresql` remains suspended.
+
 ### 2. Reconcile the private platform
 
 From a clean checkout whose implementation matches deployed `origin/main`, obtain the
@@ -76,9 +98,19 @@ that Job, and runs read-only verification. On failure, it removes only its Job a
 re-suspends only the PostgreSQL Kustomization it resumed. Claims and database data stay
 in place.
 
+**Expected result:** The PostgreSQL Kustomization is active, its StatefulSet and both
+PVCs are ready, the initial run-owned backup completes, and read-only verification
+passes.
+
 ### 3. Create the three provisioning credentials in n8n
 
 Use the private n8n UI. Do not send any value to an agent or commit it.
+
+| Credential | Type | Secret source | Purpose |
+| --- | --- | --- | --- |
+| **Automation Data Provisioner** | Postgres | Retained platform provisioner password | Create and reconcile scoped PostgreSQL domain objects |
+| **Automation Data n8n API** | Header Auth | Full-access Community-edition n8n API key | Create and rotate encrypted domain credentials in n8n |
+| **Automation Data Provisioning Header** | Header Auth | Separately generated private token | Authenticate callers of the provisioning webhook |
 
 1. Create the Postgres credential **Automation Data Provisioner**. Use host
    `automation-data-postgresql.automation-data.svc.cluster.local`, port `5432`, database
@@ -93,9 +125,15 @@ Use the private n8n UI. Do not send any value to an agent or commit it.
    **Automation Data Provisioning Header** with header name
    `X-Automation-Data-Provisioning`.
 
-The API key is broader than the workflow operations that use it. Keep the editor and API
-private, disable execution-data persistence for provisioning, and use the key only in
-this dedicated workflow.
+The Community-edition API key is a privileged platform secret. It has broader n8n API
+authority than the provisioning workflow exposes. Compromise can affect more than the
+automation-data credentials managed by this workflow. Keep the editor and API private,
+disable execution-data persistence for provisioning, and use the key only in this
+dedicated workflow.
+
+**Expected result:** The private n8n instance contains all three named credentials with
+the listed types. Their values do not appear in Git, shell history, workflow JSON, or
+agent output.
 
 ### 4. Import and publish the provisioning workflow
 
@@ -109,6 +147,9 @@ Bind:
 
 Keep the workflow's execution-data settings unchanged, then publish it. Do not add
 credential IDs or values to the template in Git.
+
+**Expected result:** **Automation Data Provisioner** is published with all three named
+credentials bound, and its execution-data settings remain unchanged.
 
 ### 5. Validate provisioning and rotation
 
@@ -139,6 +180,10 @@ operations create/reconcile a domain, rotate one login credential, and validate 
 domain. The workflow does not expose `DROP DATABASE`, `DROP ROLE`, destructive schema
 replacement, or bulk data deletion.
 
+**Expected result:** The acceptance command passes, the domain and both n8n credentials
+exist, unchanged reconciliation preserves their credentials, explicit rotation changes
+only the selected login credential, and the resulting backup is complete.
+
 ### 6. Bind the recovery canary
 
 After the acceptance domain exists, import
@@ -160,7 +205,13 @@ automation-data into isolated run-owned storage, proves the restored encrypted r
 credential authenticates against the restored verifier, creates a fresh post-recovery
 backup, and removes its temporary resources.
 
+**Expected result:** The full-chain drill passes, the restored n8n credential
+authenticates to the isolated restored database, a fresh post-recovery backup exists,
+and the run-owned temporary resources are removed.
+
 ## Routine operation
+
+### Check health
 
 Use the read-only verifier for normal health checks:
 
@@ -172,10 +223,14 @@ It checks Flux and StatefulSet readiness, both PVCs and Longhorn volumes, the pr
 Service, monitoring, backup freshness, registry/catalog consistency, and incomplete
 operation age. It does not read Secrets, query PostgreSQL directly, or invoke n8n.
 
+### Add a domain
+
 Create new domains and repository integrations only through the provisioning workflow.
 Do not add a domain list, domain credential, role, database, schema, grant, or
 domain-specific Cilium policy to this repository. PostgreSQL roles enforce domain
 isolation; the workload-scoped Cilium policy permits n8n to reach the shared service.
+
+### Rotate a credential
 
 Use explicit rotation only when a domain credential must change. Retry a failed rotation
 through the same explicit operation. Do not use ordinary reconcile as password repair.
