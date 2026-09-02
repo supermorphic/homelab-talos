@@ -1,0 +1,804 @@
+{
+  "name": "Automation Data Provisioner",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## One-time operator setup\n\nImport this inactive template in the private n8n instance at `n8n.lab.supermorphic.com`, then bind these credentials in the UI:\n\n1. **Automation Data Provisioner** — Postgres credential for `automation_data_control`.\n2. **Automation Data n8n API** — Header Auth credential containing the full-access Community API key in `X-N8N-API-KEY`.\n3. **Automation Data Provisioning Header** — Header Auth credential for this private webhook.\n\nBind the Postgres credential to every Postgres node, the API credential to every HTTP Request node, and the webhook credential to **Provisioning Webhook**. Keep execution-data persistence disabled.",
+        "height": 500,
+        "width": 560
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-760, -760],
+      "id": "00000000-0000-4000-8000-000000000001",
+      "name": "Operator Setup"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "automation-data-provision",
+        "authentication": "headerAuth",
+        "responseMode": "usingRespondToWebhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-720, 0],
+      "id": "00000000-0000-4000-8000-000000000002",
+      "name": "Provisioning Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'credential']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst domain = body.domain;\nconst operation = body.operation;\nconst credential = body.credential;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['provision', 'reconcile', 'rotate', 'validate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['migrator', 'runtime'].includes(credential)) throw new Error('invalid_credential');\n} else if (credential !== undefined) {\n  throw new Error('credential_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, ...(credential ? { credential } : {}) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "id": "00000000-0000-4000-8000-000000000003",
+      "name": "Normalize Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"leftValue": "={{ $json.operation }}", "rightValue": "provision", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "provision"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"leftValue": "={{ $json.operation }}", "rightValue": "reconcile", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reconcile"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "rotate"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"leftValue": "={{ $json.operation }}", "rightValue": "validate", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "validate"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-240, 0],
+      "id": "00000000-0000-4000-8000-000000000004",
+      "name": "Select Operation"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, -520],
+      "id": "00000000-0000-4000-8000-000000000005",
+      "name": "Probe Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.result.state }}", "rightValue": "ready", "operator": {"type": "string", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [240, -560],
+      "id": "00000000-0000-4000-8000-000000000006",
+      "name": "Is Ready Domain"
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5678/api/v1/credentials",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, -360],
+      "id": "00000000-0000-4000-8000-000000000007",
+      "name": "List Provision Credentials",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst select = (kind) => {\n  const name = `automation-data/${domain}/${kind}`;\n  const matches = $json.data.filter((item) => item.name === name);\n  if (matches.length > 1) throw new Error('duplicate_domain_credential');\n  if (matches[0] && matches[0].type !== 'postgres') throw new Error('wrong_credential_type');\n  return matches[0] || null;\n};\nconst migrator = select('migrator');\nconst runtime = select('runtime');\nreturn [{ json: { domain, migrator, runtime, migratorExists: Boolean(migrator), runtimeExists: Boolean(runtime) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, -360],
+      "id": "00000000-0000-4000-8000-000000000008",
+      "name": "Analyze Provision Credential Snapshot",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"action": "generate", "dataPropertyName": "migratorPassword", "encodingType": "base64", "stringLength": 48},
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [960, -360],
+      "id": "00000000-0000-4000-8000-000000000009",
+      "name": "Generate Migrator Password",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"action": "generate", "dataPropertyName": "runtimePassword", "encodingType": "base64", "stringLength": 48},
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [1200, -360],
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "Generate Runtime Password",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.provision_domain($1, $2, $3) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain, $json.migratorPassword, $json.runtimePassword] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1440, -360],
+      "id": "00000000-0000-4000-8000-000000000011",
+      "name": "Provision Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Generate Runtime Password').first().json;\nconst result = $json.result;\nreturn [{ json: { credentialId: context.migrator?.id || null, exists: context.migratorExists, name: `automation-data/${context.domain}/migrator`, database: result.database, user: result.migratorRole, password: context.migratorPassword } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, -360],
+      "id": "00000000-0000-4000-8000-000000000012",
+      "name": "Prepare Migrator Credential Write",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.exists }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1920, -360],
+      "id": "00000000-0000-4000-8000-000000000013",
+      "name": "Migrator Credential Exists"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: { password: $json.password }, isPartialData: true }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2160, -460],
+      "id": "00000000-0000-4000-8000-000000000014",
+      "name": "Patch Partial Migrator Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5678/api/v1/credentials",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.name, type: 'postgres', data: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', database: $json.database, user: $json.user, password: $json.password, port: 5432, ssl: 'disable', allowUnauthorizedCerts: false, maxConnections: 10 } }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2160, -260],
+      "id": "00000000-0000-4000-8000-000000000015",
+      "name": "Create Migrator Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.id || !$json.updatedAt || $json.type !== 'postgres') throw new Error('invalid_migrator_credential_response');\nreturn [{ json: { migratorCredentialId: $json.id, migratorUpdatedAt: $json.updatedAt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, -360],
+      "id": "00000000-0000-4000-8000-000000000016",
+      "name": "Normalize Migrator Credential Metadata",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Generate Runtime Password').first().json;\nreturn [{ json: { ...$json, credentialId: context.runtime?.id || null, exists: context.runtimeExists, name: `automation-data/${context.domain}/runtime`, database: context.domain, user: `${context.domain}_runtime`, password: context.runtimePassword } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, -360],
+      "id": "00000000-0000-4000-8000-000000000017",
+      "name": "Prepare Runtime Credential Write",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.exists }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2880, -360],
+      "id": "00000000-0000-4000-8000-000000000018",
+      "name": "Runtime Credential Exists"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: { password: $json.password }, isPartialData: true }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3120, -460],
+      "id": "00000000-0000-4000-8000-000000000019",
+      "name": "Patch Partial Runtime Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5678/api/v1/credentials",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.name, type: 'postgres', data: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', database: $json.database, user: $json.user, password: $json.password, port: 5432, ssl: 'disable', allowUnauthorizedCerts: false, maxConnections: 10 } }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3120, -260],
+      "id": "00000000-0000-4000-8000-000000000020",
+      "name": "Create Runtime Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const migrator = $('Prepare Runtime Credential Write').first().json;\nif (!$json.id || !$json.updatedAt || $json.type !== 'postgres') throw new Error('invalid_runtime_credential_response');\nreturn [{ json: { domain: $('Normalize Request').first().json.domain, migratorCredentialId: migrator.migratorCredentialId, migratorUpdatedAt: migrator.migratorUpdatedAt, runtimeCredentialId: $json.id, runtimeUpdatedAt: $json.updatedAt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3360, -360],
+      "id": "00000000-0000-4000-8000-000000000021",
+      "name": "Build Domain Credential Metadata",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "return [{ json: { credentialId: $json.migratorCredentialId } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3600, -360],
+      "id": "00000000-0000-4000-8000-000000000022",
+      "name": "Prepare Initial Migrator Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId + '/test' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3840, -360],
+      "id": "00000000-0000-4000-8000-000000000023",
+      "name": "Test Initial Migrator Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "if ($json.status !== 'OK') throw new Error('migrator_credential_test_failed');\nreturn [{ json: { credentialId: $('Build Domain Credential Metadata').first().json.runtimeCredentialId } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4080, -360],
+      "id": "00000000-0000-4000-8000-000000000024",
+      "name": "Require Initial Migrator Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId + '/test' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4320, -360],
+      "id": "00000000-0000-4000-8000-000000000025",
+      "name": "Test Initial Runtime Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "if ($json.status !== 'OK') throw new Error('runtime_credential_test_failed');\nreturn [{ json: $('Build Domain Credential Metadata').first().json }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4560, -360],
+      "id": "00000000-0000-4000-8000-000000000026",
+      "name": "Require Initial Runtime Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_domain_credentials($1, $2, $3, $4, $5) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain, $json.migratorCredentialId, $json.runtimeCredentialId, $json.migratorUpdatedAt, $json.runtimeUpdatedAt] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [4800, -360],
+      "id": "00000000-0000-4000-8000-000000000027",
+      "name": "Record Domain Credentials",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$('Normalize Request').first().json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [5040, -360],
+      "id": "00000000-0000-4000-8000-000000000028",
+      "name": "Validate After Provision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5678/api/v1/credentials",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, -80],
+      "id": "00000000-0000-4000-8000-000000000029",
+      "name": "List Ready Credentials",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const domain = $('Normalize Request').first().json.domain;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst exact = (kind) => $json.data.filter((item) => item.name === `automation-data/${domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('ready_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nreturn [{ json: { domain, migrator: migrators[0], runtime: runtimes[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, -80],
+      "id": "00000000-0000-4000-8000-000000000030",
+      "name": "Ready Credential Set",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.reconcile_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, -80],
+      "id": "00000000-0000-4000-8000-000000000031",
+      "name": "Reconcile Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const listed = $('Ready Credential Set').first().json;\nif ($json.result.migratorCredentialId !== listed.migrator.id || $json.result.runtimeCredentialId !== listed.runtime.id) throw new Error('credential_registry_mismatch');\nif ($json.result.passwordsUnchanged !== true) throw new Error('reconcile_changed_password');\nreturn [{ json: { credentialId: listed.migrator.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, -80],
+      "id": "00000000-0000-4000-8000-000000000032",
+      "name": "Prepare Ready Migrator Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId + '/test' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, -80],
+      "id": "00000000-0000-4000-8000-000000000033",
+      "name": "Test Ready Migrator Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "if ($json.status !== 'OK') throw new Error('migrator_credential_test_failed');\nreturn [{ json: { credentialId: $('Ready Credential Set').first().json.runtime.id } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, -80],
+      "id": "00000000-0000-4000-8000-000000000034",
+      "name": "Require Ready Migrator Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId + '/test' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, -80],
+      "id": "00000000-0000-4000-8000-000000000035",
+      "name": "Test Ready Runtime Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "if ($json.status !== 'OK') throw new Error('runtime_credential_test_failed');\nreturn [{ json: { domain: $('Normalize Request').first().json.domain } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, -80],
+      "id": "00000000-0000-4000-8000-000000000036",
+      "name": "Require Ready Runtime Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2400, -80],
+      "id": "00000000-0000-4000-8000-000000000037",
+      "name": "Validate After Reconcile",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5678/api/v1/credentials",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "250"}]},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, 260],
+      "id": "00000000-0000-4000-8000-000000000038",
+      "name": "List Rotation Credentials",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Request').first().json;\nif (!Array.isArray($json.data) || $json.nextCursor) throw new Error('incomplete_credential_snapshot');\nconst exact = (kind) => $json.data.filter((item) => item.name === `automation-data/${request.domain}/${kind}`);\nconst migrators = exact('migrator');\nconst runtimes = exact('runtime');\nif (migrators.length !== 1 || runtimes.length !== 1) throw new Error('rotation_credential_set_invalid');\nif (migrators[0].type !== 'postgres' || runtimes[0].type !== 'postgres') throw new Error('wrong_credential_type');\nconst target = request.credential === 'migrator' ? migrators[0] : runtimes[0];\nreturn [{ json: { domain: request.domain, credential: request.credential, target, migrator: migrators[0], runtime: runtimes[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 260],
+      "id": "00000000-0000-4000-8000-000000000039",
+      "name": "Prepare Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"action": "generate", "dataPropertyName": "rotationPassword", "encodingType": "base64", "stringLength": 48},
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [480, 260],
+      "id": "00000000-0000-4000-8000-000000000040",
+      "name": "Generate Rotation Password",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.rotate_domain_credential($1, $2, $3) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain, $json.credential, $json.rotationPassword] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [720, 260],
+      "id": "00000000-0000-4000-8000-000000000041",
+      "name": "Rotate Domain Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Generate Rotation Password').first().json;\nif ($json.result.credentialId !== context.target.id) throw new Error('rotation_registry_mismatch');\nreturn [{ json: { credentialId: context.target.id, password: context.rotationPassword } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 260],
+      "id": "00000000-0000-4000-8000-000000000042",
+      "name": "Prepare Rotation Credential Write",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: { password: $json.password }, isPartialData: true }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 260],
+      "id": "00000000-0000-4000-8000-000000000043",
+      "name": "Patch Rotation Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.id || !$json.updatedAt || $json.type !== 'postgres') throw new Error('invalid_rotation_credential_response');\nreturn [{ json: { credentialId: $json.id, updatedAt: $json.updatedAt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 260],
+      "id": "00000000-0000-4000-8000-000000000044",
+      "name": "Prepare Rotation Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:5678/api/v1/credentials/' + $json.credentialId + '/test' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 260],
+      "id": "00000000-0000-4000-8000-000000000045",
+      "name": "Test Rotated Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "if ($json.status !== 'OK') throw new Error('rotated_credential_test_failed');\nreturn [{ json: $('Prepare Rotation Test').first().json }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 260],
+      "id": "00000000-0000-4000-8000-000000000046",
+      "name": "Require Rotated Credential Test",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Rotation').first().json;\nconst updated = $json.updatedAt;\nconst migratorUpdatedAt = context.credential === 'migrator' ? updated : context.migrator.updatedAt;\nconst runtimeUpdatedAt = context.credential === 'runtime' ? updated : context.runtime.updatedAt;\nreturn [{ json: { domain: context.domain, migratorCredentialId: context.migrator.id, runtimeCredentialId: context.runtime.id, migratorUpdatedAt, runtimeUpdatedAt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 260],
+      "id": "00000000-0000-4000-8000-000000000047",
+      "name": "Prepare Rotation Metadata",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_domain_credentials($1, $2, $3, $4, $5) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain, $json.migratorCredentialId, $json.runtimeCredentialId, $json.migratorUpdatedAt, $json.runtimeUpdatedAt] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2400, 260],
+      "id": "00000000-0000-4000-8000-000000000048",
+      "name": "Record Rotation Credentials",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$('Normalize Request').first().json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2640, 260],
+      "id": "00000000-0000-4000-8000-000000000049",
+      "name": "Validate After Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, 520],
+      "id": "00000000-0000-4000-8000-000000000050",
+      "name": "Validate Requested Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result;\nif (!result || result.state !== 'ready') throw new Error('domain_validation_failed');\nconst checks = { ownerNoLogin: result.ownerNoLogin, migratorCanSetOwner: result.migratorCanSetOwner, runtimeCannotSetOwner: result.runtimeCannotSetOwner, migratorControlConnectDenied: result.migratorControlConnectDenied, runtimeControlConnectDenied: result.runtimeControlConnectDenied, migratorDomainConnectAllowed: result.migratorDomainConnectAllowed, runtimeDomainConnectAllowed: result.runtimeDomainConnectAllowed, runtimePrivilegesValid: result.runtimePrivilegesValid, defaultPrivilegesValid: result.defaultPrivilegesValid, crossDomainConnectDenied: result.crossDomainConnectDenied };\nif (Object.values(checks).some((value) => value !== true)) throw new Error('domain_validation_failed');\nreturn [{ json: { ok: true, domain: result.domain, operation: $('Normalize Request').first().json.operation, state: result.state, database: result.database, ownerRole: `${result.domain}_owner`, migratorRole: `${result.domain}_migrator`, runtimeRole: `${result.domain}_runtime`, checks } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5520, 0],
+      "id": "00000000-0000-4000-8000-000000000051",
+      "name": "Prepare Success Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "return [{ json: { domain: $('Normalize Request').first().json.domain, errorCode: 'workflow_operation_failed' } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4800, 520],
+      "id": "00000000-0000-4000-8000-000000000052",
+      "name": "Prepare Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_operation_error($1, $2) AS result;",
+        "options": {"queryReplacement": "={{ [$json.domain, $json.errorCode] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [5040, 520],
+      "id": "00000000-0000-4000-8000-000000000053",
+      "name": "Record Operation Error",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "return [{ json: { ok: false, domain: $('Normalize Request').first().json.domain, errorCode: 'workflow_operation_failed' } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5280, 520],
+      "id": "00000000-0000-4000-8000-000000000054",
+      "name": "Prepare Error Response"
+    },
+    {
+      "parameters": {"jsCode": "return [{ json: { ok: false, errorCode: 'invalid_request' } }];"},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 700],
+      "id": "00000000-0000-4000-8000-000000000055",
+      "name": "Prepare Request Error Response"
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ $json }}", "options": {}},
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [5760, 0],
+      "id": "00000000-0000-4000-8000-000000000056",
+      "name": "Respond"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Provisioning Webhook": {"main": [[{"node": "Normalize Request", "type": "main", "index": 0}]]},
+    "Normalize Request": {"main": [[{"node": "Select Operation", "type": "main", "index": 0}], [{"node": "Prepare Request Error Response", "type": "main", "index": 0}]]},
+    "Select Operation": {"main": [[{"node": "Probe Domain", "type": "main", "index": 0}], [{"node": "List Ready Credentials", "type": "main", "index": 0}], [{"node": "List Rotation Credentials", "type": "main", "index": 0}], [{"node": "Validate Requested Domain", "type": "main", "index": 0}]]},
+    "Probe Domain": {"main": [[{"node": "Is Ready Domain", "type": "main", "index": 0}], [{"node": "List Provision Credentials", "type": "main", "index": 0}]]},
+    "Is Ready Domain": {"main": [[{"node": "List Ready Credentials", "type": "main", "index": 0}], [{"node": "List Provision Credentials", "type": "main", "index": 0}]]},
+    "List Provision Credentials": {"main": [[{"node": "Analyze Provision Credential Snapshot", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Analyze Provision Credential Snapshot": {"main": [[{"node": "Generate Migrator Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Generate Migrator Password": {"main": [[{"node": "Generate Runtime Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Generate Runtime Password": {"main": [[{"node": "Provision Domain", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Provision Domain": {"main": [[{"node": "Prepare Migrator Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Migrator Credential Write": {"main": [[{"node": "Migrator Credential Exists", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Migrator Credential Exists": {"main": [[{"node": "Patch Partial Migrator Credential", "type": "main", "index": 0}], [{"node": "Create Migrator Credential", "type": "main", "index": 0}]]},
+    "Patch Partial Migrator Credential": {"main": [[{"node": "Normalize Migrator Credential Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Create Migrator Credential": {"main": [[{"node": "Normalize Migrator Credential Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Normalize Migrator Credential Metadata": {"main": [[{"node": "Prepare Runtime Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Runtime Credential Write": {"main": [[{"node": "Runtime Credential Exists", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Runtime Credential Exists": {"main": [[{"node": "Patch Partial Runtime Credential", "type": "main", "index": 0}], [{"node": "Create Runtime Credential", "type": "main", "index": 0}]]},
+    "Patch Partial Runtime Credential": {"main": [[{"node": "Build Domain Credential Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Create Runtime Credential": {"main": [[{"node": "Build Domain Credential Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Build Domain Credential Metadata": {"main": [[{"node": "Prepare Initial Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Initial Migrator Test": {"main": [[{"node": "Test Initial Migrator Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Test Initial Migrator Credential": {"main": [[{"node": "Require Initial Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Require Initial Migrator Test": {"main": [[{"node": "Test Initial Runtime Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Test Initial Runtime Credential": {"main": [[{"node": "Require Initial Runtime Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Require Initial Runtime Test": {"main": [[{"node": "Record Domain Credentials", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Record Domain Credentials": {"main": [[{"node": "Validate After Provision", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Validate After Provision": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "List Ready Credentials": {"main": [[{"node": "Ready Credential Set", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Ready Credential Set": {"main": [[{"node": "Reconcile Domain", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Reconcile Domain": {"main": [[{"node": "Prepare Ready Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Ready Migrator Test": {"main": [[{"node": "Test Ready Migrator Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Test Ready Migrator Credential": {"main": [[{"node": "Require Ready Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Require Ready Migrator Test": {"main": [[{"node": "Test Ready Runtime Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Test Ready Runtime Credential": {"main": [[{"node": "Require Ready Runtime Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Require Ready Runtime Test": {"main": [[{"node": "Validate After Reconcile", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Validate After Reconcile": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "List Rotation Credentials": {"main": [[{"node": "Prepare Rotation", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Rotation": {"main": [[{"node": "Generate Rotation Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Generate Rotation Password": {"main": [[{"node": "Rotate Domain Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Rotate Domain Credential": {"main": [[{"node": "Prepare Rotation Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Rotation Credential Write": {"main": [[{"node": "Patch Rotation Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Patch Rotation Credential": {"main": [[{"node": "Prepare Rotation Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Rotation Test": {"main": [[{"node": "Test Rotated Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Test Rotated Credential": {"main": [[{"node": "Require Rotated Credential Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Require Rotated Credential Test": {"main": [[{"node": "Prepare Rotation Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Rotation Metadata": {"main": [[{"node": "Record Rotation Credentials", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Record Rotation Credentials": {"main": [[{"node": "Validate After Rotation", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Validate After Rotation": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Validate Requested Domain": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Success Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Prepare Error": {"main": [[{"node": "Record Operation Error", "type": "main", "index": 0}]]},
+    "Record Operation Error": {"main": [[{"node": "Prepare Error Response", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Prepare Error Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]},
+    "Prepare Request Error Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "tags": []
+}

@@ -162,4 +162,12 @@ for validation_field in runtimePrivilegesValid defaultPrivilegesValid \
     fail "validate_domain omits $validation_field"
 done
 
+rotation_function="$(sed -n \
+  '/^CREATE OR REPLACE FUNCTION platform_operations.rotate_domain_credential(/,/^CREATE OR REPLACE FUNCTION platform_operations.record_operation_error(/p' \
+  "$control_sql")"
+rg -Fq 'IF NOT managed.has_reached_ready THEN' <<<"$rotation_function" || \
+  fail 'rotation does not require a domain that previously reached ready'
+! rg -q 'managed\.state[[:space:]]*(<>|NOT IN)' <<<"$rotation_function" || \
+  fail 'rotation cannot retry after an interrupted rotating or error state'
+
 echo 'automation-data rendered platform and control interface passed.'

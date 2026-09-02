@@ -440,7 +440,9 @@ BEGIN
   FROM platform_operations.managed_domains
   WHERE domain = p_domain
   FOR UPDATE;
-  IF NOT managed.has_reached_ready OR managed.state <> 'ready' THEN
+  -- An explicit rotation is also the repair path after an interrupted attempt. The
+  -- durable credential IDs remain authoritative after a domain has reached ready once.
+  IF NOT managed.has_reached_ready THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'domain_not_ready';
   END IF;
   IF p_credential = 'migrator' THEN
