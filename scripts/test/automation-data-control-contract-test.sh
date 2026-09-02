@@ -7,6 +7,7 @@ namespace_app="$base/namespace/app"
 postgresql_app="$base/postgresql/app"
 postgresql_ks="$base/postgresql/ks.yaml"
 control_sql="$postgresql_app/scripts/platform-control.sql"
+n8n_app="$repo_root/kubernetes/apps/automation/n8n/app"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-control-contract.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -26,6 +27,7 @@ done
 
 kustomize build "$namespace_app" >"$temp_dir/namespace.yaml"
 kustomize build "$postgresql_app" >"$temp_dir/postgresql.yaml"
+kustomize build "$n8n_app" >"$temp_dir/n8n.yaml"
 
 namespace_contract="$(yq ea -r '
   select(.kind == "Namespace" and .metadata.name == "automation-data") |
@@ -169,5 +171,65 @@ rg -Fq 'IF NOT managed.has_reached_ready THEN' <<<"$rotation_function" || \
   fail 'rotation does not require a domain that previously reached ready'
 ! rg -q 'managed\.state[[:space:]]*(<>|NOT IN)' <<<"$rotation_function" || \
   fail 'rotation cannot retry after an interrupted rotating or error state'
+
+postgres_ingress_contract="$(yq ea -o=json -I=0 '
+  select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |
+  .spec.ingress[] | select(.toPorts[0].ports[0].port == "5432") |
+  [.fromEndpoints[].matchLabels | {
+    "namespace": ."k8s:io.kubernetes.pod.namespace",
+    "workload": ."app.kubernetes.io/name"
+  }] | sort_by(.namespace, .workload)
+' "$temp_dir/postgresql.yaml")"
+[[ "$postgres_ingress_contract" == \
+  '[{"namespace":"automation","workload":"n8n"},{"namespace":"automation-data","workload":"automation-data-postgresql-backup"}]' ]] || \
+  fail 'PostgreSQL port 5432 ingress is not limited to n8n and the backup Job'
+
+metrics_ingress_contract="$(yq ea -o=json -I=0 '
+  select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |
+  .spec.ingress[] | select(.toPorts[0].ports[0].port == "9399") |
+  .fromEndpoints[0].matchLabels
+' "$temp_dir/postgresql.yaml")"
+[[ "$metrics_ingress_contract" == \
+  '{"app.kubernetes.io/name":"prometheus","k8s:io.kubernetes.pod.namespace":"monitoring","operator.prometheus.io/name":"kube-prometheus-stack-prometheus"}' ]] || \
+  fail 'metrics ingress does not use the exact Prometheus workload identity'
+
+postgres_egress_count="$(yq ea -r '
+  [select(.kind == "CiliumNetworkPolicy" and
+    .metadata.name == "automation-data-postgresql") | .spec.egress[]] | length
+' "$temp_dir/postgresql.yaml")"
+[[ "$postgres_egress_count" == 0 ]] || fail 'PostgreSQL workload must have no egress'
+
+backup_egress_contract="$(yq ea -r '
+  select(.kind == "CiliumNetworkPolicy" and
+    .metadata.name == "automation-data-postgresql-backup") |
+  [.spec.egress[] | [
+    .toEndpoints[0].matchLabels."k8s:io.kubernetes.pod.namespace",
+    (.toEndpoints[0].matchLabels."app.kubernetes.io/name" //
+      .toEndpoints[0].matchLabels."k8s:k8s-app"),
+    ([.toPorts[0].ports[] | .port + "/" + .protocol] | sort | join("+"))
+  ] | join("|")] | sort | join(",")
+' "$temp_dir/postgresql.yaml")"
+[[ "$backup_egress_contract" == \
+  'automation-data|automation-data-postgresql|5432/TCP,kube-system|kube-dns|53/TCP+53/UDP' ]] || \
+  fail 'backup egress must contain only DNS and local PostgreSQL'
+
+n8n_platform_egress_count="$(yq ea -r '
+  [select(.kind == "CiliumNetworkPolicy" and .metadata.name == "n8n") |
+    .spec.egress[] | select(
+      .toEndpoints[0].matchLabels."k8s:io.kubernetes.pod.namespace" == "automation-data" and
+      .toEndpoints[0].matchLabels."app.kubernetes.io/name" == "automation-data-postgresql" and
+      .toPorts[0].ports[0].port == "5432" and
+      .toPorts[0].ports[0].protocol == "TCP"
+    )] | length
+' "$temp_dir/n8n.yaml")"
+[[ "$n8n_platform_egress_count" == 1 ]] || \
+  fail 'n8n must have exactly one stable automation-data PostgreSQL egress path'
+
+policy_sources=(
+  "$postgresql_app/ciliumnetworkpolicy.yaml"
+  "$n8n_app/ciliumnetworkpolicy.yaml"
+)
+! rg -q '(_owner|_migrator|_runtime|domain_one|backup_test_domain)' "${policy_sources[@]}" || \
+  fail 'Cilium policy contains domain-scoped selectors or names'
 
 echo 'automation-data rendered platform and control interface passed.'

@@ -56,6 +56,14 @@ spec:
         - ports:
             - port: "5432"
               protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: automation-data
+            app.kubernetes.io/name: automation-data-postgresql
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
     - toCIDRSet:
         - cidr: 0.0.0.0/0
           except:
