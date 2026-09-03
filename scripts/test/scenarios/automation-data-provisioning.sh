@@ -232,7 +232,10 @@ for job in "$error_job" "$backup_job" "$helper_job"; do
 done
 
 error_job_manifest() {
-  JOB_NAME="$error_job" RUN_HASH="$run_hash" yq --null-input --output-format yaml '
+  local error_command
+  error_command="psql --no-psqlrc --set=ON_ERROR_STOP=1 --command=\"SELECT platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');\" >/dev/null"
+  JOB_NAME="$error_job" RUN_HASH="$run_hash" ERROR_COMMAND="$error_command" \
+    yq --null-input --output-format yaml '
     {
       "apiVersion": "batch/v1",
       "kind": "Job",
@@ -267,7 +270,7 @@ error_job_manifest() {
               "name": "record-error",
               "image": "postgres:17.11-alpine3.24",
               "command": ["/bin/sh", "-ceu"],
-              "args": ["psql --no-psqlrc --set=ON_ERROR_STOP=1 --command=\"SELECT platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');\" >/dev/null"],
+              "args": [strenv(ERROR_COMMAND)],
               "env": [
                 {"name": "PGDATABASE", "value": "automation_data_control"},
                 {"name": "PGHOST", "value": "automation-data-postgresql"},
