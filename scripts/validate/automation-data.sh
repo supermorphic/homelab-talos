@@ -27,6 +27,7 @@ scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 scripts/test/automation-data-backup-test.sh
 scripts/test/automation-data-restore-command-test.sh
+scripts/test/automation-data-longhorn-health-test.sh
 
 [[ "$(yq -r '[.resources[] | select(. == "./automation-data")] | length' \
   kubernetes/apps/kustomization.yaml)" == 1 ]] ||
