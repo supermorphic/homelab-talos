@@ -38,18 +38,18 @@ This design does not:
 - make arbitrary application health part of aggregate cluster verification; or
 - independently upgrade Talos, Kubernetes, Cilium, or Longhorn.
 
-## Current state and problem
+## Previous state and problem
 
-The current `bootstrap reboot <node>` validates Kubernetes and etcd, requires an exact
-confirmation, immediately asks Talos to reboot the target, waits for its return, and
-checks Secure Boot, TPM-backed volumes, etcd, and foundation health. It neither cordons
-nor drains the target. Workloads remain assigned when the node disappears.
+The former `bootstrap reboot <node>` validated Kubernetes and etcd, required an exact
+confirmation, immediately asked Talos to reboot the target, waited for its return, and
+checked Secure Boot, TPM-backed volumes, etcd, and foundation health. It neither cordoned
+nor drained the target. Workloads remained assigned when the node disappeared.
 
 That behavior is useful evidence for an unprepared node disappearance, but it is not the
 right routine lifecycle for an established node. It also cannot intentionally leave a
 node safely powered off for physical work.
 
-Several established-state commands currently remain under `bootstrap`:
+Several established-state commands were under `bootstrap`:
 
 ```text
 bootstrap status [node]
@@ -58,7 +58,7 @@ bootstrap reboot <node>
 bootstrap resize-longhorn <node>
 ```
 
-The current public `bootstrap verify` is additionally a pre-Cilium bootstrap gate. It
+The former public `bootstrap verify` was additionally a pre-Cilium bootstrap gate. It
 expects Kubernetes Nodes to remain `NotReady` and performs a bounded ignored-kubeconfig
 handoff. That behavior cannot become an established-cluster verifier through a blind
 rename.
@@ -510,9 +510,11 @@ AND remaining etcd members retain quorum
 The default sequence is:
 
 ```text
-acquire Lease
--> establish healthy baseline and start continuous probes
--> require scenario and exact target confirmations
+require scenario confirmation
+-> acquire Lease and pass lifecycle admission
+-> require exact target confirmation
+-> establish healthy baseline
+-> start continuous probes
 -> request electrical disconnection
 -> observe genuine unprepared multi-plane loss
 -> atomically annotate abrupt-loss and cordon the already-offline Node
@@ -743,10 +745,13 @@ Confirmation is an execution-intent and target-binding guard, not authorization.
 
 ## Implementation structure
 
-The root Justfile adds thin `node` and `cluster` modules. Public recipes delegate to a
-shared Bash lifecycle controller under `scripts/node/`. The controller owns target
-resolution, Lease handling, structured-state parsing, optimistic patches, checks,
-drain, Longhorn handling, Talos operations, acceptance, and error reporting.
+The root Justfile imports thin `.just/node.just` and `.just/cluster.just` modules. Public
+recipes delegate to focused controllers under `scripts/node/` and `scripts/cluster/`.
+The shared node controller owns target resolution, Lease handling, structured-state
+parsing, optimistic patches, checks, drain, Longhorn handling, Talos operations,
+acceptance, and error reporting. The attended abrupt-loss controller is Python so its
+clock, prompts, observations, and evidence state are directly injectable in offline
+tests; a thin Bash bridge reuses the same Lease and lifecycle recovery functions.
 
 The existing Bash Lease implementation moves to a shared `scripts/lib/` location and
 retains focused tests. A large inline Just implementation is rejected because the state
@@ -850,6 +855,12 @@ reported during implementation review. This is a review budget, not a timing ass
 inside CI. If the focused additions exceed the ceiling, implementation must first remove
 avoidable process starts, repeated parsing, rendering, or duplicated cases. An exception
 requires a concrete coverage and runtime justification.
+
+The implemented top-level cases measured 2.08 seconds for `node-lifecycle` and 0.69
+seconds for `cluster-commands` on the implementation workstation, or 2.77 seconds
+combined. The additional rows in existing Python, catalog, and access tests use injected
+commands and clocks. Their expected total CI increase remains below four seconds and the
+seven-second budget; hosted CI timing remains the final comparison.
 
 Offline lifecycle tests use fake command adapters, an injected clock, and immediate
 fixture results. They perform no cluster access, network access, real sleep, watch, retry

@@ -44,6 +44,7 @@ from production policy by a unique category and run tag; production manages only
 recycle-bin purging, and mount downloads but never media. No qBittorrent or
 qbit_manage application logs are collected.
 
-The focused `media-hardlink` integration and external Talos `plex-node-reboot`
-orchestrator also run directly; wrapping either in Chainsaw would add no useful
-Kubernetes lifecycle control.
+The focused `media-hardlink` integration and attended `node-abrupt-loss` controller also
+run directly. The latter coordinates physical electrical power changes and the common
+node recovery path, so wrapping either in Chainsaw would add no useful Kubernetes
+lifecycle control.

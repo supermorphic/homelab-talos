@@ -95,7 +95,8 @@ If a foundational cluster layer is unhealthy, run the read-only checks that are
 available, identify the lowest unhealthy layer, and begin there:
 
 ```bash
-mise exec -- just bootstrap status
+mise exec -- just cluster status
+mise exec -- just cluster verify
 mise exec -- just talos volume-status
 mise exec -- just kube cilium-status
 mise exec -- just kube flux-status
@@ -159,7 +160,7 @@ Unset a shell-exported `SOPS_AGE_KEY` when the operator task is complete.
 Talos and etcd are the first live cluster prerequisite. Start with:
 
 ```bash
-mise exec -- just bootstrap status
+mise exec -- just cluster status
 mise exec -- just talos volume-status
 ```
 
@@ -173,7 +174,7 @@ reviewed recovery plan.
 This workflow is only for `nuc2` or `nuc3` during an initial join. Inspect the exact node:
 
 ```bash
-mise exec -- just bootstrap status <node>
+mise exec -- just cluster status <node>
 ```
 
 The guarded retry independently proves that:
@@ -221,6 +222,29 @@ unhealthy or the first node has not fully recovered.
 Routine planned reboots and ordinary `talos apply-live` changes are outside this
 disaster-recovery runbook. Follow the current Talos source documentation and its guarded
 workflows for planned maintenance.
+
+### Resume a contained node recovery
+
+A failed reboot, maintenance return, or electrical-loss test can leave a Node cordoned
+with `homelab.supermorphic.com/node-lifecycle`. This is intentional containment, not a
+cleanup failure. Correct the reason the node cannot return, start it physically when
+needed, and inspect the recorded kind. Then run:
+
+```bash
+NODE_LIFECYCLE_CONFIRM='accept:<node>:<kind>' \
+  mise exec -- just node maintenance-exit <node>
+```
+
+The command accepts only `maintenance`, `reboot`, or `abrupt-loss` state for that exact
+node. It verifies Talos identity, Secure Boot and TPM-backed volumes, Kubernetes readiness
+while still cordoned, three-member etcd, Cilium, Longhorn convergence, and foundation
+dependencies. For maintenance, it restores lifecycle-owned Longhorn settings first with
+compare-and-restore checks. Annotation removal and uncordon are the final Node mutation.
+
+If the node cannot return, leave it unavailable and contained. An unexpected unannotated
+`NotReady` or cordoned node also blocks another intentional disruption. Do not manually
+uncordon, remove an etcd member, or replace a node without a separate reviewed recovery
+plan.
 
 ## Establish Cilium networking
 
@@ -412,7 +436,8 @@ Disaster recovery is complete only when every recovered dependency and required
 stateful application is healthy. Run the applicable canonical checks in order:
 
 ```bash
-mise exec -- just bootstrap status
+mise exec -- just cluster status
+mise exec -- just cluster verify
 mise exec -- just talos volume-status
 mise exec -- just kube cilium-verify
 mise exec -- just kube cilium-postflight

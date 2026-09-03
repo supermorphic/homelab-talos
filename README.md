@@ -195,6 +195,8 @@ The namespace commands are also the built-in command index:
 | `just repo` | List repository workflows |
 | `just talos` | List Talos workflows |
 | `just bootstrap` | List staged bootstrap workflows |
+| `just node` | List established-node lifecycle workflows |
+| `just cluster` | List established-cluster observation workflows |
 | `just kube` | List Kubernetes rendering, validation, and live-status workflows |
 
 All currently defined recipes are listed below. Recipes marked internal are
@@ -219,12 +221,15 @@ available for focused developer validation.
 | `just talos apply-live <node>` | Guard, preview by dry-run, apply a no-reboot change to a running node, and require a second dry-run with no remaining diff (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
 | `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
 | `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Location-aware credential installation |
-| `just bootstrap resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) with a full recovery gate | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
+| `just node resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) under the shared disruption Lease | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
 | `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Cluster bootstrap; read-only |
 | `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Cluster bootstrap; destructive after confirmation |
-| `just bootstrap status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
+| `just cluster status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
 | `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join, then require healthy three-member convergence without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
-| `just bootstrap verify` | Verify the pre-Cilium etcd/Kubernetes/Talos gate and refresh ignored kubeconfig | — | Pre-Cilium bootstrap only; use `just talos kubeconfig` after Cilium |
+| `just cluster verify` | Verify the established core platform: Nodes, etcd, Talos, Cilium, Longhorn, and foundation dependencies | — | Operator-only and read-only |
+| `just node maintenance-check <node>` | Report whether the established cluster can safely disrupt one node | — | Operator-only and read-only |
+| `just node maintenance-enter <node>` | Cordon and drain one node, evacuate Longhorn replicas, and shut it down for physical work | `NODE_MAINTENANCE_CONFIRM` | Operator-only; disruptive after confirmation |
+| `just node maintenance-exit <node>` | Restore lifecycle-owned Longhorn state, accept recovery while cordoned, then uncordon | `NODE_LIFECYCLE_CONFIRM` | Operator-only; mutating after confirmation |
 | `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Read-only |
 | `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
 | `just kube n8n-validate` | Validate n8n, PostgreSQL, backup, route, monitoring, and operations source contracts | — | Cluster-independent and read-only |
@@ -252,7 +257,8 @@ available for focused developer validation.
 | `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Read-only |
 | `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `FOUNDATION_NETWORK_CONFIRM`; `FOUNDATION_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
-| `just bootstrap reboot <node>` | Gate on cluster health, reboot one node, and require full recovery (TPM auto-unlock, etcd, MetalLB failover, Cilium, DNS, HTTPS) | `TALOS_REBOOT_CONFIRM` | Disruptive after confirmation |
+| `just node reboot <node>` | Cordon, gracefully drain, reboot one established node without routine replica evacuation, accept recovery, then uncordon | `NODE_REBOOT_CONFIRM` | Operator-only; disruptive after confirmation |
+| `just test resilience node-abrupt-loss <node>` | Observe an unprepared electrical node loss, then contain and recover the node | `CLUSTER_CHAOS_CONFIRM`; `NODE_ABRUPT_LOSS_CONFIRM` | Operator-only; attended standalone resilience test |
 | `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
 | `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
 | `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Read-only |
@@ -427,10 +433,10 @@ If either command fails, use the read-only checks in this order:
 mise exec -- just kube cilium-diagnostics
 
 # Etcd membership, Talos service state, discovery, and recent logs
-mise exec -- just bootstrap status
+mise exec -- just cluster status
 
 # Limit the detailed output to one node when the failure is localized
-mise exec -- just bootstrap status nuc1
+mise exec -- just cluster status nuc1
 ```
 
 Run read-only acceptance first. After a networking change, run the explicit
@@ -448,10 +454,10 @@ traffic, and removes the test resources afterward. `just kube cilium-validate`
 and `just repo validate` validate local declarative sources; they do not establish
 live cluster health.
 
-Do not use `just bootstrap verify` as a routine check after Cilium is installed.
-It is the pre-Cilium bootstrap gate and intentionally expects all nodes to
-be `NotReady`. Do not use `just bootstrap cilium` as a status command because it
-is an installation/reconciliation workflow with a guarded mutation path.
+Use `just cluster verify` as the routine established-cluster gate. The separate
+pre-Cilium gate is private to bootstrap and intentionally expects all nodes to be
+`NotReady`. Do not use `just bootstrap cilium` as a status command because it is an
+installation/reconciliation workflow with a guarded mutation path.
 
 ## Secret Access
 
