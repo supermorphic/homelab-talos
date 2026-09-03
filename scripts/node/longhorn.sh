@@ -21,7 +21,7 @@ build_maintenance_lifecycle_record_from_state() {
   allow="$(yq -r '.spec.allowScheduling' - <<<"$state")"
   eviction="$(yq -r '.spec.evictionRequested' - <<<"$state")"
   [[ "$allow" =~ ^(true|false)$ && "$eviction" =~ ^(true|false)$ ]] || {
-    echo "Longhorn node $node has invalid scheduling state." >&2
+    echo 'Longhorn node has invalid scheduling state.' >&2
     return 1
   }
   ALLOW="$allow" EVICTION="$eviction" \

@@ -125,6 +125,18 @@ repeat_disruption_safety() {
     --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == 'True' ]] || return 1
 }
 
+repeat_pre_containment_safety() {
+  local kubeconfig="$1"
+  local talosconfig="$2"
+  local node="$3"
+  local holder="$4"
+  verify_test_lease_holder "$kubeconfig" "$holder" || return 1
+  assert_cluster_disruption_admissible "$kubeconfig" || return 1
+  verify_etcd_recovery "$talosconfig" || return 1
+  [[ "$(node_kubectl "$kubeconfig" get node "$node" \
+    --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == 'True' ]] || return 1
+}
+
 send_talos_shutdown() {
   local talosconfig="$1"
   local node_ip="$2"
@@ -181,6 +193,7 @@ run_maintenance_enter_transaction() {
   local kubeconfig="$1" talosconfig="$2" node="$3" node_ip="$4"
   local holder="$5" record="$6" inventory_file="$7"
   local longhorn_resource_version="${8:-}"
+  repeat_pre_containment_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1
   persist_node_containment "$kubeconfig" "$node" "$record" || return 1
   apply_longhorn_maintenance_state "$kubeconfig" "$node" "$record" \
     "$longhorn_resource_version" || return 1
@@ -197,6 +210,7 @@ run_maintenance_enter_transaction() {
 run_reboot_transaction() {
   local kubeconfig="$1" talosconfig="$2" node="$3" node_ip="$4"
   local holder="$5" record="$6" inventory_file="$7"
+  repeat_pre_containment_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1
   persist_node_containment "$kubeconfig" "$node" "$record" || return 1
   capture_drain_inventory "$kubeconfig" "$node" "$inventory_file" || return 1
   perform_kubernetes_drain "$kubeconfig" "$node" || return 1
@@ -215,6 +229,8 @@ run_reboot_transaction() {
 run_maintenance_exit_transaction() {
   local kubeconfig="$1" talosconfig="$2" node="$3" node_ip="$4"
   local holder="$5" record="$6" inventory_file="${7:-}"
+  verify_test_lease_holder "$kubeconfig" "$holder" || return 1
+  assert_cluster_disruption_admissible "$kubeconfig" "$node" || return 1
   perform_recovery_acceptance "$kubeconfig" "$talosconfig" "$node" "$node_ip" \
     "$record" "$inventory_file" || return 1
   repeat_disruption_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1

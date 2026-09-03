@@ -134,6 +134,7 @@ perform_recovery_acceptance() {
   wait_for_returned_node_contained "$kubeconfig" "$node" "$record" || return 1
   verify_talos_recovery "$talosconfig" "$node" "$node_ip" || return 1
   if [[ "$kind" == 'maintenance' ]]; then
+    verify_returned_node_contained "$kubeconfig" "$node" "$record" || return 1
     restore_longhorn_maintenance_state "$kubeconfig" "$node" "$record" || return 1
   fi
   verify_longhorn_convergence "$kubeconfig" || return 1

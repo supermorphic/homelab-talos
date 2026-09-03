@@ -430,6 +430,86 @@ class AbruptNodeLossTests(unittest.TestCase):
             self.assertEqual(recovery["status"], "failed")
             self.assertIn("unresolved", recovery["reason"])
 
+    def test_prompt_failure_before_disruption_reports_no_recovery_needed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            controller = abrupt.Controller(
+                "nuc1",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=dict,
+                bridge=lambda action: events.append(action),
+                prompt=lambda _message: (_ for _ in ()).throw(EOFError("no input")),
+                monitor=self.Monitor(events),
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc1:192.168.90.10",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "no input"),
+            ):
+                controller.run()
+            recovery = json.loads((Path(temporary) / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "passed")
+            self.assertIn("before disruption", recovery["reason"])
+            self.assertNotIn("contain", events)
+
+    def test_failed_recovery_is_not_retried_inside_the_same_transaction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            clock = self.Clock()
+
+            def bridge(action: str) -> None:
+                events.append(action)
+                if action == "recover":
+                    raise ScenarioFailure("acceptance failed")
+
+            observation = {
+                "talosLost": True,
+                "nodeNotReady": True,
+                "etcdTargetLost": True,
+                "quorumRetained": True,
+                "readySurvivors": 2,
+                "readyCiliumSurvivors": 2,
+                "storage": {"survivingReplicaAvailable": True},
+            }
+            controller = abrupt.Controller(
+                "nuc2",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=lambda: observation,
+                bridge=bridge,
+                prompt=lambda _message: "",
+                monotonic=clock.now,
+                sleep=clock.sleep,
+                monitor=self.Monitor(events),
+                passive_seconds=5,
+                poll_seconds=5,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc2:192.168.90.11",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "acceptance failed"),
+            ):
+                controller.run()
+            self.assertEqual(events.count("recover"), 1)
+            recovery = json.loads((Path(temporary) / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "failed")
+            self.assertIn("pending", recovery["reason"])
+
 
 class InterruptedRunTests(unittest.TestCase):
     def test_interrupted_cordon_persists_exact_recovery_target(self):

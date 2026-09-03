@@ -46,7 +46,10 @@ invalid_records=(
   '{}'
   '{"schemaVersion":2,"kind":"reboot"}'
   '{"schemaVersion":1,"kind":"unsupported"}'
+  '{"schemaVersion":1,"kind":"reboot","step":"drained"}'
+  '{"schemaVersion":1,"kind":"reboot","longhorn":{}}'
   '{"schemaVersion":1,"kind":"maintenance"}'
+  '{"schemaVersion":1,"kind":"maintenance","extra":true,"longhorn":{"allowScheduling":{"before":true,"during":false},"evictionRequested":{"before":false,"during":true}}}'
   '{"schemaVersion":1,"kind":"maintenance","longhorn":{"allowScheduling":{"before":true,"during":true},"evictionRequested":{"before":false,"during":true}}}'
   '{"schemaVersion":1,"kind":"maintenance","longhorn":{"allowScheduling":{"before":true,"during":false},"evictionRequested":{"before":false,"during":false}}}'
 )
@@ -282,6 +285,7 @@ controlled_pods='{
       "metadata": {
         "namespace": "media",
         "name": "plex-abc",
+        "labels": {"app.kubernetes.io/name": "plex"},
         "ownerReferences": [{"kind": "ReplicaSet", "name": "plex-123", "controller": true}]
       },
       "spec": {
@@ -326,6 +330,27 @@ mirror_pods='{
 }'
 validate_drain_pods "$mirror_pods" >/dev/null
 
+captured_inventory="$state_dir/captured-inventory.json"
+drain_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  case "$*" in
+    'get pods --all-namespaces --field-selector spec.nodeName=nuc1 --output json')
+      printf '%s\n' "$controlled_pods"
+      ;;
+    '--namespace media get pvc plex-config --output json')
+      printf '%s\n' '{"metadata":{"uid":"pvc-uid"},"spec":{"volumeName":"pv-plex"}}'
+      ;;
+    'get pv pv-plex --output json')
+      printf '%s\n' '{"metadata":{"uid":"pv-uid"}}'
+      ;;
+    *) return 2 ;;
+  esac
+}
+capture_drain_inventory fake-kubeconfig nuc1 "$captured_inventory"
+[[ "$(yq -r '.homelabLifecycle.claims[0] | [.namespace, .name, .uid, .volumeName, .volumeUid] | join(" ")' \
+  "$captured_inventory")" == 'media plex-config pvc-uid pv-plex pv-uid' ]]
+
 drain_calls="$state_dir/drain-calls"
 touch "$drain_calls"
 eviction_available=true
@@ -359,6 +384,55 @@ assert_fails 'Drain ran without the policy/v1 Eviction resource.' \
 after_refusal_lines="$(wc -l <"$drain_calls" | tr -d ' ')"
 [[ "$after_refusal_lines" -eq $((before_refusal_lines + 1)) ]]
 
+replacement_pods='{
+  "items": [{
+    "metadata": {
+      "namespace": "media",
+      "name": "plex-new",
+      "labels": {"app.kubernetes.io/name": "plex"},
+      "ownerReferences": [{"kind": "ReplicaSet", "name": "plex-123", "uid": "owner-uid", "controller": true}]
+    },
+    "spec": {
+      "nodeName": "nuc2",
+      "volumes": [{"name": "config", "persistentVolumeClaim": {"claimName": "plex-config"}}]
+    },
+    "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
+  }]
+}'
+workload_inventory="$state_dir/workload-inventory.json"
+OWNER_UID='owner-uid' yq --output-format json '
+  .items[0].metadata.ownerReferences[0].uid = strenv(OWNER_UID) |
+  .homelabLifecycle.claims = [{
+    "namespace": "media",
+    "name": "plex-config",
+    "uid": "pvc-uid",
+    "volumeName": "pv-plex",
+    "volumeUid": "pv-uid"
+  }]
+' <<<"$controlled_pods" >"$workload_inventory"
+pvc_uid='pvc-uid'
+drain_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  case "$*" in
+    '--namespace media get pods --selector '*'-o json'|'--namespace media get pods --selector '*'--output json')
+      printf '%s\n' "$replacement_pods"
+      ;;
+    '--namespace media get pvc plex-config --output json')
+      PVC_UID="$pvc_uid" yq --null-input --output-format json \
+        '{"metadata":{"uid":strenv(PVC_UID)},"spec":{"volumeName":"pv-plex"}}'
+      ;;
+    'get pv pv-plex --output json')
+      printf '%s\n' '{"metadata":{"uid":"pv-uid"}}'
+      ;;
+    *) return 2 ;;
+  esac
+}
+verify_workload_replacements fake-kubeconfig nuc1 "$workload_inventory"
+pvc_uid='replacement-pvc-uid'
+assert_fails 'A rebound PVC was accepted as the original workload volume.' \
+  verify_workload_replacements fake-kubeconfig nuc1 "$workload_inventory"
+
 plex_values='kubernetes/apps/media/plex/app/values.yaml'
 [[ "$(yq -r '.controllers.plex.strategy' "$plex_values")" == 'Recreate' ]]
 [[ "$(yq -r '.controllers.plex.pod.terminationGracePeriodSeconds' "$plex_values")" == '120' ]]
@@ -388,7 +462,7 @@ recovery_just() {
 perform_recovery_acceptance fake-kubeconfig fake-talosconfig nuc1 192.168.90.10 \
   "$maintenance_record" fake-inventory
 [[ "$recovery_calls" == \
-  'contained talos longhorn-restore longhorn-converged etcd cilium workloads foundation' ]]
+  'contained talos contained longhorn-restore longhorn-converged etcd cilium workloads foundation' ]]
 
 recovery_calls=''
 # shellcheck disable=SC2218  # The later definitions are deliberate transaction fakes.
@@ -441,6 +515,9 @@ verify_no_drainable_workloads() { record_transaction_call drain-empty; }
 evacuate_longhorn_replicas() { record_transaction_call longhorn-evacuated; }
 verify_short_absence_longhorn_safety() { record_transaction_call longhorn-safe; }
 repeat_disruption_safety() { record_transaction_call safety-repeat; }
+repeat_pre_containment_safety() { record_transaction_call pre-containment-safety; }
+verify_test_lease_holder() { record_transaction_call lease-recheck; }
+assert_cluster_disruption_admissible() { record_transaction_call recovery-admission; }
 send_talos_shutdown() { record_transaction_call shutdown; }
 send_talos_reboot() { record_transaction_call reboot; }
 verify_node_offline() { record_transaction_call offline; }
@@ -451,18 +528,19 @@ remove_node_containment_and_uncordon() { record_transaction_call uncordon; }
 run_maintenance_enter_transaction fake-kubeconfig fake-talosconfig nuc1 \
   192.168.90.10 holder "$maintenance_record" fake-inventory
 [[ "$transaction_calls" == \
-  'contain longhorn-during inventory drain replacements drain-empty longhorn-evacuated safety-repeat shutdown offline' ]]
+  'pre-containment-safety contain longhorn-during inventory drain replacements drain-empty longhorn-evacuated safety-repeat shutdown offline' ]]
 
 transaction_calls=''
 run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
   192.168.90.10 holder "$reboot_record" fake-inventory
 [[ "$transaction_calls" == \
-  'contain inventory drain replacements drain-empty longhorn-safe safety-repeat reboot reboot-observed accepted safety-repeat uncordon' ]]
+  'pre-containment-safety contain inventory drain replacements drain-empty longhorn-safe safety-repeat reboot reboot-observed accepted safety-repeat uncordon' ]]
 
 transaction_calls=''
 run_maintenance_exit_transaction fake-kubeconfig fake-talosconfig nuc1 \
   192.168.90.10 holder "$maintenance_record" fake-inventory
-[[ "$transaction_calls" == 'accepted safety-repeat uncordon' ]]
+[[ "$transaction_calls" == \
+  'lease-recheck recovery-admission accepted safety-repeat uncordon' ]]
 
 # shellcheck disable=SC2329  # Invoked indirectly by run_reboot_transaction.
 perform_kubernetes_drain() { record_transaction_call drain; return 1; }
@@ -470,7 +548,7 @@ transaction_calls=''
 assert_fails 'A blocked drain did not stop reboot.' \
   run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
     192.168.90.10 holder "$reboot_record" fake-inventory
-[[ "$transaction_calls" == 'contain inventory drain' ]]
+[[ "$transaction_calls" == 'pre-containment-safety contain inventory drain' ]]
 
 perform_kubernetes_drain() { record_transaction_call drain; }
 perform_recovery_acceptance() { record_transaction_call accepted; return 1; }

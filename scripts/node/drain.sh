@@ -47,12 +47,50 @@ capture_drain_inventory() {
   local kubeconfig="$1"
   local node="$2"
   local output_file="$3"
-  local pods_json
+  local pods_json claims_json='[]' namespace claim pvc pv volume_name identity
   pods_json="$(drain_kubectl "$kubeconfig" get pods --all-namespaces \
     --field-selector "spec.nodeName=$node" --output json)" || return 1
   validate_drain_pods "$pods_json" || return 1
   report_drain_local_data "$pods_json" >&2
-  printf '%s\n' "$pods_json" >"$output_file"
+  while IFS=$'\t' read -r namespace claim; do
+    [[ -n "$namespace" && -n "$claim" ]] || continue
+    pvc="$(drain_kubectl "$kubeconfig" --namespace "$namespace" get pvc "$claim" \
+      --output json)" || return 1
+    volume_name="$(yq -r '.spec.volumeName // ""' - <<<"$pvc")"
+    [[ -n "$volume_name" ]] || {
+      echo "PVC $namespace/$claim is not bound." >&2
+      return 1
+    }
+    pv="$(drain_kubectl "$kubeconfig" get pv "$volume_name" --output json)" || return 1
+    identity="$(NAMESPACE="$namespace" CLAIM="$claim" \
+      PVC_UID="$(yq -r '.metadata.uid // ""' - <<<"$pvc")" \
+      PV_NAME="$volume_name" PV_UID="$(yq -r '.metadata.uid // ""' - <<<"$pv")" \
+      yq --null-input --output-format json '{
+        "namespace": strenv(NAMESPACE),
+        "name": strenv(CLAIM),
+        "uid": strenv(PVC_UID),
+        "volumeName": strenv(PV_NAME),
+        "volumeUid": strenv(PV_UID)
+      }')"
+    [[ "$(yq -r '.uid != "" and .volumeUid != ""' - <<<"$identity")" == 'true' ]] || {
+      echo "PVC or PV identity is unavailable for $namespace/$claim." >&2
+      return 1
+    }
+    claims_json="$(ITEM="$identity" yq \
+      '. + [(strenv(ITEM) | from_json)]' <<<"$claims_json")"
+  done < <(yq -r '
+    .items[] |
+    select(.metadata.annotations."kubernetes.io/config.mirror" == null) |
+    ([.metadata.ownerReferences[]? | select(.controller == true) | .kind][0] // "") as $kind |
+    select($kind != "" and $kind != "DaemonSet") |
+    .metadata.namespace as $namespace |
+    .spec.volumes[]? |
+    select(.persistentVolumeClaim.claimName != null) |
+    $namespace + "\t" + .persistentVolumeClaim.claimName
+  ' <<<"$pods_json" | sort -u)
+  CLAIMS="$claims_json" yq --output-format json \
+    '.homelabLifecycle.claims = (strenv(CLAIMS) | from_json)' \
+    <<<"$pods_json" >"$output_file"
 }
 
 perform_kubernetes_drain() {
@@ -97,7 +135,8 @@ verify_workload_replacements() {
   local kubeconfig="$1"
   local node="$2"
   local inventory_file="$3"
-  local pod_json namespace pod_name kind selector candidates replacement claims claim
+  local pod_json namespace pod_name kind owner_uid selector candidates replacement claims claim
+  local claim_json pvc pv expected_pvc_uid expected_volume expected_volume_uid
   [[ -f "$inventory_file" ]] || return 1
   while IFS= read -r pod_json; do
     [[ -n "$pod_json" ]] || continue
@@ -105,6 +144,8 @@ verify_workload_replacements() {
     [[ -n "$kind" && "$kind" != 'DaemonSet' ]] || continue
     namespace="$(yq -r '.metadata.namespace' <<<"$pod_json")"
     pod_name="$(yq -r '.metadata.name' <<<"$pod_json")"
+    owner_uid="$(yq -r '[.metadata.ownerReferences[]? | select(.controller == true) | .uid][0] // ""' <<<"$pod_json")"
+    [[ -n "$owner_uid" ]] || return 1
     selector="$(yq -r '.metadata.labels // {} | to_entries | map(.key + "=" + .value) | join(",")' <<<"$pod_json")"
     [[ -n "$selector" ]] || {
       echo "Cannot identify a replacement for $namespace/$pod_name without labels." >&2
@@ -112,9 +153,11 @@ verify_workload_replacements() {
     }
     candidates="$(drain_kubectl "$kubeconfig" --namespace "$namespace" get pods \
       --selector "$selector" --output json)" || return 1
-    replacement="$(TARGET="$node" yq -o=json -I=0 '
+    replacement="$(TARGET="$node" OWNER_UID="$owner_uid" yq -o=json -I=0 '
       [.items[] |
         select(.spec.nodeName != strenv(TARGET)) |
+        select([.metadata.ownerReferences[]? |
+          select(.controller == true and .uid == strenv(OWNER_UID))] | length == 1) |
         select(.metadata.deletionTimestamp == null) |
         select(.status.phase == "Running") |
         select([.status.conditions[]? | select(.type == "Ready") | .status][0] == "True")][0] // ""
@@ -132,8 +175,27 @@ verify_workload_replacements() {
         echo "Replacement for $namespace/$pod_name does not mount PVC $claim." >&2
         return 1
       }
-      drain_kubectl "$kubeconfig" --namespace "$namespace" get pvc "$claim" \
-        --output jsonpath='{.spec.volumeName}' >/dev/null
     done <<<"$claims"
   done < <(yq -o=json -I=0 '.items[]' "$inventory_file")
+
+  while IFS= read -r claim_json; do
+    [[ -n "$claim_json" ]] || continue
+    namespace="$(yq -r '.namespace' <<<"$claim_json")"
+    claim="$(yq -r '.name' <<<"$claim_json")"
+    expected_pvc_uid="$(yq -r '.uid' <<<"$claim_json")"
+    expected_volume="$(yq -r '.volumeName' <<<"$claim_json")"
+    expected_volume_uid="$(yq -r '.volumeUid' <<<"$claim_json")"
+    pvc="$(drain_kubectl "$kubeconfig" --namespace "$namespace" get pvc "$claim" \
+      --output json)" || return 1
+    [[ "$(yq -r '.metadata.uid // ""' - <<<"$pvc")" == "$expected_pvc_uid" &&
+      "$(yq -r '.spec.volumeName // ""' - <<<"$pvc")" == "$expected_volume" ]] || {
+      echo "PVC identity changed for $namespace/$claim." >&2
+      return 1
+    }
+    pv="$(drain_kubectl "$kubeconfig" get pv "$expected_volume" --output json)" || return 1
+    [[ "$(yq -r '.metadata.uid // ""' - <<<"$pv")" == "$expected_volume_uid" ]] || {
+      echo "PV identity changed for $namespace/$claim." >&2
+      return 1
+    }
+  done < <(yq -o=json -I=0 '.homelabLifecycle.claims[]?' "$inventory_file")
 }

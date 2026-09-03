@@ -13,9 +13,16 @@ validate_lifecycle_record() {
   yq --exit-status '
     (.schemaVersion == 1) and
     (
-      ((.kind == "reboot" or .kind == "abrupt-loss") and (.longhorn == null)) or
+      (
+        (.kind == "reboot" or .kind == "abrupt-loss") and
+        ((. | keys | length) == 2)
+      ) or
       (
         .kind == "maintenance" and
+        ((. | keys | length) == 3) and
+        ((.longhorn | keys | length) == 2) and
+        ((.longhorn.allowScheduling | keys | length) == 2) and
+        ((.longhorn.evictionRequested | keys | length) == 2) and
         (.longhorn.allowScheduling.before == true or
           .longhorn.allowScheduling.before == false) and
         .longhorn.allowScheduling.during == false and

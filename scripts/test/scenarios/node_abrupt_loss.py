@@ -681,6 +681,7 @@ class Controller:
         loss_proven = False
         contained = False
         restore_requested = False
+        recovery_attempted = False
         primary_error: ScenarioFailure | None = None
         self.monitor.start()
         try:
@@ -748,6 +749,7 @@ class Controller:
             restore_requested = True
             state["phase"] = "recovering"
             atomic_write_json(self.state_path, state)
+            recovery_attempted = True
             self.bridge_fn("recover")
             state["phase"] = "recovered"
             write_recovery(
@@ -772,8 +774,15 @@ class Controller:
                     pass
                 else:
                     contained = True
-            if contained:
+            if not disruption_started:
+                write_recovery(
+                    self.run_dir,
+                    "passed",
+                    f"{self.node} was unchanged because execution stopped before disruption",
+                )
+            elif contained and not recovery_attempted:
                 try:
+                    recovery_attempted = True
                     self.bridge_fn("recover")
                 except ScenarioFailure:
                     write_recovery(
@@ -787,6 +796,12 @@ class Controller:
                         "passed",
                         f"{self.node} recovered after a failed resilience assertion",
                     )
+            elif contained:
+                write_recovery(
+                    self.run_dir,
+                    "failed",
+                    f"recovery acceptance remains pending for {self.node}",
+                )
             else:
                 write_recovery(
                     self.run_dir,
