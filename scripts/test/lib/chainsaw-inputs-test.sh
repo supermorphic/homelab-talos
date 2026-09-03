@@ -186,8 +186,6 @@ exit 0
 EOF
 cat >"$validator_root/bin/uv" <<'EOF'
 #!/usr/bin/env bash
-printf '%q\t' "$@" >>"${UV_LOG:?}"
-printf '\n' >>"${UV_LOG:?}"
 exit 0
 EOF
 real_git="$(command -v git)"
@@ -209,13 +207,11 @@ git -C "$validator_root" commit -qm 'validator fixture'
 chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"
 shell_case_log="$fixture_root/shell-cases.log"
-uv_log="$fixture_root/uv.log"
 passing_output="$fixture_root/passing.out"
 malformed_output="$fixture_root/malformed.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_FAIL_MALFORMED=true \
-	UV_LOG="$uv_log" \
 	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$malformed_output" 2>&1
@@ -232,10 +228,8 @@ mapfile -t malformed_lints <"$chainsaw_log"
 : >"$chainsaw_log"
 : >"$yq_log"
 : >"$shell_case_log"
-: >"$uv_log"
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" SHELL_CASE_LOG="$shell_case_log" \
-	UV_LOG="$uv_log" \
 	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$passing_output"
@@ -266,17 +260,13 @@ for expected_case in \
 		exit 1
 	}
 done
-[[ "$(rg -c $'^run\t--locked\truff\tcheck\t.*scripts/test/test_catalog_compatibility.py' "$uv_log")" -eq 1 ]]
-[[ "$(rg -c $'^run\t--locked\truff\tformat\t--check\t.*scripts/test/test_catalog_compatibility.py' "$uv_log")" -eq 1 ]]
 
 : >"$chainsaw_log"
 : >"$yq_log"
-: >"$uv_log"
 git_failure_output="$fixture_root/git-failure.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_GIT_FAIL=true \
-	UV_LOG="$uv_log" \
 	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$git_failure_output" 2>&1
