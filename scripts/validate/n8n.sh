@@ -336,7 +336,7 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
 [[ "$(yq -r '.campaigns.integration.members | join(",")' "$catalog")" == \
     'test.cilium-connectivity,test.storage-provisioning,test.flux-canary,test.n8n-restore-drill,test.automation-data-provisioning,test.automation-data-restore-drill,test.integration.media-hardlink,test.plex-network-policy,test.ntfy-publish' && \
   "$(yq -r '.campaigns.resilience.members | join(",")' "$catalog")" == \
-    'test.flux-restart,test.portainer-persistence,test.n8n-persistence,chainsaw.resilience.qbittorrent-vpn-disconnect,chainsaw.resilience.qbittorrent-pod-recreation,chainsaw.resilience.plex-cross-node-reschedule,chainsaw.resilience.test-reports-persistence,chainsaw.resilience.tailscale-subnet-router-replica-recovery,test.resilience.plex-node-reboot' && \
+    'test.flux-restart,test.portainer-persistence,test.n8n-persistence,chainsaw.resilience.qbittorrent-vpn-disconnect,chainsaw.resilience.qbittorrent-pod-recreation,chainsaw.resilience.plex-cross-node-reschedule,chainsaw.resilience.test-reports-persistence,chainsaw.resilience.tailscale-subnet-router-replica-recovery' && \
   "$(yq -r '[.campaigns.verification.members[] | select(. == "verification.n8n")] | length' \
     "$catalog")" == '1' && \
   "$(yq -r '[.campaigns."scoped-verification".members[] | select(. == "verification.n8n")] | length' \
