@@ -6,6 +6,7 @@ source scripts/node/common.sh
 source scripts/node/longhorn.sh
 source scripts/node/drain.sh
 source scripts/node/recovery.sh
+source scripts/node/lifecycle.sh
 
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-node-lifecycle-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
@@ -126,6 +127,10 @@ assert_cluster_disruption_admissible fake-kubeconfig nuc1
 node_fixture="$(node_json False true "$abrupt_record" True false '')"
 assert_cluster_disruption_admissible fake-kubeconfig nuc1
 
+node_fixture="$(node_json True false "$reboot_record" True false '')"
+assert_fails 'A lifecycle record without its cordon was accepted for recovery.' \
+  assert_cluster_disruption_admissible fake-kubeconfig nuc1
+
 node_fixture="$(node_json True true 'malformed' True false '')"
 assert_fails 'A malformed lifecycle record was accepted for recovery.' \
   assert_cluster_disruption_admissible fake-kubeconfig nuc1
@@ -241,15 +246,20 @@ longhorn_kubectl() {
 }
 
 captured_record="$(build_maintenance_lifecycle_record fake-kubeconfig nuc1)"
+captured_resource_version="$(yq -r '.metadata.resourceVersion' "$longhorn_state")"
 [[ "$(yq -o=json -I=0 '.' - <<<"$captured_record")" == \
   "$(yq -o=json -I=0 '.' - <<<"$maintenance_record")" ]]
-apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
+apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record" \
+  "$captured_resource_version"
 [[ "$(yq -r '[.spec.allowScheduling, .spec.evictionRequested] | join(" ")' "$longhorn_state")" == 'false true' ]]
 restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$(yq -r '[.spec.allowScheduling, .spec.evictionRequested] | join(" ")' "$longhorn_state")" == 'true false' ]]
 restored_replace_count="$longhorn_replace_count"
 restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$longhorn_replace_count" == "$restored_replace_count" ]]
+assert_fails 'A stale Longhorn resourceVersion was accepted for maintenance entry.' \
+  apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record" \
+    "$captured_resource_version"
 
 yq '.spec.allowScheduling = false | .spec.evictionRequested = false' \
   "$longhorn_state" >"$state_dir/longhorn-conflict.json"
@@ -373,14 +383,100 @@ recovery_just() {
   record_recovery_call foundation
 }
 
+# shellcheck disable=SC2218  # The later definitions are deliberate transaction fakes.
 perform_recovery_acceptance fake-kubeconfig fake-talosconfig nuc1 192.168.90.10 \
   "$maintenance_record" fake-inventory
 [[ "$recovery_calls" == \
   'contained talos longhorn-restore longhorn-converged etcd cilium workloads foundation' ]]
 
 recovery_calls=''
+# shellcheck disable=SC2218  # The later definitions are deliberate transaction fakes.
 perform_recovery_acceptance fake-kubeconfig fake-talosconfig nuc1 192.168.90.10 \
   "$reboot_record"
 [[ "$recovery_calls" == 'contained talos longhorn-converged etcd cilium foundation' ]]
+
+capacity_nodes="$state_dir/capacity-nodes.json"
+capacity_pods="$state_dir/capacity-pods.json"
+cat >"$capacity_nodes" <<'EOF'
+{"items":[
+  {"metadata":{"name":"nuc1","labels":{"kubernetes.io/hostname":"nuc1"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
+  {"metadata":{"name":"nuc2","labels":{"kubernetes.io/hostname":"nuc2"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
+  {"metadata":{"name":"nuc3","labels":{"kubernetes.io/hostname":"nuc3"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}}
+]}
+EOF
+cat >"$capacity_pods" <<'EOF'
+{"items":[
+  {"metadata":{"namespace":"media","name":"plex","ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc1","containers":[{"resources":{"requests":{"cpu":"100m","memory":"512Mi","gpu.intel.com/i915":"1"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"default","name":"existing","ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"500m","memory":"1Gi"}}}]},"status":{"phase":"Running"}}
+]}
+EOF
+mise exec -- python scripts/node/capacity.py nuc1 "$capacity_nodes" "$capacity_pods" >/dev/null
+yq '(.items[] | select(.metadata.name != "nuc1") | .status.allocatable."gpu.intel.com/i915") = "0"' \
+  "$capacity_nodes" >"$state_dir/capacity-blocked.json"
+assert_fails 'Insufficient extended-resource headroom was accepted.' \
+  mise exec -- python scripts/node/capacity.py nuc1 \
+    "$state_dir/capacity-blocked.json" "$capacity_pods"
+
+NODE_MAINTENANCE_CONFIRM='enter:nuc1:192.168.90.10' \
+  require_exact_confirmation NODE_MAINTENANCE_CONFIRM 'enter:nuc1:192.168.90.10'
+NODE_REBOOT_CONFIRM='reboot:nuc1:192.168.90.10' \
+  require_exact_confirmation NODE_REBOOT_CONFIRM 'reboot:nuc1:192.168.90.10'
+NODE_LIFECYCLE_CONFIRM='accept:nuc1:maintenance' \
+  require_exact_confirmation NODE_LIFECYCLE_CONFIRM 'accept:nuc1:maintenance'
+assert_fails 'A stale maintenance confirmation was accepted.' \
+  env NODE_MAINTENANCE_CONFIRM='enter:nuc2:192.168.90.11' bash -c \
+    'source scripts/node/common.sh; require_exact_confirmation NODE_MAINTENANCE_CONFIRM enter:nuc1:192.168.90.10'
+
+transaction_calls=''
+record_transaction_call() {
+  transaction_calls+="${transaction_calls:+ }$1"
+}
+persist_node_containment() { record_transaction_call contain; }
+apply_longhorn_maintenance_state() { record_transaction_call longhorn-during; }
+capture_drain_inventory() { record_transaction_call inventory; }
+perform_kubernetes_drain() { record_transaction_call drain; }
+verify_workload_replacements() { record_transaction_call replacements; }
+verify_no_drainable_workloads() { record_transaction_call drain-empty; }
+evacuate_longhorn_replicas() { record_transaction_call longhorn-evacuated; }
+verify_short_absence_longhorn_safety() { record_transaction_call longhorn-safe; }
+repeat_disruption_safety() { record_transaction_call safety-repeat; }
+send_talos_shutdown() { record_transaction_call shutdown; }
+send_talos_reboot() { record_transaction_call reboot; }
+verify_node_offline() { record_transaction_call offline; }
+observe_node_reboot() { record_transaction_call reboot-observed; }
+perform_recovery_acceptance() { record_transaction_call accepted; }
+remove_node_containment_and_uncordon() { record_transaction_call uncordon; }
+
+run_maintenance_enter_transaction fake-kubeconfig fake-talosconfig nuc1 \
+  192.168.90.10 holder "$maintenance_record" fake-inventory
+[[ "$transaction_calls" == \
+  'contain longhorn-during inventory drain replacements drain-empty longhorn-evacuated safety-repeat shutdown offline' ]]
+
+transaction_calls=''
+run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
+  192.168.90.10 holder "$reboot_record" fake-inventory
+[[ "$transaction_calls" == \
+  'contain inventory drain replacements drain-empty longhorn-safe safety-repeat reboot reboot-observed accepted safety-repeat uncordon' ]]
+
+transaction_calls=''
+run_maintenance_exit_transaction fake-kubeconfig fake-talosconfig nuc1 \
+  192.168.90.10 holder "$maintenance_record" fake-inventory
+[[ "$transaction_calls" == 'accepted safety-repeat uncordon' ]]
+
+# shellcheck disable=SC2329  # Invoked indirectly by run_reboot_transaction.
+perform_kubernetes_drain() { record_transaction_call drain; return 1; }
+transaction_calls=''
+assert_fails 'A blocked drain did not stop reboot.' \
+  run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
+    192.168.90.10 holder "$reboot_record" fake-inventory
+[[ "$transaction_calls" == 'contain inventory drain' ]]
+
+perform_kubernetes_drain() { record_transaction_call drain; }
+perform_recovery_acceptance() { record_transaction_call accepted; return 1; }
+transaction_calls=''
+assert_fails 'Rejected recovery was reported as a successful reboot.' \
+  run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
+    192.168.90.10 holder "$reboot_record" fake-inventory
+[[ "$transaction_calls" != *uncordon* ]]
 
 echo 'Node lifecycle state tests passed.'

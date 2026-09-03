@@ -54,7 +54,7 @@ assert_cluster_disruption_admissible() {
   local kubeconfig="$1"
   local recovery_node="${2:-}"
   local nodes_json node_json node_name ready unschedulable record
-  local recovery_found=false
+  local recovery_found=false recovery_cordoned=false
 
   nodes_json="$(lifecycle_kubectl "$kubeconfig" get nodes --output json)" || {
     echo 'Cannot establish node lifecycle state through the Kubernetes API.' >&2
@@ -79,6 +79,7 @@ assert_cluster_disruption_admissible() {
         return 1
       fi
       recovery_found=true
+      [[ "$unschedulable" == 'true' ]] && recovery_cordoned=true
     fi
 
     if [[ "$unschedulable" == 'true' && "$node_name" != "$recovery_node" ]]; then
@@ -91,8 +92,14 @@ assert_cluster_disruption_admissible() {
     fi
   done < <(yq --output-format json --indent 0 '.items[]' <<<"$nodes_json")
 
-  if [[ -n "$recovery_node" && "$recovery_found" != 'true' ]]; then
-    echo "Node $recovery_node has no lifecycle record to recover." >&2
-    return 1
+  if [[ -n "$recovery_node" ]]; then
+    [[ "$recovery_found" == 'true' ]] || {
+      echo "Node $recovery_node has no lifecycle record to recover." >&2
+      return 1
+    }
+    [[ "$recovery_cordoned" == 'true' ]] || {
+      echo "Node $recovery_node has lifecycle state but is not cordoned." >&2
+      return 1
+    }
   fi
 }

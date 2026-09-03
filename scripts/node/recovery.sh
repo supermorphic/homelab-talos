@@ -34,6 +34,19 @@ verify_returned_node_contained() {
   }
 }
 
+wait_for_returned_node_contained() {
+  local kubeconfig="$1"
+  local node="$2"
+  local record="$3"
+  local attempts="${NODE_RECOVERY_RETURN_ATTEMPTS:-360}"
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    verify_returned_node_contained "$kubeconfig" "$node" "$record" && return 0
+    "${NODE_SLEEP:-sleep}" "${NODE_RECOVERY_POLL_SECONDS:-5}"
+  done
+  echo "Node $node did not return Ready under lifecycle containment." >&2
+  return 1
+}
+
 verify_talos_recovery() {
   local talosconfig="$1"
   local node="$2"
@@ -43,8 +56,8 @@ verify_talos_recovery() {
   hostname="$(recovery_talosctl get hostname "${common[@]}")" || return 1
   [[ "$(yq -r '.spec.hostname' - <<<"$hostname")" == "$node" ]] || return 1
   security="$(recovery_talosctl get securitystate "${common[@]}")" || return 1
-  [[ "$(yq -r '.spec.secureBoot' - <<<"$security")" == 'true' ]]
-  [[ "$(yq -r '.spec.bootedWithUKI' - <<<"$security")" == 'true' ]]
+  [[ "$(yq -r '.spec.secureBoot' - <<<"$security")" == 'true' ]] || return 1
+  [[ "$(yq -r '.spec.bootedWithUKI' - <<<"$security")" == 'true' ]] || return 1
   volumes="$(recovery_talosctl get volumestatuses "${common[@]}")" || return 1
   for volume in STATE EPHEMERAL u-longhorn; do
     [[ "$(VOLUME="$volume" yq ea -r 'select(.metadata.id == strenv(VOLUME)) | .spec.phase' - <<<"$volumes")" == 'ready' ]] || return 1
@@ -68,7 +81,7 @@ verify_etcd_recovery() {
   [[ "$rows" == '3' && "$leaders" == '1' ]] || return 1
   alarms="$(recovery_talosctl etcd alarm list --nodes "$NODE_CLUSTER_ENDPOINTS" \
     --endpoints "$NODE_CLUSTER_ENDPOINTS" --talosconfig "$talosconfig")" || return 1
-  [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarms")" == '0' ]]
+  [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarms")" == '0' ]] || return 1
 }
 
 verify_cilium_recovery() {
@@ -80,7 +93,7 @@ verify_cilium_recovery() {
   [[ "$(yq -r '[.status.desiredNumberScheduled, .status.numberReady, (.status.numberUnavailable // 0)] | join(" ")' - <<<"$daemonset")" == '3 3 0' ]] || return 1
   pods="$(recovery_kubectl "$kubeconfig" --namespace kube-system get pods \
     --selector k8s-app=cilium --field-selector "spec.nodeName=$node" --output json)" || return 1
-  [[ "$(yq -r '[.items[] | select([.status.conditions[]? | select(.type == "Ready") | .status][0] == "True")] | length' - <<<"$pods")" == '1' ]]
+  [[ "$(yq -r '[.items[] | select([.status.conditions[]? | select(.type == "Ready") | .status][0] == "True")] | length' - <<<"$pods")" == '1' ]] || return 1
 }
 
 verify_longhorn_convergence() {
@@ -118,14 +131,16 @@ perform_recovery_acceptance() {
   local inventory_file="${6:-}"
   local kind
   kind="$(lifecycle_record_kind "$record")" || return 1
-  verify_returned_node_contained "$kubeconfig" "$node" "$record"
-  verify_talos_recovery "$talosconfig" "$node" "$node_ip"
+  wait_for_returned_node_contained "$kubeconfig" "$node" "$record" || return 1
+  verify_talos_recovery "$talosconfig" "$node" "$node_ip" || return 1
   if [[ "$kind" == 'maintenance' ]]; then
-    restore_longhorn_maintenance_state "$kubeconfig" "$node" "$record"
+    restore_longhorn_maintenance_state "$kubeconfig" "$node" "$record" || return 1
   fi
-  verify_longhorn_convergence "$kubeconfig"
-  verify_etcd_recovery "$talosconfig"
-  verify_cilium_recovery "$kubeconfig" "$node"
-  [[ -z "$inventory_file" ]] || verify_workload_replacements "$kubeconfig" "$node" "$inventory_file"
-  recovery_just kube foundation-verify
+  verify_longhorn_convergence "$kubeconfig" || return 1
+  verify_etcd_recovery "$talosconfig" || return 1
+  verify_cilium_recovery "$kubeconfig" "$node" || return 1
+  if [[ -n "$inventory_file" ]]; then
+    verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
+  fi
+  recovery_just kube foundation-verify || return 1
 }
