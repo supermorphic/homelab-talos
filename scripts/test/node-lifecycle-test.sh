@@ -150,9 +150,34 @@ resolve_node_target nuc3
 assert_fails 'An unknown node target was accepted.' resolve_node_target other
 
 NODE_ALLOW_LINKED_WORKTREE_FOR_TESTS=true require_operator_checkout
+
+run_operator_checkout_fixture() (
+  local layout="$1"
+  local fake_git_dir='/fixture/repo/.git'
+  local fake_git_common_dir='/fixture/repo/.git'
+  if [[ "$layout" == 'linked' ]]; then
+    fake_git_dir='/fixture/repo/.git/worktrees/task'
+  fi
+  git() {
+    case "$*" in
+      'rev-parse --path-format=absolute --git-dir')
+        printf '%s\n' "$fake_git_dir"
+        ;;
+      'rev-parse --path-format=absolute --git-common-dir')
+        printf '%s\n' "$fake_git_common_dir"
+        ;;
+      'rev-parse --show-superproject-working-tree')
+        printf '\n'
+        ;;
+      *) return 64 ;;
+    esac
+  }
+  require_operator_checkout
+)
+
 assert_fails 'The linked worktree was accepted as an operator checkout.' \
-  env -u NODE_ALLOW_LINKED_WORKTREE_FOR_TESTS bash -c \
-    'source scripts/node/common.sh; require_operator_checkout'
+  run_operator_checkout_fixture linked
+run_operator_checkout_fixture standalone
 
 node_state="$state_dir/node-state.json"
 yq --null-input --output-format json '
