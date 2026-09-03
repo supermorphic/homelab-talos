@@ -18,7 +18,7 @@
         "httpMethod": "POST",
         "path": "automation-data-recovery-canary",
         "authentication": "headerAuth",
-        "responseMode": "usingRespondToWebhook",
+        "responseMode": "responseNode",
         "options": {}
       },
       "type": "n8n-nodes-base.webhook",

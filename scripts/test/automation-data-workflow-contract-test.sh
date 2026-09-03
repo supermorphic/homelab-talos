@@ -54,7 +54,7 @@ webhook = webhooks[0]
 require(webhook.get("parameters", {}).get("httpMethod") == "POST", "The webhook must use POST.")
 require(webhook.get("parameters", {}).get("path") == "automation-data-provision", "Unexpected webhook path.")
 require(webhook.get("parameters", {}).get("authentication") == "headerAuth", "The webhook must use Header Auth.")
-require(webhook.get("parameters", {}).get("responseMode") == "usingRespondToWebhook", "The webhook must use an explicit response node.")
+require(webhook.get("parameters", {}).get("responseMode") == "responseNode", "The webhook must use an explicit response node.")
 
 normalize = by_name.get("Normalize Request", {})
 require(normalize.get("type") == "n8n-nodes-base.code", "Normalize Request must be a Code node.")
@@ -304,6 +304,7 @@ if (
     webhook.get("httpMethod") != "POST"
     or webhook.get("path") != "automation-data-recovery-canary"
     or webhook.get("authentication") != "headerAuth"
+    or webhook.get("responseMode") != "responseNode"
 ):
     raise SystemExit("The recovery canary webhook contract is not exact.")
 postgres = by_name.get("Test Restored Runtime Credential", {}).get("parameters", {})

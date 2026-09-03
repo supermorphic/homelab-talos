@@ -25,6 +25,7 @@ just --dry-run bootstrap automation-data >/dev/null 2>&1 ||
 scripts/test/automation-data-secrets-test.sh
 scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
+scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-backup-test.sh
 scripts/test/automation-data-restore-command-test.sh
 scripts/test/automation-data-longhorn-health-test.sh
