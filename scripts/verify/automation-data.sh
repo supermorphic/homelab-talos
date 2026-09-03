@@ -3,6 +3,7 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/lib/flux-alerts.sh
+source scripts/lib/longhorn-verification.sh
 source scripts/lib/n8n-verification.sh
 source scripts/lib/network.sh
 require_bash
@@ -190,20 +191,15 @@ longhorn_volumes="$(
   "${kc[@]}" --namespace "$longhorn_namespace" get volumes.longhorn.io --output json
 )"
 while IFS=$'\t' read -r claim volume; do
+  mode='active'
+  [[ "$claim" == 'automation-data-postgresql-backups' ]] && mode='retained-backup'
   [[ -n "$claim" && -n "$volume" ]] || {
     echo 'A retained automation-data claim has no bound Longhorn volume identity.' >&2
     exit 1
   }
-  matches="$(PV_NAME="$volume" PVC_NAME="$claim" yq -r '
-    [.items[]? | select(
-      (.status.kubernetesStatus.pvName // "") == strenv(PV_NAME) and
-      (.status.kubernetesStatus.pvcName // "") == strenv(PVC_NAME) and
-      (.status.kubernetesStatus.namespace // "") == "automation-data" and
-      (.status.robustness // "") == "healthy" and
-      ((.status.state // "") == "attached" or (.status.state // "") == "detached")
-    )] | length
-  ' - <<<"$longhorn_volumes")"
-  [[ "$matches" == '1' ]] || {
+  longhorn_volume_matches_claim_health \
+    "$namespace" "$claim" "$volume" "$mode" \
+    <(printf '%s\n' "$longhorn_volumes") || {
     echo "The Longhorn volume for $namespace/$claim is absent or unhealthy." >&2
     exit 1
   }

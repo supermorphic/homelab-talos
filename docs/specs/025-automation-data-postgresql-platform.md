@@ -493,6 +493,12 @@ established PVC warning and critical thresholds. The initial implementation does
 speculative connection-pressure alerts or redundant domain-count and bundle-count
 metrics.
 
+Read-only verification requires the active PostgreSQL data volume to be attached and
+healthy. The retained backup volume may be attached and healthy while a backup Job uses
+it, or detached with Longhorn robustness `unknown` while idle. In either state, its
+Longhorn identity must match the bound claim, scheduling must be healthy, and restore
+must be inactive.
+
 The 13-panel `automation-data-postgresql` Grafana dashboard generalizes the n8n
 PostgreSQL panels for database-labeled resource use, transactions, connections, storage
 growth, backup freshness, and provisioning health.
