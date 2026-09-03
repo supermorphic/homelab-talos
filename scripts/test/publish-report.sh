@@ -88,7 +88,7 @@ require_deployed_source 'test report publication' \
   tests/config/allurerc.yaml \
   scripts/test/allure_report.py \
   scripts/test/generate-allure-report.sh \
-  scripts/test/lib/lease.sh \
+  scripts/lib/lease.sh \
   scripts/test/publish-report.sh \
   scripts/test/report_publish.py \
   scripts/test/validate-run.sh \
@@ -113,7 +113,7 @@ trap 'exit 143' TERM
 
 export TEST_LEASE_NAMESPACE='flux-system'
 export TEST_LEASE_NAME='homelab-test-report-publish-lock'
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 acquire_test_lease "$kubeconfig" "publish:$run_id"
 lease_acquired=true
 start_test_lease_renewal "$kubeconfig" "publish:$run_id" "$lease_failure"

@@ -7,8 +7,8 @@ source scripts/lib/common.sh
 source scripts/lib/n8n-verification.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
-# shellcheck source=scripts/test/lib/lease.sh
-source scripts/test/lib/lease.sh
+# shellcheck source=scripts/lib/lease.sh
+source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 # shellcheck source=scripts/test/lib/automation-data-restore-command.sh

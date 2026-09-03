@@ -6,7 +6,7 @@ source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/n8n-persistence-query.sh
 source scripts/test/lib/n8n-persistence-query.sh
 require_bash

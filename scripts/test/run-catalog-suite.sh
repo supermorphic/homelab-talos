@@ -5,7 +5,8 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
+source scripts/lib/node-lifecycle-state.sh
 require_bash
 
 [[ "$#" -ge 3 && "$2" == '--' ]] || {
@@ -62,6 +63,7 @@ signal_exit_code=0
 lease_acquired=false
 lease_joined=false
 lease_release_status='not-required'
+disruption_admitted=false
 finalized=false
 
 # Invoked indirectly by the EXIT trap below.
@@ -140,8 +142,20 @@ if [[ "$mutates_cluster" == 'true' ]]; then
   fi
 fi
 
+if [[ "$mutates_cluster" == 'true' &&
+  ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
+  if assert_cluster_disruption_admissible "$kubeconfig"; then
+    disruption_admitted=true
+  else
+    write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
+      disruption-admission broken 0
+    primary_exit_code=1
+    run_result='broken'
+  fi
+fi
+
 if [[ "$mutates_cluster" != 'true' ||
-  "$lease_acquired" == 'true' || "$lease_joined" == 'true' ]]; then
+  "$disruption_admitted" == 'true' ]]; then
   set +e
   "$@" 2>&1 | tee "$run_dir/logs/console.log"
   primary_exit_code="${PIPESTATUS[0]}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-lease-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT

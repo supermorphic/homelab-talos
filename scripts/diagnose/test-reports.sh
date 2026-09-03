@@ -33,7 +33,7 @@ run kubectl --kubeconfig "$kubeconfig" auth can-i update leases.coordination.k8s
   export TEST_LEASE_NAMESPACE='flux-system'
   export TEST_LEASE_NAME='homelab-test-report-publish-lock'
   # shellcheck disable=SC1091
-  source scripts/test/lib/lease.sh
+  source scripts/lib/lease.sh
   lease_manifest diagnostics "$(lease_now)" |
     kubectl --kubeconfig "$kubeconfig" create --dry-run=server --filename - \
       --output name

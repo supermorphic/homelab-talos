@@ -316,7 +316,7 @@ campaigns do not publish and cannot resume.
 - [`tests/mod.just`](../../tests/mod.just) — public campaign and report recipes.
 - [`scripts/test/run-campaign.sh`](../../scripts/test/run-campaign.sh) — planning,
   execution, publication, journaling, source checks, and resume behavior.
-- [`scripts/test/lib/lease.sh`](../../scripts/test/lib/lease.sh) — shared test Lease.
+- [`scripts/lib/lease.sh`](../../scripts/lib/lease.sh) — shared disruption Lease.
 - [`scripts/test/publish-report.sh`](../../scripts/test/publish-report.sh) — retained
   report publication and publication Lease.
 - [Persistent test reports](../reference/test-reports.md) — report archive authority and

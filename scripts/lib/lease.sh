@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Cluster-wide serialization for state-changing tests. Acquisition and renewal use
+# Cluster-wide serialization for disruptive transactions. Acquisition and renewal use
 # resourceVersion-guarded create/replace operations; release succeeds only while the
 # Lease still names this run as its holder.
 

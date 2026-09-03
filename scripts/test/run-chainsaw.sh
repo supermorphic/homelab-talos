@@ -3,7 +3,7 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 source scripts/test/lib/results.sh
 require_bash
 
