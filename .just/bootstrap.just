@@ -115,8 +115,10 @@ talos: preflight
       --endpoints 192.168.90.10 \
       --talosconfig "{{talosconfig}}"
 
-# Print read-only etcd membership, service, discovery, and recent-log status.
-status node='all':
+# Legacy bootstrap implementation retained privately until the cluster status extraction
+# has completed migration validation.
+[private]
+_status node='all':
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -298,8 +300,9 @@ retry-join node:
     }
     echo "Verified $node joined the healthy three-member etcd cluster without alarms."
 
-# Verify the bootstrapped Talos cluster and refresh the ignored workstation kubeconfig.
-verify:
+# Verify the bootstrapped pre-Cilium Talos cluster and refresh the ignored kubeconfig.
+[private]
+_verify-pre-cilium:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -529,7 +532,7 @@ cilium:
         echo "Refusing Cilium bootstrap: Cilium resources exist without the expected Helm release: $unmanaged_cilium" >&2
         exit 1
       }
-      just bootstrap verify
+      just bootstrap _verify-pre-cilium
     fi
 
     [[ "${CILIUM_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -2578,7 +2581,8 @@ agent-access:
 # Guard, reboot one node, and require full recovery before returning. Refuses
 # unless the cluster is already healthy so a rolling reboot never removes a second
 # node while another is degraded. Reused for the initial resilience soak and day-two maintenance.
-reboot node:
+[private]
+_reboot-legacy node:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -2727,7 +2731,8 @@ reboot node:
 # the rendered config targets 500GiB. Wipes ONLY nvme0n1p5; STATE, EPHEMERAL, and
 # etcd are preserved. Run only while the volume is empty (pre-Longhorn or after a
 # full replica evacuation). Verified on nuc1 2026-07-22.
-resize-longhorn node:
+[private]
+_resize-longhorn-legacy node:
     #!/usr/bin/env bash
     set -euo pipefail
 
