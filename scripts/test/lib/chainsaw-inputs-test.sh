@@ -151,6 +151,14 @@ done < <(
 	' "$repo_root/scripts/test/validate-chainsaw.sh"
 )
 
+cat >"$validator_root/scripts/test/logging-verify-test.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'scripts/test/logging-verify-test.sh' >>"${SHELL_CASE_LOG:?}"
+printf 'logging-group:%s\n' "${1:-}"
+EOF
+chmod +x "$validator_root/scripts/test/logging-verify-test.sh"
+
 printf '%s\n' 'apiVersion: chainsaw.kyverno.io/v1alpha1' \
 	'kind: Test' >"$validator_root/tests/chainsaw/nested/chainsaw-test.yaml"
 printf '%s\n' 'not: [valid' \
@@ -242,11 +250,13 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 57 ]]
-rg -Fx 'Harness shell cases passed: cases=57 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 60 ]]
+rg -Fx 'Harness shell cases passed: cases=60 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }
+mapfile -t logging_groups < <(sed -n 's/^logging-group://p' "$passing_output")
+[[ "$(printf '%s\n' "${logging_groups[@]}")" == $'topology-storage-runtime\nlabels\ncounts-compaction\nprometheus-targets' ]]
 for expected_case in \
 	scripts/test/lib/chainsaw-inputs-test.sh \
 	scripts/test/lib/harness-shell-runner-test.sh \

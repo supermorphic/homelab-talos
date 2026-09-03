@@ -119,7 +119,14 @@ register_harness_shell_case agent-access-verifier scripts/test/agent-access-veri
 register_harness_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
 register_harness_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.sh
 register_harness_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
-register_harness_shell_case logging-verifier scripts/test/logging-verify-test.sh
+register_harness_shell_case logging-verifier-topology-storage-runtime \
+	scripts/test/logging-verify-test.sh topology-storage-runtime
+register_harness_shell_case logging-verifier-labels \
+	scripts/test/logging-verify-test.sh labels
+register_harness_shell_case logging-verifier-counts-compaction \
+	scripts/test/logging-verify-test.sh counts-compaction
+register_harness_shell_case logging-verifier-prometheus-targets \
+	scripts/test/logging-verify-test.sh prometheus-targets
 register_harness_shell_case cilium-validator scripts/test/cilium-validator-test.sh
 register_harness_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
 register_harness_shell_case n8n-backup scripts/test/n8n-backup-test.sh

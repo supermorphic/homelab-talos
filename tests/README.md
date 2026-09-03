@@ -47,6 +47,11 @@ unstarted tail absent for the outer fail-fast reporter. Set
 accepted. This changes how the complete suite executes; it does not select or
 omit tests based on changed files.
 
+The logging verifier fixture retains all 64 layouts. The harness runs them as
+four deterministic groups: topology/storage/runtime, labels,
+counts/compaction, and Prometheus targets. The existing four-worker harness
+owns their concurrency; the fixture does not create a nested worker pool.
+
 Repository validation owns Bash syntax and one batched machine-readable
 ShellCheck execution. The historical audit count of 166 shell files is audit
 history, not a fixed contract. The current sorted set is derived independently
