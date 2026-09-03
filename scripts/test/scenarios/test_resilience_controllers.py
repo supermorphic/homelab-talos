@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import node_abrupt_loss as abrupt
 import plex_cross_node_reschedule as plex
 import qbittorrent_pod_recreation as pod_recreation
 import qbittorrent_vpn_disconnect as vpn
@@ -92,6 +95,420 @@ class StateTransitionTests(unittest.TestCase):
             self.assertEqual(state["phase"], "observed")
             self.assertEqual(state["newUid"], "new-uid")
             self.assertGreaterEqual(state["pollSamples"], 1)
+
+
+class AbruptNodeLossTests(unittest.TestCase):
+    class Clock:
+        def __init__(self) -> None:
+            self.value = 0.0
+
+        def now(self) -> float:
+            return self.value
+
+        def sleep(self, seconds: float) -> None:
+            self.value += seconds
+
+    class Monitor:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        def start(self) -> None:
+            self.events.append("probes-start")
+
+        def stop(self) -> list[dict[str, object]]:
+            self.events.append("probes-stop")
+            return [{"api": True, "dns": True, "https": True, "at": 0.0}]
+
+    def test_external_monitor_records_five_second_samples_and_sixty_second_slo(self):
+        clock = self.Clock()
+        results = {"api": (1, ""), "dns": (0, "192.0.2.10\n"), "https": (0, "ok\n")}
+
+        def status_runner(argv: list[str]) -> tuple[int, str]:
+            if argv[0] == "kubectl":
+                return results["api"]
+            if argv[0] == "dig":
+                return results["dns"]
+            return results["https"]
+
+        monitor = abrupt.ExternalProbeMonitor(
+            "kubeconfig",
+            status_runner=status_runner,
+            interval=5,
+            no_success_limit=60,
+            monotonic=clock.now,
+        )
+        monitor._sample()
+        clock.sleep(55)
+        monitor._sample()
+        self.assertEqual(monitor.violations(), [])
+        clock.sleep(5)
+        monitor._sample()
+        self.assertEqual(monitor.violations(), ["api"])
+        self.assertEqual(monitor.interval, 5)
+        self.assertTrue(
+            all(set(sample) == {"at", "api", "dns", "https"} for sample in monitor.samples)
+        )
+
+    def test_baseline_records_owned_workloads_claim_identity_and_off_target_replica(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            objects = {
+                "nodes": {
+                    "items": [{"metadata": {"name": name}} for name in ("nuc1", "nuc2", "nuc3")]
+                },
+                "pods": {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "plex-abc",
+                                "namespace": "media",
+                                "uid": "pod-old",
+                                "ownerReferences": [
+                                    {
+                                        "kind": "ReplicaSet",
+                                        "name": "plex",
+                                        "uid": "rs-uid",
+                                        "controller": True,
+                                    }
+                                ],
+                            },
+                            "spec": {
+                                "nodeName": "nuc1",
+                                "volumes": [
+                                    {
+                                        "name": "config",
+                                        "persistentVolumeClaim": {"claimName": "plex-config"},
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "metadata": {
+                                "name": "cilium-old",
+                                "namespace": "kube-system",
+                                "ownerReferences": [
+                                    {"kind": "DaemonSet", "name": "cilium", "uid": "ds-uid"}
+                                ],
+                            },
+                            "spec": {"nodeName": "nuc1"},
+                        },
+                    ]
+                },
+                "replicas": {
+                    "items": [
+                        {"spec": {"volumeName": "lh-volume", "nodeID": "nuc1", "failedAt": ""}},
+                        {"spec": {"volumeName": "lh-volume", "nodeID": "nuc2", "failedAt": ""}},
+                    ]
+                },
+                "pvcs": {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "plex-config",
+                                "namespace": "media",
+                                "uid": "pvc-uid",
+                            },
+                            "spec": {"volumeName": "pv-plex"},
+                        }
+                    ]
+                },
+                "pvs": {
+                    "items": [
+                        {
+                            "metadata": {"name": "pv-plex", "uid": "pv-uid"},
+                            "spec": {"csi": {"volumeHandle": "lh-volume"}},
+                        }
+                    ]
+                },
+            }
+
+            def status_runner(argv: list[str]) -> tuple[int, str]:
+                resource = argv[argv.index("get") + 1]
+                key = {
+                    "nodes": "nodes",
+                    "pods": "pods",
+                    "replicas.longhorn.io": "replicas",
+                    "persistentvolumeclaims": "pvcs",
+                    "persistentvolumes": "pvs",
+                }[resource]
+                return 0, json.dumps(objects[key])
+
+            controller = abrupt.Controller(
+                "nuc1",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                runner=lambda argv: "",
+                status_runner=status_runner,
+                monitor=self.Monitor([]),
+            )
+            baseline = controller._baseline()
+            self.assertEqual(len(baseline["targetWorkloads"]), 1)
+            self.assertEqual(baseline["targetWorkloads"][0]["ownerUid"], "rs-uid")
+            self.assertEqual(
+                baseline["affectedClaims"],
+                [
+                    {
+                        "namespace": "media",
+                        "name": "plex-config",
+                        "uid": "pvc-uid",
+                        "volumeName": "pv-plex",
+                        "volumeUid": "pv-uid",
+                        "longhornVolume": "lh-volume",
+                    }
+                ],
+            )
+
+    def test_loss_is_unprepared_then_contained_observed_and_recovered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            clock = self.Clock()
+            observations = iter(
+                [
+                    {
+                        "talosLost": False,
+                        "nodeNotReady": False,
+                        "etcdTargetLost": False,
+                        "quorumRetained": True,
+                    },
+                    {
+                        "talosLost": True,
+                        "nodeNotReady": True,
+                        "etcdTargetLost": True,
+                        "quorumRetained": True,
+                    },
+                    {
+                        "talosLost": True,
+                        "nodeNotReady": True,
+                        "etcdTargetLost": True,
+                        "quorumRetained": True,
+                        "readySurvivors": 2,
+                        "readyCiliumSurvivors": 2,
+                        "workloads": [
+                            {
+                                "namespace": "media",
+                                "ownerKind": "ReplicaSet",
+                                "ownerName": "plex",
+                                "state": "ready-on-survivor",
+                            }
+                        ],
+                        "storage": {"survivingReplicaAvailable": True, "fullReplicaCount": False},
+                    },
+                ]
+            )
+
+            def baseline() -> dict[str, object]:
+                events.append("baseline")
+                return {"healthy": True}
+
+            def observe() -> dict[str, object]:
+                events.append("observe")
+                try:
+                    return next(observations)
+                except StopIteration:
+                    return {
+                        "talosLost": True,
+                        "nodeNotReady": True,
+                        "etcdTargetLost": True,
+                        "quorumRetained": True,
+                        "readySurvivors": 2,
+                        "readyCiliumSurvivors": 2,
+                        "workloads": [],
+                        "storage": {"survivingReplicaAvailable": True, "fullReplicaCount": False},
+                    }
+
+            def bridge(action: str) -> None:
+                events.append(f"bridge:{action}")
+
+            def prompt(message: str) -> str:
+                events.append(
+                    "prompt:disconnect" if "disconnect" in message.lower() else "prompt:restore"
+                )
+                return ""
+
+            controller = abrupt.Controller(
+                "nuc1",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=baseline,
+                observe=observe,
+                bridge=bridge,
+                prompt=prompt,
+                monotonic=clock.now,
+                sleep=clock.sleep,
+                monitor=self.Monitor(events),
+                loss_timeout=15,
+                passive_seconds=10,
+                poll_seconds=5,
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                    "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc1:192.168.90.10",
+                },
+            ):
+                controller.run()
+
+            self.assertLess(events.index("prompt:disconnect"), events.index("bridge:contain"))
+            self.assertGreaterEqual(events[: events.index("bridge:contain")].count("observe"), 2)
+            self.assertLess(events.index("bridge:contain"), events.index("prompt:restore"))
+            self.assertLess(events.index("prompt:restore"), events.index("bridge:recover"))
+            state = load_state(Path(temporary) / "diagnostics" / abrupt.STATE_NAME)
+            self.assertEqual(state["phase"], "recovered")
+            self.assertFalse(state["passiveObservation"][-1]["storage"]["fullReplicaCount"])
+            self.assertEqual(state["workloadRecoverySeconds"]["media/ReplicaSet/plex"], 0.0)
+
+    def test_wrong_target_confirmation_stops_before_power_prompt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            controller = abrupt.Controller(
+                "nuc2",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=dict,
+                bridge=lambda action: events.append(action),
+                prompt=lambda message: events.append(message) or "",
+                monitor=self.Monitor(events),
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc1:192.168.90.10",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "confirmation"),
+            ):
+                controller.run()
+            self.assertEqual(events, [])
+
+    def test_detection_failure_requests_power_restoration_without_false_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            clock = self.Clock()
+            controller = abrupt.Controller(
+                "nuc3",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=lambda: {
+                    "talosLost": True,
+                    "nodeNotReady": True,
+                    "etcdTargetLost": False,
+                    "quorumRetained": True,
+                },
+                bridge=lambda action: events.append(f"bridge:{action}"),
+                prompt=lambda message: (
+                    events.append("restore" if "restore" in message.lower() else "disconnect")
+                    or ""
+                ),
+                monotonic=clock.now,
+                sleep=clock.sleep,
+                monitor=self.Monitor(events),
+                loss_timeout=10,
+                poll_seconds=5,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc3:192.168.90.12",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "genuine node loss"),
+            ):
+                controller.run()
+            self.assertIn("restore", events)
+            self.assertNotIn("bridge:contain", events)
+            recovery = json.loads((Path(temporary) / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "failed")
+            self.assertIn("unresolved", recovery["reason"])
+
+    def test_prompt_failure_before_disruption_reports_no_recovery_needed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            controller = abrupt.Controller(
+                "nuc1",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=dict,
+                bridge=lambda action: events.append(action),
+                prompt=lambda _message: (_ for _ in ()).throw(EOFError("no input")),
+                monitor=self.Monitor(events),
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc1:192.168.90.10",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "no input"),
+            ):
+                controller.run()
+            recovery = json.loads((Path(temporary) / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "passed")
+            self.assertIn("before disruption", recovery["reason"])
+            self.assertNotIn("contain", events)
+
+    def test_failed_recovery_is_not_retried_inside_the_same_transaction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            events: list[str] = []
+            clock = self.Clock()
+
+            def bridge(action: str) -> None:
+                events.append(action)
+                if action == "recover":
+                    raise ScenarioFailure("acceptance failed")
+
+            observation = {
+                "talosLost": True,
+                "nodeNotReady": True,
+                "etcdTargetLost": True,
+                "quorumRetained": True,
+                "readySurvivors": 2,
+                "readyCiliumSurvivors": 2,
+                "storage": {"survivingReplicaAvailable": True},
+            }
+            controller = abrupt.Controller(
+                "nuc2",
+                "kubeconfig",
+                "talosconfig",
+                Path(temporary),
+                baseline=lambda: {"healthy": True},
+                observe=lambda: observation,
+                bridge=bridge,
+                prompt=lambda _message: "",
+                monotonic=clock.now,
+                sleep=clock.sleep,
+                monitor=self.Monitor(events),
+                passive_seconds=5,
+                poll_seconds=5,
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "CLUSTER_CHAOS_CONFIRM": "chaos:node-abrupt-loss",
+                        "NODE_ABRUPT_LOSS_CONFIRM": "remove-power:nuc2:192.168.90.11",
+                    },
+                ),
+                self.assertRaisesRegex(ScenarioFailure, "acceptance failed"),
+            ):
+                controller.run()
+            self.assertEqual(events.count("recover"), 1)
+            recovery = json.loads((Path(temporary) / "recovery.json").read_text())
+            self.assertEqual(recovery["status"], "failed")
+            self.assertIn("pending", recovery["reason"])
 
 
 class InterruptedRunTests(unittest.TestCase):

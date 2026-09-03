@@ -70,8 +70,9 @@ e2e target:
     @scripts/test/run-live-suite.sh e2e {{quote(target)}}
 
 # Run a registered disruptive scenario after validating the exact confirmation.
-resilience target:
-    @scripts/test/run-live-suite.sh resilience {{quote(target)}}
+# node is required only by the attended node-abrupt-loss scenario.
+resilience target node='':
+    @scripts/test/run-live-suite.sh resilience {{quote(target)}} {{quote(node)}}
 
 # Collect allowlisted read-only diagnostics from the live cluster.
 diagnostics target:

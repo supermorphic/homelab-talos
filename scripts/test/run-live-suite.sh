@@ -14,6 +14,18 @@ require_bash
 tier="$1"
 target="$2"
 scenario="${3:-}"
+node_target=''
+if [[ "$tier" == 'resilience' && "$target" == 'node-abrupt-loss' ]]; then
+  node_target="$scenario"
+  scenario=''
+  case "$node_target" in
+    nuc1|nuc2|nuc3) ;;
+    *)
+      echo 'node-abrupt-loss requires one target: nuc1, nuc2, or nuc3.' >&2
+      exit 2
+      ;;
+  esac
+fi
 catalog='tests/catalog.yaml'
 entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
 mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"
@@ -31,6 +43,9 @@ suite_id="$(yq -r '.metadata.id' - <<<"$entry_json")"
 runtime="$(yq -r '.dispatch.runtime' - <<<"$entry_json")"
 path="$(yq -r '.dispatch.path' - <<<"$entry_json")"
 mapfile -t dispatch_args < <(yq -r '.dispatch.args[]?' - <<<"$entry_json")
+if [[ -n "$node_target" ]]; then
+  dispatch_args=("$node_target" "${dispatch_args[@]}")
+fi
 
 case "$runtime" in
   bash)

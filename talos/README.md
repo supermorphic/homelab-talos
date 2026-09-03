@@ -89,6 +89,37 @@ Maintenance-mode `just talos apply <node>` remains a separate destructive instal
 workflow. Its complete cluster verification is deferred until all nodes have rebooted
 and the bootstrap preflight can check them together.
 
+## Established Node Lifecycle
+
+Use the `node` domain for a node that is already part of the cluster. These workflows
+share one disruption Lease and refuse to start while another node is unavailable,
+cordoned, or in a recorded lifecycle state.
+
+```bash
+mise exec -- just node maintenance-check nuc1
+
+NODE_REBOOT_CONFIRM='reboot:nuc1:192.168.90.10' \
+  mise exec -- just node reboot nuc1
+
+NODE_MAINTENANCE_CONFIRM='enter:nuc1:192.168.90.10' \
+  mise exec -- just node maintenance-enter nuc1
+
+# Physically start the node before accepting its return.
+NODE_LIFECYCLE_CONFIRM='accept:nuc1:maintenance' \
+  mise exec -- just node maintenance-exit nuc1
+```
+
+`node reboot` cordons and drains workloads but keeps reusable Longhorn replicas for the
+short expected outage. `node maintenance-enter` also changes Longhorn scheduling and
+eviction settings and waits for replica evacuation because the outage can be indefinite.
+Recovery restores lifecycle-owned Longhorn values with compare-and-restore checks before
+the final Node patch removes the lifecycle annotation and uncordons the node.
+
+If return or acceptance fails, the node stays cordoned and annotated. After correcting
+the underlying fault, use `node maintenance-exit <node>` with the kind shown in the
+annotation. It is the common recovery path for maintenance and interrupted `reboot` or
+`abrupt-loss` state. Do not manually uncordon an unaccepted node.
+
 See the root [`README.md`](../README.md) for workstation setup, the
 [platform specification](../docs/specs/010-talos-flux-platform.md) for design rationale,
 and the [platform disaster-recovery runbook](../docs/runbooks/platform-disaster-recovery.md)

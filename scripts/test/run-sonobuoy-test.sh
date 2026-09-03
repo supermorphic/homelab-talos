@@ -141,6 +141,9 @@ standalone_private="$fixture_root/standalone-private"
 standalone_reports="$fixture_root/standalone-reports"
 standalone_run_id_file="$fixture_root/standalone.run-id"
 lease_state="$fixture_root/standalone-lease.json"
+healthy_nodes="$fixture_root/healthy-nodes.json"
+printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' \
+  >"$healthy_nodes"
 # Simulate this unit test running inside a campaign, then isolate the nested
 # standalone coordinator from the outer campaign's Lease channels.
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:outer-fixture \
@@ -150,6 +153,8 @@ TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$fixture_root/outer-lease-renewal-failed" \
   FAKE_SONOBUOY_ARCHIVE="$archive" \
   FAKE_TEST_LEASE_STATE="$lease_state" \
   TEST_LEASE_KUBECTL="$PWD/tests/fixtures/result-coordinator/fake-lease-kubectl.sh" \
+  NODE_LIFECYCLE_KUBECTL="$PWD/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
+  NODE_LIFECYCLE_TEST_NODES="$healthy_nodes" \
   TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
   TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
   TEST_SONOBUOY_PRIVATE_ROOT="$standalone_private" \

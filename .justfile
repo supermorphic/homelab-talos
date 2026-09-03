@@ -12,6 +12,12 @@ mod talos "talos"
 [group("Bootstrap")]
 mod bootstrap ".just/bootstrap.just"
 
+[group("Node lifecycle")]
+mod node ".just/node.just"
+
+[group("Established cluster")]
+mod cluster ".just/cluster.just"
+
 [group("Kubernetes")]
 mod kube "kubernetes"
 

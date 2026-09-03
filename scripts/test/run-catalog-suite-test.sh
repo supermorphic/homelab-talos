@@ -61,6 +61,14 @@ mapfile -t interrupted_runs < <(
 [[ "$(yq -r '.junit.errors' "${interrupted_runs[0]}/summary.json")" == '1' ]]
 
 lease_state="$fixture_root/campaign-lease.json"
+healthy_nodes="$fixture_root/healthy-nodes.json"
+blocked_nodes="$fixture_root/blocked-nodes.json"
+cat >"$healthy_nodes" <<'EOF'
+{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
+cat >"$blocked_nodes" <<'EOF'
+{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
   yq --null-input --output-format json '{
     "apiVersion": "coordination.k8s.io/v1",
@@ -77,18 +85,40 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
       "renewTime": strenv(NOW)
     }
   }' >"$lease_state"
+# shellcheck disable=SC2016  # Expansion must occur in the child command.
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
+NODE_LIFECYCLE_TEST_NODES="$healthy_nodes" \
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/joined" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
 TEST_EXECUTION_ORIGIN=agent \
-  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- true >/dev/null
+  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- \
+    bash -c '[[ "$HOMELAB_DISRUPTION_LEASE_HOLDER" == "campaign:fixture" ]]' >/dev/null
 mapfile -t joined_runs < <(find "$fixture_root/joined" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#joined_runs[@]}" -eq 1 ]]
 [[ "$(yq -r '.result' "${joined_runs[0]}/summary.json")" == 'passed' ]]
 [[ "$(yq -r '.phases.cleanup.status' "${joined_runs[0]}/summary.json")" == 'passed' ]]
 [[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == 'campaign:fixture' ]]
+
+blocked_marker="$fixture_root/blocked-command-ran"
+set +e
+CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
+CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
+NODE_LIFECYCLE_TEST_NODES="$blocked_nodes" \
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+TEST_RESULTS_ROOT="$fixture_root/lifecycle-blocked" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+TEST_EXECUTION_ORIGIN=agent \
+  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- \
+    touch "$blocked_marker" >/dev/null 2>&1
+blocked_exit="$?"
+set -e
+[[ "$blocked_exit" -ne 0 ]]
+[[ ! -e "$blocked_marker" ]]
 
 echo 'Single-suite result coordinator tests passed.'

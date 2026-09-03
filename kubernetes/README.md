@@ -101,6 +101,18 @@ Foundation workflows preserve the same boundary:
 | `just bootstrap foundation` | Guard and reconcile the nine suspended foundation units in dependency order |
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
+For an established cluster, `just cluster verify` composes the authoritative Node, etcd,
+Talos, Cilium, Longhorn, and foundation checks. It intentionally excludes arbitrary
+application health. `just cluster status [node]` provides detailed Talos and etcd
+diagnostics without changing the cluster.
+
+Established-node disruption uses the shared `flux-system/homelab-test-run-lock` Lease
+only while a transaction runs. A cordon and the narrow
+`homelab.supermorphic.com/node-lifecycle` Node annotation preserve maintenance or pending
+recovery after command exit. Only one node can be intentionally unavailable or
+transitioning. Successful recovery restores lifecycle-owned Longhorn state before the
+final annotation-removal and uncordon patch.
+
 The Gateway owns one wildcard certificate in `networking`; application routes do
 not copy TLS private keys. ExternalDNS publishes only routes carrying
 `external-dns.k8s.io/audience=internal`. Use the

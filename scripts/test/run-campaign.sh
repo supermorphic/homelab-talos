@@ -4,7 +4,7 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 2 ]] || {
@@ -140,35 +140,6 @@ require_source_snapshot() {
   }
 }
 
-derive_plex_placement() {
-  local node ip
-
-  if [[ "$test_mode" == 'true' && -n "${TEST_CAMPAIGN_PLEX_PLACEMENT_BIN:-}" ]]; then
-    "$TEST_CAMPAIGN_PLEX_PLACEMENT_BIN"
-    return
-  fi
-  node="$(
-    kubectl --kubeconfig "$kubeconfig" --namespace media \
-      get pod --selector app.kubernetes.io/name=plex \
-      --output jsonpath='{.items[0].spec.nodeName}'
-  )"
-  case "$node" in
-    nuc1) ip='192.168.90.10' ;;
-    nuc2) ip='192.168.90.11' ;;
-    nuc3) ip='192.168.90.12' ;;
-    *)
-      echo "Plex is on unexpected node '${node:-<none>}'." >&2
-      return 1
-      ;;
-  esac
-  printf '%s %s\n' "$node" "$ip"
-}
-
-campaign_has_suite() {
-  local suite_id="$1"
-  catalog_campaign_ids "$catalog" "$campaign" | rg -qx --fixed-strings "$suite_id"
-}
-
 expected_published_confirmation() {
   printf 'run-publish:%s:%s:%s\n' \
     "$campaign" "${source_sha:0:12}" "$plan_digest"
@@ -192,9 +163,6 @@ print_frozen_inputs() {
   fi
   echo "Mutates cluster: $(yq -r '.mutates_cluster' - <<<"$campaign_entry")"
   echo "Disruptive: $(yq -r '.disruptive' - <<<"$campaign_entry")"
-  if campaign_has_suite test.resilience.plex-node-reboot; then
-    echo 'Plex reboot target: resolved immediately before the final reboot scenario'
-  fi
   echo
   catalog_campaign_ids "$catalog" "$campaign" | nl -w2 -s'. '
 }
@@ -389,7 +357,7 @@ require_campaign_lease() {
 
 resolve_member_command() {
   local suite_id="$1"
-  local entry command latest_published placement current_node current_ip
+  local entry command latest_published
 
   entry="$(catalog_entry_by_id "$catalog" "$suite_id")"
   command="$(yq -r '.runner.command' - <<<"$entry")"
@@ -407,13 +375,6 @@ resolve_member_command() {
       return 1
     }
     command="${command//<run-id>/$latest_published}"
-  fi
-  if [[ "$command" == *'<node>'* || "$command" == *'<ip>'* ]]; then
-    placement="$(derive_plex_placement)"
-    read -r current_node current_ip <<<"$placement"
-    command="${command//<node>/$current_node}"
-    command="${command//<ip>/$current_ip}"
-    echo "Plex reboot target resolved immediately before disruption: $current_node ($current_ip)."
   fi
   [[ "$command" != *'<'* && "$command" != *'>'* ]] || {
     echo "Campaign member contains an unresolved command placeholder: $suite_id" >&2

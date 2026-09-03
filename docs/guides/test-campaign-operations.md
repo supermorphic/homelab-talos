@@ -152,11 +152,8 @@ mise exec -- just test campaign-plan weekly
 ```
 
 The confirmation proves deliberate intent to execute the displayed frozen plan. It does
-not grant operator authority. The coordinator resolves the Plex node and IP immediately
-before the reboot. An earlier
-cross-node resilience scenario may legitimately move Plex, so an earlier target could be
-stale. The campaign confirmation authorizes the reviewed sequence; the reboot primitive
-still requires its separate exact-node `TALOS_REBOOT_CONFIRM` guard.
+not grant operator authority. The attended electrical node-loss test is not a campaign
+member because it requires an explicit physical target and two physical actions.
 
 ## Run and publish a campaign
 
@@ -202,10 +199,13 @@ URLs, and observability.
 ## What the Leases protect
 
 Published campaigns hold `flux-system/homelab-test-run-lock` for the complete ordered
-sequence. This prevents other Lease-aware state-changing tests from independently mutating
-or measuring the same cluster during the campaign window. Mutating children join the
-campaign holder and do not release the Lease themselves. The Lease does not block arbitrary
-read commands or workflows that ignore the repository coordination contract.
+sequence. This shared disruption Lease also serializes node reboot, maintenance
+transitions, Longhorn resize, bootstrap join retry, and the electrical-loss test.
+Mutating campaign children join the campaign holder and do not release the Lease
+themselves. The Lease protects only an executing transaction; a Node cordon and lifecycle
+annotation preserve planned maintenance or pending recovery after command exit. It does
+not block arbitrary read commands or unrelated workflows outside the coordination
+contract.
 
 Report publication separately uses
 `flux-system/homelab-test-report-publish-lock`. That Lease serializes writes to the retained
@@ -230,8 +230,22 @@ MODE=certified mise exec -- just kube conformance
 ```
 
 Both are operator-run state-changing suites. Each acquires the shared test Lease for its
-own run and leaves its canonical report local. Publish a finalized result separately only
-when retained evidence is wanted:
+own run and leaves its canonical report local.
+
+The attended abrupt-loss test is also standalone:
+
+```bash
+CLUSTER_CHAOS_CONFIRM='chaos:node-abrupt-loss' \
+NODE_ABRUPT_LOSS_CONFIRM='remove-power:nuc1:192.168.90.10' \
+  mise exec -- just test resilience node-abrupt-loss nuc1
+```
+
+It requests actual removal and restoration of electrical input. It does not cordon or
+drain before loss. After all four loss signals are observed, it contains the offline Node,
+records ten minutes of autonomous recovery behavior, and uses the common lifecycle exit
+path while the returned Node remains cordoned. Run it only when every node is established.
+
+Publish a finalized standalone result separately only when retained evidence is wanted:
 
 ```bash
 TEST_REPORT_PUBLISH_CONFIRM='publish:test-report:<run-id>' \
@@ -316,7 +330,7 @@ campaigns do not publish and cannot resume.
 - [`tests/mod.just`](../../tests/mod.just) — public campaign and report recipes.
 - [`scripts/test/run-campaign.sh`](../../scripts/test/run-campaign.sh) — planning,
   execution, publication, journaling, source checks, and resume behavior.
-- [`scripts/test/lib/lease.sh`](../../scripts/test/lib/lease.sh) — shared test Lease.
+- [`scripts/lib/lease.sh`](../../scripts/lib/lease.sh) — shared disruption Lease.
 - [`scripts/test/publish-report.sh`](../../scripts/test/publish-report.sh) — retained
   report publication and publication Lease.
 - [Persistent test reports](../reference/test-reports.md) — report archive authority and

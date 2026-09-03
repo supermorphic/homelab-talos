@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 just_bin="$(command -v just)"
+yq_bin="$(command -v yq)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-recovery-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -13,11 +14,15 @@ mkdir -p \
   "$test_repo/.just" \
   "$test_repo/.kube" \
   "$test_repo/.talos" \
+  "$test_repo/scripts/lib" \
   "$test_repo/kubernetes/apps/kube-system/cilium" \
   "$stub_bin" \
   "$state_dir"
 
 cp "$repo_root/.just/bootstrap.just" "$test_repo/.just/bootstrap.just"
+cp "$repo_root/scripts/lib/lease.sh" "$test_repo/scripts/lib/lease.sh"
+cp "$repo_root/scripts/lib/node-lifecycle-state.sh" \
+  "$test_repo/scripts/lib/node-lifecycle-state.sh"
 
 cat >"$test_repo/.justfile" <<'EOF'
 #!/usr/bin/env -S just --justfile
@@ -91,8 +96,7 @@ case "$expression" in
     printf '%s\n' '2'
     ;;
   *)
-    echo "unexpected yq arguments: $*" >&2
-    exit 64
+    exec "$REAL_YQ" "$@"
     ;;
 esac
 EOF
@@ -101,7 +105,29 @@ cat >"$stub_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"$FAKE_CALL_LOG"
+[[ "${FAKE_KUBE_UNAVAILABLE:-}" != 'true' ]] || exit 1
 case "$*" in
+  *'get lease homelab-test-run-lock --output json')
+    [[ -f "$FAKE_STATE_DIR/lease.json" ]] || exit 1
+    cat "$FAKE_STATE_DIR/lease.json"
+    ;;
+  *'create --filename -')
+    yq --output-format json '.metadata.resourceVersion = "1"' \
+      >"$FAKE_STATE_DIR/lease.json"
+    ;;
+  *'replace --filename -')
+    yq --output-format json \
+      '.metadata.resourceVersion = ((.metadata.resourceVersion | tonumber) + 1 | tostring)' \
+      >"$FAKE_STATE_DIR/lease-next.json"
+    mv "$FAKE_STATE_DIR/lease-next.json" "$FAKE_STATE_DIR/lease.json"
+    ;;
+  *'get nodes --output json')
+    if [[ "${FAKE_LIFECYCLE_ACTIVE:-}" == 'true' ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":"{\"schemaVersion\":1,\"kind\":\"maintenance\"}"}},"spec":{"unschedulable":true}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+    else
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+    fi
+    ;;
   *'get kustomization cilium --output jsonpath={.spec.suspend}')
     printf '%s' 'true'
     ;;
@@ -272,6 +298,8 @@ run_recipe() {
     PATH="$stub_bin:$PATH" \
       FAKE_CALL_LOG="$call_log" \
       FAKE_STATE_DIR="$state_dir" \
+      REAL_YQ="$yq_bin" \
+      TEST_LEASE_SLEEP=/bin/sleep \
       "$just_bin" --justfile .justfile "$@"
   )
 }
@@ -371,5 +399,29 @@ assert_count 2 '^talosctl etcd members '
 assert_count 2 '^talosctl service etcd '
 assert_count 1 '^talosctl etcd status '
 assert_count 1 '^talosctl etcd alarm list '
+assert_count 1 '^kubectl .* create --filename -$'
+assert_count 1 '^kubectl .* replace --filename -$'
+
+reset_case
+if run_recipe \
+  FAKE_KUBE_UNAVAILABLE=true \
+  FAKE_ETCD_SCENARIO=healthy \
+  TALOS_ETCD_RETRY_CONFIRM=retry-etcd-reboot:nuc2:192.168.90.11 \
+  bootstrap retry-join nuc2 >"$state_dir/retry-kube-unavailable.out" 2>&1; then
+  echo 'retry-join continued without Kubernetes Lease coordination.' >&2
+  exit 1
+fi
+assert_count 0 '^talosctl reboot '
+
+reset_case
+if run_recipe \
+  FAKE_LIFECYCLE_ACTIVE=true \
+  FAKE_ETCD_SCENARIO=healthy \
+  TALOS_ETCD_RETRY_CONFIRM=retry-etcd-reboot:nuc2:192.168.90.11 \
+  bootstrap retry-join nuc2 >"$state_dir/retry-lifecycle-active.out" 2>&1; then
+  echo 'retry-join continued while another Node had lifecycle state.' >&2
+  exit 1
+fi
+assert_count 0 '^talosctl reboot '
 
 printf '%s\n' 'Bootstrap recovery fixture passed.'

@@ -7,7 +7,7 @@ source scripts/lib/n8n-verification.sh
 source scripts/test/lib/job.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
-source scripts/test/lib/lease.sh
+source scripts/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {

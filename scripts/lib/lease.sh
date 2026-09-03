@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Cluster-wide serialization for state-changing tests. Acquisition and renewal use
+# Cluster-wide serialization for disruptive transactions. Acquisition and renewal use
 # resourceVersion-guarded create/replace operations; release succeeds only while the
 # Lease still names this run as its holder.
 
@@ -168,7 +168,7 @@ start_test_lease_renewal() {
   local holder="$2"
   local failure_marker="$3"
   (
-    while sleep "$TEST_LEASE_RENEW_INTERVAL_SECONDS"; do
+    while "${TEST_LEASE_SLEEP:-sleep}" "$TEST_LEASE_RENEW_INTERVAL_SECONDS"; do
       if ! renew_test_lease "$kubeconfig" "$holder"; then
         : >"$failure_marker"
         exit 1

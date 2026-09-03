@@ -90,6 +90,8 @@ run_shell_case chainsaw-dispatch scripts/test/run-chainsaw-dispatch-test.sh
 run_shell_case media-hardlink scripts/test/scenarios/media-hardlink-test.sh
 run_shell_case probe-dispatch scripts/test/run-probe-dispatch-test.sh
 run_shell_case lease scripts/test/lease-test.sh
+run_shell_case node-lifecycle scripts/test/node-lifecycle-test.sh
+run_shell_case cluster-commands scripts/test/cluster-commands-test.sh
 run_shell_case catalog-suite-runner scripts/test/run-catalog-suite-test.sh
 run_shell_case ci-runner scripts/test/run-ci-test.sh
 run_shell_case campaign-runner scripts/test/run-campaign-test.sh

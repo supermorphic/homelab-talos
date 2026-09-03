@@ -6,8 +6,8 @@ source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
-# shellcheck source=scripts/test/lib/lease.sh
-source scripts/test/lib/lease.sh
+# shellcheck source=scripts/lib/lease.sh
+source scripts/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {

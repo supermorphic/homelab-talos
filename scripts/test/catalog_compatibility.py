@@ -624,7 +624,7 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "Campaign resilience ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,9 +1,9 @@\n"
+        "@@ -1,8 +1,8 @@\n"
         "-test.flux-restart\n"
         "-test.portainer-persistence\n"
         "-test.n8n-persistence\n"
@@ -632,9 +632,7 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "-chainsaw.resilience.qbittorrent-pod-recreation\n"
         "-chainsaw.resilience.plex-cross-node-reschedule\n"
         "-chainsaw.resilience.test-reports-persistence\n"
-        "-chainsaw.resilience.tailscale-subnet-router-replica-recovery\n"
-        " test.resilience.plex-node-reboot\n"
-        "+chainsaw.resilience.tailscale-subnet-router-replica-recovery\n"
+        " chainsaw.resilience.tailscale-subnet-router-replica-recovery\n"
         "+chainsaw.resilience.test-reports-persistence\n"
         "+chainsaw.resilience.plex-cross-node-reschedule\n"
         "+chainsaw.resilience.qbittorrent-pod-recreation\n"
@@ -825,15 +823,13 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 
     lease_fixture = root / "lease-reachability"
     (lease_fixture / "scripts/verify").mkdir(parents=True)
-    (lease_fixture / "scripts/test/lib").mkdir(parents=True)
+    (lease_fixture / "scripts/lib").mkdir(parents=True)
     (lease_fixture / "kubernetes").mkdir()
     (lease_fixture / "scripts/verify/root.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "source scripts/test/lib/lease.sh\n"
-        "lease_kubectl cfg delete lease lock\n",
+        "#!/usr/bin/env bash\nsource scripts/lib/lease.sh\nlease_kubectl cfg delete lease lock\n",
         encoding="utf-8",
     )
-    (lease_fixture / "scripts/test/lib/lease.sh").write_text(
+    (lease_fixture / "scripts/lib/lease.sh").write_text(
         "lease_kubectl() {\n"
         '  local kubeconfig="$1"\n'
         "  shift\n"

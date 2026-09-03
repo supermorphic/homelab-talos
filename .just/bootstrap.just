@@ -115,54 +115,6 @@ talos: preflight
       --endpoints 192.168.90.10 \
       --talosconfig "{{talosconfig}}"
 
-# Print read-only etcd membership, service, discovery, and recent-log status.
-status node='all':
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    talosconfig='{{talosconfig}}'
-    nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
-    requested_node='{{node}}'
-    case "$requested_node" in
-      all|nuc1|nuc2|nuc3) ;;
-      *)
-        echo 'Node must be one of: all, nuc1, nuc2, nuc3.' >&2
-        exit 1
-        ;;
-    esac
-
-    echo '=== etcd membership from nuc1 ==='
-    talosctl etcd members \
-      --nodes 192.168.90.10 \
-      --endpoints "$nodes_csv" \
-      --talosconfig "$talosconfig"
-
-    for node_spec in 'nuc1:192.168.90.10' 'nuc2:192.168.90.11' 'nuc3:192.168.90.12'; do
-      node="${node_spec%%:*}"
-      node_ip="${node_spec#*:}"
-      [[ "$requested_node" == 'all' || "$requested_node" == "$node" ]] || continue
-      echo "=== $node etcd service ==="
-      talosctl service etcd \
-        --nodes "$node_ip" \
-        --endpoints "$nodes_csv" \
-        --talosconfig "$talosconfig"
-
-      echo "=== $node cluster discovery ==="
-      talosctl get members \
-        --nodes "$node_ip" \
-        --endpoints "$nodes_csv" \
-        --talosconfig "$talosconfig"
-
-      echo "=== $node recent etcd log ==="
-      if ! talosctl logs etcd \
-        --nodes "$node_ip" \
-        --endpoints "$nodes_csv" \
-        --talosconfig "$talosconfig" \
-        --tail 80; then
-        echo "$node etcd log is not available."
-      fi
-    done
-
 # Retry one failed non-bootstrap etcd join after guarded live-state checks.
 retry-join node:
     #!/usr/bin/env bash
@@ -179,7 +131,33 @@ retry-join node:
     esac
 
     talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
+    source scripts/lib/lease.sh
+    source scripts/lib/node-lifecycle-state.sh
+    [[ -f "$kubeconfig" ]] || {
+      echo 'Refusing join retry: Kubernetes API coordination requires the operator kubeconfig.' >&2
+      exit 1
+    }
+    lease_holder="bootstrap:retry-join:${node}:$$"
+    lease_failure="$(mktemp "${TMPDIR:-/tmp}/homelab-retry-join-lease.XXXXXX")"
+    rm -f -- "$lease_failure"
+    lease_acquired=false
+    cleanup_retry_join_lease() {
+      local task_exit="$?"
+      trap - EXIT INT TERM
+      stop_test_lease_renewal
+      if [[ "$lease_acquired" == 'true' ]]; then
+        release_test_lease "$kubeconfig" "$lease_holder" >/dev/null 2>&1 || true
+      fi
+      rm -f -- "$lease_failure"
+      exit "$task_exit"
+    }
+    trap cleanup_retry_join_lease EXIT INT TERM
+    acquire_test_lease "$kubeconfig" "$lease_holder"
+    lease_acquired=true
+    start_test_lease_renewal "$kubeconfig" "$lease_holder" "$lease_failure"
+    assert_no_active_lifecycle_records "$kubeconfig"
 
     member_table="$(talosctl etcd members \
       --nodes 192.168.90.10 \
@@ -219,6 +197,8 @@ retry-join node:
     }
 
     echo "Rebooting only $node to rerun Talos' normal etcd join lifecycle."
+    verify_test_lease_holder "$kubeconfig" "$lease_holder"
+    assert_no_active_lifecycle_records "$kubeconfig"
     talosctl reboot \
       --nodes "$node_ip" \
       --endpoints "$nodes_csv" \
@@ -296,10 +276,20 @@ retry-join node:
       echo "Join retry for $node did not reach verified healthy etcd membership; last observed members: $member_summary." >&2
       exit 1
     }
+    [[ ! -f "$lease_failure" ]] || {
+      echo 'Shared disruption Lease renewal failed during join retry.' >&2
+      exit 1
+    }
+    verify_test_lease_holder "$kubeconfig" "$lease_holder"
+    release_test_lease "$kubeconfig" "$lease_holder"
+    lease_acquired=false
+    rm -f -- "$lease_failure"
+    trap - EXIT INT TERM
     echo "Verified $node joined the healthy three-member etcd cluster without alarms."
 
-# Verify the bootstrapped Talos cluster and refresh the ignored workstation kubeconfig.
-verify:
+# Verify the bootstrapped pre-Cilium Talos cluster and refresh the ignored kubeconfig.
+[private]
+_verify-pre-cilium:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -529,7 +519,7 @@ cilium:
         echo "Refusing Cilium bootstrap: Cilium resources exist without the expected Helm release: $unmanaged_cilium" >&2
         exit 1
       }
-      just bootstrap verify
+      just bootstrap _verify-pre-cilium
     fi
 
     [[ "${CILIUM_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -2575,150 +2565,6 @@ agent-access:
     bootstrap_complete=true
     echo 'agent-access authorization acceptance passed. Change the Git source to suspend=false in a separate reviewed change.'
 
-# Guard, reboot one node, and require full recovery before returning. Refuses
-# unless the cluster is already healthy so a rolling reboot never removes a second
-# node while another is degraded. Reused for the initial resilience soak and day-two maintenance.
-reboot node:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    node='{{node}}'
-    case "$node" in
-      nuc1) node_ip='192.168.90.10' ;;
-      nuc2) node_ip='192.168.90.11' ;;
-      nuc3) node_ip='192.168.90.12' ;;
-      *)
-        echo 'Node must be one of: nuc1, nuc2, nuc3.' >&2
-        exit 1
-        ;;
-    esac
-
-    talosconfig='{{talosconfig}}'
-    kubeconfig='{{kubeconfig}}'
-    nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
-    expected_names=$'nuc1\nnuc2\nnuc3'
-    expected_confirmation="reboot:${node}:${node_ip}"
-
-    just repo require-bash
-    [[ -f "$talosconfig" ]] || {
-      echo "Missing $talosconfig; run just talos generate." >&2
-      exit 1
-    }
-    [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
-      exit 1
-    }
-
-    cluster_healthy() {
-      local nodes_json ready names members member_count member_names alarms alarm_rows
-      nodes_json="$(kubectl --kubeconfig "$kubeconfig" get nodes --output json 2>/dev/null)" || return 1
-      names="$(yq -r '.items[].metadata.name' - <<<"$nodes_json" | sort)"
-      [[ "$names" == "$expected_names" ]] || return 1
-      ready="$(yq -r '[.items[] | .status.conditions[] | select(.type == "Ready") | .status] | sort | join(" ")' - <<<"$nodes_json")"
-      [[ "$ready" == 'True True True' ]] || return 1
-      members="$(talosctl --talosconfig "$talosconfig" --nodes 192.168.90.10 --endpoints "$nodes_csv" etcd members 2>/dev/null)" || return 1
-      member_count="$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$members")"
-      [[ "$member_count" == '3' ]] || return 1
-      member_names="$(awk 'NR > 1 && NF {print $3}' <<<"$members" | sort)"
-      [[ "$member_names" == "$expected_names" ]] || return 1
-      alarms="$(talosctl --talosconfig "$talosconfig" --nodes "$nodes_csv" --endpoints "$nodes_csv" etcd alarm list 2>/dev/null)" || return 1
-      alarm_rows="$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarms")"
-      [[ "$alarm_rows" == '0' ]] || return 1
-    }
-
-    announcer() {
-      kubectl --kubeconfig "$kubeconfig" get servicel2statuses.metallb.io --all-namespaces --output json 2>/dev/null \
-        | yq -r '[.items[].status.node] | join(" ")'
-    }
-
-    node_ready() {
-      kubectl --kubeconfig "$kubeconfig" get node "$node" --output json 2>/dev/null \
-        | yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' 2>/dev/null
-    }
-
-    echo "=== pre-reboot health gate ==="
-    cluster_healthy || {
-      echo "Refusing to reboot $node: the cluster is not fully healthy (three Ready nodes, three etcd members, no alarms)." >&2
-      exit 1
-    }
-    announcer_before="$(announcer)"
-    echo "Cluster healthy. MetalLB is announcing 192.168.90.30 from: ${announcer_before:-<none>}"
-
-    [[ "${TALOS_REBOOT_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo "Refusing to reboot $node." >&2
-      echo "Set TALOS_REBOOT_CONFIRM='$expected_confirmation' and rerun after reviewing the pre-reboot health." >&2
-      exit 1
-    }
-
-    echo "Rebooting $node ($node_ip); etcd quorum drops to 2/3 until it returns."
-    talosctl --talosconfig "$talosconfig" --nodes "$node_ip" --endpoints "$node_ip" reboot --wait=false
-
-    if rg -qw "$node" <<<"$announcer_before"; then
-      echo "=== $node announced 192.168.90.30; watching MetalLB fail the announcement over ==="
-      moved=false
-      for _ in {1..90}; do
-        current="$(announcer)"
-        if [[ -n "$current" ]] && ! rg -qw "$node" <<<"$current"; then
-          echo "  192.168.90.30 now announced from: $current"
-          moved=true
-          break
-        fi
-        sleep 2
-      done
-      [[ "$moved" == 'true' ]] || echo "Warning: did not observe MetalLB failover away from $node within the window." >&2
-    fi
-
-    echo "=== waiting for $node to drop ==="
-    for _ in {1..60}; do
-      [[ "$(node_ready)" != 'True' ]] && break
-      sleep 2
-    done
-
-    echo "=== waiting for $node to return Ready ==="
-    ready_state=''
-    for _ in {1..90}; do
-      ready_state="$(node_ready)"
-      [[ "$ready_state" == 'True' ]] && break
-      sleep 5
-    done
-    [[ "$ready_state" == 'True' ]] || {
-      echo "Node $node did not return to Ready after reboot." >&2
-      exit 1
-    }
-
-    echo "=== verifying Secure Boot and TPM volume auto-unlock on $node ==="
-    common=(--talosconfig "$talosconfig" --nodes "$node_ip" --endpoints "$node_ip" --output yaml)
-    security_state="$(talosctl get securitystate "${common[@]}")"
-    [[ "$(yq -r '.spec.secureBoot' - <<<"$security_state")" == 'true' ]] || {
-      echo "$node did not report Secure Boot after reboot." >&2
-      exit 1
-    }
-    [[ "$(yq -r '.spec.bootedWithUKI' - <<<"$security_state")" == 'true' ]]
-    volume_state="$(talosctl get volumestatuses "${common[@]}")"
-    [[ "$(yq ea -r 'select(.metadata.id == "STATE") | [.spec.phase, .spec.encryptionProvider] | join(" ")' - <<<"$volume_state")" == 'ready luks2' ]] || {
-      echo "$node STATE volume did not unlock via TPM after reboot." >&2
-      exit 1
-    }
-    [[ "$(yq ea -r 'select(.metadata.id == "EPHEMERAL") | [.spec.phase, .spec.encryptionProvider] | join(" ")' - <<<"$volume_state")" == 'ready luks2' ]] || {
-      echo "$node EPHEMERAL volume did not unlock via TPM after reboot." >&2
-      exit 1
-    }
-    [[ "$(yq ea -r 'select(.metadata.id == "u-longhorn") | .spec.phase' - <<<"$volume_state")" == 'ready' ]]
-
-    echo "=== waiting for etcd to return to three healthy members ==="
-    for _ in {1..60}; do
-      cluster_healthy && break
-      sleep 5
-    done
-    cluster_healthy || {
-      echo "Cluster did not return to full health after the $node reboot." >&2
-      exit 1
-    }
-
-    just kube foundation-verify
-
-    echo "Reboot recovery passed for $node: Secure Boot and TPM auto-unlock, three-member etcd with no alarms, MetalLB, DNS, and trusted HTTPS are healthy."
-
 # Shrink/recreate the longhorn user-volume on one node to the configured maxSize.
 # Talos never shrinks a user volume in place, so this applies a config with the
 # volume removed (--mode=reboot, so p5 unmounts on the boot), wipes+drops
@@ -2727,7 +2573,8 @@ reboot node:
 # the rendered config targets 500GiB. Wipes ONLY nvme0n1p5; STATE, EPHEMERAL, and
 # etcd are preserved. Run only while the volume is empty (pre-Longhorn or after a
 # full replica evacuation). Verified on nuc1 2026-07-22.
-resize-longhorn node:
+[private]
+_resize-longhorn-raw node:
     #!/usr/bin/env bash
     set -euo pipefail
 

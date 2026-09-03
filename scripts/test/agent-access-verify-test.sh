@@ -158,10 +158,20 @@ for context in homelab-observer homelab-diagnostic; do
     rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
     rg -q -- "--context $context auth can-i $verb referencegrants.gateway.networking.k8s.io --namespace automation" \
       "$named_log"
+    rg -q -- "--context $context auth can-i $verb leases.coordination.k8s.io --namespace kube-system" \
+      "$named_log"
+    rg -q -- "--context $context auth can-i $verb replicas.longhorn.io --namespace kube-system" \
+      "$named_log"
+    rg -q -- "--context $context auth can-i $verb settings.longhorn.io --namespace kube-system" \
+      "$named_log"
   done
   rg -q -- "--context $context auth can-i list dnsendpoints.externaldns.k8s.io --all-namespaces" \
     "$named_log"
 done
+rg -q -- '--context homelab-observer auth can-i patch leases.coordination.k8s.io --namespace flux-system' \
+  "$named_log"
+rg -q -- '--context homelab-observer auth can-i patch replicas.longhorn.io --namespace longhorn-system' \
+  "$named_log"
 
 admin_log="$(run_layout admin)"
 if rg -q -- '--context(=| )' "$admin_log"; then

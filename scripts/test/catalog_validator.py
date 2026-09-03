@@ -57,8 +57,8 @@ EXPECTED_RESILIENCE = [
     "chainsaw.resilience.plex-cross-node-reschedule",
     "chainsaw.resilience.test-reports-persistence",
     "chainsaw.resilience.tailscale-subnet-router-replica-recovery",
-    "test.resilience.plex-node-reboot",
 ]
+STANDALONE_SUITES = {"test.resilience.node-abrupt-loss"}
 METADATA_FIELDS = (
     "source",
     "framework",
@@ -1355,6 +1355,7 @@ class CatalogValidator:
             entry["metadata"]["id"]
             for entry in self.suites
             if entry["metadata"]["tier"] == tier
+            and entry["metadata"]["id"] not in STANDALONE_SUITES
             and not (
                 campaign == "smoke"
                 and entry["metadata"]["id"] == "chainsaw.smoke.cluster.diagnostics-self-test"
