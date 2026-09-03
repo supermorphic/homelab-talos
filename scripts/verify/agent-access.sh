@@ -106,6 +106,7 @@ namespaced_read_resources=(
   certificates.cert-manager.io
   ciliumendpoints.cilium.io
   ciliumnetworkpolicies.cilium.io
+  leases.coordination.k8s.io
   dnsendpoints.externaldns.k8s.io
   gateways.gateway.networking.k8s.io
   httproutes.gateway.networking.k8s.io
@@ -114,6 +115,8 @@ namespaced_read_resources=(
   backuptargets.longhorn.io
   nodes.longhorn.io
   recurringjobs.longhorn.io
+  replicas.longhorn.io
+  settings.longhorn.io
   volumes.longhorn.io
   ipaddresspools.metallb.io
   pods.metrics.k8s.io
@@ -178,6 +181,9 @@ for context in "$observer" "$diagnostic"; do
   assert_can_i "$context" no bind clusterroles.rbac.authorization.k8s.io ''
   assert_can_i "$context" no escalate clusterroles.rbac.authorization.k8s.io ''
   assert_can_i "$context" no impersonate users ''
+  assert_can_i "$context" no patch leases.coordination.k8s.io flux-system
+  assert_can_i "$context" no patch replicas.longhorn.io longhorn-system
+  assert_can_i "$context" no patch settings.longhorn.io longhorn-system
 done
 
 [[ -f "$talosconfig" ]] || {

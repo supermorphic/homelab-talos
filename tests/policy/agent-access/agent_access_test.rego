@@ -39,11 +39,12 @@ read_requirements := {
 	"aquasecurity.github.io": {"vulnerabilityreports"},
 	"cert-manager.io": {"certificates", "clusterissuers"},
 	"cilium.io": {"ciliumclusterwidenetworkpolicies", "ciliumendpoints", "ciliumidentities", "ciliumnetworkpolicies", "ciliumnodes"},
+	"coordination.k8s.io": {"leases"},
 	"externaldns.k8s.io": {"dnsendpoints"},
 	"gateway.networking.k8s.io": {"gatewayclasses", "gateways", "httproutes", "referencegrants"},
 	"helm.toolkit.fluxcd.io": {"helmreleases"},
 	"kustomize.toolkit.fluxcd.io": {"kustomizations"},
-	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "volumes"},
+	"longhorn.io": {"backuptargets", "nodes", "recurringjobs", "replicas", "settings", "volumes"},
 	"metallb.io": {"ipaddresspools"},
 	"metrics.k8s.io": {"nodes", "pods"},
 	"monitoring.coreos.com": {"prometheusrules", "servicemonitors"},
@@ -194,6 +195,16 @@ test_observer_requires_gateway_reads if {
 test_observer_requires_notification_flux_reads if {
 	messages := deny with input as fixture_without_api_group("homelab-observer-extra", "notification.toolkit.fluxcd.io")
 	count(messages_matching(messages, "notification.toolkit.fluxcd.io")) == 1
+}
+
+test_observer_requires_disruption_lease_reads if {
+	messages := deny with input as fixture_without_api_group("homelab-observer-extra", "coordination.k8s.io")
+	count(messages_matching(messages, "coordination.k8s.io")) == 1
+}
+
+test_observer_requires_longhorn_evidence_reads if {
+	messages := deny with input as fixture_without_api_group("homelab-observer-extra", "longhorn.io")
+	count(messages_matching(messages, "longhorn.io")) == 1
 }
 
 test_diagnostic_cannot_patch_flux if {

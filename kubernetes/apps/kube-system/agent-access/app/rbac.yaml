@@ -68,6 +68,9 @@ rules:
       - ciliumnetworkpolicies
       - ciliumnodes
     verbs: [get, list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch]
   - apiGroups: [externaldns.k8s.io]
     resources: [dnsendpoints]
     verbs: [get, list, watch]
@@ -81,7 +84,7 @@ rules:
     resources: [kustomizations]
     verbs: [get, list, watch]
   - apiGroups: [longhorn.io]
-    resources: [backuptargets, nodes, recurringjobs, volumes]
+    resources: [backuptargets, nodes, recurringjobs, replicas, settings, volumes]
     verbs: [get, list, watch]
   - apiGroups: [metallb.io]
     resources: [ipaddresspools]
