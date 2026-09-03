@@ -183,6 +183,7 @@ fi
 uv run --locked ruff check \
 	scripts/repository/github_protection.py \
 	scripts/test/catalog_compatibility.py \
+	scripts/test/test_catalog_compatibility.py \
 	scripts/test/catalog_validator.py \
 	scripts/test/allure_report.py \
 	scripts/test/test_allure_report.py \
@@ -209,6 +210,7 @@ uv run --locked ruff check \
 uv run --locked ruff format --check \
 	scripts/repository/github_protection.py \
 	scripts/test/catalog_compatibility.py \
+	scripts/test/test_catalog_compatibility.py \
 	scripts/test/catalog_validator.py \
 	scripts/test/allure_report.py \
 	scripts/test/test_allure_report.py \

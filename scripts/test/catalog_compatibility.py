@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import io
 import re
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,19 @@ CATALOG = REPO_ROOT / "tests/catalog.yaml"
 
 
 def run_validator(catalog: Path) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        returncode = catalog_validator.validate_catalog(str(catalog))
+    return subprocess.CompletedProcess(
+        args=[str(catalog_validator.__file__), str(catalog)],
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
+    )
+
+
+def run_cli_validator(catalog: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(VALIDATOR), str(catalog)],
         cwd=REPO_ROOT,
@@ -1026,7 +1041,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    completed = run_validator(CATALOG)
+    completed = run_cli_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "Test catalog passed validation: suites=117.\n"
     assert completed.stderr == ""
