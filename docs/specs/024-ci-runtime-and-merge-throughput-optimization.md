@@ -698,17 +698,132 @@ The post-removal result is not operationally acceptable and does not meet the
 approximately two-minute objective. The sum of the 54 shell-case medians is 694.104s and
 the largest indivisible measured case is 159.353s. Ignoring all orchestration overhead,
 ideal load-balancing floors are 347.052s for two workers, 231.368s for three, and 173.526s
-for four. Bounded split execution is therefore justified as the next Stage 1 candidate
-because several independently meaningful retained groups are material, but splitting the
-current work alone cannot reach two minutes. The next slice must first prove process and
-artifact isolation, preserve deterministic JUnit reconciliation and fail-fast semantics,
-and continue reducing at least `catalog-negative` and the logging/monitoring hotspots.
+for four. At that measurement boundary, bounded split execution was therefore justified as
+the next Stage 1 candidate because several independently meaningful retained groups were
+material, but splitting the current work alone could not reach two minutes. The 023e result
+below records the required isolation, deterministic JUnit, fail-fast, and measured-runtime
+decision.
 
 Stage 1 remains full-suite validation: all retained Active evidence still runs for every
 pull request. Stage 2 remains unauthorized. The residual bottleneck is dominated by
 universally executed harness implementation and variance; no current evidence shows that
 unrelated component validation is the main remaining cost or that an impact planner would
 provide the required saving.
+
+### 023e bounded execution and current-main rebaseline
+
+Plan 023e first tested whether the `catalog-negative` hotspot was dominated by starting the
+pinned Python process for every compatibility candidate. Commit `22b733d` added exact
+direct-versus-CLI parity tests and reused the validator process for the 61 rejection and
+three acceptance cases. All compatibility and fixture checks passed, but the controlled
+focused result failed its retention gate:
+
+| Catalog compatibility measurement | Samples | Median |
+| --- | --- | ---: |
+| Existing implementation | 161.900, 159.353, 156.031 | 159.353s |
+| Reused Python process | 397.79, 156.23, 161.57 | 161.57s |
+
+The post-change median was 2.217 seconds slower. Commit `5dfcdca` therefore reverted the
+experiment and records zero saving. Process startup is not the dominant cost. The retained
+validator repeatedly performs substantive repository analysis for each independently
+mutated candidate. Further optimization must reduce or share that analysis without changing
+the literal rejection, ordering, fail-fast, and CLI-boundary contracts.
+
+The retained implementation adds a Bash 5 bounded worker pool inside
+`validation.test-harness`; it does not split the provider workflow or select tests by
+changed path. Nine cheap, high-signal, or repository-mutating shell checks remain in a
+serial preflight. In particular, `catalog-negative` cannot overlap tests that discover the
+repository shell source set because it creates short-lived repository fixtures. The
+remaining isolated cases run with a configurable one-to-eight-worker bound and a default of
+four. Each worker receives a private `TMPDIR` and cannot inherit the outer result-fragment,
+shared-result, or run-ID context. Case declaration order owns console replay and JUnit
+fragment numbering regardless of completion order. The first observed failure stops new
+work, terminates and reaps owned active workers, records canceled started workers as
+skipped, and leaves the unstarted tail for the outer fail-fast reporter.
+
+Permanent regression coverage proves real two-worker overlap, private temporary roots,
+result-context isolation, stable output and fragment order, offset fragment numbering,
+invalid-bound rejection before execution, duplicate and unsafe registration rejection,
+failure-code propagation, cancellation, no unstarted tail, and no surviving owned process.
+The complete real harness also passed with one and four workers before measurement.
+
+The clean fixed-SHA worker comparison used the implementation immediately before the final
+rebase. Every trial passed the same 55 shell identities:
+
+| Parallel workers | Elapsed real | Change from one worker |
+| ---: | ---: | ---: |
+| 1 | 728.47s | baseline |
+| 2 | 475.42s | -34.7% |
+| 4 | 349.09s | -52.1% |
+| 6 | 356.49s | -51.1% |
+
+Four workers were fastest. Six workers added contention and took 7.40 seconds longer, so
+four remains the selected default. This comparison justifies bounded execution, but it
+also disproves the ideal load-balancing model: shared host CPU and I/O plus the serial
+preflight remain material.
+
+Three clean full-CI samples on pre-rebase implementation SHA `dd374c6` passed 721 tests
+with no failures, errors, or skips. Their wall times were 493.09, 490.73, and 471.38 seconds,
+for a 490.73-second median and 21.71-second range. Their harness times were 345.456,
+348.753, and 331.827 seconds. These samples remain valid evidence for that exact tree, but
+they are not the current-main distribution.
+
+While that measurement ran, issue 356 advanced `origin/main` to `1370eff` and added the
+`node-lifecycle` and `cluster-commands` offline cases. The branch rebased and placed both
+independently isolated cases in the worker pool. The current harness therefore has nine
+serial and 48 parallel shell cases, 57 total. The three current-main samples used rebased
+implementation SHA `5dfcdca`, Darwin 25.6.0 arm64, the pinned toolchain, ordinary warm
+caches, idle Time Machine, per-command sleep inhibition, clean tracked state, and clean
+before/after foreign-worker guards:
+
+| Sample | Wall time | Canonical duration | Harness duration | Result |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 495.48s | 494s | 352.278s | 732 passed; 0 failed/error/skipped |
+| 2 | 495.30s | 494s | 352.659s | 732 passed; 0 failed/error/skipped |
+| 3 | 494.23s | 493s | 349.144s | 732 passed; 0 failed/error/skipped |
+
+The authoritative local full-CI distribution has count 3, minimum 494.23 seconds, median
+495.30 seconds, maximum 495.48 seconds, and range 1.25 seconds. It is 38.9 percent below
+the original 810-second median and has substantial headroom below the 20-minute GitHub
+timeout. Three local samples still do not establish p95, and they do not include remote
+queue or runner startup behavior.
+
+The current-main residual suite medians are 352.278 seconds for the harness, 26.997 seconds
+for repository validation, 18.774 seconds for automation-data validation, 16.476 seconds
+for monitoring-alert validation, and 15.214 seconds for n8n validation. The residual top
+15 harness-case medians are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `catalog-negative` | 174.007s |
+| 2 | `monitoring-alloy-logs-validator` | 125.479s |
+| 3 | `logging-verifier` | 118.683s |
+| 4 | `monitoring-alloy-events-validator` | 54.434s |
+| 5 | `monitoring-loki-validator` | 35.389s |
+| 6 | `gatus-validator` | 22.862s |
+| 7 | `bootstrap-recovery` | 22.644s |
+| 8 | `monitoring-alerts-validator` | 20.088s |
+| 9 | `campaign-runner` | 18.748s |
+| 10 | `ntfy-identity` | 16.710s |
+| 11 | `agent-access-verifier` | 16.027s |
+| 12 | `plex-validator` | 12.219s |
+| 13 | `n8n-secrets` | 12.026s |
+| 14 | `chainsaw-inputs` | 11.971s |
+| 15 | `arr-validator` | 11.462s |
+
+The approximately two-minute objective is not met: the current median is 8m15s, and the
+serial `catalog-negative` case alone has a 2m54s median. Stage 1 must continue with intrinsic
+optimization of the retained catalog, logging, and monitoring harnesses. The stable result
+does remove the immediate 20-minute timeout failure, but that operational recovery is not
+the design target.
+
+The Stage 2 gate remains closed. Correctness passes and latency remains unacceptable, but
+the dominant residual work is still universally invoked harness implementation whose
+intrinsic optimization is incomplete. The measurements do not yet show how much retained
+work is unrelated to representative ordinary changes, and they do not establish that a
+planner would save enough to justify its enforcement complexity. Issue 275 remains the
+prerequisite for the separate Forgejo/NUC comparison. Natural GitHub and later Forgejo runs
+must supply the larger stable sample needed for a remote p95 claim.
 
 ## Stage 2 decision gate
 
