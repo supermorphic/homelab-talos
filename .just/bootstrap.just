@@ -181,7 +181,33 @@ retry-join node:
     esac
 
     talosconfig='{{talosconfig}}'
+    kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
+    source scripts/lib/lease.sh
+    source scripts/lib/node-lifecycle-state.sh
+    [[ -f "$kubeconfig" ]] || {
+      echo 'Refusing join retry: Kubernetes API coordination requires the operator kubeconfig.' >&2
+      exit 1
+    }
+    lease_holder="bootstrap:retry-join:${node}:$$"
+    lease_failure="$(mktemp "${TMPDIR:-/tmp}/homelab-retry-join-lease.XXXXXX")"
+    rm -f -- "$lease_failure"
+    lease_acquired=false
+    cleanup_retry_join_lease() {
+      local task_exit="$?"
+      trap - EXIT INT TERM
+      stop_test_lease_renewal
+      if [[ "$lease_acquired" == 'true' ]]; then
+        release_test_lease "$kubeconfig" "$lease_holder" >/dev/null 2>&1 || true
+      fi
+      rm -f -- "$lease_failure"
+      exit "$task_exit"
+    }
+    trap cleanup_retry_join_lease EXIT INT TERM
+    acquire_test_lease "$kubeconfig" "$lease_holder"
+    lease_acquired=true
+    start_test_lease_renewal "$kubeconfig" "$lease_holder" "$lease_failure"
+    assert_no_active_lifecycle_records "$kubeconfig"
 
     member_table="$(talosctl etcd members \
       --nodes 192.168.90.10 \
@@ -221,6 +247,8 @@ retry-join node:
     }
 
     echo "Rebooting only $node to rerun Talos' normal etcd join lifecycle."
+    verify_test_lease_holder "$kubeconfig" "$lease_holder"
+    assert_no_active_lifecycle_records "$kubeconfig"
     talosctl reboot \
       --nodes "$node_ip" \
       --endpoints "$nodes_csv" \
@@ -298,6 +326,15 @@ retry-join node:
       echo "Join retry for $node did not reach verified healthy etcd membership; last observed members: $member_summary." >&2
       exit 1
     }
+    [[ ! -f "$lease_failure" ]] || {
+      echo 'Shared disruption Lease renewal failed during join retry.' >&2
+      exit 1
+    }
+    verify_test_lease_holder "$kubeconfig" "$lease_holder"
+    release_test_lease "$kubeconfig" "$lease_holder"
+    lease_acquired=false
+    rm -f -- "$lease_failure"
+    trap - EXIT INT TERM
     echo "Verified $node joined the healthy three-member etcd cluster without alarms."
 
 # Verify the bootstrapped pre-Cilium Talos cluster and refresh the ignored kubeconfig.
@@ -2732,7 +2769,7 @@ _reboot-legacy node:
 # etcd are preserved. Run only while the volume is empty (pre-Longhorn or after a
 # full replica evacuation). Verified on nuc1 2026-07-22.
 [private]
-_resize-longhorn-legacy node:
+_resize-longhorn-raw node:
     #!/usr/bin/env bash
     set -euo pipefail
 

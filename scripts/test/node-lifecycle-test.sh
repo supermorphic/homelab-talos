@@ -7,6 +7,7 @@ source scripts/node/longhorn.sh
 source scripts/node/drain.sh
 source scripts/node/recovery.sh
 source scripts/node/lifecycle.sh
+source scripts/node/resize-longhorn.sh
 
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-node-lifecycle-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
@@ -478,5 +479,15 @@ assert_fails 'Rejected recovery was reported as a successful reboot.' \
   run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
     192.168.90.10 holder "$reboot_record" fake-inventory
 [[ "$transaction_calls" != *uncordon* ]]
+
+resize_calls=''
+verify_test_lease_holder() { resize_calls+="${resize_calls:+ }lease"; }
+assert_cluster_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
+resize_just() {
+  [[ "$*" == 'bootstrap _resize-longhorn-raw nuc1' ]] || return 2
+  resize_calls+="${resize_calls:+ }resize"
+}
+run_resize_longhorn_transaction fake-kubeconfig nuc1 holder
+[[ "$resize_calls" == 'lease admission resize' ]]
 
 echo 'Node lifecycle state tests passed.'

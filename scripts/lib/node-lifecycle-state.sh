@@ -50,6 +50,25 @@ compare_owned_value() {
   fi
 }
 
+assert_no_active_lifecycle_records() {
+  local kubeconfig="$1"
+  local nodes_json node_json node_name record
+  nodes_json="$(lifecycle_kubectl "$kubeconfig" get nodes --output json)" || {
+    echo 'Cannot inspect persistent node lifecycle state through Kubernetes.' >&2
+    return 1
+  }
+  while IFS= read -r node_json; do
+    [[ -n "$node_json" ]] || continue
+    node_name="$(yq -r '.metadata.name' <<<"$node_json")"
+    record="$(ANNOTATION="$NODE_LIFECYCLE_ANNOTATION" \
+      yq -r '.metadata.annotations[strenv(ANNOTATION)] // ""' <<<"$node_json")"
+    [[ -z "$record" ]] || {
+      echo "Node $node_name already has persistent lifecycle state." >&2
+      return 1
+    }
+  done < <(yq --output-format json --indent 0 '.items[]' <<<"$nodes_json")
+}
+
 assert_cluster_disruption_admissible() {
   local kubeconfig="$1"
   local recovery_node="${2:-}"
