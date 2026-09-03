@@ -610,6 +610,106 @@ GitHub measurements. Stage 2 is not authorized: ordinary latency is unacceptable
 four-part Stage 2 decision gate remains unmet because Stage 1 is incomplete and the
 residual impact and deterministic-selection case are not yet established.
 
+### 023d retained-harness result and post-removal rebaseline
+
+PR #342 supplied an intermediate GitHub observation before the complete encode lifecycle
+removal: canonical validation took 777 seconds, the general harness reported 593.784
+seconds, encode validation reported 64.323 seconds, and the required check completed in
+13m26s. This is one evolving-branch observation, not a distribution. At that point the
+general harness wrote `time="0"` for every shell case, so it could not identify its own
+residual critical path.
+
+Plan 023d added real shell-case duration evidence without changing case order, commands,
+failure propagation, or fail-fast behavior. Its matched focused measurements evaluated
+two implementation changes before the complete rebaseline:
+
+| Focused test | Pre samples | Pre median | Post samples | Post median | Result |
+| --- | --- | ---: | --- | ---: | --- |
+| Logging verifier | 122.53, 123.11, 126.77 | 123.11s | 128.63, 128.23, 130.43 | 128.63s | Projection rewrite reverted; zero retained saving. |
+| Alloy Logs mutations | 137.66, 132.65, 131.49 | 132.65s | 127.94, 125.54, 125.30 | 125.54s | Fixture reuse retained; observed median decrease 7.11s. |
+| Alloy Events mutations | 59.65, 60.50, 59.75 | 59.75s | 54.24, 53.68, 55.31 | 54.24s | Fixture reuse retained; observed median decrease 5.51s. |
+| Loki mutations | 37.07, 37.27, 36.30 | 37.07s | 34.86, 33.78, 34.66 | 34.66s | Fixture reuse retained; observed median decrease 2.41s. |
+
+Every focused command passed. These overlapping distributions are not added into an
+estimated complete-harness saving. Three samples do not establish p95. The logging
+projection rewrite made every measured sample slower than the pre-change maximum, so it
+was removed. The monitoring fixture helper retained all 24 Alloy Logs, 18 Alloy Events,
+and eight Loki mutation identities while avoiding repeated full-repository fixture copies.
+
+After the terminal ICQ result was recorded in specification 017, the remaining 39-test
+encode harness and all of its executable, CI, catalog, operator, GitOps, alert, fixture,
+verification, and dedicated FFmpeg toolchain surfaces were Removed. The controlled
+post-removal rebaseline used commit `f1bda1893341af8ccd6433d270117a1d3c207ceb`, based on
+`origin/main` `f19e57d`, on the same Darwin 25.6.0 arm64 host with the pinned toolchain and
+ordinary warm caches. Time Machine was paused, sleep was inhibited, and the controller
+required the fixed SHA, clean tracked state, and no foreign CI worker immediately before
+and after every accepted sample.
+
+Three complete `mise exec -- just test validate` samples passed the same 54 shell-case
+identities, 20 Chainsaw documents, and two Python test directories:
+
+| Sample | Elapsed real | User CPU | System CPU | Disposition |
+| --- | ---: | ---: | ---: | --- |
+| 9 | 741.35s | 399.38s | 162.76s | Accepted |
+| 10 | 1,647.98s | 393.86s | 153.88s | Accepted; Alloy Events case took 980.210s. |
+| 11 | 710.69s | 393.68s | 148.89s | Accepted |
+
+The post-removal harness distribution has count 3, minimum 710.69s, median 741.35s,
+observed maximum 1,647.98s, and range 937.29s. The nearly constant CPU use and the isolated
+980.210-second case in sample 10 show large elapsed-time variance that the CI-worker guard
+does not explain. This distribution is valid under the declared protocol, but its maximum
+must not be presented as a steady-state estimate or as p95.
+
+The residual top 15 shell cases by three-sample median are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `catalog-negative` | 159.353s |
+| 2 | `monitoring-alloy-logs-validator` | 123.262s |
+| 3 | `logging-verifier` | 116.474s |
+| 4 | `monitoring-alloy-events-validator` | 53.834s |
+| 5 | `monitoring-loki-validator` | 33.411s |
+| 6 | `gatus-validator` | 21.275s |
+| 7 | `campaign-runner` | 18.914s |
+| 8 | `monitoring-alerts-validator` | 18.725s |
+| 9 | `bootstrap-recovery` | 17.916s |
+| 10 | `ntfy-identity` | 15.663s |
+| 11 | `agent-access-verifier` | 14.424s |
+| 12 | `chainsaw-inputs` | 12.235s |
+| 13 | `plex-validator` | 11.311s |
+| 14 | `n8n-secrets` | 11.295s |
+| 15 | `arr-validator` | 10.629s |
+
+One clean complete-CI observation was required. The first two passing attempts took
+840.39s and 959.12s but were excluded because a foreign worker appeared before their
+post-run guard. A third attempt stopped after 879.24s when a host-wide DNS outage prevented
+resolution of the Tailscale Helm repository; a focused retry reproduced the failure, and
+resolution of GitHub and other chart domains also failed. The Tailscale validator passed
+after DNS recovered. These three attempts are preserved only as excluded diagnostics.
+
+The fourth `mise exec -- just ci` attempt passed 720 tests with no failures, errors, or
+skips and clean before/after guards. It took 2,574.80s, of which the harness reported
+2,426.217s. Its `catalog-negative` case alone took 1,768.908s, compared with 156.031s to
+161.900s in the three accepted harness samples. This single accepted full-CI observation
+is therefore evidence of severe elapsed-time variance, not a complete-gate distribution,
+steady-state estimate, or p95.
+
+The post-removal result is not operationally acceptable and does not meet the
+approximately two-minute objective. The sum of the 54 shell-case medians is 694.104s and
+the largest indivisible measured case is 159.353s. Ignoring all orchestration overhead,
+ideal load-balancing floors are 347.052s for two workers, 231.368s for three, and 173.526s
+for four. Bounded split execution is therefore justified as the next Stage 1 candidate
+because several independently meaningful retained groups are material, but splitting the
+current work alone cannot reach two minutes. The next slice must first prove process and
+artifact isolation, preserve deterministic JUnit reconciliation and fail-fast semantics,
+and continue reducing at least `catalog-negative` and the logging/monitoring hotspots.
+
+Stage 1 remains full-suite validation: all retained Active evidence still runs for every
+pull request. Stage 2 remains unauthorized. The residual bottleneck is dominated by
+universally executed harness implementation and variance; no current evidence shows that
+unrelated component validation is the main remaining cost or that an impact planner would
+provide the required saving.
+
 ## Stage 2 decision gate
 
 Stage 2 is optional. It proceeds only when all of the following are true:
