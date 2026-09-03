@@ -4,6 +4,8 @@ set -euo pipefail
 source scripts/lib/node-lifecycle-state.sh
 source scripts/node/common.sh
 source scripts/node/longhorn.sh
+source scripts/node/drain.sh
+source scripts/node/recovery.sh
 
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-node-lifecycle-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
@@ -262,5 +264,123 @@ conflict_replace_count="$longhorn_replace_count"
 assert_fails 'Conflicting live Longhorn state was overwritten.' \
   restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$longhorn_replace_count" == "$conflict_replace_count" ]]
+
+controlled_pods='{
+  "items": [
+    {
+      "metadata": {
+        "namespace": "media",
+        "name": "plex-abc",
+        "ownerReferences": [{"kind": "ReplicaSet", "name": "plex-123", "controller": true}]
+      },
+      "spec": {
+        "volumes": [
+          {"name": "config", "persistentVolumeClaim": {"claimName": "plex-config"}},
+          {"name": "transcode", "emptyDir": {}}
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "kube-system",
+        "name": "cilium-abc",
+        "ownerReferences": [{"kind": "DaemonSet", "name": "cilium", "controller": true}]
+      },
+      "spec": {"volumes": []}
+    }
+  ]
+}'
+validate_drain_pods "$controlled_pods" >/dev/null
+empty_dir_report="$(report_drain_local_data "$controlled_pods")"
+rg -q 'media/plex-abc.*transcode' <<<"$empty_dir_report"
+
+unmanaged_pods='{
+  "items": [{
+    "metadata": {"namespace": "default", "name": "unmanaged", "ownerReferences": []},
+    "spec": {"volumes": []}
+  }]
+}'
+assert_fails 'An unmanaged Pod was accepted for drain.' \
+  validate_drain_pods "$unmanaged_pods"
+
+mirror_pods='{
+  "items": [{
+    "metadata": {
+      "namespace": "kube-system",
+      "name": "static",
+      "annotations": {"kubernetes.io/config.mirror": "fixture"}
+    },
+    "spec": {"volumes": []}
+  }]
+}'
+validate_drain_pods "$mirror_pods" >/dev/null
+
+drain_calls="$state_dir/drain-calls"
+touch "$drain_calls"
+eviction_available=true
+drain_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  printf '%s\n' "$*" >>"$drain_calls"
+  if [[ "$*" == 'get --raw /apis/policy/v1' ]]; then
+    if [[ "$eviction_available" == 'true' ]]; then
+      printf '%s\n' '{"resources":[{"name":"pods/eviction","kind":"Eviction"}]}'
+    else
+      printf '%s\n' '{"resources":[]}'
+    fi
+  fi
+}
+
+perform_kubernetes_drain fake-kubeconfig nuc1
+drain_command="$(tail -1 "$drain_calls")"
+rg -q '^drain nuc1 ' <<<"$drain_command"
+rg -q -- '--ignore-daemonsets' <<<"$drain_command"
+rg -q -- '--delete-emptydir-data' <<<"$drain_command"
+rg -q -- '--timeout=' <<<"$drain_command"
+if rg -q -- '--disable-eviction|--force' <<<"$drain_command"; then
+  fail "Unsafe drain flag found: $drain_command"
+fi
+
+eviction_available=false
+before_refusal_lines="$(wc -l <"$drain_calls" | tr -d ' ')"
+assert_fails 'Drain ran without the policy/v1 Eviction resource.' \
+  perform_kubernetes_drain fake-kubeconfig nuc1
+after_refusal_lines="$(wc -l <"$drain_calls" | tr -d ' ')"
+[[ "$after_refusal_lines" -eq $((before_refusal_lines + 1)) ]]
+
+plex_values='kubernetes/apps/media/plex/app/values.yaml'
+[[ "$(yq -r '.controllers.plex.strategy' "$plex_values")" == 'Recreate' ]]
+[[ "$(yq -r '.controllers.plex.pod.terminationGracePeriodSeconds' "$plex_values")" == '120' ]]
+[[ "$(yq -r '.controllers.plex.containers.app.probes.readiness.spec.httpGet.path' "$plex_values")" == '/identity' ]]
+[[ "$(yq -r '.persistence.config.type' "$plex_values")" == 'persistentVolumeClaim' ]]
+[[ "$(yq -r '.persistence.media.type' "$plex_values")" == 'persistentVolumeClaim' ]]
+[[ "$(yq -r '.persistence.media.existingClaim' "$plex_values")" == 'media-data' ]]
+[[ "$(yq -r '.persistence.transcode.type' "$plex_values")" == 'emptyDir' ]]
+
+recovery_calls=''
+record_recovery_call() {
+  recovery_calls+="${recovery_calls:+ }$1"
+}
+verify_returned_node_contained() { record_recovery_call contained; }
+verify_talos_recovery() { record_recovery_call talos; }
+restore_longhorn_maintenance_state() { record_recovery_call longhorn-restore; }
+verify_longhorn_convergence() { record_recovery_call longhorn-converged; }
+verify_etcd_recovery() { record_recovery_call etcd; }
+verify_cilium_recovery() { record_recovery_call cilium; }
+verify_workload_replacements() { record_recovery_call workloads; }
+recovery_just() {
+  [[ "$*" == 'kube foundation-verify' ]] || return 2
+  record_recovery_call foundation
+}
+
+perform_recovery_acceptance fake-kubeconfig fake-talosconfig nuc1 192.168.90.10 \
+  "$maintenance_record" fake-inventory
+[[ "$recovery_calls" == \
+  'contained talos longhorn-restore longhorn-converged etcd cilium workloads foundation' ]]
+
+recovery_calls=''
+perform_recovery_acceptance fake-kubeconfig fake-talosconfig nuc1 192.168.90.10 \
+  "$reboot_record"
+[[ "$recovery_calls" == 'contained talos longhorn-converged etcd cilium foundation' ]]
 
 echo 'Node lifecycle state tests passed.'
