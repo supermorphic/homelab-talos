@@ -826,9 +826,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     (lease_fixture / "scripts/lib").mkdir(parents=True)
     (lease_fixture / "kubernetes").mkdir()
     (lease_fixture / "scripts/verify/root.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "source scripts/lib/lease.sh\n"
-        "lease_kubectl cfg delete lease lock\n",
+        "#!/usr/bin/env bash\nsource scripts/lib/lease.sh\nlease_kubectl cfg delete lease lock\n",
         encoding="utf-8",
     )
     (lease_fixture / "scripts/lib/lease.sh").write_text(
