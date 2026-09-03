@@ -85,6 +85,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
       "renewTime": strenv(NOW)
     }
   }' >"$lease_state"
+# shellcheck disable=SC2016  # Expansion must occur in the child command.
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
@@ -94,7 +95,8 @@ TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/joined" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
 TEST_EXECUTION_ORIGIN=agent \
-  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- true >/dev/null
+  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- \
+    bash -c '[[ "$HOMELAB_DISRUPTION_LEASE_HOLDER" == "campaign:fixture" ]]' >/dev/null
 mapfile -t joined_runs < <(find "$fixture_root/joined" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#joined_runs[@]}" -eq 1 ]]
 [[ "$(yq -r '.result' "${joined_runs[0]}/summary.json")" == 'passed' ]]

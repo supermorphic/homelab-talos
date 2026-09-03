@@ -154,6 +154,12 @@ if [[ "$mutates_cluster" == 'true' &&
   fi
 fi
 
+if [[ "$lease_acquired" == 'true' ]]; then
+  export HOMELAB_DISRUPTION_LEASE_HOLDER="$run_id"
+elif [[ "$lease_joined" == 'true' ]]; then
+  export HOMELAB_DISRUPTION_LEASE_HOLDER="$TEST_CAMPAIGN_LEASE_HOLDER"
+fi
+
 if [[ "$mutates_cluster" != 'true' ||
   "$disruption_admitted" == 'true' ]]; then
   set +e

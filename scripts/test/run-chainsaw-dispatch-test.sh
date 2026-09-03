@@ -48,8 +48,12 @@ e2e_entry="$(catalog_dispatch_entry "$catalog" e2e qbit-manage-policy '')"
 integration_entry="$(catalog_dispatch_entry "$catalog" integration media-hardlink '')"
 [[ "$(yq -r '.dispatch.runtime' - <<<"$integration_entry")" == 'bash' ]]
 
-resilience_entry="$(catalog_dispatch_entry "$catalog" resilience plex-node-reboot '')"
+resilience_entry="$(catalog_dispatch_entry "$catalog" resilience node-abrupt-loss '')"
 [[ "$(yq -r '.dispatch.mode' - <<<"$resilience_entry")" == 'direct' ]]
+if catalog_dispatch_entry "$catalog" resilience plex-node-reboot '' >/dev/null 2>&1; then
+  echo 'Retired plex-node-reboot dispatch remains registered.' >&2
+  exit 1
+fi
 
 n8n_persistence_entry="$(
   catalog_dispatch_entry "$catalog" resilience n8n-persistence ''
@@ -73,3 +77,29 @@ if rg -Fq '.test-results/state-changing.lock' "$runner"; then
   echo 'Live dispatch still uses a checkout-local state-changing lock.' >&2
   exit 1
 fi
+
+fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/live-dispatch-test.XXXXXX")"
+trap 'rm -rf -- "$fixture_root"' EXIT
+mkdir -p "$fixture_root/scripts/test/lib" "$fixture_root/tests"
+cp scripts/test/run-live-suite.sh "$fixture_root/scripts/test/run-live-suite.sh"
+cp scripts/lib/common.sh "$fixture_root/scripts/lib-common.sh"
+cp scripts/test/lib/catalog.sh "$fixture_root/scripts/test/lib/catalog.sh"
+cp tests/catalog.yaml "$fixture_root/tests/catalog.yaml"
+mkdir -p "$fixture_root/scripts/lib"
+mv "$fixture_root/scripts/lib-common.sh" "$fixture_root/scripts/lib/common.sh"
+cat >"$fixture_root/scripts/test/run-catalog-suite.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"${DISPATCH_TEST_CALLS:?}"
+EOF
+chmod +x "$fixture_root/scripts/test/run-catalog-suite.sh"
+dispatch_calls="$fixture_root/calls"
+(
+  cd "$fixture_root"
+  DISPATCH_TEST_CALLS="$dispatch_calls" \
+    scripts/test/run-live-suite.sh resilience node-abrupt-loss nuc2
+)
+[[ "$(<"$dispatch_calls")" == \
+  'test.resilience.node-abrupt-loss -- uv run --locked --no-dev python scripts/test/scenarios/node_abrupt_loss.py nuc2 .kube/config .talos/config' ]]
+expect_dispatch_rejection 'node-abrupt-loss requires a target node' \
+  resilience node-abrupt-loss

@@ -214,7 +214,6 @@ campaigns:
       - chainsaw.resilience.plex-cross-node-reschedule
       - chainsaw.resilience.test-reports-persistence
       - chainsaw.resilience.tailscale-subnet-router-replica-recovery
-      - test.resilience.plex-node-reboot
   probes:
     description: Network and application measurement probes.
     mutates_cluster: true
@@ -783,11 +782,11 @@ suites:
     runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:tailscale-subnet-router-replica-recovery mise exec -- just test resilience tailscale-subnet-router-replica-recovery", implementation: scripts/test/run-chainsaw.sh}
     native_results: {strategy: chainsaw-junit-step}
     dispatch: {mode: chainsaw, path: tests/chainsaw/resilience/tailscale-subnet-router-replica-recovery, selector: "homelab-talos/suite=tailscale-subnet-router-replica-recovery"}
-  - metadata: {id: test.resilience.plex-node-reboot, source: test, framework: bash, suite: media, tier: resilience, target: plex-node-reboot, scenario: null, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
-    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:plex-node-reboot"}
-    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:plex-node-reboot TALOS_REBOOT_CONFIRM=reboot:<node>:<ip> mise exec -- just test resilience plex-node-reboot", implementation: scripts/test/scenarios/plex-node-reboot.sh}
+  - metadata: {id: test.resilience.node-abrupt-loss, source: test, framework: python, suite: platform, tier: resilience, target: node-abrupt-loss, scenario: null, scope: cluster, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: CLUSTER_CHAOS_CONFIRM, expected: "chaos:node-abrupt-loss"}
+    runner: {command: "CLUSTER_CHAOS_CONFIRM=chaos:node-abrupt-loss NODE_ABRUPT_LOSS_CONFIRM=remove-power:<node>:<ip> mise exec -- just test resilience node-abrupt-loss <node>", implementation: scripts/test/scenarios/node_abrupt_loss.py}
     native_results: {strategy: wrapper-junit}
-    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/plex-node-reboot.sh, args: [.kube/config], selector: null}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/node_abrupt_loss.py, args: [.kube/config, .talos/config], selector: null}
 
   - metadata: {id: probe.qbittorrent, source: probe, framework: bash, suite: media, tier: measurement, target: qbittorrent, scenario: null, scope: network, intent: measurement, mutates_cluster: true, execution_owner: human}
     confirmation: {type: command, variable: null, expected: null}
