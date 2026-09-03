@@ -30,6 +30,7 @@ mkdir -p \
 
 cp scripts/test/validate-chainsaw.sh "$fixture_root/scripts/test/"
 cp scripts/test/lib/chainsaw-inputs.sh "$fixture_root/scripts/test/lib/"
+cp scripts/test/lib/harness-shell-runner.sh "$fixture_root/scripts/test/lib/"
 cp scripts/test/run-native-junit-validator.sh \
 	"$fixture_root/scripts/test/"
 cp scripts/test/repository_shell_validation.py scripts/test/junit_report.py \
@@ -132,6 +133,7 @@ run_bounded_harness() {
 : >"$conftest_log"
 mkdir "$matching_fragments"
 run_bounded_harness "$fixture_root/matching.log" \
+	TEST_HARNESS_JOBS=1 \
 	TEST_SHARED_RESULT_DIR="$shared_root" \
 	TEST_RUN_ID="$run_id" \
 	TEST_RESULT_FRAGMENT_DIR="$matching_fragments"
@@ -150,8 +152,7 @@ if [[ -e "$matching_fragments/repository-shell-validation.xml" ]]; then
 	exit 1
 fi
 [[ "$(wc -l <"$conftest_log")" -eq 1 ]]
-[[ "$(cat "$conftest_log")" == \
-  'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
+[[ "$(cat "$conftest_log")" == 'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
 
 : >"$bash_log"
 : >"$shellcheck_log"
@@ -160,6 +161,7 @@ mkdir "$fallback_fragments"
 run_bounded_harness "$fixture_root/fallback.log" \
 	-u TEST_SHARED_RESULT_DIR \
 	-u TEST_RUN_ID \
+	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR="$fallback_fragments"
 mapfile -t actual_bash_files <"$bash_log"
 [[ "${actual_bash_files[*]}" == "${expected_files[*]}" ]]
@@ -169,7 +171,6 @@ mapfile -t shellcheck_invocations <"$shellcheck_log"
 [[ "${shellcheck_invocations[0]}" == "$expected_shellcheck_argv" ]]
 [[ -s "$fallback_fragments/repository-shell-validation.xml" ]]
 [[ "$(wc -l <"$conftest_log")" -eq 1 ]]
-[[ "$(cat "$conftest_log")" == \
-  'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
+[[ "$(cat "$conftest_log")" == 'test --all-namespaces --policy tests/policy/chainsaw --output junit tests/config/chainsaw.yaml tests/chainsaw/smoke' ]]
 
 echo 'Bounded harness repository-shell consumer tests passed.'

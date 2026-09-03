@@ -17,6 +17,7 @@ write_result_case_junit() {
 }
 
 # shellcheck source=scripts/test/lib/harness-shell-runner.sh
+# shellcheck disable=SC1091 # The test resolves the repository root dynamically.
 source "$repo_root/scripts/test/lib/harness-shell-runner.sh"
 register_harness_shell_case immediate-pass true
 register_harness_shell_case delayed-pass sleep 0.05

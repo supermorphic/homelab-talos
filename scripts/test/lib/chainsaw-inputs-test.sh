@@ -116,6 +116,8 @@ cp "$repo_root/scripts/test/validate-chainsaw.sh" \
 	"$validator_root/scripts/test/validate-chainsaw.sh"
 cp "$repo_root/scripts/test/lib/chainsaw-inputs.sh" \
 	"$validator_root/scripts/test/lib/chainsaw-inputs.sh"
+cp "$repo_root/scripts/test/lib/harness-shell-runner.sh" \
+	"$validator_root/scripts/test/lib/harness-shell-runner.sh"
 printf '%s\n' ':' >"$validator_root/scripts/test/lib/results.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
 	>"$validator_root/scripts/test/run-native-junit-validator.sh"
@@ -135,7 +137,7 @@ while IFS= read -r test_script; do
 	chmod +x "$validator_root/$test_script"
 done < <(
 	awk '
-		/^[[:space:]]*run_shell_case / {
+		/^[[:space:]]*(run_shell_case|register_harness_shell_case) / {
 			for (field = 1; field <= NF; field++) {
 				if ($field ~ /^(scripts\/test|tests\/probes)\/.*\.sh$/) print $field
 			}
@@ -208,11 +210,13 @@ chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"
 shell_case_log="$fixture_root/shell-cases.log"
 uv_log="$fixture_root/uv.log"
+passing_output="$fixture_root/passing.out"
 malformed_output="$fixture_root/malformed.out"
 set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_FAIL_MALFORMED=true \
 	UV_LOG="$uv_log" \
+	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$malformed_output" 2>&1
 malformed_status="$?"
@@ -232,8 +236,9 @@ mapfile -t malformed_lints <"$chainsaw_log"
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" SHELL_CASE_LOG="$shell_case_log" \
 	UV_LOG="$uv_log" \
+	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
-	bash "$validator_root/scripts/test/validate-chainsaw.sh" >/dev/null
+	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$passing_output"
 mapfile -t passing_lints <"$chainsaw_log"
 [[ "${#passing_lints[@]}" -eq 2 ]]
 [[ "${passing_lints[0]}" == $'lint\ttest\t--file\ttests/chainsaw/nested/chainsaw-test.yaml\t' ]]
@@ -243,8 +248,14 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 57 ]]
+rg -Fx 'Harness shell cases passed: cases=57 parallel_jobs=4.' "$passing_output" || {
+	cat "$passing_output" >&2
+	exit 1
+}
 for expected_case in \
 	scripts/test/lib/chainsaw-inputs-test.sh \
+	scripts/test/lib/harness-shell-runner-test.sh \
 	scripts/test/run-native-junit-validator-test.sh; do
 	invocation_count=0
 	while IFS= read -r invoked_case; do
@@ -266,6 +277,7 @@ set +e
 PATH="$validator_root/bin:$PATH" \
 	CHAINSAW_LOG="$chainsaw_log" YQ_LOG="$yq_log" CHAINSAW_GIT_FAIL=true \
 	UV_LOG="$uv_log" \
+	TEST_HARNESS_JOBS=4 \
 	TEST_RESULT_FRAGMENT_DIR='' TEST_SHARED_RESULT_DIR='' TEST_RUN_ID='' \
 	bash "$validator_root/scripts/test/validate-chainsaw.sh" >"$git_failure_output" 2>&1
 git_failure_status="$?"

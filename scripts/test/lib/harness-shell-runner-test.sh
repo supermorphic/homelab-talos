@@ -19,6 +19,7 @@ write_result_case_junit() {
 }
 
 # shellcheck source=scripts/test/lib/harness-shell-runner.sh
+# shellcheck disable=SC1091 # The test resolves the repository root dynamically.
 source "$runner"
 
 cat >"$fixture_root/bin/barrier" <<'EOF'
@@ -68,13 +69,14 @@ mkdir "$BARRIER_ROOT"
 register_harness_shell_case first "$fixture_root/bin/barrier" first
 register_harness_shell_case second "$fixture_root/bin/barrier" second
 register_harness_shell_case third "$fixture_root/bin/third"
-run_registered_harness_shell_cases "$fixture_root/fragments" 2 0 \
+run_registered_harness_shell_cases "$fixture_root/fragments" 2 7 \
 	>"$fixture_root/output.log" 2>&1
 
 [[ "$(cat "$fixture_root/output.log")" == $'output-first\noutput-second\noutput-third' ]]
 [[ "$(cat "$TMP_LOG")" == $'second\nthird\nfirst' ]]
-for index in 1 2 3; do
-	fragment="$fixture_root/fragments/bash-${index}.xml"
+for ordinal in 8 9 10; do
+	index=$((ordinal - 7))
+	fragment="$fixture_root/fragments/bash-${ordinal}.xml"
 	[[ -s "$fragment" ]]
 	case_name="$(sed -n 's/.*name="\([^"]*\)" time=.*/\1/p' "$fragment")"
 	[[ "$case_name" == "$(

@@ -5,8 +5,11 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 source scripts/test/lib/results.sh
 source scripts/test/lib/chainsaw-inputs.sh
+source scripts/test/lib/harness-shell-runner.sh
 fragment_root="${TEST_RESULT_FRAGMENT_DIR:-}"
 shell_case_index=0
+test_harness_jobs="${TEST_HARNESS_JOBS-4}"
+validate_harness_shell_jobs "$test_harness_jobs"
 
 epoch_milliseconds() {
 	local now seconds fraction
@@ -21,6 +24,7 @@ run_shell_case() {
 	shift
 	local exit_code result case_started_ms case_duration_ms case_duration
 	if [[ -z "$fragment_root" ]]; then
+		shell_case_index=$((shell_case_index + 1))
 		"$@"
 		return
 	fi
@@ -92,64 +96,74 @@ run_shell_case result-contract scripts/test/lib/results-test.sh
 run_shell_case chainsaw-inputs scripts/test/lib/chainsaw-inputs-test.sh
 run_shell_case harness-case-timing \
 	scripts/test/validate-chainsaw-timing-test.sh
+run_shell_case harness-shell-runner \
+	scripts/test/lib/harness-shell-runner-test.sh
 run_shell_case native-junit-validator scripts/test/run-native-junit-validator-test.sh
 run_shell_case catalog-negative scripts/test/validate-catalog-test.sh
-run_shell_case flux-alerts-diagnostics \
+register_harness_shell_case flux-alerts-diagnostics \
 	scripts/test/flux-alerts-diagnostics-test.sh
-run_shell_case flux-alert-delivery \
+register_harness_shell_case flux-alert-delivery \
 	scripts/test/flux-alert-delivery-test.sh
-run_shell_case tailscale-routes scripts/test/tailscale-routes-test.sh
-run_shell_case chainsaw-dispatch scripts/test/run-chainsaw-dispatch-test.sh
-run_shell_case media-hardlink scripts/test/scenarios/media-hardlink-test.sh
-run_shell_case probe-dispatch scripts/test/run-probe-dispatch-test.sh
-run_shell_case lease scripts/test/lease-test.sh
-run_shell_case node-lifecycle scripts/test/node-lifecycle-test.sh
-run_shell_case cluster-commands scripts/test/cluster-commands-test.sh
-run_shell_case catalog-suite-runner scripts/test/run-catalog-suite-test.sh
-run_shell_case ci-runner scripts/test/run-ci-test.sh
-run_shell_case campaign-runner scripts/test/run-campaign-test.sh
-run_shell_case scoped-campaign-preflight scripts/test/scoped-campaign-preflight-test.sh
-run_shell_case agent-access-verifier scripts/test/agent-access-verify-test.sh
-run_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
-run_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.sh
-run_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
-run_shell_case logging-verifier scripts/test/logging-verify-test.sh
-run_shell_case cilium-validator scripts/test/cilium-validator-test.sh
-run_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
-run_shell_case n8n-backup scripts/test/n8n-backup-test.sh
-run_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
-run_shell_case monitoring-fixtures scripts/test/lib/monitoring-fixtures-test.sh
-run_shell_case monitoring-alloy-logs-validator \
+register_harness_shell_case tailscale-routes scripts/test/tailscale-routes-test.sh
+register_harness_shell_case chainsaw-dispatch scripts/test/run-chainsaw-dispatch-test.sh
+register_harness_shell_case media-hardlink scripts/test/scenarios/media-hardlink-test.sh
+register_harness_shell_case probe-dispatch scripts/test/run-probe-dispatch-test.sh
+register_harness_shell_case lease scripts/test/lease-test.sh
+register_harness_shell_case node-lifecycle scripts/test/node-lifecycle-test.sh
+register_harness_shell_case cluster-commands scripts/test/cluster-commands-test.sh
+register_harness_shell_case catalog-suite-runner scripts/test/run-catalog-suite-test.sh
+register_harness_shell_case ci-runner scripts/test/run-ci-test.sh
+register_harness_shell_case campaign-runner scripts/test/run-campaign-test.sh
+register_harness_shell_case scoped-campaign-preflight scripts/test/scoped-campaign-preflight-test.sh
+register_harness_shell_case agent-access-verifier scripts/test/agent-access-verify-test.sh
+register_harness_shell_case tautulli-verifier scripts/test/tautulli-verify-test.sh
+register_harness_shell_case metrics-server-verifier scripts/test/metrics-server-verify-test.sh
+register_harness_shell_case cilium-verifier scripts/test/cilium-verify-test.sh
+register_harness_shell_case logging-verifier scripts/test/logging-verify-test.sh
+register_harness_shell_case cilium-validator scripts/test/cilium-validator-test.sh
+register_harness_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
+register_harness_shell_case n8n-backup scripts/test/n8n-backup-test.sh
+register_harness_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
+register_harness_shell_case monitoring-fixtures scripts/test/lib/monitoring-fixtures-test.sh
+register_harness_shell_case monitoring-alloy-logs-validator \
 	scripts/test/monitoring-alloy-logs-validator-test.sh
-run_shell_case monitoring-loki-validator \
+register_harness_shell_case monitoring-loki-validator \
 	scripts/test/monitoring-loki-validator-test.sh
-run_shell_case monitoring-alloy-events-validator \
+register_harness_shell_case monitoring-alloy-events-validator \
 	scripts/test/monitoring-alloy-events-validator-test.sh
-run_shell_case grafana-admin-reset scripts/test/grafana-admin-reset-test.sh
-run_shell_case bootstrap-recovery scripts/test/bootstrap-recovery-test.sh
-run_shell_case talos-apply-live scripts/test/talos-apply-live-test.sh
-run_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
-run_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
-run_shell_case ntfy-publish scripts/test/ntfy-publish-test.sh
-run_shell_case security-alerts-verifier scripts/test/security-alerts-verify-test.sh
-run_shell_case plex-verifier scripts/test/plex-verify-test.sh
-run_shell_case plex-validator scripts/test/plex-validator-test.sh
-run_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
-run_shell_case allure-report scripts/test/allure-report-test.sh
-run_shell_case report-publish-install scripts/test/report-publish-install-test.sh
-run_shell_case report-publish-guard scripts/test/report-publish-guard-test.sh
-run_shell_case qbit-manage-policy-validator \
+register_harness_shell_case grafana-admin-reset scripts/test/grafana-admin-reset-test.sh
+register_harness_shell_case bootstrap-recovery scripts/test/bootstrap-recovery-test.sh
+register_harness_shell_case talos-apply-live scripts/test/talos-apply-live-test.sh
+register_harness_shell_case portainer-rbac-verifier scripts/test/portainer-rbac-verify-test.sh
+register_harness_shell_case alertmanager-ntfy-verifier scripts/test/alertmanager-ntfy-verify-test.sh
+register_harness_shell_case ntfy-publish scripts/test/ntfy-publish-test.sh
+register_harness_shell_case security-alerts-verifier scripts/test/security-alerts-verify-test.sh
+register_harness_shell_case plex-verifier scripts/test/plex-verify-test.sh
+register_harness_shell_case plex-validator scripts/test/plex-validator-test.sh
+register_harness_shell_case sonobuoy-runner scripts/test/run-sonobuoy-test.sh
+register_harness_shell_case allure-report scripts/test/allure-report-test.sh
+register_harness_shell_case report-publish-install scripts/test/report-publish-install-test.sh
+register_harness_shell_case report-publish-guard scripts/test/report-publish-guard-test.sh
+register_harness_shell_case qbit-manage-policy-validator \
 	scripts/test/qbit-manage-policy-validator-test.sh
-run_shell_case arr-validator scripts/test/arr-validator-test.sh
-run_shell_case gatus-validator scripts/test/gatus-validator-test.sh
-run_shell_case monitoring-alerts-validator \
+register_harness_shell_case arr-validator scripts/test/arr-validator-test.sh
+register_harness_shell_case gatus-validator scripts/test/gatus-validator-test.sh
+register_harness_shell_case monitoring-alerts-validator \
 	scripts/test/monitoring-alerts-validator-test.sh
-run_shell_case gatus-media-integration-secrets \
+register_harness_shell_case gatus-media-integration-secrets \
 	scripts/test/gatus-media-integration-secrets-test.sh
-run_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh
-run_shell_case dns-isolation tests/probes/dns/isolation-test.sh
-run_shell_case ntfy-identity scripts/test/ntfy-identity-test.sh
-run_shell_case ntfy-consumer-sync scripts/test/ntfy-consumer-sync-test.sh
+register_harness_shell_case qbittorrent-probe tests/probes/qbittorrent/probe-test.sh
+register_harness_shell_case dns-isolation tests/probes/dns/isolation-test.sh
+register_harness_shell_case ntfy-identity scripts/test/ntfy-identity-test.sh
+register_harness_shell_case ntfy-consumer-sync scripts/test/ntfy-consumer-sync-test.sh
+
+run_registered_harness_shell_cases \
+	"$fragment_root" \
+	"$test_harness_jobs" \
+	"$shell_case_index"
+shell_case_index=$((shell_case_index + ${#HARNESS_SHELL_CASE_NAMES[@]}))
+printf 'Harness shell cases passed: cases=%d parallel_jobs=%d.\n' \
+	"$shell_case_index" "$test_harness_jobs"
 
 # Offline Python unit tests for host-side E2E logic and probe analyzers. uv (pinned via
 # mise) provides the locked interpreter/dependencies; these modules are pure or mocked,

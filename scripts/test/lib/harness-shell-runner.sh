@@ -44,13 +44,18 @@ _harness_epoch_milliseconds() {
 	printf '%s\n' "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
 }
 
-run_registered_harness_shell_cases() (
-	set -euo pipefail
-	local result_fragment_root="${1:-}" jobs="${2:-}" start_index="${3:-}"
+validate_harness_shell_jobs() {
+	local jobs="${1:-}"
 	[[ "$jobs" =~ ^[1-8]$ ]] || {
 		echo "TEST_HARNESS_JOBS must be an integer from 1 through 8: ${jobs:-<empty>}" >&2
 		return 2
 	}
+}
+
+run_registered_harness_shell_cases() (
+	set -euo pipefail
+	local result_fragment_root="${1:-}" jobs="${2:-}" start_index="${3:-}"
+	validate_harness_shell_jobs "$jobs"
 	[[ "$start_index" =~ ^[0-9]+$ ]] || {
 		echo "Harness shell start index must be a non-negative integer: ${start_index:-<empty>}" >&2
 		return 2
