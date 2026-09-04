@@ -19,6 +19,31 @@ for file in \
   [[ -f "$file" ]] || { echo "Missing NocoDB source: $file" >&2; exit 1; }
 done
 
+secret="$app/nocodb-credentials.sops.yaml"
+secret_resource='  - ./nocodb-credentials.sops.yaml'
+secret_listed=false
+rg -Fxq -- "$secret_resource" "$app/kustomization.yaml" && secret_listed=true
+if [[ -e "$secret" || "$secret_listed" == true ]]; then
+  [[ -f "$secret" && "$secret_listed" == true ]] || {
+    echo 'The optional NocoDB Secret and its Kustomization resource must appear together.' >&2
+    exit 1
+  }
+  [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == true ]] || {
+    echo 'The NocoDB credentials manifest must be SOPS encrypted.' >&2
+    exit 1
+  }
+  [[ "$(yq -r '.metadata | [.name, .namespace] | join(",")' "$secret")" == \
+    'nocodb-credentials,automation-data' ]] || {
+    echo 'The NocoDB credentials Secret has an unexpected identity.' >&2
+    exit 1
+  }
+  [[ "$(yq -r '.stringData | keys | sort | join(",")' "$secret")" == \
+    'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]] || {
+    echo 'The NocoDB credentials Secret has an unexpected key set.' >&2
+    exit 1
+  }
+fi
+
 rg -qx '  - ./nocodb/ks.yaml' kubernetes/apps/automation-data/kustomization.yaml || {
   echo 'NocoDB is not wired into the automation-data applications graph.' >&2
   exit 1
