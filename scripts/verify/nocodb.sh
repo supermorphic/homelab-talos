@@ -35,6 +35,32 @@ for name in automation-data nocodb monitoring-alerts gatus; do
 done
 ready_resource helmrelease nocodb "$namespace"
 
+assert_no_worker_or_redis() {
+  local resource="$1" input="$2"
+  # shellcheck disable=SC2016 # yq evaluates the literal expression.
+  yq -p=json -e '
+    [
+      .items[]? |
+      [
+        (.metadata.name // ""),
+        (.metadata.labels."app.kubernetes.io/name" // ""),
+        (.metadata.labels."app.kubernetes.io/component" // "")
+      ] | join("|") |
+      select(test("(?i)(^|[|_-])(nocodb[-_])?(worker|redis)([|_-]|$)"))
+    ] | length == 0
+  ' - >/dev/null <<<"$input" || fail "NocoDB $resource inventory contains a worker or Redis resource."
+}
+
+# Enumerate namespace workloads and Service identities. The expected design has no NocoDB
+# worker or Redis companion, so the scoped observer must reject either before accepting
+# the main application resource.
+deployments="$("${kc[@]}" --namespace "$namespace" get deployments --output json)"
+pods_inventory="$("${kc[@]}" --namespace "$namespace" get pods --output json)"
+services="$("${kc[@]}" --namespace "$namespace" get services --output json)"
+assert_no_worker_or_redis Deployment "$deployments"
+assert_no_worker_or_redis Pod "$pods_inventory"
+assert_no_worker_or_redis Service "$services"
+
 deployment="$("${kc[@]}" --namespace "$namespace" get deployment nocodb --output json)"
 # shellcheck disable=SC2016 # yq evaluates the literal expression.
 yq -p=json -e '
@@ -82,11 +108,44 @@ yq -p=json -e '
 ' - >/dev/null <<<"$route" || fail 'NocoDB HTTPRoute is not current, Accepted, and ResolvedRefs.'
 
 policy="$("${kc[@]}" --namespace "$namespace" get ciliumnetworkpolicy nocodb --output json)"
-yq -p=json -e '
-  .spec.endpointSelector.matchLabels."app.kubernetes.io/name" == "nocodb" and
-  ([.spec.ingress[]?.toPorts[]?.ports[]? | select(.port == "8080" and .protocol == "TCP")] | length) == 3 and
-  ([.spec.egress[]?.toPorts[]?.ports[]? | [.port, .protocol] | join("/")] | sort | join(",")) == "53/TCP,53/UDP,5432/TCP"
-' - >/dev/null <<<"$policy" || fail 'NocoDB CiliumNetworkPolicy identity or ports differ from the contract.'
+# shellcheck disable=SC2016 # Python evaluates the literal program.
+python -c '
+import json
+import sys
+
+policy = json.load(sys.stdin)["spec"]
+ports = lambda rule: sorted(
+    (item["port"], item["protocol"])
+    for to_port in rule.get("toPorts", [])
+    for item in to_port.get("ports", [])
+)
+ingress = lambda rule: {
+    "endpoints": sorted((item.get("matchLabels", {}) for item in rule.get("fromEndpoints", [])), key=lambda value: json.dumps(value, sort_keys=True)),
+    "entities": sorted(rule.get("fromEntities", [])),
+    "ports": ports(rule),
+}
+egress = lambda rule: {
+    "endpoints": sorted((item.get("matchLabels", {}) for item in rule.get("toEndpoints", [])), key=lambda value: json.dumps(value, sort_keys=True)),
+    "ports": ports(rule),
+}
+expected_ingress = sorted([
+    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "envoy-gateway-system", "gateway.envoyproxy.io/owning-gateway-name": "internal", "gateway.envoyproxy.io/owning-gateway-namespace": "networking"}], "entities": [], "ports": [("8080", "TCP")]},
+    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "automation", "app.kubernetes.io/name": "n8n"}], "entities": [], "ports": [("8080", "TCP")]},
+    {"endpoints": [], "entities": ["host", "remote-node"], "ports": [("8080", "TCP")]},
+], key=lambda value: json.dumps(value, sort_keys=True))
+expected_egress = sorted([
+    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}], "ports": [("53", "TCP"), ("53", "UDP")]},
+    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "automation-data", "app.kubernetes.io/name": "automation-data-postgresql"}], "ports": [("5432", "TCP")]},
+], key=lambda value: json.dumps(value, sort_keys=True))
+actual_ingress = sorted((ingress(rule) for rule in policy.get("ingress", [])), key=lambda value: json.dumps(value, sort_keys=True))
+actual_egress = sorted((egress(rule) for rule in policy.get("egress", [])), key=lambda value: json.dumps(value, sort_keys=True))
+valid = (
+    policy.get("endpointSelector", {}).get("matchLabels") == {"app.kubernetes.io/name": "nocodb"}
+    and actual_ingress == expected_ingress
+    and actual_egress == expected_egress
+)
+raise SystemExit(0 if valid else 1)
+' <<<"$policy" || fail 'NocoDB CiliumNetworkPolicy identity or ports differ from the contract.'
 
 pvc="$("${kc[@]}" --namespace "$namespace" get persistentvolumeclaim nocodb-data --output json)"
 yq -p=json -e '
@@ -106,15 +165,19 @@ VOLUME_NAME="$volume_name" yq -p=json -e '
   [
     (($matches | length) == 1),
     ($matches[0].metadata.labels."recurring-job-group.longhorn.io/default" == "enabled"),
+    ($matches[0].spec.numberOfReplicas == 2),
     ([
       ([
         ($matches[0].status.state == "attached"),
         ($matches[0].status.robustness == "healthy"),
+        (($matches[0].status.replicaModeMap | length) == 2),
         (([$matches[0].status.replicaModeMap[]? | select(. == "RW")] | length) == 2)
       ] | all),
       ([
         ($matches[0].status.state == "detached"),
-        ($matches[0].status.robustness == "unknown")
+        ($matches[0].status.robustness == "unknown"),
+        (($matches[0].status.replicaModeMap | length) == 2),
+        ([$matches[0].status.replicaModeMap[]? | select(. == "ERR")] | length == 0)
       ] | all)
     ] | any)
   ] | all
@@ -136,7 +199,8 @@ query_value() {
 
 rules_response="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/rules?type=alert')"
 actual_loaded_rules="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]?.name] | sort | .[]' - <<<"$rules_response")"
-[[ "$(yq -p=json -r '.status' - <<<"$rules_response")" == 'success' && "$actual_loaded_rules" == "$expected_rules" ]] ||
+loaded_rule_health="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]? | [(.health // ""), (.lastError // "")] | join("|")] | unique | join(",")' - <<<"$rules_response")"
+[[ "$(yq -p=json -r '.status' - <<<"$rules_response")" == 'success' && "$actual_loaded_rules" == "$expected_rules" && "$loaded_rule_health" == 'ok|' ]] ||
   fail 'Prometheus has not loaded the exact NocoDB alert rule group.'
 
 backup_timestamp="$(query_value 'automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="automation-data",service="automation-data-postgresql"}')"
