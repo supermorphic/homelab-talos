@@ -161,7 +161,9 @@ case "$*" in
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_CASE_ROOT/flux-revision-count"
     if [[ "${FAKE_FAILURE:-}" == flux-revision ||
+      ("${FAKE_FAILURE:-}" == flux-drift-pre-parent && "$count" -eq 3) ||
       ("${FAKE_FAILURE:-}" == flux-drift-during-parent && "$count" -eq 4) ||
+      ("${FAKE_FAILURE:-}" == flux-drift-pre-target && "$count" -eq 6) ||
       ("${FAKE_FAILURE:-}" == flux-drift-during-target && "$count" -eq 7) ]]; then
       printf '%s' 'main@sha1:dddddddddddddddddddddddddddddddddddddddd'
     else
@@ -187,6 +189,24 @@ case "$*" in
     incoming_rv="$(jq -er '.metadata.resourceVersion' "$incoming")"
     desired_suspend="$(jq -r '.spec.suspend' "$incoming")"
     desired_owner="$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] // ""' "$incoming")"
+    if [[ "$desired_suspend" == false && -z "$desired_owner" &&
+      "${FAKE_FAILURE:-}" == release-marker-mismatch ]]; then
+      jq '
+        .metadata.resourceVersion = ((.metadata.resourceVersion | tonumber) + 1 | tostring) |
+        .metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] = "release-other-owner"
+      ' "$FAKE_CASE_ROOT/kustomization.json" >"$FAKE_CASE_ROOT/kustomization-release-raced.json"
+      mv "$FAKE_CASE_ROOT/kustomization-release-raced.json" "$FAKE_CASE_ROOT/kustomization.json"
+      exit 78
+    fi
+    if [[ "$desired_suspend" == false && -z "$desired_owner" &&
+      "${FAKE_FAILURE:-}" == release-rv-conflict ]]; then
+      jq '
+        .metadata.resourceVersion = ((.metadata.resourceVersion | tonumber) + 1 | tostring) |
+        .metadata.annotations["concurrent.example/keep"] = "retained"
+      ' "$FAKE_CASE_ROOT/kustomization.json" >"$FAKE_CASE_ROOT/kustomization-release-raced.json"
+      mv "$FAKE_CASE_ROOT/kustomization-release-raced.json" "$FAKE_CASE_ROOT/kustomization.json"
+      exit 79
+    fi
     if [[ "$desired_suspend" == true && "${FAKE_CLEANUP_FAILURE:-false}" == true ]]; then
       exit 73
     fi
@@ -644,10 +664,29 @@ assert_event 'flux reconcile kustomization automation-data '
 ! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'resume ran after Flux revision drift'
 assert_no_suspend
 
+case_name='captured SHA drift at the pre-parent boundary prevents parent reconcile'
+run_case flux-drift-pre-parent
+assert_failure
+! rg -q '^flux reconcile kustomization automation-data ' "$event_log" || \
+  fail 'parent reconcile ran after pre-parent SHA drift'
+! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || \
+  fail 'resume ran after pre-parent SHA drift'
+assert_no_suspend
+
 case_name='Flux drift during target reconcile triggers owned suspension cleanup'
 run_case flux-drift-during-target
 assert_failure
 assert_event 'flux reconcile kustomization nocodb '
+assert_cleanup_suspend
+assert_no_delete
+
+case_name='captured SHA drift at the pre-target boundary prevents target reconcile'
+run_case flux-drift-pre-target
+assert_failure
+assert_event 'flux reconcile kustomization automation-data '
+assert_event 'kubectl-replace suspend=false owner='
+! rg -q '^flux reconcile kustomization nocodb ' "$event_log" || \
+  fail 'target reconcile ran after pre-target SHA drift'
 assert_cleanup_suspend
 assert_no_delete
 
@@ -764,6 +803,32 @@ assert_status 0
 assert_no_suspend
 assert_no_secret_output
 
+case_name='release-time marker mismatch is preserved and fails without clobbering state'
+run_case release-marker-mismatch
+assert_failure
+assert_contains 'ownership marker changed'
+[[ "$(jq -r '.spec.suspend' "$case_root/kustomization.json")" == false ]] || \
+  fail 'release marker mismatch changed the concurrent suspension state'
+[[ "$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"]' \
+  "$case_root/kustomization.json")" == release-other-owner ]] || \
+  fail 'release marker mismatch clobbered the concurrent owner'
+assert_no_suspend
+assert_no_delete
+
+case_name='release-time resourceVersion conflict preserves concurrent state and re-suspends'
+run_case release-rv-conflict
+assert_failure
+[[ "$(jq -r '.spec.suspend' "$case_root/kustomization.json")" == true ]] || \
+  fail 'release resourceVersion conflict did not restore suspension'
+[[ "$(jq -r '.metadata.annotations["concurrent.example/keep"]' \
+  "$case_root/kustomization.json")" == retained ]] || \
+  fail 'release resourceVersion conflict clobbered concurrent state'
+[[ "$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] // ""' \
+  "$case_root/kustomization.json")" == '' ]] || \
+  fail 'release resourceVersion conflict retained the task owner marker'
+assert_cleanup_suspend
+assert_no_delete
+
 settings_post_line="$(rg -n -m 1 'curl POST https://nocodb.lab.supermorphic.com/api/v1/app-settings' "$event_log" | cut -d: -f1)"
 settings_get_line="$(rg -n -m 1 'curl GET https://nocodb.lab.supermorphic.com/api/v1/app-settings' "$event_log" | cut -d: -f1)"
 token_line="$(rg -n -m 1 'curl POST https://nocodb.lab.supermorphic.com/api/v1/tokens' "$event_log" | cut -d: -f1)"
@@ -781,6 +846,7 @@ assert_failure
 assert_contains 'more than one preserved orphan'
 [[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'duplicate-token case created a token'
 assert_cleanup_suspend
+assert_no_secret_output
 
 case_name='duplicate n8n credentials are refused without creating another credential'
 run_case duplicate-credential
@@ -827,6 +893,7 @@ assert_failure
 assert_contains 'more than one preserved orphan'
 [[ "$(<"$case_root/token-create-count")" -eq 2 ]] || fail 'third attempt created an unbounded token'
 [[ "$(jq length "$case_root/tokens.json")" -eq 2 ]] || fail 'third attempt did not preserve the bounded state'
+assert_no_secret_output
 
 case_name='lost credential-create response is retried without a duplicate credential'
 run_case credential-create-lost
