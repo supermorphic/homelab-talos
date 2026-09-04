@@ -7,6 +7,16 @@ source scripts/test/lib/automation-data-restore-command.sh
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-restore-command-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
 real_sha256sum="$(command -v sha256sum)"
+restore_scenario='scripts/test/scenarios/automation-data-restore-drill.sh'
+
+rg -Fq '>"$run_dir/diagnostics/automation-data-restore-evidence.json"' "$restore_scenario" || {
+  echo 'automation-data restore command test failed: restore evidence must stay under diagnostics' >&2
+  exit 1
+}
+! rg -Fq '>"$run_dir/automation-data-restore-evidence.json"' "$restore_scenario" || {
+  echo 'automation-data restore command test failed: restore evidence must not enter the run root' >&2
+  exit 1
+}
 
 fail() {
   echo "automation-data restore command test failed: $*" >&2

@@ -509,6 +509,6 @@ RUN_HASH="$run_hash" SELECTED_N8N_DUMP="$selected_n8n_dump" \
     "restoredPermissionSeparationValidated": true,
     "postRecoveryBundle": strenv(POST_RECOVERY_BUNDLE),
     "productionMutation": false
-  }' >"$run_dir/automation-data-restore-evidence.json"
+  }' >"$run_dir/diagnostics/automation-data-restore-evidence.json"
 write_phase assertion passed 'isolated n8n and automation-data restores, credential authentication, permission separation, and fresh backup passed'
 echo "automation-data full-chain restore drill passed with $selected_n8n_dump and $selected_bundle; $post_recovery_bundle was created after recovery. Cleanup will remove all run-owned resources and PVCs."
