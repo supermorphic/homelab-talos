@@ -486,6 +486,12 @@ It adds two platform-health signals:
 - registry/catalog consistency; and
 - age of the oldest incomplete provisioning operation.
 
+The platform grants `pg_monitor` to `automation_data_exporter`, matching the established
+n8n PostgreSQL exporter pattern. This login uses `INHERIT` so the predefined role's
+`pg_read_all_stats` capability is effective without `SET ROLE`. That capability lets
+`pg_database_size()` report dynamically created databases after public `CONNECT` is
+revoked. The exporter does not receive domain-role membership or domain table grants.
+
 The `automation-data-postgresql` Prometheus rule group contains 12 alerts for unavailable
 scrape and StatefulSet targets, repeated restarts and OOM kills, stale or absent logical
 backups, failed or overdue backup Jobs, the two platform-health signals, and the
@@ -528,7 +534,9 @@ Rollout follows dependency order:
 2. Create and merge the SOPS-encrypted platform Secret with the guarded
    `repo automation-data-secrets` recipe while PostgreSQL remains suspended.
 3. Run the guarded `bootstrap automation-data` recipe from deployed `origin/main`. This
-   reconciles the namespace and PostgreSQL, creates the first complete bundle, and runs
+   reconciles the namespace and PostgreSQL, enables inheritance and applies the
+   idempotent exporter monitoring grant to a new or already-initialized cluster through
+   a run-owned Job, removes that Job, creates the first complete bundle, and runs
    read-only verification.
 4. In private n8n, create **Automation Data Provisioner**, **Automation Data n8n API**,
    and **Automation Data Provisioning Header**. Import, bind, and publish
