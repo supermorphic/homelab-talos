@@ -259,7 +259,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -338,7 +338,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Reader State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === context.alias);\nif (matches.length > 1) throw new Error('duplicate_source');\nif (context.state === 'error' && matches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && matches.length !== 1) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Reader State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retryRotation = context.operation === 'rotate' && context.registryOperation === 'rotate' && context.accessKind === 'reader' && context.state === 'error';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -415,7 +415,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json;\nconst sources = Array.isArray($json.sources) ? $json.sources : [];\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === context.alias);\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sourceId: matches[0].id } }];"
+        "jsCode": "const context = $json;\nconst sources = Array.isArray($json.sources) ? $json.sources : [];\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (aliasMatches.length > 1 || matches.length > 1) throw new Error('duplicate_source');\nif (matches.length === 0) throw new Error(aliasMatches.length ? 'source_integration_mismatch' : 'missing_source');\nif (!matches[0].id || (context.sourceId && matches[0].id !== context.sourceId)) throw new Error('source_identity_mismatch');\nreturn [{ json: { ...context, sourceId: matches[0].id } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -626,7 +626,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Normalize Reader Integration').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...state, sourcePayload: {\n  fk_integration_id: state.integrationId,\n  alias: 'Read Model',\n  type: 'pg',\n  config: { client: 'pg', searchPath: ['read_model'] },\n  inflection_column: 'none',\n  inflection_table: 'none',\n  is_schema_readonly: true,\n  is_data_readonly: true\n} } }];"
+        "jsCode": "const context = $('Require Reader Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId,\n  alias: 'Read Model',\n  type: 'pg',\n  config: { client: 'pg', searchPath: ['read_model'] },\n  inflection_column: 'none',\n  inflection_table: 'none',\n  is_schema_readonly: true,\n  is_data_readonly: true\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1018,7 +1018,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Reader PostgreSQL').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+        "jsCode": "const context = $('Reader Error Rotation').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1228,7 +1228,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1307,7 +1307,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Operator State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === context.alias);\nif (matches.length > 1) throw new Error('duplicate_source');\nif (context.state === 'error' && matches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && matches.length !== 1) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Operator State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retryRotation = context.operation === 'rotate' && context.registryOperation === 'rotate' && context.accessKind === 'operator' && context.state === 'error';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1384,7 +1384,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json;\nconst matches = (context.sources || []).filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Operator');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sourceId: matches[0].id } }];"
+        "jsCode": "const context = $json;\nconst sources = Array.isArray(context.sources) ? context.sources : [];\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Operator');\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (aliasMatches.length > 1 || matches.length > 1) throw new Error('duplicate_source');\nif (matches.length === 0) throw new Error(aliasMatches.length ? 'source_integration_mismatch' : 'missing_source');\nif (!matches[0].id || (context.sourceId && matches[0].id !== context.sourceId)) throw new Error('source_identity_mismatch');\nreturn [{ json: { ...context, sourceId: matches[0].id } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1595,7 +1595,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Normalize Operator Integration').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...state, sourcePayload: {\n  fk_integration_id: state.integrationId, alias: 'Operator', type: 'pg',\n  config: { client: 'pg', searchPath: ['operator'] }, inflection_column: 'none', inflection_table: 'none',\n  is_schema_readonly: true, is_data_readonly: false\n} } }];"
+        "jsCode": "const context = $('Require Operator Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId, alias: 'Operator', type: 'pg',\n  config: { client: 'pg', searchPath: ['operator'] }, inflection_column: 'none', inflection_table: 'none',\n  is_schema_readonly: true, is_data_readonly: false\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1987,7 +1987,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Operator PostgreSQL').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+        "jsCode": "const context = $('Operator Error Rotation').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2118,6 +2118,312 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $('Start Reader').first().json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5640, 420],
+      "id": "10000000-0000-4000-8000-000000000109",
+      "name": "Relist Reader Sources Before Queue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.currentIntegrationId ? $json : null;\nconst normalized = direct || $('Normalize Reader Integration').first().json;\nconst state = direct || $('Record Reader Integration').first().json.result;\nif (!state || !state.integrationId || (normalized.integrationId && normalized.integrationId !== state.integrationId)) throw new Error('integration_identity_mismatch');\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.sources : $json;\nconst sources = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Read Model');\nconst integrationMatches = sources.filter((source) => source && source.fk_integration_id === state.integrationId);\nconst exact = aliasMatches.filter((source) => source.fk_integration_id === state.integrationId);\nif (exact.length) throw new Error('source_exists_before_queue');\nif (aliasMatches.length) throw new Error('source_integration_mismatch');\nif (integrationMatches.length) throw new Error('source_alias_mismatch');\nreturn [{ json: { ...normalized, ...state, currentIntegrationId: state.integrationId, integrationId: state.integrationId, sources } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5880, 420],
+      "id": "10000000-0000-4000-8000-000000000110",
+      "name": "Require Reader Queue Slot",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [
+            {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.accessKind }}", "rightValue": "reader", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [8760, 180],
+      "id": "10000000-0000-4000-8000-000000000111",
+      "name": "Reader Error Rotation"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [9000, 100],
+      "id": "10000000-0000-4000-8000-000000000112",
+      "name": "List Reader Reflected Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Reader Error Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('reader_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [9240, 100],
+      "id": "10000000-0000-4000-8000-000000000113",
+      "name": "Select Reader Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [9480, 100],
+      "id": "10000000-0000-4000-8000-000000000114",
+      "name": "Probe Reader Source Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Reader Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [9720, 100],
+      "id": "10000000-0000-4000-8000-000000000115",
+      "name": "Require Reader Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10920, 60],
+      "id": "10000000-0000-4000-8000-000000000116",
+      "name": "List Rotated Reader Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Normalize Reader Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('reader_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [11160, 60],
+      "id": "10000000-0000-4000-8000-000000000117",
+      "name": "Select Rotated Reader Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [11400, 60],
+      "id": "10000000-0000-4000-8000-000000000118",
+      "name": "Probe Rotated Reader Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Rotated Reader Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [11640, 60],
+      "id": "10000000-0000-4000-8000-000000000119",
+      "name": "Require Rotated Reader Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $('Prepare Operator').first().json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [15960, 340],
+      "id": "10000000-0000-4000-8000-000000000120",
+      "name": "Relist Operator Sources Before Queue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.currentIntegrationId ? $json : null;\nconst normalized = direct || $('Normalize Operator Integration').first().json;\nconst state = direct || $('Record Operator Integration').first().json.result;\nif (!state || !state.integrationId || (normalized.integrationId && normalized.integrationId !== state.integrationId)) throw new Error('integration_identity_mismatch');\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.sources : $json;\nconst sources = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Operator');\nconst integrationMatches = sources.filter((source) => source && source.fk_integration_id === state.integrationId);\nconst exact = aliasMatches.filter((source) => source.fk_integration_id === state.integrationId);\nif (exact.length) throw new Error('source_exists_before_queue');\nif (aliasMatches.length) throw new Error('source_integration_mismatch');\nif (integrationMatches.length) throw new Error('source_alias_mismatch');\nreturn [{ json: { ...normalized, ...state, currentIntegrationId: state.integrationId, integrationId: state.integrationId, sources } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [16200, 340],
+      "id": "10000000-0000-4000-8000-000000000121",
+      "name": "Require Operator Queue Slot",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [
+            {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.accessKind }}", "rightValue": "operator", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [19080, 80],
+      "id": "10000000-0000-4000-8000-000000000122",
+      "name": "Operator Error Rotation"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [19320, 20],
+      "id": "10000000-0000-4000-8000-000000000123",
+      "name": "List Operator Reflected Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Operator Error Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('operator_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [19560, 20],
+      "id": "10000000-0000-4000-8000-000000000124",
+      "name": "Select Operator Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [19800, 20],
+      "id": "10000000-0000-4000-8000-000000000125",
+      "name": "Probe Operator Source Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Operator Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20040, 20],
+      "id": "10000000-0000-4000-8000-000000000126",
+      "name": "Require Operator Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [21240, -20],
+      "id": "10000000-0000-4000-8000-000000000127",
+      "name": "List Rotated Operator Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Normalize Operator Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('operator_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [21480, -20],
+      "id": "10000000-0000-4000-8000-000000000128",
+      "name": "Select Rotated Operator Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [21720, -20],
+      "id": "10000000-0000-4000-8000-000000000129",
+      "name": "Probe Rotated Operator Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Rotated Operator Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [21960, -20],
+      "id": "10000000-0000-4000-8000-000000000130",
+      "name": "Require Rotated Operator Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
         "jsCode": "const request = $('Normalize Source Request').first().json;\nconst final = $json.result || $json;\nlet reader = final.reader || (final.accessKind === 'reader' ? final : null);\nif (!reader) reader = $('Record Reader Ready').first().json.result;\nconst ok = final.jobState !== 'timeout' && final.state !== 'waiting_for_source';\nreturn [{ json: {\n  ok,\n  domain: request.domain,\n  operation: request.operation,\n  baseId: reader.baseId,\n  reader: { accessKind: 'reader', state: reader.state, sourceId: reader.sourceId || null, integrationId: reader.integrationId || null, generation: reader.generation, sourceCreateJobId: reader.sourceCreateJobId || null },\n  operator: final.accessKind === 'operator' ? { accessKind: 'operator', state: final.state, sourceId: final.sourceId || null, integrationId: final.integrationId || null, generation: final.generation, sourceCreateJobId: final.sourceCreateJobId || null } : null,\n  errorCode: final.errorCode || null\n} }];"
       },
       "type": "n8n-nodes-base.code",
@@ -2132,7 +2438,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.domain ? $json : {};\nreturn [{ json: { ...context, errorCode: context.errorCode || 'source_operation_failed' } }];"
+        "jsCode": "const context = $json.domain ? $json : {};\nconst request = $('Normalize Source Request').first().json;\nconst sourceOperation = request.operation === 'rotate' && request.accessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2147,9 +2453,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT platform_operations.record_nocodb_source_error($1, $2, $3) AS result;",
+        "query": "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;",
         "options": {
-          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.errorCode] }}"
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceOperation, $json.errorCode] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
@@ -2724,7 +3030,7 @@
       "main": [
         [
           {
-            "node": "Prepare Reader Source Create",
+            "node": "Relist Reader Sources Before Queue",
             "type": "main",
             "index": 0
           }
@@ -2965,7 +3271,7 @@
       "main": [
         [
           {
-            "node": "Validate Reader PostgreSQL",
+            "node": "Reader Error Rotation",
             "type": "main",
             "index": 0
           }
@@ -3127,7 +3433,7 @@
       "main": [
         [
           {
-            "node": "Validate Rotated Reader PostgreSQL",
+            "node": "List Rotated Reader Tables",
             "type": "main",
             "index": 0
           }
@@ -3559,7 +3865,7 @@
       "main": [
         [
           {
-            "node": "Prepare Operator Source Create",
+            "node": "Relist Operator Sources Before Queue",
             "type": "main",
             "index": 0
           }
@@ -3800,7 +4106,7 @@
       "main": [
         [
           {
-            "node": "Validate Operator PostgreSQL",
+            "node": "Operator Error Rotation",
             "type": "main",
             "index": 0
           }
@@ -3962,7 +4268,7 @@
       "main": [
         [
           {
-            "node": "Validate Rotated Operator PostgreSQL",
+            "node": "List Rotated Operator Tables",
             "type": "main",
             "index": 0
           }
@@ -4028,6 +4334,138 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Relist Reader Sources Before Queue": {
+      "main": [
+        [{"node": "Require Reader Queue Slot", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Queue Slot": {
+      "main": [
+        [{"node": "Prepare Reader Source Create", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Reader Error Rotation": {
+      "main": [
+        [{"node": "Generate Reader Rotation Value", "type": "main", "index": 0}],
+        [{"node": "List Reader Reflected Tables", "type": "main", "index": 0}]
+      ]
+    },
+    "List Reader Reflected Tables": {
+      "main": [
+        [{"node": "Select Reader Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Reader Probe Table": {
+      "main": [
+        [{"node": "Probe Reader Source Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Reader Source Data": {
+      "main": [
+        [{"node": "Require Reader Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Data Probe": {
+      "main": [
+        [{"node": "Validate Reader PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "List Rotated Reader Tables": {
+      "main": [
+        [{"node": "Select Rotated Reader Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Rotated Reader Probe Table": {
+      "main": [
+        [{"node": "Probe Rotated Reader Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Rotated Reader Data": {
+      "main": [
+        [{"node": "Require Rotated Reader Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Rotated Reader Data Probe": {
+      "main": [
+        [{"node": "Validate Rotated Reader PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Relist Operator Sources Before Queue": {
+      "main": [
+        [{"node": "Require Operator Queue Slot", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Operator Queue Slot": {
+      "main": [
+        [{"node": "Prepare Operator Source Create", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Operator Error Rotation": {
+      "main": [
+        [{"node": "Generate Operator Rotation Value", "type": "main", "index": 0}],
+        [{"node": "List Operator Reflected Tables", "type": "main", "index": 0}]
+      ]
+    },
+    "List Operator Reflected Tables": {
+      "main": [
+        [{"node": "Select Operator Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Operator Probe Table": {
+      "main": [
+        [{"node": "Probe Operator Source Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Operator Source Data": {
+      "main": [
+        [{"node": "Require Operator Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Operator Data Probe": {
+      "main": [
+        [{"node": "Validate Operator PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "List Rotated Operator Tables": {
+      "main": [
+        [{"node": "Select Rotated Operator Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Rotated Operator Probe Table": {
+      "main": [
+        [{"node": "Probe Rotated Operator Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Rotated Operator Data": {
+      "main": [
+        [{"node": "Require Rotated Operator Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Rotated Operator Data Probe": {
+      "main": [
+        [{"node": "Validate Rotated Operator PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
       ]
     },
     "Prepare Source Error": {

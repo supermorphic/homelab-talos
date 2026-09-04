@@ -193,7 +193,7 @@ for function_name in prepare_nocodb_access read_nocodb_source_state begin_nocodb
     fail "NocoDB function $function_name does not take a domain advisory lock"
 done
 for json_field in domain readerRole readerEligible operatorRequested operatorEligible \
-  accessKind role baseId state generation credentialGeneration integrationId \
+  accessKind role baseId state operation generation credentialGeneration integrationId \
   sourceCreateJobId sourceId validatedAt operationStartedAt updatedAt errorCode \
   valid schemaPrivilegesValid objectPrivilegesValid defaultPrivilegesValid \
   outsideSchemaDenied databaseIsolationValid forbiddenAttributesDenied \
@@ -223,6 +223,8 @@ provisioner_select_grants="$(rg -U 'GRANT SELECT ON[^;]*TO automation_data_provi
 
 read_nocodb_source_state_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(/,/^\$function\$;/p' "$control_sql")"
 [[ -n "$read_nocodb_source_state_function" ]] || fail 'NocoDB source-state reader is missing'
+rg -Fq "operation text NOT NULL CHECK (operation IN ('sync', 'rotate'))" "$control_sql" ||
+  fail 'NocoDB source registry does not persist the exact retry operation'
 rg -Fq 'p_domain text' <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader lacks the domain parameter'
 rg -Fq 'p_access_kind text' <<<"$read_nocodb_source_state_function" ||
@@ -257,7 +259,7 @@ rg -Fq "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_acces
   fail 'NocoDB source-state reader permits dynamic request SQL'
 source_result_builder="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(/,/^\$function\$;/p' "$control_sql")"
 for json_field in domain accessKind role baseId integrationId sourceCreateJobId sourceId \
-  state generation credentialGeneration operationStartedAt validatedAt updatedAt errorCode; do
+  state operation generation credentialGeneration operationStartedAt validatedAt updatedAt errorCode; do
   rg -Fq "'$json_field'" <<<"$source_result_builder" ||
     fail "NocoDB source-state reader result omits $json_field"
 done
@@ -272,6 +274,10 @@ read_source_state_grants="$(rg -F 'GRANT EXECUTE ON FUNCTION platform_operations
 begin_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p' "$control_sql")"
 rg -Fq 'prepared := platform_operations.prepare_nocodb_access(p_domain);' <<<"$begin_nocodb_source_function" ||
   fail 'NocoDB source begin does not inspect prepared eligibility'
+rg -Fq "source.state = 'error' AND source.operation <> 'sync'" <<<"$begin_nocodb_source_function" ||
+  fail 'NocoDB source begin permits sync to reuse a failed rotation row'
+rg -Fq "state = 'provisioning', operation = 'sync'" <<<"$begin_nocodb_source_function" ||
+  fail 'NocoDB source begin does not persist its initial sync operation'
 rg -Fq "prepared->>'operatorEligible'" <<<"$begin_nocodb_source_function" ||
   fail 'NocoDB source begin does not reject an ineligible operator before login'
 ! rg -Fq 'validate_nocodb_access(p_domain, p_access_kind)' <<<"$begin_nocodb_source_function" ||
@@ -294,13 +300,36 @@ for transition_contract in \
   "record_nocodb_integration:source.state <> 'provisioning'" \
   "record_nocodb_source_job:source.state = 'waiting_for_source'" \
   'record_nocodb_source_ready:source.state NOT IN' \
-  "rotate_nocodb_source_credential:source.state <> 'ready'"; do
+  "rotate_nocodb_source_credential:source.state NOT IN ('ready', 'error')"; do
   function_name="${transition_contract%%:*}"
   expected_guard="${transition_contract#*:}"
   function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
   rg -Fq "$expected_guard" <<<"$function_body" ||
     fail "NocoDB function $function_name lacks its strict transition guard"
 done
+
+rotate_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.rotate_nocodb_source_credential(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'source.source_id IS NULL OR source.integration_id IS NULL OR source.base_id IS NULL' \
+  <<<"$rotate_nocodb_source_function" ||
+  fail 'NocoDB source rotation does not require the retained exact source identity'
+rg -Fq "source.state = 'error' AND source.operation <> 'rotate'" \
+  <<<"$rotate_nocodb_source_function" ||
+  fail 'NocoDB source rotation permits a failed initial generation to use the retained-identity retry'
+rg -Fq "SET state = 'rotating', operation = 'rotate'" <<<"$rotate_nocodb_source_function" ||
+  fail 'NocoDB source rotation does not persist its retry operation'
+rg -Fq "ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L" \
+  <<<"$rotate_nocodb_source_function" ||
+  fail 'NocoDB source rotation does not re-enable a failed retained source safely'
+
+record_nocodb_source_error_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'p_operation text' <<<"$record_nocodb_source_error_function" ||
+  fail 'NocoDB source error recording does not accept the exact failed operation'
+rg -Fq "p_operation NOT IN ('sync', 'rotate')" <<<"$record_nocodb_source_error_function" ||
+  fail 'NocoDB source error recording does not validate its operation'
+rg -Fq 'SET state = '\''error'\'', operation = p_operation' <<<"$record_nocodb_source_error_function" ||
+  fail 'NocoDB source error recording does not persist its exact operation'
+rg -Fqx 'GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text) TO automation_data_provisioner;' \
+  "$control_sql" || fail 'NocoDB source error recording does not have the exact fixed grant signature'
 
 validate_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
 authority_validation_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p' "$control_sql")"

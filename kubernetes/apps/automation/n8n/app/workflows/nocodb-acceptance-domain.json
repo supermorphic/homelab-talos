@@ -300,7 +300,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Keep Acceptance Sources').first().json;\nconst items = $input.all().map((item) => item.json);\nconst tables = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst facts = tables.filter((table) => table && table.title === 'acceptance_facts' && table.source_id === context.readerSourceId);\nconst decisions = tables.filter((table) => table && table.title === 'acceptance_decision' && table.source_id === context.operatorSourceId);\nif (facts.length !== 1 || decisions.length !== 1 || !facts[0].id || !decisions[0].id) throw new Error('acceptance_reflection_invalid');\nreturn [{ json: {\n  ...context,\n  factsTableId: facts[0].id,\n  decisionTableId: decisions[0].id,\n  reflectedSchemas: ['read_model', 'operator'],\n  reflectedTables: tables.map((table) => ({ id: table.id, title: table.title, sourceId: table.source_id })),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
+        "jsCode": "const direct = $json.tables !== undefined ? $json : null;\nconst context = direct || $('Keep Acceptance Sources').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst expected = [\n  { title: 'acceptance_facts', tableName: 'acceptance_facts', sourceId: context.readerSourceId, schema: 'read_model' },\n  { title: 'acceptance_decision', tableName: 'acceptance_decision', sourceId: context.operatorSourceId, schema: 'operator' }\n];\nconst resolved = expected.map((item) => ({ ...item, matches: tables.filter((table) => table && table.title === item.title && table.table_name === item.tableName && table.source_id === item.sourceId) }));\nif (tables.length !== expected.length || resolved.some((item) => item.matches.length !== 1 || !item.matches[0].id)) throw new Error('acceptance_reflection_invalid');\nconst facts = resolved[0].matches[0];\nconst decisions = resolved[1].matches[0];\nreturn [{ json: {\n  ...context,\n  factsTableId: facts.id,\n  decisionTableId: decisions.id,\n  reflectedSchemas: [...new Set(resolved.map((item) => item.schema))].sort(),\n  reflectedTables: resolved.map((item) => ({ id: item.matches[0].id, title: item.title, tableName: item.tableName, sourceId: item.sourceId, schema: item.schema })).sort((left, right) => left.schema.localeCompare(right.schema)),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -378,7 +378,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id !== context.runId || row.id === undefined)) throw new Error('cleanup_scope_invalid');\nreturn [{ json: { ...context, deleteRows: rows.map((row) => ({ id: row.id })), removedCount: rows.length } }];"
+        "jsCode": "const direct = $json.rows !== undefined ? $json : null;\nlet context = direct;\nif (!context) {\n  try { context = $('Continue Cleanup').last().json; } catch { context = $('Initialize Cleanup').first().json; }\n}\nconst raw = direct ? direct.rows : $json;\nconst rows = Array.isArray(raw) ? raw : (raw.list || []);\nif (rows.length > 100 || rows.some((row) => row.run_id !== context.runId || (row.id ?? row.Id) === undefined)) throw new Error('cleanup_scope_invalid');\nif (rows.length > 0 && Number(context.cleanupPageCount || 0) >= 10) throw new Error('cleanup_page_bound_exceeded');\nreturn [{ json: {\n  ...context,\n  hasRows: rows.length > 0,\n  cleanupPageCount: Number(context.cleanupPageCount || 0) + (rows.length > 0 ? 1 : 0),\n  removedCount: Number(context.removedCount || 0) + rows.length,\n  deleteRows: rows.map((row) => ({ id: row.id ?? row.Id }))\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -387,7 +387,7 @@
         360
       ],
       "id": "20000000-0000-4000-8000-000000000017",
-      "name": "Prepare Cleanup Delete",
+      "name": "Prepare Cleanup Page",
       "onError": "continueErrorOutput"
     },
     {
@@ -408,12 +408,12 @@
         360
       ],
       "id": "20000000-0000-4000-8000-000000000018",
-      "name": "Delete Cleanup Decisions",
+      "name": "Delete Cleanup Page",
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Cleanup Delete').first().json;\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "jsCode": "return [{ json: $('Prepare Cleanup Page').last().json }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -422,7 +422,7 @@
         360
       ],
       "id": "20000000-0000-4000-8000-000000000019",
-      "name": "Cleanup Result",
+      "name": "Continue Cleanup",
       "onError": "continueErrorOutput"
     },
     {
@@ -601,7 +601,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Updated Decision').first().json;\nif (!$json.statusCode || $json.statusCode < 400) throw new Error('protected_update_not_denied');\nreturn [{ json: { ...context, protectedUpdateDenied: true, protectedUpdateStatus: $json.statusCode } }];"
+        "jsCode": "const context = $json.context || $('Require Updated Decision').first().json;\nconst body = $json.body || {};\nif ($json.statusCode !== 400 || body.error !== 'ERR_DATABASE_OP_FAILED' || body.code !== '42501' || !/permission to access 'acceptance_decision'/i.test(String(body.message || ''))) throw new Error('protected_update_denial_invalid');\nreturn [{ json: { ...context, protectedUpdateDenied: true, protectedUpdateStatus: 400, protectedUpdateEvidence: 'postgresql_42501' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -616,12 +616,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Reader Negative Probe').first().json.factsTableId + '/records' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ id: 9007199254740991, fact: 'forbidden' }) }}",
+        "jsonBody": "={{ JSON.stringify({ id: $('Prepare Reader Negative Probe').first().json.readerProbeId, fact: $('Prepare Reader Negative Probe').first().json.readerProbeFact }) }}",
         "options": {
           "response": {
             "response": {
@@ -643,7 +643,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Capture Protected Update Denial').first().json;\nif (!$json.statusCode || $json.statusCode < 400) throw new Error('reader_insert_not_denied');\nreturn [{ json: { ...context, readerInsertDenied: true, readerInsertStatus: $json.statusCode } }];"
+        "jsCode": "const context = $json.context || $('Prepare Reader Negative Probe').first().json;\nconst body = $json.body || {};\nif ($json.statusCode === 403 && body.error === 'ERR_FORBIDDEN' && String(body.message || '') === \"Forbidden - Source 'Read Model' is read-only\") {\n  return [{ json: { ...context, readerInsertDenied: true, readerInsertStatus: 403, readerInsertEvidence: 'source_read_only', unexpectedlyPermitted: false } }];\n}\nif ($json.statusCode >= 200 && $json.statusCode < 300) {\n  return [{ json: { ...context, readerInsertDenied: false, unexpectedlyPermitted: true } }];\n}\nthrow new Error('reader_insert_denial_invalid');"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -652,7 +652,7 @@
         40
       ],
       "id": "20000000-0000-4000-8000-000000000030",
-      "name": "Capture Reader Insert Denial",
+      "name": "Evaluate Reader Insert Denial",
       "onError": "continueErrorOutput"
     },
     {
@@ -679,7 +679,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Capture Reader Insert Denial').first().json.decisionTableId + '/records' }}",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Evaluate Reader Insert Denial').first().json.decisionTableId + '/records' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
@@ -709,7 +709,154 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Capture Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  inserted: true,\n  read: true,\n  decisionUpdated: true,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus\n  }\n} }];"
+        "jsCode": "return [{ json: { ...$json, cleanupPageCount: 0, removedCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 500],
+      "id": "20000000-0000-4000-8000-000000000036",
+      "name": "Initialize Cleanup"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.hasRows }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2160, 500],
+      "id": "20000000-0000-4000-8000-000000000037",
+      "name": "Cleanup Rows Present"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [
+          {"name": "where", "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"},
+          {"name": "limit", "value": "1"}
+        ]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 500],
+      "id": "20000000-0000-4000-8000-000000000038",
+      "name": "Confirm Cleanup Absence",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 500],
+      "id": "20000000-0000-4000-8000-000000000039",
+      "name": "Require Cleanup Absent",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, -100],
+      "id": "20000000-0000-4000-8000-000000000040",
+      "name": "Read Acceptance Facts",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Cleanup Only').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('reader_read_invalid');\nreturn [{ json: { ...context, readerRead: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, -100],
+      "id": "20000000-0000-4000-8000-000000000041",
+      "name": "Require Reader Facts Read",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Protected Update Denial').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) { hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0; }\nreturn [{ json: { ...context, readerProbeId: 8000000000 + hash, readerProbeFact: `forbidden:${context.runId}` } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3840, 140],
+      "id": "20000000-0000-4000-8000-000000000042",
+      "name": "Prepare Reader Negative Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;",
+        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [4080, 140],
+      "id": "20000000-0000-4000-8000-000000000043",
+      "name": "Clear Reader Negative Residue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.readerInsertDenied }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4560, 140],
+      "id": "20000000-0000-4000-8000-000000000044",
+      "name": "Reader Insert Denied"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;",
+        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [4800, 220],
+      "id": "20000000-0000-4000-8000-000000000045",
+      "name": "Cleanup Unexpected Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error('reader_insert_not_denied');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5040, 220],
+      "id": "20000000-0000-4000-8000-000000000046",
+      "name": "Fail Unexpected Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  inserted: true,\n  read: true,\n  readerRead: context.readerRead === true,\n  decisionUpdated: true,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -998,14 +1145,14 @@
       "main": [
         [
           {
-            "node": "List Cleanup Decisions",
+            "node": "Initialize Cleanup",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Insert Acceptance Decision",
+            "node": "Read Acceptance Facts",
             "type": "main",
             "index": 0
           }
@@ -1016,7 +1163,7 @@
       "main": [
         [
           {
-            "node": "Prepare Cleanup Delete",
+            "node": "Prepare Cleanup Page",
             "type": "main",
             "index": 0
           }
@@ -1030,11 +1177,11 @@
         ]
       ]
     },
-    "Prepare Cleanup Delete": {
+    "Prepare Cleanup Page": {
       "main": [
         [
           {
-            "node": "Delete Cleanup Decisions",
+            "node": "Cleanup Rows Present",
             "type": "main",
             "index": 0
           }
@@ -1048,11 +1195,11 @@
         ]
       ]
     },
-    "Delete Cleanup Decisions": {
+    "Delete Cleanup Page": {
       "main": [
         [
           {
-            "node": "Cleanup Result",
+            "node": "Continue Cleanup",
             "type": "main",
             "index": 0
           }
@@ -1066,11 +1213,11 @@
         ]
       ]
     },
-    "Cleanup Result": {
+    "Continue Cleanup": {
       "main": [
         [
           {
-            "node": "Respond",
+            "node": "List Cleanup Decisions",
             "type": "main",
             "index": 0
           }
@@ -1232,7 +1379,7 @@
       "main": [
         [
           {
-            "node": "Try Reader Insert",
+            "node": "Prepare Reader Negative Probe",
             "type": "main",
             "index": 0
           }
@@ -1250,7 +1397,7 @@
       "main": [
         [
           {
-            "node": "Capture Reader Insert Denial",
+            "node": "Evaluate Reader Insert Denial",
             "type": "main",
             "index": 0
           }
@@ -1264,11 +1411,11 @@
         ]
       ]
     },
-    "Capture Reader Insert Denial": {
+    "Evaluate Reader Insert Denial": {
       "main": [
         [
           {
-            "node": "Delete Probe Decision",
+            "node": "Reader Insert Denied",
             "type": "main",
             "index": 0
           }
@@ -1316,6 +1463,69 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Initialize Cleanup": {
+      "main": [[{"node": "List Cleanup Decisions", "type": "main", "index": 0}]]
+    },
+    "Cleanup Rows Present": {
+      "main": [
+        [{"node": "Delete Cleanup Page", "type": "main", "index": 0}],
+        [{"node": "Confirm Cleanup Absence", "type": "main", "index": 0}]
+      ]
+    },
+    "Confirm Cleanup Absence": {
+      "main": [
+        [{"node": "Require Cleanup Absent", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Cleanup Absent": {
+      "main": [
+        [{"node": "Respond", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Read Acceptance Facts": {
+      "main": [
+        [{"node": "Require Reader Facts Read", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Facts Read": {
+      "main": [
+        [{"node": "Insert Acceptance Decision", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Prepare Reader Negative Probe": {
+      "main": [
+        [{"node": "Clear Reader Negative Residue", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Clear Reader Negative Residue": {
+      "main": [
+        [{"node": "Try Reader Insert", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Reader Insert Denied": {
+      "main": [
+        [{"node": "Delete Probe Decision", "type": "main", "index": 0}],
+        [{"node": "Cleanup Unexpected Reader Insert", "type": "main", "index": 0}]
+      ]
+    },
+    "Cleanup Unexpected Reader Insert": {
+      "main": [
+        [{"node": "Fail Unexpected Reader Insert", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Fail Unexpected Reader Insert": {
+      "main": [
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
       ]
     },
     "Prepare Acceptance Response": {

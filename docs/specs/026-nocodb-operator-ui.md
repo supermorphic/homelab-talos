@@ -502,12 +502,15 @@ Source sync performs this idempotent state machine:
 5. If exactly one source already matches the deterministic integration and alias, read it
    by ID and continue with validation. Zero matches permits creation; more than one is a
    hard error that requires attended repair.
-6. For a new or failed initial source generation, mark `provisioning`, generate a
+6. For a new or failed initial source generation, require that the base has no matching
+   or conflicting source, mark `provisioning`, generate a
    password in workflow memory, pass it to the fixed PostgreSQL function, and create or
    update the matching NocoDB integration with the same credentials. Creation uses
    `POST /api/v2/meta/workspaces/:workspaceId/integrations`; update uses
-   `PATCH /api/v2/meta/integrations/:integrationId`. Record the integration ID. A ready
-   source never enters this branch.
+   `PATCH /api/v2/meta/integrations/:integrationId`. Record the integration ID, list the
+   base sources again, and bind the queue decision to that current integration ID. The
+   second list must still contain no matching or conflicting source before creation is
+   queued. A ready source never enters this branch.
 7. Call `POST /api/v2/meta/bases/:baseId/sources`, require an HTTP 200 body containing
    exactly one job ID, store that ID, and mark the row `waiting_for_source`. The response
    is queue acceptance, not source readiness.
@@ -524,8 +527,11 @@ Source sync performs this idempotent state machine:
     `GET /api/v2/meta/bases/:baseId/sources/:sourceId`. Verify its base, integration,
     alias, reflected schema, data-edit flag, and schema-edit flag before recording the
     source ID.
-12. Test normal access through NocoDB and independently test the expected PostgreSQL
-    privilege matrix.
+12. List the base's reflected tables, select a table that belongs to the exact source ID,
+    and perform a bounded normal data read through
+    `GET /api/v2/tables/:tableId/records?limit=1`. Require the expected HTTP 200 record
+    list and page metadata. Then independently test the expected PostgreSQL privilege
+    matrix.
 13. Mark the source generation `ready` only after all asynchronous, read-back, and access
     checks succeed. Return only non-secret IDs, access kinds, states, and timestamps.
 
@@ -558,14 +564,25 @@ NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:operator' \
 ```
 
 The final argument is restricted to `reader` or `operator`. Rotation repeats readiness
-and source-identity checks immediately before mutation, updates PostgreSQL and NocoDB,
-tests authentication and denials, and reads back the new generation. It is convergent,
-not transactional. A retry replaces both sides again if interruption leaves them out of
-agreement.
+and source-identity checks immediately before mutation, updates PostgreSQL and the same
+NocoDB integration, tests authentication and denials, and reads back the new generation.
+It is convergent, not transactional. If a rotation fails after PostgreSQL is deliberately
+set to `NOLOGIN`, its registry row keeps `operation=rotate` and the exact base,
+integration, and source IDs. A later explicit rotation may replace both sides again and
+restore the fixed login attributes only when all three retained IDs match current NocoDB
+state. Ordinary sync, a different access kind, or any missing or mismatched identity
+must fail closed. An error from initial source creation remains a separate case and can
+retry only after proving that the base contains zero matching or conflicting sources.
 
 The workflow exposes no operation that deletes a source, base, login, registry row, or
 domain. NocoDB's internal cleanup of a partial failed source is the only automatic source
 deletion in this lifecycle. Future decommissioning requires a separate attended design.
+
+The workflow's NocoDB request allowlist is exact. In addition to the fixed workspace,
+base, integration, source, and job endpoints above, normal access checks may use only
+`GET /api/v2/meta/bases/:baseId/tables` and
+`GET /api/v2/tables/:tableId/records`. The workflow does not send data writes as its
+reader authentication check.
 
 ## Command lifecycle
 
@@ -665,20 +682,25 @@ run ID and cleanup never broadens beyond those rows. It proves:
    `completed`, then discovers exactly one source and reads it by ID before recording
    `ready`;
 4. reader creation completes before operator creation in the same base;
-5. the reader source reflects `read_model` but not `operator` or `app`, and its normal
-   fact query succeeds;
-6. the operator source reflects `operator` but not `read_model` or `app`, and normal
-   insert, read, approved-column update, and run-owned delete operations succeed;
-7. reader DML, DDL, role assumption, and cross-database access fail;
-8. operator update of a protected column, access outside `operator`, DDL, role
-   assumption, and cross-database access fail;
+5. the reader source reflects exactly `read_model.acceptance_facts`, with no unexpected
+   table, and its normal fact query succeeds through the NocoDB data API;
+6. the operator source reflects exactly `operator.acceptance_decision`, with no
+   unexpected table, and normal insert, read, approved-column update, and run-owned
+   delete operations succeed;
+7. a unique run-bound reader insert fails with NocoDB's stable read-only authorization
+   response, while reader DDL, role assumption, and cross-database access also fail;
+8. operator update of a protected column fails with PostgreSQL SQLSTATE `42501` exposed
+   through NocoDB's stable database-operation denial, while access outside `operator`,
+   DDL, role assumption, and cross-database access also fail;
 9. NocoDB reports data editing disabled for the reader, enabled for the operator, and
    schema editing disabled for both;
 10. unchanged sync is idempotent and does not alter ready credential generations, job
     IDs, source IDs, or integration IDs;
 11. explicit rotation restores one working source without revealing its password; and
-12. cleanup removes and proves absence of only the current run's operator rows while
-    retaining the synthetic recovery canary.
+12. cleanup pages through and deletes at most 1,000 matching rows for the current run,
+    then reads again to prove their absence while retaining the synthetic recovery
+    canary. Any unexpectedly permitted reader insert is also deleted by its unique ID
+    before the test reports failure.
 
 The PostgreSQL denials are the independent authority oracle. UI flags alone cannot pass
 the test.
@@ -738,9 +760,11 @@ remain agent-run under repository policy.
 - A NocoDB outage does not block n8n domain workflows or direct PostgreSQL access.
 - A failed bootstrap preserves the database, PVC, and API objects and re-suspends only
   state that bootstrap resumed.
-- A failed source operation records non-secret state and retains its registry row, job
-  ID, role, base, and integration for deterministic retry. NocoDB can remove only the
-  partial source created by its failed job.
+- A failed source operation records non-secret state and retains its registry row,
+  operation, job ID, role, base, integration, and source identity for deterministic
+  retry. NocoDB can remove only the partial source created by its failed job. Failed
+  rotation retries require exact retained identity; failed initial creation retries
+  require zero sources.
 - A ready credential changes only through explicit targeted rotation or attended repair.
 - A full or unavailable attachment PVC makes NocoDB unavailable rather than falling back
   to ephemeral storage.
@@ -754,11 +778,10 @@ remain agent-run under repository policy.
 
 ## Implementation status
 
-As of 2026-09-04, this specification records the approved design. NocoDB resources,
-optional reader/operator provisioning, workflow templates, Secrets, monitoring, and
-command surfaces are not implemented. The issue-317 automation-data source exists but
-remains suspended and has not completed live acceptance. No recovery capability or live
-NocoDB service is claimed.
+As of 2026-09-04, this specification records the approved design and its repository
+implementation is in progress. The staged NocoDB service and source workflows remain
+suspended and have not completed live acceptance. No recovery capability or live NocoDB
+service is claimed.
 
 ## Rejected alternatives
 

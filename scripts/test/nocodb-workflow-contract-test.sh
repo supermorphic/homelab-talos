@@ -107,12 +107,20 @@ for node in postgres_nodes:
     require(parameters.get("options", {}).get("queryReplacement"), f"{node['name']} must bind query parameters.")
     seen_functions |= calls
 require(seen_functions == approved_functions, "The source workflow does not use the exact Task 1 function set.")
+record_error = by_name.get("Record Source Error", {}).get("parameters", {})
+require(
+    record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;"
+    and "sourceOperation" in record_error.get("options", {}).get("queryReplacement", ""),
+    "Source errors must persist the exact sync or rotate operation through the fixed interface.",
+)
 
 host = "http://nocodb.automation-data.svc.cluster.local:8080"
 allowed_nocodb_paths = {
     "/api/v2/meta/bases",
     "/api/v2/meta/bases/:baseId/sources",
     "/api/v2/meta/bases/:baseId/sources/:sourceId",
+    "/api/v2/meta/bases/:baseId/tables",
+    "/api/v2/tables/:tableId/records",
     "/api/v2/jobs/:baseId",
     "/api/v2/meta/workspaces/:workspaceId/integrations",
     "/api/v2/meta/integrations/:integrationId",
@@ -129,10 +137,14 @@ def normalized_path(url):
         return "/api/v2/meta/integrations/:integrationId"
     if suffix.startswith("/api/v2/jobs/"):
         return "/api/v2/jobs/:baseId"
+    if suffix.startswith("/api/v2/tables/") and "/records" in suffix:
+        return "/api/v2/tables/:tableId/records"
     if "/sources/" in suffix:
         return "/api/v2/meta/bases/:baseId/sources/:sourceId"
     if "/sources" in suffix:
         return "/api/v2/meta/bases/:baseId/sources"
+    if suffix.startswith("/api/v2/meta/bases/") and "/tables" in suffix:
+        return "/api/v2/meta/bases/:baseId/tables"
     return suffix.rstrip("/")
 
 
@@ -154,6 +166,14 @@ for node in http_nodes:
         require(method == "GET", f"{node['name']} must GET the discovered source.")
     elif path == "/api/v2/meta/bases/:baseId/sources":
         require(method in {"GET", "POST"}, f"{node['name']} has an invalid source collection method.")
+    elif path in {"/api/v2/meta/bases/:baseId/tables", "/api/v2/tables/:tableId/records"}:
+        require(method == "GET", f"{node['name']} must perform a bounded read-only data probe.")
+        if path == "/api/v2/tables/:tableId/records":
+            query = parameters.get("queryParameters", {}).get("parameters", [])
+            require(
+                {item.get("name"): str(item.get("value")) for item in query}.get("limit") == "1",
+                f"{node['name']} must bound the data probe to one record.",
+            )
     elif path == "/api/v2/meta/bases":
         require(method in {"GET", "POST"}, f"{node['name']} has an invalid base collection method.")
     elif path == "/api/v2/meta/workspaces/:workspaceId/integrations":
@@ -201,6 +221,19 @@ def reachable(start):
     return found
 
 
+def reachable_avoiding(start, blocked):
+    found = set()
+    pending = deque([start])
+    while pending:
+        current = pending.popleft()
+        for candidate in successors(current):
+            if candidate in blocked or candidate in found:
+                continue
+            found.add(candidate)
+            pending.append(candidate)
+    return found
+
+
 executable_nodes = {node["name"] for node in nodes if node.get("type") != "n8n-nodes-base.stickyNote"}
 require(
     executable_nodes <= (reachable("Source Webhook") | {"Source Webhook"}),
@@ -216,6 +249,25 @@ require(
     "operator_not_eligible" in by_name.get("Start Operator", {}).get("parameters", {}).get("jsCode", ""),
     "An explicit operator rotation must fail when operator access is not eligible.",
 )
+for access_kind in ("Reader", "Operator"):
+    ready = f"Record {access_kind} Ready"
+    data_probe_guards = {
+        f"Require {access_kind} Data Probe",
+        f"Require Rotated {access_kind} Data Probe",
+    }
+    require(
+        ready not in reachable_avoiding("Source Webhook", data_probe_guards),
+        f"Every {access_kind.lower()} ready path must pass a normal NocoDB data probe.",
+    )
+    require(
+        f"Relist {access_kind} Sources Before Queue" in reachable(f"Record {access_kind} Integration")
+        and f"Create {access_kind} Source" in reachable(f"Relist {access_kind} Sources Before Queue"),
+        f"{access_kind} source creation must re-list sources after recording the current integration.",
+    )
+    require(
+        f"Require Rotated {access_kind} Data Probe" in reachable(f"Patch {access_kind} Rotation Integration"),
+        f"{access_kind} rotation must probe NocoDB after patching the retained integration.",
+    )
 
 for name in ("Prepare Source Response", "Prepare Source Error Response"):
     code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
@@ -300,6 +352,22 @@ if (splitCompleted.jobState !== 'completed' || splitCompleted.sourceCreateJobId 
 }
 
 const sourceContext = { ...base, integrationId: 'integration-1', alias: 'Read Model' };
+const mergedRotation = execute(
+  'Merge Reader State',
+  { result: { state: 'error', operation: 'rotate', sourceId: 'source-1', integrationId: 'integration-1' } },
+  { 'Start Reader': { ...sourceContext, operation: 'rotate' } },
+)[0].json;
+if (mergedRotation.operation !== 'rotate' || mergedRotation.registryOperation !== 'rotate') {
+  throw new Error('requested and retained source operations were not kept distinct');
+}
+for (const [label, request, context, expected] of [
+  ['targeted rotation', { operation: 'rotate', accessKind: 'reader' }, { ...sourceContext, accessKind: 'reader' }, 'rotate'],
+  ['non-target reader work', { operation: 'rotate', accessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
+  ['initial sync', { operation: 'sync' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
+]) {
+  const preparedError = execute('Prepare Source Error', context, { 'Normalize Source Request': request })[0].json;
+  if (preparedError.sourceOperation !== expected) throw new Error(`${label} persisted the wrong source operation`);
+}
 const unique = execute('Discover Reader Source', {
   ...sourceContext,
   sources: [{ id: 'source-1', base_id: 'base-1', fk_integration_id: 'integration-1', alias: 'Read Model' }],
@@ -326,6 +394,95 @@ try {
   });
 } catch (error) { errorRetryRejected = /error_retry_requires_zero_sources/.test(error.message); }
 if (!errorRetryRejected) throw new Error('error retry accepted an existing deterministic source');
+
+const failedRotation = {
+  ...sourceContext,
+  operation: 'rotate',
+  registryOperation: 'rotate',
+  state: 'error',
+  sourceId: 'source-1',
+  sources: [{ id: 'source-1', fk_integration_id: 'integration-1', alias: 'Read Model' }],
+};
+const retryRotation = execute('Inspect Reader Sources', failedRotation)[0].json;
+if (retryRotation.action !== 'existing' || retryRotation.sourceId !== 'source-1') {
+  throw new Error('failed rotation did not retain the exact source identity');
+}
+const failedOperatorRotation = {
+  ...failedRotation,
+  accessKind: 'operator',
+  alias: 'Operator',
+  sourceId: 'source-operator',
+  sources: [{ id: 'source-operator', fk_integration_id: 'integration-1', alias: 'Operator' }],
+};
+if (execute('Inspect Operator Sources', failedOperatorRotation)[0].json.action !== 'existing') {
+  throw new Error('failed operator rotation did not retain the exact source identity');
+}
+let failedOperatorInitialRejected = false;
+try { execute('Inspect Operator Sources', { ...failedOperatorRotation, registryOperation: 'sync' }); }
+catch (error) { failedOperatorInitialRejected = /error_retry_requires_zero_sources/.test(error.message); }
+if (!failedOperatorInitialRejected) throw new Error('failed initial operator source entered rotation retry');
+for (const [label, input, pattern] of [
+  ['sync with retained source', { ...failedRotation, operation: 'sync' }, /error_retry_requires_zero_sources/],
+  ['rotation of failed initial source', { ...failedRotation, registryOperation: 'sync' }, /error_retry_requires_zero_sources/],
+  ['rotation with mismatched source', {
+    ...failedRotation,
+    sources: [{ id: 'other-source', fk_integration_id: 'integration-1', alias: 'Read Model' }],
+  }, /rotation_source_identity_mismatch/],
+  ['rotation without retained source', {
+    ...failedRotation,
+    sourceId: null,
+    sources: [],
+  }, /rotation_identity_missing/],
+]) {
+  let rejected = false;
+  try { execute('Inspect Reader Sources', input); } catch (error) { rejected = pattern.test(error.message); }
+  if (!rejected) throw new Error(`${label} did not fail closed`);
+}
+const initialRetry = execute('Inspect Reader Sources', {
+  ...sourceContext,
+  operation: 'sync',
+  registryOperation: 'sync',
+  state: 'error',
+  sourceId: null,
+  integrationId: null,
+  sources: [],
+})[0].json;
+if (initialRetry.action !== 'create') throw new Error('failed initial creation with zero sources cannot retry');
+
+const queueContext = {
+  ...sourceContext,
+  state: 'provisioning',
+  currentIntegrationId: 'integration-1',
+  sources: [],
+};
+if (execute('Require Reader Queue Slot', queueContext)[0].json.integrationId !== 'integration-1') {
+  throw new Error('queue slot did not bind the current integration identity');
+}
+for (const [label, sources, pattern] of [
+  ['existing exact source', [{ id: 'source-1', fk_integration_id: 'integration-1', alias: 'Read Model' }], /source_exists_before_queue/],
+  ['mismatched integration', [{ id: 'source-1', fk_integration_id: 'other-integration', alias: 'Read Model' }], /source_integration_mismatch/],
+  ['mismatched alias', [{ id: 'source-1', fk_integration_id: 'integration-1', alias: 'Other' }], /source_alias_mismatch/],
+]) {
+  let rejected = false;
+  try { execute('Require Reader Queue Slot', { ...queueContext, sources }); } catch (error) { rejected = pattern.test(error.message); }
+  if (!rejected) throw new Error(`queue slot accepted ${label}`);
+}
+
+for (const name of [
+  'Require Reader Data Probe',
+  'Require Rotated Reader Data Probe',
+  'Require Operator Data Probe',
+  'Require Rotated Operator Data Probe',
+]) {
+  const context = { domain: 'domain_one', accessKind: name.includes('Operator') ? 'operator' : 'reader', sourceId: 'source-1' };
+  const success = execute(name, { statusCode: 200, body: { list: [], pageInfo: {} }, context })[0].json;
+  if (success.sourceId !== 'source-1' || success.dataProbeReady !== true) {
+    throw new Error(`${name} did not accept the bounded normal data response`);
+  }
+  let rejected = false;
+  try { execute(name, { statusCode: 200, body: { unexpected: [] }, context }); } catch (error) { rejected = /data_probe_invalid/.test(error.message); }
+  if (!rejected) throw new Error(`${name} accepted a malformed data response`);
+}
 JS
 
 python - "$acceptance_workflow" <<'PY'
@@ -424,6 +581,14 @@ for node in http_nodes:
         f"{node['name']} has an unapproved acceptance API path.",
     )
 
+reader_read = by_name.get("Read Acceptance Facts", {}).get("parameters", {})
+require(
+    reader_read.get("method") == "GET"
+    and "/api/v2/tables/" in reader_read.get("url", "")
+    and {item.get("name"): str(item.get("value")) for item in reader_read.get("queryParameters", {}).get("parameters", [])}.get("limit") == "1",
+    "The acceptance probe must perform a bounded reader GET of acceptance_facts.",
+)
+
 serialized = json.dumps(workflow)
 require("issue334_acceptance" in serialized, "The acceptance domain must be fixed.")
 require(not any("credentials" in node for node in nodes), "The acceptance template must not embed credential IDs.")
@@ -439,7 +604,7 @@ response_predecessors = {
 }
 require(
     response_predecessors
-    == {"Structure Result", "Grant Result", "Cleanup Result", "Prepare Acceptance Response", "Prepare Acceptance Error Response"},
+    == {"Structure Result", "Grant Result", "Require Cleanup Absent", "Prepare Acceptance Response", "Prepare Acceptance Error Response"},
     "The acceptance response must use only the bounded response builders.",
 )
 for name in response_predecessors:
@@ -459,10 +624,168 @@ while pending:
                 pending.append(edge["node"])
 executable_nodes = {node["name"] for node in nodes if node.get("type") != "n8n-nodes-base.stickyNote"}
 require(executable_nodes <= reachable, "Every acceptance executable node must be reachable from the webhook.")
+require(
+    "Require Reader Facts Read" in reachable
+    and "Insert Acceptance Decision" in {
+        edge["node"]
+        for output in connections.get("Require Reader Facts Read", {}).get("main", [])
+        for edge in output
+    },
+    "The successful reader GET must be verified before the acceptance write probes.",
+)
+require(
+    "Cleanup Unexpected Reader Insert" in reachable
+    and "Fail Unexpected Reader Insert" in {
+        edge["node"]
+        for output in connections.get("Cleanup Unexpected Reader Insert", {}).get("main", [])
+        for edge in output
+    },
+    "An unexpectedly permitted reader insert must be cleaned before failure.",
+)
+require(
+    "List Cleanup Decisions" in {
+        edge["node"]
+        for output in connections.get("Continue Cleanup", {}).get("main", [])
+        for edge in output
+    }
+    and "Require Cleanup Absent" in reachable,
+    "Cleanup must page within its bound and re-read to prove runId absence.",
+)
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
     require(label in notes, f"The acceptance setup note omits {label}.")
 PY
+
+node - "$acceptance_workflow" <<'JS'
+const fs = require('fs');
+const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const byName = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
+const execute = (name, input, lookup = {}, itemInputs = [input]) => {
+  const code = byName[name]?.parameters?.jsCode;
+  if (!code) throw new Error(`missing Code node ${name}`);
+  return new Function('$json', '$input', '$', code)(
+    input,
+    { all: () => itemInputs.map((json) => ({ json })) },
+    (nodeName) => ({ first: () => ({ json: lookup[nodeName] || input }) }),
+  );
+};
+
+const reflection = {
+  operation: 'probe',
+  runId: 'run-one',
+  readerSourceId: 'source-reader',
+  operatorSourceId: 'source-operator',
+};
+const exactTables = [
+  { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader' },
+  { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator' },
+];
+const resolved = execute('Resolve Acceptance Tables', { ...reflection, tables: exactTables })[0].json;
+if (
+  resolved.factsTableId !== 'table-facts'
+  || resolved.decisionTableId !== 'table-decisions'
+  || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
+) throw new Error('exact reflected schemas and tables were not derived');
+let unexpectedTableRejected = false;
+try {
+  execute('Resolve Acceptance Tables', {
+    ...reflection,
+    tables: [...exactTables, { id: 'extra', title: 'other', table_name: 'other', source_id: 'source-reader' }],
+  });
+} catch (error) { unexpectedTableRejected = /acceptance_reflection_invalid/.test(error.message); }
+if (!unexpectedTableRejected) throw new Error('unexpected reflected table was accepted');
+
+const readContext = { ...resolved, factsTableId: 'table-facts' };
+const readerRead = execute('Require Reader Facts Read', {
+  statusCode: 200,
+  body: { list: [{ id: 1, fact: 'fixture' }], pageInfo: { totalRows: 1 } },
+  context: readContext,
+})[0].json;
+if (readerRead.readerRead !== true || readerRead.factsTableId !== 'table-facts') {
+  throw new Error('successful acceptance reader GET was not verified');
+}
+let malformedReadRejected = false;
+try { execute('Require Reader Facts Read', { statusCode: 200, body: {}, context: readContext }); }
+catch (error) { malformedReadRejected = /reader_read_invalid/.test(error.message); }
+if (!malformedReadRejected) throw new Error('malformed reader GET was accepted');
+
+const protectedContext = { runId: 'run-one', recordId: 7 };
+const protectedDenial = execute('Capture Protected Update Denial', {
+  statusCode: 400,
+  body: {
+    error: 'ERR_DATABASE_OP_FAILED',
+    code: '42501',
+    message: "The database user does not have permission to access 'acceptance_decision'.",
+  },
+  context: protectedContext,
+})[0].json;
+if (protectedDenial.protectedUpdateDenied !== true) throw new Error('PostgreSQL 42501 denial was not accepted');
+for (const response of [
+  { statusCode: 500, body: { message: 'network failure' }, context: protectedContext },
+  { statusCode: 400, body: { error: 'ERR_DATABASE_OP_FAILED', code: '23505', message: 'duplicate' }, context: protectedContext },
+]) {
+  let rejected = false;
+  try { execute('Capture Protected Update Denial', response); } catch (error) { rejected = /protected_update_denial_invalid/.test(error.message); }
+  if (!rejected) throw new Error('non-authorization protected-update error was accepted');
+}
+
+const negativeOne = execute('Prepare Reader Negative Probe', { ...readerRead, runId: 'run-one' })[0].json;
+const negativeTwo = execute('Prepare Reader Negative Probe', { ...readerRead, runId: 'run-two' })[0].json;
+if (
+  negativeOne.readerProbeId === negativeTwo.readerProbeId
+  || negativeOne.readerProbeFact !== 'forbidden:run-one'
+  || negativeTwo.readerProbeFact !== 'forbidden:run-two'
+) throw new Error('reader negative probe is not unique and run-bound');
+const readerDenial = execute('Evaluate Reader Insert Denial', {
+  statusCode: 403,
+  body: { error: 'ERR_FORBIDDEN', message: "Forbidden - Source 'Read Model' is read-only" },
+  context: negativeOne,
+})[0].json;
+if (readerDenial.readerInsertDenied !== true || readerDenial.unexpectedlyPermitted !== false) {
+  throw new Error('exact read-only source denial was not accepted');
+}
+const readerUnexpected = execute('Evaluate Reader Insert Denial', {
+  statusCode: 200,
+  body: { id: negativeOne.readerProbeId },
+  context: negativeOne,
+})[0].json;
+if (readerUnexpected.unexpectedlyPermitted !== true) throw new Error('unexpected reader insert did not route to cleanup');
+let duplicateNotDenial = false;
+try {
+  execute('Evaluate Reader Insert Denial', {
+    statusCode: 400,
+    body: { error: 'ERR_DUPLICATE_RECORD', message: 'duplicate key' },
+    context: negativeOne,
+  });
+} catch (error) { duplicateNotDenial = /reader_insert_denial_invalid/.test(error.message); }
+if (!duplicateNotDenial) throw new Error('duplicate-key residue created a false reader-denial pass');
+
+const cleanupContext = { operation: 'cleanup', runId: 'run-one', cleanupPageCount: 0, removedCount: 0 };
+const cleanupPage = execute('Prepare Cleanup Page', {
+  ...cleanupContext,
+  rows: [{ id: 1, run_id: 'run-one' }, { id: 2, run_id: 'run-one' }],
+})[0].json;
+if (!cleanupPage.hasRows || cleanupPage.cleanupPageCount !== 1 || cleanupPage.deleteRows.length !== 2) {
+  throw new Error('cleanup page was not bounded and prepared');
+}
+const cleanupDone = execute('Prepare Cleanup Page', { ...cleanupPage, rows: [] })[0].json;
+if (cleanupDone.hasRows !== false || cleanupDone.removedCount !== 2) throw new Error('cleanup did not retain its exact removed count');
+let cleanupBoundRejected = false;
+try {
+  execute('Prepare Cleanup Page', {
+    ...cleanupContext,
+    cleanupPageCount: 10,
+    rows: [{ id: 3, run_id: 'run-one' }],
+  });
+} catch (error) { cleanupBoundRejected = /cleanup_page_bound_exceeded/.test(error.message); }
+if (!cleanupBoundRejected) throw new Error('cleanup accepted rows beyond its page bound');
+const absent = execute('Require Cleanup Absent', {
+  statusCode: 200,
+  body: { list: [], pageInfo: { totalRows: 0 } },
+  context: cleanupDone,
+})[0].json;
+if (absent.ok !== true || absent.removedCount !== 2) throw new Error('cleanup absence was not verified');
+JS
 
 mapfile -t packaged_workflows < <(
   yq -r '.configMapGenerator[] | select(.name == "n8n-workflow-templates") | .files[]' \

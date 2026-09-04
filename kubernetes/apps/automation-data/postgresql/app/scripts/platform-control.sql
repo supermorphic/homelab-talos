@@ -59,6 +59,7 @@ CREATE TABLE platform_operations.managed_nocodb_sources (
     'awaiting_grants', 'provisioning', 'waiting_for_source',
     'ready', 'rotating', 'error'
   )),
+  operation text NOT NULL CHECK (operation IN ('sync', 'rotate')),
   generation bigint NOT NULL CHECK (generation > 0),
   credential_generation bigint NOT NULL DEFAULT 0 CHECK (credential_generation >= 0),
   operation_started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -831,6 +832,7 @@ AS $function$
     'sourceCreateJobId', source.source_create_job_id,
     'sourceId', source.source_id,
     'state', source.state,
+    'operation', source.operation,
     'generation', source.generation,
     'credentialGeneration', source.credential_generation,
     'operationStartedAt', source.operation_started_at,
@@ -1037,14 +1039,15 @@ BEGIN
       ELSE
       next_generation := platform_internal.bump_generation();
       INSERT INTO platform_operations.managed_nocodb_sources (
-        domain, access_kind, role_name, state, generation, credential_generation,
+        domain, access_kind, role_name, state, operation, generation, credential_generation,
         operation_started_at, updated_at, error_code
       ) VALUES (
-        p_domain, 'operator', operator_name, 'awaiting_grants', next_generation, 0,
+        p_domain, 'operator', operator_name, 'awaiting_grants', 'sync', next_generation, 0,
         clock_timestamp(), clock_timestamp(), NULL
       ) ON CONFLICT (domain, access_kind) DO UPDATE SET
         role_name = EXCLUDED.role_name,
         state = 'awaiting_grants',
+        operation = 'sync',
         generation = EXCLUDED.generation,
         operation_started_at = EXCLUDED.operation_started_at,
         updated_at = EXCLUDED.updated_at,
@@ -1097,6 +1100,9 @@ BEGIN
   IF FOUND AND p_access_kind = 'reader' AND source.state = 'awaiting_grants' THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
   END IF;
+  IF FOUND AND source.state = 'error' AND source.operation <> 'sync' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
   IF FOUND AND source.source_id IS NOT NULL THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_identity_requires_rotation';
   END IF;
@@ -1123,15 +1129,15 @@ BEGIN
   END IF;
   next_generation := platform_internal.bump_generation();
   INSERT INTO platform_operations.managed_nocodb_sources (
-    domain, access_kind, role_name, base_id, state, generation,
+    domain, access_kind, role_name, base_id, state, operation, generation,
     credential_generation, operation_started_at, updated_at, error_code
   ) VALUES (
-    p_domain, p_access_kind, target_role, p_base_id, 'provisioning', next_generation,
+    p_domain, p_access_kind, target_role, p_base_id, 'provisioning', 'sync', next_generation,
     1, clock_timestamp(), clock_timestamp(), NULL
   ) ON CONFLICT (domain, access_kind) DO UPDATE SET
     role_name = EXCLUDED.role_name,
     base_id = EXCLUDED.base_id,
-    state = 'provisioning',
+    state = 'provisioning', operation = 'sync',
     generation = EXCLUDED.generation,
     credential_generation = platform_operations.managed_nocodb_sources.credential_generation + 1,
     operation_started_at = EXCLUDED.operation_started_at,
@@ -1267,6 +1273,7 @@ $function$;
 CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(
   p_domain text,
   p_access_kind text,
+  p_operation text,
   p_error_code text
 )
 RETURNS void
@@ -1280,6 +1287,9 @@ DECLARE
 BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
   PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_operation IS NULL OR p_operation NOT IN ('sync', 'rotate') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_source_operation';
+  END IF;
   IF p_error_code IS NULL OR p_error_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_error_code';
   END IF;
@@ -1291,7 +1301,7 @@ BEGIN
   END IF;
   next_generation := platform_internal.bump_generation();
   UPDATE platform_operations.managed_nocodb_sources
-  SET state = 'error', generation = next_generation,
+  SET state = 'error', operation = p_operation, generation = next_generation,
       updated_at = clock_timestamp(), error_code = p_error_code
   WHERE domain = p_domain AND access_kind = p_access_kind;
 END;
@@ -1320,18 +1330,29 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
   WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
-  IF source.state <> 'ready' THEN
+  IF source.state NOT IN ('ready', 'error') THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_not_ready';
+  END IF;
+  IF source.state = 'error' AND source.operation <> 'rotate' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_rotation_retry_invalid';
+  END IF;
+  IF source.source_id IS NULL OR source.integration_id IS NULL OR source.base_id IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_rotation_identity_missing';
   END IF;
   next_generation := platform_internal.bump_generation();
   UPDATE platform_operations.managed_nocodb_sources
-  SET state = 'rotating', generation = next_generation,
+  SET state = 'rotating', operation = 'rotate', generation = next_generation,
       credential_generation = credential_generation + 1,
       operation_started_at = clock_timestamp(), updated_at = clock_timestamp(), error_code = NULL
   WHERE domain = p_domain AND access_kind = p_access_kind;
   result := platform_internal.nocodb_source_result(p_domain, p_access_kind);
   PERFORM platform_internal.exec_in_database(
-    'automation_data_control', format('ALTER ROLE %I PASSWORD %L', source.role_name, p_password)
+    'automation_data_control',
+    format(
+      'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L',
+      source.role_name,
+      p_password
+    )
   );
   RETURN result;
 END;
@@ -1533,7 +1554,7 @@ GRANT EXECUTE ON FUNCTION platform_operations.begin_nocodb_source(text, text, te
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_integration(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_job(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_ready(text, text, text) TO automation_data_provisioner;
-GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.rotate_nocodb_source_credential(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text) TO automation_data_provisioner;
 
