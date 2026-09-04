@@ -281,14 +281,33 @@ for validation_field in valid loginValid schemaPrivilegesValid objectPrivilegesV
 done
 [[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 2 ]] ||
   fail 'NocoDB prepare does not run one full pre-login authority gate per access role'
-[[ "$(rg -Fc 'false' <<<"$prepare_nocodb_access_function")" -ge 2 ]] ||
-  fail 'NocoDB prepare does not deliberately require NOLOGIN before source enablement'
 rg -Fq 'has_table_privilege' <<<"$prelogin_authority_function" ||
   fail 'NocoDB authority validation does not use effective table privileges'
 rg -Fq 'has_sequence_privilege' <<<"$prelogin_authority_function" ||
   fail 'NocoDB authority validation does not use effective sequence privileges'
 rg -Fq 'acl.grantee IN (0,' <<<"$prelogin_authority_function" ||
   fail 'NocoDB authority validation does not inspect PUBLIC default ACLs'
+rg -Fq "has_any_column_privilege(%1\$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT,UPDATE,REFERENCES'')" \
+  <<<"$prelogin_authority_function" ||
+  fail 'NocoDB reader authority validation does not reject effective column DML or REFERENCES privileges'
+rg -Fq 'reader_expect_login boolean' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB preparation does not model the reader login state'
+rg -Fq 'operator_expect_login boolean' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB preparation does not model the operator login state'
+for active_login_guard in \
+  "reader_expect_login := FOUND AND reader_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');" \
+  "operator_expect_login := operator_source_exists AND operator_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');"; do
+  rg -Fq "$active_login_guard" <<<"$prepare_nocodb_access_function" ||
+    fail 'NocoDB preparation does not reconcile an active source with LOGIN required'
+done
+rg -Fq 'IF NOT reader_expect_login THEN' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB preparation can disable an active reader source'
+rg -Fq 'IF NOT operator_expect_login THEN' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB preparation can disable an active operator source'
+rg -Fq "p_domain, 'reader', reader_name, reader_expect_login" <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB reader preparation does not validate its expected login state'
+rg -Fq "p_domain, 'operator', operator_name, operator_expect_login" <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB operator preparation does not validate its expected login state'
 
 rg -Fq "^[a-z][a-z0-9_]{0,47}$" "$control_sql" || \
   fail 'platform control SQL does not enforce the domain identifier boundary'

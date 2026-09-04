@@ -910,6 +910,8 @@ DECLARE
   operator_eligible boolean := false;
   reader_authority jsonb;
   operator_authority jsonb;
+  reader_expect_login boolean;
+  operator_expect_login boolean;
   operator_source_exists boolean := false;
   next_generation bigint;
 BEGIN
@@ -941,7 +943,8 @@ BEGIN
   END IF;
   SELECT * INTO reader_source FROM platform_operations.managed_nocodb_sources
   WHERE domain = p_domain AND access_kind = 'reader' FOR UPDATE;
-  IF NOT FOUND OR reader_source.state IN ('awaiting_grants', 'error') THEN
+  reader_expect_login := FOUND AND reader_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');
+  IF NOT reader_expect_login THEN
     PERFORM platform_internal.exec_in_database(
       'automation_data_control',
       format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS', reader_name)
@@ -959,7 +962,7 @@ BEGIN
       reader_name, managed.owner_role)
   );
   reader_authority := platform_internal.validate_nocodb_access_authority(
-    p_domain, 'reader', reader_name, false
+    p_domain, 'reader', reader_name, reader_expect_login
   );
   reader_eligible := COALESCE((reader_authority->>'valid')::boolean, false);
   IF NOT reader_eligible THEN
@@ -975,7 +978,8 @@ BEGIN
     SELECT * INTO operator_source FROM platform_operations.managed_nocodb_sources
     WHERE domain = p_domain AND access_kind = 'operator' FOR UPDATE;
     operator_source_exists := FOUND;
-    IF NOT operator_source_exists OR operator_source.state IN ('awaiting_grants', 'error') THEN
+    operator_expect_login := operator_source_exists AND operator_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');
+    IF NOT operator_expect_login THEN
       PERFORM platform_internal.exec_in_database(
         'automation_data_control',
         format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS', operator_name)
@@ -1003,7 +1007,7 @@ BEGIN
         operator_name)
     );
     operator_authority := platform_internal.validate_nocodb_access_authority(
-      p_domain, 'operator', operator_name, false
+      p_domain, 'operator', operator_name, operator_expect_login
     );
     operator_eligible := COALESCE((operator_authority->>'valid')::boolean, false);
     IF operator_requested AND NOT operator_eligible THEN
@@ -1352,7 +1356,7 @@ BEGIN
     source.role_name, target_schema));
   object_privileges_valid := CASE p_access_kind
     WHEN 'reader' THEN platform_internal.query_boolean(managed.database_name, format(
-      'SELECT COALESCE(bool_and(has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''DELETE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRUNCATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''REFERENCES'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRIGGER'')), true) FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = ''read_model'' AND relation.relkind IN (''r'', ''p'', ''v'', ''m'')) AND NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = ''read_model'' AND relation.relkind = ''S'' AND (has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''USAGE'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'')))',
+      'SELECT COALESCE(bool_and(has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''DELETE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRUNCATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''REFERENCES'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRIGGER'') AND NOT has_any_column_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT,UPDATE,REFERENCES'')), true) FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = ''read_model'' AND relation.relkind IN (''r'', ''p'', ''v'', ''m'')) AND NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = ''read_model'' AND relation.relkind = ''S'' AND (has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''USAGE'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'')))',
       source.role_name))
     WHEN 'operator' THEN platform_internal.query_boolean(managed.database_name, format(
       'SELECT NOT EXISTS (SELECT FROM pg_class AS relation CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl, acldefault(''r'', relation.relowner))) AS acl WHERE relation.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ''operator'') AND relation.relkind IN (''r'', ''p'', ''v'', ''m'') AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type IN (''TRUNCATE'', ''REFERENCES'', ''TRIGGER'')) AND NOT EXISTS (SELECT FROM pg_attribute AS relation_attribute CROSS JOIN LATERAL aclexplode(COALESCE(relation_attribute.attacl, ARRAY[]::aclitem[])) AS acl WHERE relation_attribute.attrelid IN (SELECT oid FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ''operator'') AND relkind IN (''r'', ''p'', ''v'', ''m'')) AND relation_attribute.attnum > 0 AND NOT relation_attribute.attisdropped AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type = ''REFERENCES'') AND NOT EXISTS (SELECT FROM pg_class AS relation CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl, acldefault(''S'', relation.relowner))) AS acl WHERE relation.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ''operator'') AND relation.relkind = ''S'' AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type NOT IN (''USAGE'', ''SELECT'', ''UPDATE''))',
