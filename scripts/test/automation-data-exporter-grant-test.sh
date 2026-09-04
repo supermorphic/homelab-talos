@@ -55,6 +55,11 @@ expected_job_contract='{"name":"automation-data-exporter-grant-123456789abc","ap
 mkdir "$temp_dir/bin"
 cat >"$temp_dir/bin/psql" <<'EOF'
 #!/bin/sh
+for argument in "$@"; do
+  case "$argument" in
+    --file | --file=*) exit 0 ;;
+  esac
+done
 cat >>"$PSQL_STDIN_CAPTURE"
 EOF
 chmod +x "$temp_dir/bin/psql"
