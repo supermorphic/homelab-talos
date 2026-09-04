@@ -476,6 +476,7 @@ nocodb-secrets:
        .metadata.namespace = "automation-data" |
        .type = "Opaque" |
        .stringData.DATABASE_URL = "postgres://nocodb_metadata:" + strenv(metadata_password_encoded) + "@automation-data-postgresql.automation-data.svc.cluster.local:5432/nocodb?sslmode=disable" |
+       .stringData."metadata-password" = strenv(NOCODB_METADATA_PASSWORD) |
        .stringData.NC_AUTH_JWT_SECRET = strenv(NOCODB_AUTH_JWT_SECRET) |
        .stringData.NC_CONNECTION_ENCRYPT_KEY = strenv(connection_key) |
        .stringData.NC_ADMIN_EMAIL = strenv(NOCODB_ADMIN_EMAIL) |
@@ -498,7 +499,7 @@ nocodb-secrets:
     [[ "$(yq -r '.type' "$candidate")" == Opaque ]]
     [[ "$(yq -r 'has("data") | not' "$candidate")" == true ]]
     [[ "$(yq -r '.stringData | keys | sort | join(",")' "$candidate")" == \
-      'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]]
+      'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,metadata-password,source-provisioning-header' ]]
     for supplied_value in "$NOCODB_METADATA_PASSWORD" "$NOCODB_AUTH_JWT_SECRET" \
       "$NOCODB_CONNECTION_ENCRYPT_KEY" "$NOCODB_ADMIN_PASSWORD" \
       "$NOCODB_SOURCE_PROVISIONING_HEADER" "$NOCODB_ADMIN_EMAIL" "$connection_key"; do

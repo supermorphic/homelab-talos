@@ -49,7 +49,7 @@ if [[ -e "$secret" || "$secret_listed" == true ]]; then
     exit 1
   }
   [[ "$(yq -r '.stringData | keys | sort | join(",")' "$secret")" == \
-    'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]] || {
+    'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,metadata-password,source-provisioning-header' ]] || {
     echo 'The NocoDB credentials Secret has an unexpected key set.' >&2
     exit 1
   }

@@ -107,7 +107,9 @@ recipient='age1syntheticrecipientfornocodb000000000000000000000000000'
 [[ "$target" == 'kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml' ]]
 [[ "$("$REAL_YQ_BIN" -r '.metadata | [.name, .namespace] | join(",")' "$input")" == 'nocodb-credentials,automation-data' ]]
 [[ "$("$REAL_YQ_BIN" -r '.stringData | keys | sort | join(",")' "$input")" == \
-  'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]]
+  'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,metadata-password,source-provisioning-header' ]]
+[[ "$("$REAL_YQ_BIN" -r '.stringData."metadata-password"' "$input")" == \
+  'synthetic-nocodb-metadata-pass-%:/?@-01' ]]
 [[ "$("$REAL_YQ_BIN" -r '.stringData.DATABASE_URL' "$input")" == \
   'postgres://nocodb_metadata:synthetic-nocodb-metadata-pass-%25%3A%2F%3F%40-01@automation-data-postgresql.automation-data.svc.cluster.local:5432/nocodb?sslmode=disable' ]]
 if [[ -n "${FAKE_EXPECT_CONNECTION_KEY:-}" ]]; then
@@ -138,6 +140,7 @@ metadata:
 type: Opaque
 stringData:
   DATABASE_URL: ENC[synthetic]
+  metadata-password: ENC[synthetic]
   NC_AUTH_JWT_SECRET: ENC[synthetic]
   NC_CONNECTION_ENCRYPT_KEY: ENC[synthetic]
   NC_ADMIN_EMAIL: ENC[synthetic]
@@ -285,7 +288,7 @@ assert_target_contract() {
   [[ -f "$artifact" ]] || fail 'the guarded recipe did not write its Secret target'
   [[ "$("$yq_bin" -r '.metadata | [.name, .namespace] | join(",")' "$artifact")" == 'nocodb-credentials,automation-data' ]]
   [[ "$("$yq_bin" -r '.stringData | keys | sort | join(",")' "$artifact")" == \
-    'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]]
+    'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,metadata-password,source-provisioning-header' ]]
   [[ "$("$yq_bin" -r '.sops.age[].recipient' "$artifact")" == "$expected_recipient" ]]
   [[ "$("$yq_bin" -r 'has("data") | not' "$artifact")" == true ]]
   rg -qx '  - ./nocodb-credentials.sops.yaml' "$tree_root/$kustomization" || \
@@ -365,6 +368,7 @@ metadata:
 type: Opaque
 stringData:
   DATABASE_URL: ENC[synthetic]
+  metadata-password: ENC[synthetic]
   NC_AUTH_JWT_SECRET: ENC[synthetic]
   NC_CONNECTION_ENCRYPT_KEY: ENC[synthetic]
   NC_ADMIN_EMAIL: ENC[synthetic]
