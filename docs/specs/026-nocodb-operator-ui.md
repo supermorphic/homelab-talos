@@ -404,7 +404,8 @@ NocoDB functions that:
 - validate its catalog privileges;
 - record NocoDB base, integration, source-creation job, and source identifiers;
 - advance a source operation state or record a non-secret failure; and
-- read the expected source state for a named managed domain.
+- read the expected source state for a named managed domain and access kind, including
+  the stored job and object identifiers required for deterministic resume.
 
 Function bodies use fixed identifiers derived from a validated domain and fixed access
 kind. Public execution is revoked. The functions expose no arbitrary SQL, grants,
@@ -503,8 +504,10 @@ Source sync performs this idempotent state machine:
    hard error that requires attended repair.
 6. For a new or failed initial source generation, mark `provisioning`, generate a
    password in workflow memory, pass it to the fixed PostgreSQL function, and create or
-   update the matching NocoDB integration with the same credentials. Record the
-   integration ID. A ready source never enters this branch.
+   update the matching NocoDB integration with the same credentials. Creation uses
+   `POST /api/v2/meta/workspaces/:workspaceId/integrations`; update uses
+   `PATCH /api/v2/meta/integrations/:integrationId`. Record the integration ID. A ready
+   source never enters this branch.
 7. Call `POST /api/v2/meta/bases/:baseId/sources`, require an HTTP 200 body containing
    exactly one job ID, store that ID, and mark the row `waiting_for_source`. The response
    is queue acceptance, not source readiness.

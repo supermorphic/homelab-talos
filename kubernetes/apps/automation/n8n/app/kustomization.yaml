@@ -19,6 +19,8 @@ configMapGenerator:
     files:
       - automation-data-provisioner.json=workflows/automation-data-provisioner.json
       - automation-data-canary.json=workflows/automation-data-canary.json
+      - nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json
+      - nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json
       - platform-canary.json=workflows/platform-canary.json
       - platform-workflow-failure.json=workflows/platform-workflow-failure.json
 generatorOptions:

@@ -1,0 +1,1360 @@
+{
+  "name": "NocoDB Acceptance Domain",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to the two Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. Keep execution persistence disabled.",
+        "height": 380,
+        "width": 540
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        -650
+      ],
+      "id": "20000000-0000-4000-8000-000000000001",
+      "name": "Acceptance Setup"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nocodb-acceptance-domain",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -840,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000002",
+      "name": "Acceptance Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nreturn [{ json: { operation, runId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000003",
+      "name": "Normalize Acceptance Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "structure",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "structure"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "grants",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "grants"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "probe",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "probe"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "cleanup",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cleanup"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -360,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000004",
+      "name": "Select Acceptance Operation"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  fact text NOT NULL\n);\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact FROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCOMMIT;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000005",
+      "name": "Create Acceptance Structure",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', structureReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000006",
+      "name": "Structure Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;\nCOMMIT;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -100
+      ],
+      "id": "20000000-0000-4000-8000-000000000007",
+      "name": "Grant Acceptance Operator Access",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', grantsReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -100
+      ],
+      "id": "20000000-0000-4000-8000-000000000008",
+      "name": "Grant Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000009",
+      "name": "List Acceptance Bases",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nconst bases = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst matches = bases.filter((base) => base && base.title === 'issue334_acceptance');\nif (matches.length !== 1 || !matches[0].id) throw new Error(matches.length > 1 ? 'duplicate_acceptance_base' : 'acceptance_base_missing');\nreturn [{ json: { ...request, domain: 'issue334_acceptance', baseId: matches[0].id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000010",
+      "name": "Resolve Acceptance Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000011",
+      "name": "List Acceptance Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Base').first().json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst reader = sources.filter((source) => source && source.alias === 'Read Model');\nconst operator = sources.filter((source) => source && source.alias === 'Operator');\nif (reader.length !== 1 || operator.length !== 1) throw new Error('acceptance_source_set_invalid');\nreturn [{ json: { ...context, sources, readerSourceId: reader[0].id, operatorSourceId: operator[0].id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000012",
+      "name": "Keep Acceptance Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000013",
+      "name": "List Acceptance Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Keep Acceptance Sources').first().json;\nconst items = $input.all().map((item) => item.json);\nconst tables = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst facts = tables.filter((table) => table && table.title === 'acceptance_facts' && table.source_id === context.readerSourceId);\nconst decisions = tables.filter((table) => table && table.title === 'acceptance_decision' && table.source_id === context.operatorSourceId);\nif (facts.length !== 1 || decisions.length !== 1 || !facts[0].id || !decisions[0].id) throw new Error('acceptance_reflection_invalid');\nreturn [{ json: {\n  ...context,\n  factsTableId: facts[0].id,\n  decisionTableId: decisions[0].id,\n  reflectedSchemas: ['read_model', 'operator'],\n  reflectedTables: tables.map((table) => ({ id: table.id, title: table.title, sourceId: table.source_id })),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000014",
+      "name": "Resolve Acceptance Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.cleanupOnly }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000015",
+      "name": "Cleanup Only"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000016",
+      "name": "List Cleanup Decisions",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id !== context.runId || row.id === undefined)) throw new Error('cleanup_scope_invalid');\nreturn [{ json: { ...context, deleteRows: rows.map((row) => ({ id: row.id })), removedCount: rows.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000017",
+      "name": "Prepare Cleanup Delete",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.deleteRows) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000018",
+      "name": "Delete Cleanup Decisions",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Cleanup Delete').first().json;\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000019",
+      "name": "Cleanup Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: $json.runId, decision: 'pending' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000020",
+      "name": "Insert Acceptance Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000021",
+      "name": "Normalize Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000022",
+      "name": "Read Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'pending') throw new Error('insert_probe_failed');\nreturn [{ json: { ...context, protectedCreatedAt: matches[0].protected_created_at } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000023",
+      "name": "Require Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId, decision: 'approved' }]) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000024",
+      "name": "Update Acceptance Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Require Inserted Decision').first().json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000025",
+      "name": "Read Updated Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'approved' || matches[0].protected_created_at !== context.protectedCreatedAt) throw new Error('update_probe_failed');\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000026",
+      "name": "Require Updated Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId, protected_created_at: '2000-01-01T00:00:00Z' }]) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000027",
+      "name": "Try Protected Column Update",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Updated Decision').first().json;\nif (!$json.statusCode || $json.statusCode < 400) throw new Error('protected_update_not_denied');\nreturn [{ json: { ...context, protectedUpdateDenied: true, protectedUpdateStatus: $json.statusCode } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000028",
+      "name": "Capture Protected Update Denial",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: 9007199254740991, fact: 'forbidden' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3840,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000029",
+      "name": "Try Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Protected Update Denial').first().json;\nif (!$json.statusCode || $json.statusCode < 400) throw new Error('reader_insert_not_denied');\nreturn [{ json: { ...context, readerInsertDenied: true, readerInsertStatus: $json.statusCode } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000030",
+      "name": "Capture Reader Insert Denial",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId }]) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000031",
+      "name": "Delete Probe Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Capture Reader Insert Denial').first().json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4560,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000032",
+      "name": "Confirm Probe Cleanup",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  inserted: true,\n  read: true,\n  decisionUpdated: true,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus\n  }\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4800,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000033",
+      "name": "Prepare Acceptance Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: false, operation: request?.operation || null, runId: request?.runId || null, domain: 'issue334_acceptance', errorCode: 'acceptance_operation_failed' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4560,
+        260
+      ],
+      "id": "20000000-0000-4000-8000-000000000034",
+      "name": "Prepare Acceptance Error Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        5040,
+        120
+      ],
+      "id": "20000000-0000-4000-8000-000000000035",
+      "name": "Respond"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Acceptance Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Acceptance Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Acceptance Request": {
+      "main": [
+        [
+          {
+            "node": "Select Acceptance Operation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Acceptance Operation": {
+      "main": [
+        [
+          {
+            "node": "Create Acceptance Structure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Grant Acceptance Operator Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Acceptance Structure": {
+      "main": [
+        [
+          {
+            "node": "Structure Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Acceptance Operator Access": {
+      "main": [
+        [
+          {
+            "node": "Grant Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Bases": {
+      "main": [
+        [
+          {
+            "node": "Resolve Acceptance Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Acceptance Base": {
+      "main": [
+        [
+          {
+            "node": "List Acceptance Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Sources": {
+      "main": [
+        [
+          {
+            "node": "Keep Acceptance Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Acceptance Sources": {
+      "main": [
+        [
+          {
+            "node": "List Acceptance Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Tables": {
+      "main": [
+        [
+          {
+            "node": "Resolve Acceptance Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Acceptance Tables": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Only": {
+      "main": [
+        [
+          {
+            "node": "List Cleanup Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Acceptance Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Cleanup Decisions": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cleanup Delete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cleanup Delete": {
+      "main": [
+        [
+          {
+            "node": "Delete Cleanup Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Cleanup Decisions": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Acceptance Decision": {
+      "main": [
+        [
+          {
+            "node": "Normalize Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Read Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Update Acceptance Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Acceptance Decision": {
+      "main": [
+        [
+          {
+            "node": "Read Updated Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Updated Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Updated Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Updated Decision": {
+      "main": [
+        [
+          {
+            "node": "Try Protected Column Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Try Protected Column Update": {
+      "main": [
+        [
+          {
+            "node": "Capture Protected Update Denial",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Protected Update Denial": {
+      "main": [
+        [
+          {
+            "node": "Try Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Try Reader Insert": {
+      "main": [
+        [
+          {
+            "node": "Capture Reader Insert Denial",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Reader Insert Denial": {
+      "main": [
+        [
+          {
+            "node": "Delete Probe Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Probe Decision": {
+      "main": [
+        [
+          {
+            "node": "Confirm Probe Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Probe Cleanup": {
+      "main": [
+        [
+          {
+            "node": "Prepare Acceptance Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Acceptance Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Acceptance Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "tags": []
+}
