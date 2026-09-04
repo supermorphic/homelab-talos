@@ -284,11 +284,18 @@ encryption key unless the operator explicitly performs a separate recovery proce
 The application sets:
 
 - `NC_SITE_URL=https://nocodb.lab.supermorphic.com`;
-- `NC_INVITE_ONLY_SIGNUP=true` to disable public signup;
 - `NC_ALLOW_LOCAL_EXTERNAL_DBS=true` so the private PostgreSQL Service is an allowed
   source target;
 - telemetry and support chat disabled; and
-- no public shared views.
+- no automation-created public shared views.
+
+`NC_INVITE_ONLY_SIGNUP` is not a supported environment variable in NocoDB `2026.08.2`.
+After the first administrator signs in, bootstrap uses that session JWT to call
+`POST /api/v1/app-settings` with `invite_only_signup=true` and
+`restrict_workspace_creation=true`, then reads the settings back through
+`GET /api/v1/app-settings`. The application blocks API-token access to these endpoints,
+so the bootstrap session must perform this step before it creates the long-lived API
+token. The source workflow creates no shared base or view URL.
 
 The local-database allowance is contained by egress policy and by a source workflow that
 accepts no arbitrary hostname, port, database name, or credentials.
@@ -430,11 +437,13 @@ and n8n APIs. It performs this fixed transaction:
    Job. The Job creates or reconciles only the `nocodb` database and
    `nocodb_metadata` login from the encrypted Secret.
 5. Wait for NocoDB rollout and health at `/api/v1/health`.
-6. Sign in with the SOPS-managed bootstrap administrator and create one NocoDB API token.
-7. Send the token directly to the local n8n credential API as the named
-   **NocoDB Operator API** header credential.
-8. Test the credential against fixed NocoDB endpoints and read back its non-secret ID.
-9. Return only non-secret resource IDs, readiness, and next operator steps.
+6. Sign in with the SOPS-managed bootstrap administrator.
+7. Set and read back the application settings that require
+   invite-only signup and restrict workspace creation to the super administrator.
+8. Create one NocoDB API token and send it directly to the local n8n credential API as
+   the named **NocoDB Operator API** header credential.
+9. Test the credential against fixed NocoDB endpoints and read back its non-secret ID.
+10. Return only non-secret resource IDs, readiness, and next operator steps.
 
 Secret values travel through standard input, request bodies, and process memory. They do
 not appear in arguments, shell tracing, logs, saved workflow executions, or command
@@ -834,6 +843,8 @@ and dated acceptance results.
 - [NocoDB `2026.08.2` job-list controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/jobs-meta.controller.ts)
 - [NocoDB `2026.08.2` fallback jobs service](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/fallback/jobs.service.ts)
 - [NocoDB `2026.08.2` API-token controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/api-tokens.controller.ts)
+- [NocoDB `2026.08.2` application-settings contract](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/interface/AppSettings.ts)
+- [NocoDB `2026.08.2` application-settings controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/org-users.controller.ts)
 - [n8n Wait node persistence behavior](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait/)
 - [PostgreSQL 17 privileges](https://www.postgresql.org/docs/17/ddl-priv.html)
 - [PostgreSQL 17 role attributes](https://www.postgresql.org/docs/17/role-attributes.html)
