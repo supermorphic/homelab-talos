@@ -372,7 +372,18 @@ const unique = execute('Discover Reader Source', {
   ...sourceContext,
   sources: [{ id: 'source-1', base_id: 'base-1', fk_integration_id: 'integration-1', alias: 'Read Model' }],
 })[0].json;
-if (unique.sourceId !== 'source-1') throw new Error('unique source was not discovered');
+if (unique.sourceId !== 'source-1' || unique.selectedIntegrationId !== 'integration-1') {
+  throw new Error('unique source did not carry its selected current integration');
+}
+const uniqueOperator = execute('Discover Operator Source', {
+  ...sourceContext,
+  accessKind: 'operator',
+  alias: 'Operator',
+  sources: [{ id: 'source-operator', base_id: 'base-1', fk_integration_id: 'integration-1', alias: 'Operator' }],
+})[0].json;
+if (uniqueOperator.sourceId !== 'source-operator' || uniqueOperator.selectedIntegrationId !== 'integration-1') {
+  throw new Error('unique operator source did not carry its selected current integration');
+}
 let duplicateRejected = false;
 try {
   execute('Discover Reader Source', {
@@ -419,11 +430,37 @@ if (execute('Inspect Operator Sources', failedOperatorRotation)[0].json.action !
 }
 let failedOperatorInitialRejected = false;
 try { execute('Inspect Operator Sources', { ...failedOperatorRotation, registryOperation: 'sync' }); }
-catch (error) { failedOperatorInitialRejected = /error_retry_requires_zero_sources/.test(error.message); }
+catch (error) { failedOperatorInitialRejected = /rotation_retry_invalid/.test(error.message); }
 if (!failedOperatorInitialRejected) throw new Error('failed initial operator source entered rotation retry');
+for (const [name, input] of [
+  ['Inspect Reader Sources', {
+    ...sourceContext,
+    operation: 'rotate',
+    registryOperation: 'sync',
+    state: 'error',
+    sourceId: null,
+    integrationId: null,
+    sources: [],
+  }],
+  ['Inspect Operator Sources', {
+    ...sourceContext,
+    accessKind: 'operator',
+    alias: 'Operator',
+    operation: 'rotate',
+    registryOperation: 'sync',
+    state: 'error',
+    sourceId: null,
+    integrationId: null,
+    sources: [],
+  }],
+]) {
+  let rejected = false;
+  try { execute(name, input); } catch (error) { rejected = /rotation_retry_invalid/.test(error.message); }
+  if (!rejected) throw new Error(`${name} let a zero-source failed initial generation enter create during rotation`);
+}
 for (const [label, input, pattern] of [
   ['sync with retained source', { ...failedRotation, operation: 'sync' }, /error_retry_requires_zero_sources/],
-  ['rotation of failed initial source', { ...failedRotation, registryOperation: 'sync' }, /error_retry_requires_zero_sources/],
+  ['rotation of failed initial source', { ...failedRotation, registryOperation: 'sync' }, /rotation_retry_invalid/],
   ['rotation with mismatched source', {
     ...failedRotation,
     sources: [{ id: 'other-source', fk_integration_id: 'integration-1', alias: 'Read Model' }],
@@ -448,6 +485,42 @@ const initialRetry = execute('Inspect Reader Sources', {
   sources: [],
 })[0].json;
 if (initialRetry.action !== 'create') throw new Error('failed initial creation with zero sources cannot retry');
+
+for (const fixture of [
+  {
+    name: 'reader',
+    node: 'Validate Reader Source',
+    source: {
+      id: 'source-1', base_id: 'base-1', fk_integration_id: 'integration-current', alias: 'Read Model',
+      config: { searchPath: ['read_model'] }, is_data_readonly: true, is_schema_readonly: true,
+    },
+    lookup: {
+      'Start Reader': { ...sourceContext, baseId: 'base-1' },
+      'Read Reader State': { result: { sourceId: 'source-1', integrationId: 'integration-stale' } },
+      'Discover Reader Source': { sourceId: 'source-1', selectedIntegrationId: 'integration-current' },
+    },
+  },
+  {
+    name: 'operator',
+    node: 'Validate Operator Source',
+    source: {
+      id: 'source-operator', base_id: 'base-1', fk_integration_id: 'integration-current', alias: 'Operator',
+      config: { searchPath: ['operator'] }, is_data_readonly: false, is_schema_readonly: true,
+    },
+    lookup: {
+      'Prepare Operator': { ...sourceContext, baseId: 'base-1', accessKind: 'operator' },
+      'Read Operator State': { result: { sourceId: 'source-operator', integrationId: 'integration-stale' } },
+      'Discover Operator Source': { sourceId: 'source-operator', selectedIntegrationId: 'integration-current' },
+    },
+  },
+]) {
+  const valid = execute(fixture.node, fixture.source, fixture.lookup)[0].json;
+  if (valid.integrationId !== 'integration-current') throw new Error(`${fixture.name} GET did not accept its selected current integration`);
+  let mismatchRejected = false;
+  try { execute(fixture.node, { ...fixture.source, fk_integration_id: 'integration-other' }, fixture.lookup); }
+  catch (error) { mismatchRejected = /source_identity_invalid/.test(error.message); }
+  if (!mismatchRejected) throw new Error(`${fixture.name} GET accepted an integration different from discovery`);
+}
 
 const queueContext = {
   ...sourceContext,
@@ -560,6 +633,29 @@ for marker in (
 ):
     require(marker in grant_sql, f"Acceptance grant SQL omits {marker}")
 
+postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
+require(len(postgres_nodes) == 4, "Acceptance must have exactly four fixed migrator operations.")
+cleanup_sql = "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;"
+for name in ("Clear Reader Negative Residue", "Cleanup Unexpected Reader Insert"):
+    parameters = by_name.get(name, {}).get("parameters", {})
+    require(
+        parameters.get("operation") == "executeQuery"
+        and parameters.get("query") == cleanup_sql
+        and parameters.get("options", {}).get("queryReplacement")
+        == "={{ [$json.readerProbeId, $json.readerProbeFact] }}",
+        f"{name} must use the fixed owner-authority cleanup transaction.",
+    )
+for node in postgres_nodes:
+    query = node.get("parameters", {}).get("query", "")
+    require(
+        re.findall(r"SET LOCAL ROLE ([a-z0-9_]+);", query) == ["issue334_acceptance_owner"],
+        f"{node['name']} must assume only the fixed owner role.",
+    )
+    require(
+        "{{$json" not in query and "EXECUTE " not in query.upper() and "format(" not in query.lower(),
+        f"{node['name']} accepts dynamic SQL or a dynamic role.",
+    )
+
 http_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.httpRequest"]
 require(http_nodes, "The acceptance workflow must use the NocoDB data API.")
 methods = [node.get("parameters", {}).get("method", "GET") for node in http_nodes]
@@ -651,9 +747,20 @@ require(
     and "Require Cleanup Absent" in reachable,
     "Cleanup must page within its bound and re-read to prove runId absence.",
 )
+require(
+    "Get Acceptance Reader Source" in {
+        edge["node"] for output in connections.get("Keep Acceptance Sources", {}).get("main", []) for edge in output
+    }
+    and "Get Acceptance Operator Source" in reachable
+    and "List Acceptance Tables" in {
+        edge["node"] for output in connections.get("Capture Acceptance Operator Source", {}).get("main", []) for edge in output
+    },
+    "Acceptance must read both exact source configurations before resolving reflected tables.",
+)
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
     require(label in notes, f"The acceptance setup note omits {label}.")
+require("all four Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all four Postgres nodes.")
 PY
 
 node - "$acceptance_workflow" <<'JS'
@@ -676,20 +783,67 @@ const reflection = {
   readerSourceId: 'source-reader',
   operatorSourceId: 'source-operator',
 };
+const readerSourceMetadata = execute(
+  'Capture Acceptance Reader Source',
+  { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: { searchPath: ['read_model'] } },
+  { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
+)[0].json;
+const reflectedContext = execute(
+  'Capture Acceptance Operator Source',
+  { id: 'source-operator', base_id: 'base-1', alias: 'Operator', config: { searchPath: ['operator'] } },
+  { 'Capture Acceptance Reader Source': readerSourceMetadata },
+)[0].json;
+if (reflectedContext.readerSchema !== 'read_model' || reflectedContext.operatorSchema !== 'operator') {
+  throw new Error('source GET metadata did not derive the exact reflected schemas');
+}
+for (const [label, node, source, lookup, pattern] of [
+  [
+    'public reader schema',
+    'Capture Acceptance Reader Source',
+    { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: { searchPath: ['public'] } },
+    { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
+    /acceptance_reader_source_invalid/,
+  ],
+  [
+    'missing reader schema',
+    'Capture Acceptance Reader Source',
+    { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: {} },
+    { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
+    /acceptance_reader_source_invalid/,
+  ],
+  [
+    'wrong operator schema',
+    'Capture Acceptance Operator Source',
+    { id: 'source-operator', base_id: 'base-1', alias: 'Operator', config: { searchPath: ['public'] } },
+    { 'Capture Acceptance Reader Source': readerSourceMetadata },
+    /acceptance_operator_source_invalid/,
+  ],
+]) {
+  let rejected = false;
+  try { execute(node, source, lookup); } catch (error) { rejected = pattern.test(error.message); }
+  if (!rejected) throw new Error(`${label} was accepted`);
+}
 const exactTables = [
   { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader' },
   { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator' },
 ];
-const resolved = execute('Resolve Acceptance Tables', { ...reflection, tables: exactTables })[0].json;
+const resolved = execute('Resolve Acceptance Tables', { ...reflectedContext, tables: exactTables })[0].json;
 if (
   resolved.factsTableId !== 'table-facts'
   || resolved.decisionTableId !== 'table-decisions'
   || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
 ) throw new Error('exact reflected schemas and tables were not derived');
+let untrustedSchemaRejected = false;
+try {
+  execute('Resolve Acceptance Tables', { ...reflectedContext, readerSchema: 'public', tables: exactTables });
+} catch (error) { untrustedSchemaRejected = /acceptance_reflection_invalid/.test(error.message); }
+if (!untrustedSchemaRejected) throw new Error('Resolve Acceptance Tables reported a hard-coded schema instead of validating source metadata');
 let unexpectedTableRejected = false;
 try {
   execute('Resolve Acceptance Tables', {
     ...reflection,
+    readerSchema: 'read_model',
+    operatorSchema: 'operator',
     tables: [...exactTables, { id: 'extra', title: 'other', table_name: 'other', source_id: 'source-reader' }],
   });
 } catch (error) { unexpectedTableRejected = /acceptance_reflection_invalid/.test(error.message); }

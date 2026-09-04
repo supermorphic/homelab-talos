@@ -526,7 +526,8 @@ Source sync performs this idempotent state machine:
 11. Read the discovered source through
     `GET /api/v2/meta/bases/:baseId/sources/:sourceId`. Verify its base, integration,
     alias, reflected schema, data-edit flag, and schema-edit flag before recording the
-    source ID.
+    source ID. The integration comparison uses the current integration selected during
+    the immediately preceding source discovery, not a stale pre-run registry value.
 12. List the base's reflected tables, select a table that belongs to the exact source ID,
     and perform a bounded normal data read through
     `GET /api/v2/tables/:tableId/records?limit=1`. Require the expected HTTP 200 record
@@ -682,11 +683,12 @@ run ID and cleanup never broadens beyond those rows. It proves:
    `completed`, then discovers exactly one source and reads it by ID before recording
    `ready`;
 4. reader creation completes before operator creation in the same base;
-5. the reader source reflects exactly `read_model.acceptance_facts`, with no unexpected
-   table, and its normal fact query succeeds through the NocoDB data API;
-6. the operator source reflects exactly `operator.acceptance_decision`, with no
-   unexpected table, and normal insert, read, approved-column update, and run-owned
-   delete operations succeed;
+5. source GET metadata reports only the reader `read_model` search path, the reader source
+   reflects exactly its `acceptance_facts` table with no unexpected table, and its normal
+   fact query succeeds through the NocoDB data API;
+6. source GET metadata reports only the operator `operator` search path, the operator
+   source reflects exactly its `acceptance_decision` table with no unexpected table, and
+   normal insert, read, approved-column update, and run-owned delete operations succeed;
 7. a unique run-bound reader insert fails with NocoDB's stable read-only authorization
    response, while reader DDL, role assumption, and cross-database access also fail;
 8. operator update of a protected column fails with PostgreSQL SQLSTATE `42501` exposed
@@ -703,7 +705,9 @@ run ID and cleanup never broadens beyond those rows. It proves:
     before the test reports failure.
 
 The PostgreSQL denials are the independent authority oracle. UI flags alone cannot pass
-the test.
+the test. Fixed acceptance setup, grants, and residue-cleanup SQL runs through the
+NOINHERIT migrator credential and explicitly uses the fixed
+`SET LOCAL ROLE issue334_acceptance_owner` command inside each transaction.
 
 ### Attended restore drill
 

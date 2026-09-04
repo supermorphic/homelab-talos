@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to the two Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. Keep execution persistence disabled.",
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to all four Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. Keep execution persistence disabled.",
         "height": 380,
         "width": 540
       },
@@ -283,6 +283,70 @@
     {
       "parameters": {
         "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.readerSourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000047",
+      "name": "Get Acceptance Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Keep Acceptance Sources').first().json;\nconst source = $json;\nconst searchPath = source.config?.searchPath || source.config?.search_path;\nif (!source || source.id !== context.readerSourceId || source.base_id !== context.baseId || source.alias !== 'Read Model' || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('acceptance_reader_source_invalid');\nreturn [{ json: { ...context, readerSchema: searchPath[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000048",
+      "name": "Capture Acceptance Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.operatorSourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000049",
+      "name": "Get Acceptance Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Acceptance Reader Source').first().json;\nconst source = $json;\nconst searchPath = source.config?.searchPath || source.config?.search_path;\nif (!source || source.id !== context.operatorSourceId || source.base_id !== context.baseId || source.alias !== 'Operator' || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('acceptance_operator_source_invalid');\nreturn [{ json: { ...context, operatorSchema: searchPath[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000050",
+      "name": "Capture Acceptance Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
         "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
@@ -300,7 +364,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const direct = $json.tables !== undefined ? $json : null;\nconst context = direct || $('Keep Acceptance Sources').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst expected = [\n  { title: 'acceptance_facts', tableName: 'acceptance_facts', sourceId: context.readerSourceId, schema: 'read_model' },\n  { title: 'acceptance_decision', tableName: 'acceptance_decision', sourceId: context.operatorSourceId, schema: 'operator' }\n];\nconst resolved = expected.map((item) => ({ ...item, matches: tables.filter((table) => table && table.title === item.title && table.table_name === item.tableName && table.source_id === item.sourceId) }));\nif (tables.length !== expected.length || resolved.some((item) => item.matches.length !== 1 || !item.matches[0].id)) throw new Error('acceptance_reflection_invalid');\nconst facts = resolved[0].matches[0];\nconst decisions = resolved[1].matches[0];\nreturn [{ json: {\n  ...context,\n  factsTableId: facts.id,\n  decisionTableId: decisions.id,\n  reflectedSchemas: [...new Set(resolved.map((item) => item.schema))].sort(),\n  reflectedTables: resolved.map((item) => ({ id: item.matches[0].id, title: item.title, tableName: item.tableName, sourceId: item.sourceId, schema: item.schema })).sort((left, right) => left.schema.localeCompare(right.schema)),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
+        "jsCode": "const direct = $json.tables !== undefined ? $json : null;\nconst context = direct || $('Capture Acceptance Operator Source').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nif (context.readerSchema !== 'read_model' || context.operatorSchema !== 'operator') throw new Error('acceptance_reflection_invalid');\nconst expected = [\n  { title: 'acceptance_facts', tableName: 'acceptance_facts', sourceId: context.readerSourceId, schema: context.readerSchema },\n  { title: 'acceptance_decision', tableName: 'acceptance_decision', sourceId: context.operatorSourceId, schema: context.operatorSchema }\n];\nconst resolved = expected.map((item) => ({ ...item, matches: tables.filter((table) => table && table.title === item.title && table.table_name === item.tableName && table.source_id === item.sourceId) }));\nif (tables.length !== expected.length || resolved.some((item) => item.matches.length !== 1 || !item.matches[0].id)) throw new Error('acceptance_reflection_invalid');\nconst facts = resolved[0].matches[0];\nconst decisions = resolved[1].matches[0];\nreturn [{ json: {\n  ...context,\n  factsTableId: facts.id,\n  decisionTableId: decisions.id,\n  reflectedSchemas: [...new Set(resolved.map((item) => item.schema))].sort(),\n  reflectedTables: resolved.map((item) => ({ id: item.matches[0].id, title: item.title, tableName: item.tableName, sourceId: item.sourceId, schema: item.schema })).sort((left, right) => left.schema.localeCompare(right.schema)),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -805,7 +869,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "DELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
         "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
       },
       "type": "n8n-nodes-base.postgres",
@@ -833,7 +897,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "DELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
         "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
       },
       "type": "n8n-nodes-base.postgres",
@@ -1088,6 +1152,78 @@
       ]
     },
     "Keep Acceptance Sources": {
+      "main": [
+        [
+          {
+            "node": "Get Acceptance Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Acceptance Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Capture Acceptance Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Acceptance Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Get Acceptance Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Acceptance Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Capture Acceptance Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Acceptance Operator Source": {
       "main": [
         [
           {
