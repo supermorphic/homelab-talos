@@ -21,6 +21,11 @@ cilium-render:
 cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
+# Validate the staged NocoDB source and its pinned OCI Helm render. This is local,
+# secret-free, and remains safe while the Flux Kustomization is suspended.
+nocodb-validate: require-bash
+    @scripts/validate/nocodb.sh
+
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
 n8n-validate: require-bash

@@ -344,8 +344,8 @@ postgres_ingress_contract="$(yq ea -o=json -I=0 '
   }] | sort_by(.namespace, .workload)
 ' "$temp_dir/postgresql.yaml")"
 [[ "$postgres_ingress_contract" == \
-  '[{"namespace":"automation","workload":"n8n"},{"namespace":"automation-data","workload":"automation-data-postgresql-backup"}]' ]] || \
-  fail 'PostgreSQL port 5432 ingress is not limited to n8n and the backup Job'
+  '[{"namespace":"automation","workload":"n8n"},{"namespace":"automation-data","workload":"automation-data-postgresql-backup"},{"namespace":"automation-data","workload":"nocodb"},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap"}]' ]] || \
+  fail 'PostgreSQL port 5432 ingress is not limited to approved n8n, backup, and NocoDB workloads'
 
 metrics_ingress_contract="$(yq ea -o=json -I=0 '
   select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |

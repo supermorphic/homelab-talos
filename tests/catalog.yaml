@@ -46,6 +46,7 @@ executions:
     - validation.test-harness-automation
     - validation.n8n
     - validation.automation-data
+    - validation.nocodb
     - validation.test-harness-ci-framework
   ci-core:
     - validation.repo-lint
@@ -92,6 +93,7 @@ executions:
     - validation.test-harness-automation
     - validation.n8n
     - validation.automation-data
+    - validation.nocodb
   ci-framework:
     - validation.test-harness-ci-framework
 
@@ -352,6 +354,10 @@ suites:
   - metadata: {id: validation.cilium, source: validation, framework: bash, suite: ci, tier: offline, target: cilium, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-validate", implementation: scripts/validate/cilium.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.nocodb, source: validation, framework: bash, suite: ci, tier: offline, target: nocodb, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube nocodb-validate", implementation: scripts/validate/nocodb.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.n8n, source: validation, framework: bash, suite: ci, tier: offline, target: n8n, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

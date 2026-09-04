@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nocodb-data
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+  labels:
+    app.kubernetes.io/name: nocodb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: longhorn

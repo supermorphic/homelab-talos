@@ -2,48 +2,64 @@
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: automation-data-postgresql
+  name: nocodb
 spec:
   endpointSelector:
     matchLabels:
-      app.kubernetes.io/name: automation-data-postgresql
+      app.kubernetes.io/name: nocodb
   ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: envoy-gateway-system
+            gateway.envoyproxy.io/owning-gateway-name: internal
+            gateway.envoyproxy.io/owning-gateway-namespace: networking
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
     - fromEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: automation
             app.kubernetes.io/name: n8n
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+    - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: automation-data-postgresql-backup
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: nocodb
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: nocodb-metadata-bootstrap
+            app.kubernetes.io/name: automation-data-postgresql
       toPorts:
         - ports:
             - port: "5432"
               protocol: TCP
-    - fromEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: monitoring
-            app.kubernetes.io/name: prometheus
-            operator.prometheus.io/name: kube-prometheus-stack-prometheus
-      toPorts:
-        - ports:
-            - port: "9399"
-              protocol: TCP
-  egress: []
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: automation-data-postgresql-backup
+  name: nocodb-metadata-bootstrap
 spec:
   endpointSelector:
     matchLabels:
-      app.kubernetes.io/name: automation-data-postgresql-backup
+      app.kubernetes.io/name: nocodb-metadata-bootstrap
   ingress: []
   egress:
     - toEndpoints:
