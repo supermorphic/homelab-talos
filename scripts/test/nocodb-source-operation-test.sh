@@ -56,6 +56,7 @@ rg -Fxq -- 'max-time = 720' "$config" || exit 69
 rg -Fxq -- 'silent' "$config" || exit 70
 rg -Fxq -- 'show-error' "$config" || exit 71
 rg -Fxq -- "header = \"Authorization: Bearer ${NOCODB_SOURCE_OPERATION_TOKEN}\"" "$config" || exit 72
+rg -Fxq -- 'header = "Content-Type: application/json"' "$config" || exit 75
 
 body_path="$(awk -F'"' '/^data-binary = / { value=$2; sub(/^@/, "", value); print value; exit }' "$config")"
 [[ -n "$body_path" && -f "$body_path" && "$(dirname -- "$body_path")" == "$config_dir" ]] || exit 73
@@ -225,6 +226,34 @@ assert_no_secret_output
 case_name='response with an unready source fails closed'
 unready_response='{"ok":true,"domain":"domain_one","operation":"sync","baseId":"base-1","reader":{"accessKind":"reader","state":"provisioning","sourceId":null,"integrationId":null,"generation":1,"sourceCreateJobId":"job-1"},"operator":null,"errorCode":null}'
 run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$unready_response"
+assert_status 1
+assert_contains 'response did not satisfy the source lifecycle contract'
+assert_no_secret_output
+
+case_name='response with a mismatched domain fails closed'
+mismatched_domain_response="$(jq -c '.domain = "other_domain"' <<<"$valid_sync_response")"
+run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$mismatched_domain_response"
+assert_status 1
+assert_contains 'response did not satisfy the source lifecycle contract'
+assert_no_secret_output
+
+case_name='response with a mismatched operation fails closed'
+mismatched_operation_response="$(jq -c '.operation = "rotate"' <<<"$valid_sync_response")"
+run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$mismatched_operation_response"
+assert_status 1
+assert_contains 'response did not satisfy the source lifecycle contract'
+assert_no_secret_output
+
+case_name='response with a mismatched reader access kind fails closed'
+mismatched_access_kind_response="$(jq -c '.reader.accessKind = "operator" | .operator = null' <<<"$valid_sync_response")"
+run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$mismatched_access_kind_response"
+assert_status 1
+assert_contains 'response did not satisfy the source lifecycle contract'
+assert_no_secret_output
+
+case_name='response with duplicate source access kinds fails closed'
+duplicate_access_kind_response="$(jq -c '.operator.accessKind = "reader"' <<<"$valid_sync_response")"
+run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$duplicate_access_kind_response"
 assert_status 1
 assert_contains 'response did not satisfy the source lifecycle contract'
 assert_no_secret_output

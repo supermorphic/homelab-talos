@@ -79,6 +79,7 @@ fi
 {
   printf '%s\n' 'silent' 'show-error' 'fail-with-body' 'request = "POST"' 'max-time = 720'
   printf 'header = "Authorization: Bearer %s"\n' "$source_header"
+  printf '%s\n' 'header = "Content-Type: application/json"'
   printf 'data-binary = "@%s"\n' "$request_body"
   printf 'url = "%s"\n' "$webhook_url"
 } >"$curl_config"
@@ -110,7 +111,8 @@ jq -e --arg domain "$domain" --arg operation "$operation" '
     (.integrationId | . == null or type == "string") and
     (.sourceCreateJobId | . == null or type == "string")
   )) and
-  ($sources | map(.accessKind) | unique | length == length) and
+  ($sources | map(.accessKind)) as $access_kinds |
+  (($access_kinds | unique | length) == ($access_kinds | length)) and
   (.reader.accessKind == "reader") and
   (.operator == null or .operator.accessKind == "operator")
 ' <<<"$response" >/dev/null || {
