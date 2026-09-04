@@ -28,6 +28,17 @@ if [[ -e "$secret" || "$secret_listed" == true ]]; then
     echo 'The optional NocoDB Secret and its Kustomization resource must appear together.' >&2
     exit 1
   }
+  # shellcheck disable=SC2016 # yq expression intentionally uses its own variables.
+  mapfile -t expected_recipients < <(
+    target="$secret" yq -r \
+      '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+      .sops.yaml
+  )
+  [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+    "${expected_recipients[0]}" != null ]] || {
+    echo 'Unable to select exactly one SOPS age recipient for the NocoDB credentials Secret.' >&2
+    exit 1
+  }
   [[ "$(sops filestatus "$secret" | yq -r '.encrypted')" == true ]] || {
     echo 'The NocoDB credentials manifest must be SOPS encrypted.' >&2
     exit 1
@@ -40,6 +51,12 @@ if [[ -e "$secret" || "$secret_listed" == true ]]; then
   [[ "$(yq -r '.stringData | keys | sort | join(",")' "$secret")" == \
     'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,source-provisioning-header' ]] || {
     echo 'The NocoDB credentials Secret has an unexpected key set.' >&2
+    exit 1
+  }
+  mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$secret" | sort -u)
+  [[ "${#candidate_recipients[@]}" -eq 1 && \
+    "${candidate_recipients[0]}" == "${expected_recipients[0]}" ]] || {
+    echo 'The NocoDB credentials Secret has an unexpected SOPS age recipient.' >&2
     exit 1
   }
 fi

@@ -9,12 +9,14 @@ test_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-secrets-test.XXXXXX")"
 trap 'rm -rf -- "$test_dir"' EXIT
 
 tree_root="$test_dir/tree"
+validator_root="$test_dir/validator-tree"
 stub_bin="$test_dir/bin"
 target='kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml'
 kustomization='kubernetes/apps/automation-data/nocodb/app/kustomization.yaml'
 expected_confirmation='write:automation-data:nocodb:sops'
 expected_recipient='age1syntheticrecipientfornocodb000000000000000000000000000'
 retained_connection_key='synthetic-retained-connection-key-00001'
+fake_retained_connection_key="$retained_connection_key"
 real_mktemp_bin="$(command -v mktemp)"
 writer_mktemp_log="$test_dir/writer-mktemp.log"
 age_preflight_log="$test_dir/age-preflight.log"
@@ -57,8 +59,11 @@ EOF
   cat >"$stub_bin/mktemp" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ -z "${WRITER_MKTEMP_LOG:-}" ]] || printf '%s\n' "$*" >>"$WRITER_MKTEMP_LOG"
-exec "$REAL_MKTEMP_BIN" "$@"
+created="$("$REAL_MKTEMP_BIN" "$@")"
+mode="$(stat -f '%Lp' "$created" 2>/dev/null || stat -c '%a' "$created")"
+[[ -z "${WRITER_MKTEMP_LOG:-}" ]] || \
+  printf '%s\t%s\n' "$*" "$mode" >>"$WRITER_MKTEMP_LOG"
+printf '%s\n' "$created"
 EOF
 
   cat >"$stub_bin/sops" <<'EOF'
@@ -200,6 +205,7 @@ set_all_inputs() {
   unset NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY
   unset FAKE_SOPS_FAIL FAKE_SOPS_MALFORMED FAKE_SOPS_WRONG_RECIPIENT
   unset FAKE_MV_FAIL_TARGET FAKE_MV_FAIL_MARKER FAKE_EXPECT_CONNECTION_KEY
+  fake_retained_connection_key="$retained_connection_key"
 }
 
 run_recipe() {
@@ -211,7 +217,7 @@ run_recipe() {
     "WRITER_MKTEMP_LOG=$writer_mktemp_log"
     "AGE_PREFLIGHT_LOG=$age_preflight_log"
     "FAKE_MV_LOG=$mv_log"
-    "FAKE_RETAINED_CONNECTION_KEY=$retained_connection_key"
+    "FAKE_RETAINED_CONNECTION_KEY=$fake_retained_connection_key"
     "NOCODB_METADATA_PASSWORD=${NOCODB_METADATA_PASSWORD-}"
     "NOCODB_AUTH_JWT_SECRET=${NOCODB_AUTH_JWT_SECRET-}"
     "NOCODB_CONNECTION_ENCRYPT_KEY=${NOCODB_CONNECTION_ENCRYPT_KEY-}"
@@ -242,8 +248,20 @@ run_recipe() {
 
 assert_no_plaintext() {
   local content="$1" value
-  for value in "${synthetic_values[@]}"; do
-    ! rg -Fq -- "$value" <<<"$content" || fail 'a supplied value appeared in output or ciphertext'
+  local -a values=(
+    "${synthetic_values[@]}"
+    "${NOCODB_METADATA_PASSWORD:-}"
+    "${NOCODB_AUTH_JWT_SECRET:-}"
+    "${NOCODB_CONNECTION_ENCRYPT_KEY:-}"
+    "${NOCODB_ADMIN_PASSWORD:-}"
+    "${NOCODB_SOURCE_PROVISIONING_HEADER:-}"
+    "${NOCODB_ADMIN_EMAIL:-}"
+    "${NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY:-}"
+    "$fake_retained_connection_key"
+  )
+  for value in "${values[@]}"; do
+    [[ -z "$value" ]] && continue
+    ! rg -Fq -U -- "$value" <<<"$content" || fail 'a supplied value appeared in output or ciphertext'
   done
 }
 
@@ -303,6 +321,76 @@ assert_existing_files() {
     fail 'a failed guarded write did not restore the existing Kustomization'
 }
 
+assert_absent_outputs() {
+  [[ ! -e "$tree_root/$target" ]] || fail 'a failed candidate write installed a Secret'
+  ! rg -Fq './nocodb-credentials.sops.yaml' "$tree_root/$kustomization" || \
+    fail 'a failed candidate write changed the Kustomization'
+  assert_no_plaintext "$RECIPE_OUTPUT"
+}
+
+assert_update_install() {
+  local source destination secret_moves=0 kustomization_moves=0
+  while IFS=$'\t' read -r source destination; do
+    if [[ "$destination" == "$target" ]]; then
+      [[ "$(basename -- "$source")" == candidate ]] || fail 'repeat write did not replace the Secret from its candidate'
+      secret_moves=$((secret_moves + 1))
+    elif [[ "$destination" == "$kustomization" ]]; then
+      kustomization_moves=$((kustomization_moves + 1))
+    fi
+  done <"$mv_log"
+  [[ "$secret_moves" -eq 1 && "$kustomization_moves" -eq 0 ]] || \
+    fail 'repeat write changed the NocoDB Kustomization'
+}
+
+reset_validator_tree() {
+  rm -rf -- "$validator_root"
+  mkdir -p "$validator_root/kubernetes/apps/automation-data"
+  cp -R "$repo_root/kubernetes/apps/automation-data/nocodb" \
+    "$validator_root/kubernetes/apps/automation-data/nocodb"
+  cp "$repo_root/kubernetes/apps/automation-data/kustomization.yaml" \
+    "$validator_root/kubernetes/apps/automation-data/kustomization.yaml"
+  cp "$repo_root/.sops.yaml" "$validator_root/.sops.yaml"
+  mkdir -p "$validator_root/scripts/validate"
+  cp "$repo_root/scripts/validate/nocodb.sh" "$validator_root/scripts/validate/nocodb.sh"
+}
+
+write_validator_secret() {
+  local name="$1" recipient="$2"
+  cat >"$validator_root/$target" <<YAML
+apiVersion: v1
+kind: Secret
+metadata:
+  name: $name
+  namespace: automation-data
+type: Opaque
+stringData:
+  DATABASE_URL: ENC[synthetic]
+  NC_AUTH_JWT_SECRET: ENC[synthetic]
+  NC_CONNECTION_ENCRYPT_KEY: ENC[synthetic]
+  NC_ADMIN_EMAIL: ENC[synthetic]
+  NC_ADMIN_PASSWORD: ENC[synthetic]
+  source-provisioning-header: ENC[synthetic]
+sops:
+  age:
+    - recipient: $recipient
+YAML
+  printf '%s\n' '  - ./nocodb-credentials.sops.yaml' >>"$validator_root/$kustomization"
+}
+
+run_validator() {
+  local output_file="$test_dir/validator-output"
+  set +e
+  (
+    cd "$validator_root"
+    env "PATH=$stub_bin:$PATH" "REAL_MKTEMP_BIN=$real_mktemp_bin" \
+      "FAKE_SOPS_FAIL=${FAKE_SOPS_FAIL:-}" \
+      scripts/validate/nocodb.sh
+  ) >"$output_file" 2>&1
+  VALIDATOR_EXIT_CODE="$?"
+  set -e
+  VALIDATOR_OUTPUT="$(<"$output_file")"
+}
+
 write_stubs
 
 # RED: the complete public recipe interface must exist before its behavior is exercised.
@@ -320,6 +408,16 @@ assert_atomic_install
 [[ -s "$age_preflight_log" ]] || fail 'successful write skipped age preflight'
 rg -Fq "$(dirname -- "$target")/.nocodb-secrets." "$writer_mktemp_log" || \
   fail 'candidate staging did not use the target filesystem'
+awk -F '\t' '$2 != "700" {exit 1}' "$writer_mktemp_log" || \
+  fail 'writer temporary directories are not mode 0700'
+
+: >"$mv_log"
+NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY="$retained_connection_key"
+FAKE_EXPECT_CONNECTION_KEY="$retained_connection_key"
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -eq 0 ]] || fail 'repeat synthetic input was rejected'
+assert_target_contract
+assert_update_install
 
 for missing_variable in "${secret_variables[@]}"; do
   reset_tree
@@ -374,6 +472,41 @@ for recovery_key in '' 'synthetic-wrong-recovery-connection-key'; do
   assert_existing_files
 done
 
+reset_tree
+seed_existing_target
+set_all_inputs
+fake_retained_connection_key='too-short'
+NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY="$fake_retained_connection_key"
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -ne 0 ]] || fail 'short retained effective connection key was accepted'
+rg -Fq 'retained NC_CONNECTION_ENCRYPT_KEY must be at least 32 characters' <<<"$RECIPE_OUTPUT" || \
+  fail 'short retained effective connection key did not report its refusal'
+assert_no_plaintext "$RECIPE_OUTPUT"
+assert_existing_files
+
+for failure_mode in encrypt filestatus malformed wrong-recipient; do
+  reset_tree
+  set_all_inputs
+  case "$failure_mode" in
+    encrypt|filestatus) FAKE_SOPS_FAIL="$failure_mode" ;;
+    malformed) FAKE_SOPS_MALFORMED=true ;;
+    wrong-recipient) FAKE_SOPS_WRONG_RECIPIENT=true ;;
+  esac
+  run_recipe
+  [[ "$RECIPE_EXIT_CODE" -ne 0 ]] || fail "$failure_mode candidate failure unexpectedly succeeded"
+  assert_absent_outputs
+done
+
+reset_tree
+seed_existing_target
+set_all_inputs
+NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY="$retained_connection_key"
+FAKE_SOPS_FAIL=decrypt
+run_recipe
+[[ "$RECIPE_EXIT_CODE" -ne 0 ]] || fail 'decrypt failure unexpectedly succeeded'
+assert_existing_files
+assert_no_plaintext "$RECIPE_OUTPUT"
+
 for failed_target in "$target" "$kustomization"; do
   reset_tree
   set_all_inputs
@@ -386,5 +519,17 @@ for failed_target in "$target" "$kustomization"; do
     fail 'rollback did not restore the original Kustomization'
   assert_no_plaintext "$RECIPE_OUTPUT"
 done
+
+reset_validator_tree
+write_validator_secret wrong-secret "$expected_recipient"
+run_validator
+[[ "$VALIDATOR_EXIT_CODE" -ne 0 ]] || fail 'validator accepted a malformed NocoDB Secret'
+rg -Fq 'unexpected identity' <<<"$VALIDATOR_OUTPUT" || fail 'validator did not reject malformed Secret identity'
+
+reset_validator_tree
+write_validator_secret nocodb-credentials age1wrongsyntheticrecipient00000000000000000000000000000000
+run_validator
+[[ "$VALIDATOR_EXIT_CODE" -ne 0 ]] || fail 'validator accepted a mismatched NocoDB recipient'
+rg -Fq 'unexpected SOPS age recipient' <<<"$VALIDATOR_OUTPUT" || fail 'validator did not reject mismatched recipient'
 
 echo 'NocoDB guarded Secret writer tests passed.'

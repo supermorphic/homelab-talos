@@ -456,6 +456,10 @@ nocodb-secrets:
         echo 'Refusing to replace the retained NC_CONNECTION_ENCRYPT_KEY.' >&2
         exit 1
       }
+      [[ "${#retained_connection_key}" -ge 32 ]] || {
+        echo 'Refusing: retained NC_CONNECTION_ENCRYPT_KEY must be at least 32 characters.' >&2
+        exit 1
+      }
       connection_key="$retained_connection_key"
     fi
 
