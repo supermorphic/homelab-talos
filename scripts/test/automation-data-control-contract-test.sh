@@ -149,7 +149,7 @@ rg -Fq 'CREATE TABLE platform_operations.managed_nocodb_sources' "$control_sql" 
   fail 'NocoDB source registry is missing'
 ! rg -Fq 'managed_nocodb_domains' "$control_sql" ||
   fail 'removed NocoDB domain registry remains present'
-expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
+expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
 [[ "$(printf '%s\n' "${declared_functions[@]}")" == "$expected_functions" ]] || \
   fail 'platform control SQL exposes an unexpected function set'
 for state in awaiting_grants provisioning waiting_for_source ready rotating error; do
@@ -160,7 +160,7 @@ for schema in read_model operator; do
 done
 
 nocodb_functions=(
-  provision_nocodb_metadata prepare_nocodb_access begin_nocodb_source
+  provision_nocodb_metadata prepare_nocodb_access read_nocodb_source_state begin_nocodb_source
   record_nocodb_integration record_nocodb_source_job record_nocodb_source_ready
   record_nocodb_source_error rotate_nocodb_source_credential validate_nocodb_access
 )
@@ -185,7 +185,7 @@ for function_name in begin_nocodb_source rotate_nocodb_source_credential; do
   rg -Fq 'length(p_password) < 32' <<<"$function_body" ||
     fail "NocoDB function $function_name does not require a 32-character password"
 done
-for function_name in prepare_nocodb_access begin_nocodb_source record_nocodb_integration \
+for function_name in prepare_nocodb_access read_nocodb_source_state begin_nocodb_source record_nocodb_integration \
   record_nocodb_source_job record_nocodb_source_ready record_nocodb_source_error \
   rotate_nocodb_source_credential validate_nocodb_access; do
   function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
@@ -215,6 +215,40 @@ rg -Fq 'GRANT SELECT ON platform_operations.managed_domains,' "$control_sql" ||
   fail 'backup and exporter grant boundary is missing'
 ! rg -q 'GRANT SELECT ON platform_operations\.managed_nocodb_sources TO automation_data_(backup|exporter)' \
   "$control_sql" || fail 'backup and exporter must not read NocoDB source IDs'
+! rg -Uq 'GRANT SELECT ON[^;]*platform_operations\.managed_nocodb_sources[^;]*TO automation_data_provisioner;' \
+  "$control_sql" || fail 'provisioner must not receive direct NocoDB source registry SELECT'
+provisioner_select_grants="$(rg -U 'GRANT SELECT ON[^;]*TO automation_data_provisioner;' "$control_sql")"
+[[ "$provisioner_select_grants" == 'GRANT SELECT ON platform_operations.managed_domains TO automation_data_provisioner;' ]] ||
+  fail 'provisioner receives unexpected direct table SELECT privileges'
+
+read_nocodb_source_state_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(/,/^\$function\$;/p' "$control_sql")"
+[[ -n "$read_nocodb_source_state_function" ]] || fail 'NocoDB source-state reader is missing'
+rg -Fq 'p_domain text' <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader lacks the domain parameter'
+rg -Fq 'p_access_kind text' <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader lacks the access-kind parameter'
+rg -Fq 'platform_internal.assert_domain(p_domain)' <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader does not validate the managed domain'
+rg -Fq 'platform_internal.assert_nocodb_access_kind(p_access_kind)' <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader does not validate the access kind'
+rg -Fq "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);" \
+  <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader does not return the fixed registry result or JSON null'
+! rg -q 'EXECUTE[[:space:]]+.*p_|format[[:space:]]*\(' <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader permits dynamic request SQL'
+source_result_builder="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(/,/^\$function\$;/p' "$control_sql")"
+for json_field in domain accessKind role baseId integrationId sourceCreateJobId sourceId \
+  state generation credentialGeneration operationStartedAt validatedAt updatedAt errorCode; do
+  rg -Fq "'$json_field'" <<<"$source_result_builder" ||
+    fail "NocoDB source-state reader result omits $json_field"
+done
+! rg -qi 'password|token|header|config' <<<"$source_result_builder" ||
+  fail 'NocoDB source-state reader result exposes secret material'
+rg -Fq 'REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) FROM PUBLIC;' \
+  "$control_sql" || fail 'NocoDB source-state reader does not revoke PUBLIC execute'
+read_source_state_grants="$(rg -F 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text)' "$control_sql")"
+[[ "$read_source_state_grants" == 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;' ]] ||
+  fail 'NocoDB source-state reader execute grant is not provisioner-exclusive'
 
 begin_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p' "$control_sql")"
 rg -Fq 'prepared := platform_operations.prepare_nocodb_access(p_domain);' <<<"$begin_nocodb_source_function" ||

@@ -842,6 +842,23 @@ AS $function$
   WHERE source.domain = p_domain AND source.access_kind = p_access_kind;
 $function$;
 
+CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(
+  p_domain text,
+  p_access_kind text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION platform_operations.provision_nocodb_metadata(
   p_metadata_password text
 )
@@ -1506,6 +1523,8 @@ GRANT EXECUTE ON FUNCTION platform_operations.record_operation_error(text, text)
 GRANT EXECUTE ON FUNCTION platform_operations.validate_domain(text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.provision_nocodb_metadata(text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.prepare_nocodb_access(text) TO automation_data_provisioner;
+REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.begin_nocodb_source(text, text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_integration(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_job(text, text, text) TO automation_data_provisioner;
