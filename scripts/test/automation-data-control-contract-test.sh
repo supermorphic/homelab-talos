@@ -203,11 +203,65 @@ done
 for function_name in "${nocodb_functions[@]}"; do
   rg -Fq "GRANT EXECUTE ON FUNCTION platform_operations.$function_name" "$control_sql" ||
     fail "provisioner execution grant for $function_name is missing"
+  grant_lines="$(rg -F "GRANT EXECUTE ON FUNCTION platform_operations.$function_name" "$control_sql")"
+  [[ "$grant_lines" == *" TO automation_data_provisioner;"* ]] ||
+    fail "NocoDB function $function_name lacks the exact provisioner grant"
+  while IFS= read -r grant_line; do
+    [[ "$grant_line" == *' TO automation_data_provisioner;' ]] ||
+      fail "NocoDB function $function_name is executable by a non-provisioner role"
+  done <<<"$grant_lines"
 done
 rg -Fq 'GRANT SELECT ON platform_operations.managed_domains,' "$control_sql" ||
   fail 'backup and exporter grant boundary is missing'
 ! rg -q 'GRANT SELECT ON platform_operations\.managed_nocodb_sources TO automation_data_(backup|exporter)' \
   "$control_sql" || fail 'backup and exporter must not read NocoDB source IDs'
+
+begin_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'prepared := platform_operations.prepare_nocodb_access(p_domain);' <<<"$begin_nocodb_source_function" ||
+  fail 'NocoDB source begin does not inspect prepared eligibility'
+rg -Fq "prepared->>'operatorEligible'" <<<"$begin_nocodb_source_function" ||
+  fail 'NocoDB source begin does not reject an ineligible operator before login'
+! rg -Fq 'validate_nocodb_access(p_domain, p_access_kind)' <<<"$begin_nocodb_source_function" ||
+  fail 'NocoDB source begin validates only after changing the remote login'
+result_line="$(rg -n 'result := platform_internal.nocodb_source_result' <<<"$begin_nocodb_source_function" | cut -d: -f1)"
+login_line="$(rg -n "ALTER ROLE %I LOGIN" <<<"$begin_nocodb_source_function" | cut -d: -f1)"
+[[ -n "$result_line" && -n "$login_line" && "$result_line" -lt "$login_line" ]] ||
+  fail 'NocoDB source begin can fail locally after enabling the remote login'
+
+prepare_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.prepare_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'IF operator_requested AND NOT operator_eligible THEN' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB prepare does not branch for an operator awaiting reviewed grants'
+rg -Fq "'awaiting_grants'" <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB prepare does not persist the awaiting-grants transition'
+rg -Fq 'INSERT INTO platform_operations.managed_nocodb_sources' <<<"$prepare_nocodb_access_function" ||
+  fail 'NocoDB prepare does not create the awaiting-grants source row'
+
+for transition_contract in \
+  'begin_nocodb_source:source.state NOT IN' \
+  "record_nocodb_integration:source.state <> 'provisioning'" \
+  "record_nocodb_source_job:source.state = 'waiting_for_source'" \
+  'record_nocodb_source_ready:source.state NOT IN' \
+  "rotate_nocodb_source_credential:source.state <> 'ready'"; do
+  function_name="${transition_contract%%:*}"
+  expected_guard="${transition_contract#*:}"
+  function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
+  rg -Fq "$expected_guard" <<<"$function_body" ||
+    fail "NocoDB function $function_name lacks its strict transition guard"
+done
+
+validate_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'FROM pg_database AS database' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB access validation does not inspect every catalog database'
+rg -Fq 'database.datallowconn AND NOT database.datistemplate' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB access validation does not include every connectable database'
+rg -Fq 'relation_attribute.attacl' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB access validation ignores column-level operator grants'
+rg -Fq 'pg_default_acl' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB access validation does not inspect default privileges'
+! rg -Fq 'object_privileges_valid := true;' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB operator object privilege validation is hard-coded'
+! rg -Fq 'ELSE true' <<<"$validate_nocodb_access_function" ||
+  fail 'NocoDB operator default privilege validation is hard-coded'
 
 rg -Fq "^[a-z][a-z0-9_]{0,47}$" "$control_sql" || \
   fail 'platform control SQL does not enforce the domain identifier boundary'
