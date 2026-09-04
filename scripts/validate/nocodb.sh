@@ -25,8 +25,20 @@ rg -qx '  - ./nocodb/ks.yaml' kubernetes/apps/automation-data/kustomization.yaml
 }
 
 kustomize build "$app" >"$temp_dir/source.yaml"
-helm template nocodb oci://ghcr.io/nocodb/charts/nocodb \
-  --version 1.0.0 \
+chart_url="$(yq -r '.spec.url' "$app/ocirepository.yaml")"
+chart_digest="$(yq -r '.spec.ref.digest' "$app/ocirepository.yaml")"
+chart_pull_output="$(helm pull "${chart_url}@${chart_digest}" \
+  --destination "$temp_dir" \
+  --untar)"
+rg -Fq "Digest: ${chart_digest}" <<<"$chart_pull_output" || {
+  echo 'The downloaded NocoDB chart does not match the pinned OCI digest.' >&2
+  exit 1
+}
+[[ "$(yq -r '.version' "$temp_dir/nocodb/Chart.yaml")" == '1.0.0' ]] || {
+  echo 'The downloaded NocoDB chart is not version 1.0.0.' >&2
+  exit 1
+}
+helm template nocodb "$temp_dir/nocodb" \
   --namespace automation-data \
   --values "$app/values.yaml" >"$temp_dir/helm.yaml"
 

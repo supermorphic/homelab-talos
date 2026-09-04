@@ -3,6 +3,9 @@ replicaCount: 1
 
 updateStrategy:
   type: Recreate
+  # Helm otherwise merges the chart's default RollingUpdate fields into this strategy,
+  # which Kubernetes rejects for a Recreate Deployment.
+  rollingUpdate: null
 
 worker:
   enabled: false

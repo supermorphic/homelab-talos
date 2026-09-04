@@ -17,6 +17,8 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
   fail 'NocoDB must render exactly one replica'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.strategy.type' "$helm_render")" == 'Recreate' ]] ||
   fail 'the RWO NocoDB Deployment must use Recreate'
+[[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | (.spec.strategy | has("rollingUpdate"))' "$helm_render")" == 'false' ]] ||
+  fail 'the Recreate NocoDB Deployment must not retain a rollingUpdate strategy'
 ! yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$helm_render" | rg -q 'worker' ||
   fail 'a NocoDB worker Deployment must not render'
 ! rg -q 'NC_REDIS_URL|redis' "$helm_render" || fail 'Redis configuration must not render'
@@ -27,8 +29,14 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
   fail 'the rendered NocoDB Service must expose only ClusterIP TCP/8080'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.volumes[] | select(.persistentVolumeClaim.claimName == "nocodb-data") | .persistentVolumeClaim.claimName' "$helm_render")" == 'nocodb-data' ]] ||
   fail 'the NocoDB Deployment must mount only the existing nocodb-data claim'
-! yq ea -r 'select(.kind == "ServiceMonitor") | .metadata.name' "$source_render" | rg -q . ||
-  fail 'NocoDB must not create a ServiceMonitor'
+[[ "$(yq ea -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.volumes' "$helm_render")" == \
+  '[{"name":"data","persistentVolumeClaim":{"claimName":"nocodb-data"}}]' ]] ||
+  fail 'the NocoDB Deployment must have only the expected persistent volume'
+[[ "$(yq ea -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "nocodb") | [.spec.template.spec.containers[] | {"name": .name, "volumeMounts": (.volumeMounts // [])}]' "$helm_render")" == \
+  '[{"name":"nocodb","volumeMounts":[{"name":"data","mountPath":"/usr/app/data"}]}]' ]] ||
+  fail 'the NocoDB Deployment must have only the expected attachment volume mount'
+! yq ea -r 'select(.kind == "ServiceMonitor") | .metadata.name' "$source_render" "$helm_render" | rg -q . ||
+  fail 'NocoDB must not render a ServiceMonitor'
 ! rg -q 'NC_INVITE_ONLY_SIGNUP|career' "$source_render" "$helm_render" ||
   fail 'unsupported signup configuration or a career artifact is present'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.metadata.labels."app.kubernetes.io/name"' "$helm_render")" == 'nocodb' ]] ||
@@ -57,14 +65,45 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
   fail 'the metadata bootstrap policy must allow only DNS and PostgreSQL'
 [[ "$(yq ea -r 'select(.kind == "CiliumNetworkPolicy" and .metadata.name == "nocodb") | [.spec.egress[].toEndpoints[].matchLabels | (."k8s:k8s-app" // ."app.kubernetes.io/name")] | join(",")' "$source_render")" == 'kube-dns,automation-data-postgresql' ]] ||
   fail 'the NocoDB policy must target only cluster DNS and automation-data PostgreSQL'
+nocodb_policy_contract="$(yq ea -o=json -I=0 '
+  select(.kind == "CiliumNetworkPolicy" and .metadata.name == "nocodb") |
+  {
+    "ingress": ([.spec.ingress[] | {
+      "fromEndpoints": ([.fromEndpoints[]?.matchLabels |
+        to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | sort),
+      "fromEntities": ((.fromEntities // []) | sort),
+      "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+    }] | sort_by((.fromEndpoints + .fromEntities + .toPorts) | join("|"))),
+    "egress": ([.spec.egress[] | {
+      "toEndpoints": ([.toEndpoints[]?.matchLabels |
+        to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | sort),
+      "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+    }] | sort_by((.toEndpoints + .toPorts) | join("|")))
+  }
+' "$source_render")"
+[[ "$nocodb_policy_contract" == \
+  '{"ingress":[{"fromEndpoints":["app.kubernetes.io/name=n8n,k8s:io.kubernetes.pod.namespace=automation"],"fromEntities":[],"toPorts":["8080/TCP"]},{"fromEndpoints":["gateway.envoyproxy.io/owning-gateway-name=internal,gateway.envoyproxy.io/owning-gateway-namespace=networking,k8s:io.kubernetes.pod.namespace=envoy-gateway-system"],"fromEntities":[],"toPorts":["8080/TCP"]},{"fromEndpoints":[],"fromEntities":["host","remote-node"],"toPorts":["8080/TCP"]}],"egress":[{"toEndpoints":["app.kubernetes.io/name=automation-data-postgresql,k8s:io.kubernetes.pod.namespace=automation-data"],"toPorts":["5432/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toPorts":["53/TCP","53/UDP"]}]}' ]] ||
+  fail 'the NocoDB policy tuples must bind protocols, namespaces, and the internal Gateway'
+bootstrap_policy_contract="$(yq ea -o=json -I=0 '
+  select(.kind == "CiliumNetworkPolicy" and .metadata.name == "nocodb-metadata-bootstrap") |
+  {"ingress": .spec.ingress, "egress": ([.spec.egress[] | {
+    "toEndpoints": ([.toEndpoints[]?.matchLabels |
+      to_entries | sort_by(.key) | map(.key + "=" + .value) | join(",")] | sort),
+    "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+  }] | sort_by((.toEndpoints + .toPorts) | join("|")))}
+' "$source_render")"
+[[ "$bootstrap_policy_contract" == \
+  '{"ingress":[],"egress":[{"toEndpoints":["app.kubernetes.io/name=automation-data-postgresql,k8s:io.kubernetes.pod.namespace=automation-data"],"toPorts":["5432/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toPorts":["53/TCP","53/UDP"]}]}' ]] ||
+  fail 'the metadata bootstrap policy must bind only DNS and PostgreSQL destinations'
 
 [[ "$(yq ea -r 'select(.kind == "Job" and .metadata.name == "nocodb-metadata-bootstrap") | .spec.template.spec.automountServiceAccountToken' "$source_render")" == 'false' ]] ||
   fail 'the metadata bootstrap Job must not mount a service-account token'
 [[ "$(yq ea -r 'select(.kind == "Job" and .metadata.name == "nocodb-metadata-bootstrap") | .spec.template.spec.containers[0].image' "$source_render")" == 'postgres:17.11-alpine3.24' ]] ||
   fail 'the metadata bootstrap Job image is incorrect'
 job_command="$(yq ea -r 'select(.kind == "Job" and .metadata.name == "nocodb-metadata-bootstrap") | .spec.template.spec.containers[0].args[]' "$source_render")"
-[[ "$job_command" == *"SELECT platform_operations.provision_nocodb_metadata(:'metadata_password');"* ]] ||
-  fail 'the metadata bootstrap Job query is not fixed'
+expected_job_command=$'psql --no-psqlrc --set=ON_ERROR_STOP=1 <<\'SQL\'\n\\set metadata_password `printenv NOCODB_METADATA_PASSWORD`\nSELECT platform_operations.provision_nocodb_metadata(:\'metadata_password\');\nSQL'
+[[ "$job_command" == "$expected_job_command" ]] ||
+  fail 'the metadata bootstrap Job must execute only the fixed metadata query'
 ! rg -q 'provision_nocodb_metadata[^(:]|CREATE .*SHARE|public share' "$source_render" ||
   fail 'the package contains an unsupported metadata query or public-share creation'
 [[ "$(yq ea -r 'select(.kind == "Job" and .metadata.name == "nocodb-metadata-bootstrap") | [.spec.template.spec.volumes[].name] | join(",")' "$source_render")" == 'tmp' ]] ||
@@ -79,6 +118,8 @@ job_command="$(yq ea -r 'select(.kind == "Job" and .metadata.name == "nocodb-met
 values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
 [[ "$(yq -r '[.replicaCount, .updateStrategy.type, .worker.enabled, .autoscaling.enabled] | join(",")' "$values")" == '1,Recreate,false,false' ]] ||
   fail 'the NocoDB one-pod Recreate values are incorrect'
+[[ "$(yq -r '.updateStrategy | has("rollingUpdate") and .rollingUpdate == null' "$values")" == 'true' ]] ||
+  fail 'the NocoDB Recreate values must explicitly clear rollingUpdate'
 [[ "$(yq -r '[.image.registry, .image.repository, .image.tag, .image.digest] | join(",")' "$values")" == 'docker.io,nocodb/nocodb,2026.08.2,sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
   fail 'the NocoDB image value pin is incorrect'
 [[ "$(yq -r '[.externalDatabase.existingSecret, .externalDatabase.existingSecretUrlKey, .auth.existingSecret, .persistence.existingClaim, .service.type, .service.port, .nocodb.publicUrl] | join(",")' "$values")" == 'nocodb-credentials,DATABASE_URL,nocodb-credentials,nocodb-data,ClusterIP,8080,https://nocodb.lab.supermorphic.com' ]] ||
