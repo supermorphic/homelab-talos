@@ -347,6 +347,37 @@ postgres_ingress_contract="$(yq ea -o=json -I=0 '
   '[{"namespace":"automation","workload":"n8n"},{"namespace":"automation-data","workload":"automation-data-postgresql-backup"},{"namespace":"automation-data","workload":"nocodb"},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap"}]' ]] || \
   fail 'PostgreSQL port 5432 ingress is not limited to approved n8n, backup, and NocoDB workloads'
 
+postgres_nocodb_ingress_tuples="$(yq ea -o=json -I=0 '
+  select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |
+  {
+    "nocodb": [
+      .spec.ingress[] |
+      select([.fromEndpoints[].matchLabels |
+        select(."k8s:io.kubernetes.pod.namespace" == "automation-data" and
+          ."app.kubernetes.io/name" == "nocodb")] | length == 1) |
+      {
+        "namespace": "automation-data",
+        "workload": "nocodb",
+        "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+      }
+    ],
+    "metadataBootstrap": [
+      .spec.ingress[] |
+      select([.fromEndpoints[].matchLabels |
+        select(."k8s:io.kubernetes.pod.namespace" == "automation-data" and
+          ."app.kubernetes.io/name" == "nocodb-metadata-bootstrap")] | length == 1) |
+      {
+        "namespace": "automation-data",
+        "workload": "nocodb-metadata-bootstrap",
+        "toPorts": ([.toPorts[]?.ports[] | .port + "/" + .protocol] | sort)
+      }
+    ]
+  }
+' "$temp_dir/postgresql.yaml")"
+[[ "$postgres_nocodb_ingress_tuples" == \
+  '{"nocodb":[{"namespace":"automation-data","workload":"nocodb","toPorts":["5432/TCP"]}],"metadataBootstrap":[{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap","toPorts":["5432/TCP"]}]}' ]] || \
+  fail 'NocoDB PostgreSQL ingress must bind each approved source to only TCP/5432'
+
 metrics_ingress_contract="$(yq ea -o=json -I=0 '
   select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |
   .spec.ingress[] | select(.toPorts[0].ports[0].port == "9399") |
