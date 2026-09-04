@@ -231,6 +231,25 @@ rg -Fq 'platform_internal.assert_domain(p_domain)' <<<"$read_nocodb_source_state
   fail 'NocoDB source-state reader does not validate the managed domain'
 rg -Fq 'platform_internal.assert_nocodb_access_kind(p_access_kind)' <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader does not validate the access kind'
+access_kind_assertion_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_access_kind(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq "p_access_kind IS NULL OR p_access_kind NOT IN ('reader', 'operator')" \
+  <<<"$access_kind_assertion_function" ||
+  fail 'NocoDB access-kind validation does not explicitly reject NULL'
+rg -Fq "RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_access_kind';" \
+  <<<"$access_kind_assertion_function" ||
+  fail 'NocoDB access-kind validation does not reject invalid values with its fixed error'
+rg -Fq 'PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;' \
+  <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader does not prove the managed domain exists'
+rg -Fq "RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';" \
+  <<<"$read_nocodb_source_state_function" ||
+  fail 'NocoDB source-state reader does not reject an unknown managed domain'
+managed_domain_line="$(rg -n -F 'PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;' \
+  <<<"$read_nocodb_source_state_function" | cut -d: -f1)"
+null_result_line="$(rg -n -F "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);" \
+  <<<"$read_nocodb_source_state_function" | cut -d: -f1)"
+[[ -n "$managed_domain_line" && -n "$null_result_line" && "$managed_domain_line" -lt "$null_result_line" ]] ||
+  fail 'NocoDB source-state reader can return JSON null before proving the managed domain'
 rg -Fq "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);" \
   <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader does not return the fixed registry result or JSON null'

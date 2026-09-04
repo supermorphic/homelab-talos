@@ -89,7 +89,7 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, platform_operations
 AS $function$
 BEGIN
-  IF p_access_kind NOT IN ('reader', 'operator') THEN
+  IF p_access_kind IS NULL OR p_access_kind NOT IN ('reader', 'operator') THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_access_kind';
   END IF;
 END;
@@ -855,6 +855,10 @@ BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
   PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';
+  END IF;
   RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);
 END;
 $function$;
