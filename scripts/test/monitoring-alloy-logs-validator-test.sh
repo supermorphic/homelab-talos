@@ -137,6 +137,28 @@ set -e
 }
 [[ "$unsupported_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
 
+set +e
+empty_output="$(cd "$tree_root" && "$validator" '' 2>&1)"
+empty_status="$?"
+set -e
+[[ "$empty_status" -eq 2 ]] || {
+	echo "empty scope: expected exit 2, got $empty_status." >&2
+	echo "$empty_output" >&2
+	exit 1
+}
+[[ "$empty_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
+
+set +e
+extra_output="$(cd "$tree_root" && "$validator" alloy-logs extra 2>&1)"
+extra_status="$?"
+set -e
+[[ "$extra_status" -eq 2 ]] || {
+	echo "extra argument: expected exit 2, got $extra_status." >&2
+	echo "$extra_output" >&2
+	exit 1
+}
+[[ "$extra_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
+
 reset_tree
 expect_pass 'production monitoring source'
 

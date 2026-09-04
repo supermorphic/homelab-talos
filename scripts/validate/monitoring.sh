@@ -5,7 +5,7 @@ if [[ "$#" -gt 1 ]]; then
 	echo 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' >&2
 	exit 2
 fi
-scope="${1:-all}"
+scope="${1-all}"
 case "$scope" in
 all | loki | alloy-logs | alloy-events) ;;
 *)
