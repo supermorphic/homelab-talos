@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# Attended, catalog-coordinated NocoDB access acceptance.
+set -euo pipefail
+
+source scripts/lib/common.sh
+# shellcheck source=scripts/lib/lease.sh
+source scripts/lib/lease.sh
+# shellcheck source=scripts/lib/rollout.sh
+source scripts/lib/rollout.sh
+require_bash
+
+[[ "$#" -eq 1 ]] || {
+  echo 'Usage: nocodb-access.sh <kubeconfig>' >&2
+  exit 2
+}
+
+expected_confirmation='test:nocodb:access'
+[[ "${NOCODB_ACCESS_TEST_CONFIRM:-}" == "$expected_confirmation" ]] || {
+  echo "Refusing NocoDB access acceptance: set NOCODB_ACCESS_TEST_CONFIRM=$expected_confirmation." >&2
+  exit 1
+}
+
+kubeconfig="$1"
+run_dir="${HOMELAB_TEST_RUN_DIR:-}"
+[[ -f "$kubeconfig" ]] || {
+  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  exit 1
+}
+[[ -n "$run_dir" && -d "$run_dir" ]] || {
+  echo 'Refusing NocoDB access acceptance outside the catalog run coordinator.' >&2
+  exit 1
+}
+
+run_id="$(basename "$run_dir")"
+[[ "$run_id" =~ ^[A-Za-z0-9_.:-]+$ ]] || {
+  echo 'The catalog coordinator supplied an unsafe run ID.' >&2
+  exit 1
+}
+lease_holder="${TEST_CAMPAIGN_LEASE_HOLDER:-$run_id}"
+
+provisioning_url="${AUTOMATION_DATA_PROVISIONING_URL:-}"
+source_url="${NOCODB_SOURCE_PROVISIONING_URL:-}"
+acceptance_url="${NOCODB_ACCEPTANCE_URL:-}"
+provisioning_token="${AUTOMATION_DATA_PROVISIONING_TOKEN:-}"
+source_token="${NOCODB_SOURCE_PROVISIONING_TOKEN:-}"
+acceptance_token="${NOCODB_ACCEPTANCE_TOKEN:-}"
+
+[[ "$provisioning_url" == 'https://n8n.lab.supermorphic.com/webhook/automation-data-provision' ]] || {
+  echo 'AUTOMATION_DATA_PROVISIONING_URL must be the exact private provisioning webhook URL.' >&2
+  exit 1
+}
+[[ "$source_url" == 'https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source' ]] || {
+  echo 'NOCODB_SOURCE_PROVISIONING_URL must be the exact private source webhook URL.' >&2
+  exit 1
+}
+[[ "$acceptance_url" == 'https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain' ]] || {
+  echo 'NOCODB_ACCEPTANCE_URL must be the exact private acceptance webhook URL.' >&2
+  exit 1
+}
+for token_name in provisioning_token source_token acceptance_token; do
+  token_value="${!token_name}"
+  [[ "$token_value" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    echo 'Every NocoDB acceptance webhook token must contain at least 32 URL-safe characters.' >&2
+    exit 1
+  }
+done
+
+require_deployed_source 'NocoDB access acceptance' \
+  scripts/test/scenarios/nocodb-access.sh \
+  kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json \
+  kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json \
+  kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json
+
+umask 077
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-access.XXXXXX")"
+chmod 700 "$temp_dir"
+
+write_phase() {
+  local phase="$1" status="$2" reason="$3"
+  PHASE_STATUS="$status" PHASE_REASON="$reason" \
+    yq --null-input --output-format json '{
+      "status": strenv(PHASE_STATUS),
+      "reason": strenv(PHASE_REASON)
+    }' >"$run_dir/$phase.json"
+}
+
+write_phase assertion not-classified 'the fixed NocoDB access contract has not completed'
+write_phase cleanup not-classified 'current-run acceptance rows have not been removed'
+write_phase recovery not-required 'the access scenario does not disrupt or replace a workload'
+
+verify_lease() {
+  verify_test_lease_holder "$kubeconfig" "$lease_holder" || {
+    echo 'The shared state-changing test Lease is absent, expired, or owned by another run.' >&2
+    return 1
+  }
+}
+
+http_request() { # <label> <url> <token-kind|none> <body> <response> <expected-status>
+  local label="$1" url="$2" token_kind="$3" body="$4" response="$5" expected_status="$6"
+  local config="$temp_dir/${label}.curl" status curl_status
+  {
+    printf '%s\n' 'silent' 'show-error' 'request = "POST"' 'max-time = 720' \
+      'header = "Content-Type: application/json"'
+    case "$token_kind" in
+      provisioning)
+        printf 'header = "X-Automation-Data-Provisioning: %s"\n' "$provisioning_token"
+        ;;
+      source)
+        printf 'header = "Authorization: Bearer %s"\n' "$source_token"
+        ;;
+      acceptance)
+        printf 'header = "Authorization: Bearer %s"\n' "$acceptance_token"
+        ;;
+      none) ;;
+      *) return 2 ;;
+    esac
+    printf 'data-binary = "@%s"\n' "$body"
+    printf 'url = "%s"\n' "$url"
+    printf 'output = "%s"\n' "$response"
+    printf '%s\n' 'write-out = "%{http_code}"'
+  } >"$config"
+  chmod 600 "$config" "$body"
+
+  set +e
+  status="$(curl --config "$config")"
+  curl_status=$?
+  set -e
+  [[ "$curl_status" -eq 0 ]] || {
+    echo "$label request failed before returning an HTTP status." >&2
+    return "$curl_status"
+  }
+  [[ " $expected_status " == *" $status "* ]] || {
+    echo "$label returned HTTP ${status:-unknown}; expected one of: $expected_status." >&2
+    return 1
+  }
+  [[ -f "$response" && "$(wc -c <"$response")" -le 65536 ]] || {
+    echo "$label response is absent or exceeds 64 KiB." >&2
+    return 1
+  }
+}
+
+acceptance_request() { # <operation> <response>
+  local operation="$1" response="$2" body
+  body="$temp_dir/acceptance-${operation}.json"
+  verify_lease
+  jq -n --arg operation "$operation" --arg run_id "$run_id" \
+    '{operation: $operation, runId: $run_id}' >"$body"
+  http_request "acceptance-${operation}" "$acceptance_url" acceptance \
+    "$body" "$response" 200
+}
+
+cleanup() {
+  local original_exit="$?" cleanup_ok=true cleanup_response="$temp_dir/cleanup-response.json"
+  local final_exit="$original_exit"
+  trap - EXIT INT TERM
+  set +e
+  if acceptance_request cleanup "$cleanup_response" &&
+    RUN_ID="$run_id" jq -e '
+      .ok == true and
+      .operation == "cleanup" and
+      .runId == env.RUN_ID and
+      .domain == "issue334_acceptance" and
+      (.removedCount | type == "number" and . >= 0 and . <= 1000)
+    ' "$cleanup_response" >/dev/null; then
+    :
+  else
+    cleanup_ok=false
+  fi
+  rm -rf -- "$temp_dir" || cleanup_ok=false
+  [[ ! -e "$temp_dir" ]] || cleanup_ok=false
+  if [[ "$cleanup_ok" == true ]]; then
+    write_phase cleanup passed \
+      'current-run acceptance rows were removed; domain, base, and sources were retained'
+  else
+    write_phase cleanup failed \
+      'current-run acceptance cleanup or retained-canary read-back failed'
+    [[ "$final_exit" -ne 0 ]] || final_exit=1
+  fi
+  if [[ "$original_exit" -ne 0 && "$(yq -r '.status' "$run_dir/assertion.json" 2>/dev/null)" == not-classified ]]; then
+    write_phase assertion failed 'the fixed NocoDB access contract failed'
+  fi
+  exit "$final_exit"
+}
+trap cleanup EXIT
+
+namespace='automation-data'
+kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
+pods_json="$temp_dir/pods.json"
+workloads_json="$temp_dir/workloads.json"
+"${kc[@]}" get pods --selector app.kubernetes.io/name=nocodb --output json >"$pods_json"
+"${kc[@]}" get deployments,statefulsets --output json >"$workloads_json"
+jq -e '
+  (.items | length) == 1 and
+  .items[0].metadata.labels["app.kubernetes.io/name"] == "nocodb" and
+  .items[0].status.phase == "Running" and
+  (.items[0].status.containerStatuses | length) == 1 and
+  .items[0].status.containerStatuses[0].name == "nocodb" and
+  .items[0].status.containerStatuses[0].ready == true
+' "$pods_json" >/dev/null || {
+  echo 'NocoDB must have exactly one ready application pod.' >&2
+  exit 1
+}
+jq -e '
+  [.items[] | select(
+    (.metadata.name | ascii_downcase | test("nocodb|redis")) or
+    ((.metadata.labels // {} | tostring | ascii_downcase) | test("nocodb|redis"))
+  )] as $related |
+  ($related | length) == 1 and
+  $related[0].kind == "Deployment" and
+  $related[0].metadata.name == "nocodb" and
+  $related[0].spec.replicas == 1 and
+  $related[0].spec.strategy.type == "Recreate" and
+  ([$related[] | select((.metadata.name | ascii_downcase | test("worker|redis")) or ((.metadata.labels // {} | tostring | ascii_downcase) | test("worker|redis")))] | length) == 0 and
+  ([$related[].spec.template.spec.containers[]? | select((.name | ascii_downcase | test("worker|redis")) or ([.env[]? | (.name + "=" + (.value // "")) | ascii_downcase | test("redis")] | any))] | length) == 0
+' "$workloads_json" >/dev/null || {
+  echo 'NocoDB runtime must be one Recreate application Deployment without a worker or Redis.' >&2
+  exit 1
+}
+
+provision_body="$temp_dir/provision.json"
+provision_response="$temp_dir/provision-response.json"
+jq -n '{domain: "issue334_acceptance", operation: "provision"}' >"$provision_body"
+verify_lease
+http_request provision "$provisioning_url" provisioning "$provision_body" \
+  "$provision_response" 200
+jq -e '
+  .ok == true and .domain == "issue334_acceptance" and
+  .operation == "provision" and .state == "ready" and
+  .database == "issue334_acceptance" and
+  .ownerRole == "issue334_acceptance_owner" and
+  .migratorRole == "issue334_acceptance_migrator" and
+  .runtimeRole == "issue334_acceptance_runtime" and
+  (.migratorCredentialId | type == "string" and length > 0) and
+  (.runtimeCredentialId | type == "string" and length > 0) and
+  (.checks | length == 15 and all)
+' "$provision_response" >/dev/null || {
+  echo 'The existing automation-data provisioner did not return complete acceptance evidence.' >&2
+  exit 1
+}
+
+structure_response="$temp_dir/structure-response.json"
+acceptance_request structure "$structure_response"
+RUN_ID="$run_id" jq -e '
+  . == {ok:true,operation:"structure",runId:env.RUN_ID,domain:"issue334_acceptance",structureReady:true}
+' "$structure_response" >/dev/null || {
+  echo 'The fixed acceptance structure operation did not complete.' >&2
+  exit 1
+}
+
+source_request() { # <operation> <response>
+  local operation="$1" response="$2" body
+  body="$temp_dir/source-${operation}-$(basename "$response")"
+  verify_lease
+  if [[ "$operation" == sync ]]; then
+    jq -n '{domain: "issue334_acceptance", operation: "sync"}' >"$body"
+  else
+    jq -n '{domain: "issue334_acceptance", operation: "rotate", accessKind: "operator"}' >"$body"
+  fi
+  http_request "source-${operation}-$(basename "$response" .json)" "$source_url" source \
+    "$body" "$response" 200
+}
+
+validate_ready_source() { # <response> <kind>
+  local response="$1" kind="$2"
+  KIND="$kind" jq -e '
+    .accessKind == env.KIND and .state == "ready" and
+    (.sourceId | type == "string" and length > 0) and
+    (.integrationId | type == "string" and length > 0) and
+    (.sourceCreateJobId | type == "string" and length > 0) and
+    .sourceCreateJobState == "completed" and
+    .sourceDiscovered == true and .sourceReadBack == true and
+    (.generation | type == "number" and . > 0) and
+    (.credentialGeneration | type == "number" and . > 0) and
+    (.operationStartedAt | type == "string" and length > 0) and
+    (.updatedAt | type == "string" and length > 0) and
+    (.validatedAt | type == "string" and length > 0) and
+    .operationStartedAt <= .updatedAt and .updatedAt <= .validatedAt and
+    (.dataEditAllowed == (env.KIND == "operator")) and
+    .schemaEditAllowed == false and
+    .postgresqlValidation.valid == true and
+    .postgresqlValidation.loginValid == true and
+    .postgresqlValidation.schemaPrivilegesValid == true and
+    .postgresqlValidation.objectPrivilegesValid == true and
+    .postgresqlValidation.defaultPrivilegesValid == true and
+    .postgresqlValidation.outsideSchemaDenied == true and
+    .postgresqlValidation.databaseIsolationValid == true and
+    .postgresqlValidation.forbiddenAttributesDenied == true and
+    .postgresqlValidation.forbiddenMembershipsDenied == true and
+    .postgresqlValidation.ddlDenied == true and
+    (.postgresqlValidation.controlledDmlPresent == (env.KIND == "operator"))
+  ' <<<"$(jq -c --arg kind "$kind" '.[$kind]' "$response")" >/dev/null
+}
+
+validate_source_envelope() { # <response> <operation>
+  local response="$1" operation="$2"
+  OPERATION="$operation" jq -e '
+    .ok == true and .domain == "issue334_acceptance" and
+    .operation == env.OPERATION and
+    (.baseId | type == "string" and length > 0) and .errorCode == null
+  ' "$response" >/dev/null
+}
+
+first_sync="$temp_dir/source-sync-first.json"
+source_request sync "$first_sync"
+if ! validate_source_envelope "$first_sync" sync ||
+  ! validate_ready_source "$first_sync" reader; then
+  echo 'Initial source sync omitted completed reader job, discovery, read-back, or timing evidence.' >&2
+  exit 1
+fi
+jq -e '
+  .operator.accessKind == "operator" and
+  .operator.state == "awaiting_grants" and
+  .operator.sourceId == null and .operator.integrationId == null and
+  .operator.sourceCreateJobId == null and .operator.sourceCreateJobState == null and
+  .operator.sourceDiscovered == false and .operator.sourceReadBack == false and
+  .operator.credentialGeneration == 0
+' "$first_sync" >/dev/null || {
+  echo 'Initial source sync did not leave the operator awaiting reviewed grants.' >&2
+  exit 1
+}
+
+grants_response="$temp_dir/grants-response.json"
+acceptance_request grants "$grants_response"
+RUN_ID="$run_id" jq -e '
+  . == {ok:true,operation:"grants",runId:env.RUN_ID,domain:"issue334_acceptance",grantsReady:true}
+' "$grants_response" >/dev/null || {
+  echo 'The fixed acceptance grants operation did not complete.' >&2
+  exit 1
+}
+
+ready_sync="$temp_dir/source-sync-ready.json"
+source_request sync "$ready_sync"
+if ! validate_source_envelope "$ready_sync" sync ||
+  ! validate_ready_source "$ready_sync" reader ||
+  ! validate_ready_source "$ready_sync" operator; then
+  echo 'Ready source sync omitted completed jobs, discovered sources, read-back, or timing evidence.' >&2
+  exit 1
+fi
+jq -e '
+  .reader.validatedAt < .operator.operationStartedAt and
+  .reader.updatedAt < .operator.updatedAt
+' "$ready_sync" >/dev/null || {
+  echo 'Reader completion did not precede operator creation.' >&2
+  exit 1
+}
+
+signup_body="$temp_dir/signup.json"
+signup_response="$temp_dir/signup-response.json"
+jq -n '{email:"acceptance-denied@example.invalid",password:"acceptance-only-not-a-secret"}' >"$signup_body"
+verify_lease
+http_request signup-denial 'https://nocodb.lab.supermorphic.com/api/v1/auth/user/signup' none \
+  "$signup_body" "$signup_response" '400 401 403'
+jq -e 'type == "object" and length > 0' "$signup_response" >/dev/null || {
+  echo 'Unauthenticated signup denial did not return bounded evidence.' >&2
+  exit 1
+}
+
+validate_probe() {
+  local response="$1"
+  RUN_ID="$run_id" jq -e '
+    .ok == true and .operation == "probe" and .runId == env.RUN_ID and
+    .domain == "issue334_acceptance" and
+    .credentialProof == {throughN8n:true,credentialName:"NocoDB Operator API"} and
+    .inserted == true and .read == true and .readerRead == true and
+    .decisionUpdated == true and .removed == true and
+    .reflectedSchemas == ["operator","read_model"] and
+    ([.reflectedTables[] | [.schema,.tableName]] | sort) == [["operator","acceptance_decision"],["read_model","acceptance_facts"]] and
+    .forbiddenOperations.protectedUpdateDenied == true and
+    .forbiddenOperations.protectedUpdateStatus == 400 and
+    .forbiddenOperations.protectedUpdateEvidence == "postgresql_42501" and
+    .forbiddenOperations.readerInsertDenied == true and
+    .forbiddenOperations.readerInsertStatus == 403 and
+    .forbiddenOperations.readerInsertEvidence == "nocodb_readonly_source" and
+    .publicSharing.basePublicShareUuid == null and
+    (.publicSharing.views | length) == 2 and
+    ([.publicSharing.views[] | [.title,.publicShareUuid]] | sort) == [["acceptance_decision",null],["acceptance_facts",null]]
+  ' "$response" >/dev/null
+}
+
+probe_one="$temp_dir/probe-one.json"
+acceptance_request probe "$probe_one"
+validate_probe "$probe_one" || {
+  echo 'The through-n8n access probe omitted a required success, denial boolean, UI flag, or public-share assertion.' >&2
+  exit 1
+}
+
+unchanged_sync="$temp_dir/source-sync-unchanged.json"
+source_request sync "$unchanged_sync"
+if ! validate_source_envelope "$unchanged_sync" sync ||
+  ! validate_ready_source "$unchanged_sync" reader ||
+  ! validate_ready_source "$unchanged_sync" operator; then
+  echo 'Unchanged sync omitted complete source evidence.' >&2
+  exit 1
+fi
+stable_source_signature() {
+  jq -cS '[.baseId, .reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}, .operator | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}]' "$1"
+}
+[[ "$(stable_source_signature "$unchanged_sync")" == "$(stable_source_signature "$ready_sync")" ]] || {
+  echo 'Unchanged source sync changed job, source, integration, or generation identity.' >&2
+  exit 1
+}
+
+rotated_source="$temp_dir/source-rotate-operator.json"
+source_request rotate "$rotated_source"
+if ! validate_source_envelope "$rotated_source" rotate ||
+  ! validate_ready_source "$rotated_source" reader ||
+  ! validate_ready_source "$rotated_source" operator; then
+  echo 'Operator rotation omitted restored source evidence.' >&2
+  exit 1
+fi
+rotation_stable_signature() {
+  jq -cS '[.baseId, .reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}, .operator | {sourceId,integrationId,sourceCreateJobId}]' "$1"
+}
+[[ "$(rotation_stable_signature "$rotated_source")" == \
+  "$(rotation_stable_signature "$unchanged_sync")" ]] &&
+  [[ "$(jq -r '.reader.credentialGeneration' "$rotated_source")" == \
+    "$(jq -r '.reader.credentialGeneration' "$unchanged_sync")" ]] &&
+  [[ "$(jq -r '.operator.credentialGeneration' "$rotated_source")" -eq \
+    "$(( $(jq -r '.operator.credentialGeneration' "$unchanged_sync") + 1 ))" ]] &&
+  [[ "$(jq -r '.operator.generation' "$rotated_source")" -gt \
+    "$(jq -r '.operator.generation' "$unchanged_sync")" ]] || {
+  echo 'Rotation did not change only the operator credential generation.' >&2
+  exit 1
+}
+
+probe_two="$temp_dir/probe-two.json"
+acceptance_request probe "$probe_two"
+validate_probe "$probe_two" || {
+  echo 'The post-rotation through-n8n access probe failed.' >&2
+  exit 1
+}
+
+write_phase assertion passed 'the fixed NocoDB access contract passed'
+echo 'NocoDB attended access acceptance passed; cleanup will remove only current-run rows.'

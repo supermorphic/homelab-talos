@@ -40,6 +40,11 @@ nocodb-source-sync domain: require-bash
 nocodb-source-rotate domain access_kind: require-bash
     @scripts/nocodb/source-operation.sh rotate {{quote(domain)}} {{quote(access_kind)}}
 
+# Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
+# Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
+nocodb-access-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
+
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
 n8n-validate: require-bash

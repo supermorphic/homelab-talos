@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# Offline command-level tests for the attended NocoDB access scenario.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+scenario='scripts/test/scenarios/nocodb-access.sh'
+[[ -x "$scenario" ]] || {
+  echo "Missing executable NocoDB access scenario: $scenario" >&2
+  exit 1
+}
+
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-access-test.XXXXXX")"
+trap 'rm -rf -- "$fixture"' EXIT
+mkdir -p "$fixture/bin" "$fixture/responses"
+touch "$fixture/kubeconfig" "$fixture/events.log"
+
+run_id='20260904T120000Z-34b7165a210e-operator-1234abcd'
+token_provision='fixture_automation_data_provisioning_0123456789'
+token_source='fixture_nocodb_source_provisioning_0123456789'
+token_acceptance="fixture_nocodb_acceptance_${run_id:0:16}"
+
+cat >"$fixture/bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  status) [[ "${2:-}" == '--porcelain' ]] ;;
+  ls-remote)
+    [[ "${2:-}" == '--exit-code' && "${3:-}" == origin && "${4:-}" == refs/heads/main ]]
+    printf '%s\trefs/heads/main\n' '0123456789012345678901234567890123456789'
+    ;;
+  cat-file) [[ "${2:-}" == '-e' ]] ;;
+  diff) [[ "${2:-}" == '--quiet' ]] ;;
+  *) exit 64 ;;
+esac
+EOF
+
+cat >"$fixture/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'kubectl\n' >>"${NOCODB_ACCESS_EVENT_LOG:?}"
+args=" $* "
+if [[ "$args" == *' get lease '* ]]; then
+  jq -n --arg holder "${TEST_CAMPAIGN_LEASE_HOLDER:-${TEST_RUN_ID:?}}" '{
+    metadata: {resourceVersion: "7"},
+    spec: {
+      holderIdentity: $holder,
+      leaseDurationSeconds: 90,
+      acquireTime: "2099-01-01T00:00:00.000000Z",
+      renewTime: "2099-01-01T00:00:00.000000Z"
+    }
+  }'
+elif [[ "$args" == *' get pods '* ]]; then
+  if [[ "${NOCODB_ACCESS_BAD_RUNTIME:-false}" == true ]]; then
+    jq -n '{items: []}'
+  else
+    jq -n '{items: [{metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}}]}'
+  fi
+elif [[ "$args" == *' get deployments,statefulsets '* ]]; then
+  jq -n '{items: [{kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", env: [{name: "NC_SITE_URL", value: "https://nocodb.lab.supermorphic.com"}]}]}}}}]}'
+elif [[ "$args" == *' config view '* ]]; then
+  printf 'fixture-cluster'
+else
+  echo "Unexpected kubectl invocation: $*" >&2
+  exit 65
+fi
+EOF
+
+cat >"$fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" -eq 2 && "$1" == '--config' && -f "$2" ]] || exit 64
+config="$2"
+config_dir="$(dirname -- "$config")"
+mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+[[ "$(mode "$config_dir")" == 700 && "$(mode "$config")" == 600 ]] || exit 65
+url="$(awk -F'"' '/^url = / {print $2; exit}' "$config")"
+output="$(awk -F'"' '/^output = / {print $2; exit}' "$config")"
+body_path="$(awk -F'"' '/^data-binary = / {value=$2; sub(/^@/, "", value); print value; exit}' "$config")"
+[[ -n "$url" && -n "$output" && -f "$body_path" && "$(dirname -- "$body_path")" == "$config_dir" ]] || exit 66
+[[ "$(mode "$body_path")" == 600 ]] || exit 67
+rg -Fxq 'request = "POST"' "$config" || exit 68
+rg -Fxq 'header = "Content-Type: application/json"' "$config" || exit 69
+
+case "$url" in
+  https://n8n.lab.supermorphic.com/webhook/automation-data-provision)
+    rg -Fxq "header = \"X-Automation-Data-Provisioning: ${NOCODB_ACCESS_PROVISION_TOKEN:?}\"" "$config" || exit 70
+    jq -e '. == {domain: "issue334_acceptance", operation: "provision"}' "$body_path" >/dev/null || exit 71
+    event='provision'
+    response='provision.json'
+    ;;
+  https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source)
+    rg -Fxq "header = \"Authorization: Bearer ${NOCODB_ACCESS_SOURCE_TOKEN:?}\"" "$config" || exit 72
+    operation="$(jq -r '.operation' "$body_path")"
+    if [[ "$operation" == sync ]]; then
+      sync_number="$(($(rg -c '^source-sync$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
+      event='source-sync'
+      response="source-sync-${sync_number}.json"
+      jq -e '. == {domain: "issue334_acceptance", operation: "sync"}' "$body_path" >/dev/null || exit 73
+    elif [[ "$operation" == rotate ]]; then
+      event='source-rotate'
+      response='source-rotate.json'
+      jq -e '. == {domain: "issue334_acceptance", operation: "rotate", accessKind: "operator"}' "$body_path" >/dev/null || exit 74
+    else
+      exit 75
+    fi
+    ;;
+  https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain)
+    rg -Fxq "header = \"Authorization: Bearer ${NOCODB_ACCESS_ACCEPTANCE_TOKEN:?}\"" "$config" || exit 76
+    operation="$(jq -r '.operation' "$body_path")"
+    jq -e --arg operation "$operation" --arg run_id "${TEST_RUN_ID:?}" \
+      '. == {operation: $operation, runId: $run_id}' "$body_path" >/dev/null || exit 77
+    case "$operation" in
+      structure|grants|cleanup) event="acceptance-${operation}"; response="acceptance-${operation}.json" ;;
+      probe)
+        probe_number="$(($(rg -c '^acceptance-probe$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
+        event='acceptance-probe'
+        response="acceptance-probe-${probe_number}.json"
+        ;;
+      *) exit 78 ;;
+    esac
+    ;;
+  https://nocodb.lab.supermorphic.com/api/v1/auth/user/signup)
+    [[ ! -s "$body_path" || "$(jq -r '.email // empty' "$body_path")" == 'acceptance-denied@example.invalid' ]] || exit 79
+    event='signup-denial'
+    response='signup-denial.json'
+    ;;
+  *) exit 80 ;;
+esac
+
+printf '%s\n' "$event" >>"${NOCODB_ACCESS_EVENT_LOG:?}"
+cp "${NOCODB_ACCESS_RESPONSES:?}/$response" "$output"
+if [[ "$event" == signup-denial ]]; then
+  printf '%s' "${NOCODB_ACCESS_SIGNUP_STATUS:-403}"
+else
+  printf '200'
+fi
+EOF
+chmod 700 "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/curl"
+
+cat >"$fixture/responses/provision.json" <<'EOF'
+{"ok":true,"domain":"issue334_acceptance","operation":"provision","state":"ready","database":"issue334_acceptance","ownerRole":"issue334_acceptance_owner","migratorRole":"issue334_acceptance_migrator","runtimeRole":"issue334_acceptance_runtime","migratorCredentialId":"credential-migrator","runtimeCredentialId":"credential-runtime","migratorCredentialUpdatedAt":"2026-09-04T12:00:00Z","runtimeCredentialUpdatedAt":"2026-09-04T12:00:00Z","passwordsUnchanged":null,"checks":[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]}
+EOF
+cat >"$fixture/responses/acceptance-structure.json" <<EOF
+{"ok":true,"operation":"structure","runId":"$run_id","domain":"issue334_acceptance","structureReady":true}
+EOF
+cat >"$fixture/responses/acceptance-grants.json" <<EOF
+{"ok":true,"operation":"grants","runId":"$run_id","domain":"issue334_acceptance","grantsReady":true}
+EOF
+cat >"$fixture/responses/acceptance-cleanup.json" <<EOF
+{"ok":true,"operation":"cleanup","runId":"$run_id","domain":"issue334_acceptance","removedCount":2}
+EOF
+cat >"$fixture/responses/signup-denial.json" <<'EOF'
+{"error":"signup_disabled"}
+EOF
+
+source_record() {
+  local kind="$1" state="$2" source_id="$3" integration_id="$4" job_id="$5"
+  local generation="$6" credential_generation="$7" started="$8" updated="$9" validated="${10}"
+  jq -cn --arg kind "$kind" --arg state "$state" --arg source_id "$source_id" \
+    --arg integration_id "$integration_id" --arg job_id "$job_id" \
+    --argjson generation "$generation" --argjson credential_generation "$credential_generation" \
+    --arg started "$started" --arg updated "$updated" --arg validated "$validated" '{
+      accessKind: $kind,
+      state: $state,
+      sourceId: (if $source_id == "" then null else $source_id end),
+      integrationId: (if $integration_id == "" then null else $integration_id end),
+      generation: $generation,
+      credentialGeneration: $credential_generation,
+      sourceCreateJobId: (if $job_id == "" then null else $job_id end),
+      sourceCreateJobState: (if $job_id == "" then null else "completed" end),
+      sourceDiscovered: ($source_id != ""),
+      sourceReadBack: ($source_id != ""),
+      operationStartedAt: $started,
+      updatedAt: $updated,
+      validatedAt: (if $validated == "" then null else $validated end),
+      dataEditAllowed: (if $state != "ready" then null else $kind == "operator" end),
+      schemaEditAllowed: (if $state != "ready" then null else false end),
+      postgresqlValidation: (if $state != "ready" then null else {
+        valid: true,
+        loginValid: true,
+        schemaPrivilegesValid: true,
+        objectPrivilegesValid: true,
+        defaultPrivilegesValid: true,
+        outsideSchemaDenied: true,
+        databaseIsolationValid: true,
+        forbiddenAttributesDenied: true,
+        forbiddenMembershipsDenied: true,
+        ddlDenied: true,
+        controlledDmlPresent: ($kind == "operator")
+      } end)
+    }'
+}
+
+reader="$(source_record reader ready source-reader integration-reader job-reader 1 1 \
+  2026-09-04T12:01:00Z 2026-09-04T12:02:00Z 2026-09-04T12:02:00Z)"
+operator_waiting="$(source_record operator awaiting_grants '' '' '' 1 0 \
+  2026-09-04T12:02:01Z 2026-09-04T12:02:01Z '')"
+operator_ready="$(source_record operator ready source-operator integration-operator job-operator 1 1 \
+  2026-09-04T12:03:00Z 2026-09-04T12:04:00Z 2026-09-04T12:04:00Z)"
+operator_rotated="$(source_record operator ready source-operator integration-operator job-operator 2 2 \
+  2026-09-04T12:05:00Z 2026-09-04T12:06:00Z 2026-09-04T12:06:00Z)"
+
+jq -n --argjson reader "$reader" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
+jq -n --argjson reader "$reader" --argjson operator "$operator_ready" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
+cp "$fixture/responses/source-sync-2.json" "$fixture/responses/source-sync-3.json"
+jq -n --argjson reader "$reader" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
+
+probe_response() {
+  jq -n --arg run_id "$run_id" '{
+    ok: true,
+    operation: "probe",
+    runId: $run_id,
+    domain: "issue334_acceptance",
+    credentialProof: {throughN8n: true, credentialName: "NocoDB Operator API"},
+    inserted: true,
+    read: true,
+    readerRead: true,
+    decisionUpdated: true,
+    removed: true,
+    reflectedSchemas: ["operator", "read_model"],
+    reflectedTables: [
+      {title:"acceptance_decision",tableName:"acceptance_decision",sourceId:"source-operator",schema:"operator"},
+      {title:"acceptance_facts",tableName:"acceptance_facts",sourceId:"source-reader",schema:"read_model"}
+    ],
+    publicSharing: {basePublicShareUuid:null,views:[{title:"acceptance_facts",publicShareUuid:null},{title:"acceptance_decision",publicShareUuid:null}]},
+    forbiddenOperations: {
+      protectedUpdateDenied:true,protectedUpdateStatus:400,protectedUpdateEvidence:"postgresql_42501",
+      readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:"nocodb_readonly_source"
+    }
+  }'
+}
+probe_response >"$fixture/responses/acceptance-probe-1.json"
+probe_response >"$fixture/responses/acceptance-probe-2.json"
+
+case_name=''
+OUT=''
+STATUS=0
+run_dir=''
+fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
+
+run_scenario() { # [confirmation|-] [bad-runtime] [signup-status]
+  local confirmation="${1:--}" bad_runtime="${2:-false}" signup_status="${3:-403}"
+  local result_root="$fixture/run-$RANDOM-$RANDOM"
+  mkdir -p "$result_root/logs" "$result_root/diagnostics"
+  run_dir="$result_root/$run_id"
+  mv "$result_root/logs" "$result_root/diagnostics" "$run_dir" 2>/dev/null || {
+    mkdir -p "$run_dir/logs" "$run_dir/diagnostics"
+  }
+  : >"$fixture/events.log"
+  set +e
+  if [[ "$confirmation" == '-' ]]; then
+    OUT="$(PATH="$fixture/bin:$PATH" \
+      NOCODB_ACCESS_EVENT_LOG="$fixture/events.log" NOCODB_ACCESS_RESPONSES="$fixture/responses" \
+      NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
+      NOCODB_ACCESS_BAD_RUNTIME="$bad_runtime" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
+      AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
+      AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
+      NOCODB_SOURCE_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source' \
+      NOCODB_SOURCE_PROVISIONING_TOKEN="$token_source" \
+      NOCODB_ACCEPTANCE_URL='https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain' \
+      NOCODB_ACCEPTANCE_TOKEN="$token_acceptance" \
+      env -u NOCODB_ACCESS_TEST_CONFIRM "$scenario" "$fixture/kubeconfig" 2>&1)"
+  else
+    OUT="$(PATH="$fixture/bin:$PATH" \
+      NOCODB_ACCESS_EVENT_LOG="$fixture/events.log" NOCODB_ACCESS_RESPONSES="$fixture/responses" \
+      NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
+      NOCODB_ACCESS_BAD_RUNTIME="$bad_runtime" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
+      AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
+      AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
+      NOCODB_SOURCE_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source' \
+      NOCODB_SOURCE_PROVISIONING_TOKEN="$token_source" \
+      NOCODB_ACCEPTANCE_URL='https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain' \
+      NOCODB_ACCEPTANCE_TOKEN="$token_acceptance" \
+      NOCODB_ACCESS_TEST_CONFIRM="$confirmation" "$scenario" "$fixture/kubeconfig" 2>&1)"
+  fi
+  STATUS=$?
+  set -e
+}
+
+assert_status() { [[ "$STATUS" -eq "$1" ]] || fail "expected status $1, got $STATUS: $OUT"; }
+assert_no_secret_output() {
+  for secret in "$token_provision" "$token_source" "$token_acceptance"; do
+    ! rg -Fq -- "$secret" <<<"$OUT" || fail 'command output exposed a webhook token'
+    ! rg -Fq -- "$secret" "$fixture/events.log" || fail 'event log exposed a webhook token'
+  done
+}
+
+case_name='exact confirmation precedes cluster and webhook access'
+run_scenario -
+assert_status 1
+[[ ! -s "$fixture/events.log" ]] || fail 'missing confirmation reached kubectl or curl'
+assert_no_secret_output
+
+case_name='successful acceptance follows the exact lifecycle and writes separate phase evidence'
+run_scenario test:nocodb:access
+assert_status 0
+expected_order=$'kubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
+[[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "unexpected lifecycle order: $(tr '\n' ' ' <"$fixture/events.log")"
+yq -e '.status == "passed" and .reason == "the fixed NocoDB access contract passed"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
+yq -e '.status == "passed" and .reason == "current-run acceptance rows were removed; domain, base, and sources were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
+yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
+assert_no_secret_output
+
+case_name='a false denial boolean cannot be hidden behind a successful webhook'
+cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
+jq '.forbiddenOperations.readerInsertDenied = false' "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "failed"' "$run_dir/assertion.json" >/dev/null || fail 'failed assertion was not classified'
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'failure did not clean current-run rows'
+mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
+assert_no_secret_output
+
+case_name='an accepted HTTP error is not treated as authorization evidence'
+cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
+printf '%s\n' '{"error":"ERR_FORBIDDEN"}' >"$fixture/responses/acceptance-probe-1.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'HTTP-error response did not clean current-run rows'
+mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
+assert_no_secret_output
+
+case_name='rotation must change only the operator credential generation'
+cp "$fixture/responses/source-rotate.json" "$fixture/responses/rotate.valid.json"
+jq '.reader.credentialGeneration = 2' "$fixture/responses/rotate.valid.json" >"$fixture/responses/source-rotate.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'rotation failure did not clean current-run rows'
+mv "$fixture/responses/rotate.valid.json" "$fixture/responses/source-rotate.json"
+assert_no_secret_output
+
+case_name='runtime shape must be one ready application pod without worker or Redis'
+run_scenario test:nocodb:access true
+assert_status 1
+[[ "$(rg -c '^provision$' "$fixture/events.log" || true)" -eq 0 ]] || fail 'invalid runtime reached provisioning'
+assert_no_secret_output
+
+case_name='signup must return an explicit denial status'
+run_scenario test:nocodb:access false 200
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'signup failure did not clean current-run rows'
+assert_no_secret_output
+
+case_name='the Just recipe and catalog preserve the guarded coordinator contract'
+dry_run="$(mise exec -- just --dry-run kube nocodb-access-test 2>&1)"
+rg -Fq 'run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh' \
+  <<<"$dry_run" || fail 'Just does not dispatch the scenario through the catalog coordinator'
+source scripts/test/lib/catalog.sh
+entry_json="$(catalog_entry_by_id tests/catalog.yaml test.nocodb-access)"
+jq -e '
+  .metadata.id == "test.nocodb-access" and
+  .metadata.source == "test" and .metadata.framework == "bash" and
+  .metadata.suite == "platform" and .metadata.tier == "integration" and
+  .metadata.target == "nocodb" and .metadata.scenario == "access" and
+  .metadata.scope == "system" and .metadata.intent == "acceptance" and
+  .metadata.mutates_cluster == true and .metadata.execution_owner == "human" and
+  .confirmation.type == "exact" and
+  .confirmation.variable == "NOCODB_ACCESS_TEST_CONFIRM" and
+  .confirmation.expected == "test:nocodb:access" and
+  .runner.command == "NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access mise exec -- just kube nocodb-access-test" and
+  .runner.implementation == "scripts/test/scenarios/nocodb-access.sh" and
+  .native_results.strategy == "wrapper-junit" and
+  .dispatch.mode == "direct" and .dispatch.runtime == "bash" and
+  .dispatch.path == "scripts/test/scenarios/nocodb-access.sh" and
+  .dispatch.args == [".kube/config"] and .dispatch.selector == null
+' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the attended mutation contract'
+
+echo 'NocoDB access command tests passed.'

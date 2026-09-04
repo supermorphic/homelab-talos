@@ -221,7 +221,7 @@ provisioner_select_grants="$(rg -U 'GRANT SELECT ON[^;]*TO automation_data_provi
 [[ "$provisioner_select_grants" == 'GRANT SELECT ON platform_operations.managed_domains TO automation_data_provisioner;' ]] ||
   fail 'provisioner receives unexpected direct table SELECT privileges'
 
-read_nocodb_source_state_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(/,/^\$function\$;/p' "$control_sql")"
+read_nocodb_source_state_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(/,/^\$function\$;/p" "$control_sql")"
 [[ -n "$read_nocodb_source_state_function" ]] || fail 'NocoDB source-state reader is missing'
 rg -Fq "operation text NOT NULL CHECK (operation IN ('sync', 'rotate'))" "$control_sql" ||
   fail 'NocoDB source registry does not persist the exact retry operation'
@@ -233,7 +233,7 @@ rg -Fq 'platform_internal.assert_domain(p_domain)' <<<"$read_nocodb_source_state
   fail 'NocoDB source-state reader does not validate the managed domain'
 rg -Fq 'platform_internal.assert_nocodb_access_kind(p_access_kind)' <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader does not validate the access kind'
-access_kind_assertion_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_access_kind(/,/^\$function\$;/p' "$control_sql")"
+access_kind_assertion_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_access_kind(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq "p_access_kind IS NULL OR p_access_kind NOT IN ('reader', 'operator')" \
   <<<"$access_kind_assertion_function" ||
   fail 'NocoDB access-kind validation does not explicitly reject NULL'
@@ -257,7 +257,7 @@ rg -Fq "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_acces
   fail 'NocoDB source-state reader does not return the fixed registry result or JSON null'
 ! rg -q 'EXECUTE[[:space:]]+.*p_|format[[:space:]]*\(' <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader permits dynamic request SQL'
-source_result_builder="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(/,/^\$function\$;/p' "$control_sql")"
+source_result_builder="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(/,/^\$function\$;/p" "$control_sql")"
 for json_field in domain accessKind role baseId integrationId sourceCreateJobId sourceId \
   state operation generation credentialGeneration operationStartedAt validatedAt updatedAt errorCode; do
   rg -Fq "'$json_field'" <<<"$source_result_builder" ||
@@ -271,7 +271,7 @@ read_source_state_grants="$(rg -F 'GRANT EXECUTE ON FUNCTION platform_operations
 [[ "$read_source_state_grants" == 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;' ]] ||
   fail 'NocoDB source-state reader execute grant is not provisioner-exclusive'
 
-begin_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p' "$control_sql")"
+begin_nocodb_source_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq 'prepared := platform_operations.prepare_nocodb_access(p_domain);' <<<"$begin_nocodb_source_function" ||
   fail 'NocoDB source begin does not inspect prepared eligibility'
 rg -Fq "source.state = 'error' AND source.operation <> 'sync'" <<<"$begin_nocodb_source_function" ||
@@ -287,7 +287,7 @@ login_line="$(rg -n "ALTER ROLE %I LOGIN" <<<"$begin_nocodb_source_function" | c
 [[ -n "$result_line" && -n "$login_line" && "$result_line" -lt "$login_line" ]] ||
   fail 'NocoDB source begin can fail locally after enabling the remote login'
 
-prepare_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.prepare_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
+prepare_nocodb_access_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.prepare_nocodb_access(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq 'IF operator_requested AND NOT operator_eligible THEN' <<<"$prepare_nocodb_access_function" ||
   fail 'NocoDB prepare does not branch for an operator awaiting reviewed grants'
 rg -Fq "'awaiting_grants'" <<<"$prepare_nocodb_access_function" ||
@@ -308,7 +308,7 @@ for transition_contract in \
     fail "NocoDB function $function_name lacks its strict transition guard"
 done
 
-rotate_nocodb_source_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.rotate_nocodb_source_credential(/,/^\$function\$;/p' "$control_sql")"
+rotate_nocodb_source_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.rotate_nocodb_source_credential(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq 'source.source_id IS NULL OR source.integration_id IS NULL OR source.base_id IS NULL' \
   <<<"$rotate_nocodb_source_function" ||
   fail 'NocoDB source rotation does not require the retained exact source identity'
@@ -321,7 +321,7 @@ rg -Fq "ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPL
   <<<"$rotate_nocodb_source_function" ||
   fail 'NocoDB source rotation does not re-enable a failed retained source safely'
 
-record_nocodb_source_error_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(/,/^\$function\$;/p' "$control_sql")"
+record_nocodb_source_error_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq 'p_operation text' <<<"$record_nocodb_source_error_function" ||
   fail 'NocoDB source error recording does not accept the exact failed operation'
 rg -Fq "p_operation NOT IN ('sync', 'rotate')" <<<"$record_nocodb_source_error_function" ||
@@ -331,8 +331,8 @@ rg -Fq 'SET state = '\''error'\'', operation = p_operation' <<<"$record_nocodb_s
 rg -Fqx 'GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text) TO automation_data_provisioner;' \
   "$control_sql" || fail 'NocoDB source error recording does not have the exact fixed grant signature'
 
-validate_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
-authority_validation_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p' "$control_sql")"
+validate_nocodb_access_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(/,/^\$function\$;/p" "$control_sql")"
+authority_validation_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p" "$control_sql")"
 rg -Fq 'true' <<<"$validate_nocodb_access_function" ||
   fail 'ready NocoDB access validation does not require LOGIN'
 rg -Fq 'FROM pg_database AS database' <<<"$authority_validation_function" ||
@@ -348,7 +348,7 @@ rg -Fq 'pg_default_acl' <<<"$authority_validation_function" ||
 ! rg -Fq 'ELSE true' <<<"$authority_validation_function" ||
   fail 'NocoDB operator default privilege validation is hard-coded'
 
-prelogin_authority_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p' "$control_sql")"
+prelogin_authority_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p" "$control_sql")"
 [[ -n "$prelogin_authority_function" ]] ||
   fail 'NocoDB pre-login authority validator is missing'
 rg -Fq 'p_expect_login boolean' <<<"$prelogin_authority_function" ||

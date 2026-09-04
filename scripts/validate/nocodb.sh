@@ -90,8 +90,11 @@ scripts/test/nocodb-source-operation-test.sh
 scripts/test/nocodb-bootstrap-test.sh
 scripts/test/nocodb-alerts-test.sh
 scripts/test/nocodb-verification-contract-test.sh
+scripts/test/nocodb-access-command-test.sh
 
-just --dry-run kube nocodb-verify | rg -Fq \
+just --dry-run kube nocodb-verify 2>&1 | rg -Fq \
   'run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh'
+just --dry-run kube nocodb-access-test 2>&1 | rg -Fq \
+  'run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh'
 
-echo 'NocoDB source, pinned chart render, manifest, workflow, lifecycle, bootstrap, monitoring, and read-only verification contracts passed validation.'
+echo 'NocoDB source, pinned chart render, manifest, workflow, lifecycle, bootstrap, monitoring, verification, and access contracts passed validation.'

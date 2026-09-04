@@ -602,11 +602,12 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "Campaign integration ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,8 +1,8 @@\n"
+        "@@ -1,9 +1,9 @@\n"
         "-test.cilium-connectivity\n"
         "-test.storage-provisioning\n"
         "-test.flux-canary\n"
         "-test.n8n-restore-drill\n"
+        "-test.nocodb-access\n"
         "-test.automation-data-restore-drill\n"
         "-test.integration.media-hardlink\n"
         "-test.plex-network-policy\n"
@@ -614,6 +615,7 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "+test.plex-network-policy\n"
         "+test.integration.media-hardlink\n"
         "+test.automation-data-restore-drill\n"
+        "+test.nocodb-access\n"
         "+test.n8n-restore-drill\n"
         "+test.flux-canary\n"
         "+test.storage-provisioning\n"
@@ -749,7 +751,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=44 ci=43.\n",
+        "Validation catalog/executions.ci count differs: catalog=45 ci=44.\n",
     )
     expect_rejection(
         root,
