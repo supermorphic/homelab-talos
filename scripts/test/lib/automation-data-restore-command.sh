@@ -172,6 +172,18 @@ WHERE managed.state = 'ready';
 ")" || restore_fail permission-query
 test "$permission_contract" = true || restore_fail permission-validation
 
+nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+SELECT COALESCE(bool_and(
+  source.state = 'ready' AND
+  (platform_operations.validate_nocodb_access(
+    source.domain, source.access_kind
+  )->>'valid')::boolean
+), true)::text
+FROM platform_operations.managed_nocodb_sources AS source
+WHERE source.state = 'ready';
+")" || restore_fail nocodb-permission-query
+test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+
 printf '%s\n' 'restore_stage=post-recovery-backup'
 mkdir -p "$POST_RECOVERY_BACKUP_DIR"
 PGDATABASE=automation_data_control \

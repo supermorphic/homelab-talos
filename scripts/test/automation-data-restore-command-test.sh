@@ -225,6 +225,8 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
     printf '%s' "$database" | base64 | tr -d '\n'
     printf '\n'
   done
+elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
+  printf '%s\n' "${NOCODB_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* && "$command_text" == *'validate_domain'* ]]; then
   printf '%s\n' "${VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* ]]; then
@@ -260,7 +262,7 @@ EOF
 }
 
 run_restore() {
-  local root="$1" validation_result="${2:-true}" output status=0 command
+  local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}" output status=0 command
   command="$(automation_data_restore_job_command)"
   output="$(
     env \
@@ -276,6 +278,7 @@ run_restore() {
       RESTORED_DATABASES="$database_names" \
       RESTORED_REGISTRY_BASE64="$(printf '%s\n' "$registry_body" | base64 | tr -d '\n')" \
       VALIDATION_RESULT="$validation_result" \
+      NOCODB_VALIDATION_RESULT="$nocodb_validation_result" \
       REAL_SHA256SUM="$real_sha256sum" \
       /bin/sh -ceu "$command" 2>&1
   )" || status="$?"
@@ -385,5 +388,15 @@ RESTORED_REGISTRY_OVERRIDE='different' run_restore "$registry_mismatch" false
   fail 'registry/catalog disagreement was accepted'
 ! rg -q '^backup$' "$registry_mismatch/commands.log" ||
   fail 'registry/catalog disagreement reached fresh backup'
+
+nocodb_permission_failure="$(new_case nocodb-permission-failure)"
+create_bundle "$nocodb_permission_failure/backups" 20260827T003000Z
+run_restore "$nocodb_permission_failure" true false
+[[ "$(<"$nocodb_permission_failure/status")" != '0' ]] ||
+  fail 'invalid ready NocoDB source access was accepted'
+rg -Fq 'restore_failure=nocodb-permission-validation' "$nocodb_permission_failure/output" ||
+  fail 'invalid NocoDB source access did not fail its restore validation'
+! rg -q '^backup$' "$nocodb_permission_failure/commands.log" ||
+  fail 'invalid NocoDB source access reached fresh backup'
 
 echo 'automation-data restore command behavior passed.'

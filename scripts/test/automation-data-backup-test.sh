@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 backup_script="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/backup.sh"
 status_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/update-backup-status.sql"
+control_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql"
 cronjob="$repo_root/kubernetes/apps/automation-data/postgresql/app/cronjob.yaml"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-backup-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -14,6 +15,10 @@ trap 'rm -rf -- "$test_root"' EXIT
 }
 [[ -f "$status_sql" && -f "$cronjob" ]] || {
   echo 'Missing automation-data backup SQL or CronJob.' >&2
+  exit 1
+}
+[[ -f "$control_sql" ]] || {
+  echo "Missing automation-data control SQL: $control_sql" >&2
   exit 1
 }
 
@@ -299,5 +304,13 @@ cron_contract="$(yq -r '
 
 rg -Fq "platform_operations.publish_backup(:'bundle', :'checksum', :'database_set_hash')" \
   "$status_sql" || fail 'status SQL does not call the fixed publication function'
+rg -Fq "'nocodbSources'" "$control_sql" ||
+  fail 'backup state omits NocoDB source state'
+rg -Fq 'ORDER BY source.domain, source.access_kind' "$control_sql" ||
+  fail 'NocoDB source backup state lacks stable domain/access ordering'
+rg -Fq "captured.state->'nocodbSources'" "$backup_script" ||
+  fail 'backup capture does not require the NocoDB source snapshot'
+! rg -q 'nocodb.*registry.tsv\|registry.tsv.*nocodb' "$backup_script" ||
+  fail 'backup registry export must not include NocoDB identifiers'
 
 echo 'automation-data dynamic logical backup behavior passed.'

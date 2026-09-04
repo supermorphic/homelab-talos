@@ -19,6 +19,10 @@ capture_platform_state() {
 WITH captured AS MATERIALIZED (
   SELECT platform_operations.capture_backup_state() AS state
 ),
+nocodb_source_state AS (
+  SELECT jsonb_typeof(captured.state->'nocodbSources') = 'array' AS valid
+  FROM captured
+),
 registry_rows AS (
   SELECT managed.*
   FROM captured
@@ -78,7 +82,9 @@ SELECT
   captured.state->>'generation',
   replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', '')
 FROM captured
-CROSS JOIN registry_text;
+CROSS JOIN registry_text
+CROSS JOIN nocodb_source_state
+WHERE nocodb_source_state.valid;
 "
   } 2>/dev/null)" || return 1
   case "$capture_line" in

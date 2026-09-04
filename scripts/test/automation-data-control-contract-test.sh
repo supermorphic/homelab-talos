@@ -145,9 +145,69 @@ mapfile -t declared_functions < <(
   sed -nE 's/^CREATE OR REPLACE FUNCTION (platform_operations\.[a-z_]+)\(.*/\1/p' \
     "$control_sql" | sort -u
 )
-expected_functions=$'platform_operations.capture_backup_state\nplatform_operations.provision_domain\nplatform_operations.publish_backup\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.validate_domain'
+rg -Fq 'CREATE TABLE platform_operations.managed_nocodb_sources' "$control_sql" ||
+  fail 'NocoDB source registry is missing'
+! rg -Fq 'managed_nocodb_domains' "$control_sql" ||
+  fail 'removed NocoDB domain registry remains present'
+expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
 [[ "$(printf '%s\n' "${declared_functions[@]}")" == "$expected_functions" ]] || \
   fail 'platform control SQL exposes an unexpected function set'
+for state in awaiting_grants provisioning waiting_for_source ready rotating error; do
+  rg -Fq "'$state'" "$control_sql" || fail "NocoDB source state $state is missing"
+done
+for schema in read_model operator; do
+  rg -Fq "$schema" "$control_sql" || fail "NocoDB schema $schema is missing"
+done
+
+nocodb_functions=(
+  provision_nocodb_metadata prepare_nocodb_access begin_nocodb_source
+  record_nocodb_integration record_nocodb_source_job record_nocodb_source_ready
+  record_nocodb_source_error rotate_nocodb_source_credential validate_nocodb_access
+)
+for function_name in "${nocodb_functions[@]}"; do
+  function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
+  [[ -n "$function_body" ]] || fail "NocoDB function $function_name is missing"
+  rg -Fq 'SECURITY DEFINER' <<<"$function_body" ||
+    fail "NocoDB function $function_name is not SECURITY DEFINER"
+  rg -Fq 'SET search_path = pg_catalog, platform_operations' <<<"$function_body" ||
+    fail "NocoDB function $function_name lacks a fixed search path"
+  rg -Fq 'platform_internal.assert_domain(p_domain)' <<<"$function_body" ||
+    [[ "$function_name" == provision_nocodb_metadata ]] ||
+      fail "NocoDB function $function_name does not validate its domain"
+  ! rg -q 'EXECUTE[[:space:]]\+.*p_' <<<"$function_body" ||
+    fail "NocoDB function $function_name accepts dynamic request SQL"
+  ! rg -q 'DELETE[[:space:]]\+FROM\|DROP[[:space:]]\+' <<<"$function_body" ||
+    fail "NocoDB function $function_name deletes managed state"
+done
+
+for function_name in begin_nocodb_source rotate_nocodb_source_credential; do
+  function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
+  rg -Fq 'length(p_password) < 32' <<<"$function_body" ||
+    fail "NocoDB function $function_name does not require a 32-character password"
+done
+for function_name in prepare_nocodb_access begin_nocodb_source record_nocodb_integration \
+  record_nocodb_source_job record_nocodb_source_ready record_nocodb_source_error \
+  rotate_nocodb_source_credential validate_nocodb_access; do
+  function_body="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations\\.${function_name}(/,/^\\\$function\\\$;/p" "$control_sql")"
+  rg -Fq 'pg_advisory_xact_lock' <<<"$function_body" ||
+    fail "NocoDB function $function_name does not take a domain advisory lock"
+done
+for json_field in domain readerRole readerEligible operatorRequested operatorEligible \
+  accessKind role baseId state generation credentialGeneration integrationId \
+  sourceCreateJobId sourceId validatedAt operationStartedAt updatedAt errorCode \
+  valid schemaPrivilegesValid objectPrivilegesValid defaultPrivilegesValid \
+  outsideSchemaDenied databaseIsolationValid forbiddenAttributesDenied \
+  forbiddenMembershipsDenied ddlDenied controlledDmlPresent; do
+  rg -Fq "'$json_field'" "$control_sql" || fail "NocoDB result field $json_field is missing"
+done
+for function_name in "${nocodb_functions[@]}"; do
+  rg -Fq "GRANT EXECUTE ON FUNCTION platform_operations.$function_name" "$control_sql" ||
+    fail "provisioner execution grant for $function_name is missing"
+done
+rg -Fq 'GRANT SELECT ON platform_operations.managed_domains,' "$control_sql" ||
+  fail 'backup and exporter grant boundary is missing'
+! rg -q 'GRANT SELECT ON platform_operations\.managed_nocodb_sources TO automation_data_(backup|exporter)' \
+  "$control_sql" || fail 'backup and exporter must not read NocoDB source IDs'
 
 rg -Fq "^[a-z][a-z0-9_]{0,47}$" "$control_sql" || \
   fail 'platform control SQL does not enforce the domain identifier boundary'
