@@ -86,5 +86,6 @@ helm template nocodb "$temp_dir/nocodb" \
 
 scripts/test/nocodb-manifest-contract-test.sh "$temp_dir/source.yaml" "$temp_dir/helm.yaml"
 scripts/test/nocodb-workflow-contract-test.sh
+scripts/test/nocodb-source-operation-test.sh
 
 echo 'NocoDB source, pinned chart render, manifest, and workflow contracts passed validation.'

@@ -26,6 +26,16 @@ cilium-validate: require-bash
 nocodb-validate: require-bash
     @scripts/validate/nocodb.sh
 
+# Reconcile every eligible NocoDB source for one managed domain through the fixed private
+# webhook. Guard: NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>'.
+nocodb-source-sync domain: require-bash
+    @scripts/nocodb/source-operation.sh sync {{quote(domain)}}
+
+# Rotate exactly one NocoDB source credential through the fixed private webhook. Guard:
+# NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:<reader|operator>'.
+nocodb-source-rotate domain access_kind: require-bash
+    @scripts/nocodb/source-operation.sh rotate {{quote(domain)}} {{quote(access_kind)}}
+
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
 n8n-validate: require-bash
