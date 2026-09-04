@@ -70,6 +70,7 @@ register_harness_shell_case first "$fixture_root/bin/barrier" first
 register_harness_shell_case second "$fixture_root/bin/barrier" second
 register_harness_shell_case third "$fixture_root/bin/third"
 run_registered_harness_shell_cases "$fixture_root/fragments" 2 7 \
+	validation.test-harness-core \
 	>"$fixture_root/output.log" 2>&1
 
 [[ "$(cat "$fixture_root/output.log")" == $'output-first\noutput-second\noutput-third' ]]
@@ -88,6 +89,7 @@ EOF
 	)" ]]
 	case_time="$(sed -n 's/.*time="\([^"]*\)".*/\1/p' "$fragment")"
 	awk -v value="$case_time" 'BEGIN { exit !(value >= 0) }'
+	rg -q 'classname="validation.test-harness-core"' "$fragment"
 done
 mapfile -t tmp_paths < <(cut -d= -f2- "$TMP_PATH_LOG" | LC_ALL=C sort -u)
 [[ "${#tmp_paths[@]}" -eq 3 ]]
@@ -97,7 +99,8 @@ for invalid in 0 9 abc ''; do
 	reset_harness_shell_cases
 	register_harness_shell_case marker touch "$marker"
 	set +e
-	run_registered_harness_shell_cases "$fixture_root/fragments" "$invalid" 0 >/dev/null 2>&1
+	run_registered_harness_shell_cases "$fixture_root/fragments" "$invalid" 0 \
+		validation.test-harness >/dev/null 2>&1
 	status="$?"
 	set -e
 	[[ "$status" -ne 0 && ! -e "$marker" ]]
@@ -107,6 +110,20 @@ register_harness_shell_case duplicate true
 if register_harness_shell_case duplicate true 2>/dev/null; then exit 1; fi
 if register_harness_shell_case Bad true 2>/dev/null; then exit 1; fi
 if register_harness_shell_case empty 2>/dev/null; then exit 1; fi
+
+for suite_id in validation.test-harness validation.test-harness-observability \
+	validation.test-harness-automation validation.test-harness-ci-framework; do
+	reset_harness_shell_cases
+	register_harness_shell_case accepted-suite true
+	run_registered_harness_shell_cases "$fixture_root/fragments" 1 0 "$suite_id"
+done
+reset_harness_shell_cases
+register_harness_shell_case rejected-suite touch "$fixture_root/rejected-suite-ran"
+if run_registered_harness_shell_cases "$fixture_root/fragments" 1 0 \
+	validation.test-harness-invalid >/dev/null 2>&1; then
+	exit 1
+fi
+[[ ! -e "$fixture_root/rejected-suite-ran" ]]
 
 reset_harness_shell_cases
 rm -f "$fixture_root/fragments"/*.xml
@@ -120,6 +137,7 @@ register_harness_shell_case blocking "$fixture_root/bin/blocking"
 register_harness_shell_case never-started touch "$tail_marker"
 set +e
 run_registered_harness_shell_cases "$fixture_root/fragments" 2 0 \
+	validation.test-harness \
 	>"$fixture_root/failure-output.log" 2>&1
 status="$?"
 set -e
