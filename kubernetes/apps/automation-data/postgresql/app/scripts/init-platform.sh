@@ -13,8 +13,9 @@ CREATE ROLE automation_data_backup
   LOGIN SUPERUSER NOINHERIT
   PASSWORD :'backup_password';
 CREATE ROLE automation_data_exporter
-  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT
   PASSWORD :'exporter_password';
+GRANT pg_monitor TO automation_data_exporter;
 
 REVOKE CONNECT ON DATABASE automation_data_control FROM PUBLIC;
 GRANT CONNECT ON DATABASE automation_data_control TO

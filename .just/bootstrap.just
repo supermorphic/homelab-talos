@@ -2978,7 +2978,9 @@ automation-data:
     postgresql_ks='kubernetes/apps/automation-data/postgresql/ks.yaml'
     database_secret='kubernetes/apps/automation-data/postgresql/app/postgresql-credentials.sops.yaml'
     bootstrap_run_id="$(date -u +%Y%m%d%H%M%S)-$$"
+    exporter_grant_job="automation-data-exporter-grant-$bootstrap_run_id"
     backup_job="automation-data-backup-bootstrap-$bootstrap_run_id"
+    exporter_grant_job_created=false
     backup_job_created=false
     resumed_postgresql=false
     bootstrap_complete=false
@@ -2988,6 +2990,54 @@ automation-data:
       resource="$(kubectl --kubeconfig "$kubeconfig" --namespace automation-data \
         get job "$backup_job" --ignore-not-found --output name)" || return 1
       [[ -z "$resource" ]]
+    }
+    exporter_grant_job_absent() {
+      local resource
+      resource="$(kubectl --kubeconfig "$kubeconfig" --namespace automation-data \
+        get job "$exporter_grant_job" --ignore-not-found --output name)" || return 1
+      [[ -z "$resource" ]]
+    }
+    report_exporter_grant_job_failure() {
+      echo "Automation-data exporter grant Job automation-data/$exporter_grant_job did not complete." >&2
+      kubectl --kubeconfig "$kubeconfig" --namespace automation-data get job \
+        "$exporter_grant_job" --output json 2>/dev/null | yq -r '
+          {
+            "name": .metadata.name,
+            "active": (.status.active // 0),
+            "succeeded": (.status.succeeded // 0),
+            "failed": (.status.failed // 0),
+            "conditions": [.status.conditions[]? | {
+              "type": .type,
+              "status": .status,
+              "reason": (.reason // "")
+            }]
+          }
+        ' >&2 || true
+      kubectl --kubeconfig "$kubeconfig" --namespace automation-data logs \
+        "job/$exporter_grant_job" --container grant-exporter-monitor \
+        --tail=80 --limit-bytes=16384 --timestamps=true >&2 || true
+    }
+    wait_for_exporter_grant_job() {
+      local deadline=$((SECONDS + 300)) state
+      while (( SECONDS < deadline )); do
+        if ! state="$(kubectl --kubeconfig "$kubeconfig" --namespace automation-data \
+          get job "$exporter_grant_job" --output json)"; then
+          report_exporter_grant_job_failure
+          return 1
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Complete" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          return 0
+        fi
+        if [[ "$(yq -r '[.status.conditions[]? | select(
+          .type == "Failed" and .status == "True") ] | length' <<<"$state")" == '1' ]]; then
+          report_exporter_grant_job_failure
+          return 1
+        fi
+        sleep 5
+      done
+      report_exporter_grant_job_failure
+      return 1
     }
     report_backup_job_failure() {
       echo "Initial automation-data backup Job automation-data/$backup_job did not complete." >&2
@@ -3043,6 +3093,13 @@ automation-data:
             cleanup_failed=true
           backup_job_absent || cleanup_failed=true
         fi
+        if [[ "$exporter_grant_job_created" == 'true' ]]; then
+          echo "automation-data acceptance did not pass; removing exporter grant Job automation-data/$exporter_grant_job." >&2
+          kubectl --kubeconfig "$kubeconfig" --namespace automation-data delete job \
+            "$exporter_grant_job" --ignore-not-found --wait=true --timeout=2m >/dev/null || \
+            cleanup_failed=true
+          exporter_grant_job_absent || cleanup_failed=true
+        fi
         if [[ "$resumed_postgresql" == 'true' ]]; then
           echo 'automation-data acceptance did not pass; re-suspending automation-data-postgresql while preserving its resources and claims.' >&2
           flux suspend kustomization automation-data-postgresql --namespace flux-system \
@@ -3067,8 +3124,10 @@ automation-data:
       exit 1
     }
     source scripts/lib/rollout.sh
+    source scripts/lib/automation-data-bootstrap.sh
     require_deployed_source 'automation-data bootstrap' \
       .just/bootstrap.just kubernetes/mod.just tests/catalog.yaml \
+      scripts/lib/automation-data-bootstrap.sh \
       scripts/validate/automation-data.sh scripts/verify/automation-data.sh \
       scripts/test/scenarios/automation-data-provisioning.sh \
       scripts/test/scenarios/automation-data-restore-drill.sh \
@@ -3131,10 +3190,30 @@ automation-data:
     kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
       --for=condition=Ready kustomization/automation-data-postgresql --timeout=15m
 
+    exporter_grant_job_absent || {
+      echo "Refusing automation-data bootstrap: automation-data/$exporter_grant_job exists or its absence cannot be proved." >&2
+      exit 1
+    }
     backup_job_absent || {
       echo "Refusing automation-data bootstrap: automation-data/$backup_job exists or its absence cannot be proved." >&2
       exit 1
     }
+    echo 'Applying the idempotent monitoring-role grant to the initialized PostgreSQL cluster.'
+    exporter_grant_job_created=true
+    automation_data_exporter_grant_job_manifest \
+      "$exporter_grant_job" "$bootstrap_run_id" | \
+      kubectl --kubeconfig "$kubeconfig" --namespace automation-data create \
+        --filename - >/dev/null
+    wait_for_exporter_grant_job
+    echo 'Exporter monitoring grant completed; deleting run-owned exporter grant Job.'
+    kubectl --kubeconfig "$kubeconfig" --namespace automation-data delete job \
+      "$exporter_grant_job" --wait=true --timeout=2m >/dev/null
+    exporter_grant_job_absent || {
+      echo "Failed to remove run-owned Job automation-data/$exporter_grant_job." >&2
+      exit 1
+    }
+    exporter_grant_job_created=false
+
     echo 'Creating the first validated automation-data logical backup from the reconciled CronJob.'
     backup_job_created=true
     kubectl --kubeconfig "$kubeconfig" --namespace automation-data create job \

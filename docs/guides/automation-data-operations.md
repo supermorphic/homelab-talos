@@ -93,14 +93,17 @@ AUTOMATION_DATA_BOOTSTRAP_CONFIRM='bootstrap:automation-data' \
 
 The bootstrap checks that the encrypted Secret is committed and selected without
 decrypting it. It reconciles the namespace, resumes only
-`automation-data-postgresql`, creates one run-owned backup Job from the CronJob, removes
-that Job, and runs read-only verification. On failure, it removes only its Job and
-re-suspends only the PostgreSQL Kustomization it resumed. Claims and database data stay
-in place.
+`automation-data-postgresql`, enables role inheritance and applies the idempotent
+`pg_monitor` grant required by the platform exporter, and removes that run-owned
+migration Job. It then creates one
+run-owned backup Job from the CronJob, removes that Job, and runs read-only verification.
+On failure, it removes only its run-owned Jobs and re-suspends only the PostgreSQL
+Kustomization it resumed. Claims and database data stay in place.
 
 **Expected result:** The PostgreSQL Kustomization is active, its StatefulSet and both
-PVCs are ready, the initial run-owned backup completes, and read-only verification
-passes.
+PVCs are ready, SQL Exporter can report every connectable database without receiving
+domain data privileges, the initial run-owned backup completes, and read-only
+verification passes.
 
 ### 3. Create the three provisioning credentials in n8n
 
