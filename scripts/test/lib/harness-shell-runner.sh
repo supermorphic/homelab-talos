@@ -54,10 +54,14 @@ validate_harness_shell_jobs() {
 
 run_registered_harness_shell_cases() (
 	set -euo pipefail
-	local result_fragment_root="${1:-}" jobs="${2:-}" start_index="${3:-}"
+	local result_fragment_root="${1:-}" jobs="${2:-}" start_index="${3:-}" suite_id="${4:-}"
 	validate_harness_shell_jobs "$jobs"
 	[[ "$start_index" =~ ^[0-9]+$ ]] || {
 		echo "Harness shell start index must be a non-negative integer: ${start_index:-<empty>}" >&2
+		return 2
+	}
+	[[ "$suite_id" =~ ^validation\.test-harness(-(core|observability|automation|ci-framework))?$ ]] || {
+		echo "Invalid harness shell suite ID: ${suite_id:-<empty>}" >&2
 		return 2
 	}
 
@@ -160,7 +164,7 @@ run_registered_harness_shell_cases() (
 		fragment_number=$((start_index + index + 1))
 		write_result_case_junit \
 			"$result_fragment_root/bash-${fragment_number}.xml" \
-			validation.test-harness \
+			"$suite_id" \
 			"${HARNESS_SHELL_CASE_NAMES[$index]}" \
 			"$result" \
 			"$duration"
