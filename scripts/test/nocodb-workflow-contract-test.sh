@@ -269,6 +269,16 @@ for access_kind in ("Reader", "Operator"):
         f"Require Rotated {access_kind} Data Probe" in reachable(f"Patch {access_kind} Rotation Integration"),
         f"{access_kind} rotation must probe NocoDB after patching the retained integration.",
     )
+    require(
+        f"Observe {access_kind} Ready Job" in reachable(f"Validate {access_kind} Source")
+        and f"Require {access_kind} Ready Job" in reachable(f"Observe {access_kind} Ready Job")
+        and ready in reachable(f"Require {access_kind} Ready Job"),
+        f"{access_kind} ready output must observe the exact stored source-create job after source GET.",
+    )
+    require(
+        f"Merge {access_kind} Ready Evidence" in reachable(ready),
+        f"{access_kind} registry output must be merged with observed readiness evidence.",
+    )
     rotation_if = by_name.get(f"{access_kind} Error Rotation", {}).get("parameters", {})
     require(
         "requestedAccessKind" in json.dumps(rotation_if),
@@ -321,6 +331,20 @@ if (operatorRotateRequest.requestedAccessKind !== 'operator' || operatorRotateRe
 }
 
 const base = { domain: 'domain_one', accessKind: 'reader', baseId: 'base-1', sourceCreateJobId: 'job-1', pollCount: 3 };
+const readerValidation = {
+  domain: 'domain_one', accessKind: 'reader', role: 'domain_one_reader', valid: true,
+  loginValid: true, schemaPrivilegesValid: true, objectPrivilegesValid: true,
+  defaultPrivilegesValid: true, outsideSchemaDenied: true, databaseIsolationValid: true,
+  forbiddenAttributesDenied: true, forbiddenMembershipsDenied: true, ddlDenied: true,
+  controlledDmlPresent: false,
+};
+const operatorValidation = {
+  domain: 'domain_one', accessKind: 'operator', role: 'domain_one_operator', valid: true,
+  loginValid: true, schemaPrivilegesValid: true, objectPrivilegesValid: true,
+  defaultPrivilegesValid: true, outsideSchemaDenied: true, databaseIsolationValid: true,
+  forbiddenAttributesDenied: true, forbiddenMembershipsDenied: true, ddlDenied: true,
+  controlledDmlPresent: true,
+};
 for (const evaluator of ['Evaluate Reader Job', 'Evaluate Operator Job']) {
   const completed = execute(evaluator, { ...base, jobs: [{ id: 'job-1', job: 'source-create', status: 'completed' }] })[0].json;
   if (completed.jobState !== 'completed' || completed.sourceCreateJobId !== 'job-1') {
@@ -461,7 +485,7 @@ for (const [node, input, pattern] of [
 }
 const operatorTargetReaderGate = execute(
   'Require Reader PostgreSQL',
-  { result: { valid: true, accessKind: 'reader' } },
+  { result: readerValidation },
   {
     'Validate Reader Source': { ...sourceContext, requestedAccessKind: 'operator' },
     'Normalize Source Request': operatorRotateRequest,
@@ -470,22 +494,129 @@ const operatorTargetReaderGate = execute(
 if (operatorTargetReaderGate.rotateTarget !== false) throw new Error('operator-targeted rotation enabled the reader rotation path');
 const operatorTargetOperatorGate = execute(
   'Require Operator PostgreSQL',
-  { result: { valid: true, accessKind: 'operator' } },
+  { result: operatorValidation },
   {
     'Validate Operator Source': { ...sourceContext, accessKind: 'operator', requestedAccessKind: 'operator' },
     'Normalize Source Request': operatorRotateRequest,
   },
 )[0].json;
 if (operatorTargetOperatorGate.rotateTarget !== true) throw new Error('operator-targeted rotation did not enable the operator rotation path');
-const boundedSourceResponse = execute(
-  'Prepare Source Response',
-  { result: { state: 'ready', accessKind: 'reader', baseId: 'base-1', sourceId: 'source-1', integrationId: 'integration-1', generation: 2 } },
-  { 'Normalize Source Request': operatorRotateRequest },
+if (operatorTargetReaderGate.postgresqlValidation.valid !== true || operatorTargetReaderGate.postgresqlValidation.controlledDmlPresent !== false) {
+  throw new Error('reader PostgreSQL readiness matrix was not preserved from validate_nocodb_access');
+}
+if (operatorTargetOperatorGate.postgresqlValidation.valid !== true || operatorTargetOperatorGate.postgresqlValidation.controlledDmlPresent !== true) {
+  throw new Error('operator PostgreSQL readiness matrix was not preserved from validate_nocodb_access');
+}
+
+const storedReader = {
+  domain: 'domain_one', accessKind: 'reader', state: 'ready', baseId: 'base-1', sourceId: 'source-1',
+  integrationId: 'integration-1', sourceCreateJobId: 'job-1', generation: 11, credentialGeneration: 2,
+  operationStartedAt: '2026-09-04T12:00:00Z', updatedAt: '2026-09-04T12:01:00Z', validatedAt: '2026-09-04T12:01:00Z',
+};
+const observedReader = {
+  ...operatorTargetReaderGate, sourceId: 'source-1', integrationId: 'integration-1', sourceCreateJobId: 'job-1',
+  sourceCreateJobState: 'completed', sourceDiscovered: true, sourceReadBack: true,
+  dataEditAllowed: false, schemaEditAllowed: false,
+};
+const mergedReaderReady = execute(
+  'Merge Reader Ready Evidence', { result: storedReader },
+  { 'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null }, 'Require Reader PostgreSQL': observedReader },
 )[0].json;
+if (mergedReaderReady.credentialGeneration !== 2 || mergedReaderReady.sourceCreateJobState !== 'completed' || mergedReaderReady.postgresqlValidation.valid !== true) {
+  throw new Error('reader stored state and observed readiness evidence were not merged');
+}
+const storedOperator = {
+  domain: 'domain_one', accessKind: 'operator', state: 'ready', baseId: 'base-1', sourceId: 'source-operator',
+  integrationId: 'integration-operator', sourceCreateJobId: 'job-operator', generation: 12, credentialGeneration: 3,
+  operationStartedAt: '2026-09-04T12:02:00Z', updatedAt: '2026-09-04T12:03:00Z', validatedAt: '2026-09-04T12:03:00Z',
+};
+const observedOperator = {
+  ...operatorTargetOperatorGate, sourceId: 'source-operator', integrationId: 'integration-operator', sourceCreateJobId: 'job-operator',
+  sourceCreateJobState: 'completed', sourceDiscovered: true, sourceReadBack: true,
+  dataEditAllowed: true, schemaEditAllowed: false,
+};
+const mergedOperatorReady = execute(
+  'Merge Operator Ready Evidence', { result: storedOperator },
+  { 'Normalize Source Request': operatorRotateRequest, 'Keep Rotated Operator': observedOperator },
+)[0].json;
+if (mergedOperatorReady.credentialGeneration !== 3 || mergedOperatorReady.postgresqlValidation.controlledDmlPresent !== true) {
+  throw new Error('rotated operator response lost stored or observed readiness evidence');
+}
+const mergedOperatorSync = execute(
+  'Merge Operator Ready Evidence', { result: storedOperator },
+  {
+    'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null },
+    'Require Operator PostgreSQL': observedOperator,
+  },
+)[0].json;
+if (mergedOperatorSync.sourceCreateJobState !== 'completed' || mergedOperatorSync.postgresqlValidation.valid !== true) {
+  throw new Error('unchanged operator sync lost observed readiness evidence');
+}
+const boundedSourceResponse = execute('Prepare Source Response', mergedOperatorReady, {
+  'Normalize Source Request': operatorRotateRequest,
+  'Merge Reader Ready Evidence': mergedReaderReady,
+})[0].json;
 const boundedResponseKeys = ['baseId', 'domain', 'errorCode', 'ok', 'operation', 'operator', 'reader'];
 if (JSON.stringify(Object.keys(boundedSourceResponse).sort()) !== JSON.stringify(boundedResponseKeys)) {
   throw new Error('source response exposed request-routing or unbounded internal fields');
 }
+const readyEvidenceKeys = [
+  'accessKind', 'credentialGeneration', 'dataEditAllowed', 'generation', 'integrationId', 'operationStartedAt',
+  'postgresqlValidation', 'schemaEditAllowed', 'sourceCreateJobId', 'sourceCreateJobState', 'sourceDiscovered',
+  'sourceId', 'sourceReadBack', 'state', 'updatedAt', 'validatedAt',
+];
+const validationEvidenceKeys = [
+  'controlledDmlPresent', 'databaseIsolationValid', 'ddlDenied', 'defaultPrivilegesValid',
+  'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'loginValid', 'objectPrivilegesValid',
+  'outsideSchemaDenied', 'schemaPrivilegesValid', 'valid',
+];
+for (const kind of ['reader', 'operator']) {
+  if (JSON.stringify(Object.keys(boundedSourceResponse[kind]).sort()) !== JSON.stringify(readyEvidenceKeys)) {
+    throw new Error(`${kind} source response omitted or exposed readiness evidence fields`);
+  }
+  if (boundedSourceResponse[kind].sourceCreateJobState !== 'completed' || boundedSourceResponse[kind].postgresqlValidation.valid !== true) {
+    throw new Error(`${kind} source response did not contain observed terminal job and PostgreSQL evidence`);
+  }
+  if (JSON.stringify(Object.keys(boundedSourceResponse[kind].postgresqlValidation).sort()) !== JSON.stringify(validationEvidenceKeys)) {
+    throw new Error(`${kind} source response exposed a non-boolean or unbounded PostgreSQL result`);
+  }
+}
+let inferredReadyEvidenceRejected = false;
+try {
+  execute('Prepare Source Response', storedReader, {
+    'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null },
+  });
+} catch (error) { inferredReadyEvidenceRejected = /source_response_evidence_invalid/.test(error.message); }
+if (!inferredReadyEvidenceRejected) throw new Error('state=ready fabricated missing source, job, UI, or PostgreSQL evidence');
+for (const forbidden of ['password', 'token', 'header', 'credentialId', 'role']) {
+  if (JSON.stringify(boundedSourceResponse).toLowerCase().includes(forbidden.toLowerCase())) {
+    throw new Error(`source response exposed secret-bearing or internal field ${forbidden}`);
+  }
+}
+const unchangedSyncResponse = execute('Prepare Source Response', mergedOperatorSync, {
+  'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null },
+  'Merge Reader Ready Evidence': mergedReaderReady,
+})[0].json;
+if (unchangedSyncResponse.operation !== 'sync' || unchangedSyncResponse.reader.postgresqlValidation.valid !== true || unchangedSyncResponse.operator.postgresqlValidation.valid !== true) {
+  throw new Error('unchanged sync response was not complete');
+}
+const awaitingOperator = execute(
+  'Capture Optional Operator State',
+  { result: {
+    domain: 'domain_one', accessKind: 'operator', state: 'awaiting_grants', baseId: null, sourceId: null,
+    integrationId: null, sourceCreateJobId: null, generation: 8, credentialGeneration: 0,
+    operationStartedAt: '2026-09-04T11:00:00Z', updatedAt: '2026-09-04T11:00:00Z', validatedAt: null,
+  } },
+  { 'Start Operator': { domain: 'domain_one', operation: 'sync', reader: mergedReaderReady, plan: { operatorRequested: true } } },
+)[0].json;
+const awaitingResponse = execute('Prepare Source Response', awaitingOperator, {
+  'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null },
+  'Merge Reader Ready Evidence': mergedReaderReady,
+})[0].json;
+if (
+  awaitingResponse.ok !== true || awaitingResponse.operator.state !== 'awaiting_grants'
+  || awaitingResponse.operator.sourceCreateJobState !== null || awaitingResponse.operator.postgresqlValidation !== null
+) throw new Error('awaiting-grants operator response fabricated readiness evidence');
 let failedOperatorInitialRejected = false;
 try { execute('Inspect Operator Sources', { ...failedOperatorRotation, registryOperation: 'sync' }); }
 catch (error) { failedOperatorInitialRejected = /rotation_retry_invalid/.test(error.message); }
@@ -574,10 +705,54 @@ for (const fixture of [
 ]) {
   const valid = execute(fixture.node, fixture.source, fixture.lookup)[0].json;
   if (valid.integrationId !== 'integration-current') throw new Error(`${fixture.name} GET did not accept its selected current integration`);
+  if (valid.dataEditAllowed !== (fixture.name === 'operator') || valid.schemaEditAllowed !== false || valid.sourceDiscovered !== true || valid.sourceReadBack !== true) {
+    throw new Error(`${fixture.name} source GET flags were not preserved as observed evidence`);
+  }
   let mismatchRejected = false;
   try { execute(fixture.node, { ...fixture.source, fk_integration_id: 'integration-other' }, fixture.lookup); }
   catch (error) { mismatchRejected = /source_identity_invalid/.test(error.message); }
   if (!mismatchRejected) throw new Error(`${fixture.name} GET accepted an integration different from discovery`);
+}
+
+for (const fixture of [
+  {
+    node: 'Validate Reader Source',
+    source: { id: 'source-new-reader', base_id: 'base-1', fk_integration_id: 'integration-new', alias: 'Read Model', config: { searchPath: ['read_model'] }, is_data_readonly: true, is_schema_readonly: true },
+    lookup: {
+      'Start Reader': { domain: 'domain_one', baseId: 'base-1' },
+      'Read Reader State': { result: null },
+      'Discover Reader Source After Job': { sourceId: 'source-new-reader', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-reader' },
+    },
+    expected: 'job-current-reader',
+  },
+  {
+    node: 'Validate Operator Source',
+    source: { id: 'source-new-operator', base_id: 'base-1', fk_integration_id: 'integration-new', alias: 'Operator', config: { searchPath: ['operator'] }, is_data_readonly: false, is_schema_readonly: true },
+    lookup: {
+      'Prepare Operator': { domain: 'domain_one', baseId: 'base-1' },
+      'Read Operator State': { result: null },
+      'Discover Operator Source After Job': { sourceId: 'source-new-operator', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-operator' },
+    },
+    expected: 'job-current-operator',
+  },
+]) {
+  if (execute(fixture.node, fixture.source, fixture.lookup)[0].json.sourceCreateJobId !== fixture.expected) {
+    throw new Error(`${fixture.node} did not carry the current completed job identity into read-back evidence`);
+  }
+}
+
+for (const [name, kind] of [['Require Reader Ready Job', 'reader'], ['Require Operator Ready Job', 'operator']]) {
+  const context = {
+    ...base, accessKind: kind, sourceId: `source-${kind}`, sourceCreateJobId: `job-${kind}`,
+    dataEditAllowed: kind === 'operator', schemaEditAllowed: false, sourceDiscovered: true, sourceReadBack: true,
+  };
+  const result = execute(name, { ...context, jobs: [{ id: `job-${kind}`, job: 'source-create', status: 'completed' }] })[0].json;
+  if (result.sourceCreateJobState !== 'completed') throw new Error(`${name} did not preserve observed completed job state`);
+  for (const jobs of [[], [{ id: `job-${kind}`, job: 'source-create', status: 'active' }]]) {
+    let rejected = false;
+    try { execute(name, { ...context, jobs }); } catch (error) { rejected = /ready_job_invalid/.test(error.message); }
+    if (!rejected) throw new Error(`${name} accepted missing or nonterminal job evidence`);
+  }
 }
 
 const queueContext = {
@@ -731,9 +906,33 @@ for node in http_nodes:
     require(
         "/tables/" in url
         or url.endswith("/api/v2/meta/bases")
-        or ("/api/v2/meta/bases/" in url and ("/sources" in url or "/tables" in url)),
+        or ("/api/v2/meta/bases/" in url and ("/sources" in url or "/tables" in url or "/shared" in url)),
         f"{node['name']} has an unapproved acceptance API path.",
     )
+
+share_nodes = {
+    node["name"]: node.get("parameters", {})
+    for node in http_nodes
+    if "/shared" in node.get("parameters", {}).get("url", "")
+    or "/share" in node.get("parameters", {}).get("url", "")
+}
+require(
+    set(share_nodes) == {"Get Acceptance Base Share", "Get Reader Shared Views", "Get Operator Shared Views"},
+    "Acceptance must make exactly one base-share and two exact table-share reads.",
+)
+require(
+    all(parameters.get("method", "GET") == "GET" for parameters in share_nodes.values()),
+    "Acceptance public-share checks must be GET-only.",
+)
+require(
+    "/api/v2/meta/bases/" in share_nodes["Get Acceptance Base Share"].get("url", "")
+    and "/shared" in share_nodes["Get Acceptance Base Share"].get("url", "")
+    and "/api/v2/meta/tables/" in share_nodes["Get Reader Shared Views"].get("url", "")
+    and "/share" in share_nodes["Get Reader Shared Views"].get("url", "")
+    and "/api/v2/meta/tables/" in share_nodes["Get Operator Shared Views"].get("url", "")
+    and "/share" in share_nodes["Get Operator Shared Views"].get("url", ""),
+    "Acceptance public-share checks use the wrong NocoDB endpoints.",
+)
 
 reader_read = by_name.get("Read Acceptance Facts", {}).get("parameters", {})
 require(
@@ -815,6 +1014,21 @@ require(
     },
     "Acceptance must read both exact source configurations before resolving reflected tables.",
 )
+require(
+    "Get Acceptance Base Share" in {
+        edge["node"] for output in connections.get("Resolve Acceptance Tables", {}).get("main", []) for edge in output
+    }
+    and "Get Reader Shared Views" in {
+        edge["node"] for output in connections.get("Require Acceptance Base Private", {}).get("main", []) for edge in output
+    }
+    and "Get Operator Shared Views" in {
+        edge["node"] for output in connections.get("Require Reader Shares Empty", {}).get("main", []) for edge in output
+    }
+    and "Cleanup Only" in {
+        edge["node"] for output in connections.get("Require Operator Shares Empty", {}).get("main", []) for edge in output
+    },
+    "Acceptance must validate the base and both exact table share surfaces before probing or cleanup.",
+)
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
     require(label in notes, f"The acceptance setup note omits {label}.")
@@ -893,6 +1107,38 @@ if (
   || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
   || resolved.reflectedTables.some((table) => table.schema !== exactTables.find((candidate) => candidate.id === table.id).schema)
 ) throw new Error('exact reflected schemas and tables were not derived');
+const privateBase = execute(
+  'Require Acceptance Base Private',
+  { uuid: null, roles: null, fk_custom_url_id: null },
+  { 'Resolve Acceptance Tables': resolved },
+)[0].json;
+if (privateBase.publicSharing.basePublicShareUuid !== null) throw new Error('null base share UUID was not retained as evidence');
+for (const body of [{ roles: null }, { uuid: 'public-base-uuid', roles: 'viewer' }]) {
+  let rejected = false;
+  try { execute('Require Acceptance Base Private', body, { 'Resolve Acceptance Tables': resolved }); }
+  catch (error) { rejected = /acceptance_base_share_invalid/.test(error.message); }
+  if (!rejected) throw new Error('missing or non-null base share UUID was accepted');
+}
+const noReaderShares = execute(
+  'Require Reader Shares Empty', { list: [] }, { 'Require Acceptance Base Private': privateBase },
+)[0].json;
+const noOperatorShares = execute(
+  'Require Operator Shares Empty', { list: [] }, { 'Require Reader Shares Empty': noReaderShares },
+)[0].json;
+if (
+  noOperatorShares.publicSharing.views.length !== 2
+  || noOperatorShares.publicSharing.views.some((view) => view.publicShareUuid !== null)
+) throw new Error('empty exact table share collections were not retained as bounded evidence');
+for (const [name, lookup] of [
+  ['Require Reader Shares Empty', { 'Require Acceptance Base Private': privateBase }],
+  ['Require Operator Shares Empty', { 'Require Reader Shares Empty': noReaderShares }],
+]) {
+  for (const body of [{ list: [{ id: 'view-one', uuid: 'shared-view' }] }, { unexpected: [] }]) {
+    let rejected = false;
+    try { execute(name, body, lookup); } catch (error) { rejected = /acceptance_table_share_invalid/.test(error.message); }
+    if (!rejected) throw new Error(`${name} accepted a public or malformed share collection`);
+  }
+}
 let untrustedSchemaRejected = false;
 try {
   execute('Resolve Acceptance Tables', { ...reflectedContext, readerSchema: 'public', tables: exactTables, pageInfo: completePage });
@@ -1017,6 +1263,38 @@ const absent = execute('Require Cleanup Absent', {
   context: cleanupDone,
 })[0].json;
 if (absent.ok !== true || absent.removedCount !== 2) throw new Error('cleanup absence was not verified');
+
+const acceptanceResponse = execute(
+  'Prepare Acceptance Response',
+  { list: [] },
+  {
+    'Evaluate Reader Insert Denial': {
+      ...noOperatorShares,
+      inserted: true,
+      read: true,
+      readerRead: true,
+      decisionUpdated: true,
+      removed: true,
+      protectedUpdateDenied: true,
+      protectedUpdateStatus: 400,
+      protectedUpdateEvidence: 'postgresql_42501',
+      readerInsertDenied: true,
+      readerInsertStatus: 403,
+      readerInsertEvidence: 'nocodb_readonly_source',
+    },
+  },
+)[0].json;
+if (
+  acceptanceResponse.credentialProof?.throughN8n !== true
+  || acceptanceResponse.credentialProof?.credentialName !== 'NocoDB Operator API'
+  || acceptanceResponse.publicSharing?.basePublicShareUuid !== null
+  || acceptanceResponse.publicSharing?.views?.length !== 2
+) throw new Error('successful HTTP probe omitted credential-path or public-sharing evidence');
+for (const forbidden of ['password', 'token', 'header', 'credentialId']) {
+  if (JSON.stringify(acceptanceResponse).toLowerCase().includes(forbidden.toLowerCase())) {
+    throw new Error(`acceptance response exposed secret-bearing field ${forbidden}`);
+  }
+}
 JS
 
 mapfile -t packaged_workflows < <(

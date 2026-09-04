@@ -478,6 +478,11 @@ as compensation. A retry reconciles the credential from observed state and permi
 most one preserved orphan-token replacement as described above. Bootstrap keeps cleanup
 armed until a live read-back proves marker removal and the intended active state.
 
+There is no separate bootstrap-token recovery command. A rare lost token response is
+handled by the bounded bootstrap rerun above. The source credential rotation command
+rotates a selected PostgreSQL reader or operator login; it does not recover or rotate the
+broad NocoDB API token stored by n8n.
+
 ## Source provisioning workflow
 
 Ongoing source management is a private n8n workflow invoked by a purpose-specific
@@ -552,6 +557,18 @@ Source sync performs this idempotent state machine:
 13. Mark the source generation `ready` only after all asynchronous, read-back, and access
     checks succeed. Return only non-secret IDs, access kinds, states, and timestamps.
 
+The bounded source response also includes the stored job ID and terminal job state,
+credential generation, source UI edit flags, and the boolean PostgreSQL validation matrix
+used for readiness. Attended acceptance uses this non-secret evidence to compare unchanged
+sync and targeted rotation without reading the registry or credentials directly.
+Each source result names these as `sourceCreateJobId`, `sourceCreateJobState`,
+`credentialGeneration`, `dataEditAllowed`, `schemaEditAllowed`, and
+`postgresqlValidation`. It also returns `sourceDiscovered`, `sourceReadBack`, the registry
+`generation`, and supported `operationStartedAt`, `updatedAt`, and `validatedAt`
+timestamps. A `ready` result requires fresh source GET, exact completed-job, data API, and
+PostgreSQL validation evidence; the workflow does not infer those fields from registry
+state alone.
+
 The workflow uses execution order `v1` and disables saved manual, successful, failed, and
 progress execution data. Passwords exist transiently in n8n memory because both systems
 must receive the same generated value.
@@ -603,6 +620,14 @@ base, integration, source, and job endpoints above, normal access checks may use
 `GET /api/v2/meta/bases/:baseId/tables` and
 `GET /api/v2/tables/:tableId/records`. The workflow does not send data writes as its
 reader authentication check.
+
+The synthetic acceptance probe also reads
+`GET /api/v2/meta/bases/:baseId/shared` and each reflected table's
+`GET /api/v2/meta/tables/:tableId/share` collection. It requires a null base share UUID
+and empty shared-view collections. It never creates, changes, or deletes a share. A
+successful probe returns only the resulting bounded public-sharing evidence and identifies
+the n8n `NocoDB Operator API` credential path; it does not restate the PostgreSQL source
+validation matrix as if the acceptance data API calls had measured it.
 
 ## Command lifecycle
 

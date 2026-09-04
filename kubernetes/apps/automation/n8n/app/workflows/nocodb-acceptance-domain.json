@@ -378,6 +378,84 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/shared' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "id": "20000000-0000-4000-8000-000000000051",
+      "name": "Get Acceptance Base Share",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst response = $json;\nif (!response || typeof response !== 'object' || Array.isArray(response) || !Object.prototype.hasOwnProperty.call(response, 'uuid') || response.uuid !== null) throw new Error('acceptance_base_share_invalid');\nreturn [{ json: { ...context, publicSharing: { basePublicShareUuid: response.uuid, views: [] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 300],
+      "id": "20000000-0000-4000-8000-000000000052",
+      "name": "Require Acceptance Base Private",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.factsTableId + '/share' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 300],
+      "id": "20000000-0000-4000-8000-000000000053",
+      "name": "Get Reader Shared Views",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Acceptance Base Private').first().json;\nconst list = $json?.list;\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(list) || list.length !== 0) throw new Error('acceptance_table_share_invalid');\nif (pageInfo !== undefined && (pageInfo.totalRows !== 0 || pageInfo.isLastPage !== true)) throw new Error('acceptance_table_share_invalid');\nreturn [{ json: { ...context, publicSharing: { ...context.publicSharing, views: [{ title: 'acceptance_facts', publicShareUuid: null }] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300],
+      "id": "20000000-0000-4000-8000-000000000054",
+      "name": "Require Reader Shares Empty",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.decisionTableId + '/share' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300],
+      "id": "20000000-0000-4000-8000-000000000055",
+      "name": "Get Operator Shared Views",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Reader Shares Empty').first().json;\nconst list = $json?.list;\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(list) || list.length !== 0) throw new Error('acceptance_table_share_invalid');\nif (pageInfo !== undefined && (pageInfo.totalRows !== 0 || pageInfo.isLastPage !== true)) throw new Error('acceptance_table_share_invalid');\nreturn [{ json: { ...context, publicSharing: { ...context.publicSharing, views: [...context.publicSharing.views, { title: 'acceptance_decision', publicShareUuid: null }] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 300],
+      "id": "20000000-0000-4000-8000-000000000056",
+      "name": "Require Operator Shares Empty",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
@@ -512,7 +590,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId } }];"
+        "jsCode": "const context = $('Cleanup Only').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId, inserted: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -557,7 +635,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Normalize Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'pending') throw new Error('insert_probe_failed');\nreturn [{ json: { ...context, protectedCreatedAt: matches[0].protected_created_at } }];"
+        "jsCode": "const context = $('Normalize Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'pending') throw new Error('insert_probe_failed');\nreturn [{ json: { ...context, protectedCreatedAt: matches[0].protected_created_at, read: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -623,7 +701,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'approved' || matches[0].protected_created_at !== context.protectedCreatedAt) throw new Error('update_probe_failed');\nreturn [{ json: context }];"
+        "jsCode": "const context = $('Require Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'approved' || matches[0].protected_created_at !== context.protectedCreatedAt) throw new Error('update_probe_failed');\nreturn [{ json: { ...context, decisionUpdated: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -920,7 +998,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  inserted: true,\n  read: true,\n  readerRead: context.readerRead === true,\n  decisionUpdated: true,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
+        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true || context.protectedUpdateDenied !== true || context.readerInsertDenied !== true || context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2) throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1263,7 +1341,7 @@
       "main": [
         [
           {
-            "node": "Cleanup Only",
+            "node": "Get Acceptance Base Share",
             "type": "main",
             "index": 0
           }
@@ -1275,6 +1353,42 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Get Acceptance Base Share": {
+      "main": [
+        [{"node": "Require Acceptance Base Private", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Acceptance Base Private": {
+      "main": [
+        [{"node": "Get Reader Shared Views", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Reader Shared Views": {
+      "main": [
+        [{"node": "Require Reader Shares Empty", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Shares Empty": {
+      "main": [
+        [{"node": "Get Operator Shared Views", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Operator Shared Views": {
+      "main": [
+        [{"node": "Require Operator Shares Empty", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Operator Shares Empty": {
+      "main": [
+        [{"node": "Cleanup Only", "type": "main", "index": 0}],
+        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
       ]
     },
     "Cleanup Only": {
