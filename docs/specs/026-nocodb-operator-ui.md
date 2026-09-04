@@ -564,9 +564,12 @@ NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:operator' \
   mise exec -- just kube nocodb-source-rotate <domain> operator
 ```
 
-The final argument is restricted to `reader` or `operator`. Rotation repeats readiness
-and source-identity checks immediately before mutation, updates PostgreSQL and the same
-NocoDB integration, tests authentication and denials, and reads back the new generation.
+The final argument is restricted to `reader` or `operator`. The workflow preserves that
+normalized requested access kind separately from the reader or operator branch currently
+being evaluated, so one target can never enter or resume the other target's rotation.
+Rotation repeats readiness and source-identity checks immediately before mutation,
+updates PostgreSQL and the same NocoDB integration, tests authentication and denials, and
+reads back the new generation.
 It is convergent, not transactional. If a rotation fails after PostgreSQL is deliberately
 set to `NOLOGIN`, its registry row keeps `operation=rotate` and the exact base,
 integration, and source IDs. A later explicit rotation may replace both sides again and
@@ -683,12 +686,16 @@ run ID and cleanup never broadens beyond those rows. It proves:
    `completed`, then discovers exactly one source and reads it by ID before recording
    `ready`;
 4. reader creation completes before operator creation in the same base;
-5. source GET metadata reports only the reader `read_model` search path, the reader source
-   reflects exactly its `acceptance_facts` table with no unexpected table, and its normal
-   fact query succeeds through the NocoDB data API;
-6. source GET metadata reports only the operator `operator` search path, the operator
-   source reflects exactly its `acceptance_decision` table with no unexpected table, and
-   normal insert, read, approved-column update, and run-owned delete operations succeed;
+5. source GET metadata reports only the reader `read_model` search path, and the returned
+   table metadata itself reports schema `read_model`; the reader source reflects exactly
+   its `acceptance_facts` table with no unexpected table, and its normal fact query
+   succeeds through the NocoDB data API;
+6. source GET metadata reports only the operator `operator` search path, and the returned
+   table metadata itself reports schema `operator`; the operator source reflects exactly
+   its `acceptance_decision` table with no unexpected table, and normal insert, read,
+   approved-column update, and run-owned delete operations succeed. The pinned table-list
+   endpoint returns its complete list without pagination; if it supplies page metadata,
+   the test also requires the returned row count to be complete and `isLastPage=true`;
 7. a unique run-bound reader insert fails with NocoDB's stable read-only authorization
    response, while reader DDL, role assumption, and cross-database access also fail;
 8. operator update of a protected column fails with PostgreSQL SQLSTATE `42501` exposed

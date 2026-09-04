@@ -77,6 +77,7 @@ for values, label in (
         require(re.search(rf"['\"]{value}['\"]", normalize_code), f"Missing source {label}: {value}")
 require("^[a-z][a-z0-9_]{0,47}$" in normalize_code, "The source workflow must enforce the domain grammar.")
 require("Object.keys" in normalize_code and "allowedFields" in normalize_code, "Extra source request fields are not rejected.")
+require("requestedAccessKind" in normalize_code, "The source workflow must preserve the normalized rotation target separately.")
 
 approved_functions = {
     "platform_operations.validate_domain",
@@ -268,6 +269,11 @@ for access_kind in ("Reader", "Operator"):
         f"Require Rotated {access_kind} Data Probe" in reachable(f"Patch {access_kind} Rotation Integration"),
         f"{access_kind} rotation must probe NocoDB after patching the retained integration.",
     )
+    rotation_if = by_name.get(f"{access_kind} Error Rotation", {}).get("parameters", {})
+    require(
+        "requestedAccessKind" in json.dumps(rotation_if),
+        f"{access_kind} failed-rotation routing must use the preserved requested target.",
+    )
 
 for name in ("Prepare Source Response", "Prepare Source Error Response"):
     code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
@@ -306,6 +312,13 @@ const execute = (name, input, lookup = {}, itemInputs = [input]) => {
     (nodeName) => ({ first: () => ({ json: lookup[nodeName] || input }) }),
   );
 };
+
+const operatorRotateRequest = execute('Normalize Source Request', {
+  body: { domain: 'domain_one', operation: 'rotate', accessKind: 'operator' },
+})[0].json;
+if (operatorRotateRequest.requestedAccessKind !== 'operator' || operatorRotateRequest.accessKind !== 'operator') {
+  throw new Error('Normalize Source Request did not preserve the explicit rotation target separately');
+}
 
 const base = { domain: 'domain_one', accessKind: 'reader', baseId: 'base-1', sourceCreateJobId: 'job-1', pollCount: 3 };
 for (const evaluator of ['Evaluate Reader Job', 'Evaluate Operator Job']) {
@@ -355,14 +368,14 @@ const sourceContext = { ...base, integrationId: 'integration-1', alias: 'Read Mo
 const mergedRotation = execute(
   'Merge Reader State',
   { result: { state: 'error', operation: 'rotate', sourceId: 'source-1', integrationId: 'integration-1' } },
-  { 'Start Reader': { ...sourceContext, operation: 'rotate' } },
+  { 'Start Reader': { ...sourceContext, operation: 'rotate', requestedAccessKind: 'reader' } },
 )[0].json;
-if (mergedRotation.operation !== 'rotate' || mergedRotation.registryOperation !== 'rotate') {
+if (mergedRotation.operation !== 'rotate' || mergedRotation.registryOperation !== 'rotate' || mergedRotation.requestedAccessKind !== 'reader') {
   throw new Error('requested and retained source operations were not kept distinct');
 }
 for (const [label, request, context, expected] of [
-  ['targeted rotation', { operation: 'rotate', accessKind: 'reader' }, { ...sourceContext, accessKind: 'reader' }, 'rotate'],
-  ['non-target reader work', { operation: 'rotate', accessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
+  ['targeted rotation', { operation: 'rotate', requestedAccessKind: 'reader' }, { ...sourceContext, accessKind: 'reader' }, 'rotate'],
+  ['non-target reader work', { operation: 'rotate', requestedAccessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
   ['initial sync', { operation: 'sync' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
 ]) {
   const preparedError = execute('Prepare Source Error', context, { 'Normalize Source Request': request })[0].json;
@@ -409,6 +422,7 @@ if (!errorRetryRejected) throw new Error('error retry accepted an existing deter
 const failedRotation = {
   ...sourceContext,
   operation: 'rotate',
+  requestedAccessKind: 'reader',
   registryOperation: 'rotate',
   state: 'error',
   sourceId: 'source-1',
@@ -420,6 +434,7 @@ if (retryRotation.action !== 'existing' || retryRotation.sourceId !== 'source-1'
 }
 const failedOperatorRotation = {
   ...failedRotation,
+  requestedAccessKind: 'operator',
   accessKind: 'operator',
   alias: 'Operator',
   sourceId: 'source-operator',
@@ -427,6 +442,49 @@ const failedOperatorRotation = {
 };
 if (execute('Inspect Operator Sources', failedOperatorRotation)[0].json.action !== 'existing') {
   throw new Error('failed operator rotation did not retain the exact source identity');
+}
+let mismatchedOperatorIdentityRejected = false;
+try {
+  execute('Inspect Operator Sources', {
+    ...failedOperatorRotation,
+    sources: [{ id: 'other-operator', fk_integration_id: 'integration-1', alias: 'Operator' }],
+  });
+} catch (error) { mismatchedOperatorIdentityRejected = /rotation_source_identity_mismatch/.test(error.message); }
+if (!mismatchedOperatorIdentityRejected) throw new Error('operator rotation accepted a mismatched retained source identity');
+for (const [node, input, pattern] of [
+  ['Inspect Reader Sources', { ...failedRotation, requestedAccessKind: 'operator' }, /rotation_target_mismatch/],
+  ['Inspect Operator Sources', { ...failedOperatorRotation, requestedAccessKind: 'reader' }, /rotation_target_mismatch/],
+]) {
+  let rejected = false;
+  try { execute(node, input); } catch (error) { rejected = pattern.test(error.message); }
+  if (!rejected) throw new Error(`${node} resumed rotation for the other requested access kind`);
+}
+const operatorTargetReaderGate = execute(
+  'Require Reader PostgreSQL',
+  { result: { valid: true, accessKind: 'reader' } },
+  {
+    'Validate Reader Source': { ...sourceContext, requestedAccessKind: 'operator' },
+    'Normalize Source Request': operatorRotateRequest,
+  },
+)[0].json;
+if (operatorTargetReaderGate.rotateTarget !== false) throw new Error('operator-targeted rotation enabled the reader rotation path');
+const operatorTargetOperatorGate = execute(
+  'Require Operator PostgreSQL',
+  { result: { valid: true, accessKind: 'operator' } },
+  {
+    'Validate Operator Source': { ...sourceContext, accessKind: 'operator', requestedAccessKind: 'operator' },
+    'Normalize Source Request': operatorRotateRequest,
+  },
+)[0].json;
+if (operatorTargetOperatorGate.rotateTarget !== true) throw new Error('operator-targeted rotation did not enable the operator rotation path');
+const boundedSourceResponse = execute(
+  'Prepare Source Response',
+  { result: { state: 'ready', accessKind: 'reader', baseId: 'base-1', sourceId: 'source-1', integrationId: 'integration-1', generation: 2 } },
+  { 'Normalize Source Request': operatorRotateRequest },
+)[0].json;
+const boundedResponseKeys = ['baseId', 'domain', 'errorCode', 'ok', 'operation', 'operator', 'reader'];
+if (JSON.stringify(Object.keys(boundedSourceResponse).sort()) !== JSON.stringify(boundedResponseKeys)) {
+  throw new Error('source response exposed request-routing or unbounded internal fields');
 }
 let failedOperatorInitialRejected = false;
 try { execute('Inspect Operator Sources', { ...failedOperatorRotation, registryOperation: 'sync' }); }
@@ -824,27 +882,47 @@ for (const [label, node, source, lookup, pattern] of [
   if (!rejected) throw new Error(`${label} was accepted`);
 }
 const exactTables = [
-  { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader' },
-  { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator' },
+  { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader', schema: 'read_model' },
+  { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator', schema: 'operator' },
 ];
-const resolved = execute('Resolve Acceptance Tables', { ...reflectedContext, tables: exactTables })[0].json;
+const completePage = { totalRows: 2, page: 1, pageSize: 25, isFirstPage: true, isLastPage: true };
+const resolved = execute('Resolve Acceptance Tables', { ...reflectedContext, tables: exactTables, pageInfo: completePage })[0].json;
 if (
   resolved.factsTableId !== 'table-facts'
   || resolved.decisionTableId !== 'table-decisions'
   || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
+  || resolved.reflectedTables.some((table) => table.schema !== exactTables.find((candidate) => candidate.id === table.id).schema)
 ) throw new Error('exact reflected schemas and tables were not derived');
 let untrustedSchemaRejected = false;
 try {
-  execute('Resolve Acceptance Tables', { ...reflectedContext, readerSchema: 'public', tables: exactTables });
+  execute('Resolve Acceptance Tables', { ...reflectedContext, readerSchema: 'public', tables: exactTables, pageInfo: completePage });
 } catch (error) { untrustedSchemaRejected = /acceptance_reflection_invalid/.test(error.message); }
 if (!untrustedSchemaRejected) throw new Error('Resolve Acceptance Tables reported a hard-coded schema instead of validating source metadata');
+for (const [label, mutate] of [
+  ['public table schema', (input) => { input.tables[0].schema = 'public'; }],
+  ['missing table schema', (input) => { delete input.tables[0].schema; }],
+  ['unreturned later-page table', (input) => { input.pageInfo.totalRows = 3; }],
+  ['nonterminal table page', (input) => { input.pageInfo.isLastPage = false; }],
+]) {
+  const input = {
+    ...reflectedContext,
+    tables: exactTables.map((table) => ({ ...table })),
+    pageInfo: { ...completePage },
+  };
+  mutate(input);
+  let rejected = false;
+  try { execute('Resolve Acceptance Tables', input); }
+  catch (error) { rejected = /acceptance_reflection_invalid/.test(error.message); }
+  if (!rejected) throw new Error(`${label} was accepted as an exact reflected surface`);
+}
 let unexpectedTableRejected = false;
 try {
   execute('Resolve Acceptance Tables', {
     ...reflection,
     readerSchema: 'read_model',
     operatorSchema: 'operator',
-    tables: [...exactTables, { id: 'extra', title: 'other', table_name: 'other', source_id: 'source-reader' }],
+    tables: [...exactTables, { id: 'extra', title: 'other', table_name: 'other', source_id: 'source-reader', schema: 'read_model' }],
+    pageInfo: { ...completePage, totalRows: 3 },
   });
 } catch (error) { unexpectedTableRejected = /acceptance_reflection_invalid/.test(error.message); }
 if (!unexpectedTableRejected) throw new Error('unexpected reflected table was accepted');

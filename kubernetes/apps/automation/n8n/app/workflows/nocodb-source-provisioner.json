@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, ...(accessKind ? { accessKind } : {}) } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(accessKind ? { accessKind } : {}) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -338,7 +338,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Reader State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retryRotation = context.operation === 'rotate' && context.registryOperation === 'rotate' && context.accessKind === 'reader' && context.state === 'error';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Reader State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retainedRotation = context.registryOperation === 'rotate' && context.state === 'error';\nif (context.operation === 'rotate' && retainedRotation && context.requestedAccessKind !== 'reader') throw new Error('rotation_target_mismatch');\nconst retryRotation = context.operation === 'rotate' && retainedRotation && context.requestedAccessKind === 'reader' && context.accessKind === 'reader';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -954,7 +954,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Validate Reader Source').first().json;\nconst result = $json.result;\nif (!result || result.valid !== true || result.accessKind !== 'reader') throw new Error('reader_postgresql_invalid');\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, rotateTarget: request.operation === 'rotate' && request.accessKind === 'reader' } }];"
+        "jsCode": "const context = $('Validate Reader Source').first().json;\nconst result = $json.result;\nif (!result || result.valid !== true || result.accessKind !== 'reader') throw new Error('reader_postgresql_invalid');\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'reader' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1149,7 +1149,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $('Keep Access Plan').first().json.plan;\nconst reader = $json.result || $json;\nif (request.operation === 'rotate' && request.accessKind === 'operator' && (plan.operatorRequested !== true || plan.operatorEligible !== true)) {\n  throw new Error('operator_not_eligible');\n}\nconst required = request.operation === 'rotate' ? request.accessKind === 'operator' : plan.operatorRequested === true && plan.operatorEligible === true;\nreturn [{ json: { ...request, plan, baseId: reader.baseId, workspaceId: $('Start Reader').first().json.workspaceId, reader, operatorRequired: required } }];"
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $('Keep Access Plan').first().json.plan;\nconst reader = $json.result || $json;\nif (request.operation === 'rotate' && request.requestedAccessKind === 'operator' && (plan.operatorRequested !== true || plan.operatorEligible !== true)) {\n  throw new Error('operator_not_eligible');\n}\nconst required = request.operation === 'rotate' ? request.requestedAccessKind === 'operator' : plan.operatorRequested === true && plan.operatorEligible === true;\nreturn [{ json: { ...request, plan, baseId: reader.baseId, workspaceId: $('Start Reader').first().json.workspaceId, reader, operatorRequired: required } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1307,7 +1307,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Operator State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retryRotation = context.operation === 'rotate' && context.registryOperation === 'rotate' && context.accessKind === 'operator' && context.state === 'error';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Operator State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retainedRotation = context.registryOperation === 'rotate' && context.state === 'error';\nif (context.operation === 'rotate' && retainedRotation && context.requestedAccessKind !== 'operator') throw new Error('rotation_target_mismatch');\nconst retryRotation = context.operation === 'rotate' && retainedRotation && context.requestedAccessKind === 'operator' && context.accessKind === 'operator';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1923,7 +1923,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Validate Operator Source').first().json;\nconst result = $json.result;\nif (!result || result.valid !== true || result.accessKind !== 'operator') throw new Error('operator_postgresql_invalid');\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, rotateTarget: request.operation === 'rotate' && request.accessKind === 'operator' } }];"
+        "jsCode": "const context = $('Validate Operator Source').first().json;\nconst result = $json.result;\nif (!result || result.valid !== true || result.accessKind !== 'operator') throw new Error('operator_postgresql_invalid');\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'operator' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2149,7 +2149,7 @@
           "conditions": [
             {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
             {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
-            {"leftValue": "={{ $json.accessKind }}", "rightValue": "reader", "operator": {"type": "string", "operation": "equals"}}
+            {"leftValue": "={{ $json.requestedAccessKind }}", "rightValue": "reader", "operator": {"type": "string", "operation": "equals"}}
           ],
           "combinator": "and"
         },
@@ -2302,7 +2302,7 @@
           "conditions": [
             {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
             {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
-            {"leftValue": "={{ $json.accessKind }}", "rightValue": "operator", "operator": {"type": "string", "operation": "equals"}}
+            {"leftValue": "={{ $json.requestedAccessKind }}", "rightValue": "operator", "operator": {"type": "string", "operation": "equals"}}
           ],
           "combinator": "and"
         },
@@ -2438,7 +2438,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.domain ? $json : {};\nconst request = $('Normalize Source Request').first().json;\nconst sourceOperation = request.operation === 'rotate' && request.accessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
+        "jsCode": "const context = $json.domain ? $json : {};\nconst request = $('Normalize Source Request').first().json;\nconst sourceOperation = request.operation === 'rotate' && request.requestedAccessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
