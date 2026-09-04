@@ -250,18 +250,45 @@ for transition_contract in \
 done
 
 validate_nocodb_access_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(/,/^\$function\$;/p' "$control_sql")"
-rg -Fq 'FROM pg_database AS database' <<<"$validate_nocodb_access_function" ||
+authority_validation_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p' "$control_sql")"
+rg -Fq 'true' <<<"$validate_nocodb_access_function" ||
+  fail 'ready NocoDB access validation does not require LOGIN'
+rg -Fq 'FROM pg_database AS database' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation does not inspect every catalog database'
-rg -Fq 'database.datallowconn AND NOT database.datistemplate' <<<"$validate_nocodb_access_function" ||
+rg -Fq 'database.datallowconn AND NOT database.datistemplate' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation does not include every connectable database'
-rg -Fq 'relation_attribute.attacl' <<<"$validate_nocodb_access_function" ||
+rg -Fq 'relation_attribute.attacl' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation ignores column-level operator grants'
-rg -Fq 'pg_default_acl' <<<"$validate_nocodb_access_function" ||
+rg -Fq 'pg_default_acl' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation does not inspect default privileges'
-! rg -Fq 'object_privileges_valid := true;' <<<"$validate_nocodb_access_function" ||
+! rg -Fq 'object_privileges_valid := true;' <<<"$authority_validation_function" ||
   fail 'NocoDB operator object privilege validation is hard-coded'
-! rg -Fq 'ELSE true' <<<"$validate_nocodb_access_function" ||
+! rg -Fq 'ELSE true' <<<"$authority_validation_function" ||
   fail 'NocoDB operator default privilege validation is hard-coded'
+
+prelogin_authority_function="$(sed -n '/^CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(/,/^\$function\$;/p' "$control_sql")"
+[[ -n "$prelogin_authority_function" ]] ||
+  fail 'NocoDB pre-login authority validator is missing'
+rg -Fq 'p_expect_login boolean' <<<"$prelogin_authority_function" ||
+  fail 'NocoDB pre-login authority validator does not model the expected login state'
+rg -Fq 'NOT login_valid' <<<"$prelogin_authority_function" ||
+  fail 'NocoDB pre-login authority validator does not require NOLOGIN'
+for validation_field in valid loginValid schemaPrivilegesValid objectPrivilegesValid \
+  defaultPrivilegesValid outsideSchemaDenied databaseIsolationValid \
+  forbiddenAttributesDenied forbiddenMembershipsDenied ddlDenied controlledDmlPresent; do
+  rg -Fq "'$validation_field'" <<<"$prelogin_authority_function" ||
+    fail "NocoDB pre-login authority validator omits $validation_field"
+done
+[[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 2 ]] ||
+  fail 'NocoDB prepare does not run one full pre-login authority gate per access role'
+[[ "$(rg -Fc 'false' <<<"$prepare_nocodb_access_function")" -ge 2 ]] ||
+  fail 'NocoDB prepare does not deliberately require NOLOGIN before source enablement'
+rg -Fq 'has_table_privilege' <<<"$prelogin_authority_function" ||
+  fail 'NocoDB authority validation does not use effective table privileges'
+rg -Fq 'has_sequence_privilege' <<<"$prelogin_authority_function" ||
+  fail 'NocoDB authority validation does not use effective sequence privileges'
+rg -Fq 'acl.grantee IN (0,' <<<"$prelogin_authority_function" ||
+  fail 'NocoDB authority validation does not inspect PUBLIC default ACLs'
 
 rg -Fq "^[a-z][a-z0-9_]{0,47}$" "$control_sql" || \
   fail 'platform control SQL does not enforce the domain identifier boundary'
