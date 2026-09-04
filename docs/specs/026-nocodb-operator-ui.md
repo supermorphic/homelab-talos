@@ -90,26 +90,32 @@ NocoDB never receives `<domain>_runtime`, `<domain>_migrator`, `<domain>_owner`,
 `automation_data_provisioner`, or a platform backup credential. It receives only the
 optional reader and operator logins defined here.
 
-### Read facts; edit decisions and explicit corrections
+### Separate read and operator surfaces
 
-Workflow-produced facts are read-only through NocoDB. The normal controlled-edit surface
-contains operator-owned state such as review status, approve or reject decisions,
-priority, notes, and follow-up state.
+Noco-enabled domains present two distinct PostgreSQL schemas instead of exposing the same
+tables through two credentials:
 
-Domains should preserve source facts and represent corrections as explicit override
-records or fields. A domain may grant a targeted column update on a source table only
-when its reviewed migration defines that as the intended business contract. Broad table
-updates, schema changes, backfills, and changes across many records remain n8n or
-migrator operations.
+- `read_model` contains workflow-produced facts and read-only projections; and
+- `operator` contains decisions, notes, priorities, follow-up state, and explicit
+  correction or override records intended for human editing.
+
+The reader source reflects only `read_model`. The operator source reflects only
+`operator`. An operator uses both sources in the same NocoDB base: the first to inspect
+facts and the second to record a decision or correction. The operator credential does not
+gain a second path to the read-model objects.
+
+Domains preserve source facts and represent corrections as records in `operator` rather
+than updating source tables in place. Broad changes, schema changes, backfills, and
+changes across many records remain n8n or migrator operations.
 
 ### Domain opt-in
 
 Ordinary automation-data provisioning continues to create only owner, migrator, and
 runtime roles. A NocoDB source-sync operation is the explicit opt-in that adds
-`<domain>_reader`. It also creates `<domain>_operator` as a `NOLOGIN` candidate so a
-reviewed domain migration has a stable grant target. A later source sync enables that
-role as a login and creates its source only after a controlled-edit privilege surface
-exists and passes validation.
+`<domain>_reader`. When the domain has an `operator` schema, source sync also creates
+`<domain>_operator` as a `NOLOGIN` candidate so a reviewed domain migration has a stable
+grant target. A later source sync enables each role as a login and creates its source
+only after that role's distinct schema and privileges pass validation.
 
 Enabling or reconciling a NocoDB source is runtime platform state. It does not require a
 per-domain `homelab-talos` manifest, SOPS Secret, or NetworkPolicy change.
@@ -131,8 +137,8 @@ https://nocodb.lab.supermorphic.com
       v
 one NocoDB application pod
       |-- metadata --> automation-data PostgreSQL database "nocodb"
-      |-- reader source --> selected domain as <domain>_reader
-      |-- operator source --> selected domain as <domain>_operator
+      |-- reader source --> <domain>.read_model as <domain>_reader
+      |-- operator source --> <domain>.operator as <domain>_operator
       `-- attachments --> retained 10 GiB Longhorn PVC
 
 operator lifecycle command
@@ -173,9 +179,11 @@ The application uses the official OCI Helm chart:
 
 The Helm values set the image by digest. The tag remains visible for operator context but
 does not select mutable content. Version `2026.08.2` is selected instead of the chart's
-`2026.06.1` application default because it supplies the stable source-creation endpoint
-`POST /api/v2/meta/bases/:baseId/sources` needed by the provisioning workflow. Live
-acceptance must prove this chart and image combination before activation.
+`2026.06.1` application default because it supplies
+`POST /api/v2/meta/bases/:baseId/sources`. This endpoint queues source creation and
+returns `{ "id": "<job-id>" }`; it does not return a created source. The workflow must
+observe that asynchronous contract rather than treating the HTTP 200 response as source
+readiness. Live acceptance must prove this chart and image combination before activation.
 
 The chart is configured with:
 
@@ -189,11 +197,13 @@ The chart is configured with:
 - `persistence.existingClaim` bound to the separately declared PVC.
 
 One pod is intentional. The retained `ReadWriteOnce` claim can attach to only one node at
-a time, and NocoDB background work does not justify Redis or a worker at this scale.
-`Recreate` satisfies the repository invariant for a Deployment that mounts a
-`ReadWriteOnce` PVC. The two Longhorn replicas are two storage copies for that one volume,
-not two NocoDB application instances. A pod or node move can cause a short outage while
-the volume detaches and reattaches.
+a time. With the worker disabled and Redis absent, NocoDB runs source-creation jobs in the
+application pod's fallback queue. Attended acceptance must prove that this mode completes
+source creation and supports normal operator read and write behavior. `Recreate` satisfies
+the repository invariant for a Deployment that mounts a `ReadWriteOnce` PVC. The two
+Longhorn replicas are two storage copies for that one volume, not two NocoDB application
+instances. A pod or node move can cause a short outage while the volume detaches and
+reattaches.
 
 The current Community edition uses NocoDB's Sustainable Use License rather than an
 OSI-approved open-source license. Internal self-hosted use is within the selected
@@ -288,8 +298,6 @@ Workload-scoped Cilium policy permits:
 - internal-Gateway ingress to the NocoDB Service;
 - n8n ingress to the same Service for fixed API operations;
 - NocoDB egress to cluster DNS and the automation-data PostgreSQL Service;
-- NocoDB egress required for its own image-independent application operation only when
-  explicitly documented and tested; and
 - monitoring ingress or observation through the established service paths.
 
 There is no general Internet ingress or egress. The metadata bootstrap Job receives only
@@ -302,23 +310,29 @@ Noco-enabled domains add one or two login roles:
 
 | Role | Creation rule | PostgreSQL authority |
 | --- | --- | --- |
-| `<domain>_reader` | Every explicitly enabled domain | `CONNECT`, schema `USAGE`, and `SELECT` on the approved read surface |
-| `<domain>_operator` | Created as `NOLOGIN`; enabled only after an explicit controlled-edit surface exists | Reader access plus exact domain-declared DML grants |
+| `<domain>_reader` | Enabled when the domain has a valid `read_model` schema | `CONNECT`, `USAGE` and `SELECT` only on `read_model` |
+| `<domain>_operator` | Created as `NOLOGIN` when `operator` exists; enabled only after its controlled-edit grants exist | `CONNECT`, `USAGE`, and exact `SELECT` and DML grants only on `operator` |
 
-The reader is `LOGIN`. The operator remains `NOLOGIN` until its controlled-edit grants
-pass validation; source sync then changes only that attribute and sets its transient
-password. Both roles are `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION
-NOBYPASSRLS`. They cannot assume the owner, migrator, runtime, provisioner, metadata, or
-backup role. `PUBLIC` privileges cannot bypass these limits.
+Source sync creates the reader only after `read_model` exists, gives it the fixed schema
+read contract, sets its transient password, and enables `LOGIN`. When `operator` exists,
+source sync creates the operator as `NOLOGIN`; it remains unable to authenticate until
+its controlled-edit grants pass validation. Source sync then changes only that attribute,
+sets its transient password, and creates its source. Both roles are `NOSUPERUSER
+NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`. They cannot assume the
+owner, migrator, runtime, provisioner, metadata, or backup role. `PUBLIC` privileges
+cannot bypass these limits.
 
-The reader normally receives `SELECT` on current domain tables and matching owner default
-privileges for later tables in the approved `app` schema. It receives no sequence use,
-DML, DDL, ownership, or role membership.
+The reader receives `USAGE` on `read_model`, `SELECT` on its current tables and views,
+and matching owner default privileges for later tables and views in that schema. It
+receives no privilege on `app` or `operator`, no sequence use, and no DML, DDL,
+ownership, or role membership. Domain migrations control the read surface by creating
+reviewed projections in `read_model`; source sync can safely apply the fixed read grant
+without accepting table or column input.
 
-The operator receives the same read surface plus grants declared by reviewed domain
-migrations. Those grants can include:
+The operator does not inherit the reader surface. It receives grants declared by reviewed
+domain migrations only on objects in `operator`. Those grants can include:
 
-- `INSERT` and sequence use on dedicated decision, note, or override tables;
+- `SELECT`, `INSERT`, and sequence use on dedicated decision, note, or override tables;
 - `UPDATE` on an exact column list;
 - `DELETE` only on tables whose rows are operator-owned state; and
 - row-level security policies when a table requires row restrictions.
@@ -328,28 +342,46 @@ row-policy expression from the webhook. After initial reader provisioning, a rev
 domain migration grants the `NOLOGIN` operator candidate its business privilege surface.
 Source sync reads PostgreSQL catalogs and refuses to enable that login or create its
 source when it cannot prove that at least one controlled DML grant exists and that no
-forbidden role attribute, ownership, schema-create, or cross-database authority exists.
+privilege extends outside `operator`. It also rejects forbidden role attributes,
+ownership, schema-create, or cross-database authority.
 
-NocoDB configures a reader source with data editing and schema editing disabled. It
-configures an operator source with data editing enabled and schema editing disabled.
-Those settings reduce mistakes in the UI; PostgreSQL denial remains the independent
-oracle.
+NocoDB configures the reader source to reflect only `read_model`, with data editing and
+schema editing disabled. It configures the operator source to reflect only `operator`,
+with data editing enabled and schema editing disabled. Those settings make the UI match
+the database contract and reduce accidental writes. PostgreSQL denial remains the
+independent security oracle rather than the normal way the UI distinguishes the two
+surfaces.
 
 ## Platform registry and fixed functions
 
 The automation-data control database adds runtime state for NocoDB without changing the
-meaning of ordinary domain readiness:
+meaning of ordinary domain readiness. It uses one table rather than separate domain and
+source registries:
 
-- `platform_operations.managed_nocodb_domains` records domain, NocoDB base ID,
-  requested access mode, state, generation, last operation, and non-secret error data;
-- `platform_operations.managed_nocodb_sources` records domain, access kind, role name,
-  NocoDB integration ID, source ID, credential generation, successful validation time,
-  and non-secret error data.
+`platform_operations.managed_nocodb_sources` has one row for each requested
+`(domain, access_kind)`. It records role name, NocoDB base ID, integration ID, nullable
+source ID, nullable source-creation job ID, state, operation generation, credential
+generation, operation start time, successful validation time, and non-secret error data.
 
-Rows reference `managed_domains`. Access kind is restricted to `reader` or `operator`.
-Identifiers are validated against the existing domain contract, and IDs are treated as
-opaque values rather than executable input. Passwords and API tokens never enter these
-tables.
+Rows reference `managed_domains`. Access kind is restricted to `reader` or `operator`,
+and states are restricted to `awaiting_grants`, `provisioning`, `waiting_for_source`,
+`ready`, `rotating`, or `error`. NocoDB IDs are opaque values rather than executable
+input. Passwords and API tokens never enter this table.
+
+A separate domain registry would duplicate the base ID, requested access, state,
+generation, and error already represented by the source rows. Domain UI readiness is
+therefore derived:
+
+- no reader row means the domain is not Noco-enabled;
+- a ready reader row with no operator row means read-only ready;
+- a ready reader row plus an `awaiting_grants` operator row means reader ready and
+  operator pending;
+- ready reader and operator rows mean controlled-edit ready; and
+- any active or error source state reports the corresponding incomplete domain state.
+
+The reader row establishes the canonical base ID. An operator row must use that same ID,
+which the fixed recording function validates before writing it. This is enough state to
+resume an interrupted asynchronous source creation without a second table.
 
 The existing `automation_data_provisioner` login gains execute access only to fixed
 NocoDB functions that:
@@ -357,7 +389,7 @@ NocoDB functions that:
 - create or reconcile a requested reader or operator role;
 - set or rotate that role's transient password;
 - validate its catalog privileges;
-- record NocoDB base, integration, and source identifiers;
+- record NocoDB base, integration, source-creation job, and source identifiers;
 - advance a source operation state or record a non-secret failure; and
 - read the expected source state for a named managed domain.
 
@@ -432,36 +464,73 @@ are deterministic:
 
 - base: `<domain>`;
 - integration: `automation-data/<domain>/<access-kind>`; and
-- source alias: `Read` or `Operator`.
+- source alias: `Read Model` or `Operator`.
+
+The reader request restricts PostgreSQL reflection to `read_model`; the operator request
+restricts it to `operator`. NocoDB permits only one source-creation job at a time for one
+base, so the workflow completes reader creation before it can queue operator creation.
 
 Source sync performs this idempotent state machine:
 
 1. Validate the domain and require its existing automation-data state to be `ready`.
-2. Inspect catalogs through fixed functions and derive reader-only or controlled-edit
-   eligibility.
-3. Mark the NocoDB source operation as `provisioning` with a new generation.
-4. Create or reconcile `<domain>_reader` as a login and `<domain>_operator` as a
-   `NOLOGIN` candidate. If reviewed operator grants already pass validation, enable the
-   operator login. Otherwise leave it unable to authenticate and omit its source.
-5. For each new or incomplete eligible source, generate a password in workflow memory
-   and pass it to the fixed PostgreSQL function and the matching NocoDB source request.
-6. Create or reconcile the deterministic NocoDB base, integrations, and sources with
-   schema editing disabled and the correct data-edit setting.
-7. Test each source, read back its settings and IDs, and independently test the expected
-   PostgreSQL privilege matrix.
-8. Mark the generation `ready` only after all checks succeed.
-9. Return only non-secret IDs, access kinds, state, and timestamps.
+2. Inspect catalogs through fixed functions. Require `read_model`; treat `operator` as an
+   optional controlled-edit request.
+3. Create or reconcile `<domain>_reader` with the fixed read-model grants. When
+   `operator` exists, create `<domain>_operator` as a `NOLOGIN` grant target. If reviewed
+   operator grants already pass validation, enable the operator login. Otherwise record
+   `awaiting_grants`, leave it unable to authenticate, and omit its NocoDB source.
+4. For each eligible source, reconcile the deterministic NocoDB base, inspect any
+   existing integration and registry row, and list the base's current sources before
+   changing credentials or queueing work. A stored `waiting_for_source` job takes
+   precedence over source discovery and resumes at step 8.
+5. If exactly one source already matches the deterministic integration and alias, read it
+   by ID and continue with validation. Zero matches permits creation; more than one is a
+   hard error that requires attended repair.
+6. For a new or failed initial source generation, mark `provisioning`, generate a
+   password in workflow memory, pass it to the fixed PostgreSQL function, and create or
+   update the matching NocoDB integration with the same credentials. Record the
+   integration ID. A ready source never enters this branch.
+7. Call `POST /api/v2/meta/bases/:baseId/sources`, require an HTTP 200 body containing
+   exactly one job ID, store that ID, and mark the row `waiting_for_source`. The response
+   is queue acceptance, not source readiness.
+8. Poll `POST /api/v2/jobs/:baseId` with the `source-create` job filter every five seconds
+   for at most ten minutes. Select the exact stored job ID. Treat `completed` and
+   `failed` as terminal; every other reported state remains nonterminal until the bound.
+9. On `failed`, record a non-secret error and stop. On timeout, retain the job ID and
+   `waiting_for_source` state so retry resumes polling instead of queueing a duplicate.
+   A missing stored job is a hard error, not permission to queue another.
+10. On `completed`, list the base sources and require exactly one match on both the
+    deterministic integration ID and alias. The job result does not supply the source
+    ID, so this discovery step is mandatory.
+11. Read the discovered source through
+    `GET /api/v2/meta/bases/:baseId/sources/:sourceId`. Verify its base, integration,
+    alias, reflected schema, data-edit flag, and schema-edit flag before recording the
+    source ID.
+12. Test normal access through NocoDB and independently test the expected PostgreSQL
+    privilege matrix.
+13. Mark the source generation `ready` only after all asynchronous, read-back, and access
+    checks succeed. Return only non-secret IDs, access kinds, states, and timestamps.
 
 The workflow uses execution order `v1` and disables saved manual, successful, failed, and
 progress execution data. Passwords exist transiently in n8n memory because both systems
 must receive the same generated value.
 
-Partial failure never triggers deletion compensation. An incomplete initial generation
-remains `provisioning` or `error`; retry can set a replacement password because no ready
-source contract exists. Once a source is `ready`, sync preserves its PostgreSQL verifier,
-NocoDB encrypted credential, source ID, and integration ID. A missing ready-side object
-is an error that requires explicit rotation or repair; ordinary sync does not silently
-replace it.
+Each five-second polling delay remains below n8n's 65-second threshold for offloading a
+Wait execution to its database. The workflow must not replace the polling loop with a
+long Wait that persists execution data. A NocoDB or n8n pod restart can interrupt the
+in-memory loop; the stored source-creation job ID lets the next explicit sync resume from
+NocoDB state without retaining the password in n8n execution history.
+
+The workflow never calls a source-delete endpoint as compensation. NocoDB `2026.08.2`
+does delete its own partially created source when the source-creation processor reports
+an error; the registry still retains the failed job and generation. The next explicit
+sync first proves that no deterministic source exists, then may start a new initial
+generation and set a replacement password because no ready contract exists. A timeout
+with a nonterminal job is not a failed generation and only resumes polling.
+
+Once a source is `ready`, sync preserves its PostgreSQL verifier, NocoDB encrypted
+credential, source ID, and integration ID. A missing ready-side object is an error that
+requires explicit rotation or repair; ordinary sync does not silently replace it.
 
 Credential rotation is separate and target-bound:
 
@@ -476,8 +545,9 @@ tests authentication and denials, and reads back the new generation. It is conve
 not transactional. A retry replaces both sides again if interruption leaves them out of
 agreement.
 
-No automatic operation deletes a source, base, login, registry row, or domain. Future
-decommissioning requires a separate attended design.
+The workflow exposes no operation that deletes a source, base, login, registry row, or
+domain. NocoDB's internal cleanup of a partial failed source is the only automatic source
+deletion in this lifecycle. Future decommissioning requires a separate attended design.
 
 ## Command lifecycle
 
@@ -536,6 +606,10 @@ ShellCheck, formatting, link, and gitleaks checks. New independent assertions co
 - exact private route and application URL;
 - no runtime, migrator, owner, provisioner, or backup credential reference;
 - fixed source operations and absence of arbitrary SQL or target fields;
+- one source registry table with resumable source-creation job state;
+- asynchronous create, bounded job polling, unique source discovery, and read-back before
+  `ready`;
+- distinct `read_model` and `operator` reflection and privilege surfaces;
 - reader/operator role attributes and forbidden privileges;
 - no ordinary-sync credential replacement for a ready source; and
 - no career-domain artifact.
@@ -561,21 +635,32 @@ NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
   mise exec -- just kube nocodb-access-test
 ```
 
-The test creates only run-labeled state in a synthetic automation-data domain. It proves:
+The test uses a dedicated synthetic automation-data acceptance domain. Its base, sources,
+and registry rows remain as recovery canaries; data mutations within them use a unique
+run ID and cleanup never broadens beyond those rows. It proves:
 
-1. source sync creates a reader source and an eligible operator source without a Git,
+1. exactly one NocoDB application pod is ready, no worker workload exists, and no Redis
+   URL or Redis workload is configured;
+2. source sync creates a reader source and an eligible operator source without a Git,
    SOPS, Flux, or NetworkPolicy change;
-2. reader `SELECT` succeeds;
-3. reader `INSERT`, `UPDATE`, `DELETE`, DDL, role assumption, and cross-database access
-   fail;
-4. operator read and one approved column update succeed;
-5. operator update of a protected column, DDL, role assumption, and cross-database access
-   fail;
-6. NocoDB reports data editing disabled for the reader, enabled for the operator, and
+3. each create response yields a job ID, the workflow observes that exact job reach
+   `completed`, then discovers exactly one source and reads it by ID before recording
+   `ready`;
+4. reader creation completes before operator creation in the same base;
+5. the reader source reflects `read_model` but not `operator` or `app`, and its normal
+   fact query succeeds;
+6. the operator source reflects `operator` but not `read_model` or `app`, and normal
+   insert, read, approved-column update, and run-owned delete operations succeed;
+7. reader DML, DDL, role assumption, and cross-database access fail;
+8. operator update of a protected column, access outside `operator`, DDL, role
+   assumption, and cross-database access fail;
+9. NocoDB reports data editing disabled for the reader, enabled for the operator, and
    schema editing disabled for both;
-7. unchanged sync is idempotent and does not alter ready credential generations or IDs;
-8. explicit rotation restores one working source without revealing its password; and
-9. cleanup removes only test-owned rows and objects and proves their absence.
+10. unchanged sync is idempotent and does not alter ready credential generations, job
+    IDs, source IDs, or integration IDs;
+11. explicit rotation restores one working source without revealing its password; and
+12. cleanup removes and proves absence of only the current run's operator rows while
+    retaining the synthetic recovery canary.
 
 The PostgreSQL denials are the independent authority oracle. UI flags alone cannot pass
 the test.
@@ -592,8 +677,9 @@ Longhorn attachment backup. It proves:
 
 1. restored NocoDB metadata, global roles, source registry, and catalogs agree;
 2. the retained connection encryption key decrypts the restored source credentials;
-3. restored reader and operator sources authenticate to an isolated restored synthetic
-   domain and retain the expected privilege denials;
+3. restored reader and operator sources authenticate to the distinct `read_model` and
+   `operator` schemas of an isolated restored synthetic domain and retain the expected
+   privilege denials;
 4. a saved base and view remain available;
 5. an attachment created before backup is retrievable from the restored PVC;
 6. the restored automation-data service can publish a fresh complete logical bundle; and
@@ -634,8 +720,9 @@ remain agent-run under repository policy.
 - A NocoDB outage does not block n8n domain workflows or direct PostgreSQL access.
 - A failed bootstrap preserves the database, PVC, and API objects and re-suspends only
   state that bootstrap resumed.
-- A failed source operation records non-secret state and retains partial objects for
-  deterministic retry.
+- A failed source operation records non-secret state and retains its registry row, job
+  ID, role, base, and integration for deterministic retry. NocoDB can remove only the
+  partial source created by its failed job.
 - A ready credential changes only through explicit targeted rotation or attended repair.
 - A full or unavailable attachment PVC makes NocoDB unavailable rather than falling back
   to ephemeral storage.
@@ -644,11 +731,12 @@ remain agent-run under repository policy.
 - Loss of `NC_CONNECTION_ENCRYPT_KEY` cannot be repaired from the metadata database. The
   operator must restore the retained Secret or explicitly rotate every source after
   recovery.
-- Source or role deletion is not automatic compensation or cleanup.
+- The workflow does not use source, base, registry, or role deletion as compensation or
+  cleanup.
 
 ## Implementation status
 
-As of 2026-09-03, this specification records the approved design. NocoDB resources,
+As of 2026-09-04, this specification records the approved design. NocoDB resources,
 optional reader/operator provisioning, workflow templates, Secrets, monitoring, and
 command surfaces are not implemented. The issue-317 automation-data source exists but
 remains suspended and has not completed live acceptance. No recovery capability or live
@@ -735,7 +823,12 @@ and dated acceptance results.
 - [NocoDB backup guidance](https://nocodb.com/docs/self-hosting/maintenance/backups)
 - [NocoDB self-hosting and license](https://nocodb.com/docs/self-hosting)
 - [NocoDB `2026.08.2` source controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/sources.controller.ts)
+- [NocoDB `2026.08.2` asynchronous source-create controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/jobs/source-create/source-create.controller.ts)
+- [NocoDB `2026.08.2` source-create processor](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/jobs/source-create/source-create.processor.ts)
+- [NocoDB `2026.08.2` job-list controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/jobs-meta.controller.ts)
+- [NocoDB `2026.08.2` fallback jobs service](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/fallback/jobs.service.ts)
 - [NocoDB `2026.08.2` API-token controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/api-tokens.controller.ts)
+- [n8n Wait node persistence behavior](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait/)
 - [PostgreSQL 17 privileges](https://www.postgresql.org/docs/17/ddl-priv.html)
 - [PostgreSQL 17 role attributes](https://www.postgresql.org/docs/17/role-attributes.html)
 - [Automation-data PostgreSQL specification](025-automation-data-postgresql-platform.md)
