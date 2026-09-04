@@ -825,9 +825,141 @@ planner would save enough to justify its enforcement complexity. Issue 275 remai
 prerequisite for the separate Forgejo/NUC comparison. Natural GitHub and later Forgejo runs
 must supply the larger stable sample needed for a remote p95 claim.
 
+### 023f intrinsic hotspot reduction and Stage 2 decision
+
+Plan 023f continued Stage 1 in the required order: delete unnecessary work, remove
+duplicate work, make retained work faster, and decompose a retained monolith. It did not
+select validation by changed path. Every Active validation target still ran in each full-CI
+sample.
+
+The catalog compatibility fixture previously contained a second repository-shell
+validation matrix. That matrix rebuilt full-tree shell fixtures and repeated behavior
+already owned by `test_repository_shell_validation.py`,
+`validate-harness-shell-consumer-test.sh`, and `run-ci-test.sh`. Commit `79c8a1e` removed
+339 lines of duplicate fixture and execution code. It retained all 61 catalog rejection
+cases, all three catalog acceptance cases, the executable harness-consumer integration,
+the native-JUnit catalog assertion, and static guards against restoring the six reviewed
+duplicate shell executions. Three focused samples took 30.04, 30.26, and 30.50 seconds,
+for a 30.26-second median compared with the former 174.007-second current-main median. The
+observed focused decrease was 143.747 seconds, or 82.6 percent.
+
+Commit `f6d15b7` made the existing complete monitoring validator accept one optional,
+fail-closed component scope: `loki`, `alloy-logs`, or `alloy-events`. No argument still
+runs the complete validator. An unknown scope or extra argument exits 2 with a literal
+usage diagnostic before temporary repositories or rendered state are constructed. The
+mutation harnesses now call the narrowest canonical validator that can detect the
+mutation. Alloy River-only mutations call the existing River validator directly;
+render-dependent mutations call the matching monitoring component scope. All 24 Alloy
+Logs, 18 Alloy Events, and eight Loki mutation cases remain Active and passed, and the
+complete unscoped monitoring validator also passed.
+
+The focused monitoring results were:
+
+| Mutation harness | Samples | Median | Former median | Observed decrease |
+| --- | --- | ---: | ---: | ---: |
+| Alloy Logs | 15.14, 14.64, 14.86s | 14.86s | 125.479s | 88.2% |
+| Alloy Events | 7.94, 7.98, 7.97s | 7.97s | 54.434s | 85.4% |
+| Loki | 12.21, 12.22, 12.40s | 12.22s | 35.389s | 65.5% |
+
+Commit `ff44c79` retained all 64 logging live-acceptance fixture layouts and assigned each
+layout to exactly one repository-owned group: 31 topology/storage/runtime cases, 11 label
+cases, nine count/compaction cases, and 13 Prometheus-target cases. A contract test invokes
+the real selector path with a harmless verifier and proves complete membership, no
+duplicates, exact-layout compatibility, `all` compatibility, group order, and unknown
+selector rejection. The outer four-worker harness replaced the former single
+`logging-verifier` identity with the four group identities. It remains the only owner of
+concurrency, cancellation, console order, and JUnit order; the logging fixture does not
+create nested workers.
+
+Three focused grouped samples took 36.79, 36.84, and 36.65 seconds, for a 36.79-second
+median compared with the former serial 118.683-second median. The corresponding sums of
+the four JUnit case durations were 118.321, 118.200, and 117.935 seconds. The 69.0 percent
+wall-time reduction is bounded parallelism over the complete retained case set, not
+deleted logging evidence.
+
+The branch then rebased onto `origin/main` `4ce63dd`, which added an automation-data
+contract fix but did not change the focused logging inputs. The complete current-main
+rebaseline used implementation SHA `ff44c79`, Darwin 25.6.0 arm64, the pinned toolchain,
+ordinary warm caches, idle Time Machine, per-command sleep inhibition, clean tracked
+state, and clean before/after foreign-worker guards. Three other passing attempts took
+322.68, 293.36, and 291.68 seconds but were excluded because CI from the
+`homelab-talos.automation-data-db` worktree was active at their post-run guard. The final
+accepted sample followed a five-minute clear-host guard after that worktree repeatedly
+restarted CI during shorter windows.
+
+| Sample | Wall time | Canonical duration | Harness duration | Result |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 319.31s | 318s | 166.464s | 735 passed; 0 failed/error/skipped |
+| 2 | 321.97s | 321s | 165.438s | 735 passed; 0 failed/error/skipped |
+| 3 | 293.26s | 293s | 153.201s | 735 passed; 0 failed/error/skipped |
+
+The distribution has count 3, minimum 293.26 seconds, median 319.31 seconds, maximum
+321.97 seconds, and range 28.71 seconds. The median is 35.5 percent below the preceding
+495.30-second current-main median. All three samples have the same 735-test identity
+multiset, the same ordered 60 shell identities inside the 296-test harness report, and no
+failure, error, or skip. Three local samples do not establish p95 and do not include remote
+queue or runner-start behavior.
+
+The residual suite medians are:
+
+| Rank | Suite | Median |
+| ---: | --- | ---: |
+| 1 | `validation.test-harness` | 165.438s |
+| 2 | `validation.repo-validate` | 28.186s |
+| 3 | `validation.automation-data` | 19.421s |
+| 4 | `validation.monitoring-alerts` | 17.028s |
+| 5 | `validation.n8n` | 15.782s |
+| 6 | `validation.monitoring` | 9.848s |
+| 7 | `validation.links` | 7.873s |
+| 8 | `validation.kubeconform` | 4.816s |
+| 9 | `validation.arr` | 4.288s |
+| 10 | `validation.foundation` | 3.529s |
+
+The residual top 15 shell-case medians are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `logging-verifier-topology-storage-runtime` | 38.127s |
+| 2 | `logging-verifier-counts-compaction` | 30.094s |
+| 3 | `catalog-negative` | 30.020s |
+| 4 | `logging-verifier-prometheus-targets` | 28.756s |
+| 5 | `logging-verifier-labels` | 24.449s |
+| 6 | `bootstrap-recovery` | 23.634s |
+| 7 | `gatus-validator` | 23.187s |
+| 8 | `monitoring-alerts-validator` | 20.412s |
+| 9 | `campaign-runner` | 19.689s |
+| 10 | `ntfy-identity` | 17.843s |
+| 11 | `monitoring-alloy-logs-validator` | 16.816s |
+| 12 | `agent-access-verifier` | 16.801s |
+| 13 | `monitoring-loki-validator` | 13.471s |
+| 14 | `chainsaw-inputs` | 12.985s |
+| 15 | `arr-validator` | 12.199s |
+
+Stage 1 produced a material and stable improvement, but its complete-gate median remains
+2.66 times the 120-second design target. The residual evidence is no longer dominated by
+obsolete or duplicated encode work or by one unsplit test. It now includes many retained
+component-specific validators and fixture groups that cannot all be affected by an
+ordinary isolated application change. Further global concurrency does not remove their
+CPU and I/O cost, and four workers already outperformed six in the 023e comparison.
+
+The Stage 2 decision gate is therefore open. Its next plan should use the middle-weight,
+deterministic gated approach: repository-owned input mappings select universal and
+affected Active targets, dependency or reverse-impact rules broaden the set when required,
+unknown or malformed impact fails closed to broad validation, and one static merge-gate
+reconciles that every planned target ran and passed. This is the same design class as the
+deterministic gate used by `homelab-playbook`; this repository must still define its own
+target boundaries and dependency rules from the completed audit. An agent, PR author, or
+Renovate source cannot de-escalate the deterministic result. Stage 2 must preserve fresh
+pre-merge execution against the complete rebased tree and must not become a generalized
+build system.
+
+Issue 275 remains the prerequisite for the Forgejo/NUC comparison. Runner persistence,
+caching, and capacity experiments remain Stage 3 work and must not delay the now-justified
+Stage 2 planner design.
+
 ## Stage 2 decision gate
 
-Stage 2 is optional. It proceeds only when all of the following are true:
+Stage 2 was optional until measurements satisfied all of the following conditions:
 
 1. Stage 1 correctness and coverage checks pass.
 2. Ordinary merge latency remains operationally unacceptable.
@@ -836,25 +968,23 @@ Stage 2 is optional. It proceeds only when all of the following are true:
 4. Deterministic target selection offers enough expected savings to justify its
    maintenance and enforcement complexity.
 
-If Stage 1 reaches approximately two minutes p95, or otherwise provides an acceptable
-three-to-five-stream drain experience, implementation stops and reassesses before adding
-Stage 2.
+The 023f result satisfies these conditions. All retained correctness checks passed; the
+319.31-second median remains operationally unacceptable; the residual profile contains
+material application and subsystem validation unrelated to an ordinary isolated change;
+and the bounded middle-weight planner below can omit that unrelated work without weakening
+the universal invariants. Stage 2 is authorized for a separate implementation plan. The
+plan must include its own RED/GREEN planner, fail-closed, and merge-gate tests before any
+provider workflow becomes required.
 
-If the residual bottleneck is universally required validation, an impact planner is not
-the remedy. The next action is further intrinsic optimization or a separately justified
-focused rewrite.
+If later evidence shows that the residual selected path is dominated by universally
+required validation, the planner is not the remedy for that portion. Further intrinsic
+optimization remains valid and can continue alongside Stage 2 when it preserves the same
+evidence.
 
-No Stage 2 plan exists. The encode reduction removes the former dominant reason to build
-selection around that harness, but the missing complete post-Stage-1 remote baseline and
-remaining Stage 1 backlog still prevent a final decision. Only measurements that satisfy
-all four conditions above authorize a new plan and, after this specification becomes
-historical, a new numbered design specification.
+## Stage 2 architecture
 
-## Conditional Stage 2 architecture
-
-If the decision gate justifies Stage 2, implement the smallest deterministic
-affected-target planner that solves the residual problem. Do not create a general build
-system.
+Implement the smallest deterministic affected-target planner that solves the residual
+problem. Do not create a general build system.
 
 The existing test catalog is the preferred metadata owner if it can accept a small impact
 block without confusing its assurance and live-dispatch responsibilities. Retained
