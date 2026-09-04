@@ -114,37 +114,65 @@ import json
 import sys
 
 policy = json.load(sys.stdin)["spec"]
-ports = lambda rule: sorted(
-    (item["port"], item["protocol"])
-    for to_port in rule.get("toPorts", [])
-    for item in to_port.get("ports", [])
-)
-ingress = lambda rule: {
-    "endpoints": sorted((item.get("matchLabels", {}) for item in rule.get("fromEndpoints", [])), key=lambda value: json.dumps(value, sort_keys=True)),
-    "entities": sorted(rule.get("fromEntities", [])),
-    "ports": ports(rule),
+expected = {
+    "endpointSelector": {"matchLabels": {"app.kubernetes.io/name": "nocodb"}},
+    "ingress": [
+        {
+            "fromEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "envoy-gateway-system",
+                "gateway.envoyproxy.io/owning-gateway-name": "internal",
+                "gateway.envoyproxy.io/owning-gateway-namespace": "networking",
+            }}],
+            "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+        },
+        {
+            "fromEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "automation",
+                "app.kubernetes.io/name": "n8n",
+            }}],
+            "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+        },
+        {
+            "fromEntities": ["host", "remote-node"],
+            "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+        },
+    ],
+    "egress": [
+        {
+            "toEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "kube-system",
+                "k8s:k8s-app": "kube-dns",
+            }}],
+            "toPorts": [{"ports": [
+                {"port": "53", "protocol": "UDP"},
+                {"port": "53", "protocol": "TCP"},
+            ]}],
+        },
+        {
+            "toEndpoints": [{"matchLabels": {
+                "k8s:io.kubernetes.pod.namespace": "automation-data",
+                "app.kubernetes.io/name": "automation-data-postgresql",
+            }}],
+            "toPorts": [{"ports": [{"port": "5432", "protocol": "TCP"}]}],
+        },
+    ],
 }
-egress = lambda rule: {
-    "endpoints": sorted((item.get("matchLabels", {}) for item in rule.get("toEndpoints", [])), key=lambda value: json.dumps(value, sort_keys=True)),
-    "ports": ports(rule),
-}
-expected_ingress = sorted([
-    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "envoy-gateway-system", "gateway.envoyproxy.io/owning-gateway-name": "internal", "gateway.envoyproxy.io/owning-gateway-namespace": "networking"}], "entities": [], "ports": [("8080", "TCP")]},
-    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "automation", "app.kubernetes.io/name": "n8n"}], "entities": [], "ports": [("8080", "TCP")]},
-    {"endpoints": [], "entities": ["host", "remote-node"], "ports": [("8080", "TCP")]},
-], key=lambda value: json.dumps(value, sort_keys=True))
-expected_egress = sorted([
-    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}], "ports": [("53", "TCP"), ("53", "UDP")]},
-    {"endpoints": [{"k8s:io.kubernetes.pod.namespace": "automation-data", "app.kubernetes.io/name": "automation-data-postgresql"}], "ports": [("5432", "TCP")]},
-], key=lambda value: json.dumps(value, sort_keys=True))
-actual_ingress = sorted((ingress(rule) for rule in policy.get("ingress", [])), key=lambda value: json.dumps(value, sort_keys=True))
-actual_egress = sorted((egress(rule) for rule in policy.get("egress", [])), key=lambda value: json.dumps(value, sort_keys=True))
-valid = (
-    policy.get("endpointSelector", {}).get("matchLabels") == {"app.kubernetes.io/name": "nocodb"}
-    and actual_ingress == expected_ingress
-    and actual_egress == expected_egress
-)
-raise SystemExit(0 if valid else 1)
+
+unordered_list_keys = frozenset({
+    "ingress", "egress", "fromEndpoints", "toEndpoints", "fromEntities", "toPorts", "ports",
+})
+
+def normalize(value, path=()):
+    if isinstance(value, dict):
+        return {key: normalize(item, path + (key,)) for key, item in value.items()}
+    if isinstance(value, list):
+        items = [normalize(item, path) for item in value]
+        if path[-1] in unordered_list_keys:
+            return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
+        return items
+    return value
+
+raise SystemExit(0 if normalize(policy) == normalize(expected) else 1)
 ' <<<"$policy" || fail 'NocoDB CiliumNetworkPolicy identity or ports differ from the contract.'
 
 pvc="$("${kc[@]}" --namespace "$namespace" get persistentvolumeclaim nocodb-data --output json)"
@@ -176,8 +204,8 @@ VOLUME_NAME="$volume_name" yq -p=json -e '
       ([
         ($matches[0].status.state == "detached"),
         ($matches[0].status.robustness == "unknown"),
-        (($matches[0].status.replicaModeMap | length) == 2),
-        ([$matches[0].status.replicaModeMap[]? | select(. == "ERR")] | length == 0)
+        (($matches[0].status.replicaModeMap | type) == "!!map"),
+        (($matches[0].status.replicaModeMap | length) == 0)
       ] | all)
     ] | any)
   ] | all

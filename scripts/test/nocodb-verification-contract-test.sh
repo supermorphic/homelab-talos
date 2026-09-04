@@ -81,19 +81,60 @@ case " $* " in
     if [[ "${FIXTURE_CASE:-healthy}" == policy-broadened ]]; then
       printf '%s\n' '{"spec":{"endpointSelector":{"matchLabels":{"app.kubernetes.io/name":"nocodb"}},"ingress":[{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"wrong"}}],"fromEntities":["world"],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation","app.kubernetes.io/name":"n8n"}}],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEntities":["host","remote-node"],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]}],"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"},{"port":"53","protocol":"TCP"}]}]},{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation-data","app.kubernetes.io/name":"automation-data-postgresql"}}],"toPorts":[{"ports":[{"port":"5432","protocol":"TCP"}]}]}]}}'
     else
-      printf '%s\n' '{"spec":{"endpointSelector":{"matchLabels":{"app.kubernetes.io/name":"nocodb"}},"ingress":[{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"envoy-gateway-system","gateway.envoyproxy.io/owning-gateway-name":"internal","gateway.envoyproxy.io/owning-gateway-namespace":"networking"}}],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation","app.kubernetes.io/name":"n8n"}}],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEntities":["host","remote-node"],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]}],"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"},{"port":"53","protocol":"TCP"}]}]},{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation-data","app.kubernetes.io/name":"automation-data-postgresql"}}],"toPorts":[{"ports":[{"port":"5432","protocol":"TCP"}]}]}]}}'
+      policy='{ "spec": {"endpointSelector":{"matchLabels":{"app.kubernetes.io/name":"nocodb"}},"ingress":[{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"envoy-gateway-system","gateway.envoyproxy.io/owning-gateway-name":"internal","gateway.envoyproxy.io/owning-gateway-namespace":"networking"}}],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation","app.kubernetes.io/name":"n8n"}}],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]},{"fromEntities":["host","remote-node"],"toPorts":[{"ports":[{"port":"8080","protocol":"TCP"}]}]}],"egress":[{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"kube-system","k8s:k8s-app":"kube-dns"}}],"toPorts":[{"ports":[{"port":"53","protocol":"UDP"},{"port":"53","protocol":"TCP"}]}]},{"toEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation-data","app.kubernetes.io/name":"automation-data-postgresql"}}],"toPorts":[{"ports":[{"port":"5432","protocol":"TCP"}]}]}]}}'
+      case "${FIXTURE_CASE:-healthy}" in
+        policy-extra-auth|policy-extra-cidr|policy-extra-to-cidr|policy-extra-entity|policy-extra-fqdn|policy-extra-expression|policy-extra-l7|policy-extra-rule)
+          policy="$(FIXTURE_CASE="${FIXTURE_CASE:-healthy}" python -c '
+import json
+import os
+import sys
+
+document = json.load(sys.stdin)
+spec = document["spec"]
+case = os.environ["FIXTURE_CASE"]
+if case == "policy-extra-auth":
+    spec["authentication"] = {"mode": "required"}
+elif case == "policy-extra-cidr":
+    spec["ingress"][0]["fromCIDR"] = ["192.0.2.0/24"]
+elif case == "policy-extra-to-cidr":
+    spec["egress"][0]["toCIDR"] = ["192.0.2.0/24"]
+elif case == "policy-extra-entity":
+    spec["egress"][0]["toEntities"] = ["world"]
+elif case == "policy-extra-fqdn":
+    spec["egress"][0]["toFQDNs"] = [{"matchName": "example.invalid"}]
+elif case == "policy-extra-expression":
+    spec["ingress"][0]["fromEndpoints"][0]["matchExpressions"] = [{"key": "role", "operator": "Exists"}]
+elif case == "policy-extra-l7":
+    spec["ingress"][0]["toPorts"][0]["rules"] = {"http": [{"method": "GET"}]}
+elif case == "policy-extra-rule":
+    spec["ingress"].append({"fromEntities": ["world"], "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}]})
+print(json.dumps(document, separators=(",", ":")))
+' <<<"$policy")"
+          ;;
+      esac
+      printf '%s\n' "$policy"
     fi ;;
   *' get persistentvolumeclaim nocodb-data '*)
     printf '%s\n' '{"spec":{"storageClassName":"longhorn","resources":{"requests":{"storage":"10Gi"}},"volumeName":"pvc-volume"},"status":{"phase":"Bound"}}' ;;
   *' get volumes.longhorn.io '*)
     if [[ "${FIXTURE_CASE:-healthy}" == longhorn-third-failed ]]; then
       printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW","replica-c":"ERR"}}}]}'
+    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-attached-wo ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"WO"}}}]}'
     elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-missing-config ]]; then
       printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW"}}}]}'
     elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-bad ]]; then
       printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"RW","replica-b":"ERR"}}}]}'
     elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-healthy ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"RW","replica-b":"RW"}}}]}'
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{}}}]}'
+    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-rw ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"RW"}}}]}'
+    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-wo ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"WO"}}}]}'
+    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-err ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"ERR"}}}]}'
+    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-missing-config ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{}}}]}'
     else
       printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW"}}}]}'
     fi ;;
@@ -178,26 +219,50 @@ PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
   "$verifier" "$fixture/kubeconfig" >/dev/null
 
 expect_fixture_failure() {
-  local fixture_case="$1"
-  if PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
-    FIXTURE_CASE="$fixture_case" "$verifier" "$fixture/kubeconfig" >/dev/null 2>&1; then
+  local fixture_case="$1" fixture_output
+  if fixture_output="$(PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
+    FIXTURE_CASE="$fixture_case" "$verifier" "$fixture/kubeconfig" 2>&1)"; then
     echo "NocoDB verification contract test failed: $fixture_case was accepted." >&2
     exit 1
   fi
+  case "$fixture_output" in
+    *'Mutation-capable curl option rejected'*|*'Unexpected Prometheus '*|*'Unexpected curl '*|*'Missing Prometheus query'*|*'Multiple Prometheus URLs'*)
+      echo "NocoDB verification contract test failed: $fixture_case violated the curl trace contract." >&2
+      exit 1 ;;
+  esac
 }
 
 expect_fixture_failure worker
 expect_fixture_failure redis-pod
 expect_fixture_failure redis-service
 expect_fixture_failure policy-broadened
+expect_fixture_failure policy-extra-auth
+expect_fixture_failure policy-extra-cidr
+expect_fixture_failure policy-extra-to-cidr
+expect_fixture_failure policy-extra-entity
+expect_fixture_failure policy-extra-fqdn
+expect_fixture_failure policy-extra-expression
+expect_fixture_failure policy-extra-l7
+expect_fixture_failure policy-extra-rule
 expect_fixture_failure longhorn-third-failed
+expect_fixture_failure longhorn-attached-wo
 expect_fixture_failure longhorn-missing-config
 expect_fixture_failure longhorn-detached-bad
+expect_fixture_failure longhorn-detached-rw
+expect_fixture_failure longhorn-detached-wo
+expect_fixture_failure longhorn-detached-err
+expect_fixture_failure longhorn-detached-missing-config
 expect_fixture_failure rules-unhealthy
 expect_fixture_failure gatus-down
 
 PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
   FIXTURE_CASE=longhorn-detached-healthy "$verifier" "$fixture/kubeconfig" >/dev/null
+
+if PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
+  "$fixture/bin/curl" --request POST 'https://prometheus.lab.supermorphic.com/api/v1/query' >/dev/null 2>&1; then
+  echo 'NocoDB verification contract test failed: fake curl accepted a mutation request.' >&2
+  exit 1
+fi
 
 while IFS= read -r observation; do
   case "$observation" in

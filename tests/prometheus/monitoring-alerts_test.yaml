@@ -23,6 +23,9 @@ tests:
       - eval_time: 7m
         alertname: NocoDBDown
         exp_alerts: []
+      - eval_time: 8m
+        alertname: NocoDBDown
+        exp_alerts: []
       - eval_time: 9m
         alertname: NocoDBDown
         exp_alerts:
@@ -31,7 +34,7 @@ tests:
       - eval_time: 14m
         alertname: NocoDBDown
         exp_alerts: []
-      - eval_time: 16m
+      - eval_time: 15m
         alertname: NocoDBProbeMissing
         exp_alerts: []
 
@@ -44,7 +47,7 @@ tests:
       - eval_time: 14m
         alertname: NocoDBProbeMissing
         exp_alerts: []
-      - eval_time: 16m
+      - eval_time: 15m
         alertname: NocoDBProbeMissing
         exp_alerts:
           - exp_labels: {severity: warning, name: nocodb, group: Platform}
@@ -61,12 +64,15 @@ tests:
       - eval_time: 7m
         alertname: NocoDBWorkloadUnavailable
         exp_alerts: []
+      - eval_time: 8m
+        alertname: NocoDBWorkloadUnavailable
+        exp_alerts: []
       - eval_time: 9m
         alertname: NocoDBWorkloadUnavailable
         exp_alerts:
           - exp_labels: {severity: critical, namespace: automation-data, deployment: nocodb}
             exp_annotations: {summary: NocoDB Deployment has no available replica}
-      - eval_time: 14m
+      - eval_time: 13m
         alertname: NocoDBWorkloadUnavailable
         exp_alerts: []
 
@@ -85,7 +91,10 @@ tests:
       - eval_time: 9m
         alertname: NocoDBContainerRestarting
         exp_alerts: []
-      - eval_time: 15m
+      - eval_time: 13m
+        alertname: NocoDBContainerRestarting
+        exp_alerts: []
+      - eval_time: 14m
         alertname: NocoDBContainerRestarting
         exp_alerts:
           - exp_labels: {severity: warning, namespace: automation-data, pod: nocodb-abc, container: nocodb}
@@ -94,6 +103,9 @@ tests:
         alertname: NocoDBContainerRestarting
         exp_alerts: []
       - eval_time: 2m
+        alertname: NocoDBContainerOomKilled
+        exp_alerts: []
+      - eval_time: 3m
         alertname: NocoDBContainerOomKilled
         exp_alerts: []
       - eval_time: 4m
@@ -118,12 +130,15 @@ tests:
       - eval_time: 4m
         alertname: NocoDBMetadataBootstrapJobFailed
         exp_alerts: []
-      - eval_time: 6m
+      - eval_time: 5m
         alertname: NocoDBMetadataBootstrapJobFailed
         exp_alerts:
           - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-metadata-bootstrap, condition: "true"}
             exp_annotations: {summary: NocoDB metadata bootstrap Job failed}
       - eval_time: 34m
+        alertname: NocoDBMetadataBootstrapJobOverdue
+        exp_alerts: []
+      - eval_time: 35m
         alertname: NocoDBMetadataBootstrapJobOverdue
         exp_alerts: []
       - eval_time: 36m
@@ -145,12 +160,15 @@ tests:
       - eval_time: 4m
         alertname: NocoDBAcceptanceJobFailed
         exp_alerts: []
-      - eval_time: 6m
+      - eval_time: 5m
         alertname: NocoDBAcceptanceJobFailed
         exp_alerts:
           - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-acceptance-domain, condition: "true"}
             exp_annotations: {summary: NocoDB acceptance Job failed}
       - eval_time: 34m
+        alertname: NocoDBAcceptanceJobOverdue
+        exp_alerts: []
+      - eval_time: 35m
         alertname: NocoDBAcceptanceJobOverdue
         exp_alerts: []
       - eval_time: 36m
@@ -174,6 +192,9 @@ tests:
       - eval_time: 7m
         alertname: NocoDBPersistentVolumeClaimNotBound
         exp_alerts: []
+      - eval_time: 8m
+        alertname: NocoDBPersistentVolumeClaimNotBound
+        exp_alerts: []
       - eval_time: 9m
         alertname: NocoDBPersistentVolumeClaimNotBound
         exp_alerts:
@@ -185,7 +206,7 @@ tests:
       - eval_time: 14m
         alertname: NocoDBPersistentVolumeUsageWarning
         exp_alerts: []
-      - eval_time: 16m
+      - eval_time: 15m
         alertname: NocoDBPersistentVolumeUsageWarning
         exp_alerts:
           - exp_labels: {severity: warning, namespace: automation-data, persistentvolumeclaim: nocodb-data}
@@ -194,6 +215,9 @@ tests:
         alertname: NocoDBPersistentVolumeUsageWarning
         exp_alerts: []
       - eval_time: 24m
+        alertname: NocoDBPersistentVolumeUsageCritical
+        exp_alerts: []
+      - eval_time: 25m
         alertname: NocoDBPersistentVolumeUsageCritical
         exp_alerts: []
       - eval_time: 26m
