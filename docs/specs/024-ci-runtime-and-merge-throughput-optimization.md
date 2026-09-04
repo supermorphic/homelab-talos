@@ -900,6 +900,19 @@ multiset, the same ordered 60 shell identities inside the 296-test harness repor
 failure, error, or skip. Three local samples do not establish p95 and do not include remote
 queue or runner-start behavior.
 
+A later rebase onto `origin/main` `110feaa` exposed a coordinator correctness defect
+before publication. The new automation-data exporter-grant fixture intentionally consumes
+its command stdin. `run-ci.sh` was still reading suite IDs from a process substitution
+attached to the coordinator loop, so the ninth suite could consume IDs 10 through 40 and
+the coordinator could finalize a partial run as passed. Two 9-of-40 verification runs were
+rejected despite their internally valid partial reports. The coordinator now resolves the
+complete ordered execution list before any suite starts, rejects a failed or empty list,
+iterates the in-memory list, and gives every noninteractive suite `/dev/null` as stdin. A
+permanent three-suite regression test places an stdin consumer between two passing suites
+and requires all three identities and reports. This correctness fix does not change the
+three-sample benchmark distribution above, which predates `110feaa` and completed all 40
+suites.
+
 The residual suite medians are:
 
 | Rank | Suite | Median |

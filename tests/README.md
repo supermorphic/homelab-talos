@@ -202,6 +202,11 @@ download `canonical-test-results-<run>-<attempt>`. It also generates and uploads
 `allure-test-report-<run>-<attempt>` when canonical finalization succeeded and
 writes the run/suite counts to the job summary.
 
+The coordinator resolves the complete ordered CI execution list before it starts
+the first suite. Each suite receives `/dev/null` as stdin. A validator cannot
+consume later suite IDs or wait for interactive input, and an empty or failed
+execution-list lookup fails before suite execution.
+
 Node.js and Allure are pinned through mise. Generate static Awesome reports with
 `mise exec -- just test report <run-id>` or `report-latest`; output is
 `.test-reports/<run-id>/awesome/`. `report-open <run-id>` starts Allure's local

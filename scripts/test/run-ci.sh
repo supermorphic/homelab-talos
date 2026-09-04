@@ -32,6 +32,16 @@ run_result='passed'
 primary_exit_code=0
 signal_exit_code=0
 
+execution_id_lines="$(catalog_execution_ids "$catalog" ci)" || {
+	echo 'Failed to resolve the complete CI execution list.' >&2
+	exit 2
+}
+[[ -n "$execution_id_lines" ]] || {
+	echo 'The CI execution list is empty.' >&2
+	exit 2
+}
+mapfile -t execution_ids <<<"$execution_id_lines"
+
 epoch_milliseconds() {
 	local now seconds fraction
 	now="$EPOCHREALTIME"
@@ -79,7 +89,7 @@ append_suite_record() {
 	suite_records+="${suite_records:+$'\n'}$record"
 }
 
-while IFS= read -r suite_id; do
+for suite_id in "${execution_ids[@]}"; do
 	[[ -n "$suite_id" ]] || continue
 	entry="$(catalog_entry_by_id "$catalog" "$suite_id")"
 	command="$(yq -r '.runner.command' - <<<"$entry")"
@@ -111,7 +121,7 @@ while IFS= read -r suite_id; do
 		TEST_SHARED_RESULT_DIR="$shared_result_dir" \
 		TEST_RUN_ID="$run_id" \
 		TEST_RESULT_FRAGMENT_DIR="$(cd "$fragment_dir" && pwd)" \
-		"$just_bin" "${just_args[@]}" 2>&1 | tee "$suite_log"
+		"$just_bin" "${just_args[@]}" </dev/null 2>&1 | tee "$suite_log"
 	command_exit_code="${PIPESTATUS[0]}"
 	set -e
 	if [[ "$signal_exit_code" -ne 0 ]]; then
@@ -173,7 +183,7 @@ while IFS= read -r suite_id; do
 		run_result="$suite_result"
 		echo "CI fail-fast stop after $suite_id ($suite_result)." >&2
 	fi
-done < <(catalog_execution_ids "$catalog" ci)
+done
 
 merge_junit_reports "$run_dir/junit.xml" validation.ci "${suite_reports[@]}"
 suites_json="$(

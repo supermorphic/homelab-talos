@@ -10,6 +10,42 @@ fake_just="$fixture_root/fake-just.sh"
 fake_just_log="$fixture_root/fake-just.log"
 catalog="$fixture_root/catalog.yaml"
 
+stdin_catalog="$fixture_root/stdin-catalog.yaml"
+stdin_fake_just="$fixture_root/stdin-fake-just.sh"
+stdin_fake_just_log="$fixture_root/stdin-fake-just.log"
+stdin_run_id_file="$fixture_root/stdin-ci.run-id"
+cp tests/fixtures/result-coordinator/catalog.yaml "$stdin_catalog"
+yq -i '
+  .executions.ci = ["validation.fixture-pass", "validation.fixture-fail", "validation.fixture-skipped"] |
+  (.suites[] | select(.metadata.id == "validation.fixture-pass").runner.command) = "mise exec -- just fixture first" |
+  (.suites[] | select(.metadata.id == "validation.fixture-fail").runner.command) = "mise exec -- just fixture stdin-consumer" |
+  (.suites[] | select(.metadata.id == "validation.fixture-skipped").runner.command) = "mise exec -- just fixture last" |
+  (.suites[] | select(.metadata.id == "validation.fixture-pass").native_results.strategy) = "wrapper-junit" |
+  (.suites[] | select(.metadata.id == "validation.fixture-fail").native_results.strategy) = "wrapper-junit" |
+  (.suites[] | select(.metadata.id == "validation.fixture-skipped").native_results.strategy) = "wrapper-junit"
+' "$stdin_catalog"
+# shellcheck disable=SC2016
+printf '%s\n' \
+	'#!/usr/bin/env bash' \
+	'set -euo pipefail' \
+	'printf "%s\n" "$*" >>"${FAKE_JUST_LOG:?}"' \
+	'[[ "$*" != "fixture stdin-consumer" ]] || cat >/dev/null' \
+	'exit 0' >"$stdin_fake_just"
+chmod +x "$stdin_fake_just"
+
+FAKE_JUST_LOG="$stdin_fake_just_log" \
+	UV_CACHE_DIR="$fixture_root/uv-cache" \
+	TEST_CATALOG_PATH="$stdin_catalog" \
+	TEST_RESULTS_ROOT="$fixture_root/stdin-results" \
+	TEST_JUST_BIN="$stdin_fake_just" \
+	TEST_EXECUTION_ORIGIN=agent \
+	TEST_RUN_ID_FILE="$stdin_run_id_file" \
+	scripts/test/run-ci.sh >/dev/null 2>&1
+stdin_run_dir="$fixture_root/stdin-results/$(cat "$stdin_run_id_file")"
+[[ "$(cat "$stdin_fake_just_log")" == $'fixture first\nfixture stdin-consumer\nfixture last' ]]
+[[ "$(yq -r '.suites | length' "$stdin_run_dir/summary.json")" -eq 3 ]]
+[[ "$(yq -r '.junit.tests' "$stdin_run_dir/summary.json")" -eq 3 ]]
+
 cp tests/fixtures/result-coordinator/catalog.yaml "$catalog"
 yq -i '
   .executions.ci = ["validation.repo-validate", "validation.test-harness"] |
