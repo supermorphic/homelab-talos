@@ -116,6 +116,7 @@ campaigns:
       - verification.foundation
       - verification.n8n
       - verification.automation-data
+      - verification.nocodb
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -178,6 +179,7 @@ campaigns:
       - verification.foundation
       - verification.n8n
       - verification.automation-data
+      - verification.nocodb
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -521,6 +523,11 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube automation-data-verify", implementation: scripts/verify/automation-data.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.nocodb, source: verification, framework: bash, suite: platform, tier: verification, target: nocodb, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube nocodb-verify", implementation: scripts/verify/nocodb.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

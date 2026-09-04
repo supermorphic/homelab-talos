@@ -88,5 +88,10 @@ scripts/test/nocodb-manifest-contract-test.sh "$temp_dir/source.yaml" "$temp_dir
 scripts/test/nocodb-workflow-contract-test.sh
 scripts/test/nocodb-source-operation-test.sh
 scripts/test/nocodb-bootstrap-test.sh
+scripts/test/nocodb-alerts-test.sh
+scripts/test/nocodb-verification-contract-test.sh
 
-echo 'NocoDB source, pinned chart render, manifest, workflow, lifecycle, and bootstrap contracts passed validation.'
+just --dry-run kube nocodb-verify | rg -Fq \
+  'run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh'
+
+echo 'NocoDB source, pinned chart render, manifest, workflow, lifecycle, bootstrap, monitoring, and read-only verification contracts passed validation.'

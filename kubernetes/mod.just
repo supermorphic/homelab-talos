@@ -26,6 +26,10 @@ cilium-validate: require-bash
 nocodb-validate: require-bash
     @scripts/validate/nocodb.sh
 
+# Observe deployed NocoDB only through scoped Kubernetes and Prometheus/Gatus reads.
+nocodb-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh {{quote(kubeconfig)}}
+
 # Reconcile every eligible NocoDB source for one managed domain through the fixed private
 # webhook. Guard: NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>'.
 nocodb-source-sync domain: require-bash

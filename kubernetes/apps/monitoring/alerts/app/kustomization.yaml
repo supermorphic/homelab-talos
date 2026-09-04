@@ -10,3 +10,4 @@ resources:
   - ./portainer.yaml
   - ./test-reports.yaml
   - ./n8n.yaml
+  - ./nocodb.yaml
