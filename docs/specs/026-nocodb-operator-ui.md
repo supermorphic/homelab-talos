@@ -430,7 +430,8 @@ and n8n APIs. It performs this fixed transaction:
 
 1. Capture the remote `main` SHA once, validate the complete tracked checkout against
    that immutable SHA, render the package, and require Flux to report the same revision
-   throughout the transaction.
+   immediately before and after each reconcile. Neither reconcile requests a mutable
+   source refresh.
 2. Prove that issue-317 bootstrap, provisioning acceptance, a current complete backup,
    and the full-chain restore drill have passed. The newest restore evidence must be
    newer than the newest provisioning acceptance at the captured SHA.
@@ -443,10 +444,13 @@ and n8n APIs. It performs this fixed transaction:
 6. Sign in with the SOPS-managed bootstrap administrator.
 7. Set and read back the application settings that require
    invite-only signup and restrict workspace creation to the super administrator.
-8. Reconcile exactly one deterministically described NocoDB API token and exactly one
-   n8n credential named **NocoDB Operator API**, then send the token directly to the n8n
-   credential API when the credential is absent. A retry lists retained server state and
-   resumes it instead of creating duplicate broad credentials.
+8. Reconcile the n8n credential named **NocoDB Operator API**. If it is absent, create a
+   fresh NocoDB token with the exact bootstrap-managed description
+   `NocoDB Operator API bootstrap/v1` and send it directly to the n8n credential API. If
+   one prior bootstrap token exists without the n8n credential, classify it as an
+   unrecoverable orphan, preserve it, create one replacement, and report only the
+   orphan's non-secret ID for later revocation in NocoDB. More than one orphan is a hard
+   stop that prevents unbounded broad-token accumulation.
 9. Before discarding the in-memory token, test it directly against a fixed NocoDB
    source-list endpoint. Then read the created n8n credential back through the public API
    and require the expected non-secret ID, name, and `httpHeaderAuth` type. n8n `2.36.7`
@@ -470,8 +474,9 @@ The temporary resume uses an ownership marker and resource-version precondition.
 failure, bootstrap re-suspends only the Kustomization mutation carrying its marker and
 preserves the PVC, database, metadata, and API state for diagnosis and retry. It does not
 delete or regenerate a connection encryption key, administrator, token, or n8n credential
-as compensation. A retry reconciles the deterministic token and credential from observed
-state.
+as compensation. A retry reconciles the credential from observed state and permits at
+most one preserved orphan-token replacement as described above. Bootstrap keeps cleanup
+armed until a live read-back proves marker removal and the intended active state.
 
 ## Source provisioning workflow
 

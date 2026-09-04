@@ -14,6 +14,7 @@ expected_confirmation='bootstrap:nocodb'
 nocodb_url='https://nocodb.lab.supermorphic.com'
 n8n_url='https://n8n.lab.supermorphic.com'
 reports_url='https://tests.lab.supermorphic.com/api/catalog.json'
+bootstrap_token_description='NocoDB Operator API bootstrap/v1'
 nocodb_ks='kubernetes/apps/automation-data/nocodb/ks.yaml'
 nocodb_app='kubernetes/apps/automation-data/nocodb/app'
 secret="$nocodb_app/nocodb-credentials.sops.yaml"
@@ -21,11 +22,15 @@ secret_resource='./nocodb-credentials.sops.yaml'
 n8n_api_key="${N8N_API_KEY:-}"
 bootstrap_complete=false
 resume_cleanup_intent=false
+release_pending=false
+success_reported=false
 temp_dir=''
 request_number=0
 captured_main_sha=''
 ownership_marker=''
 ownership_annotation='homelab.supermorphic.com/nocodb-bootstrap-owner'
+credential_id=''
+orphan_token_id=''
 
 get_nocodb_kustomization() { # <output>
   kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
@@ -35,6 +40,29 @@ get_nocodb_kustomization() { # <output>
 replace_nocodb_kustomization() { # <input>
   kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
     replace --filename - <"$1" >/dev/null
+}
+
+verify_released_active() {
+  local verified="$temp_dir/release-verified.json"
+  get_nocodb_kustomization "$verified" || return 1
+  jq -e --arg key "$ownership_annotation" '
+    .spec.suspend == false and (.metadata.annotations[$key] // "") == ""
+  ' "$verified" >/dev/null
+}
+
+emit_bootstrap_success() {
+  [[ "$success_reported" != true ]] || return 0
+  if [[ -n "$orphan_token_id" ]]; then
+    printf 'Preserved orphan NocoDB API token ID: %s\n' "$orphan_token_id"
+  fi
+  printf 'NocoDB Operator API credential ID: %s\n' "$credential_id"
+  cat >&2 <<'EOF'
+Import the secret-free NocoDB source-provisioning workflow. Bind NocoDB Operator API,
+Automation Data Provisioner, and the fixed provisioning Header Auth credential exactly
+as its setup note specifies, then publish it. Revoke any reported orphan token in NocoDB
+after verifying the credential. Keep durable suspend changes in Git.
+EOF
+  success_reported=true
 }
 
 restore_owned_suspension() {
@@ -68,7 +96,7 @@ restore_owned_suspension() {
 release_owned_marker() {
   local current="$temp_dir/release-current.json"
   local replacement="$temp_dir/release-replacement.json"
-  local verified="$temp_dir/release-verified.json"
+  local replace_status
 
   get_nocodb_kustomization "$current"
   jq -e --arg key "$ownership_annotation" --arg marker "$ownership_marker" '
@@ -81,11 +109,17 @@ release_owned_marker() {
     del(.metadata.annotations[$key]) |
     if (.metadata.annotations | length) == 0 then del(.metadata.annotations) else . end
   ' "$current" >"$replacement"
+  release_pending=true
+  set +e
   replace_nocodb_kustomization "$replacement"
-  get_nocodb_kustomization "$verified"
-  jq -e --arg key "$ownership_annotation" '
-    .spec.suspend == false and (.metadata.annotations[$key] // "") == ""
-  ' "$verified" >/dev/null
+  replace_status=$?
+  set -e
+  verify_released_active || {
+    [[ "$replace_status" -eq 0 ]] || echo 'NocoDB marker release request failed.' >&2
+    return 1
+  }
+  release_pending=false
+  bootstrap_complete=true
 }
 
 cleanup_nocodb_bootstrap() {
@@ -93,8 +127,16 @@ cleanup_nocodb_bootstrap() {
   trap - EXIT
   set +e
   if [[ "$bootstrap_complete" != true && "$resume_cleanup_intent" == true ]]; then
-    echo 'NocoDB bootstrap did not pass; restoring the owned suspension while preserving resources and API state.' >&2
-    restore_owned_suspension || cleanup_failed=true
+    if [[ "$release_pending" == true ]] && verify_released_active; then
+      echo 'NocoDB marker release was confirmed after the client lost its response.' >&2
+      release_pending=false
+      bootstrap_complete=true
+      original_exit=0
+      emit_bootstrap_success || cleanup_failed=true
+    else
+      echo 'NocoDB bootstrap did not pass; restoring the owned suspension while preserving resources and API state.' >&2
+      restore_owned_suspension || cleanup_failed=true
+    fi
   fi
   if [[ -n "$temp_dir" ]]; then
     rm -rf -- "$temp_dir" || cleanup_failed=true
@@ -430,9 +472,11 @@ require_preconditions
 }
 require_preconditions
 
+require_deployed_revision
 echo 'Reconciling the automation-data parent before NocoDB activation.' >&2
-flux reconcile kustomization automation-data --namespace flux-system --with-source \
+flux reconcile kustomization automation-data --namespace flux-system \
   --kubeconfig "$kubeconfig" --timeout 10m
+require_deployed_revision
 kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
   --for=condition=Ready kustomization/automation-data --timeout=10m
 
@@ -443,8 +487,10 @@ require_live_suspension
 
 echo 'Resuming and reconciling the staged NocoDB package.' >&2
 resume_with_ownership
-flux reconcile kustomization nocodb --namespace flux-system --with-source \
+require_deployed_revision
+flux reconcile kustomization nocodb --namespace flux-system \
   --kubeconfig "$kubeconfig" --timeout 15m
+require_deployed_revision
 
 wait_for_metadata_job
 kubectl --kubeconfig "$kubeconfig" --namespace automation-data wait \
@@ -514,14 +560,10 @@ jq -e '(.data | type) == "array" and .nextCursor == null' \
   echo 'n8n credential inventory was invalid or incomplete.' >&2
   exit 1
 }
-token_count="$(jq '[.list[] | select(.description == "NocoDB Operator API")] | length' \
-  "$token_list_response")"
+token_count="$(jq --arg description "$bootstrap_token_description" \
+  '[.list[] | select(.description == $description)] | length' "$token_list_response")"
 credential_name_count="$(jq '[.data[] | select(.name == "NocoDB Operator API")] | length' \
   "$credential_list_response")"
-[[ "$token_count" -le 1 ]] || {
-  echo 'Refusing NocoDB bootstrap: multiple NocoDB API tokens have the fixed description.' >&2
-  exit 1
-}
 [[ "$credential_name_count" -le 1 ]] || {
   echo 'Refusing NocoDB bootstrap: multiple n8n credentials have the fixed name.' >&2
   exit 1
@@ -535,44 +577,14 @@ if [[ "$credential_name_count" -eq 1 ]]; then
     exit 1
   }
 fi
-[[ "$credential_name_count" -eq 0 || "$token_count" -eq 1 ]] || {
-  echo 'Refusing NocoDB bootstrap: the n8n credential exists without its NocoDB API token.' >&2
-  exit 1
-}
-
-if [[ "$token_count" -eq 1 ]]; then
-  nocodb_api_token="$(jq -er '.list[] | select(.description == "NocoDB Operator API") |
-    .token | select(type == "string" and length > 0)' "$token_list_response")" || {
-    echo 'Existing NocoDB token inventory omitted the API token.' >&2
-    exit 1
-  }
-else
-  token_body="$temp_dir/token.json"
-  token_response="$temp_dir/token-response.json"
-  jq -n '{description: "NocoDB Operator API"}' >"$token_body"
-  curl_request 'NocoDB API token creation' POST "$nocodb_url/api/v1/tokens" \
-    jwt "$token_body" "$token_response"
-  nocodb_api_token="$(jq -er '
-    .token | select(type == "string" and length > 0)
-  ' "$token_response")" || {
-    echo 'NocoDB token response omitted the fixed API token.' >&2
-    exit 1
-  }
-fi
-[[ "$nocodb_api_token" =~ ^[A-Za-z0-9._-]+$ ]] || {
-  echo 'NocoDB returned an invalid API-token shape.' >&2
-  exit 1
-}
-
-source_list_response="$temp_dir/source-list-response.json"
-curl_request 'NocoDB API token source-list probe' GET \
-  "$nocodb_url/api/v2/meta/bases" token '' "$source_list_response"
-jq -e '
-  type == "object" and
-  (.list | type == "array") and
-  (.pageInfo | type == "object")
-' "$source_list_response" >/dev/null || {
-  echo 'NocoDB API token source-list response did not satisfy the fixed contract.' >&2
+managed_token_ids="$(jq -er --arg description "$bootstrap_token_description" '
+  [.list[] | select(.description == $description)] as $tokens |
+  if all($tokens[]; (.id | type == "string" and test("^[A-Za-z0-9_-]+$")))
+  then ($tokens | map(.id) | join(","))
+  else error("invalid bootstrap token ID")
+  end
+' "$token_list_response")" || {
+  echo 'NocoDB bootstrap-token inventory contains an invalid non-secret ID.' >&2
   exit 1
 }
 
@@ -581,6 +593,43 @@ if [[ "$credential_name_count" -eq 1 ]]; then
     .name == "NocoDB Operator API" and .type == "httpHeaderAuth"
   ) | .id' "$credential_list_response")"
 else
+  if [[ "$token_count" -gt 1 ]]; then
+    printf 'Preserved orphan NocoDB API token IDs: %s\n' "$managed_token_ids" >&2
+    echo 'Refusing NocoDB bootstrap: more than one preserved orphan token requires attended revocation.' >&2
+    exit 1
+  fi
+  if [[ "$token_count" -eq 1 ]]; then
+    orphan_token_id="$managed_token_ids"
+  fi
+  token_body="$temp_dir/token.json"
+  token_response="$temp_dir/token-response.json"
+  BOOTSTRAP_TOKEN_DESCRIPTION="$bootstrap_token_description" jq -n \
+    '{description: env.BOOTSTRAP_TOKEN_DESCRIPTION}' >"$token_body"
+  curl_request 'NocoDB API token creation' POST "$nocodb_url/api/v1/tokens" \
+    jwt "$token_body" "$token_response"
+  nocodb_api_token="$(jq -er '
+    .token | select(type == "string" and length > 0)
+  ' "$token_response")" || {
+    echo 'NocoDB token response omitted the fixed API token.' >&2
+    exit 1
+  }
+  [[ "$nocodb_api_token" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo 'NocoDB returned an invalid API-token shape.' >&2
+    exit 1
+  }
+
+  source_list_response="$temp_dir/source-list-response.json"
+  curl_request 'NocoDB API token source-list probe' GET \
+    "$nocodb_url/api/v2/meta/bases" token '' "$source_list_response"
+  jq -e '
+    type == "object" and
+    (.list | type == "array") and
+    (.pageInfo | type == "object")
+  ' "$source_list_response" >/dev/null || {
+    echo 'NocoDB API token source-list response did not satisfy the fixed contract.' >&2
+    exit 1
+  }
+
   credential_body="$temp_dir/credential.json"
   credential_response="$temp_dir/credential-response.json"
   NOCODB_API_TOKEN="$nocodb_api_token" jq -n '{
@@ -612,10 +661,4 @@ jq -e --arg id "$credential_id" '
 }
 
 release_owned_marker
-bootstrap_complete=true
-printf 'NocoDB Operator API credential ID: %s\n' "$credential_id"
-cat >&2 <<'EOF'
-Import the secret-free NocoDB source-provisioning workflow. Bind NocoDB Operator API,
-Automation Data Provisioner, and the fixed provisioning Header Auth credential exactly
-as its setup note specifies, then publish it. Keep durable suspend changes in Git.
-EOF
+emit_bootstrap_success

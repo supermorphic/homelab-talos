@@ -28,6 +28,10 @@ rg -Fq -- "scripts/nocodb/bootstrap.sh '.kube/config'" <<<"$bootstrap_recipe" ||
   echo 'NocoDB bootstrap uses mutable source resolution or non-owned suspend operations.' >&2
   exit 1
 }
+! rg -n -- '--with-source' "$bootstrap" >/dev/null || {
+  echo 'NocoDB bootstrap lets reconcile re-resolve a mutable source.' >&2
+  exit 1
+}
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-bootstrap-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
@@ -42,6 +46,7 @@ admin_password='synthetic_admin_password_0123456789'
 n8n_api_key='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 jwt='synthetic_nocodb_jwt_0123456789'
 nocodb_token='synthetic_nocodb_api_token_0123456789'
+nocodb_token_prefix='sensitive-prefix-012345'
 
 export FAKE_NOCODB_EVENT_LOG="$event_log"
 export FAKE_REMOTE_MAIN="$remote_main"
@@ -50,6 +55,7 @@ export FAKE_ADMIN_PASSWORD="$admin_password"
 export FAKE_N8N_API_KEY="$n8n_api_key"
 export FAKE_NOCODB_JWT="$jwt"
 export FAKE_NOCODB_TOKEN="$nocodb_token"
+export FAKE_NOCODB_TOKEN_PREFIX="$nocodb_token_prefix"
 
 cat >"$stub_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -155,7 +161,8 @@ case "$*" in
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_CASE_ROOT/flux-revision-count"
     if [[ "${FAKE_FAILURE:-}" == flux-revision ||
-      ("${FAKE_FAILURE:-}" == flux-revision-after-parent && "$count" -ge 3) ]]; then
+      ("${FAKE_FAILURE:-}" == flux-drift-during-parent && "$count" -eq 4) ||
+      ("${FAKE_FAILURE:-}" == flux-drift-during-target && "$count" -eq 7) ]]; then
       printf '%s' 'main@sha1:dddddddddddddddddddddddddddddddddddddddd'
     else
       printf 'main@sha1:%s' "$FAKE_REMOTE_MAIN"
@@ -198,6 +205,10 @@ case "$*" in
     if [[ "$desired_suspend" == false && -n "$desired_owner" &&
       "${FAKE_FAILURE:-}" == resume-apply-lost ]]; then
       exit 76
+    fi
+    if [[ "$desired_suspend" == false && -z "$desired_owner" &&
+      "${FAKE_FAILURE:-}" == release-apply-lost ]]; then
+      exit 77
     fi
     cat "$FAKE_CASE_ROOT/kustomization.json"
     ;;
@@ -302,16 +313,18 @@ case "$url" in
   'https://nocodb.lab.supermorphic.com/api/v1/tokens')
     rg -Fxq -- "header = \"xc-auth: ${FAKE_NOCODB_JWT}\"" "$config" || exit 76
     if [[ "$method" == POST && -f "$body" ]]; then
-      jq -e '. == {description: "NocoDB Operator API"}' "$body" >/dev/null || exit 77
+      jq -e '. == {description: "NocoDB Operator API bootstrap/v1"}' "$body" >/dev/null || exit 77
       [[ "${FAKE_FAILURE:-}" != token ]] || exit 79
       count="$(<"$FAKE_CASE_ROOT/token-create-count")"
-      printf '%s\n' "$((count + 1))" >"$FAKE_CASE_ROOT/token-create-count"
-      jq --arg token "$FAKE_NOCODB_TOKEN" \
-        '. + [{id:"nocodb-token-id",description:"NocoDB Operator API",token:$token}]' \
+      count=$((count + 1))
+      printf '%s\n' "$count" >"$FAKE_CASE_ROOT/token-create-count"
+      token_id="nocodb-token-id-$count"
+      jq --arg id "$token_id" --arg prefix "$FAKE_NOCODB_TOKEN_PREFIX" \
+        '. + [{id:$id,description:"NocoDB Operator API bootstrap/v1",token_prefix:$prefix}]' \
         "$FAKE_CASE_ROOT/tokens.json" >"$FAKE_CASE_ROOT/tokens-next.json"
       mv "$FAKE_CASE_ROOT/tokens-next.json" "$FAKE_CASE_ROOT/tokens.json"
       [[ "${FAKE_FAILURE:-}" != token-create-lost ]] || exit 80
-      printf '%s\n' "{\"id\":\"nocodb-token-id\",\"description\":\"NocoDB Operator API\",\"token\":\"$FAKE_NOCODB_TOKEN\"}" >"$output"
+      printf '%s\n' "{\"id\":\"$token_id\",\"description\":\"NocoDB Operator API bootstrap/v1\",\"token\":\"$FAKE_NOCODB_TOKEN\"}" >"$output"
     else
       exit 75
     fi
@@ -463,26 +476,27 @@ reset_api_state() { # <failure>
   printf '%s\n' 0 >"$case_root/credential-create-count"
   case "$failure" in
     duplicate-token)
-      jq -n --arg token "$nocodb_token" '[
-        {id:"token-one",description:"NocoDB Operator API",token:$token},
-        {id:"token-two",description:"NocoDB Operator API",token:$token}
+      jq -n --arg prefix "$nocodb_token_prefix" '[
+        {id:"token-one",description:"NocoDB Operator API bootstrap/v1",token_prefix:$prefix},
+        {id:"token-two",description:"NocoDB Operator API bootstrap/v1",token_prefix:$prefix}
       ]' >"$case_root/tokens.json"
       ;;
     duplicate-credential)
-      jq -n --arg token "$nocodb_token" '[{id:"token-one",description:"NocoDB Operator API",token:$token}]' \
-        >"$case_root/tokens.json"
       printf '%s\n' '[{"id":"credential-one","name":"NocoDB Operator API","type":"httpHeaderAuth"},{"id":"credential-two","name":"NocoDB Operator API","type":"httpHeaderAuth"}]' \
         >"$case_root/credentials.json"
       ;;
     wrong-credential-type)
-      jq -n --arg token "$nocodb_token" '[{id:"token-one",description:"NocoDB Operator API",token:$token}]' \
-        >"$case_root/tokens.json"
       printf '%s\n' '[{"id":"credential-id","name":"NocoDB Operator API","type":"postgres"}]' \
         >"$case_root/credentials.json"
       ;;
-    credential-without-token)
+    existing-credential)
       printf '%s\n' '[{"id":"credential-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}]' \
         >"$case_root/credentials.json"
+      ;;
+    one-orphan)
+      jq -n --arg prefix "$nocodb_token_prefix" '[
+        {id:"orphan-token-id",description:"NocoDB Operator API bootstrap/v1",token_prefix:$prefix}
+      ]' >"$case_root/tokens.json"
       ;;
   esac
 }
@@ -535,7 +549,7 @@ assert_no_delete() {
     fail 'bootstrap attempted destructive compensation'
 }
 assert_no_secret_output() {
-  for value in "$admin_password" "$jwt" "$nocodb_token" "$n8n_api_key"; do
+  for value in "$admin_password" "$jwt" "$nocodb_token" "$nocodb_token_prefix" "$n8n_api_key"; do
     ! rg -Fq -- "$value" <<<"$OUT" || fail 'bootstrap exposed secret material'
   done
 }
@@ -623,12 +637,19 @@ assert_status 0
 [[ "$(<"$case_root/remote-check-count")" -eq 1 ]] || fail 'remote main was resolved more than once'
 assert_no_suspend
 
-case_name='Flux drift after parent reconcile refuses before resume'
-run_case flux-revision-after-parent
+case_name='Flux drift during parent reconcile refuses before resume'
+run_case flux-drift-during-parent
 assert_failure
 assert_event 'flux reconcile kustomization automation-data '
 ! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'resume ran after Flux revision drift'
 assert_no_suspend
+
+case_name='Flux drift during target reconcile triggers owned suspension cleanup'
+run_case flux-drift-during-target
+assert_failure
+assert_event 'flux reconcile kustomization nocodb '
+assert_cleanup_suspend
+assert_no_delete
 
 case_name='tracked checkout drift after parent reconcile refuses before resume'
 run_case tracked-drift-after-parent
@@ -733,6 +754,16 @@ assert_no_suspend
 assert_no_delete
 assert_no_secret_output
 
+case_name='release response loss is proven active before cleanup is disarmed'
+run_case release-apply-lost
+assert_status 0
+[[ "$(jq -r '.spec.suspend' "$case_root/kustomization.json")" == false ]] || \
+  fail 'release response loss did not retain the intended active state'
+[[ "$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] // ""' \
+  "$case_root/kustomization.json")" == '' ]] || fail 'release response loss retained the task marker'
+assert_no_suspend
+assert_no_secret_output
+
 settings_post_line="$(rg -n -m 1 'curl POST https://nocodb.lab.supermorphic.com/api/v1/app-settings' "$event_log" | cut -d: -f1)"
 settings_get_line="$(rg -n -m 1 'curl GET https://nocodb.lab.supermorphic.com/api/v1/app-settings' "$event_log" | cut -d: -f1)"
 token_line="$(rg -n -m 1 'curl POST https://nocodb.lab.supermorphic.com/api/v1/tokens' "$event_log" | cut -d: -f1)"
@@ -747,7 +778,7 @@ credential_read_line="$(rg -n -m 1 'curl GET https://n8n.lab.supermorphic.com/ap
 case_name='duplicate NocoDB tokens are refused without creating another token'
 run_case duplicate-token
 assert_failure
-assert_contains 'multiple NocoDB API tokens'
+assert_contains 'more than one preserved orphan'
 [[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'duplicate-token case created a token'
 assert_cleanup_suspend
 
@@ -758,12 +789,17 @@ assert_contains 'multiple n8n credentials'
 [[ "$(<"$case_root/credential-create-count")" -eq 0 ]] || fail 'duplicate-credential case created a credential'
 assert_cleanup_suspend
 
-case_name='credential without token is refused as inconsistent durable state'
-run_case credential-without-token
-assert_failure
-assert_contains 'credential exists without'
-[[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'inconsistent-state case created a token'
-assert_cleanup_suspend
+case_name='existing credential is reused without token creation or direct probe'
+run_case existing-credential
+assert_status 0
+[[ "$OUT" == *'NocoDB Operator API credential ID: credential-id'* ]] || \
+  fail 'existing credential ID was not reported'
+[[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'existing-credential case created a token'
+[[ "$(<"$case_root/credential-create-count")" -eq 0 ]] || fail 'existing-credential case created a credential'
+! rg -q '^curl GET https://nocodb.lab.supermorphic.com/api/v2/meta/bases$' "$event_log" || \
+  fail 'existing-credential case attempted a raw-token probe'
+assert_no_suspend
+assert_no_secret_output
 
 case_name='wrong existing credential type is refused'
 run_case wrong-credential-type
@@ -771,14 +807,26 @@ assert_failure
 assert_contains 'unexpected type'
 assert_cleanup_suspend
 
-case_name='lost token-create response is retried without a duplicate token'
+case_name='one preserved orphan permits one fresh replacement'
+run_case one-orphan
+assert_status 0
+assert_contains 'Preserved orphan NocoDB API token ID: orphan-token-id'
+[[ "$(<"$case_root/token-create-count")" -eq 1 ]] || fail 'one-orphan case did not create one replacement'
+[[ "$(jq length "$case_root/tokens.json")" -eq 2 ]] || fail 'one-orphan case did not preserve the orphan'
+assert_no_secret_output
+
+case_name='two lost token responses stop before a third broad token'
 run_case token-create-lost
 assert_failure
 [[ "$(jq length "$case_root/tokens.json")" -eq 1 ]] || fail 'first attempt did not retain one token'
+run_case token-create-lost exact false true
+assert_failure
+[[ "$(jq length "$case_root/tokens.json")" -eq 2 ]] || fail 'second attempt did not retain one replacement'
 run_case none exact false true
-assert_status 0
-[[ "$(<"$case_root/token-create-count")" -eq 1 ]] || fail 'retry created a duplicate token'
-[[ "$(jq length "$case_root/tokens.json")" -eq 1 ]] || fail 'retry retained duplicate tokens'
+assert_failure
+assert_contains 'more than one preserved orphan'
+[[ "$(<"$case_root/token-create-count")" -eq 2 ]] || fail 'third attempt created an unbounded token'
+[[ "$(jq length "$case_root/tokens.json")" -eq 2 ]] || fail 'third attempt did not preserve the bounded state'
 
 case_name='lost credential-create response is retried without a duplicate credential'
 run_case credential-create-lost
@@ -788,5 +836,8 @@ run_case none exact false true
 assert_status 0
 [[ "$(<"$case_root/credential-create-count")" -eq 1 ]] || fail 'retry created a duplicate credential'
 [[ "$(jq length "$case_root/credentials.json")" -eq 1 ]] || fail 'retry retained duplicate credentials'
+[[ "$(<"$case_root/token-create-count")" -eq 1 ]] || fail 'credential retry created another token'
+! rg -q '^curl GET https://nocodb.lab.supermorphic.com/api/v2/meta/bases$' "$event_log" || \
+  fail 'credential retry attempted a raw-token probe'
 
 echo 'NocoDB guarded bootstrap transaction tests passed.'
