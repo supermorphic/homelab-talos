@@ -159,6 +159,12 @@ The NocoDB application package contains:
 - SOPS Secret references; and
 - local validation and lifecycle scripts.
 
+NocoDB runs in the existing `automation-data` namespace under
+`kubernetes/apps/automation-data/nocodb/`. Its fixed metadata bootstrap Job can therefore
+read the existing automation-data provisioner Secret and the separate NocoDB Secret
+without copying credentials across namespaces. Workload labels and Cilium policy still
+isolate NocoDB from the PostgreSQL, backup, and exporter workloads in that namespace.
+
 The automation-data platform gains the optional roles, fixed provisioning functions, and
 NocoDB source registry. Following the existing workflow-template layout, the n8n package
 owns the secret-free source-provisioning workflow template and the egress needed for the
