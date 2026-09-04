@@ -171,9 +171,10 @@ diagnosis to one corrected quality selection. Issue 330 commit
 `022787bedfd3e32365c3de1701966240e579c045` then applied the lifecycle rule before any
 additional scheduling work. It removed completed diagnostics, comparison modes,
 historical protocols, unused fixtures, and their operator and source surfaces. The
-retained offline validator contains exactly 39 high-value Bats tests across five files:
+then-retained offline validator contained exactly 39 high-value Bats tests across five
+files:
 
-| Bats file | Current tests |
+| Bats file | Tests at the issue-330 boundary |
 | --- | ---: |
 | `benchmark.bats` | 15 |
 | `dispatch.bats` | 8 |
@@ -181,7 +182,7 @@ retained offline validator contains exactly 39 high-value Bats tests across five
 | `runmeta.bats` | 2 |
 | `source-contract.bats` | 3 |
 
-The retained evidence groups are:
+The then-retained evidence groups were:
 
 | Group | Tests | Required proof |
 | --- | ---: | --- |
@@ -189,10 +190,11 @@ The retained evidence groups are:
 | Work plan, evidence, ranking, resume, and integration | 17 | Exact 144-row plan, QSV commands, evidence authentication, ranking outcomes, resume, and four representative rows |
 | Dispatch and safety | 10 | Confirmation, capability, provenance, source drift, safe Job rendering, confinement, rollback, and bounded results |
 
-No retained offline test simulates all 144 encodes. One independent planner assertion
-proves the exact `6 x 3 x 8` work set. Four representative integration cases cover AVC
-ICQ 16, HDR10 ICQ 30, row failure and cleanup, and authenticated resume. Focused oracles
-cover the remaining scientific, identity, ranking, and safety invariants.
+At that boundary, no retained offline test simulated all 144 encodes. One independent
+planner assertion proved the exact `6 x 3 x 8` work set. Four representative integration
+cases covered AVC ICQ 16, HDR10 ICQ 30, row failure and cleanup, and authenticated resume.
+Focused oracles covered the remaining scientific, identity, ranking, and safety
+invariants.
 
 Three controlled complete-validator runs took 78.25s, 77.10s, and 77.42s. The 77.42s
 median is 91.3 percent below the inherited 894.01s median and meets the 60-to-120-second
@@ -204,7 +206,9 @@ The issue-330 result demonstrates the governing optimization order: close the ev
 lifecycle, remove work without a current consumer, and retain cheaper independent
 oracles before adding runners or selective execution. It does not establish the final
 required-check p95 because the complete Stage 1 gate and GitHub execution distribution
-still require remeasurement after the remaining CI work is integrated.
+still require remeasurement after the remaining CI work is integrated. Specification 017
+subsequently recorded the completed 144-row evaluation and terminal no-go decision, so
+these 39 identities and their operational surfaces no longer have a current consumer.
 
 ## Staged decision model
 
@@ -228,14 +232,15 @@ specification when its measured decision is material enough to require implement
 The reviewed execution boundary is:
 
 - Plan 023a produced the historical audit and controlled baseline.
-- Issues 325 and 330 completed the encode evidence-lifecycle decision and focused the
-  offline harness. They supersede Plan 023b's proposed split runner, runner-contract
-  fixes, and fixture micro-optimizations. None of that runner code remains.
+- Issues 325 and 330 focused the encode harness while the corrected evaluation remained
+  pending. Specification 017 subsequently closed that evaluation. Stage 1 therefore
+  removes the remaining harness instead of optimizing or scheduling it. This also
+  supersedes Plan 023b's proposed split runner, runner-contract fixes, and fixture
+  micro-optimizations.
 - The remaining Stage 1 work removes duplicate repository and general-harness work,
   optimizes retained slow cases, and remeasures the complete gate.
 - Bounded concurrency is considered only when retained independent work still dominates
-  the measured critical path. The focused encode harness does not justify a custom
-  per-file runner.
+  the measured critical path.
 - Stage 2 gets a plan only if the post-Stage-1 result still justifies impact selection.
 - Stage 3 remains gated by issue 275 and its later decision gate.
 
@@ -296,18 +301,14 @@ encode harness and its then-current operational surfaces. Those totals describe 
 fixed audit commit only. Active experimental evidence remains maintained and runnable for
 its current consumer; Active does not mean permanently required.
 
-Issues 325 and 330 completed the encode lifecycle review. The bounded diagnostic stage
-has a committed terminal decision. The diagnostic producer, collector, reader, terminal
-transport, historical protocols, and operator recipes are Removed. The same disposition
-applies to x265 comparison, finalist publication, savings and audio inventory, contention
-and playback observation, findings rendering, census and sample selection, stills, and
-generalized compatibility helpers without a current quality consumer.
-
-The retained `validation.encode-benchmark` owner has 39 Bats identities and only the
-source, quality, evidence, run, dispatch, result, verification, and workload surfaces
-needed for the corrected quality selection. Exact current repository-wide inventory and
-shell-source totals still require regeneration after all Stage 1 branches are integrated;
-historical totals cannot be used as current acceptance evidence.
+Issues 325 and 330 first removed completed diagnostic and unused evaluation work, leaving
+39 Bats identities for the pending corrected quality selection. Specification 017 then
+recorded the complete corrected 144-row evidence and terminal no-go decision. The
+remaining `validation.encode-benchmark` owner and its source, fixture, quality, evidence,
+run, dispatch, result, verification, workload, alert, and toolchain surfaces are therefore
+Removed by this Stage 1 change. Exact current repository-wide inventory and shell-source
+totals still require regeneration after all Stage 1 branches are integrated; historical
+totals cannot be used as current acceptance evidence.
 
 ### Lifecycle states
 
@@ -333,55 +334,24 @@ must still identify a current consumer or permanent safety invariant.
 
 ## `encode-benchmark` disposition and boundary
 
-`encode-benchmark` is Active. Specification 017 records a terminal diagnostic decision
-and one remaining purpose: run the corrected 144-row quality evaluation and rank ICQ
-settings independently for AVC, VC-1, and HDR10. No further anomaly diagnostic is
-required.
+`encode-benchmark` is Removed. Specification 017 records the completed corrected 144-row
+evaluation, independent AVC, VC-1, and HDR10 rankings, and the terminal no-go strategy
+decision. It explicitly states that no further ICQ diagnostic or quality run is
+justified. The evidence lifecycle is complete and no current feature, operator workflow,
+or safety invariant consumes the runnable harness.
 
-The harness originated during the FileFlows movie-encoding strategy work, but its current
-purpose is the distinct QSV HEVC ICQ evaluation in specification 017. FileFlows is not
-deployed, and the harness does not authorize a FileFlows deployment.
+The harness originated during the FileFlows movie-encoding strategy work, but its final
+purpose was the distinct QSV HEVC ICQ evaluation in specification 017. FileFlows is not
+deployed, and the completed harness does not authorize a FileFlows deployment.
 
-During Stage 1, `encode-benchmark` remains part of every required `just ci` run. Issue 330
-reduced its intrinsic offline cost before changing when it runs. The retained quality,
-identity, resume, evidence, dispatch, rollback, confinement, and workload contracts stay
-Active. Completed diagnostic and unused evaluation surfaces are Removed.
+The removal boundary deletes the application source and fixtures, offline validator,
+live verifier, dispatcher and result scripts, catalog identities, general-harness case,
+operator recipes, Flux Kustomization, PrometheusRule and its rule tests, and the now-unused
+FFmpeg toolchain entry. Removing the parent media Kustomization reference lets Flux prune
+the Git-managed inert ConfigMaps, PriorityClass, alert rule, and child Kustomization after
+merge. This change does not perform a live mutation or delete evidence outside Git.
 
-### Offline-CI scope
-
-Issue 303 may change:
-
-- Bats tests, fixtures, and test-specific setup;
-- offline source validation, parsing, rendering, and linting;
-- offline report generation and adapters;
-- duplicated test cases or completed historical paths;
-- repeated process and tool invocation;
-- test decomposition and safe offline parallelism; and
-- behavior-neutral test interfaces that do not change live semantics.
-
-Issue 303 does not optimize or alter:
-
-- live ICQ quality Job runtime;
-- encoding parameters or quality methodology;
-- run identity or evidence comparability;
-- quality dispatch authority;
-- live operational behavior; or
-- production evidence contracts.
-
-The audit groups current encode coverage by consumer:
-
-- exact ICQ quality work planning and selection correctness;
-- corrected VMAF and authoritative HDR quality oracles;
-- bounded per-row quality evidence;
-- immutable run identity, provenance, and resume behavior;
-- dispatch authorization, ownership, rollback, and cleanup safety; and
-- rendered workload and runtime-contract validation.
-
-Each retained group identifies the corrected quality selection, reproducibility need, or
-permanent safety invariant that consumes it. Old LA-ICQ-only cases and completed ICQ
-modes are not retained merely for history.
-
-### Implemented encode optimization
+### Pre-removal optimization and evidence
 
 Issue 330 removed approximately 29,751 net lines from the encode application, tests,
 fixtures, helpers, and validation surface. It replaced repeated full-path simulations
@@ -394,8 +364,14 @@ The earlier split-runner implementation and its report-boundary tests are supers
 Removed. The five-file, approximately 77-second validator does not justify restoring that
 custom runner. The unaccepted immutable dispatch-fixture experiment is also superseded:
 its target helpers and 120-test structure no longer exist, and it claims zero retained
-savings. Any future encode optimization starts from the current 39-test surface and fresh
-measurements.
+savings.
+
+The 78.96s, 76.45s, and 76.72s controlled samples below establish the cost of the final
+pre-removal harness. Its removal should eliminate approximately that focused work from a
+warm local full gate, but this is an expectation rather than a measured end-to-end saving.
+The post-removal controlled baseline supplies the actual result. A future encoding
+strategy starts from a new design and current requirements; it does not restore this
+completed harness by default.
 
 ## Stage 1 optimization design
 
@@ -498,8 +474,8 @@ These are separate command measurements. They are not added into one savings cla
 because focused profiles overlap other views and were not measured as a combined in-run
 delta.
 
-The focused ICQ harness reduction is complete. Remaining semantic-preserving runtime work
-addresses:
+The completed ICQ harness is Removed rather than optimized further. Remaining
+semantic-preserving runtime work addresses:
 
 - one native-result evaluation for the remaining Conftest and kubeconform console/JUnit
   pairs;
@@ -522,12 +498,8 @@ suite, file, shell-case, and focused profiles are never summed.
 
 After work removal and intrinsic optimization, retained suites may run concurrently in
 bounded groups. This remains full-suite execution in Stage 1: every retained Active suite
-runs for every pull request.
-
-The encode validator uses the repository's ordinary suite-level native-result wrapper and
-runs its five Bats files together. The discarded split runner provides no current
-execution or reporting dependency. Any future decomposition must be justified by a fresh
-profile and must preserve deterministic reporting, cancellation, and failure behavior.
+runs for every pull request. `encode-benchmark` has no current execution or reporting
+dependency because its complete lifecycle is Removed.
 
 Cheap, high-signal repository invariants run first where ordering materially improves
 failure latency. Concurrent execution must preserve deterministic reports, results for
@@ -536,11 +508,11 @@ required suite causing the complete gate to fail.
 
 ## Stage 1 verification and measurement
 
-The pre-issue-330 observational and controlled baselines remain historical context. The
-issue-330 encode distribution is current focused evidence, but it is not a complete
-Stage 1 gate or GitHub p95. After the remaining Stage 1 branches finish, rebase onto final
-current `main`, regenerate the exact inventory, and collect controlled complete-gate and
-GitHub measurements. Historical and current samples must not be combined.
+The pre-issue-330 observational and controlled baselines and the issue-330 encode
+distribution remain historical pre-removal evidence. They are not a complete Stage 1
+gate or GitHub p95. After the remaining Stage 1 branches finish, rebase onto final current
+`main`, regenerate the exact inventory, and collect controlled complete-gate and GitHub
+measurements. Historical and current samples must not be combined.
 
 The 2026-08-31 quiet-window remeasurement on the rebased issue-303 branch independently
 confirmed the focused encode result. Three complete `encode-benchmark-validate` runs
@@ -551,10 +523,11 @@ process guard found no foreign CI or benchmark work during the samples.
 One clean complete `mise exec -- just ci` run then passed in 727.76s on the same host and
 conditions. This single 12m07.76s observation is not a p95 and does not replace the
 required repeated GitHub measurements. It does show that the complete offline gate still
-misses the approximately two-minute objective after the encode harness fell below 80
-seconds. Stage 1 must therefore continue by profiling and reducing the remaining Active
-validation and harness costs. This result does not by itself justify Stage 2 target
-selection.
+missed the approximately two-minute objective while the encode harness remained in the
+gate. The later lifecycle removal is expected to eliminate its approximately 77-second
+focused cost, but the actual full-gate change must be measured. Stage 1 must continue by
+profiling and reducing the remaining Active validation and harness costs. This result does
+not by itself justify Stage 2 target selection.
 
 Measurements separate:
 
@@ -590,8 +563,9 @@ The historical plan-023a inventory remains exactly 500 entries: 494 Active and s
 Removed. Plan 023c removes exactly those six reviewed duplicate executions:
 `harness:conftest-console`, `harness:yaml-parse`, `harness:bash-syntax`,
 `harness:shellcheck-per-file`, `harness:shellcheck-json`, and
-`shell:qbit-manage-policy-shellcheck`. Issue-330 encode removals are a separate lifecycle
-decision and are not included in this count. Focused positive and negative checks proved
+`shell:qbit-manage-policy-shellcheck`. Issue-330 encode reductions and the later complete
+encode lifecycle removal are separate decisions and are not included in this historical
+count. Focused positive and negative checks proved
 the canonical ownership, exact first-Bash failure behavior, exact ShellCheck findings,
 rejection and one-time recomputation of invalid artifacts, producer-failure harness skip,
 one Conftest evaluation, 20 Chainsaw lints, and no generic reparse of Chainsaw test
@@ -636,9 +610,378 @@ GitHub measurements. Stage 2 is not authorized: ordinary latency is unacceptable
 four-part Stage 2 decision gate remains unmet because Stage 1 is incomplete and the
 residual impact and deterministic-selection case are not yet established.
 
+### 023d retained-harness result and post-removal rebaseline
+
+PR #342 supplied an intermediate GitHub observation before the complete encode lifecycle
+removal: canonical validation took 777 seconds, the general harness reported 593.784
+seconds, encode validation reported 64.323 seconds, and the required check completed in
+13m26s. This is one evolving-branch observation, not a distribution. At that point the
+general harness wrote `time="0"` for every shell case, so it could not identify its own
+residual critical path.
+
+Plan 023d added real shell-case duration evidence without changing case order, commands,
+failure propagation, or fail-fast behavior. Its matched focused measurements evaluated
+two implementation changes before the complete rebaseline:
+
+| Focused test | Pre samples | Pre median | Post samples | Post median | Result |
+| --- | --- | ---: | --- | ---: | --- |
+| Logging verifier | 122.53, 123.11, 126.77 | 123.11s | 128.63, 128.23, 130.43 | 128.63s | Projection rewrite reverted; zero retained saving. |
+| Alloy Logs mutations | 137.66, 132.65, 131.49 | 132.65s | 127.94, 125.54, 125.30 | 125.54s | Fixture reuse retained; observed median decrease 7.11s. |
+| Alloy Events mutations | 59.65, 60.50, 59.75 | 59.75s | 54.24, 53.68, 55.31 | 54.24s | Fixture reuse retained; observed median decrease 5.51s. |
+| Loki mutations | 37.07, 37.27, 36.30 | 37.07s | 34.86, 33.78, 34.66 | 34.66s | Fixture reuse retained; observed median decrease 2.41s. |
+
+Every focused command passed. These overlapping distributions are not added into an
+estimated complete-harness saving. Three samples do not establish p95. The logging
+projection rewrite made every measured sample slower than the pre-change maximum, so it
+was removed. The monitoring fixture helper retained all 24 Alloy Logs, 18 Alloy Events,
+and eight Loki mutation identities while avoiding repeated full-repository fixture copies.
+
+After the terminal ICQ result was recorded in specification 017, the remaining 39-test
+encode harness and all of its executable, CI, catalog, operator, GitOps, alert, fixture,
+verification, and dedicated FFmpeg toolchain surfaces were Removed. The controlled
+post-removal rebaseline used commit `f1bda1893341af8ccd6433d270117a1d3c207ceb`, based on
+`origin/main` `f19e57d`, on the same Darwin 25.6.0 arm64 host with the pinned toolchain and
+ordinary warm caches. Time Machine was paused, sleep was inhibited, and the controller
+required the fixed SHA, clean tracked state, and no foreign CI worker immediately before
+and after every accepted sample.
+
+Three complete `mise exec -- just test validate` samples passed the same 54 shell-case
+identities, 20 Chainsaw documents, and two Python test directories:
+
+| Sample | Elapsed real | User CPU | System CPU | Disposition |
+| --- | ---: | ---: | ---: | --- |
+| 9 | 741.35s | 399.38s | 162.76s | Accepted |
+| 10 | 1,647.98s | 393.86s | 153.88s | Accepted; Alloy Events case took 980.210s. |
+| 11 | 710.69s | 393.68s | 148.89s | Accepted |
+
+The post-removal harness distribution has count 3, minimum 710.69s, median 741.35s,
+observed maximum 1,647.98s, and range 937.29s. The nearly constant CPU use and the isolated
+980.210-second case in sample 10 show large elapsed-time variance that the CI-worker guard
+does not explain. This distribution is valid under the declared protocol, but its maximum
+must not be presented as a steady-state estimate or as p95.
+
+The residual top 15 shell cases by three-sample median are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `catalog-negative` | 159.353s |
+| 2 | `monitoring-alloy-logs-validator` | 123.262s |
+| 3 | `logging-verifier` | 116.474s |
+| 4 | `monitoring-alloy-events-validator` | 53.834s |
+| 5 | `monitoring-loki-validator` | 33.411s |
+| 6 | `gatus-validator` | 21.275s |
+| 7 | `campaign-runner` | 18.914s |
+| 8 | `monitoring-alerts-validator` | 18.725s |
+| 9 | `bootstrap-recovery` | 17.916s |
+| 10 | `ntfy-identity` | 15.663s |
+| 11 | `agent-access-verifier` | 14.424s |
+| 12 | `chainsaw-inputs` | 12.235s |
+| 13 | `plex-validator` | 11.311s |
+| 14 | `n8n-secrets` | 11.295s |
+| 15 | `arr-validator` | 10.629s |
+
+One clean complete-CI observation was required. The first two passing attempts took
+840.39s and 959.12s but were excluded because a foreign worker appeared before their
+post-run guard. A third attempt stopped after 879.24s when a host-wide DNS outage prevented
+resolution of the Tailscale Helm repository; a focused retry reproduced the failure, and
+resolution of GitHub and other chart domains also failed. The Tailscale validator passed
+after DNS recovered. These three attempts are preserved only as excluded diagnostics.
+
+The fourth `mise exec -- just ci` attempt passed 720 tests with no failures, errors, or
+skips and clean before/after guards. It took 2,574.80s, of which the harness reported
+2,426.217s. Its `catalog-negative` case alone took 1,768.908s, compared with 156.031s to
+161.900s in the three accepted harness samples. This single accepted full-CI observation
+is therefore evidence of severe elapsed-time variance, not a complete-gate distribution,
+steady-state estimate, or p95.
+
+The post-removal result is not operationally acceptable and does not meet the
+approximately two-minute objective. The sum of the 54 shell-case medians is 694.104s and
+the largest indivisible measured case is 159.353s. Ignoring all orchestration overhead,
+ideal load-balancing floors are 347.052s for two workers, 231.368s for three, and 173.526s
+for four. At that measurement boundary, bounded split execution was therefore justified as
+the next Stage 1 candidate because several independently meaningful retained groups were
+material, but splitting the current work alone could not reach two minutes. The 023e result
+below records the required isolation, deterministic JUnit, fail-fast, and measured-runtime
+decision.
+
+Stage 1 remains full-suite validation: all retained Active evidence still runs for every
+pull request. Stage 2 remains unauthorized. The residual bottleneck is dominated by
+universally executed harness implementation and variance; no current evidence shows that
+unrelated component validation is the main remaining cost or that an impact planner would
+provide the required saving.
+
+### 023e bounded execution and current-main rebaseline
+
+Plan 023e first tested whether the `catalog-negative` hotspot was dominated by starting the
+pinned Python process for every compatibility candidate. Commit `22b733d` added exact
+direct-versus-CLI parity tests and reused the validator process for the 61 rejection and
+three acceptance cases. All compatibility and fixture checks passed, but the controlled
+focused result failed its retention gate:
+
+| Catalog compatibility measurement | Samples | Median |
+| --- | --- | ---: |
+| Existing implementation | 161.900, 159.353, 156.031 | 159.353s |
+| Reused Python process | 397.79, 156.23, 161.57 | 161.57s |
+
+The post-change median was 2.217 seconds slower. Commit `5dfcdca` therefore reverted the
+experiment and records zero saving. Process startup is not the dominant cost. The retained
+validator repeatedly performs substantive repository analysis for each independently
+mutated candidate. Further optimization must reduce or share that analysis without changing
+the literal rejection, ordering, fail-fast, and CLI-boundary contracts.
+
+The retained implementation adds a Bash 5 bounded worker pool inside
+`validation.test-harness`; it does not split the provider workflow or select tests by
+changed path. Nine cheap, high-signal, or repository-mutating shell checks remain in a
+serial preflight. In particular, `catalog-negative` cannot overlap tests that discover the
+repository shell source set because it creates short-lived repository fixtures. The
+remaining isolated cases run with a configurable one-to-eight-worker bound and a default of
+four. Each worker receives a private `TMPDIR` and cannot inherit the outer result-fragment,
+shared-result, or run-ID context. Case declaration order owns console replay and JUnit
+fragment numbering regardless of completion order. The first observed failure stops new
+work, terminates and reaps owned active workers, records canceled started workers as
+skipped, and leaves the unstarted tail for the outer fail-fast reporter.
+
+Permanent regression coverage proves real two-worker overlap, private temporary roots,
+result-context isolation, stable output and fragment order, offset fragment numbering,
+invalid-bound rejection before execution, duplicate and unsafe registration rejection,
+failure-code propagation, cancellation, no unstarted tail, and no surviving owned process.
+The complete real harness also passed with one and four workers before measurement.
+
+The clean fixed-SHA worker comparison used the implementation immediately before the final
+rebase. Every trial passed the same 55 shell identities:
+
+| Parallel workers | Elapsed real | Change from one worker |
+| ---: | ---: | ---: |
+| 1 | 728.47s | baseline |
+| 2 | 475.42s | -34.7% |
+| 4 | 349.09s | -52.1% |
+| 6 | 356.49s | -51.1% |
+
+Four workers were fastest. Six workers added contention and took 7.40 seconds longer, so
+four remains the selected default. This comparison justifies bounded execution, but it
+also disproves the ideal load-balancing model: shared host CPU and I/O plus the serial
+preflight remain material.
+
+Three clean full-CI samples on pre-rebase implementation SHA `dd374c6` passed 721 tests
+with no failures, errors, or skips. Their wall times were 493.09, 490.73, and 471.38 seconds,
+for a 490.73-second median and 21.71-second range. Their harness times were 345.456,
+348.753, and 331.827 seconds. These samples remain valid evidence for that exact tree, but
+they are not the current-main distribution.
+
+While that measurement ran, issue 356 advanced `origin/main` to `1370eff` and added the
+`node-lifecycle` and `cluster-commands` offline cases. The branch rebased and placed both
+independently isolated cases in the worker pool. The current harness therefore has nine
+serial and 48 parallel shell cases, 57 total. The three current-main samples used rebased
+implementation SHA `5dfcdca`, Darwin 25.6.0 arm64, the pinned toolchain, ordinary warm
+caches, idle Time Machine, per-command sleep inhibition, clean tracked state, and clean
+before/after foreign-worker guards:
+
+| Sample | Wall time | Canonical duration | Harness duration | Result |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 495.48s | 494s | 352.278s | 732 passed; 0 failed/error/skipped |
+| 2 | 495.30s | 494s | 352.659s | 732 passed; 0 failed/error/skipped |
+| 3 | 494.23s | 493s | 349.144s | 732 passed; 0 failed/error/skipped |
+
+The authoritative local full-CI distribution has count 3, minimum 494.23 seconds, median
+495.30 seconds, maximum 495.48 seconds, and range 1.25 seconds. It is 38.9 percent below
+the original 810-second median and has substantial headroom below the 20-minute GitHub
+timeout. Three local samples still do not establish p95, and they do not include remote
+queue or runner startup behavior.
+
+The current-main residual suite medians are 352.278 seconds for the harness, 26.997 seconds
+for repository validation, 18.774 seconds for automation-data validation, 16.476 seconds
+for monitoring-alert validation, and 15.214 seconds for n8n validation. The residual top
+15 harness-case medians are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `catalog-negative` | 174.007s |
+| 2 | `monitoring-alloy-logs-validator` | 125.479s |
+| 3 | `logging-verifier` | 118.683s |
+| 4 | `monitoring-alloy-events-validator` | 54.434s |
+| 5 | `monitoring-loki-validator` | 35.389s |
+| 6 | `gatus-validator` | 22.862s |
+| 7 | `bootstrap-recovery` | 22.644s |
+| 8 | `monitoring-alerts-validator` | 20.088s |
+| 9 | `campaign-runner` | 18.748s |
+| 10 | `ntfy-identity` | 16.710s |
+| 11 | `agent-access-verifier` | 16.027s |
+| 12 | `plex-validator` | 12.219s |
+| 13 | `n8n-secrets` | 12.026s |
+| 14 | `chainsaw-inputs` | 11.971s |
+| 15 | `arr-validator` | 11.462s |
+
+The approximately two-minute objective is not met: the current median is 8m15s, and the
+serial `catalog-negative` case alone has a 2m54s median. Stage 1 must continue with intrinsic
+optimization of the retained catalog, logging, and monitoring harnesses. The stable result
+does remove the immediate 20-minute timeout failure, but that operational recovery is not
+the design target.
+
+The Stage 2 gate remains closed. Correctness passes and latency remains unacceptable, but
+the dominant residual work is still universally invoked harness implementation whose
+intrinsic optimization is incomplete. The measurements do not yet show how much retained
+work is unrelated to representative ordinary changes, and they do not establish that a
+planner would save enough to justify its enforcement complexity. Issue 275 remains the
+prerequisite for the separate Forgejo/NUC comparison. Natural GitHub and later Forgejo runs
+must supply the larger stable sample needed for a remote p95 claim.
+
+### 023f intrinsic hotspot reduction and Stage 2 decision
+
+Plan 023f continued Stage 1 in the required order: delete unnecessary work, remove
+duplicate work, make retained work faster, and decompose a retained monolith. It did not
+select validation by changed path. Every Active validation target still ran in each full-CI
+sample.
+
+The catalog compatibility fixture previously contained a second repository-shell
+validation matrix. That matrix rebuilt full-tree shell fixtures and repeated behavior
+already owned by `test_repository_shell_validation.py`,
+`validate-harness-shell-consumer-test.sh`, and `run-ci-test.sh`. Commit `79c8a1e` removed
+339 lines of duplicate fixture and execution code. It retained all 61 catalog rejection
+cases, all three catalog acceptance cases, the executable harness-consumer integration,
+the native-JUnit catalog assertion, and static guards against restoring the six reviewed
+duplicate shell executions. Three focused samples took 30.04, 30.26, and 30.50 seconds,
+for a 30.26-second median compared with the former 174.007-second current-main median. The
+observed focused decrease was 143.747 seconds, or 82.6 percent.
+
+Commit `f6d15b7` made the existing complete monitoring validator accept one optional,
+fail-closed component scope: `loki`, `alloy-logs`, or `alloy-events`. No argument still
+runs the complete validator. An unknown scope or extra argument exits 2 with a literal
+usage diagnostic before temporary repositories or rendered state are constructed. The
+mutation harnesses now call the narrowest canonical validator that can detect the
+mutation. Alloy River-only mutations call the existing River validator directly;
+render-dependent mutations call the matching monitoring component scope. All 24 Alloy
+Logs, 18 Alloy Events, and eight Loki mutation cases remain Active and passed, and the
+complete unscoped monitoring validator also passed.
+
+The focused monitoring results were:
+
+| Mutation harness | Samples | Median | Former median | Observed decrease |
+| --- | --- | ---: | ---: | ---: |
+| Alloy Logs | 15.14, 14.64, 14.86s | 14.86s | 125.479s | 88.2% |
+| Alloy Events | 7.94, 7.98, 7.97s | 7.97s | 54.434s | 85.4% |
+| Loki | 12.21, 12.22, 12.40s | 12.22s | 35.389s | 65.5% |
+
+Commit `ff44c79` retained all 64 logging live-acceptance fixture layouts and assigned each
+layout to exactly one repository-owned group: 31 topology/storage/runtime cases, 11 label
+cases, nine count/compaction cases, and 13 Prometheus-target cases. A contract test invokes
+the real selector path with a harmless verifier and proves complete membership, no
+duplicates, exact-layout compatibility, `all` compatibility, group order, and unknown
+selector rejection. The outer four-worker harness replaced the former single
+`logging-verifier` identity with the four group identities. It remains the only owner of
+concurrency, cancellation, console order, and JUnit order; the logging fixture does not
+create nested workers.
+
+Three focused grouped samples took 36.79, 36.84, and 36.65 seconds, for a 36.79-second
+median compared with the former serial 118.683-second median. The corresponding sums of
+the four JUnit case durations were 118.321, 118.200, and 117.935 seconds. The 69.0 percent
+wall-time reduction is bounded parallelism over the complete retained case set, not
+deleted logging evidence.
+
+The branch then rebased onto `origin/main` `4ce63dd`, which added an automation-data
+contract fix but did not change the focused logging inputs. The complete current-main
+rebaseline used implementation SHA `ff44c79`, Darwin 25.6.0 arm64, the pinned toolchain,
+ordinary warm caches, idle Time Machine, per-command sleep inhibition, clean tracked
+state, and clean before/after foreign-worker guards. Three other passing attempts took
+322.68, 293.36, and 291.68 seconds but were excluded because CI from the
+`homelab-talos.automation-data-db` worktree was active at their post-run guard. The final
+accepted sample followed a five-minute clear-host guard after that worktree repeatedly
+restarted CI during shorter windows.
+
+| Sample | Wall time | Canonical duration | Harness duration | Result |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 319.31s | 318s | 166.464s | 735 passed; 0 failed/error/skipped |
+| 2 | 321.97s | 321s | 165.438s | 735 passed; 0 failed/error/skipped |
+| 3 | 293.26s | 293s | 153.201s | 735 passed; 0 failed/error/skipped |
+
+The distribution has count 3, minimum 293.26 seconds, median 319.31 seconds, maximum
+321.97 seconds, and range 28.71 seconds. The median is 35.5 percent below the preceding
+495.30-second current-main median. All three samples have the same 735-test identity
+multiset, the same ordered 60 shell identities inside the 296-test harness report, and no
+failure, error, or skip. Three local samples do not establish p95 and do not include remote
+queue or runner-start behavior.
+
+A later rebase onto `origin/main` `110feaa` exposed a coordinator correctness defect
+before publication. The new automation-data exporter-grant fixture intentionally consumes
+its command stdin. `run-ci.sh` was still reading suite IDs from a process substitution
+attached to the coordinator loop, so the ninth suite could consume IDs 10 through 40 and
+the coordinator could finalize a partial run as passed. Two 9-of-40 verification runs were
+rejected despite their internally valid partial reports. The coordinator now resolves the
+complete ordered execution list before any suite starts, rejects a failed or empty list,
+iterates the in-memory list, and gives every noninteractive suite `/dev/null` as stdin. A
+permanent three-suite regression test places an stdin consumer between two passing suites
+and requires all three identities and reports. This correctness fix does not change the
+three-sample benchmark distribution above, which predates `110feaa` and completed all 40
+suites.
+
+The residual suite medians are:
+
+| Rank | Suite | Median |
+| ---: | --- | ---: |
+| 1 | `validation.test-harness` | 165.438s |
+| 2 | `validation.repo-validate` | 28.186s |
+| 3 | `validation.automation-data` | 19.421s |
+| 4 | `validation.monitoring-alerts` | 17.028s |
+| 5 | `validation.n8n` | 15.782s |
+| 6 | `validation.monitoring` | 9.848s |
+| 7 | `validation.links` | 7.873s |
+| 8 | `validation.kubeconform` | 4.816s |
+| 9 | `validation.arr` | 4.288s |
+| 10 | `validation.foundation` | 3.529s |
+
+The residual top 15 shell-case medians are:
+
+| Rank | Shell case | Median |
+| ---: | --- | ---: |
+| 1 | `logging-verifier-topology-storage-runtime` | 38.127s |
+| 2 | `logging-verifier-counts-compaction` | 30.094s |
+| 3 | `catalog-negative` | 30.020s |
+| 4 | `logging-verifier-prometheus-targets` | 28.756s |
+| 5 | `logging-verifier-labels` | 24.449s |
+| 6 | `bootstrap-recovery` | 23.634s |
+| 7 | `gatus-validator` | 23.187s |
+| 8 | `monitoring-alerts-validator` | 20.412s |
+| 9 | `campaign-runner` | 19.689s |
+| 10 | `ntfy-identity` | 17.843s |
+| 11 | `monitoring-alloy-logs-validator` | 16.816s |
+| 12 | `agent-access-verifier` | 16.801s |
+| 13 | `monitoring-loki-validator` | 13.471s |
+| 14 | `chainsaw-inputs` | 12.985s |
+| 15 | `arr-validator` | 12.199s |
+
+Stage 1 produced a material and stable improvement, but its complete-gate median remains
+2.66 times the 120-second design target. The residual evidence is no longer dominated by
+obsolete or duplicated encode work or by one unsplit test. It now includes many retained
+component-specific validators and fixture groups. Further global concurrency does not
+remove their CPU and I/O cost, and four workers already outperformed six in the 023e
+comparison.
+
+These measurements justify evaluating Stage 2, but they do not yet authorize its
+implementation. The suite-level and shell-case profiles do not map representative ordinary
+changes to the validation they can affect. They therefore do not prove how much work a
+deterministic selector would omit, what the selected critical path would be, or whether the
+expected saving justifies the new enforcement surface. The next Stage 2 artifact must first
+inventory repository-owned target inputs and dependency or reverse-impact relationships,
+then evaluate representative change sets and their predicted selected paths against the
+approximately two-minute objective.
+
+If that analysis opens the decision gate, the leading candidate is the middle-weight,
+deterministic gated approach used by `homelab-playbook`: repository-owned input mappings
+select universal and affected Active targets, dependency or reverse-impact rules broaden
+the set when required, unknown or malformed impact fails closed to broad validation, and
+one static merge-gate reconciles that every planned target ran and passed. This repository
+must define its own target boundaries and dependency rules from its audit. An agent, PR
+author, or Renovate source cannot de-escalate the deterministic result. Stage 2 must
+preserve fresh pre-merge execution against the complete rebased tree and must not become a
+generalized build system.
+
+Issue 275 remains the prerequisite for the Forgejo/NUC comparison. Runner persistence,
+caching, and capacity experiments remain Stage 3 work and must not be used to assume the
+outcome of the Stage 2 impact analysis.
+
 ## Stage 2 decision gate
 
-Stage 2 is optional. It proceeds only when all of the following are true:
+Stage 2 is optional. It proceeds only when measurements satisfy all of the following
+conditions:
 
 1. Stage 1 correctness and coverage checks pass.
 2. Ordinary merge latency remains operationally unacceptable.
@@ -647,25 +990,23 @@ Stage 2 is optional. It proceeds only when all of the following are true:
 4. Deterministic target selection offers enough expected savings to justify its
    maintenance and enforcement complexity.
 
-If Stage 1 reaches approximately two minutes p95, or otherwise provides an acceptable
-three-to-five-stream drain experience, implementation stops and reassesses before adding
-Stage 2.
+The 023f result satisfies conditions 1 and 2: retained correctness checks passed, and the
+319.31-second median remains operationally unacceptable. It does not yet satisfy conditions
+3 and 4. The residual profile identifies potentially separable application and subsystem
+validation, but no deterministic target-to-input inventory or representative ordinary
+change analysis establishes the unrelated fraction, selected critical path, or expected
+saving. Stage 2 planner implementation is not authorized by this result. A separate
+analysis/design step must establish those facts before an implementation plan is approved.
 
-If the residual bottleneck is universally required validation, an impact planner is not
-the remedy. The next action is further intrinsic optimization or a separately justified
-focused rewrite.
-
-No Stage 2 plan exists. The encode reduction removes the former dominant reason to build
-selection around that harness, but the missing complete post-Stage-1 remote baseline and
-remaining Stage 1 backlog still prevent a final decision. Only measurements that satisfy
-all four conditions above authorize a new plan and, after this specification becomes
-historical, a new numbered design specification.
+If later evidence shows that the residual selected path is dominated by universally
+required validation, the planner is not the remedy for that portion. Further intrinsic
+optimization remains valid and can continue alongside Stage 2 when it preserves the same
+evidence.
 
 ## Conditional Stage 2 architecture
 
-If the decision gate justifies Stage 2, implement the smallest deterministic
-affected-target planner that solves the residual problem. Do not create a general build
-system.
+If the decision gate is satisfied, implement the smallest deterministic affected-target
+planner that solves the residual problem. Do not create a general build system.
 
 The existing test catalog is the preferred metadata owner if it can accept a small impact
 block without confusing its assurance and live-dispatch responsibilities. Retained
@@ -879,20 +1220,16 @@ Stage 1 is complete when:
 2. Removed work and its operational surfaces are deleted.
 3. Retained work has no known duplicate execution without a documented independent
    invariant.
-4. The encode harness remains Active for the corrected ICQ quality selection. Completed
-   diagnostics and unused evaluation modes remain Removed.
-5. The encode validator retains exactly 39 high-value Bats identities across the five
-   current files, unless a later reviewed consumer change updates that boundary.
-6. Its planner proves the exact 144-row work set without simulating all 144 encodes, and
-   representative integration tests cover AVC, HDR10, row failure, cleanup, and resume.
-7. The discarded split runner and immutable dispatch-fixture experiment remain absent.
-8. Live ICQ quality behavior and evidence contracts remain unchanged.
-9. Representative positive and negative coverage passes.
-10. The complete `mise exec -- just ci` gate passes.
-11. Controlled post-change timing separates validation, setup, queue, and reporting
+4. Specification 017 preserves the terminal ICQ evidence and no executable encode source,
+   fixture, CI, catalog, GitOps, alert, operator, verification, or dedicated toolchain
+   surface remains.
+5. The discarded split runner and immutable dispatch-fixture experiment remain absent.
+6. Retained representative positive and negative coverage passes.
+7. The complete `mise exec -- just ci` gate passes.
+8. Controlled post-change timing separates validation, setup, queue, and reporting
    costs, reports sample sizes with its percentiles, and evaluates the ordinary gate
    against the approximately two-minute p95 objective.
-12. The Stage 2 decision gate is evaluated explicitly rather than assumed.
+9. The Stage 2 decision gate is evaluated explicitly rather than assumed.
 
 If later stages proceed, their implementation specifications and plans must reconcile
 their measured results, provider trust model, and runner-placement decision before merge.

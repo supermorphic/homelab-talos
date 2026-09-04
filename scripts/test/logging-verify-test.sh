@@ -2,7 +2,152 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-verifier="$repo_root/scripts/verify/logging.sh"
+
+topology_storage_runtime_cases=(
+	trim-only
+	all-evidence-present
+	missing-diagnostic-context
+	healthy-two-pod-daemonset
+	duplicate-alloy-log-node
+	two-alloy-events-pods
+	two-loki-pods
+	loki-pod-owner-mismatch
+	missing-mounted-claim
+	ambiguous-mounted-claim
+	mismatched-mounted-claim
+	stale-trim-labeled-pvc
+	longhorn-status-missing
+	longhorn-status-mismatch
+	longhorn-status-ambiguous
+	default-group
+	daily-snapshot
+	daily-backup
+	trim-missing
+	extra-recurring-job
+	prometheus-port-forward-fails
+	wrong-runtime-retention
+	malformed-runtime-retention
+	runtime-retention-stream-override
+	runtime-discover-service-name-nonempty
+	runtime-discover-service-name-missing
+	runtime-discover-service-name-malformed
+	runtime-config-unavailable
+	runtime-shard-streams-enabled
+	runtime-shard-streams-missing
+	runtime-shard-streams-malformed
+)
+label_cases=(
+	forbidden-label
+	ip-label
+	missing-container-label
+	cross-source-container-label
+	cross-source-talos-label
+	missing-talos-label
+	extra-event-label
+	missing-event-label
+	sensitive-name-label
+	global-union-only
+	malformed-label-response
+)
+count_compaction_cases=(
+	missing-kubernetes
+	missing-talos-service
+	unlabeled-and-kernel-only
+	missing-kernel
+	missing-events
+	missing-compaction
+	stale-compaction
+	future-compaction
+	malformed-compaction
+)
+prometheus_target_cases=(
+	unrelated-loki-target
+	unrelated-alloy-logs-target
+	unrelated-alloy-events-target
+	wrong-alloy-logs-job
+	wrong-alloy-events-job
+	missing-loki-target
+	extra-loki-target
+	one-alloy-logs-target
+	two-alloy-logs-target
+	excess-alloy-logs-target
+	unhealthy-alloy-logs-target
+	missing-alloy-events-target
+	extra-alloy-events-target
+)
+all_cases=(
+	"${topology_storage_runtime_cases[@]}"
+	"${label_cases[@]}"
+	"${count_compaction_cases[@]}"
+	"${prometheus_target_cases[@]}"
+)
+
+declare -A case_group=()
+for layout in "${topology_storage_runtime_cases[@]}"; do case_group["$layout"]='topology-storage-runtime'; done
+for layout in "${label_cases[@]}"; do case_group["$layout"]='labels'; done
+for layout in "${count_compaction_cases[@]}"; do case_group["$layout"]='counts-compaction'; done
+for layout in "${prometheus_target_cases[@]}"; do case_group["$layout"]='prometheus-targets'; done
+
+selector_valid() {
+	local selector="$1"
+	[[ "$selector" == 'all' || "$selector" == 'topology-storage-runtime' ||
+		"$selector" == 'labels' || "$selector" == 'counts-compaction' ||
+		"$selector" == 'prometheus-targets' || -n "${case_group[$selector]:-}" ]]
+}
+
+selected_case="${1:-all}"
+case_selected() {
+	local layout="$1"
+	[[ "$selected_case" == 'all' || "$selected_case" == "$layout" ||
+		"$selected_case" == "${case_group[$layout]}" ]]
+}
+
+if [[ "$selected_case" == '--group-contract' ]]; then
+	[[ "${#all_cases[@]}" -eq 64 ]]
+	[[ "${#case_group[@]}" -eq "${#all_cases[@]}" ]]
+	harmless_verifier="$(command -v true)"
+
+	for group in topology-storage-runtime labels counts-compaction prometheus-targets; do
+		case "$group" in
+		topology-storage-runtime) expected=("${topology_storage_runtime_cases[@]}") ;;
+		labels) expected=("${label_cases[@]}") ;;
+		counts-compaction) expected=("${count_compaction_cases[@]}") ;;
+		prometheus-targets) expected=("${prometheus_target_cases[@]}") ;;
+		esac
+		mapfile -t selected < <(
+			LOGGING_VERIFY_CONTRACT_CAPTURE=true \
+				LOGGING_VERIFY_TEST_VERIFIER="$harmless_verifier" \
+				bash "$0" "$group"
+		)
+		[[ "$(printf '%s\n' "${selected[@]}")" == "$(printf '%s\n' "${expected[@]}")" ]]
+	done
+
+	mapfile -t selected < <(
+		LOGGING_VERIFY_CONTRACT_CAPTURE=true \
+			LOGGING_VERIFY_TEST_VERIFIER="$harmless_verifier" \
+			bash "$0" all
+	)
+	[[ "$(printf '%s\n' "${selected[@]}")" == "$(printf '%s\n' "${all_cases[@]}")" ]]
+	mapfile -t selected < <(
+		LOGGING_VERIFY_CONTRACT_CAPTURE=true \
+			LOGGING_VERIFY_TEST_VERIFIER="$harmless_verifier" \
+			bash "$0" missing-kernel
+	)
+	[[ "${#selected[@]}" -eq 1 && "${selected[0]}" == 'missing-kernel' ]]
+	if selector_valid 'unknown-selector'; then
+		echo 'Unknown selector was accepted by the group contract.' >&2
+		exit 1
+	fi
+	echo 'Logging verifier group-selection contract passed: cases=64 groups=4.'
+	exit 0
+fi
+
+if ! selector_valid "$selected_case"; then
+	echo 'usage: logging-verify-test.sh [all|topology-storage-runtime|labels|counts-compaction|prometheus-targets|LAYOUT]' >&2
+	exit 2
+fi
+
+verifier="${LOGGING_VERIFY_TEST_VERIFIER:-$repo_root/scripts/verify/logging.sh}"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/logging-verify-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 
@@ -322,57 +467,86 @@ EOF
 chmod +x "$fixture/bin/sleep"
 
 run_case() {
-  local layout="$1" expected_status="$2" expected_message="$3" expected_starts="$4" expected_stops="$5"
-  local case_root="$fixture/$layout" output status
-  mkdir -p "$case_root"
-  : >"$case_root/kubectl.log"; : >"$case_root/curl.log"; : >"$case_root/process.log"
-  output="$case_root/output"
+	local layout="$1" expected_status="$2" expected_message="$3" expected_starts="$4" expected_stops="$5"
+	local case_root="$fixture/$layout" output status
+	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" == true ]]; then
+		"$verifier"
+		printf '%s\n' "$layout"
+		return
+	fi
+	mkdir -p "$case_root"
+	: >"$case_root/kubectl.log"
+	: >"$case_root/curl.log"
+	: >"$case_root/process.log"
+	output="$case_root/output"
 
-  set +e
-  PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
-    FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
-    FAKE_PROCESS_LOG="$case_root/process.log" \
-    "$verifier" "$fixture/kubeconfig" >"$output" 2>&1
-  status="$?"
-  set -e
+	set +e
+	PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
+		FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
+		FAKE_PROCESS_LOG="$case_root/process.log" \
+		"$verifier" "$fixture/kubeconfig" >"$output" 2>&1
+	status="$?"
+	set -e
 
-  [[ "$status" -eq "$expected_status" ]] || { echo "$layout: expected exit $expected_status, got $status" >&2; cat "$output" >&2; exit 1; }
-  rg -F -q -- "$expected_message" "$output" || { echo "$layout: missing expected diagnostic: $expected_message" >&2; cat "$output" >&2; exit 1; }
-  [[ "$(rg -c ' start ' "$case_root/process.log" || true)" -eq "$expected_starts" ]]
-  [[ "$(rg -c ' stop ' "$case_root/process.log" || true)" -eq "$expected_stops" ]]
-  [[ -z "$(find "$fixture/tmp" -mindepth 1 -print -quit)" ]] || { echo "$layout: verifier left temporary files behind" >&2; exit 1; }
-  for private_identity in private-telemetry-claim private-active-claim private-pv-identity private-longhorn-volume private-node-identity private-alloy-log-pod private-alloy-event-pod private-loki-pod private-loki-statefulset-uid private-revision private-volume-object-value; do
-    if rg -F -q -- "$private_identity" "$output"; then echo "$layout: verifier printed a private infrastructure identity" >&2; exit 1; fi
-  done
+	[[ "$status" -eq "$expected_status" ]] || {
+		echo "$layout: expected exit $expected_status, got $status" >&2
+		cat "$output" >&2
+		exit 1
+	}
+	rg -F -q -- "$expected_message" "$output" || {
+		echo "$layout: missing expected diagnostic: $expected_message" >&2
+		cat "$output" >&2
+		exit 1
+	}
+	[[ "$(rg -c ' start ' "$case_root/process.log" || true)" -eq "$expected_starts" ]]
+	[[ "$(rg -c ' stop ' "$case_root/process.log" || true)" -eq "$expected_stops" ]]
+	[[ -z "$(find "$fixture/tmp" -mindepth 1 -print -quit)" ]] || {
+		echo "$layout: verifier left temporary files behind" >&2
+		exit 1
+	}
+	for private_identity in private-telemetry-claim private-active-claim private-pv-identity private-longhorn-volume private-node-identity private-alloy-log-pod private-alloy-event-pod private-loki-pod private-loki-statefulset-uid private-revision private-volume-object-value; do
+		if rg -F -q -- "$private_identity" "$output"; then
+			echo "$layout: verifier printed a private infrastructure identity" >&2
+			exit 1
+		fi
+	done
 }
 
-selected_case="${1:-all}"
-case_selected() { [[ "$selected_case" == 'all' || "$selected_case" == "$1" ]]; }
-
 if case_selected trim-only; then
-  run_case trim-only 0 'Logging acceptance passed' 2 2
-  rg -F -q -- '--context homelab-diagnostic' "$fixture/trim-only/kubectl.log"
-  rg -F -q -- 'get volumes.longhorn.io --output json' "$fixture/trim-only/kubectl.log"
-  ! rg -q -- ' get persistentvolume(s)? ' "$fixture/trim-only/kubectl.log" || { echo 'Verifier attempted a forbidden PersistentVolume read.' >&2; exit 1; }
-  ! rg -F -q -- 'storage-loki-0' "$fixture/trim-only/kubectl.log" || { echo 'Verifier assumed the generated Loki PVC name.' >&2; exit 1; }
+	run_case trim-only 0 'Logging acceptance passed' 2 2
+	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" != true ]]; then
+		rg -F -q -- '--context homelab-diagnostic' "$fixture/trim-only/kubectl.log"
+		rg -F -q -- 'get volumes.longhorn.io --output json' "$fixture/trim-only/kubectl.log"
+		! rg -q -- ' get persistentvolume(s)? ' "$fixture/trim-only/kubectl.log" || {
+			echo 'Verifier attempted a forbidden PersistentVolume read.' >&2
+			exit 1
+		}
+		! rg -F -q -- 'storage-loki-0' "$fixture/trim-only/kubectl.log" || {
+			echo 'Verifier assumed the generated Loki PVC name.' >&2
+			exit 1
+		}
+	fi
 fi
 
 if case_selected all-evidence-present; then
-  run_case all-evidence-present 0 'Logging acceptance passed' 2 2
-  for query in 'sum(count_over_time({source="kubernetes"}[30m]))' 'sum(count_over_time({source="talos",service=~".+",service!="kernel"}[30m]))' 'sum(count_over_time({source="talos",service="kernel"}[30m]))' 'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
-    rg -F -q -- "query=$query" "$fixture/all-evidence-present/curl.log"
-  done
-  for selector in '{source="kubernetes"}' '{source="talos"}' '{source="kubernetes_event"}'; do
-    rg -F -q -- "query=$selector" "$fixture/all-evidence-present/curl.log"
-  done
-  rg -F -q -- '/config/tenant/v1/limits' "$fixture/all-evidence-present/curl.log"
-  rg -F -q -- '/config?mode=diffs' "$fixture/all-evidence-present/curl.log"
-  rg -F -q -- 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}' "$fixture/all-evidence-present/curl.log"
-  [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/labels$' "$fixture/all-evidence-present/curl.log")" -eq 3 ]]
-  [[ "$(rg -c '127.0.0.1:23100/loki/api/v1/query$' "$fixture/all-evidence-present/curl.log")" -eq 4 ]]
-  if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$|query=sum\(count_over_time\(\{source="talos",service!="kernel"\}' "$fixture/all-evidence-present/curl.log"; then
-    echo 'Verifier requested raw Loki entries or used an unlabeled or kernel-inclusive Talos selector.' >&2; exit 1
-  fi
+	run_case all-evidence-present 0 'Logging acceptance passed' 2 2
+	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" != true ]]; then
+		for query in 'sum(count_over_time({source="kubernetes"}[30m]))' 'sum(count_over_time({source="talos",service=~".+",service!="kernel"}[30m]))' 'sum(count_over_time({source="talos",service="kernel"}[30m]))' 'sum(count_over_time({source="kubernetes_event"}[30m]))'; do
+			rg -F -q -- "query=$query" "$fixture/all-evidence-present/curl.log"
+		done
+		for selector in '{source="kubernetes"}' '{source="talos"}' '{source="kubernetes_event"}'; do
+			rg -F -q -- "query=$selector" "$fixture/all-evidence-present/curl.log"
+		done
+		rg -F -q -- '/config/tenant/v1/limits' "$fixture/all-evidence-present/curl.log"
+		rg -F -q -- '/config?mode=diffs' "$fixture/all-evidence-present/curl.log"
+		rg -F -q -- 'loki_boltdb_shipper_compact_tables_operation_last_successful_run_timestamp_seconds{namespace="monitoring",job="monitoring/loki"}' "$fixture/all-evidence-present/curl.log"
+		[[ "$(rg -c '127.0.0.1:23100/loki/api/v1/labels$' "$fixture/all-evidence-present/curl.log")" -eq 3 ]]
+		[[ "$(rg -c '127.0.0.1:23100/loki/api/v1/query$' "$fixture/all-evidence-present/curl.log")" -eq 4 ]]
+		if rg -q '/loki/api/v1/(query_range|tail)| query=\{source="talos"\}$|query=sum\(count_over_time\(\{source="talos",service!="kernel"\}' "$fixture/all-evidence-present/curl.log"; then
+			echo 'Verifier requested raw Loki entries or used an unlabeled or kernel-inclusive Talos selector.' >&2
+			exit 1
+		fi
+	fi
 fi
 
 case_selected missing-diagnostic-context && run_case missing-diagnostic-context 2 'Logging verification requires kubeconfig context homelab-diagnostic.' 0 0
@@ -438,4 +612,6 @@ case_selected unhealthy-alloy-logs-target && run_case unhealthy-alloy-logs-targe
 case_selected missing-alloy-events-target && run_case missing-alloy-events-target 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
 case_selected extra-alloy-events-target && run_case extra-alloy-events-target 1 'Prometheus does not have exactly 1 healthy alloy-events ServiceMonitor target.' 2 2
 
-echo 'Logging live-acceptance verifier fixture tests passed.'
+if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" != true ]]; then
+	echo 'Logging live-acceptance verifier fixture tests passed.'
+fi

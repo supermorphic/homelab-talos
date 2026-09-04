@@ -37,6 +37,21 @@ executes the shell unit-test suites, and runs Python unit tests via `uv run
 unsets SOPS age-key variables. `mise exec -- just test catalog-validate` runs
 only the catalog checks.
 
+The offline harness keeps its cheap/high-signal and repository-mutating shell
+checks in a serial preflight. It then runs the remaining isolated shell cases
+with four bounded workers. Each worker receives a private temporary directory;
+console output and JUnit fragments remain in repository declaration order. A
+failure stops new work, cancels and accounts for active workers, and leaves the
+unstarted tail absent for the outer fail-fast reporter. Set
+`TEST_HARNESS_JOBS=1` for a diagnostic serial run. Values from 1 through 8 are
+accepted. This changes how the complete suite executes; it does not select or
+omit tests based on changed files.
+
+The logging verifier fixture retains all 64 layouts. The harness runs them as
+four deterministic groups: topology/storage/runtime, labels,
+counts/compaction, and Prometheus targets. The existing four-worker harness
+owns their concurrency; the fixture does not create a nested worker pool.
+
 Repository validation owns Bash syntax and one batched machine-readable
 ShellCheck execution. The historical audit count of 166 shell files is audit
 history, not a fixed contract. The current sorted set is derived independently
@@ -186,6 +201,11 @@ with 90-day retention; open the workflow run's **Artifacts** section and
 download `canonical-test-results-<run>-<attempt>`. It also generates and uploads
 `allure-test-report-<run>-<attempt>` when canonical finalization succeeded and
 writes the run/suite counts to the job summary.
+
+The coordinator resolves the complete ordered CI execution list before it starts
+the first suite. Each suite receives `/dev/null` as stdin. A validator cannot
+consume later suite IDs or wait for interactive input, and an empty or failed
+execution-list lookup fails before suite execution.
 
 Node.js and Allure are pinned through mise. Generate static Awesome reports with
 `mise exec -- just test report <run-id>` or `report-latest`; output is
