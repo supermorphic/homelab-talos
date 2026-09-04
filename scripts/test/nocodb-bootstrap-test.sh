@@ -24,6 +24,10 @@ rg -Fq -- "scripts/nocodb/bootstrap.sh '.kube/config'" <<<"$bootstrap_recipe" ||
   echo 'NocoDB bootstrap places secret material in jq process arguments.' >&2
   exit 1
 }
+! rg -n 'rev-parse origin/main|require_deployed_source|flux (resume|suspend)' "$bootstrap" >/dev/null || {
+  echo 'NocoDB bootstrap uses mutable source resolution or non-owned suspend operations.' >&2
+  exit 1
+}
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-bootstrap-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
@@ -59,20 +63,42 @@ case "$*" in
       printf '%s\n' 'https://github.com/supermorphic/homelab-talos.git'
     fi
     ;;
-  'status --porcelain') ;;
-  'ls-remote --exit-code origin refs/heads/main')
-    printf '%s\trefs/heads/main\n' "$FAKE_REMOTE_MAIN"
+  'status --porcelain --untracked-files=no')
+    [[ "${FAKE_FAILURE:-}" != tracked-status ]] || printf '%s\n' ' M scripts/lib/omitted-helper.sh'
     ;;
-  "cat-file -e ${FAKE_REMOTE_MAIN}^{commit}"|"cat-file -e origin/main:kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml") ;;
+  'ls-remote --exit-code origin refs/heads/main')
+    count=0
+    [[ ! -f "$FAKE_CASE_ROOT/remote-check-count" ]] || count="$(<"$FAKE_CASE_ROOT/remote-check-count")"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$FAKE_CASE_ROOT/remote-check-count"
+    if [[ "${FAKE_FAILURE:-}" == remote-ref ]]; then
+      printf '%s\trefs/heads/main\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    elif [[ "${FAKE_FAILURE:-}" == mutable-remote && "$count" -gt 1 ]]; then
+      printf '%s\trefs/heads/main\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    else
+      printf '%s\trefs/heads/main\n' "$FAKE_REMOTE_MAIN"
+    fi
+    ;;
+  "cat-file -e ${FAKE_REMOTE_MAIN}^{commit}"|\
+  'cat-file -e aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'|\
+  "cat-file -e ${FAKE_REMOTE_MAIN}:kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml") ;;
+  'rev-parse HEAD')
+    if [[ "${FAKE_FAILURE:-}" == local-head ]]; then
+      printf '%s\n' 'cccccccccccccccccccccccccccccccccccccccc'
+    else
+      printf '%s\n' "$FAKE_REMOTE_MAIN"
+    fi
+    ;;
   "diff --quiet ${FAKE_REMOTE_MAIN} --"*)
     count=0
     [[ ! -f "$FAKE_CASE_ROOT/source-check-count" ]] || count="$(<"$FAKE_CASE_ROOT/source-check-count")"
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_CASE_ROOT/source-check-count"
-    [[ "${FAKE_FAILURE:-}" != source ]] || exit 1
-    [[ "${FAKE_FAILURE:-}" != source-recheck || "$count" -lt 2 ]] || exit 1
+    [[ "${FAKE_FAILURE:-}" != tracked-drift ]] || exit 1
+    [[ "${FAKE_FAILURE:-}" != tracked-drift-recheck || "$count" -lt 2 ]] || exit 1
+    [[ "${FAKE_FAILURE:-}" != tracked-drift-after-parent || "$count" -lt 3 ]] || exit 1
     ;;
-  "rev-parse origin/main") printf '%s\n' "$FAKE_REMOTE_MAIN" ;;
+  "diff --cached --quiet ${FAKE_REMOTE_MAIN} --") ;;
   *)
     echo "unexpected git arguments: $*" >&2
     exit 64
@@ -107,14 +133,8 @@ set -euo pipefail
 printf 'flux %s\n' "$*" >>"$FAKE_NOCODB_EVENT_LOG"
 case "${1:-} ${2:-} ${3:-}" in
   'reconcile kustomization automation-data') ;;
-  'resume kustomization nocodb')
-    [[ "${FAKE_FAILURE:-}" != resume ]] || exit 71
-    ;;
   'reconcile kustomization nocodb')
     [[ "${FAKE_FAILURE:-}" != reconcile ]] || exit 72
-    ;;
-  'suspend kustomization nocodb')
-    [[ "${FAKE_CLEANUP_FAILURE:-false}" != true ]] || exit 73
     ;;
   *)
     echo "unexpected flux arguments: $*" >&2
@@ -130,26 +150,68 @@ printf 'kubectl %s\n' "$*" >>"$FAKE_NOCODB_EVENT_LOG"
 
 case "$*" in
   *'get gitrepository flux-system --output jsonpath={.status.artifact.revision}')
-    printf 'main@sha1:%s' "$FAKE_REMOTE_MAIN"
+    count=0
+    [[ ! -f "$FAKE_CASE_ROOT/flux-revision-count" ]] || count="$(<"$FAKE_CASE_ROOT/flux-revision-count")"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$FAKE_CASE_ROOT/flux-revision-count"
+    if [[ "${FAKE_FAILURE:-}" == flux-revision ||
+      ("${FAKE_FAILURE:-}" == flux-revision-after-parent && "$count" -ge 3) ]]; then
+      printf '%s' 'main@sha1:dddddddddddddddddddddddddddddddddddddddd'
+    else
+      printf 'main@sha1:%s' "$FAKE_REMOTE_MAIN"
+    fi
     ;;
-  *'get kustomization nocodb --output jsonpath={.spec.suspend}')
+  *'get kustomization nocodb --output json')
     count=0
     [[ ! -f "$FAKE_CASE_ROOT/suspend-check-count" ]] || count="$(<"$FAKE_CASE_ROOT/suspend-check-count")"
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_CASE_ROOT/suspend-check-count"
     if [[ "${FAKE_FAILURE:-}" == live-suspension ||
       ("${FAKE_FAILURE:-}" == live-suspension-recheck && "$count" -ge 3) ]]; then
-      printf 'false'
+      jq '.spec.suspend = false' "$FAKE_CASE_ROOT/kustomization.json"
     else
-      printf 'true'
+      cat "$FAKE_CASE_ROOT/kustomization.json"
     fi
+    ;;
+  *'replace --filename -')
+    incoming="$FAKE_CASE_ROOT/kustomization-incoming.json"
+    cat >"$incoming"
+    current_rv="$(jq -er '.metadata.resourceVersion' "$FAKE_CASE_ROOT/kustomization.json")"
+    incoming_rv="$(jq -er '.metadata.resourceVersion' "$incoming")"
+    desired_suspend="$(jq -r '.spec.suspend' "$incoming")"
+    desired_owner="$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] // ""' "$incoming")"
+    if [[ "$desired_suspend" == true && "${FAKE_CLEANUP_FAILURE:-false}" == true ]]; then
+      exit 73
+    fi
+    if [[ "$desired_suspend" == true && "${FAKE_FAILURE:-}" == cleanup-concurrent ]]; then
+      jq '.metadata.resourceVersion = ((.metadata.resourceVersion | tonumber) + 1 | tostring)' \
+        "$FAKE_CASE_ROOT/kustomization.json" >"$FAKE_CASE_ROOT/kustomization-raced.json"
+      mv "$FAKE_CASE_ROOT/kustomization-raced.json" "$FAKE_CASE_ROOT/kustomization.json"
+      exit 74
+    fi
+    [[ "$incoming_rv" == "$current_rv" ]] || exit 75
+    jq --arg rv "$((current_rv + 1))" '.metadata.resourceVersion = $rv' "$incoming" \
+      >"$FAKE_CASE_ROOT/kustomization-next.json"
+    mv "$FAKE_CASE_ROOT/kustomization-next.json" "$FAKE_CASE_ROOT/kustomization.json"
+    printf 'kubectl-replace suspend=%s owner=%s\n' "$desired_suspend" "$desired_owner" \
+      >>"$FAKE_NOCODB_EVENT_LOG"
+    if [[ "$desired_suspend" == false && -n "$desired_owner" &&
+      "${FAKE_FAILURE:-}" == resume-apply-lost ]]; then
+      exit 76
+    fi
+    cat "$FAKE_CASE_ROOT/kustomization.json"
     ;;
   *'get secret nocodb-credentials --output jsonpath={.metadata.name}')
     printf 'nocodb-credentials'
     ;;
   *'wait --for=condition=Ready kustomization/automation-data '*) ;;
   *'get job nocodb-metadata-bootstrap --output json')
-    if [[ "${FAKE_FAILURE:-}" == metadata-job ]]; then
+    if [[ "${FAKE_FAILURE:-}" == cleanup-marker-mismatch ]]; then
+      jq '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] = "another-owner"' \
+        "$FAKE_CASE_ROOT/kustomization.json" >"$FAKE_CASE_ROOT/kustomization-other.json"
+      mv "$FAKE_CASE_ROOT/kustomization-other.json" "$FAKE_CASE_ROOT/kustomization.json"
+      printf '%s\n' '{"status":{"conditions":[{"type":"Failed","status":"True","reason":"SyntheticFailure"}]}}'
+    elif [[ "${FAKE_FAILURE:-}" == metadata-job || "${FAKE_FAILURE:-}" == cleanup-concurrent ]]; then
       printf '%s\n' '{"status":{"conditions":[{"type":"Failed","status":"True","reason":"SyntheticFailure"}]}}'
     else
       printf '%s\n' '{"status":{"conditions":[{"type":"Complete","status":"True"}]}}'
@@ -200,7 +262,14 @@ case "$url" in
       printf '%s\n' '{"schema_version":1,"runs":[]}' >"$output"
       exit 0
     }
-    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\"},{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\"}]}" >"$output"
+    provision_end='2026-09-04T10:00:00Z'
+    restore_end='2026-09-04T11:00:00Z'
+    case "${FAKE_FAILURE:-}" in
+      evidence-stale) restore_end='2026-09-04T09:00:00Z' ;;
+      evidence-equal) restore_end="$provision_end" ;;
+      evidence-invalid-time) restore_end='not-a-timestamp' ;;
+    esac
+    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"2026-09-04T08:00:00Z\"},{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"$provision_end\"},{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"$restore_end\"}]}" >"$output"
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/health')
     [[ "$method" == GET && -z "$body" ]] || exit 69
@@ -231,11 +300,38 @@ case "$url" in
     fi
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/tokens')
-    [[ "$method" == POST && -f "$body" ]] || exit 75
     rg -Fxq -- "header = \"xc-auth: ${FAKE_NOCODB_JWT}\"" "$config" || exit 76
-    jq -e '. == {description: "NocoDB Operator API"}' "$body" >/dev/null || exit 77
-    [[ "${FAKE_FAILURE:-}" != token ]] || exit 79
-    printf '%s\n' "{\"id\":\"nocodb-token-id\",\"token\":\"$FAKE_NOCODB_TOKEN\"}" >"$output"
+    if [[ "$method" == POST && -f "$body" ]]; then
+      jq -e '. == {description: "NocoDB Operator API"}' "$body" >/dev/null || exit 77
+      [[ "${FAKE_FAILURE:-}" != token ]] || exit 79
+      count="$(<"$FAKE_CASE_ROOT/token-create-count")"
+      printf '%s\n' "$((count + 1))" >"$FAKE_CASE_ROOT/token-create-count"
+      jq --arg token "$FAKE_NOCODB_TOKEN" \
+        '. + [{id:"nocodb-token-id",description:"NocoDB Operator API",token:$token}]' \
+        "$FAKE_CASE_ROOT/tokens.json" >"$FAKE_CASE_ROOT/tokens-next.json"
+      mv "$FAKE_CASE_ROOT/tokens-next.json" "$FAKE_CASE_ROOT/tokens.json"
+      [[ "${FAKE_FAILURE:-}" != token-create-lost ]] || exit 80
+      printf '%s\n' "{\"id\":\"nocodb-token-id\",\"description\":\"NocoDB Operator API\",\"token\":\"$FAKE_NOCODB_TOKEN\"}" >"$output"
+    else
+      exit 75
+    fi
+    ;;
+  'https://nocodb.lab.supermorphic.com/api/v1/tokens?limit=100&offset=0'|'https://nocodb.lab.supermorphic.com/api/v1/tokens?limit=100&offset=1')
+    [[ "$method" == GET && -z "$body" ]] || exit 75
+    rg -Fxq -- "header = \"xc-auth: ${FAKE_NOCODB_JWT}\"" "$config" || exit 76
+    if [[ "${FAKE_FAILURE:-}" == duplicate-token ]]; then
+      if [[ "$url" == *'offset=1' ]]; then
+        jq -n --slurpfile tokens "$FAKE_CASE_ROOT/tokens.json" \
+          '{list:[$tokens[0][1]],pageInfo:{isLastPage:true,totalRows:2,pageSize:100}}' >"$output"
+      else
+        jq -n --slurpfile tokens "$FAKE_CASE_ROOT/tokens.json" \
+          '{list:[$tokens[0][0]],pageInfo:{isLastPage:false,totalRows:2,pageSize:100}}' >"$output"
+      fi
+    else
+      jq -n --slurpfile tokens "$FAKE_CASE_ROOT/tokens.json" \
+        '{list:$tokens[0],pageInfo:{isLastPage:true,totalRows:($tokens[0] | length),pageSize:100}}' \
+        >"$output"
+    fi
     ;;
   'https://nocodb.lab.supermorphic.com/api/v2/meta/bases')
     [[ "$method" == GET && -z "$body" ]] || exit 78
@@ -244,17 +340,45 @@ case "$url" in
     printf '%s\n' '{"list":[],"pageInfo":{"totalRows":0,"page":1,"pageSize":25,"isFirstPage":true,"isLastPage":true}}' >"$output"
     ;;
   'https://n8n.lab.supermorphic.com/api/v1/credentials')
-    [[ "$method" == POST && -f "$body" ]] || exit 81
     rg -Fxq -- "header = \"X-N8N-API-KEY: ${FAKE_N8N_API_KEY}\"" "$config" || exit 82
-    jq -e --arg token "$FAKE_NOCODB_TOKEN" \
-      '. == {name: "NocoDB Operator API", type: "httpHeaderAuth", data: {name: "xc-token", value: $token}}' \
-      "$body" >/dev/null || exit 83
-    [[ "${FAKE_FAILURE:-}" != credential ]] || exit 84
-    printf '%s\n' '{"id":"credential-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}' >"$output"
+    if [[ "$method" == POST && -f "$body" ]]; then
+      jq -e --arg token "$FAKE_NOCODB_TOKEN" \
+        '. == {name: "NocoDB Operator API", type: "httpHeaderAuth", data: {name: "xc-token", value: $token}}' \
+        "$body" >/dev/null || exit 83
+      [[ "${FAKE_FAILURE:-}" != credential ]] || exit 84
+      count="$(<"$FAKE_CASE_ROOT/credential-create-count")"
+      printf '%s\n' "$((count + 1))" >"$FAKE_CASE_ROOT/credential-create-count"
+      jq '. + [{id:"credential-id",name:"NocoDB Operator API",type:"httpHeaderAuth"}]' \
+        "$FAKE_CASE_ROOT/credentials.json" >"$FAKE_CASE_ROOT/credentials-next.json"
+      mv "$FAKE_CASE_ROOT/credentials-next.json" "$FAKE_CASE_ROOT/credentials.json"
+      [[ "${FAKE_FAILURE:-}" != credential-create-lost ]] || exit 85
+      printf '%s\n' '{"id":"credential-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}' >"$output"
+    else
+      exit 81
+    fi
     ;;
-  'https://n8n.lab.supermorphic.com/api/v1/credentials/credential-id')
+  'https://n8n.lab.supermorphic.com/api/v1/credentials?limit=100'|'https://n8n.lab.supermorphic.com/api/v1/credentials?limit=100&cursor=page-two')
+    [[ "$method" == GET && -z "$body" ]] || exit 81
+    rg -Fxq -- "header = \"X-N8N-API-KEY: ${FAKE_N8N_API_KEY}\"" "$config" || exit 82
+    if [[ "${FAKE_FAILURE:-}" == duplicate-credential ]]; then
+      if [[ "$url" == *'cursor=page-two' ]]; then
+        jq -n --slurpfile data "$FAKE_CASE_ROOT/credentials.json" \
+          '{data:[$data[0][1]],nextCursor:null}' >"$output"
+      else
+        jq -n --slurpfile data "$FAKE_CASE_ROOT/credentials.json" \
+          '{data:[$data[0][0]],nextCursor:"page-two"}' >"$output"
+      fi
+    else
+      jq -n --slurpfile data "$FAKE_CASE_ROOT/credentials.json" \
+        '{data:$data[0],nextCursor:null}' >"$output"
+    fi
+    ;;
+  'https://n8n.lab.supermorphic.com/api/v1/credentials/'*)
     [[ "$method" == GET && -z "$body" ]] || exit 85
     rg -Fxq -- "header = \"X-N8N-API-KEY: ${FAKE_N8N_API_KEY}\"" "$config" || exit 86
+    credential_id="${url##*/}"
+    jq -e --arg id "$credential_id" '.[] | select(.id == $id)' \
+      "$FAKE_CASE_ROOT/credentials.json" >/dev/null || exit 87
     case "${FAKE_FAILURE:-}" in
       credential-readback-id)
         printf '%s\n' '{"id":"other-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}' >"$output"
@@ -263,7 +387,8 @@ case "$url" in
         printf '%s\n' '{"id":"credential-id","name":"NocoDB Operator API","type":"postgres"}' >"$output"
         ;;
       *)
-        printf '%s\n' '{"id":"credential-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}' >"$output"
+        jq -c --arg id "$credential_id" '.[] | select(.id == $id)' \
+          "$FAKE_CASE_ROOT/credentials.json" >"$output"
         ;;
     esac
     ;;
@@ -282,6 +407,7 @@ STATUS=0
 
 fail() {
   echo "FAIL [$case_name]: $1" >&2
+  sed -n '1,240p' "$event_log" >&2
   exit 1
 }
 
@@ -323,11 +449,53 @@ sops:
 EOF
 }
 
-run_case() { # <failure|none> <confirmation|exact> <cleanup-failure>
+reset_transaction_state() {
+  cat >"$case_root/kustomization.json" <<'EOF'
+{"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"Kustomization","metadata":{"name":"nocodb","namespace":"flux-system","resourceVersion":"1","annotations":{}},"spec":{"suspend":true}}
+EOF
+}
+
+reset_api_state() { # <failure>
+  local failure="$1"
+  printf '%s\n' '[]' >"$case_root/tokens.json"
+  printf '%s\n' '[]' >"$case_root/credentials.json"
+  printf '%s\n' 0 >"$case_root/token-create-count"
+  printf '%s\n' 0 >"$case_root/credential-create-count"
+  case "$failure" in
+    duplicate-token)
+      jq -n --arg token "$nocodb_token" '[
+        {id:"token-one",description:"NocoDB Operator API",token:$token},
+        {id:"token-two",description:"NocoDB Operator API",token:$token}
+      ]' >"$case_root/tokens.json"
+      ;;
+    duplicate-credential)
+      jq -n --arg token "$nocodb_token" '[{id:"token-one",description:"NocoDB Operator API",token:$token}]' \
+        >"$case_root/tokens.json"
+      printf '%s\n' '[{"id":"credential-one","name":"NocoDB Operator API","type":"httpHeaderAuth"},{"id":"credential-two","name":"NocoDB Operator API","type":"httpHeaderAuth"}]' \
+        >"$case_root/credentials.json"
+      ;;
+    wrong-credential-type)
+      jq -n --arg token "$nocodb_token" '[{id:"token-one",description:"NocoDB Operator API",token:$token}]' \
+        >"$case_root/tokens.json"
+      printf '%s\n' '[{"id":"credential-id","name":"NocoDB Operator API","type":"postgres"}]' \
+        >"$case_root/credentials.json"
+      ;;
+    credential-without-token)
+      printf '%s\n' '[{"id":"credential-id","name":"NocoDB Operator API","type":"httpHeaderAuth"}]' \
+        >"$case_root/credentials.json"
+      ;;
+  esac
+}
+
+run_case() { # <failure|none> <confirmation|exact> <cleanup-failure> <preserve-api-state>
   local failure="$1" confirmation="${2:-exact}" cleanup_failure="${3:-false}"
+  local preserve_api_state="${4:-false}"
   : >"$event_log"
+  reset_transaction_state
+  [[ "$preserve_api_state" == true ]] || reset_api_state "$failure"
   rm -f -- "$case_root/source-check-count" "$case_root/prerequisite-count" \
-    "$case_root/suspend-check-count"
+    "$case_root/suspend-check-count" "$case_root/remote-check-count" \
+    "$case_root/flux-revision-count"
   set +e
   if [[ "$confirmation" == exact ]]; then
     OUT="$(cd "$case_root" && PATH="$stub_bin:$PATH" FAKE_CASE_ROOT="$case_root" \
@@ -349,15 +517,17 @@ assert_failure() { [[ "$STATUS" -ne 0 ]] || fail 'expected failure'; }
 assert_contains() { rg -Fq -- "$1" <<<"$OUT" || fail "output missing '$1': $OUT"; }
 assert_event() { rg -Fq -- "$1" "$event_log" || fail "event log missing '$1'"; }
 assert_no_activation() {
-  ! rg -q '^flux (reconcile kustomization|resume kustomization)' "$event_log" ||
+  ! rg -q '^flux reconcile kustomization' "$event_log" ||
     fail 'a refused precondition reached activation'
+  ! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" ||
+    fail 'a refused precondition resumed nocodb'
 }
 assert_no_suspend() {
-  ! rg -q '^flux suspend kustomization' "$event_log" ||
+  ! rg -q '^kubectl-replace suspend=true ' "$event_log" ||
     fail 'the command suspended a Kustomization it did not resume'
 }
 assert_cleanup_suspend() {
-  [[ "$(rg -c '^flux suspend kustomization nocodb ' "$event_log")" -eq 1 ]] ||
+  [[ "$(rg -c '^kubectl-replace suspend=true owner=' "$event_log")" -eq 1 ]] ||
     fail 'failed activation did not suspend exactly the resumed nocodb Kustomization'
 }
 assert_no_delete() {
@@ -395,8 +565,41 @@ assert_contains 'provisioning and restore evidence'
 assert_no_activation
 assert_no_suspend
 
-case_name='source mismatch refuses before mutation'
-run_case source
+for failure in evidence-stale evidence-equal evidence-invalid-time; do
+  case_name="restore evidence must have a valid end newer than provisioning: $failure"
+  run_case "$failure"
+  assert_failure
+  assert_contains 'provisioning and restore evidence'
+  assert_no_activation
+  assert_no_suspend
+done
+
+case_name='drift in any tracked helper refuses before mutation'
+run_case tracked-drift
+assert_failure
+assert_no_activation
+assert_no_suspend
+
+case_name='dirty tracked checkout refuses before mutation'
+run_case tracked-status
+assert_failure
+assert_no_activation
+assert_no_suspend
+
+case_name='local HEAD must equal the captured remote main commit'
+run_case local-head
+assert_failure
+assert_no_activation
+assert_no_suspend
+
+case_name='remote main drift from the local checkout refuses before mutation'
+run_case remote-ref
+assert_failure
+assert_no_activation
+assert_no_suspend
+
+case_name='Flux must deploy the captured remote main commit'
+run_case flux-revision
 assert_failure
 assert_no_activation
 assert_no_suspend
@@ -409,9 +612,29 @@ assert_no_activation
 assert_no_suspend
 
 case_name='source drift during the immediate recheck refuses before mutation'
-run_case source-recheck
+run_case tracked-drift-recheck
 assert_failure
 assert_no_activation
+assert_no_suspend
+
+case_name='remote main authority is captured once and remains immutable'
+run_case mutable-remote
+assert_status 0
+[[ "$(<"$case_root/remote-check-count")" -eq 1 ]] || fail 'remote main was resolved more than once'
+assert_no_suspend
+
+case_name='Flux drift after parent reconcile refuses before resume'
+run_case flux-revision-after-parent
+assert_failure
+assert_event 'flux reconcile kustomization automation-data '
+! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'resume ran after Flux revision drift'
+assert_no_suspend
+
+case_name='tracked checkout drift after parent reconcile refuses before resume'
+run_case tracked-drift-after-parent
+assert_failure
+assert_event 'flux reconcile kustomization automation-data '
+! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'resume ran after checkout drift'
 assert_no_suspend
 
 case_name='prerequisite drift during the immediate recheck refuses before mutation'
@@ -443,14 +666,14 @@ run_case live-suspension-recheck
 assert_failure
 assert_contains 'not suspended in the live cluster'
 assert_event 'flux reconcile kustomization automation-data '
-! rg -q '^flux resume kustomization nocodb ' "$event_log" || fail 'resume ran after suspension drift'
+! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'resume ran after suspension drift'
 assert_no_suspend
 
-case_name='failed resume does not suspend a Kustomization the command did not resume'
-run_case resume
+case_name='applied resume with a lost response is recovered by owned cleanup'
+run_case resume-apply-lost
 assert_failure
-assert_event 'flux resume kustomization nocodb '
-assert_no_suspend
+assert_event 'kubectl-replace suspend=false owner='
+assert_cleanup_suspend
 assert_no_delete
 
 case_name='failed reconcile re-suspends the Kustomization resumed by this command'
@@ -465,17 +688,34 @@ for failure in metadata-job helmrelease rollout health signin settings-update \
   case_name="failure after resume preserves durable state: $failure"
   run_case "$failure"
   assert_failure
-  assert_event 'flux resume kustomization nocodb '
+  assert_event 'kubectl-replace suspend=false owner='
   assert_cleanup_suspend
   assert_no_delete
   assert_no_secret_output
 done
 
+case_name='cleanup does not clobber another owner marker'
+run_case cleanup-marker-mismatch
+assert_failure
+assert_contains 'ownership marker changed'
+[[ "$(jq -r '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"]' \
+  "$case_root/kustomization.json")" == another-owner ]] || fail 'cleanup clobbered another owner marker'
+assert_no_suspend
+
+case_name='cleanup resourceVersion conflict remains visible without clobbering state'
+run_case cleanup-concurrent
+assert_failure
+assert_contains 'Failed to restore'
+[[ "$(jq -r '.spec.suspend' "$case_root/kustomization.json")" == false ]] || \
+  fail 'cleanup clobbered a concurrent Kustomization change'
+assert_no_suspend
+
 case_name='cleanup failure remains visible'
 run_case signin exact true
 assert_failure
-assert_contains 'Failed to re-suspend nocodb'
-assert_cleanup_suspend
+assert_contains 'Failed to restore'
+[[ "$(jq -r '.spec.suspend' "$case_root/kustomization.json")" == false ]] || \
+  fail 'failed cleanup unexpectedly changed the Kustomization'
 assert_no_delete
 
 case_name='successful bootstrap probes the token and reads back the fixed credential'
@@ -503,5 +743,50 @@ credential_read_line="$(rg -n -m 1 'curl GET https://n8n.lab.supermorphic.com/ap
   "$token_line" -lt "$probe_line" && "$probe_line" -lt "$credential_create_line" &&
   "$credential_create_line" -lt "$credential_read_line" ]] ||
   fail 'token creation did not follow settings update and read-back'
+
+case_name='duplicate NocoDB tokens are refused without creating another token'
+run_case duplicate-token
+assert_failure
+assert_contains 'multiple NocoDB API tokens'
+[[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'duplicate-token case created a token'
+assert_cleanup_suspend
+
+case_name='duplicate n8n credentials are refused without creating another credential'
+run_case duplicate-credential
+assert_failure
+assert_contains 'multiple n8n credentials'
+[[ "$(<"$case_root/credential-create-count")" -eq 0 ]] || fail 'duplicate-credential case created a credential'
+assert_cleanup_suspend
+
+case_name='credential without token is refused as inconsistent durable state'
+run_case credential-without-token
+assert_failure
+assert_contains 'credential exists without'
+[[ "$(<"$case_root/token-create-count")" -eq 0 ]] || fail 'inconsistent-state case created a token'
+assert_cleanup_suspend
+
+case_name='wrong existing credential type is refused'
+run_case wrong-credential-type
+assert_failure
+assert_contains 'unexpected type'
+assert_cleanup_suspend
+
+case_name='lost token-create response is retried without a duplicate token'
+run_case token-create-lost
+assert_failure
+[[ "$(jq length "$case_root/tokens.json")" -eq 1 ]] || fail 'first attempt did not retain one token'
+run_case none exact false true
+assert_status 0
+[[ "$(<"$case_root/token-create-count")" -eq 1 ]] || fail 'retry created a duplicate token'
+[[ "$(jq length "$case_root/tokens.json")" -eq 1 ]] || fail 'retry retained duplicate tokens'
+
+case_name='lost credential-create response is retried without a duplicate credential'
+run_case credential-create-lost
+assert_failure
+[[ "$(jq length "$case_root/credentials.json")" -eq 1 ]] || fail 'first attempt did not retain one credential'
+run_case none exact false true
+assert_status 0
+[[ "$(<"$case_root/credential-create-count")" -eq 1 ]] || fail 'retry created a duplicate credential'
+[[ "$(jq length "$case_root/credentials.json")" -eq 1 ]] || fail 'retry retained duplicate credentials'
 
 echo 'NocoDB guarded bootstrap transaction tests passed.'

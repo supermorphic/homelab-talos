@@ -428,10 +428,12 @@ The first command writes only the guarded SOPS-encrypted repository Secret. The 
 operator-run because it reads sensitive runtime material and administers private NocoDB
 and n8n APIs. It performs this fixed transaction:
 
-1. Validate source, render the package, and check that the running checkout is deployed
-   `origin/main`.
+1. Capture the remote `main` SHA once, validate the complete tracked checkout against
+   that immutable SHA, render the package, and require Flux to report the same revision
+   throughout the transaction.
 2. Prove that issue-317 bootstrap, provisioning acceptance, a current complete backup,
-   and the full-chain restore drill have passed.
+   and the full-chain restore drill have passed. The newest restore evidence must be
+   newer than the newest provisioning acceptance at the captured SHA.
 3. Repeat the source, target, Secret-shape, live suspension, and prerequisite checks
    immediately before mutation.
 4. Temporarily reconcile the staged NocoDB package and run the fixed metadata bootstrap
@@ -441,8 +443,10 @@ and n8n APIs. It performs this fixed transaction:
 6. Sign in with the SOPS-managed bootstrap administrator.
 7. Set and read back the application settings that require
    invite-only signup and restrict workspace creation to the super administrator.
-8. Create one NocoDB API token and send it directly to the local n8n credential API as
-   the named **NocoDB Operator API** header credential.
+8. Reconcile exactly one deterministically described NocoDB API token and exactly one
+   n8n credential named **NocoDB Operator API**, then send the token directly to the n8n
+   credential API when the credential is absent. A retry lists retained server state and
+   resumes it instead of creating duplicate broad credentials.
 9. Before discarding the in-memory token, test it directly against a fixed NocoDB
    source-list endpoint. Then read the created n8n credential back through the public API
    and require the expected non-secret ID, name, and `httpHeaderAuth` type. n8n `2.36.7`
@@ -462,10 +466,12 @@ Data Provisioner**, **NocoDB Operator API**, and the fixed webhook header creden
 then publishes it. The bootstrap command does not guess or silently change workflow
 bindings.
 
-On failure, bootstrap re-suspends only a Kustomization that it resumed and preserves the
-PVC, database, metadata, and API state for diagnosis and retry. It does not delete or
-regenerate a connection encryption key, administrator, token, or n8n credential as
-compensation. A retry reconciles observed state.
+The temporary resume uses an ownership marker and resource-version precondition. On
+failure, bootstrap re-suspends only the Kustomization mutation carrying its marker and
+preserves the PVC, database, metadata, and API state for diagnosis and retry. It does not
+delete or regenerate a connection encryption key, administrator, token, or n8n credential
+as compensation. A retry reconciles the deterministic token and credential from observed
+state.
 
 ## Source provisioning workflow
 

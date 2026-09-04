@@ -20,18 +20,81 @@ secret="$nocodb_app/nocodb-credentials.sops.yaml"
 secret_resource='./nocodb-credentials.sops.yaml'
 n8n_api_key="${N8N_API_KEY:-}"
 bootstrap_complete=false
-resumed_nocodb=false
+resume_cleanup_intent=false
 temp_dir=''
 request_number=0
+captured_main_sha=''
+ownership_marker=''
+ownership_annotation='homelab.supermorphic.com/nocodb-bootstrap-owner'
+
+get_nocodb_kustomization() { # <output>
+  kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+    get kustomization nocodb --output json >"$1"
+}
+
+replace_nocodb_kustomization() { # <input>
+  kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+    replace --filename - <"$1" >/dev/null
+}
+
+restore_owned_suspension() {
+  local current="$temp_dir/cleanup-current.json"
+  local replacement="$temp_dir/cleanup-replacement.json"
+  local verified="$temp_dir/cleanup-verified.json"
+  local current_marker
+
+  get_nocodb_kustomization "$current" || return 1
+  current_marker="$(jq -r --arg key "$ownership_annotation" \
+    '.metadata.annotations[$key] // ""' "$current")" || return 1
+  if [[ -z "$current_marker" ]]; then
+    return 0
+  fi
+  if [[ "$current_marker" != "$ownership_marker" ]]; then
+    echo 'NocoDB cleanup stopped because the bootstrap ownership marker changed.' >&2
+    return 1
+  fi
+  jq --arg key "$ownership_annotation" '
+    .spec.suspend = true |
+    del(.metadata.annotations[$key]) |
+    if (.metadata.annotations | length) == 0 then del(.metadata.annotations) else . end
+  ' "$current" >"$replacement" || return 1
+  replace_nocodb_kustomization "$replacement" || return 1
+  get_nocodb_kustomization "$verified" || return 1
+  jq -e --arg key "$ownership_annotation" '
+    .spec.suspend == true and (.metadata.annotations[$key] // "") == ""
+  ' "$verified" >/dev/null
+}
+
+release_owned_marker() {
+  local current="$temp_dir/release-current.json"
+  local replacement="$temp_dir/release-replacement.json"
+  local verified="$temp_dir/release-verified.json"
+
+  get_nocodb_kustomization "$current"
+  jq -e --arg key "$ownership_annotation" --arg marker "$ownership_marker" '
+    .spec.suspend == false and .metadata.annotations[$key] == $marker
+  ' "$current" >/dev/null || {
+    echo 'NocoDB bootstrap ownership changed before marker release.' >&2
+    return 1
+  }
+  jq --arg key "$ownership_annotation" '
+    del(.metadata.annotations[$key]) |
+    if (.metadata.annotations | length) == 0 then del(.metadata.annotations) else . end
+  ' "$current" >"$replacement"
+  replace_nocodb_kustomization "$replacement"
+  get_nocodb_kustomization "$verified"
+  jq -e --arg key "$ownership_annotation" '
+    .spec.suspend == false and (.metadata.annotations[$key] // "") == ""
+  ' "$verified" >/dev/null
+}
 
 cleanup_nocodb_bootstrap() {
   local original_exit="$?" cleanup_failed=false
   trap - EXIT
   set +e
-  if [[ "$bootstrap_complete" != true && "$resumed_nocodb" == true ]]; then
-    echo 'NocoDB bootstrap did not pass; re-suspending nocodb while preserving its resources and API state.' >&2
-    flux suspend kustomization nocodb --namespace flux-system \
-      --kubeconfig "$kubeconfig" >/dev/null || cleanup_failed=true
+  if [[ "$bootstrap_complete" != true && "$resume_cleanup_intent" == true ]]; then
+    echo 'NocoDB bootstrap did not pass; restoring the owned suspension while preserving resources and API state.' >&2
+    restore_owned_suspension || cleanup_failed=true
   fi
   if [[ -n "$temp_dir" ]]; then
     rm -rf -- "$temp_dir" || cleanup_failed=true
@@ -39,7 +102,7 @@ cleanup_nocodb_bootstrap() {
   fi
   set -e
   if [[ "$cleanup_failed" == true ]]; then
-    echo 'Failed to re-suspend nocodb or remove its secret-bearing temporary files.' >&2
+    echo 'Failed to restore the owned NocoDB suspension or remove its secret-bearing temporary files.' >&2
     exit 1
   fi
   exit "$original_exit"
@@ -58,25 +121,34 @@ trap cleanup_nocodb_bootstrap EXIT
   echo "Refusing NocoDB bootstrap: origin must be $expected_origin." >&2
   exit 1
 }
+remote_record="$(git ls-remote --exit-code origin refs/heads/main)" || {
+  echo 'Refusing NocoDB bootstrap: cannot resolve the authoritative origin/main commit.' >&2
+  exit 1
+}
+read -r captured_main_sha remote_ref extra_remote_field <<<"$remote_record"
+[[ "$captured_main_sha" =~ ^[0-9a-f]{40}$ && "$remote_ref" == refs/heads/main &&
+  -z "${extra_remote_field:-}" ]] || {
+  echo 'Refusing NocoDB bootstrap: origin/main returned an invalid authority record.' >&2
+  exit 1
+}
+git cat-file -e "${captured_main_sha}^{commit}" 2>/dev/null || {
+  echo 'Refusing NocoDB bootstrap: the captured origin/main commit is unavailable locally.' >&2
+  exit 1
+}
 
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-bootstrap.XXXXXX")"
 chmod 700 "$temp_dir"
+ownership_marker="nocodb-bootstrap-${captured_main_sha:0:12}-$$-$(basename "$temp_dir")"
 
-# shellcheck source=scripts/lib/rollout.sh
-source scripts/lib/rollout.sh
-
-require_source_parity() {
-  require_deployed_source 'NocoDB bootstrap' \
-    .just/bootstrap.just \
-    scripts/nocodb/bootstrap.sh \
-    scripts/validate/nocodb.sh \
-    tests/catalog.yaml \
-    kubernetes/apps/automation-data/nocodb \
-    kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json \
-    scripts/verify/automation-data.sh \
-    scripts/test/scenarios/automation-data-provisioning.sh \
-    scripts/test/scenarios/automation-data-restore-drill.sh
+require_checkout_parity() {
+  if [[ "$(git rev-parse HEAD)" != "$captured_main_sha" ]] ||
+    [[ -n "$(git status --porcelain --untracked-files=no)" ]] ||
+    ! git diff --quiet "$captured_main_sha" -- ||
+    ! git diff --cached --quiet "$captured_main_sha" --; then
+    echo 'Refusing NocoDB bootstrap: the complete tracked checkout does not equal the captured origin/main commit.' >&2
+    return 1
+  fi
 }
 
 require_secret_contract() {
@@ -84,7 +156,7 @@ require_secret_contract() {
     echo "Refusing NocoDB bootstrap: the encrypted NocoDB Secret is absent: $secret." >&2
     return 1
   }
-  git cat-file -e "origin/main:$secret" 2>/dev/null || {
+  git cat-file -e "$captured_main_sha:$secret" 2>/dev/null || {
     echo 'Refusing NocoDB bootstrap: the encrypted NocoDB Secret is not deployed on origin/main.' >&2
     return 1
   }
@@ -109,20 +181,24 @@ require_secret_contract() {
 }
 
 require_deployed_revision() {
-  local remote_main deployed_revision
-  remote_main="$(git rev-parse origin/main)"
+  local deployed_revision
   deployed_revision="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
     get gitrepository flux-system --output jsonpath='{.status.artifact.revision}')"
-  [[ "$deployed_revision" == *"$remote_main"* ]] || {
-    echo "Refusing NocoDB bootstrap: Flux revision $deployed_revision does not match origin/main $remote_main." >&2
+  [[ "$deployed_revision" == "main@sha1:$captured_main_sha" ]] || {
+    echo "Refusing NocoDB bootstrap: Flux revision does not equal the captured origin/main commit $captured_main_sha." >&2
     return 1
   }
 }
 
 require_live_suspension() {
-  [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
-    get kustomization nocodb --output jsonpath='{.spec.suspend}')" == true ]] || {
-    echo 'Refusing NocoDB bootstrap: nocodb is not suspended in the live cluster.' >&2
+  local state="$temp_dir/live-suspension-$request_number.json"
+  request_number=$((request_number + 1))
+  get_nocodb_kustomization "$state"
+  jq -e --arg key "$ownership_annotation" '
+    .spec.suspend == true and (.metadata.annotations[$key] // "") == "" and
+    (.metadata.resourceVersion | type == "string" and length > 0)
+  ' "$state" >/dev/null || {
+    echo 'Refusing NocoDB bootstrap: nocodb is not suspended in the live cluster or is already owned.' >&2
     return 1
   }
 }
@@ -176,28 +252,110 @@ curl_request() { # <label> <method> <url> <auth:none|jwt|n8n|token> <body-or-emp
   }
 }
 
+list_n8n_credentials() { # <output>
+  local output="$1" aggregate="$temp_dir/credential-inventory-aggregate.json"
+  local page_response page_url next_cursor='' encoded_cursor seen_cursors='|' page=0
+  jq -n '{data: [], nextCursor: null}' >"$aggregate"
+  while :; do
+    page=$((page + 1))
+    [[ "$page" -le 100 ]] || {
+      echo 'n8n credential inventory exceeded the bounded page count.' >&2
+      return 1
+    }
+    page_url="$n8n_url/api/v1/credentials?limit=100"
+    if [[ -n "$next_cursor" ]]; then
+      encoded_cursor="$(CURSOR_VALUE="$next_cursor" jq -nr 'env.CURSOR_VALUE | @uri')"
+      page_url="$page_url&cursor=$encoded_cursor"
+    fi
+    page_response="$temp_dir/credential-inventory-page-$page.json"
+    curl_request 'n8n credential inventory' GET "$page_url" n8n '' "$page_response"
+    jq -e '
+      (.data | type) == "array" and
+      (.nextCursor == null or
+        ((.nextCursor | type) == "string" and (.nextCursor | length) > 0 and
+          (.nextCursor | length) <= 1024))
+    ' "$page_response" >/dev/null || {
+      echo 'n8n credential inventory returned an invalid page.' >&2
+      return 1
+    }
+    jq -s '{data: (.[0].data + .[1].data), nextCursor: null}' \
+      "$aggregate" "$page_response" >"$temp_dir/credential-inventory-next.json"
+    mv "$temp_dir/credential-inventory-next.json" "$aggregate"
+    next_cursor="$(jq -r '.nextCursor // ""' "$page_response")"
+    [[ -n "$next_cursor" ]] || break
+    case "$seen_cursors" in
+      *"|$next_cursor|"*)
+        echo 'n8n credential inventory repeated a pagination cursor.' >&2
+        return 1
+        ;;
+    esac
+    seen_cursors="$seen_cursors$next_cursor|"
+  done
+  mv "$aggregate" "$output"
+}
+
+list_nocodb_tokens() { # <output>
+  local output="$1" aggregate="$temp_dir/token-inventory-aggregate.json"
+  local page_response page_url is_last page_count page=0 offset=0
+  jq -n '{list: []}' >"$aggregate"
+  while :; do
+    page=$((page + 1))
+    [[ "$page" -le 100 ]] || {
+      echo 'NocoDB token inventory exceeded the bounded page count.' >&2
+      return 1
+    }
+    page_url="$nocodb_url/api/v1/tokens?limit=100&offset=$offset"
+    page_response="$temp_dir/token-inventory-page-$page.json"
+    curl_request 'NocoDB API token inventory' GET "$page_url" jwt '' "$page_response"
+    jq -e '
+      (.list | type) == "array" and
+      (.pageInfo | type) == "object" and
+      (.pageInfo.isLastPage | type) == "boolean"
+    ' "$page_response" >/dev/null || {
+      echo 'NocoDB token inventory returned an invalid page.' >&2
+      return 1
+    }
+    jq -s '{list: (.[0].list + .[1].list)}' \
+      "$aggregate" "$page_response" >"$temp_dir/token-inventory-next.json"
+    mv "$temp_dir/token-inventory-next.json" "$aggregate"
+    is_last="$(jq -r '.pageInfo.isLastPage' "$page_response")"
+    [[ "$is_last" == false ]] || break
+    page_count="$(jq '.list | length' "$page_response")"
+    [[ "$page_count" -gt 0 ]] || {
+      echo 'NocoDB token inventory returned an empty non-terminal page.' >&2
+      return 1
+    }
+    offset=$((offset + page_count))
+  done
+  mv "$aggregate" "$output"
+}
+
 require_attended_evidence() {
   local evidence="$temp_dir/evidence-$request_number.json"
-  local remote_main
-  remote_main="$(git rev-parse origin/main)"
   curl_request 'Automation-data evidence query' GET "$reports_url" none '' "$evidence"
-  jq -e --arg revision "$remote_main" '
+  jq -e --arg revision "$captured_main_sha" '
+    def matching($suite): [.runs[] | select(
+      .suite == $suite and
+      .result == "passed" and
+      .authoritative == true and
+      .git_sha == $revision
+    )];
+    def valid_end:
+      (.end | type) == "string" and
+      (.end | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+      ((try (.end | fromdateiso8601) catch null) != null);
     .schema_version == 1 and
     (.runs | type == "array") and
-    ([.runs[] | select(
-      .suite == "test.automation-data-provisioning" and
-      .result == "passed" and
-      .authoritative == true and
-      .git_sha == $revision
-    )] | length >= 1) and
-    ([.runs[] | select(
-      .suite == "test.automation-data-restore-drill" and
-      .result == "passed" and
-      .authoritative == true and
-      .git_sha == $revision
-    )] | length >= 1)
+    ((matching("test.automation-data-provisioning")) as $provisioning |
+      (matching("test.automation-data-restore-drill")) as $restore |
+      ($provisioning | length) >= 1 and
+      ($restore | length) >= 1 and
+      all($provisioning[]; valid_end) and
+      all($restore[]; valid_end) and
+      (($restore | map(.end | fromdateiso8601) | max) >
+        ($provisioning | map(.end | fromdateiso8601) | max)))
   ' "$evidence" >/dev/null || {
-    echo 'Refusing NocoDB bootstrap: current authoritative automation-data provisioning and restore evidence is absent.' >&2
+    echo 'Refusing NocoDB bootstrap: current provisioning and restore evidence is absent, invalid, or not ordered.' >&2
     return 1
   }
 }
@@ -207,7 +365,7 @@ require_preconditions() {
     echo "Refusing NocoDB bootstrap: origin must be $expected_origin." >&2
     return 1
   }
-  require_source_parity
+  require_checkout_parity
   [[ "$(yq -r '.spec.suspend' "$nocodb_ks")" == true ]] || {
     echo 'Refusing NocoDB bootstrap: nocodb must be staged suspended in Git.' >&2
     return 1
@@ -238,6 +396,30 @@ wait_for_metadata_job() {
   return 1
 }
 
+resume_with_ownership() {
+  local current="$temp_dir/resume-current.json"
+  local replacement="$temp_dir/resume-replacement.json"
+
+  get_nocodb_kustomization "$current"
+  jq -e --arg key "$ownership_annotation" '
+    .spec.suspend == true and (.metadata.annotations[$key] // "") == "" and
+    (.metadata.resourceVersion | type == "string" and length > 0)
+  ' "$current" >/dev/null || {
+    echo 'Refusing NocoDB bootstrap: nocodb changed before the owned resume.' >&2
+    return 1
+  }
+  jq --arg key "$ownership_annotation" --arg marker "$ownership_marker" '
+    .spec.suspend = false |
+    .metadata.annotations = (.metadata.annotations // {}) |
+    .metadata.annotations[$key] = $marker
+  ' "$current" >"$replacement"
+
+  # Arm compensation before the compare-and-swap. If the API applies the object but
+  # the client loses the response, cleanup finds this marker and restores suspension.
+  resume_cleanup_intent=true
+  replace_nocodb_kustomization "$replacement"
+}
+
 # The first pass is reviewable preflight. The second pass is the immediate check before
 # the first mutation; neither pass resumes or reconciles a Kustomization.
 require_preconditions
@@ -254,14 +436,13 @@ flux reconcile kustomization automation-data --namespace flux-system --with-sour
 kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
   --for=condition=Ready kustomization/automation-data --timeout=10m
 
-# The parent reconcile can advance the source. Bind the resume to the same deployed
-# origin/main and repeat the target suspension check immediately before it changes.
+# The parent reconcile must not change any authority bound by the original capture.
+require_checkout_parity
 require_deployed_revision
 require_live_suspension
 
 echo 'Resuming and reconciling the staged NocoDB package.' >&2
-flux resume kustomization nocodb --namespace flux-system --kubeconfig "$kubeconfig"
-resumed_nocodb=true
+resume_with_ownership
 flux reconcile kustomization nocodb --namespace flux-system --with-source \
   --kubeconfig "$kubeconfig" --timeout 15m
 
@@ -319,15 +500,65 @@ jq -e '.invite_only_signup == true and .restrict_workspace_creation == true' \
     exit 1
   }
 
-token_body="$temp_dir/token.json"
-token_response="$temp_dir/token-response.json"
-jq -n '{description: "NocoDB Operator API"}' >"$token_body"
-curl_request 'NocoDB API token creation' POST "$nocodb_url/api/v1/tokens" \
-  jwt "$token_body" "$token_response"
-nocodb_api_token="$(jq -er '.token | select(type == "string" and length > 0)' "$token_response")" || {
-  echo 'NocoDB token response omitted the API token.' >&2
+token_list_response="$temp_dir/token-list-response.json"
+credential_list_response="$temp_dir/credential-list-response.json"
+list_nocodb_tokens "$token_list_response"
+list_n8n_credentials "$credential_list_response"
+
+jq -e '(.list | type) == "array"' "$token_list_response" >/dev/null || {
+  echo 'NocoDB token inventory returned an invalid response.' >&2
   exit 1
 }
+jq -e '(.data | type) == "array" and .nextCursor == null' \
+  "$credential_list_response" >/dev/null || {
+  echo 'n8n credential inventory was invalid or incomplete.' >&2
+  exit 1
+}
+token_count="$(jq '[.list[] | select(.description == "NocoDB Operator API")] | length' \
+  "$token_list_response")"
+credential_name_count="$(jq '[.data[] | select(.name == "NocoDB Operator API")] | length' \
+  "$credential_list_response")"
+[[ "$token_count" -le 1 ]] || {
+  echo 'Refusing NocoDB bootstrap: multiple NocoDB API tokens have the fixed description.' >&2
+  exit 1
+}
+[[ "$credential_name_count" -le 1 ]] || {
+  echo 'Refusing NocoDB bootstrap: multiple n8n credentials have the fixed name.' >&2
+  exit 1
+}
+if [[ "$credential_name_count" -eq 1 ]]; then
+  jq -e '.data[] | select(
+    .name == "NocoDB Operator API" and .type == "httpHeaderAuth" and
+    (.id | type == "string" and test("^[A-Za-z0-9_-]+$"))
+  )' "$credential_list_response" >/dev/null || {
+    echo 'Refusing NocoDB bootstrap: the fixed n8n credential has an unexpected type or ID.' >&2
+    exit 1
+  }
+fi
+[[ "$credential_name_count" -eq 0 || "$token_count" -eq 1 ]] || {
+  echo 'Refusing NocoDB bootstrap: the n8n credential exists without its NocoDB API token.' >&2
+  exit 1
+}
+
+if [[ "$token_count" -eq 1 ]]; then
+  nocodb_api_token="$(jq -er '.list[] | select(.description == "NocoDB Operator API") |
+    .token | select(type == "string" and length > 0)' "$token_list_response")" || {
+    echo 'Existing NocoDB token inventory omitted the API token.' >&2
+    exit 1
+  }
+else
+  token_body="$temp_dir/token.json"
+  token_response="$temp_dir/token-response.json"
+  jq -n '{description: "NocoDB Operator API"}' >"$token_body"
+  curl_request 'NocoDB API token creation' POST "$nocodb_url/api/v1/tokens" \
+    jwt "$token_body" "$token_response"
+  nocodb_api_token="$(jq -er '
+    .token | select(type == "string" and length > 0)
+  ' "$token_response")" || {
+    echo 'NocoDB token response omitted the fixed API token.' >&2
+    exit 1
+  }
+fi
 [[ "$nocodb_api_token" =~ ^[A-Za-z0-9._-]+$ ]] || {
   echo 'NocoDB returned an invalid API-token shape.' >&2
   exit 1
@@ -345,22 +576,28 @@ jq -e '
   exit 1
 }
 
-credential_body="$temp_dir/credential.json"
-credential_response="$temp_dir/credential-response.json"
-NOCODB_API_TOKEN="$nocodb_api_token" jq -n '{
-  name: "NocoDB Operator API",
-  type: "httpHeaderAuth",
-  data: {name: "xc-token", value: env.NOCODB_API_TOKEN}
-}' >"$credential_body"
-curl_request 'n8n NocoDB credential creation' POST "$n8n_url/api/v1/credentials" \
-  n8n "$credential_body" "$credential_response"
-credential_id="$(jq -er '
-  select(.name == "NocoDB Operator API" and .type == "httpHeaderAuth") |
-  .id | select(type == "string" and test("^[A-Za-z0-9_-]+$"))
-' "$credential_response")" || {
-  echo 'n8n credential response did not match the requested Header Auth identity.' >&2
-  exit 1
-}
+if [[ "$credential_name_count" -eq 1 ]]; then
+  credential_id="$(jq -er '.data[] | select(
+    .name == "NocoDB Operator API" and .type == "httpHeaderAuth"
+  ) | .id' "$credential_list_response")"
+else
+  credential_body="$temp_dir/credential.json"
+  credential_response="$temp_dir/credential-response.json"
+  NOCODB_API_TOKEN="$nocodb_api_token" jq -n '{
+    name: "NocoDB Operator API",
+    type: "httpHeaderAuth",
+    data: {name: "xc-token", value: env.NOCODB_API_TOKEN}
+  }' >"$credential_body"
+  curl_request 'n8n NocoDB credential creation' POST "$n8n_url/api/v1/credentials" \
+    n8n "$credential_body" "$credential_response"
+  credential_id="$(jq -er '
+    select(.name == "NocoDB Operator API" and .type == "httpHeaderAuth") |
+    .id | select(type == "string" and test("^[A-Za-z0-9_-]+$"))
+  ' "$credential_response")" || {
+    echo 'n8n credential response did not match the requested Header Auth identity.' >&2
+    exit 1
+  }
+fi
 
 credential_read_response="$temp_dir/credential-read-response.json"
 curl_request 'n8n NocoDB credential read-back' GET \
@@ -374,6 +611,7 @@ jq -e --arg id "$credential_id" '
   exit 1
 }
 
+release_owned_marker
 bootstrap_complete=true
 printf 'NocoDB Operator API credential ID: %s\n' "$credential_id"
 cat >&2 <<'EOF'
