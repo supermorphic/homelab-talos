@@ -6,6 +6,15 @@ scenario="$repo_root/scripts/test/scenarios/automation-data-provisioning.sh"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-provisioning-command-test.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
+rg -Fq '>"$run_dir/diagnostics/automation-data-provisioning-evidence.json"' "$scenario" || {
+  echo 'Provisioning evidence must stay under the canonical diagnostics directory.' >&2
+  exit 1
+}
+! rg -Fq '>"$run_dir/automation-data-provisioning-evidence.json"' "$scenario" || {
+  echo 'Provisioning evidence must not add an entry to the canonical run root.' >&2
+  exit 1
+}
+
 sed -n '/^error_job_manifest()/,/^}/p' "$scenario" >"$temp_dir/error-job-function.sh"
 # shellcheck disable=SC1091 # Extract the production renderer without running the live scenario.
 source "$temp_dir/error-job-function.sh"

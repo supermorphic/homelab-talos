@@ -494,7 +494,7 @@ jq -n \
     permissionChecksPassed: $permissionChecksPassed,
     backupAdvanced: $backupAdvanced,
     bundleEvidence: $bundleEvidence
-  }' >"$run_dir/automation-data-provisioning-evidence.json"
+  }' >"$run_dir/diagnostics/automation-data-provisioning-evidence.json"
 
 write_phase assertion passed 'provisioning, idempotency, permission, rotation, and backup assertions passed'
 echo "automation-data attended provisioning acceptance passed for $domain: credential IDs and unchanged reconciliation remained stable; permission checks and runtime rotation passed; the error registry row did not block a complete dynamically discovered backup."
