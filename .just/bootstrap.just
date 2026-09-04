@@ -3266,3 +3266,7 @@ automation-data:
     Durable suspend:false changes remain Git-managed. Do not activate a destructive
     database or role decommission path as part of this bootstrap.
     EOF
+
+# Activate the staged NocoDB package and bind its API token directly to n8n.
+nocodb:
+    scripts/nocodb/bootstrap.sh '{{kubeconfig}}'

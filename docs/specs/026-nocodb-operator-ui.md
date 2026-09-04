@@ -443,7 +443,12 @@ and n8n APIs. It performs this fixed transaction:
    invite-only signup and restrict workspace creation to the super administrator.
 8. Create one NocoDB API token and send it directly to the local n8n credential API as
    the named **NocoDB Operator API** header credential.
-9. Test the credential against fixed NocoDB endpoints and read back its non-secret ID.
+9. Before discarding the in-memory token, test it directly against a fixed NocoDB
+   source-list endpoint. Then read the created n8n credential back through the public API
+   and require the expected non-secret ID, name, and `httpHeaderAuth` type. n8n `2.36.7`
+   does not expose its stored generic Header Auth probe through API-key authentication;
+   the attended source workflow acceptance is the independent proof that n8n can use the
+   stored credential.
 10. Return only non-secret resource IDs, readiness, and next operator steps.
 
 Secret values travel through standard input, request bodies, and process memory. They do
