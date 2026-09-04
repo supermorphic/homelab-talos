@@ -951,28 +951,37 @@ The residual top 15 shell-case medians are:
 Stage 1 produced a material and stable improvement, but its complete-gate median remains
 2.66 times the 120-second design target. The residual evidence is no longer dominated by
 obsolete or duplicated encode work or by one unsplit test. It now includes many retained
-component-specific validators and fixture groups that cannot all be affected by an
-ordinary isolated application change. Further global concurrency does not remove their
-CPU and I/O cost, and four workers already outperformed six in the 023e comparison.
+component-specific validators and fixture groups. Further global concurrency does not
+remove their CPU and I/O cost, and four workers already outperformed six in the 023e
+comparison.
 
-The Stage 2 decision gate is therefore open. Its next plan should use the middle-weight,
-deterministic gated approach: repository-owned input mappings select universal and
-affected Active targets, dependency or reverse-impact rules broaden the set when required,
-unknown or malformed impact fails closed to broad validation, and one static merge-gate
-reconciles that every planned target ran and passed. This is the same design class as the
-deterministic gate used by `homelab-playbook`; this repository must still define its own
-target boundaries and dependency rules from the completed audit. An agent, PR author, or
-Renovate source cannot de-escalate the deterministic result. Stage 2 must preserve fresh
-pre-merge execution against the complete rebased tree and must not become a generalized
-build system.
+These measurements justify evaluating Stage 2, but they do not yet authorize its
+implementation. The suite-level and shell-case profiles do not map representative ordinary
+changes to the validation they can affect. They therefore do not prove how much work a
+deterministic selector would omit, what the selected critical path would be, or whether the
+expected saving justifies the new enforcement surface. The next Stage 2 artifact must first
+inventory repository-owned target inputs and dependency or reverse-impact relationships,
+then evaluate representative change sets and their predicted selected paths against the
+approximately two-minute objective.
+
+If that analysis opens the decision gate, the leading candidate is the middle-weight,
+deterministic gated approach used by `homelab-playbook`: repository-owned input mappings
+select universal and affected Active targets, dependency or reverse-impact rules broaden
+the set when required, unknown or malformed impact fails closed to broad validation, and
+one static merge-gate reconciles that every planned target ran and passed. This repository
+must define its own target boundaries and dependency rules from its audit. An agent, PR
+author, or Renovate source cannot de-escalate the deterministic result. Stage 2 must
+preserve fresh pre-merge execution against the complete rebased tree and must not become a
+generalized build system.
 
 Issue 275 remains the prerequisite for the Forgejo/NUC comparison. Runner persistence,
-caching, and capacity experiments remain Stage 3 work and must not delay the now-justified
-Stage 2 planner design.
+caching, and capacity experiments remain Stage 3 work and must not be used to assume the
+outcome of the Stage 2 impact analysis.
 
 ## Stage 2 decision gate
 
-Stage 2 was optional until measurements satisfied all of the following conditions:
+Stage 2 is optional. It proceeds only when measurements satisfy all of the following
+conditions:
 
 1. Stage 1 correctness and coverage checks pass.
 2. Ordinary merge latency remains operationally unacceptable.
@@ -981,23 +990,23 @@ Stage 2 was optional until measurements satisfied all of the following condition
 4. Deterministic target selection offers enough expected savings to justify its
    maintenance and enforcement complexity.
 
-The 023f result satisfies these conditions. All retained correctness checks passed; the
-319.31-second median remains operationally unacceptable; the residual profile contains
-material application and subsystem validation unrelated to an ordinary isolated change;
-and the bounded middle-weight planner below can omit that unrelated work without weakening
-the universal invariants. Stage 2 is authorized for a separate implementation plan. The
-plan must include its own RED/GREEN planner, fail-closed, and merge-gate tests before any
-provider workflow becomes required.
+The 023f result satisfies conditions 1 and 2: retained correctness checks passed, and the
+319.31-second median remains operationally unacceptable. It does not yet satisfy conditions
+3 and 4. The residual profile identifies potentially separable application and subsystem
+validation, but no deterministic target-to-input inventory or representative ordinary
+change analysis establishes the unrelated fraction, selected critical path, or expected
+saving. Stage 2 planner implementation is not authorized by this result. A separate
+analysis/design step must establish those facts before an implementation plan is approved.
 
 If later evidence shows that the residual selected path is dominated by universally
 required validation, the planner is not the remedy for that portion. Further intrinsic
 optimization remains valid and can continue alongside Stage 2 when it preserves the same
 evidence.
 
-## Stage 2 architecture
+## Conditional Stage 2 architecture
 
-Implement the smallest deterministic affected-target planner that solves the residual
-problem. Do not create a general build system.
+If the decision gate is satisfied, implement the smallest deterministic affected-target
+planner that solves the residual problem. Do not create a general build system.
 
 The existing test catalog is the preferred metadata owner if it can accept a small impact
 block without confusing its assurance and live-dispatch responsibilities. Retained
