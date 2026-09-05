@@ -57,8 +57,12 @@ def scan_tree(root: Path) -> tuple[Path, ...]:
     check_path(root)
     if not root.is_dir():
         raise UnsafeInput(f"results root must be a directory: {root}")
+
+    def traversal_error(error: OSError) -> None:
+        raise UnsafeInput(f"cannot traverse results tree: {error}") from error
+
     directories = []
-    for directory, children, files in os.walk(root, followlinks=False):
+    for directory, children, files in os.walk(root, followlinks=False, onerror=traversal_error):
         path = Path(directory)
         directories.append(path)
         for name in children + files:

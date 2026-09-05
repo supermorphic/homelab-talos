@@ -378,6 +378,29 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(process.returncode, 2, process.stderr)
         self.assertIn("regular", process.stderr)
 
+    def test_unreadable_download_directory_is_unsafe_input(self):
+        self.make_run()
+        unreadable = self.results / "unreadable artifact"
+        unreadable.mkdir()
+        (unreadable / "cancelled.json").write_text('{"result":"cancelled"}')
+        original_mode = unreadable.stat().st_mode
+        try:
+            unreadable.chmod(0)
+            try:
+                list(unreadable.iterdir())
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("current user can read mode-000 directories")
+            process = self.cli()
+            self.assertEqual(process.returncode, 2, process.stderr)
+            self.assertIn("cannot traverse", process.stderr)
+            self.assertIn("unreadable artifact", process.stderr)
+            with self.assertRaises(self.reconciler.UnsafeInput):
+                self.reconciler.discover_results(self.results)
+        finally:
+            unreadable.chmod(original_mode)
+
     def test_symlinked_output_cannot_overwrite_target(self):
         self.make_run()
         self.output.mkdir()
