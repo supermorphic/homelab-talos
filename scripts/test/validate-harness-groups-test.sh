@@ -49,6 +49,12 @@ automation_work="$(list_work automation)"
 ci_framework_work="$(list_work ci-framework)"
 all_work="$(list_work all)"
 
+expect_lines "$(printf '%s\n' "$core_work" | sed -n 's/^setup://p')" \
+	'repository-shell-validation'
+expect_lines "$(printf '%s\n' "$ci_framework_work" | sed -n 's/^setup://p')" \
+	$'catalog\nchainsaw-configuration\nchainsaw-conftest\nchainsaw-test-files\nchainsaw-yaml-support-files'
+[[ -z "$(printf '%s\n' "$observability_work" "$automation_work" | sed -n 's/^setup://p')" ]]
+
 [[ "$(wc -l <<<"$all_work" | tr -d ' ')" -eq 72 ]]
 expect_lines "$(printf '%s\n' "$all_work" | sed -n '1,6p')" \
 	$'setup:catalog\nsetup:chainsaw-configuration\nsetup:chainsaw-conftest\nsetup:chainsaw-test-files\nsetup:chainsaw-yaml-support-files\nsetup:repository-shell-validation'
