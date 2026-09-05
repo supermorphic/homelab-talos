@@ -97,6 +97,56 @@ class ClassificationTests(unittest.TestCase):
             ("core", "observability"),
         )
 
+    def test_observability_implementations_select_owned_tests(self):
+        cases = {
+            "scripts/diagnose/flux-alerts.sh": ("core", "observability"),
+            "scripts/verify/logging.sh": ("core", "observability"),
+            "scripts/verify/alertmanager-ntfy.sh": ("core", "observability"),
+            "kubernetes/mod.just": ("core", "observability", "automation", "ci-framework"),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
+
+    def test_cross_domain_automation_inputs_select_owned_tests(self):
+        cases = {
+            "kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/automation-data-postgresql.json": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml": (
+                "core",
+                "automation",
+            ),
+            "scripts/verify/n8n.sh": ("core", "automation"),
+            "scripts/verify/automation-data.sh": ("core", "automation"),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
+
+    def test_external_framework_implementations_select_full(self):
+        for path in (
+            "kubernetes/apps/monitoring/test-reports/app/install-report.sh",
+            "kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh",
+            "scripts/repository/github_protection.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False),
+                    ("core", "observability", "automation", "ci-framework"),
+                )
+
     def test_status_and_path_contract_rejects_ambiguous_inputs(self):
         for change in (
             Change("T", None, "docs/a"),
