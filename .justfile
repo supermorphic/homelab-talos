@@ -28,7 +28,8 @@ mod test "tests"
 # PR; GitHub Actions runs the exact same command on PRs targeting main. Requires
 # the mise toolchain and network egress (Helm pulls public charts) but NO kubeconfig,
 # SOPS age key, or cluster access. Cluster-dependent checks (*-verify, *-status,
-# bootstrap, pihole-status) are intentionally excluded and remain operator-only.
+# bootstrap, pihole-status) are intentionally excluded. AGENTS.md defines their
+# authority boundaries, including approved scoped agent verification.
 [group("CI")]
 ci:
     scripts/test/run-ci.sh

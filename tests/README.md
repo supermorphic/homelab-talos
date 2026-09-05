@@ -6,7 +6,7 @@ This tree contains declarative, repository-owned test inputs:
   test, diagnostic, probe, and conformance suites. It owns stable reporting
   metadata and the live Chainsaw dispatch registry.
 - `config/` holds the pinned Chainsaw runtime configuration.
-- `chainsaw/` will hold live `smoke/`, `e2e/`, and `resilience/` scenarios.
+- `chainsaw/` holds live `smoke/`, `e2e/`, and `resilience/` scenarios.
 - `policy/` holds cluster-independent Conftest/Rego policy.
 - `fixtures/` holds controlled test data, including a lint-only Chainsaw test
   that is never part of live scenario discovery.
@@ -90,7 +90,11 @@ Before an operator starts a `weekly` or `full` campaign, they must silently prom
 and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
 not appear in the catalog or campaign plan.
 
-Live commands are operator-only:
+Live commands remain outside `just ci`. [`AGENTS.md`](../AGENTS.md) defines their
+authority boundaries: agents may run approved scoped verification with task-local
+credentials, while deliberate mutation or broader access requires the applicable
+authorization. Use the [agent cluster access guide](../docs/guides/agent-cluster-access.md)
+and each suite's catalog access tier to select an approved workflow.
 
 - `mise exec -- just test smoke cluster`
 - `mise exec -- just test smoke cluster diagnostics-self-test` (expected failure)
@@ -98,9 +102,10 @@ Live commands are operator-only:
 - `mise exec -- just test smoke media qbit-manage`
 - `mise exec -- just test smoke platform` (all platform readiness suites) or
   `mise exec -- just test smoke platform <cluster|flux|gateway|dns|cilium|longhorn|portainer|smb>` (one).
-  Read-only resource-readiness per subsystem; the deep functional checks (cilium connectivity
-  test, dig/curl DNS+HTTPS, talosctl/etcd, helm-value parity, test-PVC replica anti-affinity)
-  remain operator-only in the `just kube *-verify` recipes. The scenario list is an explicit
+  Read-only resource-readiness per subsystem. The `just kube *-verify` recipes provide
+  deeper observational checks according to their catalog access tiers. Deliberate
+  mutation, such as the Cilium connectivity test or a test-PVC provisioning check,
+  uses a separate registered test workflow. The scenario list is an explicit
   registry — a bare `smoke platform` runs only suites labelled `homelab-talos/suite=platform`.
 - `mise exec -- just test diagnostics cluster`
 - `mise exec -- just test probe qbittorrent`

@@ -1,6 +1,6 @@
 # Homelab Talos Platform
 
-This private repository is the source of truth for the three-node NUC Talos
+This repository is the source of truth for the three-node NUC Talos
 cluster and its Flux-managed Kubernetes platform. Start with the
 [documentation index](docs/README.md), then use the source-adjacent `README.md`
 for the subsystem being changed. Numbered [design specifications](docs/specs/)
@@ -30,6 +30,7 @@ git add -A
 git commit -m "..."             # staged-file hooks provide fast feedback
 git fetch origin
 git rebase origin/main           # when main advanced and the branch is clean
+mise exec -- just ci             # required before opening or updating a PR
 git push -u origin HEAD
 mise exec -- gh pr create
 ```
@@ -40,9 +41,10 @@ an uninstalled hook suite silently removes that gate. `mise exec -- just repo li
 runs the same hook suite repository-wide. The hook recipe installs into Git's shared
 common directory and configures `core.hooksPath` to use it. One installation covers the
 clone and its linked worktrees; rerunning the recipe from either location is safe.
-`mise exec -- just ci` remains the single canonical full validation command and can
-be run locally, but the required GitHub Actions `ci` check is the authoritative merge
-gate for every pull request targeting `main`. It needs network egress for public Helm
+Run `mise exec -- just ci`, the single canonical full validation command, before
+opening or updating a pull request and again after a required rebase. The required
+GitHub Actions `ci` check is the authoritative merge gate for every pull request
+targeting `main`. It needs network egress for public Helm
 charts but **no kubeconfig, SOPS age key, cluster access, or repository secrets**.
 
 The active `Protect main` ruleset requires the branch to be current, the GitHub
@@ -422,7 +424,7 @@ result shows:
 - Three etcd members and no etcd alarms.
 - Four healthy Flux controllers and all sources,
   Kustomizations, and HelmReleases reporting Ready.
-- Ready staging and production issuers, the wildcard certificate, MetalLB,
+- Ready production issuer, the wildcard certificate, MetalLB,
   Envoy Gateway, ExternalDNS, and echo; Pi-hole resolves the echo hostname to
   `192.168.90.30`.
 
@@ -498,7 +500,9 @@ restoring access after workstation or cluster loss.
 5. Run the subsystem's generation or validation recipe when it is available.
 6. Inspect `git status` and confirm no generated config, decrypted secret,
    kubeconfig, talosconfig, or private key is trackable.
-7. Commit on the feature branch, push it, and open a pull request. GitHub's required
+7. Run `mise exec -- just ci` before opening or updating a pull request. After a
+   required rebase, rerun affected validation, including `mise exec -- just ci`.
+8. Commit on the feature branch, push it, and open a pull request. GitHub's required
    `ci` check supplies the authoritative full validation result.
 
 Do not bypass a disabled recipe with a raw cluster-changing command. Enable and
@@ -558,5 +562,5 @@ credentials; it never copies an admin user into the worktree kubeconfig. Do not
 copy credentials into Git.
 
 Generated configs, kubeconfigs, talosconfigs, decrypted secrets, Helm output,
-support bundles, and age private identities must remain outside Git. The private
-repository does not weaken this rule.
+support bundles, and age private identities must remain outside Git, regardless of
+repository visibility.
