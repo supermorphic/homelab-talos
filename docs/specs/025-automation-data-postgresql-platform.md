@@ -630,12 +630,23 @@ repository contracts already proved by CI.
 
 ## Implementation status
 
-As of 2026-09-02, the repository implementation, guarded Secret, documentation, offline
-contracts, and attended command surfaces are present. The
-`automation-data-postgresql` Flux Kustomization remains staged with
-`spec.suspend: true`. The live bootstrap, n8n credential bindings, provisioning test,
-and full-chain restore drill have not run. Recovery therefore remains unproved, and this
-specification does not claim Issue 317 is complete.
+As of 2026-09-05, the repository implementation, guarded Secret, documentation, offline
+contracts, n8n credential bindings, and attended command surfaces are complete. The
+attended provisioning run
+`20260904T022844Z-df8824b737bd-operator-1f4ca77c` passed domain creation, unchanged
+reconciliation, permission separation, explicit runtime credential rotation, and a
+complete dynamically discovered backup despite an incomplete registry record.
+
+The full-chain restore run
+`20260905T143411Z-699116bc4844-operator-dc1ee8f0` then restored
+`n8n-postgresql-20260905T010011Z.dump` and
+`automation-data-20260905T003011Z`, proved that the restored encrypted n8n runtime
+credential authenticated against the restored PostgreSQL password verifier, and created
+the fresh post-recovery bundle `automation-data-20260905T143440Z`. Canonical result
+validation and cleanup both passed. This proves the recovery capability defined by this
+specification without operator escrow of domain plaintext passwords. Following that
+acceptance, the repository keeps the `automation-data-postgresql` Flux Kustomization
+active with `spec.suspend: false`.
 
 ## Rejected alternatives
 

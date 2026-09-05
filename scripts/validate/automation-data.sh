@@ -39,8 +39,8 @@ platform_graph="$(yq -r '[.resources[]] | sort | join(",")' \
   kubernetes/apps/automation-data/kustomization.yaml)"
 [[ "$platform_graph" == './namespace/ks.yaml,./postgresql/ks.yaml' ]] ||
   fail 'the automation-data Flux package graph is incomplete'
-[[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/postgresql/ks.yaml)" == true ]] ||
-  fail 'the automation-data PostgreSQL package must remain staged'
+[[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/postgresql/ks.yaml)" == false ]] ||
+  fail 'the accepted automation-data PostgreSQL package must remain active'
 
 exporter='kubernetes/apps/automation-data/postgresql/app/sql-exporter.yml'
 mapfile -t metrics < <(
