@@ -9,12 +9,60 @@ require_bash
 [[ "$#" -eq 1 ]] || { echo 'Usage: nocodb.sh <kubeconfig>' >&2; exit 2; }
 kubeconfig="$1"
 namespace='automation-data'
+source_ks='kubernetes/apps/automation-data/nocodb/ks.yaml'
+gatus_values='kubernetes/apps/monitoring/gatus/app/values.yaml'
+gatus_activation_values='kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml'
+alerts_kustomization='kubernetes/apps/monitoring/alerts/app/kustomization.yaml'
+alerts_definition='kubernetes/apps/monitoring/alerts/app/nocodb.yaml'
+catalog='tests/catalog.yaml'
 prometheus_base_url='https://prometheus.lab.supermorphic.com'
 prometheus_resolve="prometheus.lab.supermorphic.com:443:${HOMELAB_GATEWAY_VIP}"
 kc=(kubectl --kubeconfig "$kubeconfig")
 
 fail() { echo "NocoDB verification failed: $*" >&2; exit 1; }
 [[ -f "$kubeconfig" ]] || fail "Missing $kubeconfig; generate the task-scoped Talos kubeconfig first."
+for source in "$source_ks" "$gatus_values" "$gatus_activation_values" \
+  "$alerts_kustomization" "$alerts_definition" "$catalog"; do
+  [[ -f "$source" ]] || fail "Missing verification source: $source."
+done
+
+yq -e '(.spec.suspend | type) == "!!bool"' "$source_ks" >/dev/null ||
+  fail 'Git NocoDB suspension intent is absent or invalid.'
+source_suspend="$(yq -r '.spec.suspend' "$source_ks")"
+active_gatus_name_count="$(yq -r '[.config.endpoints[]? | select(.name == "nocodb")] | length' "$gatus_values")"
+active_gatus_contract_count="$(yq -r '[.config.endpoints[]? | select(
+  .name == "nocodb" and .group == "Platform" and
+  .url == "https://nocodb.lab.supermorphic.com/api/v1/health" and
+  .interval == "1m" and (.conditions | join(",")) == "[STATUS] == 200"
+)] | length' "$gatus_values")"
+activation_endpoint_count="$(yq -r '[.config.endpoints[]? | select(
+  .name == "nocodb" and .group == "Platform" and
+  .url == "https://nocodb.lab.supermorphic.com/api/v1/health" and
+  .interval == "1m" and (.conditions | join(",")) == "[STATUS] == 200"
+)] | length' "$gatus_activation_values")"
+selected_rule_count="$(yq -r '[.resources[]? | select(. == "./nocodb.yaml")] | length' "$alerts_kustomization")"
+verification_campaign_count="$(yq -r '[.campaigns.verification.members[]? |
+  select(. == "verification.nocodb")] | length' "$catalog")"
+scoped_campaign_count="$(yq -r '[.campaigns."scoped-verification".members[]? |
+  select(. == "verification.nocodb")] | length' "$catalog")"
+[[ "$activation_endpoint_count" == 1 ]] || fail 'The retained NocoDB Gatus activation definition is invalid.'
+
+declared_phase="${NOCODB_VERIFY_PHASE:-}"
+[[ -z "$declared_phase" || "$declared_phase" == attended ]] ||
+  fail 'NOCODB_VERIFY_PHASE must be unset or exactly attended.'
+
+if [[ "$source_suspend" == true ]]; then
+  [[ "$active_gatus_name_count" == 0 && "$selected_rule_count" == 0 && \
+    "$verification_campaign_count" == 0 && "$scoped_campaign_count" == 0 ]] ||
+    fail 'Staged Git intent has active NocoDB monitoring or recurring verification enrollment.'
+else
+  [[ "$declared_phase" != attended ]] ||
+    fail 'Attended phase cannot override durable active Git intent.'
+  [[ "$active_gatus_name_count" == 1 && "$active_gatus_contract_count" == 1 && \
+    "$selected_rule_count" == 1 && \
+    "$verification_campaign_count" == 1 && "$scoped_campaign_count" == 1 ]] ||
+    fail 'Durable active Git intent lacks exact NocoDB monitoring and recurring verification enrollment.'
+fi
 
 ready_resource() {
   local resource="$1" name="$2" resource_namespace="$3" state
@@ -30,9 +78,45 @@ ready_resource() {
   ' - >/dev/null <<<"$state" || fail "$resource/$name is not current and Ready."
 }
 
-for name in automation-data nocodb monitoring-alerts gatus; do
+for name in automation-data monitoring-alerts gatus; do
   ready_resource kustomization "$name" flux-system
 done
+
+nocodb_kustomization="$("${kc[@]}" --namespace flux-system get kustomization nocodb --output json)"
+yq -p=json -e '(.spec.suspend | type) == "!!bool"' - >/dev/null <<<"$nocodb_kustomization" ||
+  fail 'Live NocoDB suspension state is absent or invalid.'
+live_suspend="$(yq -p=json -r '.spec.suspend' - <<<"$nocodb_kustomization")"
+phase=''
+monitoring_required=false
+if [[ "$source_suspend" == true && -z "$declared_phase" ]]; then
+  [[ "$live_suspend" == true ]] ||
+    fail 'Staged NocoDB is active without an explicit attended verification phase.'
+  staged_deployment="$("${kc[@]}" --namespace "$namespace" get deployment nocodb \
+    --ignore-not-found --output name)"
+  [[ -z "$staged_deployment" ]] ||
+    fail 'Staged NocoDB has an active Deployment; declare attended only for the reviewed temporary activation.'
+  echo 'NocoDB read-only verification passed: phase=staged-absent; Git and live suspension agree, no application Deployment is active, and monitoring remains unenrolled.'
+  exit 0
+elif [[ "$source_suspend" == true ]]; then
+  [[ "$live_suspend" == false ]] || fail 'Attended NocoDB verification requires a live active Kustomization.'
+  phase='temporary-attended'
+else
+  [[ "$live_suspend" == false ]] || fail 'Durable active NocoDB is suspended in the live cluster.'
+  phase='durable-active'
+  monitoring_required=true
+fi
+
+# shellcheck disable=SC2016 # yq evaluates its own variables.
+yq -p=json -e '
+  .metadata.generation as $generation |
+  [
+    (.spec.suspend == false),
+    (.status.observedGeneration == $generation),
+    (([.status.conditions[]? | select(
+      .type == "Ready" and .status == "True" and .observedGeneration == $generation
+    )] | length) == 1)
+  ] | all
+' - >/dev/null <<<"$nocodb_kustomization" || fail 'Active NocoDB Kustomization is not current and Ready.'
 ready_resource helmrelease nocodb "$namespace"
 
 assert_no_worker_or_redis() {
@@ -211,29 +295,35 @@ VOLUME_NAME="$volume_name" yq -p=json -e '
   ] | all
 ' - >/dev/null <<<"$volumes" || fail 'NocoDB Longhorn volume identity, replica health, detached state, or default recurring group is invalid.'
 
-rule="$("${kc[@]}" --namespace monitoring get prometheusrule nocodb --output json)"
-expected_rules=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBPersistentVolumeClaimNotBound\nNocoDBPersistentVolumeUsageCritical\nNocoDBPersistentVolumeUsageWarning\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
-actual_rules="$(yq -p=json -r '.spec.groups[]? | select(.name == "nocodb") | .rules[]?.alert' - <<<"$rule" | LC_ALL=C sort)"
-[[ "$actual_rules" == "$expected_rules" ]] || fail 'NocoDB PrometheusRule does not expose the exact 12-alert contract.'
-
 query_value() {
   local query="$1" response
   response="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "$query")" || return 1
   yq -p=json -r 'select(.status == "success" and (.data.result | length) == 1) | .data.result[0].value[1]' - <<<"$response"
 }
 
-[[ "$(query_value 'gatus_results_endpoint_success{name="nocodb", group="Platform"}')" == '1' ]] ||
-  fail 'NocoDB Gatus success metric is absent or unhealthy.'
+if [[ "$monitoring_required" == true ]]; then
+  rule="$("${kc[@]}" --namespace monitoring get prometheusrule nocodb --output json)"
+  expected_rules=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBPersistentVolumeClaimNotBound\nNocoDBPersistentVolumeUsageCritical\nNocoDBPersistentVolumeUsageWarning\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
+  actual_rules="$(yq -p=json -r '.spec.groups[]? | select(.name == "nocodb") | .rules[]?.alert' - <<<"$rule" | LC_ALL=C sort)"
+  [[ "$actual_rules" == "$expected_rules" ]] || fail 'NocoDB PrometheusRule does not expose the exact 12-alert contract.'
 
-rules_response="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/rules?type=alert')"
-actual_loaded_rules="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]?.name] | sort | .[]' - <<<"$rules_response")"
-loaded_rule_health="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]? | [(.health // ""), (.lastError // "")] | join("|")] | unique | join(",")' - <<<"$rules_response")"
-[[ "$(yq -p=json -r '.status' - <<<"$rules_response")" == 'success' && "$actual_loaded_rules" == "$expected_rules" && "$loaded_rule_health" == 'ok|' ]] ||
-  fail 'Prometheus has not loaded the exact NocoDB alert rule group.'
+  [[ "$(query_value 'gatus_results_endpoint_success{name="nocodb", group="Platform"}')" == '1' ]] ||
+    fail 'NocoDB Gatus success metric is absent or unhealthy.'
+
+  rules_response="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/rules?type=alert')"
+  actual_loaded_rules="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]?.name] | sort | .[]' - <<<"$rules_response")"
+  loaded_rule_health="$(yq -p=json -r '[.data.groups[]? | select(.name == "nocodb") | .rules[]? | [(.health // ""), (.lastError // "")] | join("|")] | unique | join(",")' - <<<"$rules_response")"
+  [[ "$(yq -p=json -r '.status' - <<<"$rules_response")" == 'success' && "$actual_loaded_rules" == "$expected_rules" && "$loaded_rule_health" == 'ok|' ]] ||
+    fail 'Prometheus has not loaded the exact NocoDB alert rule group.'
+fi
 
 backup_timestamp="$(query_value 'automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="automation-data",service="automation-data-postgresql"}')"
 # shellcheck disable=SC2016 # yq evaluates the literal expression.
 VALUE="$backup_timestamp" yq -n -e 'env(VALUE) | tonumber as $value | [($value >= (now | to_unix) - 129600), ($value <= (now | to_unix))] | all' >/dev/null ||
   fail 'Automation-data logical backup freshness is absent or older than 36 hours.'
 
-echo 'NocoDB read-only acceptance passed: current Flux and Helm state, one Ready Pod, private Service and route, policy, retained attachment volume, Gatus, alerts, and automation-data logical backup freshness match their contracts.'
+if [[ "$monitoring_required" == true ]]; then
+  echo "NocoDB read-only verification passed: phase=$phase; current Flux and Helm state, one Ready Pod, private Service and route, policy, retained attachment volume, Gatus, alerts, and automation-data logical backup freshness match their contracts."
+else
+  echo "NocoDB read-only verification passed: phase=$phase; the temporary workload, private Service and route, policy, retained attachment volume, and automation-data logical backup freshness match their direct contracts; monitoring remains intentionally unenrolled."
+fi

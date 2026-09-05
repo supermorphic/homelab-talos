@@ -28,6 +28,22 @@ fail() {
 	exit 1
 }
 
+postgresql_render="$fixture/postgresql.yaml"
+kustomize build kubernetes/apps/automation-data/postgresql/app >"$postgresql_render"
+rendered_backup_configmap="$(yq ea -r '
+  select(.kind == "CronJob" and .metadata.name == "automation-data-postgresql-backup") |
+  [.spec.jobTemplate.spec.template.spec.volumes[] |
+    select(.name == "backup-script") | .configMap.name] |
+  select(length == 1) | .[0]
+' "$postgresql_render")"
+[[ "$rendered_backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] ||
+	fail 'PostgreSQL render did not produce one hashed backup ConfigMap reference'
+rendered_backup_source="$(CONFIGMAP_NAME="$rendered_backup_configmap" yq ea -o=json -I=0 '
+  select(.kind == "ConfigMap" and .metadata.name == strenv(CONFIGMAP_NAME))
+' "$postgresql_render")"
+jq -e '.data | has("backup.sh") and has("update-backup-status.sql")' \
+	<<<"$rendered_backup_source" >/dev/null || fail 'rendered backup ConfigMap is missing a required script key'
+
 create_bundle() { # <timestamp> <complete|incomplete>
 	local timestamp="$1" state="$2" bundle database_name encoded dump_path
 	bundle="$fixture/bundles/automation-data-$timestamp"

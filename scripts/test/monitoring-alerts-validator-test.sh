@@ -13,6 +13,7 @@ tree_root="$test_dir/tree"
 reset_tree() {
   rm -rf -- "$tree_root"
   mkdir -p "$tree_root/kubernetes/apps/monitoring" \
+    "$tree_root/kubernetes/apps/automation-data/nocodb" \
     "$tree_root/kubernetes/apps/automation/n8n" \
     "$tree_root/kubernetes/apps/automation/n8n-postgresql" \
     "$tree_root/kubernetes/apps/networking/public-webhook-gateway" \
@@ -24,6 +25,8 @@ reset_tree() {
     "$tree_root/kubernetes/apps/monitoring/kustomization.yaml"
   cp "$repo_root/kubernetes/apps/automation/n8n/ks.yaml" \
     "$tree_root/kubernetes/apps/automation/n8n/ks.yaml"
+  cp "$repo_root/kubernetes/apps/automation-data/nocodb/ks.yaml" \
+    "$tree_root/kubernetes/apps/automation-data/nocodb/ks.yaml"
   cp "$repo_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml" \
     "$tree_root/kubernetes/apps/automation/n8n-postgresql/ks.yaml"
   cp "$repo_root/kubernetes/apps/networking/public-webhook-gateway/ks.yaml" \
@@ -277,6 +280,14 @@ case_canonical_alias_duplicate_selection() {
     'Complete n8n platform activation must select exactly one resource path resolving to n8n.yaml; found 2.'
 }
 
+case_staged_nocodb_alias_selection() {
+  reset_tree
+  yq -i '.resources += ["../app/nocodb.yaml"]' \
+    "$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+  expect_full_fail 'staged NocoDB rule selected through a parent alias' \
+    'staged nocodb.yaml must not be wired into the monitoring alerts Kustomization.'
+}
+
 case "${1:-all}" in
   production) case_production ;;
   all-suspended) case_all_suspended ;;
@@ -291,6 +302,7 @@ case "${1:-all}" in
   complete-alias-selection) case_complete_alias_selection ;;
   duplicate-canonical-selection) case_duplicate_canonical_selection ;;
   canonical-alias-duplicate-selection) case_canonical_alias_duplicate_selection ;;
+  staged-nocodb-alias-selection) case_staged_nocodb_alias_selection ;;
   all)
     case_production
     case_all_suspended
@@ -305,6 +317,7 @@ case "${1:-all}" in
     case_complete_alias_selection
     case_duplicate_canonical_selection
     case_canonical_alias_duplicate_selection
+    case_staged_nocodb_alias_selection
     ;;
   *) echo "Unknown monitoring-alerts-validator test case: $1" >&2; exit 2 ;;
 esac

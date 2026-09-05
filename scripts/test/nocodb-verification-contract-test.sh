@@ -14,7 +14,7 @@ verifier="$repo_root/scripts/verify/nocodb.sh"
 for forbidden in \
   ' get secret ' ' secrets ' ' exec ' ' port-forward ' \
   'kubectl apply' 'kubectl delete' 'kubectl patch' 'kubectl create' \
-  'nocodb.lab.supermorphic.com/api/' 'curl.*nocodb'; do
+  'curl.*nocodb'; do
   ! rg -i -q -- "$forbidden" "$verifier" || {
     echo "NocoDB verification contract test failed: forbidden verifier observation: $forbidden" >&2
     exit 1
@@ -49,6 +49,12 @@ cat >"$fixture/bin/kubectl" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >>"$OBSERVATIONS"
 case " $* " in
+  *' get kustomization nocodb '*)
+    if [[ "${FIXTURE_LIVE_NOCODB:-active}" == suspended ]]; then
+      printf '%s\n' '{"metadata":{"generation":1},"spec":{"suspend":true},"status":{"observedGeneration":1}}'
+    else
+      printf '%s\n' '{"metadata":{"generation":1},"spec":{"suspend":false},"status":{"observedGeneration":1,"conditions":[{"type":"Ready","status":"True","observedGeneration":1}]}}'
+    fi ;;
   *' get kustomization '*|*' get helmrelease '*)
     printf '%s\n' '{"metadata":{"generation":1},"spec":{"suspend":false},"status":{"observedGeneration":1,"conditions":[{"type":"Ready","status":"True","observedGeneration":1}]}}' ;;
   *' get deployments '*)
@@ -57,7 +63,11 @@ case " $* " in
     else
       printf '%s\n' '{"items":[{"metadata":{"name":"nocodb"}}]}'
     fi ;;
+  *' get deployment nocodb --ignore-not-found --output name '*)
+    [[ "${FIXTURE_CASE:-healthy}" != staged-workload-present ]] || printf '%s\n' 'deployment.apps/nocodb'
+    ;;
   *' get deployment nocodb '*)
+    if [[ "${FIXTURE_CASE:-healthy}" == workload-absent ]]; then exit 1; fi
     printf '%s\n' '{"metadata":{"generation":1},"spec":{"replicas":1},"status":{"observedGeneration":1,"replicas":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1,"unavailableReplicas":0}}' ;;
   *' get pods '*)
     if [[ "${FIXTURE_CASE:-healthy}" == redis-pod && " $* " == *' get pods --output json '* ]]; then
@@ -215,13 +225,89 @@ esac
 EOF
 chmod +x "$fixture/bin/kubectl" "$fixture/bin/curl"
 
-PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
-  "$verifier" "$fixture/kubeconfig" >/dev/null
+staged_source="$repo_root"
+durable_source="$fixture/durable-source"
+mkdir -p "$durable_source/scripts/lib" \
+  "$durable_source/kubernetes/apps/automation-data/nocodb" \
+  "$durable_source/kubernetes/apps/monitoring/gatus/app" \
+  "$durable_source/kubernetes/apps/monitoring/alerts/app" \
+  "$durable_source/tests"
+cp "$repo_root/scripts/lib/common.sh" "$repo_root/scripts/lib/flux-alerts.sh" \
+  "$repo_root/scripts/lib/network.sh" "$durable_source/scripts/lib/"
+cp "$repo_root/kubernetes/apps/automation-data/nocodb/ks.yaml" \
+  "$durable_source/kubernetes/apps/automation-data/nocodb/ks.yaml"
+cp "$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml" \
+  "$repo_root/kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml" \
+  "$durable_source/kubernetes/apps/monitoring/gatus/app/"
+cp "$repo_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml" \
+  "$repo_root/kubernetes/apps/monitoring/alerts/app/nocodb.yaml" \
+  "$durable_source/kubernetes/apps/monitoring/alerts/app/"
+cp "$repo_root/tests/catalog.yaml" "$durable_source/tests/catalog.yaml"
+yq -i '.spec.suspend = false' \
+  "$durable_source/kubernetes/apps/automation-data/nocodb/ks.yaml"
+# shellcheck disable=SC2016 # yq evaluates its own variables.
+yq ea '. as $item ireduce ({}; . *+ $item)' \
+  "$durable_source/kubernetes/apps/monitoring/gatus/app/values.yaml" \
+  "$durable_source/kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml" \
+  >"$fixture/durable-values.yaml"
+mv "$fixture/durable-values.yaml" \
+  "$durable_source/kubernetes/apps/monitoring/gatus/app/values.yaml"
+yq -i '.resources += ["./nocodb.yaml"]' \
+  "$durable_source/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+yq -i '.campaigns.verification.members += ["verification.nocodb"] |
+  .campaigns."scoped-verification".members += ["verification.nocodb"]' \
+  "$durable_source/tests/catalog.yaml"
+
+run_verifier() { # <source-root> <live-state> <declared-phase-or-empty> <fixture-case>
+  local source_root="$1" live_state="$2" declared_phase="$3" fixture_case="$4"
+  (
+    cd "$source_root"
+    PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
+      FIXTURE_LIVE_NOCODB="$live_state" FIXTURE_CASE="$fixture_case" \
+      NOCODB_VERIFY_PHASE="$declared_phase" \
+      "$verifier" "$fixture/kubeconfig"
+  )
+}
+
+: >"$fixture/observations.log"
+staged_output="$(run_verifier "$staged_source" suspended '' healthy)"
+[[ "$staged_output" == *'phase=staged-absent'* ]] || {
+  echo 'NocoDB verification contract test failed: staged absence was not reported.' >&2
+  exit 1
+}
+! rg -q 'get prometheusrule|gatus_results_endpoint_success|/api/v1/rules' \
+  "$fixture/observations.log" || {
+  echo 'NocoDB verification contract test failed: staged absence required enrolled monitoring.' >&2
+  exit 1
+}
+
+: >"$fixture/observations.log"
+attended_output="$(run_verifier "$staged_source" active attended healthy)"
+[[ "$attended_output" == *'phase=temporary-attended'* ]] || {
+  echo 'NocoDB verification contract test failed: attended activation was not reported.' >&2
+  exit 1
+}
+! rg -q 'get prometheusrule|gatus_results_endpoint_success|/api/v1/rules' \
+  "$fixture/observations.log" || {
+  echo 'NocoDB verification contract test failed: attended activation required enrolled monitoring.' >&2
+  exit 1
+}
+
+: >"$fixture/observations.log"
+durable_output="$(run_verifier "$durable_source" active '' healthy)"
+[[ "$durable_output" == *'phase=durable-active'* ]] || {
+  echo 'NocoDB verification contract test failed: durable activation was not reported.' >&2
+  exit 1
+}
+if ! rg -q 'get prometheusrule' "$fixture/observations.log" ||
+  ! rg -q 'gatus_results_endpoint_success' "$fixture/observations.log"; then
+  echo 'NocoDB verification contract test failed: durable activation omitted enrolled monitoring.' >&2
+  exit 1
+fi
 
 expect_fixture_failure() {
-  local fixture_case="$1" fixture_output
-  if fixture_output="$(PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
-    FIXTURE_CASE="$fixture_case" "$verifier" "$fixture/kubeconfig" 2>&1)"; then
+  local source_root="$1" live_state="$2" declared_phase="$3" fixture_case="$4" fixture_output
+  if fixture_output="$(run_verifier "$source_root" "$live_state" "$declared_phase" "$fixture_case" 2>&1)"; then
     echo "NocoDB verification contract test failed: $fixture_case was accepted." >&2
     exit 1
   fi
@@ -232,31 +318,26 @@ expect_fixture_failure() {
   esac
 }
 
-expect_fixture_failure worker
-expect_fixture_failure redis-pod
-expect_fixture_failure redis-service
-expect_fixture_failure policy-broadened
-expect_fixture_failure policy-extra-auth
-expect_fixture_failure policy-extra-cidr
-expect_fixture_failure policy-extra-to-cidr
-expect_fixture_failure policy-extra-entity
-expect_fixture_failure policy-extra-fqdn
-expect_fixture_failure policy-extra-expression
-expect_fixture_failure policy-extra-l7
-expect_fixture_failure policy-extra-rule
-expect_fixture_failure longhorn-third-failed
-expect_fixture_failure longhorn-attached-wo
-expect_fixture_failure longhorn-missing-config
-expect_fixture_failure longhorn-detached-bad
-expect_fixture_failure longhorn-detached-rw
-expect_fixture_failure longhorn-detached-wo
-expect_fixture_failure longhorn-detached-err
-expect_fixture_failure longhorn-detached-missing-config
-expect_fixture_failure rules-unhealthy
-expect_fixture_failure gatus-down
+expect_fixture_failure "$staged_source" active '' undeclared-attended
+expect_fixture_failure "$staged_source" suspended attended attended-not-active
+expect_fixture_failure "$staged_source" suspended '' staged-workload-present
+expect_fixture_failure "$staged_source" active attended workload-absent
+expect_fixture_failure "$durable_source" suspended '' durable-not-active
+expect_fixture_failure "$durable_source" active '' workload-absent
+expect_fixture_failure "$staged_source" suspended unsupported unknown-phase
 
-PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
-  FIXTURE_CASE=longhorn-detached-healthy "$verifier" "$fixture/kubeconfig" >/dev/null
+for fixture_case in worker redis-pod redis-service policy-broadened policy-extra-auth \
+  policy-extra-cidr policy-extra-to-cidr policy-extra-entity policy-extra-fqdn \
+  policy-extra-expression policy-extra-l7 policy-extra-rule longhorn-third-failed \
+  longhorn-attached-wo longhorn-missing-config longhorn-detached-bad \
+  longhorn-detached-rw longhorn-detached-wo longhorn-detached-err \
+  longhorn-detached-missing-config; do
+  expect_fixture_failure "$staged_source" active attended "$fixture_case"
+done
+expect_fixture_failure "$durable_source" active '' rules-unhealthy
+expect_fixture_failure "$durable_source" active '' gatus-down
+
+run_verifier "$staged_source" active attended longhorn-detached-healthy >/dev/null
 
 if PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
   "$fixture/bin/curl" --request POST 'https://prometheus.lab.supermorphic.com/api/v1/query' >/dev/null 2>&1; then

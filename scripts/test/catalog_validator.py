@@ -88,6 +88,16 @@ SAFE_RUNNER = re.compile(
 VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
 
 
+def campaign_exclusions() -> set[str]:
+    exclusions = set(STANDALONE_SUITES)
+    nocodb_source = yaml.safe_load(
+        (REPO_ROOT / "kubernetes/apps/automation-data/nocodb/ks.yaml").read_text(encoding="utf-8")
+    )
+    if nocodb_source.get("spec", {}).get("suspend") is True:
+        exclusions.add("verification.nocodb")
+    return exclusions
+
+
 def scoped_read_rules(catalog: dict[str, Any]) -> dict[str, set[str]]:
     access = catalog.get("campaigns", {}).get("scoped-verification", {}).get("access", {})
     raw_core = access.get("required_core_read_resources")
@@ -1408,7 +1418,7 @@ class CatalogValidator:
             entry["metadata"]["id"]
             for entry in self.suites
             if entry["metadata"]["tier"] == tier
-            and entry["metadata"]["id"] not in STANDALONE_SUITES
+            and entry["metadata"]["id"] not in campaign_exclusions()
             and not (
                 campaign == "smoke"
                 and entry["metadata"]["id"] == "chainsaw.smoke.cluster.diagnostics-self-test"
@@ -1434,6 +1444,7 @@ class CatalogValidator:
             for entry in self.suites
             if entry["metadata"]["tier"] == "verification"
             and entry["access"]["tier"] in {"observer", "diagnostic"}
+            and entry["metadata"]["id"] not in campaign_exclusions()
         )
         actual_scoped = sorted(self.campaigns["scoped-verification"]["members"])
         if actual_scoped != expected_scoped:

@@ -38,6 +38,12 @@ assert_production_activated_render() {
     echo 'Activated Gatus must render exactly one n8n readiness endpoint.' >&2
     exit 1
   }
+  [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
+    .data."config.yaml" | from_yaml | .endpoints[]? |
+    select(.name == "nocodb")] | length' "$render")" == '0' ]] || {
+    echo 'Staged NocoDB must be absent from the active Gatus render.' >&2
+    exit 1
+  }
 }
 
 tree_root="$test_dir/tree"

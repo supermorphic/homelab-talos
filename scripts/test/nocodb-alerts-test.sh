@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 values="$repo_root/kubernetes/apps/monitoring/gatus/app/values.yaml"
+activation_values="$repo_root/kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml"
 rule="$repo_root/kubernetes/apps/monitoring/alerts/app/nocodb.yaml"
 kustomization="$repo_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
 
@@ -11,10 +12,13 @@ fail() {
   exit 1
 }
 
-[[ -f "$values" ]] || fail 'NocoDB Gatus endpoint is missing.'
+[[ -f "$values" ]] || fail 'Active Gatus values are missing.'
+[[ -f "$activation_values" ]] || fail 'Staged NocoDB Gatus activation definition is missing.'
 [[ -f "$rule" ]] || fail 'NocoDB PrometheusRule is missing.'
 
-endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$values")"
+[[ "$(yq -r '[.config.endpoints[] | select(.name == "nocodb")] | length' "$values")" == '0' ]] ||
+  fail 'Staged NocoDB must not be enrolled in active Gatus values.'
+endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$activation_values")"
 [[ "$(yq -r '.group' <<<"$endpoint")" == 'Platform' ]] || fail 'NocoDB Gatus group must be Platform.'
 [[ "$(yq -r '.url' <<<"$endpoint")" == 'https://nocodb.lab.supermorphic.com/api/v1/health' ]] || fail 'NocoDB Gatus URL is incorrect.'
 [[ "$(yq -r '.interval' <<<"$endpoint")" == '1m' ]] || fail 'NocoDB Gatus interval must be 1m.'
@@ -43,7 +47,7 @@ for required_expression in \
   rg -Fq -- "$required_expression" "$rule" || fail "Missing required PromQL contract: $required_expression"
 done
 
-rg -Fxq '  - ./nocodb.yaml' "$kustomization" || fail 'NocoDB PrometheusRule is not selected.'
+! rg -Fxq '  - ./nocodb.yaml' "$kustomization" || fail 'Staged NocoDB PrometheusRule must not be selected.'
 ! rg -q 'ServiceMonitor|alloy|loki' "$repo_root/kubernetes/apps/automation-data/nocodb" ||
   fail 'NocoDB must not add a ServiceMonitor or a second log agent.'
 

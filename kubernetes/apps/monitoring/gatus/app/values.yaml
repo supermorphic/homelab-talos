@@ -100,14 +100,6 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
-    # NocoDB operator UI (black-box through the internal gateway). The health endpoint
-    # is unauthenticated and does not perform a data operation.
-    - name: nocodb
-      group: Platform
-      url: "https://nocodb.lab.supermorphic.com/api/v1/health"
-      interval: 1m
-      conditions:
-        - "[STATUS] == 200"
     # ntfy notification service. Probed in-cluster because require-login is on; the
     # unauthenticated /v1/health endpoint proves the server and its storage are up.
     - name: ntfy

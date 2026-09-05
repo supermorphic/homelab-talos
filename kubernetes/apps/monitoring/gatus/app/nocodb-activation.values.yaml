@@ -1,0 +1,10 @@
+# Retained activation source for the staged NocoDB health check. Copy this exact endpoint
+# into values.yaml only with the reviewed durable NocoDB activation change.
+config:
+  endpoints:
+    - name: nocodb
+      group: Platform
+      url: "https://nocodb.lab.supermorphic.com/api/v1/health"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"

@@ -24,6 +24,17 @@ test_src="tests/prometheus/$domain-alerts_test.yaml"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-alerts-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
+resolved_alert_resource_count() { # <kustomization> <rule-file>
+  local owner="$1" rule="$2" owner_directory expected resource resolved count=0
+  owner_directory="${owner%/*}"
+  expected="$(n8n_normalise_relative_path "$rule")"
+  while IFS= read -r resource; do
+    resolved="$(n8n_normalise_relative_path "$owner_directory/$resource")"
+    [[ "$resolved" != "$expected" ]] || count=$((count + 1))
+  done < <(yq -r '.resources[]?' "$owner")
+  printf '%s\n' "$count"
+}
+
 for f in "$ks" "$app_kustomization" "$test_src"; do
   [[ -f "$f" ]] || { echo "Missing $domain alerts source: $f" >&2; exit 1; }
 done
@@ -39,8 +50,8 @@ rg -qx "  - ./alerts/ks.yaml" "kubernetes/apps/$domain/kustomization.yaml" || {
 [[ "$(yq -r '.spec.path' "$ks")" == "./kubernetes/apps/$domain/alerts/app" ]]
 
 # Every rule file in the app directory must be a PrometheusRule in the monitoring
-# namespace. The monitoring-owned n8n rule is the one approved staged exception: it is
-# tested while unselected before activation, and its activation validator controls wiring.
+# namespace. Monitoring-owned n8n and NocoDB rules have explicit staged exceptions: each
+# remains tested while unselected, and its activation intent controls wiring.
 mapfile -t rule_files < <(rg --files "$base/app" | rg '\.yaml$' | rg -v '/kustomization\.yaml$' | sort)
 [[ "${#rule_files[@]}" -gt 0 ]] || { echo "No rule files under $base/app." >&2; exit 1; }
 extracted=()
@@ -56,6 +67,13 @@ for rule in "${rule_files[@]}"; do
   selected_count="$(n8n_alert_resource_count "$app_kustomization" "$(basename "$rule")")"
   if [[ "$domain" == 'monitoring' && "$(basename "$rule")" == 'n8n.yaml' ]]; then
     : # The activation validator resolves aliases and owns the staged n8n selection count.
+  elif [[ "$domain" == 'monitoring' && "$(basename "$rule")" == 'nocodb.yaml' && \
+    "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/nocodb/ks.yaml)" == 'true' ]]; then
+    selected_count="$(resolved_alert_resource_count "$app_kustomization" "$rule")"
+    [[ "$selected_count" == '0' ]] || {
+      echo 'Refusing: staged nocodb.yaml must not be wired into the monitoring alerts Kustomization.' >&2
+      exit 1
+    }
   elif [[ "$selected_count" != '1' ]]; then
     echo "Refusing: $(basename "$rule") is not wired into $app_kustomization." >&2
     exit 1

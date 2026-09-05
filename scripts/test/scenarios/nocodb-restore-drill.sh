@@ -60,6 +60,7 @@ app="$prefix-nocodb"
 app_service="$prefix-nocodb"
 request_job="$prefix-request"
 policy="$prefix-policy"
+backup_configmap=''
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 kl=(kubectl --kubeconfig "$kubeconfig" --namespace "$longhorn_namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
@@ -154,6 +155,41 @@ route_targets_service() {
   ' "$routes" >/dev/null
 }
 
+resolve_rendered_backup_configmap() { # <rendered-package-json>
+	jq -er '
+    [.[] | select(.kind == "CronJob" and
+      .metadata.name == "automation-data-postgresql-backup")] as $jobs |
+    (if ($jobs | length) != 1 then
+      error("expected one rendered backup CronJob")
+    else $jobs[0] end) as $job |
+    [$job.spec.jobTemplate.spec.template.spec.volumes[]? |
+      select(.name == "backup-script") | .configMap.name |
+      select(type == "string" and
+        test("^automation-data-postgresql-backup-[a-z0-9]+$"))] as $references |
+    (if ($references | length) != 1 then
+      error("expected one rendered backup-script volume reference")
+    else $references[0] end) as $name |
+    [.[] | select(.kind == "ConfigMap" and .metadata.name == $name and
+      (.data | type == "object") and
+      (.data | has("backup.sh") and has("update-backup-status.sql")))] as $sources |
+    if ($sources | length) == 1 then $name
+    else error("expected one rendered backup ConfigMap with both script keys") end
+  ' "$1"
+}
+
+resolve_deployed_backup_configmap() { # <deployed-cronjob-json>
+	jq -er '
+    select(.kind == "CronJob" and
+      .metadata.name == "automation-data-postgresql-backup") |
+    [.spec.jobTemplate.spec.template.spec.volumes[]? |
+      select(.name == "backup-script") | .configMap.name |
+      select(type == "string" and
+        test("^automation-data-postgresql-backup-[a-z0-9]+$"))] |
+    if length == 1 then .[0]
+    else error("expected one deployed backup-script volume reference") end
+  ' "$1"
+}
+
 database_manifests() {
 	# shellcheck disable=SC2016 # yq evaluates its own variables.
 	DATABASE="$database" DATABASE_SERVICE="$database_service" DATABASE_PVC="$database_pvc" \
@@ -235,7 +271,8 @@ printf 'source_registry_base64=%s\n' "$(printf '%s' "$source_registry" | base64 
 EOF
 	)"
 	JOB_NAME="$restore_job" JOB_COMMAND="$command" DATABASE_SERVICE="$database_service" \
-		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" yq --null-input --output-format yaml '
+		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
+		BACKUP_CONFIGMAP="$backup_configmap" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
@@ -267,7 +304,7 @@ EOF
             "volumes":[
               {"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},
               {"name":"post-recovery","emptyDir":{}},
-              {"name":"scripts","configMap":{"name":"automation-data-postgresql-backup","defaultMode":365}},
+              {"name":"scripts","configMap":{"name":strenv(BACKUP_CONFIGMAP),"defaultMode":365}},
               {"name":"tmp","emptyDir":{}}
             ]
           }
@@ -373,6 +410,49 @@ resource_absent "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" |
 	echo "Refusing to adopt existing Longhorn Volume $attachment_volume." >&2
 	exit 1
 }
+
+# Bind the restore Job to the exact generated script source selected by both the local
+# package and the current deployed backup CronJob. A stale ConfigMap with matching keys
+# is not an acceptable substitute.
+postgresql_package_yaml="$temp_dir/postgresql-package.yaml"
+postgresql_package_json="$temp_dir/postgresql-package.json"
+kustomize build kubernetes/apps/automation-data/postgresql/app >"$postgresql_package_yaml"
+# shellcheck disable=SC2016 # yq evaluates its own variables.
+yq ea -o=json -I=0 '. as $item ireduce ([]; . + [$item])' \
+	"$postgresql_package_yaml" >"$postgresql_package_json"
+rendered_backup_configmap="$(resolve_rendered_backup_configmap "$postgresql_package_json")" || {
+	echo 'The rendered PostgreSQL package has no unambiguous backup script ConfigMap.' >&2
+	exit 1
+}
+deployed_backup_cronjob="$temp_dir/deployed-backup-cronjob.json"
+"${kc[@]}" get cronjob automation-data-postgresql-backup --output json \
+	>"$deployed_backup_cronjob" || {
+	echo 'The deployed automation-data backup CronJob is absent.' >&2
+	exit 1
+}
+deployed_backup_configmap="$(resolve_deployed_backup_configmap "$deployed_backup_cronjob")" || {
+	echo 'The deployed automation-data backup CronJob has no unambiguous generated script reference.' >&2
+	exit 1
+}
+[[ "$deployed_backup_configmap" == "$rendered_backup_configmap" ]] || {
+	echo 'The deployed backup CronJob script reference differs from the rendered PostgreSQL package.' >&2
+	exit 1
+}
+deployed_backup_source="$temp_dir/deployed-backup-configmap.json"
+"${kc[@]}" get configmap "$deployed_backup_configmap" --output json \
+	>"$deployed_backup_source" || {
+	echo 'The exact backup ConfigMap selected by the deployed CronJob is absent.' >&2
+	exit 1
+}
+CONFIGMAP_NAME="$deployed_backup_configmap" jq -e '
+  .kind == "ConfigMap" and .metadata.name == env.CONFIGMAP_NAME and
+  (.data | type == "object") and
+  (.data | has("backup.sh") and has("update-backup-status.sql"))
+' "$deployed_backup_source" >/dev/null || {
+	echo 'The deployed backup ConfigMap is missing a required script key.' >&2
+	exit 1
+}
+backup_configmap="$deployed_backup_configmap"
 
 production_pvc="$temp_dir/production-pvc.json"
 production_pv="$temp_dir/production-pv.json"

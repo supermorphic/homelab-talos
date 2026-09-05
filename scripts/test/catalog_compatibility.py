@@ -798,6 +798,12 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         assert "verification.logging" in canonical["campaigns"][campaign_name]["members"], (
             f"verification.logging is absent from {campaign_name}"
         )
+        assert "verification.nocodb" not in canonical["campaigns"][campaign_name]["members"], (
+            f"staged verification.nocodb is enrolled in {campaign_name}"
+        )
+    assert suite(canonical, "verification.nocodb")["runner"]["implementation"] == (
+        "scripts/verify/nocodb.sh"
+    ), "offline NocoDB verification definition is absent"
     analyze = catalog_validator.forbidden_kubernetes_operations
     forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',

@@ -15,6 +15,18 @@ fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-restore-scenario-test.XXXXX
 trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p "$fixture/bin"
 touch "$fixture/kubeconfig"
+postgresql_render="$fixture/postgresql.yaml"
+kustomize build kubernetes/apps/automation-data/postgresql/app >"$postgresql_render"
+backup_configmap="$(yq ea -r '
+  select(.kind == "CronJob" and .metadata.name == "automation-data-postgresql-backup") |
+  [.spec.jobTemplate.spec.template.spec.volumes[] |
+    select(.name == "backup-script") | .configMap.name] |
+  select(length == 1) | .[0]
+' "$postgresql_render")"
+[[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || {
+	echo 'NocoDB restore scenario test could not resolve the rendered backup ConfigMap.' >&2
+	exit 1
+}
 
 cat >"$fixture/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
@@ -62,6 +74,47 @@ if [[ "$args" == *' get httproutes.gateway.networking.k8s.io '* ]]; then
 		exit 0
 	fi
 	printf '%s\n' '{"items":[]}'
+	exit 0
+fi
+
+if [[ "$args" == *' get cronjob automation-data-postgresql-backup '* ]]; then
+	case "${NOCODB_RESTORE_VOLUME_CASE:-}" in
+		missing-backup-script-volume)
+			jq -n '{kind:"CronJob",metadata:{name:"automation-data-postgresql-backup"},spec:{jobTemplate:{spec:{template:{spec:{volumes:[{name:"tmp",emptyDir:{}}]}}}}}}'
+			;;
+		ambiguous-backup-script-volume)
+			jq -n --arg name "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '{kind:"CronJob",metadata:{name:"automation-data-postgresql-backup"},spec:{jobTemplate:{spec:{template:{spec:{volumes:[
+				{name:"backup-script",configMap:{name:$name}},
+				{name:"backup-script",configMap:{name:$name}}
+			]}}}}}}'
+			;;
+		stale-backup-configmap-reference)
+			jq -n '{kind:"CronJob",metadata:{name:"automation-data-postgresql-backup"},spec:{jobTemplate:{spec:{template:{spec:{volumes:[
+				{name:"backup-script",configMap:{name:"automation-data-postgresql-backup-stalehash"}}
+			]}}}}}}'
+			;;
+		*)
+			jq -n --arg name "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '{kind:"CronJob",metadata:{name:"automation-data-postgresql-backup"},spec:{jobTemplate:{spec:{template:{spec:{volumes:[
+				{name:"backup-script",configMap:{name:$name}}
+			]}}}}}}'
+			;;
+	esac
+	exit 0
+fi
+
+if [[ "$args" == *' get configmap '* && "$args" == *' --output json '* ]]; then
+	case "${NOCODB_RESTORE_VOLUME_CASE:-}" in
+		missing-backup-configmap) exit 1 ;;
+		missing-backup-script-key)
+			jq -n --arg name "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '{kind:"ConfigMap",metadata:{name:$name},data:{"update-backup-status.sql":"sql"}}'
+			;;
+		missing-backup-status-key)
+			jq -n --arg name "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '{kind:"ConfigMap",metadata:{name:$name},data:{"backup.sh":"script"}}'
+			;;
+		*)
+			jq -n --arg name "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '{kind:"ConfigMap",metadata:{name:$name},data:{"backup.sh":"script","update-backup-status.sql":"sql"}}'
+			;;
+	esac
 	exit 0
 fi
 
@@ -208,9 +261,13 @@ if [[ "$args" == *' create --filename '* ]]; then
 			printf '%s\n' create-preflight >>"$events"
 		else
 			printf '%s\n' create-restore-job >>"$events"
-			yq -o=json '.' "$manifest" | jq -e '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "backups") |
-          .readOnly == true and .subPath == "automation-data-20260904T023000Z" and
-          .mountPath == "/backups/automation-data-20260904T023000Z"' >/dev/null
+			yq -o=json '.' "$manifest" | jq -e --arg configmap "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '
+          (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "backups") |
+            .readOnly == true and .subPath == "automation-data-20260904T023000Z" and
+            .mountPath == "/backups/automation-data-20260904T023000Z") and
+          ([.spec.template.spec.volumes[] | select(.name == "scripts") |
+            select(.configMap.name == $configmap)] | length) == 1
+        ' >/dev/null
 		fi
 	fi
 	while IFS=$'\t' read -r kind name; do
@@ -283,6 +340,7 @@ run_case() { # <case>
 		TEST_CAMPAIGN_LEASE_HOLDER="$run_id" NOCODB_RESTORE_CONFIRM="$confirmation" \
 		NOCODB_RESTORE_FIXTURE_STATE="$state" NOCODB_RESTORE_VOLUME_CASE="$case_name" \
 		NOCODB_RESTORE_RUN_HASH="$run_hash" \
+		NOCODB_RESTORE_BACKUP_CONFIGMAP="$backup_configmap" \
 		NOCODB_RESTORE_SOURCE_REGISTRY_BASE64="$source_registry_base64" \
 		"$scenario" "$fixture/kubeconfig" >"$state/stdout.log" 2>"$state/stderr.log"
 	status="$?"
@@ -340,6 +398,14 @@ for rejected_case in missing-pvc mismatched-pv unavailable-target missing-backup
 	IFS=$'\t' read -r case_name status state < <(run_case "$rejected_case")
 	[[ "$status" -ne 0 ]] || record_failure "$case_name preflight was accepted"
 	! rg -q '^(create-|delete )' "$state/events.log" || record_failure "$case_name preflight allowed a mutation"
+done
+
+for rejected_case in missing-backup-script-volume ambiguous-backup-script-volume \
+	stale-backup-configmap-reference missing-backup-configmap missing-backup-script-key \
+	missing-backup-status-key; do
+	IFS=$'\t' read -r case_name status state < <(run_case "$rejected_case")
+	[[ "$status" -ne 0 ]] || record_failure "$case_name backup script reference was accepted"
+	! rg -q '^(create-|delete )' "$state/events.log" || record_failure "$case_name allowed a mutation"
 done
 
 for rejected_case in invalid-registry request-failure; do

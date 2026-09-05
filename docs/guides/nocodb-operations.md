@@ -269,17 +269,32 @@ the broad NocoDB API token stored in **NocoDB Operator API**.
 
 ### 6. Verify observed health
 
-Run the read-only verifier:
+While Git still records `spec.suspend: true`, the default verifier checks the
+never-bootstrapped staged state:
 
 ```bash
 mise exec -- just kube nocodb-verify
 ```
 
-It observes Flux and Helm readiness, the one Deployment, Service endpoints, private
-route, Cilium policy, 10 GiB attachment claim and Longhorn volume, Gatus, Prometheus
-rules, and automation-data backup freshness. It does not read Secrets, authenticate to
-NocoDB, inspect metadata, invoke source credentials, or perform a positive authorization
-probe.
+After an attended workflow deliberately resumes that staged Kustomization, declare the
+temporary phase explicitly:
+
+```bash
+NOCODB_VERIFY_PHASE=attended mise exec -- just kube nocodb-verify
+```
+
+This form requires the live Kustomization and direct Deployment, Helm, Service, route,
+policy, storage, and backup observations to be healthy. It does not require the Gatus
+endpoint, PrometheusRule, or recurring verification enrollment that remain inactive
+until durable activation. The default staged check rejects an active Deployment. It
+permits the retained attachment PVC because retained storage is not an active workload.
+
+After Git records `spec.suspend: false`, the plain command automatically selects the
+durable-active phase. It then also requires the exact Gatus endpoint, Prometheus rules,
+and recurring verification enrollment. An absent workload in either attended or durable
+active intent is a failure; the verifier does not skip it. All phases are read-only. The
+verifier does not read Secrets, authenticate to NocoDB, inspect metadata, invoke source
+credentials, or perform a positive authorization probe.
 
 ### 7. Run attended access acceptance
 
@@ -374,7 +389,9 @@ source parity. Until that change merges, the source of truth remains suspended.
 
 For normal work:
 
-1. Run `mise exec -- just kube nocodb-verify` before an attended change.
+1. Run `mise exec -- just kube nocodb-verify` before an attended change after durable
+   activation. During staged attended activation, use the explicit
+   `NOCODB_VERIFY_PHASE=attended` form above.
 2. Use `nocodb-source-sync` to add or reconcile one domain.
 3. Use a reviewed domain migration between the first and second sync when controlled
    operator editing is required.
