@@ -665,10 +665,12 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
     for group, execution in harness_groups.items():
         suite_id = f"validation.test-harness-{group}"
         assert canonical["executions"][execution].count(suite_id) == 1
-        assert sum(
-            suite_id in canonical["executions"][candidate]
-            for candidate in CI_GROUP_EXECUTIONS
-        ) == 1
+        assert (
+            sum(
+                suite_id in canonical["executions"][candidate] for candidate in CI_GROUP_EXECUTIONS
+            )
+            == 1
+        )
         record = suite(canonical, suite_id)
         assert record["runner"]["command"] == f"mise exec -- just test validate {group}"
         assert record["runner"]["implementation"] == "scripts/test/validate-chainsaw.sh"
@@ -694,9 +696,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         root,
         canonical,
         "unknown-ci-group-member",
-        lambda data: data["executions"]["ci-core"].__setitem__(
-            0, "validation.unknown"
-        ),
+        lambda data: data["executions"]["ci-core"].__setitem__(0, "validation.unknown"),
         "CI group executions are not the exact full CI partition.\n",
     )
     expect_rejection(

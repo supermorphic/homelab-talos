@@ -848,11 +848,7 @@ def validate_ci_partition(catalog: dict[str, Any]) -> None:
         fail("Test catalog execution names must be ci plus the four CI group executions.\n")
 
     full = executions["ci"]
-    grouped = [
-        suite_id
-        for execution in CI_GROUP_EXECUTIONS
-        for suite_id in executions[execution]
-    ]
+    grouped = [suite_id for execution in CI_GROUP_EXECUTIONS for suite_id in executions[execution]]
     if duplicates(grouped):
         fail("CI group executions contain duplicate suite IDs.\n")
     if set(grouped) != set(full) or len(grouped) != len(full):
@@ -874,17 +870,12 @@ def validate_ci_partition(catalog: dict[str, Any]) -> None:
         if suite_id not in suites_by_id:
             fail(f"CI harness suite {suite_id} is missing from the catalog.\n")
         suite = next(
-            entry
-            for entry in catalog["suites"]
-            if entry.get("metadata", {}).get("id") == suite_id
+            entry for entry in catalog["suites"] if entry.get("metadata", {}).get("id") == suite_id
         )
         command = suite.get("runner", {}).get("command")
         expected_command = f"mise exec -- just test validate {group}"
         if command != expected_command:
-            fail(
-                f"CI harness suite {suite_id} must use command "
-                f"'{expected_command}'.\n"
-            )
+            fail(f"CI harness suite {suite_id} must use command '{expected_command}'.\n")
 
 
 def exact_diff(description: str, expected: list[str], actual: list[str]) -> str:
