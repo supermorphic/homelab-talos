@@ -147,13 +147,31 @@ and [Deployment strategy](https://kubernetes.io/docs/concepts/workloads/controll
 documentation. Updates that replace Grafana's pod incur downtime.
 
 Cluster-independent validation checks that the pinned chart renders exactly one
-Grafana Deployment with `Recreate` and no `rollingUpdate` settings. Chart versions,
+Grafana Deployment with `Recreate` and an explicit `rollingUpdate: null`. Chart versions,
 drift detection, and the dedicated exporter remain unchanged. Pre-change live
 `monitoring-verify` passed, including all five Flux resource kinds and both alert rules;
 it did not send a notification or prove external ntfy delivery.
 
-Post-merge acceptance remains pending: verify a new successful Helm release revision,
-the live Grafana Deployment strategy and readiness, and `monitoring-verify`. Do not
-consolidate the exporters on the strength of the offline render alone. If the upgrade
-fails, retain the dedicated exporter and diagnose the new conditions, events, and
-bounded controller logs before considering another change.
+Post-merge verification of [PR #367](https://github.com/supermorphic/homelab-talos/pull/367)
+found an explicit server-side-apply failure on the Grafana Deployment: Kubernetes
+rejected `spec.strategy.rollingUpdate` while the desired type was `Recreate`. Helm
+automatically rolled back; Grafana remained ready with its prior `RollingUpdate`
+strategy. `monitoring-verify` failed because the monitoring Kustomization was not Ready.
+This is direct evidence of the September failure, not proof of the July failure's cause.
+
+The first render omitted `rollingUpdate`. That was insufficient: the live object had
+API-defaulted rolling-update settings, while the controller's managed fields owned
+only `strategy.type`. The earlier review considered client-side strategic merging;
+the observed request instead used server-side apply. The corrected chart values render
+an explicit `rollingUpdate: null` to clear the field, following Kubernetes' guidance on
+[clearing defaulted fields](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/#default-field-values).
+The regression check distinguishes explicit null from an absent field. It proves the
+rendered deletion instruction, not API-server acceptance; no local API server was
+available for a full offline transition test.
+
+Acceptance of the correction remains pending: verify a new successful Helm release
+revision, the live Grafana Deployment strategy and readiness, and `monitoring-verify`.
+Keep the dedicated exporter until that succeeds and a separate migration proves parity.
+If the corrected upgrade fails, diagnose current conditions, events, and bounded
+controller logs before considering another change. Do not infer success from the
+render alone or bypass Git with a manual live patch.
