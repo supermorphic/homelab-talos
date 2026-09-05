@@ -341,9 +341,11 @@ run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 
-run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup]
+run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm]
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
   local oversize_event="${4:-}" lose_lease_on_cleanup="${5:-false}"
+  local omit_binding_confirm="${6:-false}"
+  local binding_confirm='bound:issue334_acceptance:credential-migrator'
   local result_root="$fixture/run-$RANDOM-$RANDOM"
   mkdir -p "$result_root/logs" "$result_root/diagnostics"
   run_dir="$result_root/$run_id"
@@ -352,6 +354,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
   }
   : >"$fixture/events.log"
   set +e
+  [[ "$omit_binding_confirm" != true ]] || binding_confirm=''
   if [[ "$confirmation" == '-' ]]; then
     OUT="$(PATH="$fixture/bin:$PATH" \
       NOCODB_ACCESS_EVENT_LOG="$fixture/events.log" NOCODB_ACCESS_RESPONSES="$fixture/responses" \
@@ -365,6 +368,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
       NOCODB_SOURCE_PROVISIONING_TOKEN="$token_source" \
       NOCODB_ACCEPTANCE_URL='https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain' \
       NOCODB_ACCEPTANCE_TOKEN="$token_acceptance" \
+      NOCODB_ACCEPTANCE_BINDING_CONFIRM="$binding_confirm" \
       env -u NOCODB_ACCESS_TEST_CONFIRM "$scenario" "$fixture/kubeconfig" 2>&1)"
   else
     OUT="$(PATH="$fixture/bin:$PATH" \
@@ -379,6 +383,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
       NOCODB_SOURCE_PROVISIONING_TOKEN="$token_source" \
       NOCODB_ACCEPTANCE_URL='https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain' \
       NOCODB_ACCEPTANCE_TOKEN="$token_acceptance" \
+      NOCODB_ACCEPTANCE_BINDING_CONFIRM="$binding_confirm" \
       NOCODB_ACCESS_TEST_CONFIRM="$confirmation" "$scenario" "$fixture/kubeconfig" 2>&1)"
   fi
   STATUS=$?
@@ -397,6 +402,21 @@ case_name='exact confirmation precedes cluster and webhook access'
 run_scenario -
 assert_status 1
 [[ ! -s "$fixture/events.log" ]] || fail 'missing confirmation reached kubectl or curl'
+assert_no_secret_output
+
+case_name='first run provisions the synthetic domain before explicit acceptance binding'
+run_scenario test:nocodb:access none 403 '' false true
+assert_status 1
+[[ "$(cat "$fixture/events.log")" == $'kubectl\nkubectl\nkubectl\nkubectl\nprovision' ]] ||
+  fail "first-run onboarding reached acceptance before binding: $(tr '\n' ' ' <"$fixture/events.log")"
+[[ "$OUT" == *'Generated migrator credential ID: credential-migrator'* ]] ||
+  fail 'first-run onboarding omitted the generated migrator credential ID'
+[[ "$OUT" == *"NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:credential-migrator'"* ]] ||
+  fail 'first-run onboarding omitted the explicit rerun confirmation'
+yq -e '.status == "failed"' "$run_dir/assertion.json" >/dev/null ||
+  fail 'binding stop was not recorded as an incomplete acceptance run'
+yq -e '.status == "not-required"' "$run_dir/cleanup.json" >/dev/null ||
+  fail 'binding stop attempted acceptance cleanup before any acceptance mutation'
 assert_no_secret_output
 
 case_name='successful acceptance follows the exact lifecycle and writes separate phase evidence'
@@ -538,7 +558,7 @@ assert_no_secret_output
 case_name='oversize response fails during bounded curl transfer and still cleans current-run rows'
 run_scenario test:nocodb:access none 403 provision
 assert_status 63
-yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'oversize response did not clean current-run rows'
+yq -e '.status == "not-required"' "$run_dir/cleanup.json" >/dev/null || fail 'oversize provisioning response incorrectly ran acceptance cleanup'
 assert_no_secret_output
 
 case_name='signup must return an explicit denial status'

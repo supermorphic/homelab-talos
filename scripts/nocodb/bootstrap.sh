@@ -19,6 +19,7 @@ nocodb_ks='kubernetes/apps/automation-data/nocodb/ks.yaml'
 nocodb_app='kubernetes/apps/automation-data/nocodb/app'
 secret="$nocodb_app/nocodb-credentials.sops.yaml"
 secret_resource='./nocodb-credentials.sops.yaml'
+platform_preflight='scripts/nocodb/platform-preflight.sh'
 n8n_api_key="${N8N_API_KEY:-}"
 bootstrap_complete=false
 resume_cleanup_intent=false
@@ -374,30 +375,127 @@ list_nocodb_tokens() { # <output>
 
 require_attended_evidence() {
   local evidence="$temp_dir/evidence-$request_number.json"
+  local candidates="$temp_dir/evidence-candidates-$request_number.tsv"
+  local suite evidence_sha evidence_end selected_provisioning_end='' selected_restore_end=''
+  local diff_status
+  local selected_end candidate_suite
+  local -a common_evidence_paths suite_evidence_paths
   curl_request 'Automation-data evidence query' GET "$reports_url" none '' "$evidence"
-  jq -e --arg revision "$captured_main_sha" '
-    def matching($suite): [.runs[] | select(
-      .suite == $suite and
-      .result == "passed" and
-      .authoritative == true and
-      .git_sha == $revision
-    )];
+  jq -e '
     def valid_end:
       (.end | type) == "string" and
       (.end | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
       ((try (.end | fromdateiso8601) catch null) != null);
     .schema_version == 1 and
     (.runs | type == "array") and
-    ((matching("test.automation-data-provisioning")) as $provisioning |
-      (matching("test.automation-data-restore-drill")) as $restore |
-      ($provisioning | length) >= 1 and
-      ($restore | length) >= 1 and
-      all($provisioning[]; valid_end) and
-      all($restore[]; valid_end) and
-      (($restore | map(.end | fromdateiso8601) | max) >
-        ($provisioning | map(.end | fromdateiso8601) | max)))
+    all(.runs[] | select(
+      .suite == "test.automation-data-provisioning" or
+      .suite == "test.automation-data-restore-drill"
+    ) | select(.result == "passed" and .authoritative == true);
+      (.git_sha | type) == "string" and
+      (.git_sha | test("^[0-9a-f]{40}$")) and valid_end)
   ' "$evidence" >/dev/null || {
-    echo 'Refusing NocoDB bootstrap: current provisioning and restore evidence is absent, invalid, or not ordered.' >&2
+    echo 'Refusing NocoDB bootstrap: provisioning and restore evidence contains invalid dependency metadata.' >&2
+    return 1
+  }
+  jq -r '
+    [.runs[] | select(
+      (.suite == "test.automation-data-provisioning" or
+        .suite == "test.automation-data-restore-drill") and
+      .result == "passed" and .authoritative == true
+    ) | [.suite, .git_sha, .end]] |
+    sort_by(.[0], .[2]) | reverse | .[] | @tsv
+  ' "$evidence" >"$candidates"
+
+  for suite in test.automation-data-provisioning test.automation-data-restore-drill; do
+    selected_end=''
+    while IFS=$'\t' read -r candidate_suite evidence_sha evidence_end; do
+      [[ "$candidate_suite" == "$suite" ]] || continue
+      git cat-file -e "${evidence_sha}^{commit}" 2>/dev/null || {
+        echo "Refusing NocoDB bootstrap: applicable provisioning and restore evidence cannot be established because Git object $evidence_sha is unavailable locally." >&2
+        return 1
+      }
+      common_evidence_paths=(
+        kubernetes/apps/automation-data
+        kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml
+        kubernetes/apps/automation/n8n/app/helmrelease.yaml
+        kubernetes/apps/automation/n8n/app/kustomization.yaml
+        kubernetes/apps/automation/n8n/ks.yaml
+        kubernetes/mod.just
+        scripts/lib
+        scripts/test/lib
+        scripts/test/run-catalog-suite.sh
+        scripts/validate/automation-data.sh
+        scripts/verify/automation-data.sh
+        tests/catalog.yaml
+      )
+      case "$suite" in
+        test.automation-data-provisioning)
+          suite_evidence_paths=(
+            scripts/test/scenarios/automation-data-provisioning.sh
+            kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json
+          )
+          ;;
+        test.automation-data-restore-drill)
+          suite_evidence_paths=(
+            scripts/test/scenarios/automation-data-restore-drill.sh
+            scripts/test/lib/automation-data-restore-command.sh
+            kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json
+          )
+          ;;
+        *)
+          echo 'Refusing NocoDB bootstrap: evidence dependency coverage is unknown.' >&2
+          return 1
+          ;;
+      esac
+      set +e
+      git diff --quiet "$evidence_sha" "$captured_main_sha" -- \
+        "${common_evidence_paths[@]}" "${suite_evidence_paths[@]}"
+      diff_status=$?
+      set -e
+      case "$diff_status" in
+        0)
+          selected_end="$evidence_end"
+          break
+          ;;
+        1) ;;
+        *)
+          echo 'Refusing NocoDB bootstrap: applicable provisioning and restore evidence has dependency coverage that could not be compared.' >&2
+          return 1
+          ;;
+      esac
+    done <"$candidates"
+    [[ -n "$selected_end" ]] || {
+      echo "Refusing NocoDB bootstrap: applicable provisioning and restore evidence is absent for $suite." >&2
+      return 1
+    }
+    if [[ "$suite" == test.automation-data-provisioning ]]; then
+      selected_provisioning_end="$selected_end"
+    else
+      selected_restore_end="$selected_end"
+    fi
+  done
+  [[ "$(jq -nr --arg provisioning "$selected_provisioning_end" \
+    --arg restore "$selected_restore_end" \
+    '($restore | fromdateiso8601) > ($provisioning | fromdateiso8601)')" == true ]] || {
+    echo 'Refusing NocoDB bootstrap: applicable provisioning and restore evidence is not ordered; restore must be newer.' >&2
+    return 1
+  }
+}
+
+require_platform_preflight() {
+  local output="$temp_dir/platform-preflight-$request_number.out"
+  request_number=$((request_number + 1))
+  [[ -x "$platform_preflight" ]] || {
+    echo 'Refusing NocoDB bootstrap: the fixed platform preflight helper is unavailable.' >&2
+    return 1
+  }
+  "$platform_preflight" "$kubeconfig" >"$output" || {
+    echo 'Refusing NocoDB bootstrap: the installed revision and post-upgrade backup preflight failed.' >&2
+    return 1
+  }
+  [[ "$(cat "$output")" == $'installed_revision=026-nocodb-v1\npost_upgrade_backup=true' ]] || {
+    echo 'Refusing NocoDB bootstrap: the platform preflight returned unexpected evidence.' >&2
     return 1
   }
 }
@@ -471,6 +569,7 @@ require_preconditions
   exit 1
 }
 require_preconditions
+require_platform_preflight
 
 require_deployed_revision
 echo 'Reconciling the automation-data parent before NocoDB activation.' >&2
@@ -484,6 +583,8 @@ kubectl --kubeconfig "$kubeconfig" --namespace flux-system wait \
 require_checkout_parity
 require_deployed_revision
 require_live_suspension
+just kube automation-data-verify
+require_platform_preflight
 
 echo 'Resuming and reconciling the staged NocoDB package.' >&2
 resume_with_ownership

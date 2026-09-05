@@ -165,7 +165,23 @@ NOCODB_BOOTSTRAP_CONFIRM='bootstrap:nocodb' mise exec -- just bootstrap nocodb
 ```
 
 Bootstrap verifies the issue-317 prerequisite evidence, encrypted Secret, deployed
-revision, and live suspension twice before mutation. It reconciles the parent package,
+revision, and live suspension twice before mutation. Provisioning and restore reports
+retain the Git SHA at which they ran. A report from an older SHA remains eligible only
+when its complete platform, backup, policy, workflow, restore, and shared lifecycle
+source dependencies equal deployed `origin/main`; missing Git objects, comparison
+errors, or changed relevant source stop bootstrap. Documentation-only changes do not
+invalidate evidence. The newest eligible restore must be newer than the newest eligible
+provisioning acceptance.
+
+After confirmation, bootstrap runs a fixed ephemeral PostgreSQL preflight Job with the
+existing backup Secret by reference. Its read-only transaction invokes
+`platform_operations.read_platform_revision()` and requires revision `026-nocodb-v1`
+plus a complete logical backup whose `completed_at` is at or after the revision's
+`installed_at`. It repeats this preflight after the parent reconcile and immediately
+before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
+values, and bootstrap removes only the Job with its exact run marker.
+
+Bootstrap then reconciles the parent package,
 uses an ownership marker to resume NocoDB, creates or reconciles only the `nocodb`
 database and `nocodb_metadata` login, waits for the one NocoDB pod, enables invite-only
 signup and restricted workspace creation, and creates the n8n Header Auth credential
@@ -299,16 +315,20 @@ credentials, or perform a positive authorization probe.
 ### 7. Run attended access acceptance
 
 Import
-`kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Bind
-`automation-data/issue334_acceptance/migrator` to all six Postgres nodes,
-**NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to
-**Acceptance Webhook**. Before publishing, generate and retain a separate token with at
+`kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Do not bind
+a PostgreSQL credential or publish this workflow yet: the first provisioning call must
+create `issue334_acceptance` and its generated migrator credential. Bind **NocoDB
+Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to
+**Acceptance Webhook**. Generate and retain a separate token with at
 least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Create the
 **NocoDB Acceptance Header** Header Auth credential with header name `Authorization`
 and value `Bearer <token>`. Keep the bare token outside Git as
-`NOCODB_ACCEPTANCE_TOKEN`. Keep execution persistence disabled and publish the workflow.
+`NOCODB_ACCEPTANCE_TOKEN`. Keep execution persistence disabled. Do not publish the
+workflow until the generated PostgreSQL credential is bound after the first pass.
 
-The access script requires these six exact environment variables:
+The access script requires these six exact endpoint and token environment variables.
+The completed pass also requires the non-secret binding confirmation printed by the
+first pass:
 
 | Variable | Required value |
 | --- | --- |
@@ -318,9 +338,19 @@ The access script requires these six exact environment variables:
 | `AUTOMATION_DATA_PROVISIONING_TOKEN` | Bare retained token for **Automation Data Provisioning Header** |
 | `NOCODB_SOURCE_PROVISIONING_TOKEN` | Bare retained token used by **NocoDB Source Provisioning Header** |
 | `NOCODB_ACCEPTANCE_TOKEN` | Bare retained token used by **NocoDB Acceptance Header** |
+| `NOCODB_ACCEPTANCE_BINDING_CONFIRM` | `bound:issue334_acceptance:<generated-migrator-credential-id>` |
 
 Each token must contain at least 32 URL-safe characters from the set above. Load all
-three tokens through an approved secret-input method, export the exact URLs, and run:
+three tokens through an approved secret-input method and export the exact URLs. Run the
+command first without `NOCODB_ACCEPTANCE_BINDING_CONFIRM`. It provisions
+`issue334_acceptance`, prints only the generated non-secret migrator credential ID, and
+stops before it calls the unpublished acceptance workflow. The catalog records this
+intentional first pass as incomplete.
+
+In n8n, bind that exact generated credential to all six Postgres nodes in **NocoDB
+Acceptance Domain**, check the other bindings, and publish the workflow. Do not add its
+credential ID to the Git template. Then rerun the same shell block with the exact
+confirmation printed by the first pass:
 
 ```bash
 (
@@ -336,16 +366,22 @@ three tokens through an approved secret-input method, export the exact URLs, and
   printf '\n' >&2
   export AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
   export NOCODB_ACCEPTANCE_TOKEN
+  export NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:<generated-migrator-credential-id>'
   NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
     mise exec -- just kube nocodb-access-test
   unset AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
   unset NOCODB_ACCEPTANCE_TOKEN
+  unset NOCODB_ACCEPTANCE_BINDING_CONFIRM
 )
 ```
 
-The command provisions the synthetic domain, runs the two-phase source adoption, proves
-read and controlled-edit behavior plus PostgreSQL denials, rotates only the operator
-source login, and establishes or verifies a persistent attachment recovery canary.
+The confirmation guards execution intent; the idempotent provisioning response must
+still return the same valid domain and credential identity before the command invokes
+acceptance. The command does not bind or publish an n8n workflow.
+
+The completed run provisions the synthetic domain, runs the two-phase source adoption,
+proves read and controlled-edit behavior plus PostgreSQL denials, rotates only the
+operator source login, and establishes or verifies a persistent attachment recovery canary.
 Run-owned data rows are removed, but the synthetic domain, base, sources, registry rows,
 saved view, and recovery canary remain for restore evidence.
 

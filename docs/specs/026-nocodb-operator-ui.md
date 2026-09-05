@@ -535,6 +535,11 @@ and n8n APIs. It performs this fixed transaction:
    prerequisites pass. Changed platform or recovery code requires new affected evidence.
    The newest applicable restore evidence must be newer than the applicable provisioning
    acceptance. Retain exact deployed-source checks for the command being executed.
+   A fixed ephemeral preflight Job uses the existing backup Secret by reference. In a
+   read-only transaction it calls `read_platform_revision()` and accepts only
+   `026-nocodb-v1` with the singleton complete logical backup timestamp at or after the
+   singleton revision installation timestamp. The command removes only its exact
+   run-marked Job and repeats this check after the parent reconcile before NocoDB resume.
 3. Repeat the source, target, Secret-shape, live suspension, and prerequisite checks
    immediately before mutation.
 4. Temporarily reconcile the staged NocoDB package and run the fixed metadata bootstrap
@@ -905,6 +910,13 @@ NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
 The test uses a dedicated synthetic automation-data acceptance domain. Its base, sources,
 and registry rows remain as recovery canaries; data mutations within them use a unique
 run ID and cleanup never broadens beyond those rows. It proves:
+
+On a first run where the synthetic domain does not exist, the command invokes the fixed
+automation-data provisioner first and reports the generated non-secret migrator
+credential ID. It stops before the acceptance workflow until the operator explicitly
+binds that credential and supplies a confirmation containing the same ID. A rerun still
+validates the idempotent provisioning response before invoking acceptance; the command
+never edits or publishes n8n workflow bindings.
 
 1. exactly one NocoDB application pod is ready, no worker workload exists, and no Redis
    URL or Redis workload is configured;

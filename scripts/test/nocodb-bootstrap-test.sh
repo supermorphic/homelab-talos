@@ -6,10 +6,15 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 bootstrap='scripts/nocodb/bootstrap.sh'
+platform_preflight='scripts/nocodb/platform-preflight.sh'
 if [[ ! -x "$bootstrap" ]]; then
   echo "Missing executable NocoDB bootstrap command: $bootstrap" >&2
   exit 1
 fi
+[[ -x "$platform_preflight" ]] || {
+  echo "Missing executable NocoDB platform preflight: $platform_preflight" >&2
+  exit 1
+}
 
 bootstrap_recipe="$(mise exec -- just --dry-run bootstrap nocodb 2>&1)" || {
   echo 'Missing bootstrap nocodb recipe.' >&2
@@ -41,6 +46,8 @@ event_log="$fixture/events.log"
 mkdir -p "$stub_bin"
 
 remote_main='0123456789012345678901234567890123456789'
+evidence_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+newer_evidence_sha='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 admin_email='operator@example.test'
 admin_password='synthetic_admin_password_0123456789'
 n8n_api_key='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -50,6 +57,8 @@ nocodb_token_prefix='sensitive-prefix-012345'
 
 export FAKE_NOCODB_EVENT_LOG="$event_log"
 export FAKE_REMOTE_MAIN="$remote_main"
+export FAKE_EVIDENCE_SHA="$evidence_sha"
+export FAKE_NEWER_EVIDENCE_SHA="$newer_evidence_sha"
 export FAKE_ADMIN_EMAIL="$admin_email"
 export FAKE_ADMIN_PASSWORD="$admin_password"
 export FAKE_N8N_API_KEY="$n8n_api_key"
@@ -86,8 +95,11 @@ case "$*" in
     fi
     ;;
   "cat-file -e ${FAKE_REMOTE_MAIN}^{commit}"|\
-  'cat-file -e aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'|\
-  "cat-file -e ${FAKE_REMOTE_MAIN}:kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml") ;;
+  "cat-file -e ${FAKE_EVIDENCE_SHA}^{commit}"|\
+  "cat-file -e ${FAKE_NEWER_EVIDENCE_SHA}^{commit}"|\
+  "cat-file -e ${FAKE_REMOTE_MAIN}:kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml")
+    [[ "${FAKE_FAILURE:-}" != evidence-object-missing || "$*" != "cat-file -e ${FAKE_EVIDENCE_SHA}^{commit}" ]] || exit 1
+    ;;
   'rev-parse HEAD')
     if [[ "${FAKE_FAILURE:-}" == local-head ]]; then
       printf '%s\n' 'cccccccccccccccccccccccccccccccccccccccc'
@@ -105,11 +117,51 @@ case "$*" in
     [[ "${FAKE_FAILURE:-}" != tracked-drift-after-parent || "$count" -lt 3 ]] || exit 1
     ;;
   "diff --cached --quiet ${FAKE_REMOTE_MAIN} --") ;;
+  "diff --quiet ${FAKE_REMOTE_MAIN} ${FAKE_REMOTE_MAIN} --"*) ;;
+  "diff --quiet ${FAKE_EVIDENCE_SHA} ${FAKE_REMOTE_MAIN} --"*)
+    case "${FAKE_FAILURE:-}" in
+      evidence-provisioning-source)
+        [[ "$*" != *'scripts/test/scenarios/automation-data-provisioning.sh'* ]] || exit 1
+        ;;
+      evidence-backup-source|evidence-sql-source)
+        [[ "$*" != *'kubernetes/apps/automation-data'* ]] || exit 1
+        ;;
+      evidence-image-source)
+        [[ "$*" != *'kubernetes/apps/automation/n8n/app/helmrelease.yaml'* ]] || exit 1
+        ;;
+      evidence-policy-source)
+        [[ "$*" != *'kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml'* ]] || exit 1
+        ;;
+      evidence-restore-source)
+        [[ "$*" != *'scripts/test/scenarios/automation-data-restore-drill.sh'* ]] || exit 1
+        ;;
+      evidence-lifecycle-source)
+        [[ "$*" != *'scripts/lib'* ]] || exit 1
+        ;;
+      evidence-unknown-coverage) exit 2 ;;
+    esac
+    ;;
+  "diff --quiet ${FAKE_NEWER_EVIDENCE_SHA} ${FAKE_REMOTE_MAIN} --"*)
+    [[ "${FAKE_FAILURE:-}" != evidence-newest-unsuitable ]] || exit 1
+    ;;
   *)
     echo "unexpected git arguments: $*" >&2
     exit 64
     ;;
 esac
+EOF
+
+cat >"$stub_bin/platform-preflight" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'platform-preflight %s\n' "$*" >>"$FAKE_NOCODB_EVENT_LOG"
+count=0
+[[ ! -f "$FAKE_CASE_ROOT/platform-preflight-count" ]] || count="$(<"$FAKE_CASE_ROOT/platform-preflight-count")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_CASE_ROOT/platform-preflight-count"
+[[ "${FAKE_FAILURE:-}" != platform-preflight ]] || exit 86
+[[ "${FAKE_FAILURE:-}" != platform-preflight-recheck || "$count" -lt 2 ]] || exit 86
+printf '%s\n' 'installed_revision=026-nocodb-v1' 'post_upgrade_backup=true'
 EOF
 
 cat >"$stub_bin/just" <<'EOF'
@@ -300,7 +352,17 @@ case "$url" in
       evidence-equal) restore_end="$provision_end" ;;
       evidence-invalid-time) restore_end='not-a-timestamp' ;;
     esac
-    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"2026-09-04T08:00:00Z\"},{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"$provision_end\"},{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_REMOTE_MAIN\",\"end\":\"$restore_end\"}]}" >"$output"
+    evidence_revision="$FAKE_REMOTE_MAIN"
+    case "${FAKE_FAILURE:-}" in
+      evidence-docs|evidence-provisioning-source|evidence-backup-source|evidence-sql-source|evidence-image-source|evidence-policy-source|evidence-restore-source|evidence-lifecycle-source|evidence-unknown-coverage|evidence-object-missing|evidence-newest-unsuitable)
+        evidence_revision="$FAKE_EVIDENCE_SHA"
+        ;;
+    esac
+    extra_run=''
+    if [[ "${FAKE_FAILURE:-}" == evidence-newest-unsuitable ]]; then
+      extra_run=",{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_NEWER_EVIDENCE_SHA\",\"end\":\"2026-09-04T12:00:00Z\"}"
+    fi
+    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"2026-09-04T08:00:00Z\"},{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$provision_end\"},{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$restore_end\"}$extra_run]}" >"$output"
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/health')
     [[ "$method" == GET && -z "$body" ]] || exit 69
@@ -432,7 +494,7 @@ case "$url" in
 esac
 printf 'curl %s %s\n' "$method" "$url" >>"$FAKE_NOCODB_EVENT_LOG"
 EOF
-chmod 700 "$stub_bin/git" "$stub_bin/just" "$stub_bin/flux" "$stub_bin/kubectl" "$stub_bin/curl"
+chmod 700 "$stub_bin/git" "$stub_bin/just" "$stub_bin/flux" "$stub_bin/kubectl" "$stub_bin/curl" "$stub_bin/platform-preflight"
 
 case_name=''
 OUT=''
@@ -454,6 +516,7 @@ write_fixture() {
   : >"$case_root/.kube/config"
   cp "$repo_root/scripts/lib/rollout.sh" "$case_root/scripts/lib/rollout.sh"
   cp "$repo_root/scripts/nocodb/bootstrap.sh" "$case_root/scripts/nocodb/bootstrap.sh"
+  cp "$stub_bin/platform-preflight" "$case_root/scripts/nocodb/platform-preflight.sh"
   cat >"$case_root/kubernetes/apps/automation-data/nocodb/ks.yaml" <<'EOF'
 spec:
   suspend: true
@@ -529,7 +592,7 @@ run_case() { # <failure|none> <confirmation|exact> <cleanup-failure> <preserve-a
   [[ "$preserve_api_state" == true ]] || reset_api_state "$failure"
   rm -f -- "$case_root/source-check-count" "$case_root/prerequisite-count" \
     "$case_root/suspend-check-count" "$case_root/remote-check-count" \
-    "$case_root/flux-revision-count"
+    "$case_root/flux-revision-count" "$case_root/platform-preflight-count"
   set +e
   if [[ "$confirmation" == exact ]]; then
     OUT="$(cd "$case_root" && PATH="$stub_bin:$PATH" FAKE_CASE_ROOT="$case_root" \
@@ -584,6 +647,8 @@ assert_no_activation
 assert_no_suspend
 assert_no_delete
 assert_no_secret_output
+[[ "$(rg -c '^platform-preflight ' "$event_log" || true)" -eq 0 ]] ||
+  fail 'missing confirmation created a platform preflight Job'
 
 case_name='issue-317 prerequisite evidence is required'
 run_case prerequisite
@@ -607,6 +672,28 @@ for failure in evidence-stale evidence-equal evidence-invalid-time; do
   assert_no_activation
   assert_no_suspend
 done
+
+case_name='unrelated documentation changes preserve original-SHA evidence eligibility'
+run_case evidence-docs
+assert_status 0
+assert_event "git cat-file -e ${evidence_sha}^{commit}"
+assert_event "git diff --quiet $evidence_sha $remote_main --"
+
+for failure in evidence-provisioning-source evidence-backup-source evidence-sql-source \
+  evidence-image-source evidence-policy-source evidence-restore-source \
+  evidence-lifecycle-source evidence-unknown-coverage evidence-object-missing; do
+  case_name="affected or unknown evidence coverage is rejected: $failure"
+  run_case "$failure"
+  assert_failure
+  assert_contains 'applicable provisioning and restore evidence'
+  assert_no_activation
+done
+
+case_name='newest suitable restore evidence is selected when a newer affected run is ineligible'
+run_case evidence-newest-unsuitable
+assert_status 0
+assert_event "git diff --quiet $newer_evidence_sha $remote_main --"
+assert_event "git diff --quiet $evidence_sha $remote_main --"
 
 case_name='drift in any tracked helper refuses before mutation'
 run_case tracked-drift
@@ -703,6 +790,23 @@ assert_failure
 assert_no_activation
 assert_no_suspend
 
+case_name='installed revision and post-upgrade backup preflight gates the parent reconcile'
+run_case platform-preflight
+assert_failure
+assert_contains 'installed revision and post-upgrade backup preflight failed'
+assert_no_activation
+assert_no_suspend
+
+case_name='platform preflight is repeated after parent reconcile and before NocoDB resume'
+run_case platform-preflight-recheck
+assert_failure
+assert_event 'flux reconcile kustomization automation-data '
+[[ "$(rg -c '^platform-preflight ' "$event_log" || true)" -eq 2 ]] ||
+  fail 'platform preflight was not repeated at the pre-resume boundary'
+! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" ||
+  fail 'NocoDB resumed after the repeated platform preflight failed'
+assert_no_suspend
+
 case_name='missing encrypted Secret refuses before mutation'
 mv "$case_root/kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml" \
   "$case_root/kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml.absent"
@@ -781,6 +885,8 @@ assert_no_delete
 case_name='successful bootstrap probes the token and reads back the fixed credential'
 run_case none
 assert_status 0
+[[ "$(rg -c '^platform-preflight ' "$event_log" || true)" -eq 2 ]] ||
+  fail 'bootstrap did not repeat the installed-revision and post-upgrade-backup preflight'
 [[ "$OUT" == *'NocoDB Operator API credential ID: credential-id'* ]] ||
   fail "success omitted the non-secret credential ID: $OUT"
 assert_event 'curl POST https://nocodb.lab.supermorphic.com/api/v1/app-settings'

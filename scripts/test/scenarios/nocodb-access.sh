@@ -44,6 +44,8 @@ acceptance_url="${NOCODB_ACCEPTANCE_URL:-}"
 provisioning_token="${AUTOMATION_DATA_PROVISIONING_TOKEN:-}"
 source_token="${NOCODB_SOURCE_PROVISIONING_TOKEN:-}"
 acceptance_token="${NOCODB_ACCEPTANCE_TOKEN:-}"
+acceptance_binding_confirm="${NOCODB_ACCEPTANCE_BINDING_CONFIRM:-}"
+acceptance_cleanup_armed=false
 
 [[ "$provisioning_url" == 'https://n8n.lab.supermorphic.com/webhook/automation-data-provision' ]] || {
   echo 'AUTOMATION_DATA_PROVISIONING_URL must be the exact private provisioning webhook URL.' >&2
@@ -155,7 +157,10 @@ cleanup() {
   local final_exit="$original_exit"
   trap - EXIT INT TERM
   set +e
-  if acceptance_request cleanup "$cleanup_response" &&
+  if [[ "$acceptance_cleanup_armed" != true ]]; then
+    write_phase cleanup not-required \
+      'no acceptance-domain mutation ran before the explicit credential-binding stop'
+  elif acceptance_request cleanup "$cleanup_response" &&
     RUN_ID="$run_id" jq -e '
       .ok == true and
       .operation == "cleanup" and
@@ -169,7 +174,9 @@ cleanup() {
   fi
   rm -rf -- "$temp_dir" || cleanup_ok=false
   [[ ! -e "$temp_dir" ]] || cleanup_ok=false
-  if [[ "$cleanup_ok" == true ]]; then
+  if [[ "$acceptance_cleanup_armed" != true ]]; then
+    :
+  elif [[ "$cleanup_ok" == true ]]; then
     write_phase cleanup passed \
       'current-run rows were removed; domain, base, sources, and reserved attachment canary were retained'
   else
@@ -284,15 +291,24 @@ jq -e '
   .ownerRole == "issue334_acceptance_owner" and
   .migratorRole == "issue334_acceptance_migrator" and
   .runtimeRole == "issue334_acceptance_runtime" and
-  (.migratorCredentialId | type == "string" and length > 0) and
-  (.runtimeCredentialId | type == "string" and length > 0) and
+  (.migratorCredentialId | type == "string" and test("^[A-Za-z0-9_-]+$")) and
+  (.runtimeCredentialId | type == "string" and test("^[A-Za-z0-9_-]+$")) and
   (.checks | length == 15 and all)
 ' "$provision_response" >/dev/null || {
   echo 'The existing automation-data provisioner did not return complete acceptance evidence.' >&2
   exit 1
 }
+migrator_credential_id="$(jq -r '.migratorCredentialId' "$provision_response")"
+expected_binding_confirm="bound:issue334_acceptance:$migrator_credential_id"
+[[ "$acceptance_binding_confirm" == "$expected_binding_confirm" ]] || {
+  printf 'Generated migrator credential ID: %s\n' "$migrator_credential_id" >&2
+  echo 'Bind this credential to the issue334_acceptance PostgreSQL node in the acceptance workflow, then publish the workflow.' >&2
+  printf "Rerun with NOCODB_ACCEPTANCE_BINDING_CONFIRM='%s'.\n" "$expected_binding_confirm" >&2
+  exit 1
+}
 
 structure_response="$temp_dir/structure-response.json"
+acceptance_cleanup_armed=true
 acceptance_request structure "$structure_response"
 RUN_ID="$run_id" jq -e '
   . == {ok:true,operation:"structure",runId:env.RUN_ID,domain:"issue334_acceptance",structureReady:true}
