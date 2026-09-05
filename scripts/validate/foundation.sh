@@ -5,6 +5,8 @@ source scripts/lib/common.sh
 source scripts/lib/network.sh
 require_bash
 
+scripts/validate/public-webhook-routes.sh
+
 cert_manager_chart='oci://quay.io/jetstack/charts/cert-manager'
 metallb_repository='https://metallb.github.io/metallb'
 envoy_gateway_chart='oci://docker.io/envoyproxy/gateway-helm'

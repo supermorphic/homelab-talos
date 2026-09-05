@@ -264,6 +264,7 @@ if group_selected core; then
 		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
 		scripts/test/ci_reconcile.py scripts/test/test_ci_reconcile.py
 		scripts/test/test_repository_secret_scan.py
+		scripts/test/test_public_webhook_routes.py
 		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py
