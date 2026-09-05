@@ -133,8 +133,8 @@ init_config_contract="$(yq ea -r '
 [[ "$init_config_contract" == 'init-platform.sh,platform-control.sql|true|true' ]] || \
   fail 'rendered init ConfigMap does not contain both executable platform sources'
 
-[[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == true ]] || \
-  fail 'PostgreSQL Flux Kustomization must remain staged suspended'
+[[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == false ]] || \
+  fail 'accepted PostgreSQL Flux Kustomization must remain active'
 dependencies="$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$postgresql_ks")"
 [[ "$dependencies" == 'automation-data,cilium,kube-prometheus-stack,longhorn' ]] || \
   fail 'PostgreSQL Flux dependency graph is incomplete'

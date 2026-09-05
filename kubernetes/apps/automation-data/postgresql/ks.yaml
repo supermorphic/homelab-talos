@@ -23,7 +23,7 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # Keep the new stateful service inert until the staged rollout passes.
-  suspend: true
+  # Keep the accepted stateful service reconciled after the staged rollout passes.
+  suspend: false
   timeout: 10m
   wait: true
