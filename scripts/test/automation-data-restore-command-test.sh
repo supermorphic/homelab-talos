@@ -225,6 +225,8 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
     printf '%s' "$database" | base64 | tr -d '\n'
     printf '\n'
   done
+elif [[ "$command_text" == *'025-baseline'* && "$command_text" == *'026-nocodb-v1'* ]]; then
+  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v1}"
 elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
   printf '%s\n' "${NOCODB_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* && "$command_text" == *'validate_domain'* ]]; then
@@ -262,7 +264,8 @@ EOF
 }
 
 run_restore() {
-  local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}" output status=0 command
+  local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}"
+  local platform_revision="${4:-026-nocodb-v1}" output status=0 command
   command="$(automation_data_restore_job_command)"
   output="$(
     env \
@@ -279,12 +282,27 @@ run_restore() {
       RESTORED_REGISTRY_BASE64="$(printf '%s\n' "$registry_body" | base64 | tr -d '\n')" \
       VALIDATION_RESULT="$validation_result" \
       NOCODB_VALIDATION_RESULT="$nocodb_validation_result" \
+      RESTORED_PLATFORM_REVISION="$platform_revision" \
       REAL_SHA256SUM="$real_sha256sum" \
       /bin/sh -ceu "$command" 2>&1
   )" || status="$?"
   printf '%s\n' "$status" >"$root/status"
   printf '%s\n' "$output" >"$root/output"
 }
+
+old_schema_restore="$(new_case old-schema-restore)"
+create_bundle "$old_schema_restore/backups" 20260824T003000Z
+run_restore "$old_schema_restore" true true 025-baseline
+[[ "$(<"$old_schema_restore/status")" == '0' ]] ||
+  fail 'recognized old bundle schema did not restore'
+! rg -F 'validate_nocodb_access' "$old_schema_restore/commands.log" >/dev/null ||
+  fail 'old bundle restore queried an absent NocoDB registry'
+
+unknown_schema_restore="$(new_case unknown-schema-restore)"
+create_bundle "$unknown_schema_restore/backups" 20260824T003001Z
+run_restore "$unknown_schema_restore" true true unknown
+[[ "$(<"$unknown_schema_restore/status")" != '0' ]] ||
+  fail 'unknown restored platform revision was accepted'
 
 success="$(new_case success)"
 create_bundle "$success/backups" 20260825T003000Z

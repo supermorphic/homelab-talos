@@ -6,7 +6,8 @@ base="$repo_root/kubernetes/apps/automation-data"
 namespace_app="$base/namespace/app"
 postgresql_app="$base/postgresql/app"
 postgresql_ks="$base/postgresql/ks.yaml"
-control_sql="$postgresql_app/scripts/platform-control.sql"
+platform_control_sql="$postgresql_app/scripts/platform-control.sql"
+extension_sql="$postgresql_app/scripts/nocodb-extension.sql"
 n8n_app="$repo_root/kubernetes/apps/automation/n8n/app"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-control-contract.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -21,13 +22,19 @@ for source in \
   "$namespace_app/kustomization.yaml" \
   "$postgresql_app/kustomization.yaml" \
   "$postgresql_ks" \
-  "$control_sql"; do
+  "$platform_control_sql" \
+  "$extension_sql"; do
   [[ -f "$source" ]] || fail "missing $source"
 done
 
 kustomize build "$namespace_app" >"$temp_dir/namespace.yaml"
 kustomize build "$postgresql_app" >"$temp_dir/postgresql.yaml"
 kustomize build "$n8n_app" >"$temp_dir/n8n.yaml"
+control_sql="$temp_dir/combined-platform-control.sql"
+{
+  cat "$platform_control_sql"
+  cat "$extension_sql"
+} >"$control_sql"
 
 namespace_contract="$(yq ea -r '
   select(.kind == "Namespace" and .metadata.name == "automation-data") |
@@ -128,10 +135,21 @@ secret_contract="$(yq ea -r '
 init_config_contract="$(yq ea -r '
   select(.kind == "ConfigMap" and (.metadata.name | test("^automation-data-postgresql-init-"))) |
   [.data | keys | sort | join(","), (.data."init-platform.sh" | length > 0),
+    (.data."nocodb-extension.sql" | length > 0),
     (.data."platform-control.sql" | length > 0)] | join("|")
 ' "$temp_dir/postgresql.yaml")"
-[[ "$init_config_contract" == 'init-platform.sh,migrate-control.sh,platform-control.sql|true|true' ]] || \
-  fail 'rendered init ConfigMap does not contain the initialization and migration sources'
+[[ "$init_config_contract" == \
+  'init-platform.sh,migrate-control.sh,nocodb-extension.sql,platform-control.sql|true|true|true' ]] || \
+  fail 'rendered init ConfigMap does not contain all executable platform sources'
+
+init_mount_contract="$(yq ea -r '
+  select(.kind == "StatefulSet" and .metadata.name == "automation-data-postgresql") |
+  .spec.template.spec.containers[] | select(.name == "postgresql") |
+  [.volumeMounts[] | select(.name == "init") |
+    [.mountPath, .subPath, .readOnly] | join("|")] | sort | .[]
+' "$temp_dir/postgresql.yaml")"
+[[ "$init_mount_contract" == $'/docker-entrypoint-initdb.d/00-init-platform.sh|init-platform.sh|true\n/scripts/nocodb-extension.sql|nocodb-extension.sql|true\n/scripts/platform-control.sql|platform-control.sql|true' ]] ||
+  fail 'PostgreSQL does not mount every fixed fresh-initialization source'
 
 [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == false ]] || \
   fail 'accepted PostgreSQL Flux Kustomization must remain active'
@@ -149,7 +167,7 @@ rg -Fq 'CREATE TABLE platform_operations.managed_nocodb_sources' "$control_sql" 
   fail 'NocoDB source registry is missing'
 ! rg -Fq 'managed_nocodb_domains' "$control_sql" ||
   fail 'removed NocoDB domain registry remains present'
-expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
+expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.read_platform_revision\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
 [[ "$(printf '%s\n' "${declared_functions[@]}")" == "$expected_functions" ]] || \
   fail 'platform control SQL exposes an unexpected function set'
 for state in awaiting_grants provisioning waiting_for_source ready rotating error; do

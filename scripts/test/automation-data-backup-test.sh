@@ -5,6 +5,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 backup_script="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/backup.sh"
 status_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/update-backup-status.sql"
 control_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql"
+extension_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql"
 cronjob="$repo_root/kubernetes/apps/automation-data/postgresql/app/cronjob.yaml"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-backup-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -17,8 +18,8 @@ trap 'rm -rf -- "$test_root"' EXIT
   echo 'Missing automation-data backup SQL or CronJob.' >&2
   exit 1
 }
-[[ -f "$control_sql" ]] || {
-  echo "Missing automation-data control SQL: $control_sql" >&2
+[[ -f "$control_sql" && -f "$extension_sql" ]] || {
+  echo 'Missing automation-data control or NocoDB extension SQL.' >&2
   exit 1
 }
 
@@ -64,6 +65,18 @@ case "$tool" in
       [[ "${FAIL_STAGE:-}" != status ]] || exit 41
       printf 'freshness-advanced\n' >>"$FAKE_LOG"
     elif [[ "$command_text" == *capture_backup_state* ]]; then
+      case "${STATE_SCHEMA:-new}" in
+        old)
+          [[ "$command_text" == *"025-baseline"* ]] || exit 43
+          ;;
+        new)
+          [[ "$command_text" == *"026-nocodb-v1"* ]] || exit 44
+          ;;
+        unknown | partial)
+          exit 45
+          ;;
+        *) exit 46 ;;
+      esac
       count=0
       [[ ! -f "$FAKE_STATE_COUNT" ]] || count="$(<"$FAKE_STATE_COUNT")"
       count=$((count + 1))
@@ -174,7 +187,7 @@ EOF
 }
 
 run_backup() {
-  local case_root="$1" fail_stage="${2:-}" unstable_once="${3:-}"
+  local case_root="$1" fail_stage="${2:-}" unstable_once="${3:-}" state_schema="${4:-new}"
   env \
     PATH="$case_root/bin:$PATH" \
     BACKUP_DIR="$case_root/backups" \
@@ -189,9 +202,24 @@ run_backup() {
     FAKE_DATABASE_COUNT="$case_root/database-count" \
     FAIL_STAGE="$fail_stage" \
     UNSTABLE_ONCE="$unstable_once" \
+    STATE_SCHEMA="$state_schema" \
     REAL_SHA256SUM="$real_sha256sum" \
     "$backup_test_shell" "$backup_script"
 }
+
+old_schema_case="$(new_case old-schema)"
+run_backup "$old_schema_case" '' '' old
+[[ -s "$old_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
+  fail 'recognized pre-extension schema did not produce a complete backup'
+
+for invalid_schema in unknown partial; do
+  invalid_case="$(new_case "$invalid_schema-schema")"
+  if run_backup "$invalid_case" '' '' "$invalid_schema" >/dev/null 2>&1; then
+    fail "$invalid_schema schema produced a backup"
+  fi
+  ! find "$invalid_case/backups" -type f -name COMPLETE -print -quit | rg -q . ||
+    fail "$invalid_schema schema published a complete backup"
+done
 
 success_case="$(new_case success)"
 run_backup "$success_case"
@@ -304,9 +332,9 @@ cron_contract="$(yq -r '
 
 rg -Fq "platform_operations.publish_backup(:'bundle', :'checksum', :'database_set_hash')" \
   "$status_sql" || fail 'status SQL does not call the fixed publication function'
-rg -Fq "'nocodbSources'" "$control_sql" ||
+rg -Fq "'nocodbSources'" "$extension_sql" ||
   fail 'backup state omits NocoDB source state'
-rg -Fq 'ORDER BY source.domain, source.access_kind' "$control_sql" ||
+rg -Fq 'ORDER BY source.domain, source.access_kind' "$extension_sql" ||
   fail 'NocoDB source backup state lacks stable domain/access ordering'
 rg -Fq "captured.state->'nocodbSources'" "$backup_script" ||
   fail 'backup capture does not require the NocoDB source snapshot'

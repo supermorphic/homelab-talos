@@ -172,7 +172,32 @@ WHERE managed.state = 'ready';
 ")" || restore_fail permission-query
 test "$permission_contract" = true || restore_fail permission-validation
 
-nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+restored_platform_revision="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+WITH captured AS (
+  SELECT platform_operations.capture_backup_state() AS state
+)
+SELECT CASE
+  WHEN to_regclass('platform_operations.platform_schema_revision') IS NULL AND
+    to_regclass('platform_operations.managed_nocodb_sources') IS NULL AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['generation', 'registry']::text[]
+    THEN '025-baseline'
+  WHEN to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
+    to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL AND
+    captured.state->>'platformRevision' = '026-nocodb-v1' AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[]
+    THEN '026-nocodb-v1'
+  ELSE NULL
+END
+FROM captured;
+")" || restore_fail platform-revision-query
+case "$restored_platform_revision" in
+  025-baseline) ;;
+  026-nocodb-v1)
+    nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
 SELECT COALESCE(bool_and(
   source.state = 'ready' AND
   (platform_operations.validate_nocodb_access(
@@ -182,7 +207,10 @@ SELECT COALESCE(bool_and(
 FROM platform_operations.managed_nocodb_sources AS source
 WHERE source.state = 'ready';
 ")" || restore_fail nocodb-permission-query
-test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    ;;
+  *) restore_fail platform-revision-validation ;;
+esac
 
 printf '%s\n' 'restore_stage=post-recovery-backup'
 mkdir -p "$POST_RECOVERY_BACKUP_DIR"

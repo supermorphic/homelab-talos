@@ -65,6 +65,11 @@ automation-data-validate: require-bash
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
+# Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
+# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1'.
+automation-data-upgrade: require-bash
+    @scripts/upgrade/automation-data.sh {{quote(kubeconfig)}}
+
 # Observe the deployed automation-data platform without reading Secrets, querying
 # PostgreSQL, invoking n8n, execing into a Pod, or opening a port-forward.
 automation-data-verify: require-bash

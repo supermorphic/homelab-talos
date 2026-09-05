@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-psql --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'EOSQL'
+psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'EOSQL'
 \getenv provisioner_password PROVISIONER_PASSWORD
 \getenv backup_password BACKUP_PASSWORD
 \getenv exporter_password EXPORTER_PASSWORD
@@ -24,5 +24,5 @@ GRANT CONNECT ON DATABASE automation_data_control TO
   automation_data_exporter;
 EOSQL
 
-psql --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --file=/scripts/platform-control.sql

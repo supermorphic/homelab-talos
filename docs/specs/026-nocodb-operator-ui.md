@@ -431,6 +431,18 @@ preconditions immediately before applying the reviewed upgrade. Its source and c
 registration must exist and pass local tests before any operator invocation is published
 as an available procedure.
 
+The implemented revision is `026-nocodb-v1`. A single-row
+`platform_operations.platform_schema_revision` table records it as platform migration
+metadata. The fixed read-only oracle is
+`platform_operations.read_platform_revision() RETURNS text`; the function also validates
+the installed extension contract before returning the revision. Fresh initialization
+and the upgrade both load `nocodb-extension.sql`. The operator command is
+`AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1' mise exec -- just
+kube automation-data-upgrade`. The catalog-only install preserves the platform
+generation and existing domain rows. Because `capture_backup_state()` gains the
+revision and source array in the same transaction, its before/after value still changes
+across the install and prevents publication of a backup that spans the schema change.
+
 Deploy backup compatibility before applying the upgrade. The updated backup path must
 support both the exact accepted pre-extension schema and the upgraded schema while
 NocoDB is staged. An absent optional registry is valid only for the recognized old
@@ -1034,7 +1046,10 @@ or restore drill has run against the live cluster. No active service or recovery
 capability is claimed.
 
 The 2026-09-05 integration audit revised this design after the initial implementation.
-The existing-platform upgrade, shared response validation, ready-source independence
+The fixed existing-platform upgrade and old/new backup compatibility are implemented and
+pass disposable populated PostgreSQL upgrade, rerun, fresh-equivalence, and isolated
+restore tests. They have not been invoked against the live cluster. Shared response
+validation, ready-source independence
 from historical jobs, generated restore references, activation-aware monitoring, and
 disposable integration requirements above are acceptance work still to be completed.
 The operations guide and recovery runbook describe the initial implementation; reconcile

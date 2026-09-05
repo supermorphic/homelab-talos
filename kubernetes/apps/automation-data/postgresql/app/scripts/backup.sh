@@ -19,8 +19,28 @@ capture_platform_state() {
 WITH captured AS MATERIALIZED (
   SELECT platform_operations.capture_backup_state() AS state
 ),
-nocodb_source_state AS (
-  SELECT jsonb_typeof(captured.state->'nocodbSources') = 'array' AS valid
+platform_shape AS (
+  SELECT CASE
+    WHEN to_regclass('platform_operations.platform_schema_revision') IS NULL AND
+      to_regclass('platform_operations.managed_nocodb_sources') IS NULL AND
+      (SELECT array_agg(key ORDER BY key)
+       FROM jsonb_object_keys(captured.state) AS key) =
+        ARRAY['generation', 'registry']::text[] AND
+      jsonb_typeof(captured.state->'generation') = 'number' AND
+      jsonb_typeof(captured.state->'registry') = 'array'
+      THEN '025-baseline'
+    WHEN to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
+      to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL AND
+      (SELECT array_agg(key ORDER BY key)
+       FROM jsonb_object_keys(captured.state) AS key) =
+        ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[] AND
+      captured.state->>'platformRevision' = '026-nocodb-v1' AND
+      jsonb_typeof(captured.state->'generation') = 'number' AND
+      jsonb_typeof(captured.state->'registry') = 'array' AND
+      jsonb_typeof(captured.state->'nocodbSources') = 'array'
+      THEN '026-nocodb-v1'
+    ELSE NULL
+  END AS revision
   FROM captured
 ),
 registry_rows AS (
@@ -83,8 +103,8 @@ SELECT
   replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', '')
 FROM captured
 CROSS JOIN registry_text
-CROSS JOIN nocodb_source_state
-WHERE nocodb_source_state.valid;
+CROSS JOIN platform_shape
+WHERE platform_shape.revision IS NOT NULL;
 "
   } 2>/dev/null)" || return 1
   case "$capture_line" in
