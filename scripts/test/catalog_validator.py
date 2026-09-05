@@ -43,6 +43,7 @@ EXPECTED_INTEGRATION = [
     "test.flux-canary",
     "test.n8n-restore-drill",
     "test.nocodb-access",
+    "test.nocodb-restore-drill",
     "test.automation-data-restore-drill",
     "test.integration.media-hardlink",
     "test.plex-network-policy",

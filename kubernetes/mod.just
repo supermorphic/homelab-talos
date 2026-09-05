@@ -45,6 +45,11 @@ nocodb-source-rotate domain access_kind: require-bash
 nocodb-access-test: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
 
+# Restore NocoDB metadata and its closest attachment backup into isolated run-owned
+# resources. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
+nocodb-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
+
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
 n8n-validate: require-bash

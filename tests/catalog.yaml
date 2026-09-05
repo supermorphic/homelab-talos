@@ -242,6 +242,7 @@ campaigns:
       - test.flux-canary
       - test.n8n-restore-drill
       - test.nocodb-access
+      - test.nocodb-restore-drill
       - test.automation-data-restore-drill
       - test.integration.media-hardlink
       - test.plex-network-policy
@@ -694,6 +695,11 @@ suites:
     runner: {command: "NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access mise exec -- just kube nocodb-access-test", implementation: scripts/test/scenarios/nocodb-access.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-access.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.nocodb-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: metadata-attachment-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: NOCODB_RESTORE_CONFIRM, expected: "restore:nocodb:metadata"}
+    runner: {command: "NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata mise exec -- just kube nocodb-restore-drill", implementation: scripts/test/scenarios/nocodb-restore-drill.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-restore-drill.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.automation-data-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: automation-data-restore-drill, scenario: full-chain, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: AUTOMATION_DATA_RESTORE_CONFIRM, expected: "restore:automation-data:full-chain"}
     runner: {command: "AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill", implementation: scripts/test/scenarios/automation-data-restore-drill.sh}
