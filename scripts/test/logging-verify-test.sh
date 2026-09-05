@@ -24,6 +24,7 @@ topology_storage_runtime_cases=(
 	daily-backup
 	trim-missing
 	extra-recurring-job
+	port-forward-delayed-start
 	prometheus-port-forward-fails
 	wrong-runtime-retention
 	malformed-runtime-retention
@@ -103,7 +104,7 @@ case_selected() {
 }
 
 if [[ "$selected_case" == '--group-contract' ]]; then
-	[[ "${#all_cases[@]}" -eq 64 ]]
+	[[ "${#all_cases[@]}" -eq 65 ]]
 	[[ "${#case_group[@]}" -eq "${#all_cases[@]}" ]]
 	harmless_verifier="$(command -v true)"
 
@@ -138,7 +139,7 @@ if [[ "$selected_case" == '--group-contract' ]]; then
 		echo 'Unknown selector was accepted by the group contract.' >&2
 		exit 1
 	fi
-	echo 'Logging verifier group-selection contract passed: cases=64 groups=4.'
+	echo 'Logging verifier group-selection contract passed: cases=65 groups=4.'
 	exit 0
 fi
 
@@ -466,9 +467,25 @@ exit 0
 EOF
 chmod +x "$fixture/bin/sleep"
 
+# Release the delayed background process only after its first log read completes.
+# This makes the regression independent of which process the scheduler runs first.
+real_sed="$(command -v sed)"
+cat >"$fixture/bin/sed" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+log_file="${@: -1}"
+"$REAL_SED" "$@"
+status="$?"
+if [[ "$FAKE_LAYOUT" == 'port-forward-delayed-start' && "$log_file" == *-port-forward.log ]]; then
+  : >"${log_file}.polled"
+fi
+exit "$status"
+EOF
+chmod +x "$fixture/bin/sed"
+
 run_case() {
 	local layout="$1" expected_status="$2" expected_message="$3" expected_starts="$4" expected_stops="$5"
-	local case_root="$fixture/$layout" output status
+	local case_root="$fixture/$layout" output status case_verifier="$verifier"
 	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" == true ]]; then
 		"$verifier"
 		printf '%s\n' "$layout"
@@ -480,11 +497,21 @@ run_case() {
 	: >"$case_root/process.log"
 	output="$case_root/output"
 
+	if [[ "$layout" == 'port-forward-delayed-start' ]]; then
+		# Add only a scheduling barrier before the child's redirection. exec keeps
+		# the original PID/cleanup contract; all verifier assertions remain intact.
+		# shellcheck disable=SC2016 # Preserve verifier variables for its own shell.
+		"$real_sed" 's/^  "${kc\[@\]}" --namespace "$ns" port-forward /  ( echo "startup barrier" >>"$FAKE_PROCESS_LOG"; while [[ ! -f "${log_file}.polled" ]]; do \/bin\/sleep 0.01; done; exec "${kc[@]}" --namespace "$ns" port-forward /; s/ >"$log_file" 2>\&1 \&$/ >"$log_file" 2>\&1 ) \&/' \
+			"$verifier" >"$case_root/verifier.sh"
+		chmod +x "$case_root/verifier.sh"
+		case_verifier="$case_root/verifier.sh"
+	fi
+
 	set +e
 	PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
 		FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
-		FAKE_PROCESS_LOG="$case_root/process.log" \
-		"$verifier" "$fixture/kubeconfig" >"$output" 2>&1
+		FAKE_PROCESS_LOG="$case_root/process.log" REAL_SED="$real_sed" \
+		"$case_verifier" "$fixture/kubeconfig" >"$output" 2>&1
 	status="$?"
 	set -e
 
@@ -500,6 +527,12 @@ run_case() {
 	}
 	[[ "$(rg -c ' start ' "$case_root/process.log" || true)" -eq "$expected_starts" ]]
 	[[ "$(rg -c ' stop ' "$case_root/process.log" || true)" -eq "$expected_stops" ]]
+	if [[ "$layout" == 'port-forward-delayed-start' ]]; then
+		[[ "$(rg -c '^startup barrier$' "$case_root/process.log" || true)" -eq 2 ]] || {
+			echo 'Delayed-start fixture did not exercise both port-forward barriers.' >&2
+			exit 1
+		}
+	fi
 	[[ -z "$(find "$fixture/tmp" -mindepth 1 -print -quit)" ]] || {
 		echo "$layout: verifier left temporary files behind" >&2
 		exit 1
@@ -567,6 +600,7 @@ case_selected daily-snapshot && run_case daily-snapshot 1 'Actual Longhorn Volum
 case_selected daily-backup && run_case daily-backup 1 'Actual Longhorn Volume has forbidden recurring-job assignment recurring-job.longhorn.io/daily-backup.' 0 0
 case_selected trim-missing && run_case trim-missing 1 'Actual Longhorn Volume does not have the required filesystem-trim assignment after synchronization retries.' 0 0
 case_selected extra-recurring-job && run_case extra-recurring-job 1 'Actual Longhorn Volume has an unexpected recurring-job assignment after synchronization retries.' 0 0
+case_selected port-forward-delayed-start && run_case port-forward-delayed-start 0 'Logging acceptance passed' 2 2
 case_selected prometheus-port-forward-fails && run_case prometheus-port-forward-fails 1 'Port-forward to Service kube-prometheus-stack-prometheus stopped before becoming ready.' 2 1
 case_selected wrong-runtime-retention && run_case wrong-runtime-retention 1 'Loki effective runtime retention is not exactly 336h with no stream override.' 2 2
 case_selected malformed-runtime-retention && run_case malformed-runtime-retention 1 'Loki effective runtime retention is not exactly 336h with no stream override.' 2 2

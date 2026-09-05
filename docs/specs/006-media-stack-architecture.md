@@ -34,6 +34,11 @@ explicit security context.
 
 ## Storage model and hardlink contract
 
+The SMB CSI driver runs one controller Deployment and a Linux node DaemonSet.
+Its Helm values disable the chart's default Windows DaemonSet because all cluster
+nodes run Talos Linux. The source validator checks the rendered workloads to retain
+the controller and Linux plugin while excluding the unused Windows component.
+
 Bulk downloads and libraries use one static `ReadWriteMany` SMB volume named
 `media-data`. The `downloads/` and `media/` trees are siblings on that one server
 filesystem. qBittorrent writes below `/data/downloads`; Sonarr, Radarr, and Lidarr import

@@ -5,11 +5,15 @@
 Replace the repository's ADR-style decision lifecycle with a specification-driven
 documentation model that matches how design and implementation evolve in practice.
 
-The durable artifact is a design specification. A specification is committed before
-implementation and may change while implementation is active. Merge is the freeze
-boundary: before merge, the specification must be reconciled with the implemented and
-validated result; after merge, it is a historical record. A later material redesign uses
-a new numbered specification.
+The durable artifact is a design specification. A specification is a living design
+record that may change during or after implementation to describe the current validated
+design for its subject. Before merge, it must be reconciled with the implemented and
+validated result. Iterative work on the same subject normally updates that specification;
+a distinct design subject uses a new numbered specification.
+
+This record includes the current lifecycle from [`AGENTS.md`](../../AGENTS.md). It
+replaces the migration's original post-merge freeze model while retaining the migration
+rationale and history below.
 
 Implementation plans are separate, transient execution artifacts. They remain
 uncommitted and may be discarded after the work is complete.
@@ -68,14 +72,15 @@ The lifecycle is:
 6. Update the specification when implementation materially changes the intended design.
 7. Update the plan freely as execution changes.
 8. Before merge, reconcile the specification with the implemented and validated result.
-9. Merge the change. The specification becomes a historical record and the plan may be
-   discarded.
-10. Create a new numbered specification for a later material redesign.
+9. Merge the change. Preserve its identifier; the transient plan may be discarded.
+10. Update the same specification for later work on its subject. Create a new numbered
+    specification when the work introduces a distinct design subject.
 
-Approval for implementation does not make a specification immutable. A specification
-may evolve until merge. Small corrections that make an active specification accurately
-describe the same design remain within its lineage. A material redesign after merge
-starts a new lineage and receives a new identifier.
+Approval and merge do not make a specification immutable. A specification may evolve
+with its subject before or after merge. Corrections and iterative design changes stay in
+the existing specification; merge alone is not a reason to create a new one. Existing
+identifiers are never reused or renumbered after merge. A distinct design subject uses
+the next consecutive three-digit identifier after the highest existing specification.
 
 When a transient implementation plan corresponds to a numbered specification, it uses
 the same numeric identifier and descriptive name where practical. Repository-defined
@@ -101,7 +106,7 @@ lineages. Records that amended or reported findings about an earlier design inhe
 parent lineage rather than receiving an artificial independent record. The surviving
 lineages are numbered consecutively from `001` through `020`, without gaps. This one-time
 migration renumbering does not authorize renumbering historical specifications after
-merge. A later material redesign receives the next number after the current maximum.
+merge. A distinct design subject receives the next number after the current maximum.
 
 When historical records disagree, the implemented and validated repository state wins.
 If neither current source nor current documentation resolves a material conflict, the

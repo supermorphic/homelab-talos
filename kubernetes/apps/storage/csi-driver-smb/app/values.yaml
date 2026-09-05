@@ -5,3 +5,8 @@
 # schedulable control-plane nodes, which carry no NoSchedule taint here.
 controller:
   replicas: 1
+
+# All cluster nodes run Talos Linux; the chart enables an unused Windows
+# DaemonSet by default.
+windows:
+  enabled: false
