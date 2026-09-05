@@ -1074,6 +1074,14 @@ application:
   select `observability` in addition to `core`.
 - `kubernetes/apps/automation/**`, `kubernetes/apps/automation-data/**`, and their
   explicitly owned test fixtures select `automation` in addition to `core`.
+- Direct validator inputs retain cross-domain ownership. The public webhook gateway,
+  ExternalDNS values, networking graph, selected Gatus and alert resources, PostgreSQL
+  dashboard packaging, and consumed operations documentation also select `automation`.
+  Gatus's echo route/service, internal gateway, and n8n/PostgreSQL/public-route Flux
+  entrypoints also select `observability`. The SOPS policy selects both conditional groups.
+- Foundation validation in `core` owns the repository-wide public webhook route
+  uniqueness check. n8n validation retains its direct route and workflow assertions.
+  This keeps the global invariant active for changes in every application domain.
 - Existing application and domain paths outside those breakouts select `core` unless an
   explicit foundational rule below selects `full`.
 - `.github/workflows/**`, the impact map, the planner, the merge gate, the catalog,
@@ -1124,6 +1132,14 @@ candidate can affect, then obtains that evidence in the current run.
 The required branch-protection name remains a static `merge-gate`. It fails when any
 planned target is missing, unexpectedly skipped, cancelled, failed, or bound to another
 plan identity.
+
+Reconciliation resolves `tests/catalog.yaml` from the immutable Git commit recorded in
+the plan's `head_sha` and validates it through the established catalog validator. The
+plan schema stays unchanged: its identity already binds that exact candidate commit.
+An unavailable commit or missing, inaccessible, or malformed catalog is a configuration
+error. Each group must report exactly the suites in its catalog execution, with every
+suite marked `passed`, independently of aggregate status or JUnit counts. All reported
+groups, including unexpected groups, use the complete canonical group order.
 
 The required workflow cannot use top-level path filters. Provider workflow files remain
 thin wrappers around repository-owned planning, execution, and reconciliation commands.

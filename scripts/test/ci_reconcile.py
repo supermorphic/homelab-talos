@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import stat
@@ -13,7 +15,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from ci_plan import EXECUTIONS, Plan, read_plan, unique_json_object
+import yaml
+from catalog_validator import validate_catalog
+from ci_plan import EXECUTIONS, GROUPS, Plan, read_plan, read_yaml, unique_json_object
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN_FILES = {"summary.json", "environment.json", "evidence.json", "junit.xml"}
@@ -151,12 +155,61 @@ def discover_results(root: Path) -> tuple[GroupResult, ...]:
     return discovered
 
 
-def evaluate(plan_path: Path, results_root: Path) -> tuple[dict, list[str], list[tuple]]:
+def candidate_executions(plan: Plan, repo: Path) -> dict[str, list[str]]:
+    """Resolve the catalog bytes bound by the plan's immutable candidate commit."""
+    check_path(repo)
+    try:
+        kind = subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-t", plan.head_sha],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if kind != "commit":
+            raise ValueError("candidate revision must name a commit")
+        content = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{plan.head_sha}:tests/catalog.yaml"],
+            capture_output=True,
+            check=True,
+        ).stdout
+        with tempfile.TemporaryDirectory(prefix="ci-candidate-catalog-") as directory:
+            path = Path(directory) / "catalog.yaml"
+            path.write_bytes(content)
+            catalog = read_yaml(path)
+            diagnostics = io.StringIO()
+            with contextlib.redirect_stdout(diagnostics), contextlib.redirect_stderr(diagnostics):
+                status = validate_catalog(str(path))
+            if status:
+                raise ValueError(diagnostics.getvalue().strip())
+        return catalog["executions"]
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        yaml.YAMLError,
+    ) as error:
+        raise UnsafeInput(f"invalid candidate catalog at {plan.head_sha}: {error}") from error
+
+
+def evaluate(
+    plan_path: Path, results_root: Path, *, repo: Path = ROOT
+) -> tuple[dict, list[str], list[tuple]]:
     check_path(plan_path)
     try:
         plan: Plan = read_plan(plan_path)
     except (OSError, ValueError, TypeError) as error:
         raise UnsafeInput(f"invalid plan: {error}") from error
+    executions = candidate_executions(plan, repo)
+    return evaluate_results(plan, results_root, executions)
+
+
+def evaluate_results(
+    plan: Plan, results_root: Path, executions: dict[str, list[str]]
+) -> tuple[dict, list[str], list[tuple]]:
+    """Check canonical runs against an already validated plan and candidate catalog."""
     reasons = []
     try:
         results = discover_results(results_root)
@@ -167,7 +220,7 @@ def evaluate(plan_path: Path, results_root: Path) -> tuple[dict, list[str], list
         by_group[result.group].append(result)
     groups = []
     rows = []
-    order = [*plan.groups, *sorted(set(by_group) - set(plan.groups))]
+    order = [group for group in GROUPS if group in plan.groups or group in by_group]
     for group in order:
         runs = by_group[group]
         required = group in plan.groups
@@ -194,6 +247,21 @@ def evaluate(plan_path: Path, results_root: Path) -> tuple[dict, list[str], list
                     )
                     result = "failed"
             summary = load_json(run.summary_path)
+            expected_suites = executions[EXECUTIONS[group]]
+            actual_suites = {suite["id"] for suite in summary["suites"]}
+            for suite_id in expected_suites:
+                if suite_id not in actual_suites:
+                    reasons.append(f"group {group} missing expected suite: {suite_id}")
+                    result = "failed"
+            for suite in summary["suites"]:
+                if suite["id"] not in expected_suites:
+                    reasons.append(f"group {group} unexpected suite: {suite['id']}")
+                    result = "failed"
+                if suite["result"] != "passed":
+                    reasons.append(
+                        f"group {group} suite {suite['id']} result is {suite['result']}"
+                    )
+                    result = "failed"
             if run.result != "passed":
                 reasons.append(f"group {group} result is {run.result}")
             if summary["junit"]["failures"] or summary["junit"]["errors"]:
@@ -262,12 +330,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ("plan", "results", "output"):
         parser.add_argument(f"--{argument}", required=True, type=Path)
+    parser.add_argument("--repo", type=Path, default=ROOT)
     args = parser.parse_args()
     try:
         check_path(args.output)
         for name in ("merge-gate.json", "merge-gate.md"):
             check_path(args.output / name)
-        payload, reasons, rows = evaluate(args.plan, args.results)
+        payload, reasons, rows = evaluate(args.plan, args.results, repo=args.repo)
         args.output.mkdir(parents=True, exist_ok=True)
         markdown = [
             f"Merge gate: {payload['result']}",

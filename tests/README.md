@@ -222,6 +222,13 @@ the first suite. Each suite receives `/dev/null` as stdin. A validator cannot
 consume later suite IDs or wait for interactive input, and an empty or failed
 execution-list lookup fails before suite execution.
 
+`mise exec -- just test ci-reconcile PLAN RESULTS OUTPUT` checks downloaded group
+results against the plan and the complete catalog executions from its exact candidate
+Git commit. Every expected suite must be present and passed; unexpected suites fail.
+The candidate commit and its `tests/catalog.yaml` blob must be available locally.
+Reconciliation does not use a changed working-tree catalog as evidence for that commit.
+This interface is offline groundwork; the advisory shadow rollout still runs full CI.
+
 Node.js and Allure are pinned through mise. Generate static Awesome reports with
 `mise exec -- just test report <run-id>` or `report-latest`; output is
 `.test-reports/<run-id>/awesome/`. `report-open <run-id>` starts Allure's local

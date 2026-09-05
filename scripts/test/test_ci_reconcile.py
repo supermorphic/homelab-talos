@@ -13,11 +13,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/test/ci_reconcile.py"
 BASE = "b" * 40
-HEAD = "c" * 40
-RUN_ID = "20260904T120000Z-cccccccccccc-github-actions-1234abcd"
+HEAD = subprocess.run(
+    ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+).stdout.strip()
+RUN_ID = f"20260904T120000Z-{HEAD[:12]}-github-actions-1234abcd"
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -32,6 +36,8 @@ class ReconciliationTests(unittest.TestCase):
         self.results = self.root / "downloaded results"
         self.results.mkdir()
         self.output = self.root / "output"
+        self.catalog_path = ROOT / "tests/catalog.yaml"
+        self.executions = yaml.safe_load(self.catalog_path.read_text())["executions"]
         self.plan_path = self.root / "plan.json"
         self.plan = {
             "schema_version": 1,
@@ -53,17 +59,31 @@ class ReconciliationTests(unittest.TestCase):
         ).hexdigest()
         self.write_json(self.plan_path, self.plan)
 
-    def make_run(self, group="core", result="passed", suffix="1234abcd", wrapper=""):
-        run_id = f"20260904T120000Z-cccccccccccc-github-actions-{suffix}"
+    def make_run(self, group="core", result="passed", suffix="1234abcd", wrapper="", suites=None):
+        head = self.plan["head_sha"]
+        run_id = f"20260904T120000Z-{head[:12]}-github-actions-{suffix}"
         run = self.results / wrapper / run_id
         (run / "diagnostics").mkdir(parents=True)
         (run / "logs").mkdir()
+        execution = "ci-framework" if group == "ci-framework" else f"ci-{group}"
+        if suites is None:
+            suites = [(suite_id, result) for suite_id in self.executions[execution]]
+        records = [
+            {
+                "id": suite_id,
+                "result": suite_result,
+                "duration_ms": 1,
+                "tests": 1,
+                "failures": int(suite_result == "failed"),
+                "errors": int(suite_result == "broken"),
+                "skipped": int(suite_result == "skipped"),
+                "passed": int(suite_result == "passed"),
+            }
+            for suite_id, suite_result in suites
+        ]
         counts = {
-            "tests": 1,
-            "failures": int(result == "failed"),
-            "errors": int(result == "broken"),
-            "skipped": int(result == "skipped"),
-            "passed": int(result == "passed"),
+            field: sum(record[field] for record in records)
+            for field in ("tests", "failures", "errors", "skipped", "passed")
         }
         metadata = {
             "source": "repository",
@@ -81,14 +101,14 @@ class ReconciliationTests(unittest.TestCase):
                 schema_version=1,
                 run_id=run_id,
                 **metadata,
-                git_sha=HEAD,
+                git_sha=head,
                 execution_origin="github-actions",
                 start="2026-09-04T12:00:00Z",
                 end="2026-09-04T12:00:01Z",
                 duration_seconds=1,
                 result=result,
                 junit=counts,
-                suites=[dict(id="validation.fixture", result=result, **counts)],
+                suites=records,
                 phases={},
             ),
         )
@@ -100,7 +120,7 @@ class ReconciliationTests(unittest.TestCase):
                 "execution_origin": "github-actions",
                 "start": "2026-09-04T12:00:00Z",
                 "end": "2026-09-04T12:00:01Z",
-                "git": {"sha": HEAD, "branch": "fixture", "dirty": False},
+                "git": {"sha": head, "branch": "fixture", "dirty": False},
                 "host": {"os": "fixture", "architecture": "fixture"},
                 "tools": {},
                 "cluster": {},
@@ -114,7 +134,7 @@ class ReconciliationTests(unittest.TestCase):
                 "schema_version": 1,
                 "plan_id": self.plan["plan_id"],
                 "base_sha": BASE,
-                "head_sha": HEAD,
+                "head_sha": head,
                 "group": group,
                 "execution": "ci-framework" if group == "ci-framework" else f"ci-{group}",
             },
@@ -127,11 +147,15 @@ class ReconciliationTests(unittest.TestCase):
                 "artifacts": [{"path": "diagnostics/ci-binding.json"}],
             },
         )
-        tag = {"failed": "failure", "broken": "error", "skipped": "skipped"}.get(result)
-        outcome = f"<{tag}/>" if tag else ""
+        cases = []
+        for suite_id, suite_result in suites:
+            tag = {"failed": "failure", "broken": "error", "skipped": "skipped"}.get(suite_result)
+            outcome = f"<{tag}/>" if tag else ""
+            cases.append(f'<testcase name="{suite_id}">{outcome}</testcase>')
         (run / "junit.xml").write_text(
-            f'<testsuites><testsuite name="fixture"><testcase name="case">{outcome}'
-            "</testcase></testsuite></testsuites>\n",
+            '<testsuites><testsuite name="fixture">'
+            + "".join(cases)
+            + "</testsuite></testsuites>\n",
             encoding="utf-8",
         )
         return run
@@ -141,7 +165,7 @@ class ReconciliationTests(unittest.TestCase):
         payload.update(changes)
         self.write_json(path, payload)
 
-    def cli(self):
+    def cli(self, *args):
         return subprocess.run(
             [
                 sys.executable,
@@ -152,6 +176,7 @@ class ReconciliationTests(unittest.TestCase):
                 str(self.results),
                 "--output",
                 str(self.output),
+                *args,
             ],
             cwd=ROOT,
             text=True,
@@ -161,12 +186,11 @@ class ReconciliationTests(unittest.TestCase):
         )
 
     def assert_failure(self, reason):
-        process = self.cli()
-        self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
-        self.assertIn(reason, process.stderr)
-        payload = json.loads((self.output / "merge-gate.json").read_text())
+        payload, reasons, _rows = self.reconciler.evaluate_results(
+            self.reconciler.read_plan(self.plan_path), self.results, self.executions
+        )
         self.assertEqual(payload["result"], "failed")
-        self.assertIn(reason, (self.output / "merge-gate.md").read_text())
+        self.assertIn(reason, "\n".join(reasons))
         return payload
 
     def test_exact_selected_results_pass_with_stable_output_and_counts(self):
@@ -193,7 +217,7 @@ class ReconciliationTests(unittest.TestCase):
         first = json_path.read_bytes()
         self.assertEqual(json.loads(first), expected)
         self.assertIn("| Group | Required | Run ID | Result | Suites | Tests |", markdown)
-        self.assertIn(f"| core | yes | {RUN_ID} | passed | 1 | 1 |", markdown)
+        self.assertIn(f"| core | yes | {RUN_ID} | passed | 32 | 32 |", markdown)
         self.assertEqual(self.cli().returncode, 0)
         self.assertEqual(json_path.read_bytes(), first)
         self.assertEqual(
@@ -225,8 +249,11 @@ class ReconciliationTests(unittest.TestCase):
         self.write_plan()
         for index, group in enumerate(self.plan["groups"]):
             self.make_run(group, suffix=f"{index:08x}")
-        process = self.cli()
-        self.assertEqual(process.returncode, 0, process.stderr)
+        payload, reasons, _rows = self.reconciler.evaluate_results(
+            self.reconciler.read_plan(self.plan_path), self.results, self.executions
+        )
+        self.assertEqual(payload["result"], "passed", reasons)
+        self.assertEqual([group["id"] for group in payload["groups"]], self.plan["groups"])
 
     def test_native_diagnostic_summary_is_not_a_child_run(self):
         run = self.make_run()
@@ -234,17 +261,16 @@ class ReconciliationTests(unittest.TestCase):
         evidence = json.loads((run / "evidence.json").read_text())
         evidence["artifacts"].append({"path": "diagnostics/summary.json"})
         self.write_json(run / "evidence.json", evidence)
-        process = self.cli()
-        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(len(self.reconciler.discover_results(self.results)), 1)
 
     def test_all_invalid_children_are_reported(self):
         for suffix in ("1234abcd", "1234abce"):
             run = self.make_run(suffix=suffix)
             (run / "environment.json").unlink()
-        process = self.cli()
-        self.assertEqual(process.returncode, 1, process.stderr)
-        self.assertIn("1234abcd", process.stderr)
-        self.assertIn("1234abce", process.stderr)
+        with self.assertRaises(self.reconciler.InvalidResults) as raised:
+            self.reconciler.discover_results(self.results)
+        self.assertIn("1234abcd", str(raised.exception))
+        self.assertIn("1234abce", str(raised.exception))
 
     def test_unclaimed_downloaded_file_fails(self):
         self.make_run()
@@ -274,6 +300,51 @@ class ReconciliationTests(unittest.TestCase):
         self.make_run()
         self.make_run("automation", suffix="1234abce")
         self.assert_failure("unexpected group: automation")
+
+    def test_missing_expected_suite_fails_despite_consistent_passed_run(self):
+        suites = [(suite_id, "passed") for suite_id in self.executions["ci-core"][1:]]
+        self.make_run(suites=suites)
+        self.assert_failure("group core missing expected suite")
+
+    def test_unexpected_suite_fails_despite_consistent_passed_run(self):
+        suites = [(suite_id, "passed") for suite_id in self.executions["ci-core"]]
+        self.make_run(suites=[*suites, ("validation.unexpected", "passed")])
+        self.assert_failure("group core unexpected suite: validation.unexpected")
+
+    def test_skipped_suite_fails_beneath_passed_group(self):
+        suites = [(suite_id, "passed") for suite_id in self.executions["ci-core"]]
+        suite_id = suites[0][0]
+        suites[0] = (suite_id, "skipped")
+        self.make_run(suites=suites)
+        self.assert_failure(f"group core suite {suite_id} result is skipped")
+
+    def test_incomplete_suite_cli_fails_and_writes_both_reports(self):
+        complete = [(suite_id, "passed") for suite_id in self.executions["ci-core"]]
+        for suites, reason in (
+            (complete[1:], "missing expected suite"),
+            ([*complete, ("validation.unexpected", "passed")], "unexpected suite"),
+            ([(complete[0][0], "skipped"), *complete[1:]], "result is skipped"),
+        ):
+            with self.subTest(reason=reason):
+                run = self.make_run(suites=suites)
+                process = self.cli()
+                self.assertEqual(process.returncode, 1, process.stderr)
+                self.assertIn(reason, process.stderr)
+                payload = json.loads((self.output / "merge-gate.json").read_text())
+                self.assertEqual(payload["result"], "failed")
+                self.assertIn(reason, (self.output / "merge-gate.md").read_text())
+                shutil.rmtree(run)
+
+    def test_unexpected_groups_follow_complete_canonical_order(self):
+        self.plan["groups"] = ["core", "automation"]
+        self.write_plan()
+        for index, group in enumerate(("core", "observability", "automation", "ci-framework")):
+            self.make_run(group, suffix=f"{index:08x}")
+        payload = self.assert_failure("unexpected group: observability")
+        self.assertEqual(
+            [group["id"] for group in payload["groups"]],
+            ["core", "observability", "automation", "ci-framework"],
+        )
 
     def test_failed_broken_and_skipped_results_fail(self):
         for result in ("failed", "broken", "skipped"):
@@ -348,6 +419,118 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 2, process.stderr)
                 self.assertIn("plan", process.stderr)
 
+    def candidate_repo(self, content):
+        repo = self.root / "candidate"
+        repo.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+        if content is not None:
+            (repo / "tests").mkdir(exist_ok=True)
+            (repo / "tests/catalog.yaml").write_text(content)
+            subprocess.run(["git", "-C", str(repo), "add", "tests/catalog.yaml"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "candidate catalog fixture",
+            ],
+            check=True,
+        )
+        self.plan["head_sha"] = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.write_plan()
+        return repo
+
+    def assert_catalog_error(self, *args):
+        process = self.cli(*args)
+        self.assertEqual(process.returncode, 2, process.stderr)
+        self.assertIn("candidate catalog", process.stderr)
+        self.assertNotIn("Traceback", process.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_unavailable_candidate_commit_is_configuration_error(self):
+        self.plan["head_sha"] = "0" * 40
+        self.write_plan()
+        self.assert_catalog_error()
+
+    def test_missing_candidate_catalog_is_configuration_error(self):
+        repo = self.candidate_repo(None)
+        self.assert_catalog_error("--repo", str(repo))
+
+    def test_inaccessible_candidate_repository_is_configuration_error(self):
+        repo = self.candidate_repo(self.catalog_path.read_text())
+        original_mode = repo.stat().st_mode
+        try:
+            repo.chmod(0)
+            try:
+                list(repo.iterdir())
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("current user can read mode-000 directories")
+            self.assert_catalog_error("--repo", str(repo))
+        finally:
+            repo.chmod(original_mode)
+
+    def test_malformed_candidate_catalog_is_configuration_error(self):
+        original = self.catalog_path.read_text()
+        for content in (
+            "{",
+            "schema_version: 2\nsuites: []\n",
+            original + "\nexecutions: {}\n",
+            original.replace("  ci-core:\n", "  missing-core:\n", 1),
+            original.replace(
+                "mise exec -- just test validate core",
+                "mise exec -- just test validate automation",
+                1,
+            ),
+        ):
+            with self.subTest(content=content[:40]):
+                repo = self.candidate_repo(content)
+                self.assert_catalog_error("--repo", str(repo))
+                shutil.rmtree(repo)
+
+    def test_just_interface_reads_complete_immutable_candidate_catalog(self):
+        self.make_run()
+        process = subprocess.run(
+            [
+                "just",
+                "test",
+                "ci-reconcile",
+                str(self.plan_path),
+                str(self.results),
+                str(self.output),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+
+    def test_worktree_catalog_cannot_replace_candidate_catalog(self):
+        repo = self.candidate_repo(self.catalog_path.read_text())
+        (repo / "tests/catalog.yaml").write_text("invalid working-tree catalog")
+        self.make_run()
+        process = self.cli("--repo", str(repo))
+        self.assertEqual(process.returncode, 0, process.stderr)
+
     def test_symlinked_inputs_rejected_before_validator_reads(self):
         run = self.make_run()
         for target in (
@@ -363,9 +546,13 @@ class ReconciliationTests(unittest.TestCase):
                 target.rename(saved)
                 target.symlink_to(saved, target_is_directory=saved.is_dir())
                 try:
-                    process = self.cli()
-                    self.assertEqual(process.returncode, 2, process.stderr)
-                    self.assertIn("symlink", process.stderr)
+                    if target == self.plan_path:
+                        process = self.cli()
+                        self.assertEqual(process.returncode, 2, process.stderr)
+                        self.assertIn("symlink", process.stderr)
+                    else:
+                        with self.assertRaisesRegex(self.reconciler.UnsafeInput, "symlink"):
+                            self.reconciler.discover_results(self.results)
                 finally:
                     target.unlink()
                     saved.rename(target)
