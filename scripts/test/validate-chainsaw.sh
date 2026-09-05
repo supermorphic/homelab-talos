@@ -170,6 +170,7 @@ register_group_shell_case core node-lifecycle scripts/test/node-lifecycle-test.s
 register_group_shell_case core cluster-commands scripts/test/cluster-commands-test.sh
 register_group_shell_case ci-framework catalog-suite-runner scripts/test/run-catalog-suite-test.sh
 register_group_shell_case ci-framework ci-runner scripts/test/run-ci-test.sh
+register_group_shell_case ci-framework ci-workflow-contract scripts/test/ci-workflow-contract-test.sh
 register_group_shell_case ci-framework campaign-runner scripts/test/run-campaign-test.sh
 register_group_shell_case core scoped-campaign-preflight scripts/test/scoped-campaign-preflight-test.sh
 register_group_shell_case core agent-access-verifier scripts/test/agent-access-verify-test.sh
@@ -262,6 +263,7 @@ if group_selected core; then
 		scripts/test/repository_shell_validation.py scripts/test/test_repository_shell_validation.py
 		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
 		scripts/test/ci_reconcile.py scripts/test/test_ci_reconcile.py
+		scripts/test/test_repository_secret_scan.py
 		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py
