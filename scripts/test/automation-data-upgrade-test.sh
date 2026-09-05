@@ -343,7 +343,8 @@ baseline_scripts="$integration_root/baseline-scripts"
 candidate_scripts="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts"
 mkdir -p "$baseline_scripts" "$integration_root/backups/old" \
 	"$integration_root/backups/new" "$integration_root/backups/malformed-old" \
-	"$integration_root/backups/malformed-new" "$integration_root/private"
+	"$integration_root/backups/malformed-new" "$integration_root/backups/race" \
+	"$integration_root/private"
 chmod 700 "$integration_root/private"
 for source_name in init-platform.sh platform-control.sql update-backup-status.sql; do
 	git show "$baseline:kubernetes/apps/automation-data/postgresql/app/scripts/$source_name" \
@@ -504,6 +505,70 @@ run_backup_in_container() { # <container> <host-output-directory>
 	fi
 	podman cp "$container:$container_output/." "$output"
 }
+
+# Prove on the pinned PostgreSQL release that a capture waits outside its transaction
+# for the fixed upgrade lock, then takes its snapshot only after the upgrade commits.
+race_container="$(new_container_name race)"
+start_database "$race_container" baseline
+race_upgrade_sql="$integration_root/private/race-upgrade.sql"
+cat >"$race_upgrade_sql" <<'EOSQL'
+BEGIN;
+SELECT pg_advisory_xact_lock(
+  hashtextextended('automation-data:platform-upgrade:026-nocodb-v1', 0)
+);
+\! touch /tmp/race-upgrade-lock-ready
+SELECT pg_sleep(8);
+\ir /candidate/nocodb-extension.sql
+COMMIT;
+EOSQL
+chmod 600 "$race_upgrade_sql"
+podman cp "$race_upgrade_sql" "$race_container:/tmp/race-upgrade.sql"
+psql_file "$race_container" automation_data_control /tmp/race-upgrade.sql \
+	>"$integration_root/private/race-upgrade.log" 2>&1 &
+race_upgrade_pid=$!
+for _attempt in {1..50}; do
+	podman exec "$race_container" test -f /tmp/race-upgrade-lock-ready && break
+	sleep 0.1
+done
+podman exec "$race_container" test -f /tmp/race-upgrade-lock-ready || {
+	wait "$race_upgrade_pid" || true
+	fail 'race fixture did not acquire the fixed upgrade advisory lock'
+}
+run_backup_in_container "$race_container" "$integration_root/backups/race" \
+	>"$integration_root/private/race-backup.log" 2>&1 &
+race_backup_pid=$!
+backup_waited_for_upgrade=false
+for _attempt in {1..60}; do
+	if [[ "$(psql_query "$race_container" automation_data_control "
+SELECT EXISTS (
+  SELECT 1 FROM pg_stat_activity
+  WHERE datname = 'automation_data_control'
+    AND pid <> pg_backend_pid()
+    AND wait_event = 'advisory'
+    AND query LIKE '%pg_advisory_lock%'
+);
+")" == t ]]; then
+		backup_waited_for_upgrade=true
+		break
+	fi
+	sleep 0.1
+done
+if ! wait "$race_upgrade_pid"; then
+	wait "$race_backup_pid" || true
+	fail 'race fixture upgrade transaction failed'
+fi
+if ! wait "$race_backup_pid"; then
+	fail 'backup failed after waiting for the upgrade transaction'
+fi
+[[ "$backup_waited_for_upgrade" == true ]] ||
+	fail 'backup capture did not wait for the fixed upgrade advisory lock'
+[[ "$(psql_query "$race_container" automation_data_control \
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	fail 'race fixture backup did not observe the committed upgraded revision'
+race_bundle="$(find "$integration_root/backups/race" -mindepth 1 -maxdepth 1 \
+	-type d -name 'automation-data-*' -print -quit)"
+[[ -n "$race_bundle" && -s "$race_bundle/COMPLETE" ]] ||
+	fail 'race fixture did not publish a complete post-upgrade bundle'
 
 # The recognized baseline is an exact bounded catalog, not merely absence of the two
 # extension tables. A leftover extension function must stop backup publication.
@@ -758,6 +823,7 @@ printf '%s\n' \
 	'managed_domain_registry_unchanged=true' \
 	'platform_generation_unchanged=true' \
 	'backup_capture_detects_revision_change=true' \
+	'backup_upgrade_lock_interleaving_valid=true' \
 	'old_catalog_leftover_rejected=true' \
 	'upgraded_catalog_oracle_enforced=true' \
 	'revision_oracle_grants_enforced=true' \

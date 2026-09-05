@@ -69,7 +69,9 @@ case "$tool" in
       printf 'freshness-advanced\n' >>"$FAKE_LOG"
     elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
       [[ "$command_text" == *'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'* &&
-        "$command_text" == *'WITH captured AS MATERIALIZED'* ]] || exit 49
+        "$command_text" == *'WITH captured AS MATERIALIZED'* &&
+        "$command_text" == *'pg_advisory_lock'* &&
+        "$command_text" == *"SET lock_timeout = '5s'"* ]] || exit 49
       case "${STATE_SCHEMA:-new}" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43

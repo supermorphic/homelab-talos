@@ -16,6 +16,11 @@ capture_platform_state() {
   output_registry="$1"
   capture_line="$(psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 \
     --field-separator='|' 2>/dev/null <<'EOSQL'
+SET lock_timeout = '5s';
+SELECT pg_advisory_lock(
+  hashtextextended('automation-data:platform-upgrade:026-nocodb-v1', 0)
+) AS upgrade_lock_held
+\gset
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 WITH operation_tables AS (
   SELECT array_agg(class.relname::text ORDER BY class.relname) AS names
@@ -159,6 +164,10 @@ CROSS JOIN registry_text
 CROSS JOIN platform_shape
 WHERE platform_shape.revision IS NOT NULL;
 COMMIT;
+SELECT 1 / pg_advisory_unlock(
+  hashtextextended('automation-data:platform-upgrade:026-nocodb-v1', 0)
+)::integer AS upgrade_lock_released
+\gset
 EOSQL
   )" || return 1
   case "$capture_line" in
@@ -244,7 +253,15 @@ while [ "$attempt" -le "$max_attempts" ]; do
   database_manifest="$temporary_bundle/.database-manifest"
   : >"$database_manifest"
 
-  start_platform_state="$(capture_platform_state "$temporary_bundle/registry.tsv")"
+  if ! start_platform_state="$(capture_platform_state "$temporary_bundle/registry.tsv")"; then
+    rm -rf -- "$temporary_bundle"
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo 'Platform state remained unavailable or invalid.' >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    continue
+  fi
   capture_databases "$start_databases"
   database_set_hash="$(sha256sum "$start_databases" | awk '{print $1}')"
 
@@ -267,7 +284,15 @@ while [ "$attempt" -le "$max_attempts" ]; do
     printf 'database\t%s\t%s\n' "$database_base64" "$dump_relative" >>"$database_manifest"
   done <"$start_databases"
 
-  end_platform_state="$(capture_platform_state "$end_registry")"
+  if ! end_platform_state="$(capture_platform_state "$end_registry")"; then
+    rm -rf -- "$temporary_bundle"
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo 'Platform state remained unavailable or invalid.' >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    continue
+  fi
   capture_databases "$end_databases"
   if [ "$start_platform_state" != "$end_platform_state" ] ||
     ! cmp -s "$start_databases" "$end_databases"; then
