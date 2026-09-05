@@ -301,9 +301,10 @@ class GitPlanTests(unittest.TestCase):
         self.git("config", "user.email", "ci-planner@example.invalid")
         self.git("config", "commit.gpgsign", "false")
         self.git("config", "core.hooksPath", "/dev/null")
-        self.write("docs/planner-fixture.md", "initial\n")
+        self.documentation_path = (Path("docs") / "planner-fixture.md").as_posix()
+        self.write(self.documentation_path, "initial\n")
         self.base = self.commit()
-        self.write("docs/planner-fixture.md", "updated\n")
+        self.write(self.documentation_path, "updated\n")
         self.head = self.commit()
         self.output = self.repo / "plan.json"
 
@@ -374,7 +375,7 @@ class GitPlanTests(unittest.TestCase):
         self.git("mv", "kubernetes/apps/monitoring/old file\nname.yaml", "docs/renamed.yaml")
         (self.repo / "kubernetes/apps/automation-data/deleted.yaml").unlink()
         self.write("docs/added.yaml", "new content\n")
-        self.write("docs/planner-fixture.md", "modified again\n")
+        self.write(self.documentation_path, "modified again\n")
         head = self.commit()
         plan = make_plan(self.repo, base, head, IMPACT, CATALOG)
         self.assertEqual(plan.groups, ("core", "observability", "automation"))
@@ -385,7 +386,7 @@ class GitPlanTests(unittest.TestCase):
                 "docs/renamed.yaml",
                 "kubernetes/apps/automation-data/deleted.yaml",
                 "docs/added.yaml",
-                "docs/planner-fixture.md",
+                self.documentation_path,
             }.issubset(paths)
         )
 
@@ -438,8 +439,8 @@ class GitPlanTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_unsupported_git_type_change_exits_two(self):
-        (self.repo / "docs/planner-fixture.md").unlink()
-        (self.repo / "docs/planner-fixture.md").symlink_to("somewhere")
+        (self.repo / self.documentation_path).unlink()
+        (self.repo / self.documentation_path).symlink_to("somewhere")
         self.head = self.commit()
         self.assert_error(self.plan_cli())
 
