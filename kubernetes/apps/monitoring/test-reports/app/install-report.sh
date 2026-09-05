@@ -64,7 +64,7 @@ computed_manifest="$stage/manifest.computed"
 (
   cd "$stage"
   find artifact generation report prune.txt -type f -print |
-    sort |
+    LC_ALL=C sort |
     while IFS= read -r path; do
       sha256sum "$path"
     done

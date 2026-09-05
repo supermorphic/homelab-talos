@@ -117,6 +117,12 @@ class ReportPublishTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = self.make_inputs(root)
+            # Path component ordering differs from full filename ordering when
+            # an asset directory shares a prefix with an adjacent asset file.
+            for name in ("assets/icon/file.js", "assets/icon.js"):
+                asset = args.report_dir / "awesome" / name
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_text("synthetic asset\n", encoding="utf-8")
             result = report_publish.prepare(args)
             self.assertEqual(result["status"], "prepared")
             self.assertTrue(result["authoritative"])
