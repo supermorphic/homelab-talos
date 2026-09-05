@@ -6,6 +6,7 @@ source scripts/lib/network.sh
 require_bash
 
 scripts/validate/public-webhook-routes.sh
+scripts/validate/internal-dns-endpoints.sh
 
 cert_manager_chart='oci://quay.io/jetstack/charts/cert-manager'
 metallb_repository='https://metallb.github.io/metallb'
