@@ -241,6 +241,7 @@ if group_selected core; then
 		-exec dirname {} \; | LC_ALL=C sort -u)
 fi
 if group_selected ci-framework; then
+	# Root discovery includes planner and merge-gate reconciliation tests exactly once.
 	if [[ -n "$fragment_root" ]]; then
 		uv run --locked python scripts/test/junit_tools.py unittest \
 			--output "$fragment_root/python-test-tools.xml" \
@@ -260,6 +261,7 @@ if group_selected core; then
 		scripts/test/junit_tools.py scripts/test/test_junit_tools.py
 		scripts/test/repository_shell_validation.py scripts/test/test_repository_shell_validation.py
 		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
+		scripts/test/ci_reconcile.py scripts/test/test_ci_reconcile.py
 		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py
