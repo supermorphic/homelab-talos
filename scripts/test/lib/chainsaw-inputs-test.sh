@@ -137,7 +137,7 @@ while IFS= read -r test_script; do
 	chmod +x "$validator_root/$test_script"
 done < <(
 	awk '
-		/^[[:space:]]*(run_shell_case|register_harness_shell_case) / {
+		/^[[:space:]]*(run_group_shell_case|register_group_shell_case|run_shell_case|register_harness_shell_case) / {
 			for (field = 1; field <= NF; field++) {
 				if ($field ~ /^(scripts\/test|tests\/probes)\/.*\.sh$/) print $field
 			}
