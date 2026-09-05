@@ -10,6 +10,18 @@ validate group="all":
 catalog-validate:
     @scripts/test/validate-catalog.sh
 
+# Plan deterministic validation groups for an exact base and candidate head.
+ci-plan base head output:
+    @uv run --locked python scripts/test/ci_plan.py plan --base {{quote(base)}} \
+      --head {{quote(head)}} --impact tests/impact.yaml --catalog tests/catalog.yaml \
+      --output {{quote(output)}}
+
+# Request the complete validation set for an exact base and candidate head.
+ci-plan-full base head output:
+    @uv run --locked python scripts/test/ci_plan.py plan --base {{quote(base)}} \
+      --head {{quote(head)}} --impact tests/impact.yaml --catalog tests/catalog.yaml \
+      --output {{quote(output)}} --full
+
 # Validate one canonical run directory by run ID.
 result-validate run:
     @scripts/test/validate-run.sh ".test-results/{{run}}"
