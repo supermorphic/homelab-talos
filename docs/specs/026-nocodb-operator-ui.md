@@ -30,9 +30,11 @@ three roles for each managed domain:
 The core `managed_domains` registry and ordinary provisioning functions manage only the
 migrator and runtime login credentials. The implemented extension keeps optional NocoDB
 reader and operator state in the separate, single-purpose `managed_nocodb_sources`
-registry. The automation-data Flux Kustomization is still suspended, and live acceptance
-has not run. This specification therefore does not assume that the underlying platform
-is operational.
+registry. The accepted platform is already active: specification 025 records successful
+provisioning and full-chain recovery acceptance on 2026-09-05, and its Flux
+Kustomization has `spec.suspend: false`. NocoDB remains suspended and unaccepted.
+Introducing NocoDB must upgrade that existing platform without recreating its database,
+changing existing domain credentials, or interrupting its backup contract.
 
 The cluster already supplies these relevant patterns:
 
@@ -109,6 +111,14 @@ gain a second path to the read-model objects.
 Domains preserve source facts and represent corrections as records in `operator` rather
 than updating source tables in place. Broad changes, schema changes, backfills, and
 changes across many records remain n8n or migrator operations.
+
+Domain workflows explicitly consume the applicable operator decisions. A refresh updates
+workflow-owned facts without overwriting human-owned decisions. A domain's reviewed
+migrations grant its runtime login the access needed to publish `read_model` and consume
+`operator`; NocoDB provisioning does not grant that runtime access. Acceptance must prove
+the complete fact, decision, consumption, and subsequent-refresh sequence, not just CRUD
+on two unrelated tables. Business decisions needed by automation belong in `operator`,
+not only in NocoDB comments, views, or attachment metadata.
 
 ### Domain opt-in
 
@@ -199,7 +209,7 @@ The chart is configured with:
 - `updateStrategy.type: Recreate`;
 - worker and autoscaling disabled;
 - no Redis configuration;
-- `NC_SECURE_ATTACHMENTS=false` explicitly;
+- an explicitly validated attachment-access mode, shared by normal use and recovery;
 - a `ClusterIP` Service;
 - chart Ingress and chart NetworkPolicy disabled in favor of repository patterns;
 - the external PostgreSQL URL and both auth keys from an existing Secret; and
@@ -214,12 +224,15 @@ Longhorn replicas are two storage copies for that one volume, not two NocoDB app
 instances. A pod or node move can cause a short outage while the volume detaches and
 reattaches.
 
-The explicit secure-attachments setting is part of the pinned `2026.08.2` recovery
-contract. The retained canary is associated through a comment, and this release exposes
-comment attachment bytes through `/download/*` only when that setting is false. The
-route remains behind the existing private ingress. Do not enable secure attachments
-without redesigning the canary around a supported authenticated proxy or an Attachment
-column.
+Attachment access must be selected from the pinned application's supported operator
+behavior. Prefer an authenticated attachment path and adapt the recovery canary to it;
+do not select application-wide access behavior merely to satisfy a test. The current
+implementation uses a comment-associated canary and `NC_SECURE_ATTACHMENTS=false`.
+That implementation is not a validated final choice. Before activation, exercise the
+supported authenticated alternative in the local integration test and reconcile the
+canary, manifests, guide, and restore drill together. If that alternative cannot support
+the required use, obtain an explicit operator decision on the access model. The private
+Gateway alone does not establish per-user attachment authorization.
 
 The current Community edition uses NocoDB's Sustainable Use License rather than an
 OSI-approved open-source license. Internal self-hosted use is within the selected
@@ -371,9 +384,67 @@ ownership, schema-create, or cross-database authority.
 NocoDB configures the reader source to reflect only `read_model`, with data editing and
 schema editing disabled. It configures the operator source to reflect only `operator`,
 with data editing enabled and schema editing disabled. Those settings make the UI match
-the database contract and reduce accidental writes. PostgreSQL denial remains the
-independent security oracle rather than the normal way the UI distinguishes the two
-surfaces.
+the two broad access surfaces and reduce accidental writes; they do not promise that
+Community edition represents every column-level grant in its editor. PostgreSQL denial
+remains the independent security oracle rather than the normal way the UI distinguishes
+the two surfaces.
+
+### Domain schema evolution
+
+Reviewed domain migrations remain the only DDL path. After a migration changes reflected
+objects, validate its grants, explicitly refresh the affected source's schema metadata
+through the supported NocoDB UI, and run source sync to validate identity and access.
+Schema refresh is metadata reconciliation, not source recreation or credential rotation.
+Preserve the existing base, integration, source, and saved views where their referenced
+objects remain valid. Report incompatible renames or removals for attended review rather
+than silently deleting views or widening grants. The initial implementation need not add
+an automatic refresh endpoint to the provisioning webhook.
+
+The local integration test must prove an additive table/column change, refresh, and
+unchanged source identity. The guide must document the verified pinned-version UI steps
+before this procedure is described as supported.
+
+## Existing-platform upgrade
+
+Initialization SQL runs only for an empty PostgreSQL data directory. It is not the
+upgrade mechanism for the accepted platform. Provide one fixed, versioned additive
+upgrade for the NocoDB extension, with the same extension definitions used by fresh
+initialization. This is a control-schema upgrade, not a PostgreSQL engine upgrade or a
+general migration service.
+
+The upgrade must:
+
+- validate the expected existing control schema and installed revision before mutation;
+- serialize execution and apply its transactional schema/function changes atomically;
+- install the source registry and exact function grants without recreating domains or
+  changing existing owner, migrator, runtime, provisioner, exporter, or backup logins;
+- record the installed revision and make an unchanged rerun a validated no-op;
+- reject an unknown revision or incompatible partial state instead of overwriting it;
+- preserve the platform-generation mechanism used by backup consistency checks; and
+- read back the resulting schema, grants, existing domain identities, and revision.
+
+Use a fixed, Git-reviewed operator-run lifecycle command for this existing-state
+administration. Its bounded Job uses the existing platform credential by Secret
+reference; neither an agent nor n8n receives broader credentials or an arbitrary SQL
+execution surface. The command repeats deployed-source, target, backup, and revision
+preconditions immediately before applying the reviewed upgrade. Its source and command
+registration must exist and pass local tests before any operator invocation is published
+as an available procedure.
+
+Deploy backup compatibility before applying the upgrade. The updated backup path must
+support both the exact accepted pre-extension schema and the upgraded schema while
+NocoDB is staged. An absent optional registry is valid only for the recognized old
+revision; malformed state or a missing registry in the upgraded revision is an error.
+Old logical bundles remain restorable. An upgraded backup captures the source registry
+and optional roles without changing ordinary domain readiness. NocoDB bootstrap refuses
+to proceed until the extension revision and a post-upgrade backup have been validated.
+
+Test the upgrade against a populated instance initialized from the accepted pre-extension
+Git revision, not from the new initialization SQL. Prove data, role identity, grants,
+and password verifiers remain unchanged without printing verifier values. Test backup
+before and after upgrade, a no-op rerun, incompatible-state rejection, and isolated
+restore of both bundle formats. A fresh-install test must converge to the same extension
+contract.
 
 ## Platform registry and fixed functions
 
@@ -444,8 +515,14 @@ and n8n APIs. It performs this fixed transaction:
    immediately before and after each reconcile. Neither reconcile requests a mutable
    source refresh.
 2. Prove that issue-317 bootstrap, provisioning acceptance, a current complete backup,
-   and the full-chain restore drill have passed. The newest restore evidence must be
-   newer than the newest provisioning acceptance at the captured SHA.
+   and the full-chain restore drill have passed for the relevant platform implementation.
+   Also require the installed NocoDB extension revision and a complete post-upgrade
+   backup. Evidence records its original Git SHA; a later unrelated repository commit
+   does not by itself invalidate it. Reuse is permitted only when the relevant platform
+   source trees and shared lifecycle dependencies are identical and current observational
+   prerequisites pass. Changed platform or recovery code requires new affected evidence.
+   The newest applicable restore evidence must be newer than the applicable provisioning
+   acceptance. Retain exact deployed-source checks for the command being executed.
 3. Repeat the source, target, Secret-shape, live suspension, and prerequisite checks
    immediately before mutation.
 4. Temporarily reconcile the staged NocoDB package and run the fixed metadata bootstrap
@@ -568,7 +645,7 @@ Source sync performs this idempotent state machine:
 13. Mark the source generation `ready` only after all asynchronous, read-back, and access
     checks succeed. Return only non-secret IDs, access kinds, states, and timestamps.
 
-The bounded source response also includes the stored job ID and terminal job state,
+The bounded source response also includes the stored job ID and currently observed job state,
 credential generation, source UI edit flags, and the boolean PostgreSQL validation matrix
 used for readiness. Attended acceptance uses this non-secret evidence to compare unchanged
 sync and targeted rotation without reading the registry or credentials directly.
@@ -576,9 +653,20 @@ Each source result names these as `sourceCreateJobId`, `sourceCreateJobState`,
 `credentialGeneration`, `dataEditAllowed`, `schemaEditAllowed`, and
 `postgresqlValidation`. It also returns `sourceDiscovered`, `sourceReadBack`, the registry
 `generation`, and supported `operationStartedAt`, `updatedAt`, and `validatedAt`
-timestamps. A `ready` result requires fresh source GET, exact completed-job, data API, and
-PostgreSQL validation evidence; the workflow does not infer those fields from registry
-state alone.
+timestamps. The command and workflow share one explicit response contract, and a
+cluster-independent test executes the real response-producing Code node and passes its
+output to the command's validator. Unknown fields or changed types must not drift between
+handcrafted fixtures and the real response.
+
+A first transition to `ready` requires the exact creation job to complete, followed by
+source discovery, GET, data API, and PostgreSQL validation. The stored source ID and
+successful validation record retain that transition's evidence. Subsequent ready syncs
+and rotations require fresh source identity, data API, and PostgreSQL checks, but must
+not require historical job-list visibility. NocoDB's pinned job-list service omits
+completed jobs older than one hour. Retain `sourceCreateJobId` for traceability;
+`sourceCreateJobState` is null when not observed in the current operation, not a fabricated
+fresh `completed` observation. Acceptance distinguishes creation evidence from current
+source validation and tests normal operation after completed jobs age out.
 
 The workflow uses execution order `v1` and disables saved manual, successful, failed, and
 progress execution data. Passwords exist transiently in n8n memory because both systems
@@ -587,8 +675,12 @@ must receive the same generated value.
 Each five-second polling delay remains below n8n's 65-second threshold for offloading a
 Wait execution to its database. The workflow must not replace the polling loop with a
 long Wait that persists execution data. A NocoDB or n8n pod restart can interrupt the
-in-memory loop; the stored source-creation job ID lets the next explicit sync resume from
-NocoDB state without retaining the password in n8n execution history.
+in-memory loop. The next explicit sync can resume polling only while the stored job is
+still observable. The fallback queue does not guarantee that interrupted work survives
+a restart. A missing job for a source not yet recorded ready remains an attended
+investigation case; it is not proof of failure or permission to queue another source.
+An established ready source does not depend on that queue history. No password is
+retained in n8n execution history to support retry.
 
 The workflow never calls a source-delete endpoint as compensation. NocoDB `2026.08.2`
 can delete its own partially created source when the source-creation processor reports
@@ -700,6 +792,14 @@ change plan.
 Gatus checks `https://nocodb.lab.supermorphic.com/api/v1/health` through the private
 route. Application logs flow through the existing Alloy collection path.
 
+Monitoring enrollment follows intended activation. The staged package must not enable
+an unavailable-endpoint check, expected-absence alerts, or recurring NocoDB verification
+campaign membership. Enable the endpoint, rule selection, and campaign membership with
+the reviewed durable activation change. Their source definitions and offline tests may
+exist before enrollment. Attended bootstrap and acceptance verify the temporary active
+workload directly; they must not require monitoring that is deliberately unenrolled.
+After durable activation, absence is an outage and must not silently skip verification.
+
 Prometheus alerts cover:
 
 - unavailable Deployment or health target;
@@ -741,6 +841,34 @@ ShellCheck, formatting, link, and gitleaks checks. New independent assertions co
 CI does not start NocoDB or PostgreSQL, create a source, test live privileges, create an
 attachment backup, or perform a restore.
 
+### Disposable local integration
+
+Before cluster activation, run a separate registered, agent-owned local integration test
+through the pinned toolchain using Podman. Keep it outside `just ci`; it needs a working
+local container runtime but no cluster access, production credentials, or age key.
+Use the repository's pinned application versions, synthetic data and generated local
+credentials, run-owned containers, a private container network, and temporary storage.
+Bind any required host port only to loopback. Disable saved provisioning execution data
+and redact results; do not publish credential-bearing container or HTTP logs.
+
+The test exercises the actual PostgreSQL definitions, imported n8n workflows, NocoDB API,
+and source-command response validation together. It proves:
+
+- populated-platform upgrade and fresh-install equivalence, including backup/restore;
+- first-run domain provisioning before the migrator credential is bound to acceptance;
+- reader creation, operator grant phase, and operator creation through real async jobs;
+- the workflow fact, human decision, workflow consumption, and refresh-preservation loop;
+- unchanged sync and targeted rotation after job-history expiry;
+- ready-source behavior after application restart, plus fail-closed interrupted creation;
+- additive schema refresh without changing source identity or credentials;
+- attachment upload, authorized retrieval, persistence after restart, and recovery; and
+- removal of only run-owned containers, networks, and storage, with absence read-back.
+
+Use synthetic aged-job fixtures in the fast contract tests and real aged job metadata in
+the disposable environment; do not alter the host clock or production metadata. A local
+test does not replace attended proof of the private Gateway, Cilium policy, Longhorn
+replicas, or paired live backups. Record local and live evidence separately.
+
 ### Read-only live verification
 
 ```sh
@@ -751,6 +879,9 @@ The verifier observes Flux readiness, Deployment rollout, Service endpoints, pri
 route, Gatus, Prometheus rules, workload policy, attachment PVC identity and Longhorn
 robustness, and current automation-data backup freshness. It does not read application
 metadata, inspect Secrets, authenticate to NocoDB, or alter target state.
+Before monitoring enrollment, an explicitly invoked verifier checks the staged/attended
+phase against Git intent and reports that phase, rather than claiming durable activation.
+It must distinguish intentional inactivity from failure of an intended active service.
 
 ### Attended access test
 
@@ -799,6 +930,11 @@ run ID and cleanup never broadens beyond those rows. It proves:
     canary. Any unexpectedly permitted reader insert is also deleted by its unique ID
     before the test reports failure.
 
+Acceptance also demonstrates the human-feedback loop, schema refresh, aged-job sync,
+and ready-source restart behavior defined above. Include an attended browser check that
+the reader is visibly read-only and an operator can make the intended small edit. API
+checks alone do not establish the usability of this operator interface.
+
 The PostgreSQL denials are the independent authority oracle. UI flags alone cannot pass
 the test. Fixed acceptance setup, grants, and residue-cleanup SQL runs through the
 NOINHERIT migrator credential and explicitly uses the fixed
@@ -825,6 +961,12 @@ Longhorn attachment backup. It proves:
 7. all run-owned workloads, Services, policies, and temporary claims are removed and
    proved absent.
 
+Runtime-created Jobs resolve the exact generated backup ConfigMap selected by the
+accepted deployed workload and validate its expected script keys. They must not use an
+unhashed generator name or select an arbitrary stale ConfigMap. The detached Longhorn
+volume is checked before binding; two healthy attached replicas are checked after the
+restored workload mounts it.
+
 The restore drill never points restored NocoDB at the live domain service and never
 overwrites the running metadata database or PVC.
 
@@ -832,22 +974,27 @@ overwrites the running metadata database or PVC.
 
 Rollout follows dependency and authority order:
 
-1. Implement the staged NocoDB package, optional automation-data role contract, workflow
-   templates, lifecycle commands, monitoring, tests, and reconciled specifications.
-2. Run `mise exec -- just ci`, review, merge, and leave the NocoDB Flux Kustomization
-   suspended.
-3. Complete issue-317 bootstrap, provisioning acceptance, complete backup, and
-   full-chain restore drill if they have not already passed.
+1. Reconcile with the active platform baseline. Implement the additive upgrade, backup
+   compatibility, source lifecycle fixes, staged monitoring, and local integration test.
+2. Pass focused validation, disposable Podman integration, and `mise exec -- just ci`.
+   Review and merge only with specific operator authorization. Keep NocoDB suspended
+   and its monitoring and recurring verification unenrolled.
+3. Verify current platform prerequisites. Apply the fixed reviewed control-schema
+   upgrade through its operator-run command, then validate a complete post-upgrade
+   backup and the affected platform acceptance/recovery evidence.
 4. Create and merge the guarded SOPS-encrypted NocoDB Secret while NocoDB remains
-   suspended.
+   suspended. Do not repeat platform acceptance solely because an unrelated Git SHA
+   changed; verify relevant-source equivalence and current prerequisites.
 5. From deployed `origin/main`, run the confirmed NocoDB bootstrap command.
-6. Import, bind, and publish the private NocoDB source-provisioning workflow.
-7. Run the confirmed access test and wait for complete automation-data and Longhorn
-   backups that contain its persistent NocoDB state.
-8. Run the confirmed NocoDB restore drill.
-9. Only after all acceptance passes, change the NocoDB Kustomization's `spec.suspend` to
-   `false` through a reviewed Git change and reconcile this specification with the dated
-   result.
+6. Import, bind, and publish the private source workflow. Provision the synthetic domain
+   before binding its existing migrator credential to the acceptance workflow; publish
+   that workflow only after every required credential exists and is bound.
+7. Run access and browser acceptance. Wait for complete automation-data and Longhorn
+   backups that contain the persistent NocoDB state.
+8. Run the confirmed paired NocoDB restore drill.
+9. After acceptance passes, make the reviewed Git activation change: set NocoDB's
+   `spec.suspend: false`, enroll its monitoring and recurring verification together,
+   verify their active behavior, and record dated results in this specification.
 
 Initial administrator login, n8n credential binding, workflow publication, and commands
 that read sensitive runtime state or call administrative APIs remain attended operator
@@ -885,6 +1032,15 @@ The NocoDB Flux Kustomization is selected by its parent and remains
 `spec.suspend: true`. No NocoDB bootstrap, source sync, access acceptance, backup pairing,
 or restore drill has run against the live cluster. No active service or recovery
 capability is claimed.
+
+The 2026-09-05 integration audit revised this design after the initial implementation.
+The existing-platform upgrade, shared response validation, ready-source independence
+from historical jobs, generated restore references, activation-aware monitoring, and
+disposable integration requirements above are acceptance work still to be completed.
+The operations guide and recovery runbook describe the initial implementation; reconcile
+them with the tested result before rollout. Component contract-test passes do not mark
+these integration requirements complete. The transient execution plan remains under
+`.tmp/plans/026-nocodb-operator-ui.md` and is not a committed design artifact.
 
 ## Rejected alternatives
 
@@ -970,6 +1126,7 @@ and dated acceptance results.
 - [NocoDB `2026.08.2` asynchronous source-create controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/jobs/source-create/source-create.controller.ts)
 - [NocoDB `2026.08.2` source-create processor](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/jobs/source-create/source-create.processor.ts)
 - [NocoDB `2026.08.2` job-list controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/jobs-meta.controller.ts)
+- [NocoDB `2026.08.2` job-list retention](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/services/jobs-meta.service.ts)
 - [NocoDB `2026.08.2` fallback jobs service](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/modules/jobs/fallback/jobs.service.ts)
 - [NocoDB `2026.08.2` API-token controller](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/controllers/api-tokens.controller.ts)
 - [NocoDB `2026.08.2` application-settings contract](https://github.com/nocodb/nocodb/blob/2026.08.2/packages/nocodb/src/interface/AppSettings.ts)

@@ -9,6 +9,12 @@ The repository contains the recovery workflow, but live recovery remains unprove
 the attended NocoDB access test, paired backups, and restore drill pass. Do not describe
 an unrun drill as established recoverability.
 
+The integration requirements in
+[specification 026](../specs/026-nocodb-operator-ui.md) were revised on 2026-09-05.
+Reconcile this runbook with the tested implementation before using it for rollout
+acceptance; the initial recovery scripts alone do not establish that those requirements
+are met.
+
 ## Recovery roots and limits
 
 Keep these recovery roots available:
