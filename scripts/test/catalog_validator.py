@@ -844,6 +844,9 @@ def validate_ci_partition(catalog: dict[str, Any]) -> None:
         if not isinstance(executions[execution], list):
             fail(f"CI group execution {execution} must be a list.\n")
 
+    if set(executions) != {"ci", *CI_GROUP_EXECUTIONS}:
+        fail("Test catalog execution names must be ci plus the four CI group executions.\n")
+
     full = executions["ci"]
     grouped = [
         suite_id
@@ -854,6 +857,8 @@ def validate_ci_partition(catalog: dict[str, Any]) -> None:
         fail("CI group executions contain duplicate suite IDs.\n")
     if set(grouped) != set(full) or len(grouped) != len(full):
         fail("CI group executions are not the exact full CI partition.\n")
+    if grouped != full:
+        fail("CI group executions are not in canonical full-CI order.\n")
 
     suites_by_id = {
         entry["metadata"]["id"]
