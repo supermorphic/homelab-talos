@@ -35,4 +35,15 @@ HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/c
   helm template csi-driver-smb csi-driver-smb --repo "$chart_repo" --version "$chart_version" --namespace csi-driver-smb --values "$values" >"$temp_dir/render.yaml"
 rg -q 'smb\.csi\.k8s\.io' "$temp_dir/render.yaml"
 
+# Talos nodes are Linux-only. Check the rendered workloads so a chart default
+# cannot silently restore the unused Windows plugin or remove the Linux plugin.
+[[ "$(yq ea -r '[select(.kind == "DaemonSet") | .metadata.name + ":" + .spec.template.spec.nodeSelector."kubernetes.io/os"] | join(",")' "$temp_dir/render.yaml")" == 'csi-smb-node:linux' ]] || {
+  echo 'SMB CSI must render only the Linux csi-smb-node DaemonSet.' >&2
+  exit 1
+}
+[[ "$(yq ea -r '[select(.kind == "Deployment") | .metadata.name] | join(",")' "$temp_dir/render.yaml")" == 'csi-smb-controller' ]] || {
+  echo 'SMB CSI must retain its controller Deployment.' >&2
+  exit 1
+}
+
 echo "csi-driver-smb $chart_version source, wiring, dependency, and pinned render passed validation."
