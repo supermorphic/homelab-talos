@@ -41,6 +41,8 @@ target.
   grants, and encrypted n8n credentials without repository changes.
 - Give each domain a stable ownership role, a DDL-capable migration login, and a separate
   CRUD-only runtime login.
+- Let an optional NocoDB integration add separate read-only and controlled-edit roles
+  without changing ordinary domain readiness or granting NocoDB a core domain login.
 - Keep the platform provisioning credential and n8n credential-management API key away
   from normal workflows.
 - Preserve all dynamically created databases, database objects, grants, global roles,
@@ -170,6 +172,12 @@ The Flux package owns only platform resources:
 The established monitoring packages own the related PrometheusRule and dashboard.
 Domain-specific objects never appear in these resources.
 
+The optional NocoDB extension adds one `nocodb` metadata database, one
+`managed_nocodb_sources` table in the platform control database, and reader or operator
+roles only for domains that explicitly opt in. It does not add a second domain registry
+or change the core provisioning contract. The reader source row is the canonical base
+identity; an optional operator source row must use that same base.
+
 ## PostgreSQL runtime
 
 PostgreSQL runs as one StatefulSet replica. The initial implementation uses the same
@@ -191,9 +199,15 @@ The platform bootstrap creates a control database containing the
 `platform_operations.managed_domains` registry and operational backup state. This
 database is platform runtime state and is included in every logical backup bundle.
 
+The NocoDB metadata bootstrap uses a fixed platform function to create a separate
+`nocodb` database and `nocodb_metadata` login. The metadata database is not a managed
+automation domain and is not entered in `managed_domains`. Catalog-driven backup
+discovery includes it as an ordinary non-template database.
+
 ## Authority model
 
-The platform has three operator-visible authority levels.
+The platform has three core operator-visible authority levels. NocoDB opt-in adds the
+optional reader and operator roles described below without changing these core roles.
 
 ### Platform provisioning
 
@@ -256,6 +270,20 @@ cluster roles or connect to another domain database.
 Each normal workflow uses a CRUD-only login for one database. It cannot change schema,
 assume the owner role, manage roles, or connect to another domain database.
 
+### Optional NocoDB access
+
+A Noco-enabled domain can add `<domain>_reader` for `read_model` and
+`<domain>_operator` for `operator`. Neither role can assume the owner, migrator, runtime,
+provisioner, metadata, or backup role. The reader receives fixed read-only grants. The
+operator receives only exact DML grants from a reviewed domain migration.
+
+Operator adoption is deliberately two-phase. The first source sync creates the operator
+as a `NOLOGIN` grant target when the `operator` schema exists. A reviewed migration then
+grants the intended table, column, sequence, and optional row-policy authority. A second
+source sync enables the login only after catalog validation passes. These roles and the
+source lifecycle are defined in
+[specification 026](026-nocodb-operator-ui.md).
+
 ## Domain role and grant model
 
 A valid domain identifier matches `^[a-z][a-z0-9_]{0,47}$`. Its 48-character maximum
@@ -287,6 +315,13 @@ to that database.
 The platform creates both n8n credentials automatically. It never returns a generated
 password to the operator. Domain credentials are stored only as PostgreSQL password
 verifiers and n8n ciphertext.
+
+Optional NocoDB roles are not created by ordinary domain provisioning. Their single
+runtime registry is `platform_operations.managed_nocodb_sources`, with one row for each
+requested `(domain, access_kind)`. It references `managed_domains` and records only
+non-secret source lifecycle state and opaque object IDs. Source passwords exist only
+transiently during source sync or targeted rotation; the matching verifier and encrypted
+NocoDB integration credential are the retained pair.
 
 ## Provisioning workflow
 
@@ -398,11 +433,15 @@ Preserving global roles and password verifiers requires broader protected-catalo
 than the n8n single-database backup role; that authority is never available to n8n
 workflows.
 
-At the start of one run, the backup job reads the PostgreSQL database catalog and the
-runtime managed-domain registry. The PostgreSQL catalog is the fail-safe source for the
-set of actual non-template databases: an unregistered or partially registered database
-is still included rather than silently omitted. The captured manifest also records every
-registry row and its state. The set is never read from Git.
+At the start of one run, the backup job reads the PostgreSQL database catalog, the
+runtime managed-domain registry, and the NocoDB source state held by the control
+database. The PostgreSQL catalog is the fail-safe source for the set of actual
+non-template databases: an unregistered or partially registered database, including the
+NocoDB metadata database, is still included rather than silently omitted. The captured
+manifest records the catalog-derived set, and `registry.tsv` records every managed-domain
+row and its state. NocoDB source rows remain in the control-database dump; their captured
+state also participates in the stable platform generation. The database set is never
+read from Git.
 
 Active provisioning coordinates with backup through a three-attempt stability check.
 The backup captures the catalog set and registry generation before dumping and checks
@@ -496,7 +535,8 @@ The attended full-chain restore drill:
    `postgres` attributes and password verifier.
 4. Restores the platform control database and every domain database from the manifest.
 5. Verifies that the registry, PostgreSQL catalog, ownership, grants, and restored
-   database set agree.
+   database set agree. When optional NocoDB source rows exist, it also validates every
+   ready reader and operator role against the restored catalogs.
 6. Restores the n8n database into an isolated n8n recovery instance with the retained
    `N8N_ENCRYPTION_KEY`.
 7. Redirects only that temporary n8n instance's automation-data hostname to the isolated
@@ -725,6 +765,10 @@ the credential ciphertext and PostgreSQL password verifier as one recoverable co
 The [operations guide](../guides/automation-data-operations.md) and
 [recovery runbook](../runbooks/automation-data-recovery.md) retain procedures and test
 mechanics outside this durable design record.
+
+The optional NocoDB extension in specification 026 is separate from that accepted
+platform baseline. Its repository implementation does not establish live NocoDB
+provisioning or recovery; NocoDB remains staged pending its own acceptance.
 
 ## Rejected alternatives
 

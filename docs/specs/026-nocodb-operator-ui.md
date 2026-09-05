@@ -27,10 +27,12 @@ three roles for each managed domain:
 | `<domain>_migrator` | Login for reviewed DDL through explicit owner-role assumption |
 | `<domain>_runtime` | Login for ordinary workflow CRUD in the domain |
 
-The current registry and provisioning functions manage only the migrator and runtime
-login credentials. The automation-data Flux Kustomization is still suspended, and live
-acceptance has not run. This specification therefore defines a source extension and a
-dependency gate; it does not assume that the underlying platform is operational.
+The core `managed_domains` registry and ordinary provisioning functions manage only the
+migrator and runtime login credentials. The implemented extension keeps optional NocoDB
+reader and operator state in the separate, single-purpose `managed_nocodb_sources`
+registry. The automation-data Flux Kustomization is still suspended, and live acceptance
+has not run. This specification therefore does not assume that the underlying platform
+is operational.
 
 The cluster already supplies these relevant patterns:
 
@@ -419,9 +421,10 @@ Function bodies use fixed identifiers derived from a validated domain and fixed 
 kind. Public execution is revoked. The functions expose no arbitrary SQL, grants,
 database creation, role deletion, base deletion, or domain decommissioning.
 
-Specification 025, the provisioner workflow contract, registry documentation, backup
-manifest tests, and restore validation must be updated during implementation to include
-these optional roles and tables.
+Specification 025, the provisioner workflow contract, backup capture, and restore
+validation include these optional roles and the single source registry. The source rows
+remain in the restored `automation_data_control` database; `registry.tsv` continues to
+describe managed domains rather than duplicating NocoDB object identifiers.
 
 ## Bootstrap workflow
 
@@ -861,17 +864,21 @@ remain agent-run under repository policy.
 - Loss of NocoDB metadata can be recovered from automation-data logical backup; loss of
   attachments can be recovered separately from Longhorn backup.
 - Loss of `NC_CONNECTION_ENCRYPT_KEY` cannot be repaired from the metadata database. The
-  operator must restore the retained Secret or explicitly rotate every source after
-  recovery.
+  operator must restore the retained Secret. If the key is permanently lost, a
+  separately reviewed recovery must establish replacement encryption material and rotate
+  each reader or operator source explicitly; no broad automatic recovery exists.
 - The workflow does not use source, base, registry, or role deletion as compensation or
   cleanup.
 
 ## Implementation status
 
-As of 2026-09-04, this specification records the approved design and its repository
-implementation is in progress. The staged NocoDB service and source workflows remain
-suspended and have not completed live acceptance. No recovery capability or live NocoDB
-service is claimed.
+As of 2026-09-05, the repository contains the staged NocoDB package, optional
+automation-data roles and single source registry, secret-free n8n workflows, lifecycle
+commands, monitoring, offline contract tests, operations guide, and recovery runbook.
+The NocoDB Flux Kustomization is selected by its parent and remains
+`spec.suspend: true`. No NocoDB bootstrap, source sync, access acceptance, backup pairing,
+or restore drill has run against the live cluster. No active service or recovery
+capability is claimed.
 
 ## Rejected alternatives
 

@@ -101,6 +101,28 @@ Foundation workflows preserve the same boundary:
 | `just bootstrap foundation` | Guard and reconcile the nine suspended foundation units in dependency order |
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
+The staged NocoDB operator UI uses the automation-data PostgreSQL and private n8n
+boundaries. Its Git-managed Flux Kustomization remains suspended until attended access,
+backup, and paired restore acceptance pass:
+
+| Command | Behavior |
+|---|---|
+| `just repo nocodb-secrets` | Guard and write the SOPS-encrypted runtime Secret while retaining `NC_CONNECTION_ENCRYPT_KEY` |
+| `just kube nocodb-validate` | Validate the staged chart, package, optional database roles, workflows, monitoring, and command contracts |
+| `just bootstrap nocodb` | Initialize metadata and settings and bind one NocoDB API token directly to n8n |
+| `just kube nocodb-source-sync <domain>` | Reconcile the fixed `read_model` source and eligible `operator` source for one managed domain |
+| `just kube nocodb-source-rotate <domain> <kind>` | Rotate one selected reader or operator PostgreSQL login and matching NocoDB integration |
+| `just kube nocodb-verify` | Observe workload, route, policy, attachment storage, monitoring, and backup freshness without reading application state |
+| `just kube nocodb-access-test` | Run bounded synthetic source, privilege, rotation, and persistent attachment-canary acceptance |
+| `just kube nocodb-restore-drill` | Validate paired metadata and attachment backups in isolated run-owned resources |
+
+Source creation in NocoDB `2026.08.2` is asynchronous. Source sync records and polls the
+returned job ID, then discovers and validates the created source before it records
+`ready`. The reader exposes only `read_model`; the optional operator exposes only exact
+reviewed DML in `operator`. See the
+[NocoDB operations guide](../docs/guides/nocodb-operations.md) and
+[NocoDB recovery runbook](../docs/runbooks/nocodb-recovery.md).
+
 For an established cluster, `just cluster verify` composes the authoritative Node, etcd,
 Talos, Cilium, Longhorn, and foundation checks. It intentionally excludes arbitrary
 application health. `just cluster status [node]` provides detailed Talos and etcd
