@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Implement the reusable PostgreSQL service requested by
+This records the implemented PostgreSQL service requested by
 [issue 317](https://github.com/supermorphic/homelab-talos/issues/317). The service stores
 durable relational state owned by n8n automation domains. It is separate from the
 dedicated PostgreSQL instance that stores n8n runtime state.
@@ -12,8 +12,8 @@ automation-data domain, private repository integration, or workflow-owned databa
 schema state does not require a `homelab-talos` change. n8n creates domain databases,
 roles, grants, and credentials dynamically through one private provisioning workflow.
 
-The recovery capability described here does not exist until issue 317 is implemented and
-the complete restore drill passes.
+The platform is active, and the attended full-chain restore drill passed on 2026-09-05.
+See [Implementation status](#implementation-status) for the delivery and acceptance record.
 
 ## Existing platform context
 
@@ -244,7 +244,8 @@ assume the owner role, manage roles, or connect to another domain database.
 
 A valid domain identifier matches `^[a-z][a-z0-9_]{0,47}$`. Its 48-character maximum
 leaves room for the longest `_migrator` suffix within PostgreSQL's 63-byte identifier
-limit. One provisioning request creates or reconciles:
+limit. PostgreSQL and platform names are reserved. New domains cannot adopt unrelated
+existing databases or roles. One provisioning request creates or reconciles:
 
 | Object | Form | Purpose |
 | --- | --- | --- |
@@ -291,8 +292,9 @@ The workflow accepts structured domain identifiers and supported operations. It 
 accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
 
 1. Validate and canonicalize the domain identifier and requested operation.
-2. Create or reconcile a registry row in `provisioning` state.
-3. Compare the registry record with PostgreSQL catalogs.
+2. Check registry ownership against PostgreSQL catalogs before claiming new names.
+3. Commit a `provisioning` reservation before database or role changes commit on the
+   separate PostgreSQL connection.
 4. Create or reconcile the owner, migrator, and runtime roles.
 5. Create or reconcile the database, initial schema, grants, and default privileges.
 6. For initial creation only, generate migrator and runtime passwords and create the
@@ -314,11 +316,15 @@ final outputs or logs.
 Provisioning never compensates for failure by dropping resources. A partial initial
 creation remains visible as `provisioning` or `error`. Its retry may generate replacement
 credentials while the domain has never reached `ready`, because no completed credential
-contract exists yet. Once a domain reaches `ready`, ordinary provisioning and structural
+contract exists yet. Failed attempts can retry immediately; an interrupted active attempt
+must age past 30 minutes before retry. The reservation survives an outer transaction
+rollback, so retry does not infer ownership from matching names alone. Once a domain
+reaches `ready`, ordinary provisioning and structural
 reconciliation never alter role passwords, rotate credentials, replace credential IDs,
 or update credential ciphertext. Missing login roles or n8n credentials on a `ready`
-domain are errors that require the explicit credential-repair or rotation operation;
-ordinary reconciliation does not silently replace them.
+domain require reviewed recovery; explicit rotation repairs passwords only while both
+the login and its n8n credential still exist. Ordinary reconciliation does not silently
+replace missing objects.
 
 Credential rotation is an explicit operation separate from provision or reconcile. It
 changes one scoped login and its existing n8n credential, tests the result, and records
@@ -464,6 +470,13 @@ This drill is the independent recovery oracle. Artifact creation, `pg_restore --
 checksums, Longhorn replica health, and retained Secrets do not independently prove the
 complete chain.
 
+The default selects the newest valid bundle and n8n dump independently. Both must contain
+the same credential version. An operator can instead select a known matching retained
+pair with `AUTOMATION_DATA_RESTORE_BUNDLE` and `N8N_RESTORE_DUMP`; both selectors are
+required together, accept exact basenames only, and never fall back after an invalid
+explicit selection. Unavailable backup fixtures are classified separately from SQL,
+permission, and credential-authentication failures.
+
 The globals dump contains password verifiers and remains sensitive even though it does
 not contain plaintext passwords. Repository files, CI output, test evidence, logs, and
 metrics never publish its contents.
@@ -483,8 +496,12 @@ signals, with a database label where needed:
 
 It adds two platform-health signals:
 
-- registry/catalog consistency; and
-- age of the oldest incomplete provisioning operation.
+- presence of the database and roles recorded for each ready domain; and
+- age of the oldest active provisioning or rotation operation.
+
+Terminal `error` rows remain in the registry for diagnosis and retry; they do not keep
+the active-operation timer running. A failed request returns a bounded error to its
+caller. The retained backup-error acceptance record is deliberately terminal.
 
 The platform grants `pg_monitor` to `automation_data_exporter`, matching the established
 n8n PostgreSQL exporter pattern. This login uses `INHERIT` so the predefined role's
@@ -526,36 +543,19 @@ later resizing or topology changes.
 
 ## Rollout
 
-Rollout follows dependency order:
+The platform was staged with reconciliation suspended, then bootstrapped and accepted
+before permanent activation in Git. The operator created the encrypted platform Secret,
+bound the provisioning and recovery workflows in private n8n, and ran the registered
+provisioning and full-chain restore tests. The guarded bootstrap applied the exporter
+monitoring grant to the initialized database and created the first logical bundle.
 
-1. Merge the namespace, staged PostgreSQL package, two 20 GiB retained claims, Service,
-   policy, backup workflow, exporter, monitoring, guarded Secret writer, and secret-free
-   n8n templates after `mise exec -- just ci` passes.
-2. Create and merge the SOPS-encrypted platform Secret with the guarded
-   `repo automation-data-secrets` recipe while PostgreSQL remains suspended.
-3. Run the guarded `bootstrap automation-data` recipe from deployed `origin/main`. This
-   reconciles the namespace and PostgreSQL, enables inheritance and applies the
-   idempotent exporter monitoring grant to a new or already-initialized cluster through
-   a run-owned Job, removes that Job, creates the first complete bundle, and runs
-   read-only verification.
-4. In private n8n, create **Automation Data Provisioner**, **Automation Data n8n API**,
-   and **Automation Data Provisioning Header**. Import, bind, and publish
-   `automation-data-provisioner.json`.
-5. Run `test.automation-data-provisioning`. It creates the unlisted
-   `issue317_acceptance` domain, proves idempotent reconcile and role permissions, rotates
-   a credential explicitly, and publishes a later complete bundle.
-6. Import `automation-data-recovery-canary.json`, bind **Platform Canary Header** and
-   `automation-data/issue317_acceptance/runtime`, and publish the recovery canary.
-7. Wait for later complete n8n and automation-data backups that include those bindings,
-   then run `test.automation-data-restore-drill`.
-8. Only after all live acceptance passes, change
-   `automation-data-postgresql.spec.suspend` to `false` through a reviewed Git change and
-   reconcile this specification with the dated result.
-
-Credential creation, initial workflow bootstrap, and live mutation that requires
-operator authority remain attended operator actions. Agent-owned repository work and
-approved scoped verification proceed through the repository workflows without asking the
-operator to perform them.
+[Staged activation](../guides/automation-data-operations.md#staged-activation) records the
+original command sequence; the bootstrap guard now refuses the active source state.
+Recovery of the active platform follows the
+[recovery runbook](../runbooks/automation-data-recovery.md). Private credential handling
+and privileged live tests remain operator actions; scoped observation uses the assigned
+worktree credentials. The dated results below distinguish acceptance from source-only
+validation.
 
 ## Validation strategy
 
@@ -630,9 +630,17 @@ repository contracts already proved by CI.
 
 ## Implementation status
 
-As of 2026-09-05, the repository implementation, guarded Secret, documentation, offline
-contracts, n8n credential bindings, and attended command surfaces are complete. The
-attended provisioning run
+### Initial deployment
+
+The implementation merged in [PR #352](https://github.com/supermorphic/homelab-talos/pull/352).
+Follow-up PRs #355, #357–360, and #362 corrected idle backup-volume health, live
+acceptance contracts, exporter permissions, offline test execution, canonical result
+layout, and restore ConfigMap discovery. [PR #364](https://github.com/supermorphic/homelab-talos/pull/364)
+activated reconciliation after acceptance. PostgreSQL, the guarded Secret, offline
+contracts, n8n credential bindings, and operational commands are deployed as of
+2026-09-05.
+
+The attended provisioning run
 `20260904T022844Z-df8824b737bd-operator-1f4ca77c` passed domain creation, unchanged
 reconciliation, permission separation, explicit runtime credential rotation, and a
 complete dynamically discovered backup despite an incomplete registry record.
@@ -647,6 +655,34 @@ validation and cleanup both passed. This proves the recovery capability defined 
 specification without operator escrow of domain plaintext passwords. Following that
 acceptance, the repository keeps the `automation-data-postgresql` Flux Kustomization
 active with `spec.suspend: false`.
+
+### Closeout audit
+
+The closeout audit repeated `mise exec -- just kube automation-data-verify` against
+revision `0d678994c5f8` using task-scoped credentials. Run
+`20260905T151755Z-0d678994c5f8-operator-90f1a303` passed live verification and canonical
+result validation: Flux and StatefulSet readiness, both retained claims and Longhorn
+volumes, private Service, healthy scrape target, all 12 alert rules, dashboard, backup
+freshness, registry consistency, and incomplete-operation age. This baseline observation
+and the initial attended results predate the audit's control-function changes.
+
+The audit also corrected the operations guide's Secret variable names and provisioning
+test inputs, documented consumer provisioning and migration requests, and distinguished
+normal idle backup-volume detachment from a storage fault. At the operator's request,
+the automation-data specification moved from identifier 025 to 026 to resolve the
+identifier collision with node lifecycle.
+
+The source corrections retain the provisioning API, add durable ownership reservations,
+and provide an explicit update command for initialized databases. Recovery accepts an
+exact retained backup pair. Credential-rotating acceptance is standalone, while the
+restore drill remains in periodic integration coverage. Canonical CI now scans candidate
+Git ancestry without unrelated local refs and owns shell validation for the migration
+sources. Redundant focused ShellCheck and documentation keyword checks were removed.
+
+Control-function updates on retained storage require
+[`kube automation-data-control-migrate`](../guides/automation-data-operations.md#update-platform-control-functions)
+and updated private workflow bindings before attended acceptance. Initial deployment
+evidence does not establish acceptance of a later control-function revision.
 
 ## Rejected alternatives
 
@@ -704,10 +740,3 @@ live acceptance result.
 - [n8n 2.36.7 credential API](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/public-api/v1/handlers/credentials/credentials.handler.ts)
 - [n8n workflow automation platform specification](023-n8n-workflow-automation-platform.md)
 - [CI runtime and merge-throughput specification](024-ci-runtime-and-merge-throughput-optimization.md)
-
-## Pull request linkage
-
-Every pull request produced by this initiative links
-[GitHub issue 317](https://github.com/supermorphic/homelab-talos/issues/317) in its
-description. Partial pull requests use `Related to #317`. Only the pull request that
-finishes the accepted issue scope uses `Closes #317`.
