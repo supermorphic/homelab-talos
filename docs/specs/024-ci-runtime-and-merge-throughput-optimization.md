@@ -1072,8 +1072,9 @@ application:
 
 - `kubernetes/apps/monitoring/**` and explicitly owned monitoring or logging test fixtures
   select `observability` in addition to `core`.
-- `kubernetes/apps/automation/**`, `kubernetes/apps/automation-data/**`, and their
-  explicitly owned test fixtures select `automation` in addition to `core`.
+- `kubernetes/apps/automation/**`, `kubernetes/apps/automation-data/**`, their
+  domain-prefixed `scripts/operations/automation-data-*` commands, and explicitly owned
+  test fixtures select `automation` in addition to `core`.
 - Direct validator inputs retain cross-domain ownership. The public webhook gateway,
   ExternalDNS values, networking graph, selected Gatus and alert resources, PostgreSQL
   dashboard packaging, and consumed operations documentation also select `automation`.
