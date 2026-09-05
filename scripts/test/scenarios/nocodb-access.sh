@@ -171,7 +171,7 @@ cleanup() {
   [[ ! -e "$temp_dir" ]] || cleanup_ok=false
   if [[ "$cleanup_ok" == true ]]; then
     write_phase cleanup passed \
-      'current-run acceptance rows were removed; domain, base, and sources were retained'
+      'current-run rows were removed; domain, base, sources, and reserved attachment canary were retained'
   else
     write_phase cleanup failed \
       'current-run acceptance cleanup or retained-canary read-back failed'
@@ -416,16 +416,30 @@ jq -e 'type == "object" and length > 0' "$signup_response" >/dev/null || {
   exit 1
 }
 
-validate_probe() {
-  local response="$1"
-  RUN_ID="$run_id" jq -e '
+validate_probe() { # <response> <source-response>
+  local response="$1" source_response="$2"
+  local base_id reader_source_id operator_source_id
+  base_id="$(jq -r '.baseId' "$source_response")"
+  reader_source_id="$(jq -r '.reader.sourceId' "$source_response")"
+  operator_source_id="$(jq -r '.operator.sourceId' "$source_response")"
+  RUN_ID="$run_id" BASE_ID="$base_id" READER_SOURCE_ID="$reader_source_id" \
+    OPERATOR_SOURCE_ID="$operator_source_id" jq -e '
     .ok == true and .operation == "probe" and .runId == env.RUN_ID and
     .domain == "issue334_acceptance" and
+    (env.BASE_ID | length > 0) and
     .credentialProof == {throughN8n:true,credentialName:"NocoDB Operator API"} and
     .inserted == true and .read == true and .readerRead == true and
     .decisionUpdated == true and .removed == true and
     .reflectedSchemas == ["operator","read_model"] and
-    ([.reflectedTables[] | [.schema,.tableName]] | sort) == [["operator","acceptance_decision"],["read_model","acceptance_facts"]] and
+    ([.reflectedTables[] | select(.schema == "read_model" and .tableName == "acceptance_facts")]) as $facts_tables |
+    ([.reflectedTables[] | select(.schema == "operator" and .tableName == "acceptance_decision")]) as $decision_tables |
+    ($facts_tables | length) == 1 and ($decision_tables | length) == 1 and
+    ($facts_tables[0].id | type == "string" and length > 0) and
+    $facts_tables[0].title == "acceptance_facts" and
+    $facts_tables[0].sourceId == env.READER_SOURCE_ID and
+    ($decision_tables[0].id | type == "string" and length > 0) and
+    $decision_tables[0].title == "acceptance_decision" and
+    $decision_tables[0].sourceId == env.OPERATOR_SOURCE_ID and
     .forbiddenOperations.protectedUpdateDenied == true and
     .forbiddenOperations.protectedUpdateStatus == 400 and
     .forbiddenOperations.protectedUpdateEvidence == "postgresql_42501" and
@@ -434,16 +448,46 @@ validate_probe() {
     .forbiddenOperations.readerInsertEvidence == "source_read_only" and
     .publicSharing.basePublicShareUuid == null and
     (.publicSharing.views | length) == 2 and
-    ([.publicSharing.views[] | [.title,.publicShareUuid]] | sort) == [["acceptance_decision",null],["acceptance_facts",null]]
+    ([.publicSharing.views[] | [.title,.publicShareUuid]] | sort) == [["acceptance_decision",null],["acceptance_facts",null]] and
+    (.attachmentCanary | keys) == [
+      "attachmentId","commentId","mimetype","path","rowId","savedViewId",
+      "savedViewTableId","savedViewTitle","savedViewType","sha256","size","state","title"
+    ] and
+    .attachmentCanary.state == "ready" and
+    (.attachmentCanary.rowId | type == "string" and length > 0) and
+    (.attachmentCanary.savedViewId | type == "string" and length > 0) and
+    (.attachmentCanary.savedViewTableId | type == "string" and length > 0) and
+    .attachmentCanary.savedViewTableId == $facts_tables[0].id and
+    .attachmentCanary.savedViewTitle == "acceptance_facts" and
+    .attachmentCanary.savedViewType == 3 and
+    (.attachmentCanary.commentId | type == "string" and length > 0) and
+    (.attachmentCanary.attachmentId | type == "string" and length > 0) and
+    (.attachmentCanary.path | type == "string" and test("^download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$")) and
+    .attachmentCanary.title == "issue334-recovery-canary-v1.txt" and
+    .attachmentCanary.mimetype == "text/plain" and
+    .attachmentCanary.size == 37 and
+    .attachmentCanary.sha256 == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
   ' "$response" >/dev/null
 }
 
 probe_one="$temp_dir/probe-one.json"
 acceptance_request probe "$probe_one"
-validate_probe "$probe_one" || {
+validate_probe "$probe_one" "$ready_sync" || {
   echo 'The through-n8n access probe omitted a required success, denial boolean, UI flag, or public-share assertion.' >&2
   exit 1
 }
+canary_evidence="$run_dir/diagnostics/attachment-canary.json"
+base_id="$(jq -r '.baseId' "$ready_sync")"
+table_id="$(jq -r '.attachmentCanary.savedViewTableId' "$probe_one")"
+jq -n --arg domain issue334_acceptance --arg base_id "$base_id" --arg table_id "$table_id" \
+  --slurpfile before "$probe_one" '{
+    domain: $domain,
+    baseId: $base_id,
+    tableId: $table_id,
+    beforeRotation: $before[0].attachmentCanary,
+    afterRotation: null
+  }' >"$canary_evidence"
+chmod 600 "$canary_evidence"
 
 unchanged_sync="$temp_dir/source-sync-unchanged.json"
 source_request sync "$unchanged_sync"
@@ -494,8 +538,17 @@ rotation_stable_signature() {
 
 probe_two="$temp_dir/probe-two.json"
 acceptance_request probe "$probe_two"
-validate_probe "$probe_two" || {
+validate_probe "$probe_two" "$rotated_source" || {
   echo 'The post-rotation through-n8n access probe failed.' >&2
+  exit 1
+}
+updated_canary_evidence="$temp_dir/attachment-canary.json"
+jq --slurpfile after "$probe_two" \
+  '.afterRotation = $after[0].attachmentCanary' "$canary_evidence" >"$updated_canary_evidence"
+chmod 600 "$updated_canary_evidence"
+mv "$updated_canary_evidence" "$canary_evidence"
+jq -e '.beforeRotation == .afterRotation' "$canary_evidence" >/dev/null || {
+  echo 'Operator rotation replaced or changed the durable attachment canary.' >&2
   exit 1
 }
 

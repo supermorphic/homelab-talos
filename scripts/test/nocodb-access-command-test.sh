@@ -256,13 +256,37 @@ jq -n --argjson reader "$reader" --argjson operator "$operator_rotated" '{ok:tru
 
 producer_probe_code="$(jq -r '.nodes[] | select(.name == "Evaluate Reader Insert Denial") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
 producer_reader_insert_evidence="$(sed -n "s/.*readerInsertEvidence: '\([^']*\)'.*/\1/p" <<<"$producer_probe_code")"
+producer_canary_inspect="$(jq -r '.nodes[] | select(.name == "Inspect Recovery Canary Row") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
+producer_canary_download="$(jq -r '.nodes[] | select(.name == "Require Recovery Canary Download") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
+producer_saved_view="$(jq -r '.nodes[] | select(.name == "Require Recovery Saved View") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
+producer_canary_title="$(sed -n "s/.*attachment.title !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
+producer_canary_mimetype="$(sed -n "s/.*attachment.mimetype !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
+producer_canary_size="$(sed -n 's/.*attachment.size !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_canary_inspect")"
+producer_canary_sha256="$(sed -n "s/.*attachment.sha256 !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
+producer_saved_view_title="$(sed -n "s/.*view.title !== '\([^']*\)'.*/\1/p" <<<"$producer_saved_view")"
+producer_saved_view_type="$(sed -n 's/.*view.type !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_saved_view")"
+producer_canary_literal="$(sed -n 's/.*attachmentCanary: { \(.*\) } } }\];/\1/p' <<<"$producer_canary_download")"
+producer_canary_fields="$(tr ',' '\n' <<<"$producer_canary_literal" | sed 's/^ *//;s/:.*//' | paste -sd, -)"
 [[ "$producer_reader_insert_evidence" =~ ^[a-z0-9_]+$ ]] || {
   echo 'Could not derive reader-insert denial evidence from the committed acceptance producer.' >&2
   exit 1
 }
+[[ "$producer_canary_title" =~ ^[A-Za-z0-9._-]+$ &&
+  "$producer_canary_mimetype" =~ ^[a-z0-9.+-]+/[a-z0-9.+-]+$ &&
+  "$producer_canary_size" =~ ^[0-9]+$ &&
+  "$producer_canary_sha256" =~ ^[a-f0-9]{64}$ &&
+  "$producer_saved_view_title" =~ ^[A-Za-z0-9_-]+$ &&
+  "$producer_saved_view_type" =~ ^[0-9]+$ &&
+  "$producer_canary_fields" == 'state,rowId,savedViewId,savedViewTableId,savedViewTitle,savedViewType,commentId,attachmentId,path,title,mimetype,size,sha256' ]] || {
+  echo 'Could not derive the attachment-canary contract from the committed acceptance producer.' >&2
+  exit 1
+}
 
 probe_response() {
-  jq -n --arg run_id "$run_id" --arg reader_insert_evidence "$producer_reader_insert_evidence" '{
+  jq -n --arg run_id "$run_id" --arg reader_insert_evidence "$producer_reader_insert_evidence" \
+    --arg canary_title "$producer_canary_title" --arg canary_mimetype "$producer_canary_mimetype" \
+    --arg canary_sha256 "$producer_canary_sha256" --arg saved_view_title "$producer_saved_view_title" \
+    --argjson canary_size "$producer_canary_size" --argjson saved_view_type "$producer_saved_view_type" '{
     ok: true,
     operation: "probe",
     runId: $run_id,
@@ -275,10 +299,17 @@ probe_response() {
     removed: true,
     reflectedSchemas: ["operator", "read_model"],
     reflectedTables: [
-      {title:"acceptance_decision",tableName:"acceptance_decision",sourceId:"source-operator",schema:"operator"},
-      {title:"acceptance_facts",tableName:"acceptance_facts",sourceId:"source-reader",schema:"read_model"}
+      {id:"table-decision",title:"acceptance_decision",tableName:"acceptance_decision",sourceId:"source-operator",schema:"operator"},
+      {id:"table-facts",title:"acceptance_facts",tableName:"acceptance_facts",sourceId:"source-reader",schema:"read_model"}
     ],
     publicSharing: {basePublicShareUuid:null,views:[{title:"acceptance_facts",publicShareUuid:null},{title:"acceptance_decision",publicShareUuid:null}]},
+    attachmentCanary: {
+      state:"ready",rowId:"41",savedViewId:"view-facts",savedViewTableId:"table-facts",
+      savedViewTitle:$saved_view_title,savedViewType:$saved_view_type,
+      commentId:"comment-canary",attachmentId:"attachment-canary",
+      path:"download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt",
+      title:$canary_title,mimetype:$canary_mimetype,size:$canary_size,sha256:$canary_sha256
+    },
     forbiddenOperations: {
       protectedUpdateDenied:true,protectedUpdateStatus:400,protectedUpdateEvidence:"postgresql_42501",
       readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:$reader_insert_evidence
@@ -287,12 +318,18 @@ probe_response() {
 }
 probe_response >"$fixture/responses/acceptance-probe-1.json"
 probe_response >"$fixture/responses/acceptance-probe-2.json"
+[[ "$(jq -r '.attachmentCanary | keys_unsorted | join(",")' "$fixture/responses/acceptance-probe-1.json")" == \
+  "$producer_canary_fields" ]] || {
+  echo 'The command fake attachment canary drifted from the committed producer field contract.' >&2
+  exit 1
+}
 
 case_name=''
 OUT=''
 STATUS=0
 run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
+file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 
 run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup]
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
@@ -358,9 +395,62 @@ assert_status 0
 expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "unexpected lifecycle order: $(tr '\n' ' ' <"$fixture/events.log")"
 yq -e '.status == "passed" and .reason == "the fixed NocoDB access contract passed"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
-yq -e '.status == "passed" and .reason == "current-run acceptance rows were removed; domain, base, and sources were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
+yq -e '.status == "passed" and .reason == "current-run rows were removed; domain, base, sources, and reserved attachment canary were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
 yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
+jq -e '
+  (keys | sort) == ["afterRotation","baseId","beforeRotation","domain","tableId"] and
+  .domain == "issue334_acceptance" and .baseId == "base-acceptance" and
+  .tableId == "table-facts" and .beforeRotation == .afterRotation and
+  .beforeRotation.state == "ready" and .beforeRotation.rowId == "41" and
+  .beforeRotation.savedViewId == "view-facts" and
+  .beforeRotation.savedViewTableId == .tableId and
+  .beforeRotation.savedViewTitle == "acceptance_facts" and
+  .beforeRotation.savedViewType == 3 and
+  .beforeRotation.commentId == "comment-canary" and
+  .beforeRotation.attachmentId == "attachment-canary" and
+  .beforeRotation.path == "download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt" and
+  .beforeRotation.title == "issue334-recovery-canary-v1.txt" and
+  .beforeRotation.mimetype == "text/plain" and .beforeRotation.size == 37 and
+  .beforeRotation.sha256 == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
+' "$run_dir/diagnostics/attachment-canary.json" >/dev/null || fail 'durable attachment-canary evidence is absent or incomplete'
+[[ "$(file_mode "$run_dir/diagnostics/attachment-canary.json")" == 600 ]] || fail 'durable attachment-canary evidence is not mode 0600'
 assert_no_secret_output
+
+case_name='each successful probe must return the complete attachment canary'
+cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
+jq 'del(.attachmentCanary)' "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'missing canary did not clean current-run rows'
+mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
+assert_no_secret_output
+
+case_name='operator rotation must not replace the durable attachment canary'
+cp "$fixture/responses/acceptance-probe-2.json" "$fixture/responses/probe.valid.json"
+jq '.attachmentCanary.attachmentId = "replacement-attachment" |
+  .attachmentCanary.path = "download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_ZyxW2.txt"' \
+  "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-2.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'canary drift did not clean current-run rows'
+jq -e '.beforeRotation.attachmentId == "attachment-canary" and
+  .afterRotation.attachmentId == "replacement-attachment" and
+  .beforeRotation.path != .afterRotation.path' \
+  "$run_dir/diagnostics/attachment-canary.json" >/dev/null || fail 'canary drift was not recorded before rejection'
+mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-2.json"
+assert_no_secret_output
+
+for forbidden_canary_field in signedUrl rawBytes author credentials; do
+  case_name="attachment canary rejects forbidden $forbidden_canary_field evidence"
+  cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
+  jq --arg field "$forbidden_canary_field" '.attachmentCanary[$field] = "fixture-forbidden-value"' \
+    "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
+  run_scenario test:nocodb:access
+  assert_status 1
+  yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'forbidden canary evidence did not clean current-run rows'
+  mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
+  assert_no_secret_output
+done
 
 case_name='second sync must preserve the first base identity'
 cp "$fixture/responses/source-sync-2.json" "$fixture/responses/sync-two.valid.json"
