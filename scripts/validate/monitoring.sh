@@ -62,6 +62,12 @@ if [[ "$scope" == all ]]; then
 
 	chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 	[[ -n "$chart_version" && "$chart_version" != 'null' ]]
+	# SSA cannot clear the live unowned rollingUpdate defaults, even with null.
+	# Keep upgrades on the tested typed strategic-merge path for this release.
+	[[ "$(yq -r '.spec.upgrade.serverSideApply' "$hr")" == 'disabled' ]] || {
+		echo 'Refusing: kube-prometheus-stack upgrades must use client-side apply to clear Grafana rollout defaults.' >&2
+		exit 1
+	}
 	[[ "$(yq -r '.spec.url' "$repo")" == 'https://prometheus-community.github.io/helm-charts' ]]
 	[[ "$(yq -r '.prometheus.prometheusSpec.retention' "$values")" == '30d' ]]
 	[[ "$(yq -r '.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage' "$values")" == '50Gi' ]]
@@ -80,13 +86,12 @@ if [[ "$scope" == all ]]; then
 		helm template kube-prometheus-stack kube-prometheus-stack --repo https://prometheus-community.github.io/helm-charts --version "$chart_version" --namespace monitoring --values "$values" >"$temp_dir/kps.yaml"
 	render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanager") | .kind] | .[]' "$temp_dir/kps.yaml" | sort -u | tr '\n' ' ')"
 	[[ "$render_kinds" == 'Alertmanager Prometheus ' ]]
-	# SSA preserves the live API-defaulted rollingUpdate object when omitted.
-	# Require an explicit null to clear it while switching Grafana to Recreate.
+	# Preserve the explicit clearing instruction for the client-side merge path.
 	[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-grafana")] | length' "$temp_dir/kps.yaml")" == '1' ]]
 	yq ea -e 'select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-grafana") |
     .spec.strategy.type == "Recreate" and (.spec.strategy | has("rollingUpdate")) and
     .spec.strategy.rollingUpdate == null' "$temp_dir/kps.yaml" >/dev/null || {
-		echo 'Refusing: rendered Grafana Deployment must use Recreate with explicit rollingUpdate: null for server-side apply.' >&2
+		echo 'Refusing: rendered Grafana Deployment must use Recreate with explicit rollingUpdate: null.' >&2
 		exit 1
 	}
 fi
