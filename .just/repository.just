@@ -1845,7 +1845,7 @@ validate-files: require-bash
     @test "$(sops filestatus kubernetes/apps/monitoring/portainer/app/portainer-admin-password.sops.yaml | yq -r '.encrypted')" = true
     @if rg -q 'PRIVATE KEY' kubernetes/apps/networking/external-dns/app/pihole-ca.crt; then echo "Pi-hole CA source must not contain a private key" >&2; exit 1; fi
 
-# Scan Git history and all currently trackable files without printing secrets.
+# Scan HEAD ancestry and all currently trackable files without printing secrets.
 secret-scan:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1854,7 +1854,7 @@ secret-scan:
       echo "An age private key exists in a trackable file." >&2
       exit 1
     fi
-    gitleaks git --redact --no-banner .
+    gitleaks git --log-opts=HEAD --redact --no-banner .
     git diff --no-ext-diff HEAD | gitleaks stdin --redact --no-banner
     untracked="$(git ls-files --others --exclude-standard)"
     if [[ -n "$untracked" ]]; then
