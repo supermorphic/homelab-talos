@@ -259,7 +259,7 @@ for sql_rejection in sql-unknown sql-partial sql-overlap; do
 			fail 'failed Job omitted bounded structured Pod diagnostics'
 		rg -Fq 'upgrade_failure=unknown_platform_revision' "$case_root/output" ||
 			fail 'failed Job omitted its reviewed SQL failure classification'
-		! rg -F 'UNSAFE_RAW_DIAGNOSTIC\|UNSAFE_POD_SPEC' "$case_root/output" >/dev/null ||
+		! rg -e 'UNSAFE_RAW_DIAGNOSTIC' -e 'UNSAFE_POD_SPEC' "$case_root/output" >/dev/null ||
 			fail 'failed Job exposed raw log or Pod-spec content'
 	fi
 done
@@ -648,6 +648,14 @@ expect_oracle_grant_failure \
 	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO PUBLIC;' \
 	'REVOKE EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM PUBLIC;' \
 	'PUBLIC execute grant'
+expect_oracle_grant_failure \
+	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_provisioner WITH GRANT OPTION;' \
+	'REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM automation_data_provisioner;' \
+	'provisioner execute grant option'
+expect_oracle_grant_failure \
+	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_backup WITH GRANT OPTION;' \
+	'REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM automation_data_backup;' \
+	'backup execute grant option'
 [[ "$(psql_query "$old_container" automation_data_control \
 	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
 	fail 'revision oracle did not recover after restoring exact grants'

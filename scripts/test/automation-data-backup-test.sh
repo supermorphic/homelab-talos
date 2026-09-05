@@ -60,33 +60,26 @@ case "$tool" in
           ;;
       esac
     done
+    if [[ -z "$command_text" && ! -t 0 ]]; then
+      command_text="$(cat)"
+    fi
     if $is_status; then
       printf 'status-attempt\t%s\n' "$*" >>"$FAKE_LOG"
       [[ "${FAIL_STAGE:-}" != status ]] || exit 41
       printf 'freshness-advanced\n' >>"$FAKE_LOG"
     elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
+      [[ "$command_text" == *'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'* &&
+        "$command_text" == *'WITH captured AS MATERIALIZED'* ]] || exit 49
       case "${STATE_SCHEMA:-new}" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43
-          printf '%s\n' '025-baseline'
           ;;
         new)
-          printf '%s\n' 'upgraded-candidate'
+          [[ "$command_text" == *read_platform_revision* ]] || exit 48
+          printf 'revision-oracle\n' >>"$FAKE_LOG"
           ;;
-        unknown | partial)
-          printf '%s\n' 'invalid'
-          ;;
+        unknown | partial) exit 45 ;;
         *) exit 46 ;;
-      esac
-    elif [[ "$command_text" == *read_platform_revision* ]]; then
-      [[ "${STATE_SCHEMA:-new}" == new ]] || exit 48
-      printf '%s\n' '026-nocodb-v1'
-      printf 'revision-oracle\n' >>"$FAKE_LOG"
-    elif [[ "$command_text" == *capture_backup_state* ]]; then
-      case "${STATE_SCHEMA:-new}" in
-        old) [[ "$command_text" == *"025-baseline"* ]] || exit 43 ;;
-        new) [[ "$command_text" == *"026-nocodb-v1"* ]] || exit 44 ;;
-        *) exit 45 ;;
       esac
       count=0
       [[ ! -f "$FAKE_STATE_COUNT" ]] || count="$(<"$FAKE_STATE_COUNT")"

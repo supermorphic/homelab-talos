@@ -12,8 +12,11 @@ final_name="automation-data-$artifact_timestamp"
 final_bundle="$backup_dir/$final_name"
 max_attempts=3
 
-classify_platform_revision() {
-  catalog_state="$(psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 --command="
+capture_platform_state() {
+  output_registry="$1"
+  capture_line="$(psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 \
+    --field-separator='|' 2>/dev/null <<'EOSQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 WITH operation_tables AS (
   SELECT array_agg(class.relname::text ORDER BY class.relname) AS names
   FROM pg_class AS class
@@ -26,68 +29,60 @@ operation_functions AS (
   JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
   WHERE namespace.nspname = 'platform_operations'
 )
-SELECT CASE
-  WHEN COALESCE(operation_tables.names = ARRAY[
-      'logical_backup_status', 'managed_domains', 'platform_generation'
-    ]::text[], false) AND
-    COALESCE(operation_functions.names = ARRAY[
-      'capture_backup_state', 'provision_domain', 'publish_backup',
-      'reconcile_domain', 'record_domain_credentials', 'record_operation_error',
-      'rotate_domain_credential', 'validate_domain'
-    ]::text[], false) AND
-    to_regprocedure('platform_operations.provision_domain(text,text,text)') IS NOT NULL AND
-    to_regprocedure('platform_operations.reconcile_domain(text)') IS NOT NULL AND
-    to_regprocedure('platform_operations.record_domain_credentials(text,text,text,timestamptz,timestamptz)') IS NOT NULL AND
-    to_regprocedure('platform_operations.rotate_domain_credential(text,text,text)') IS NOT NULL AND
-    to_regprocedure('platform_operations.record_operation_error(text,text)') IS NOT NULL AND
-    to_regprocedure('platform_operations.validate_domain(text)') IS NOT NULL AND
-    to_regprocedure('platform_operations.capture_backup_state()') IS NOT NULL AND
-    to_regprocedure('platform_operations.publish_backup(text,text,text)') IS NOT NULL AND
-    NOT EXISTS (
-      SELECT 1
-      FROM pg_proc AS procedure
-      JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
-      WHERE namespace.nspname IN ('platform_operations', 'platform_internal')
-        AND (procedure.proname = 'assert_nocodb_access_kind' OR
-          procedure.proname LIKE '%nocodb%')
-    ) THEN '025-baseline'
-  WHEN to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
-    to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL
-    THEN 'upgraded-candidate'
-  ELSE 'invalid'
-END
-FROM operation_tables, operation_functions;
-" 2>/dev/null)" || return 1
-  case "$catalog_state" in
-    025-baseline) printf '%s\n' "$catalog_state" ;;
-    upgraded-candidate)
-      installed_revision="$(psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 \
-        --command='SELECT platform_operations.read_platform_revision();' 2>/dev/null)" || return 1
-      [ "$installed_revision" = '026-nocodb-v1' ] || return 1
-      printf '%s\n' "$installed_revision"
-      ;;
-    *) return 1 ;;
-  esac
-}
-
-capture_platform_state() {
-  output_registry="$1"
-  platform_revision="$(classify_platform_revision)" || return 1
-  capture_line="$({
-    psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 --field-separator='|' --command="
+SELECT
+  COALESCE(operation_tables.names = ARRAY[
+    'logical_backup_status', 'managed_domains', 'platform_generation'
+  ]::text[], false) AND
+  COALESCE(operation_functions.names = ARRAY[
+    'capture_backup_state', 'provision_domain', 'publish_backup',
+    'reconcile_domain', 'record_domain_credentials', 'record_operation_error',
+    'rotate_domain_credential', 'validate_domain'
+  ]::text[], false) AND
+  to_regprocedure('platform_operations.provision_domain(text,text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.reconcile_domain(text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.record_domain_credentials(text,text,text,timestamptz,timestamptz)') IS NOT NULL AND
+  to_regprocedure('platform_operations.rotate_domain_credential(text,text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.record_operation_error(text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.validate_domain(text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.capture_backup_state()') IS NOT NULL AND
+  to_regprocedure('platform_operations.publish_backup(text,text,text)') IS NOT NULL AND
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS procedure
+    JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+    WHERE namespace.nspname IN ('platform_operations', 'platform_internal')
+      AND (procedure.proname = 'assert_nocodb_access_kind' OR
+        procedure.proname LIKE '%nocodb%')
+  ) AS old_catalog_valid,
+  to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
+  to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL
+    AS upgraded_catalog_candidate
+FROM operation_tables, operation_functions
+\gset
+\set platform_revision 'invalid'
+\if :old_catalog_valid
+  \set platform_revision '025-baseline'
+\elif :upgraded_catalog_candidate
+  SELECT platform_operations.read_platform_revision() = '026-nocodb-v1'
+    AS revision_oracle_valid
+  \gset
+  \if :revision_oracle_valid
+    \set platform_revision '026-nocodb-v1'
+  \endif
+\endif
 WITH captured AS MATERIALIZED (
   SELECT platform_operations.capture_backup_state() AS state
 ),
 platform_shape AS (
   SELECT CASE
-    WHEN '$platform_revision' = '025-baseline' AND
+    WHEN :'platform_revision' = '025-baseline' AND
       (SELECT array_agg(key ORDER BY key)
        FROM jsonb_object_keys(captured.state) AS key) =
         ARRAY['generation', 'registry']::text[] AND
       jsonb_typeof(captured.state->'generation') = 'number' AND
       jsonb_typeof(captured.state->'registry') = 'array'
       THEN '025-baseline'
-    WHEN '$platform_revision' = '026-nocodb-v1' AND
+    WHEN :'platform_revision' = '026-nocodb-v1' AND
       (SELECT array_agg(key ORDER BY key)
        FROM jsonb_object_keys(captured.state) AS key) =
         ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[] AND
@@ -163,8 +158,9 @@ FROM captured
 CROSS JOIN registry_text
 CROSS JOIN platform_shape
 WHERE platform_shape.revision IS NOT NULL;
-"
-  } 2>/dev/null)" || return 1
+COMMIT;
+EOSQL
+  )" || return 1
   case "$capture_line" in
     *'|'*'|'*) ;;
     *) return 1 ;;
