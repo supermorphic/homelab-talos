@@ -147,6 +147,15 @@ class ClassificationTests(unittest.TestCase):
                     ("core", "observability", "automation", "ci-framework"),
                 )
 
+    def test_merge_gate_implementation_and_tests_select_explicit_full(self):
+        for path in ("scripts/test/ci_reconcile.py", "scripts/test/test_ci_reconcile.py"):
+            with self.subTest(path=path):
+                groups, reasons = planner.select(
+                    [Change("M", None, path)], self.impact, full=False
+                )
+                self.assertEqual(groups, ("core", "observability", "automation", "ci-framework"))
+                self.assertEqual(reasons[0]["reason"], "full")
+
     def test_status_and_path_contract_rejects_ambiguous_inputs(self):
         for change in (
             Change("T", None, "docs/a"),
