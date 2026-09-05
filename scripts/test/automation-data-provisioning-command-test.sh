@@ -30,15 +30,15 @@ mkdir "$temp_dir/bin"
 cat >"$temp_dir/bin/psql" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$@" >"$PSQL_ARGS_FILE"
+cat >"$PSQL_STDIN_FILE"
 EOF
 chmod +x "$temp_dir/bin/psql"
 
-PSQL_ARGS_FILE="$temp_dir/psql-args" PATH="$temp_dir/bin:$PATH" /bin/sh -ceu "$command"
+PSQL_STDIN_FILE="$temp_dir/fixture.sql" PSQL_ARGS_FILE="$temp_dir/psql-args" PATH="$temp_dir/bin:$PATH" /bin/sh -ceu "$command"
 mapfile -t actual_args <"$temp_dir/psql-args"
 expected_args=(
   '--no-psqlrc'
   '--set=ON_ERROR_STOP=1'
-  "--command=SELECT platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');"
 )
 [[ "${#actual_args[@]}" -eq "${#expected_args[@]}" ]] || {
   echo 'The rendered error Job did not preserve PostgreSQL string arguments.' >&2
@@ -53,5 +53,11 @@ for index in "${!expected_args[@]}"; do
     exit 1
   }
 done
+
+rg -Fq "PERFORM platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');" "$temp_dir/fixture.sql"
+rg -Fq 'SELECT FROM pg_database' "$temp_dir/fixture.sql"
+rg -Fq 'SELECT FROM pg_roles' "$temp_dir/fixture.sql"
+yq -e '.spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |
+  .valueFrom.secretKeyRef.key == "backup-password"' "$temp_dir/error-job.yaml" >/dev/null
 
 echo 'automation-data provisioning command test: PASS'

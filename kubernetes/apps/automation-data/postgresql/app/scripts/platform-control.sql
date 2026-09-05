@@ -53,7 +53,8 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, platform_operations
 AS $function$
 BEGIN
-  IF p_domain IS NULL OR p_domain !~ '^[a-z][a-z0-9_]{0,47}$' THEN
+  IF p_domain IS NULL OR p_domain !~ '^[a-z][a-z0-9_]{0,47}$' OR
+    p_domain IN ('postgres', 'template0', 'template1', 'automation_data_control') THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_domain';
   END IF;
 END;
@@ -170,7 +171,6 @@ DECLARE
   migrator_name text;
   runtime_name text;
   existing platform_operations.managed_domains%ROWTYPE;
-  next_generation bigint;
 BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
   IF p_migrator_password IS NULL OR length(p_migrator_password) < 32 OR
@@ -184,107 +184,121 @@ BEGIN
   runtime_name := p_domain || '_runtime';
   SELECT * INTO existing
   FROM platform_operations.managed_domains
-  WHERE domain = p_domain
-  FOR UPDATE;
+  WHERE domain = p_domain;
   IF FOUND AND existing.has_reached_ready THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'ready_domain_requires_reconcile';
   END IF;
 
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = owner_name) THEN
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', owner_name)
-    );
-  ELSE
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', owner_name)
-    );
+  IF FOUND THEN
+    IF existing.state <> 'error' AND NOT (
+      existing.state = 'provisioning' AND
+      existing.operation_started_at < clock_timestamp() - interval '30 minutes'
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'domain_operation_in_progress';
+    END IF;
+  ELSIF EXISTS (SELECT FROM pg_database WHERE datname = p_domain) OR
+    EXISTS (SELECT FROM pg_roles WHERE rolname IN (owner_name, migrator_name, runtime_name)) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unmanaged_object_collision';
   END IF;
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = migrator_name) THEN
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', migrator_name, p_migrator_password)
-    );
-  ELSE
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', migrator_name, p_migrator_password)
-    );
-  END IF;
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = runtime_name) THEN
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', runtime_name, p_runtime_password)
-    );
-  ELSE
-    PERFORM platform_internal.exec_in_database(
-      'automation_data_control',
-      format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', runtime_name, p_runtime_password)
-    );
-  END IF;
+
+  -- The outer advisory lock serializes callers. Do not lock or write the registry
+  -- in this transaction before the independent connection commits the reservation.
+  -- A caller rollback must not erase ownership of independently committed DDL.
   PERFORM platform_internal.exec_in_database(
     'automation_data_control',
-    format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', owner_name, migrator_name)
+    format($sql$
+      INSERT INTO platform_operations.managed_domains (
+        domain, database_name, owner_role, migrator_role, runtime_role,
+        state, generation
+      ) VALUES (%1$L, %1$L, %2$L, %3$L, %4$L,
+        'provisioning', platform_internal.bump_generation())
+      ON CONFLICT (domain) DO UPDATE SET
+        state = 'provisioning', generation = EXCLUDED.generation,
+        operation_started_at = clock_timestamp(), updated_at = clock_timestamp(),
+        error_code = NULL
+      $sql$, p_domain, owner_name, migrator_name, runtime_name)
   );
 
-  IF NOT EXISTS (SELECT FROM pg_database WHERE datname = p_domain) THEN
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = owner_name) THEN
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', owner_name)
+      );
+    ELSE
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', owner_name)
+      );
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = migrator_name) THEN
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', migrator_name, p_migrator_password)
+      );
+    ELSE
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', migrator_name, p_migrator_password)
+      );
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = runtime_name) THEN
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', runtime_name, p_runtime_password)
+      );
+    ELSE
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', runtime_name, p_runtime_password)
+      );
+    END IF;
     PERFORM platform_internal.exec_in_database(
       'automation_data_control',
-      format('CREATE DATABASE %I OWNER %I', p_domain, owner_name)
+      format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', owner_name, migrator_name)
     );
-  ELSE
+
+    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = p_domain) THEN
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('CREATE DATABASE %I OWNER %I', p_domain, owner_name)
+      );
+    ELSE
+      PERFORM platform_internal.exec_in_database(
+        'automation_data_control',
+        format('ALTER DATABASE %I OWNER TO %I', p_domain, owner_name)
+      );
+    END IF;
     PERFORM platform_internal.exec_in_database(
       'automation_data_control',
-      format('ALTER DATABASE %I OWNER TO %I', p_domain, owner_name)
+      format(
+        'REVOKE CONNECT ON DATABASE %1$I FROM PUBLIC; GRANT CONNECT ON DATABASE %1$I TO %2$I, %3$I, %4$I; REVOKE CONNECT ON DATABASE automation_data_control FROM %2$I, %3$I, %4$I',
+        p_domain,
+        owner_name,
+        migrator_name,
+        runtime_name
+      )
     );
-  END IF;
-  PERFORM platform_internal.exec_in_database(
-    'automation_data_control',
-    format(
-      'REVOKE CONNECT ON DATABASE %1$I FROM PUBLIC; GRANT CONNECT ON DATABASE %1$I TO %2$I, %3$I, %4$I; REVOKE CONNECT ON DATABASE automation_data_control FROM %2$I, %3$I, %4$I',
+    PERFORM platform_internal.reconcile_database(
       p_domain,
       owner_name,
       migrator_name,
       runtime_name
-    )
-  );
-  PERFORM platform_internal.reconcile_database(
-    p_domain,
-    owner_name,
-    migrator_name,
-    runtime_name
-  );
+    );
 
-  next_generation := platform_internal.bump_generation();
-  INSERT INTO platform_operations.managed_domains (
-    domain,
-    database_name,
-    owner_role,
-    migrator_role,
-    runtime_role,
-    state,
-    generation,
-    operation_started_at,
-    updated_at,
-    error_code
-  ) VALUES (
-    p_domain,
-    p_domain,
-    owner_name,
-    migrator_name,
-    runtime_name,
-    'provisioning',
-    next_generation,
-    clock_timestamp(),
-    clock_timestamp(),
-    NULL
-  ) ON CONFLICT (domain) DO UPDATE SET
-    state = 'provisioning',
-    generation = EXCLUDED.generation,
-    operation_started_at = EXCLUDED.operation_started_at,
-    updated_at = EXCLUDED.updated_at,
-    error_code = NULL;
+  EXCEPTION WHEN OTHERS THEN
+    -- Only a call that committed a reservation may mark its DDL attempt failed.
+    PERFORM platform_internal.exec_in_database(
+      'automation_data_control',
+      format($sql$
+        UPDATE platform_operations.managed_domains
+        SET state = 'error', generation = platform_internal.bump_generation(),
+          updated_at = clock_timestamp(), error_code = 'provisioning_failed'
+        WHERE domain = %L
+        $sql$, p_domain)
+    );
+    RAISE;
+  END;
 
   RETURN jsonb_build_object(
     'domain', p_domain,
@@ -488,30 +502,15 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_error_code';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
   next_generation := platform_internal.bump_generation();
-  INSERT INTO platform_operations.managed_domains (
-    domain,
-    database_name,
-    owner_role,
-    migrator_role,
-    runtime_role,
-    state,
-    generation,
-    error_code
-  ) VALUES (
-    p_domain,
-    p_domain,
-    p_domain || '_owner',
-    p_domain || '_migrator',
-    p_domain || '_runtime',
-    'error',
-    next_generation,
-    p_error_code
-  ) ON CONFLICT (domain) DO UPDATE SET
-    state = 'error',
-    generation = EXCLUDED.generation,
-    updated_at = clock_timestamp(),
-    error_code = EXCLUDED.error_code;
+  UPDATE platform_operations.managed_domains
+  SET state = 'error', generation = next_generation,
+      updated_at = clock_timestamp(), error_code = p_error_code
+  WHERE domain = p_domain;
 END;
 $function$;
 

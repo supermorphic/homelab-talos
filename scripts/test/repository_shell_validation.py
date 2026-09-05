@@ -22,7 +22,9 @@ junit_report = importlib.util.module_from_spec(JUNIT_REPORT_SPEC)
 JUNIT_REPORT_SPEC.loader.exec_module(junit_report)
 
 REPOSITORY_DIRS = (
+    "kubernetes/apps/automation-data/postgresql/app/scripts",
     "scripts/hooks",
+    "scripts/operations",
     "scripts/repository",
     "scripts/secrets",
     "scripts/talos",

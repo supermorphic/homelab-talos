@@ -26,10 +26,15 @@ cilium-validate: require-bash
 n8n-validate: require-bash
     @scripts/validate/n8n.sh
 
-# Validate the unique specification 025 automation-data contracts. This remains a fast,
+# Validate the unique specification 026 automation-data contracts. This remains a fast,
 # cluster-independent, secret-free source check and does not start PostgreSQL or n8n.
 automation-data-validate: require-bash
     @scripts/validate/automation-data.sh
+
+# Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
+# Operator-run; deactivate provisioning and drain executions before confirmation.
+automation-data-control-migrate: require-bash
+    @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
 # Observe the deployed automation-data platform without reading Secrets, querying
 # PostgreSQL, invoking n8n, execing into a Pod, or opening a port-forward.

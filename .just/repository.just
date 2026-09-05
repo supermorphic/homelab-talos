@@ -1760,13 +1760,13 @@ require-bash:
     source scripts/lib/common.sh
     require_bash
 
-# Parse and ShellCheck every Bash validation, verification, test, and probe
+# Parse and ShellCheck every repository operation, validation, verification, test, and probe
 # entrypoint. Live behavior is proven separately through operator-run gates.
 [private]
 validate-shell-scripts:
     #!/usr/bin/env bash
     set -euo pipefail
-    for script in scripts/hooks/*.sh scripts/repository/*.sh scripts/talos/*.sh scripts/validate/*.sh scripts/verify/*.sh; do
+    for script in kubernetes/apps/automation-data/postgresql/app/scripts/*.sh scripts/hooks/*.sh scripts/operations/*.sh scripts/repository/*.sh scripts/talos/*.sh scripts/validate/*.sh scripts/verify/*.sh; do
       test -x "$script"
     done
     artifact_root="${TEST_SHARED_RESULT_DIR:-}"

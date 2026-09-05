@@ -22,7 +22,9 @@ repository_shell_validation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(repository_shell_validation)
 
 REPOSITORY_DIRS = (
+    "kubernetes/apps/automation-data/postgresql/app/scripts",
     "scripts/hooks",
+    "scripts/operations",
     "scripts/repository",
     "scripts/secrets",
     "scripts/talos",
@@ -164,6 +166,18 @@ exit 0
     def test_discovers_tracked_talos_shell_source(self) -> None:
         self.assertIn(
             Path("scripts/talos/apply-live.sh"),
+            repository_shell_validation.discover_shell_sources(REPO_ROOT),
+        )
+
+    def test_discovers_tracked_operations_shell_source(self) -> None:
+        self.assertIn(
+            Path("scripts/operations/automation-data-control-migrate.sh"),
+            repository_shell_validation.discover_shell_sources(REPO_ROOT),
+        )
+
+    def test_discovers_automation_data_workload_shell_source(self) -> None:
+        self.assertIn(
+            Path("kubernetes/apps/automation-data/postgresql/app/scripts/migrate-control.sh"),
             repository_shell_validation.discover_shell_sources(REPO_ROOT),
         )
 
