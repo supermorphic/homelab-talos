@@ -105,12 +105,23 @@ mise exec -- yq -i '
   (.jobs.plan-shadow.steps[] | select(
     .if == "github.event_name == '\''pull_request'\''" and
     (.run | contains("mise exec -- just test ci-plan"))
-  ).run) = "mise exec -- just test ci-plan \\\n+    \"${{ github.event.pull_request.head.sha }}\" \\\n+    \"${{ github.event.pull_request.base.sha }}\" \\\n+    \"$RUNNER_TEMP/ci-plan.json\"" |
+  ).run) = "mise exec -- just test ci-plan \\\n    \"${{ github.event.pull_request.head.sha }}\" \\\n    \"${{ github.event.pull_request.base.sha }}\" \\\n    \"$RUNNER_TEMP/ci-plan.json\"" |
   (.jobs.plan-shadow.steps[] | select(
     .if == "github.event_name == '\''workflow_dispatch'\''" and
     (.run | contains("mise exec -- just test ci-plan-full"))
-  ).run) = "mise exec -- just test ci-plan-full \\\n+    \"${{ github.sha }}\" \\\n+    \"$RUNNER_TEMP/ci-plan.json\" \\\n+    \"${{ github.sha }}\""
+  ).run) = "mise exec -- just test ci-plan-full \\\n    \"${{ github.sha }}\" \\\n    \"$RUNNER_TEMP/ci-plan.json\" \\\n    \"${{ github.sha }}\""
 ' "$swapped_workflow"
+# Each mutation must execute exactly the intended permutation, with no extra arguments.
+assert_planner_argv "$swapped_workflow" pull_request \
+	'mise exec -- just test ci-plan' exec -- just test ci-plan \
+	2222222222222222222222222222222222222222 \
+	1111111111111111111111111111111111111111 \
+	"$fixture_root/runner-temp/ci-plan.json"
+assert_planner_argv "$swapped_workflow" workflow_dispatch \
+	'mise exec -- just test ci-plan-full' exec -- just test ci-plan-full \
+	3333333333333333333333333333333333333333 \
+	"$fixture_root/runner-temp/ci-plan.json" \
+	3333333333333333333333333333333333333333
 if assert_planner_argv "$swapped_workflow" pull_request \
 	'mise exec -- just test ci-plan' exec -- just test ci-plan \
 	1111111111111111111111111111111111111111 \
