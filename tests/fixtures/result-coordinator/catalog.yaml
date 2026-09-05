@@ -1,31 +1,36 @@
 schema_version: 1
 executions:
   ci:
-    - validation.fixture-pass
-    - validation.fixture-fail
-    - validation.fixture-skipped
+    - validation.core
+    - validation.observability
+    - validation.automation
+    - validation.ci-framework
   ci-core:
-    - validation.fixture-pass
+    - validation.core
   ci-observability:
-    - validation.fixture-fail
+    - validation.observability
   ci-automation:
-    - validation.fixture-skipped
+    - validation.automation
   ci-framework:
-    - validation.fixture-pass
+    - validation.ci-framework
 suites:
   - metadata: {id: validation.ci, source: validation, framework: just, suite: ci, tier: offline, target: repository, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just ci", implementation: .justfile}
     native_results: {strategy: aggregate}
-  - metadata: {id: validation.fixture-pass, source: validation, framework: bash, suite: ci, tier: offline, target: fixture-pass, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.core, source: validation, framework: bash, suite: ci, tier: offline, target: core, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just fixture-pass", implementation: tests/fixtures/result-coordinator/fake-just.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.fixture-fail, source: validation, framework: bash, suite: ci, tier: offline, target: fixture-fail, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.observability, source: validation, framework: bash, suite: ci, tier: offline, target: observability, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just fixture-fail", implementation: tests/fixtures/result-coordinator/fake-just.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.fixture-skipped, source: validation, framework: bash, suite: ci, tier: offline, target: fixture-skipped, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.automation, source: validation, framework: bash, suite: ci, tier: offline, target: automation, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just fixture-skipped", implementation: tests/fixtures/result-coordinator/fake-just.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.ci-framework, source: validation, framework: bash, suite: ci, tier: offline, target: ci-framework, scenario: null, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just fixture-skipped", implementation: tests/fixtures/result-coordinator/fake-just.sh}
     native_results: {strategy: wrapper-junit}
