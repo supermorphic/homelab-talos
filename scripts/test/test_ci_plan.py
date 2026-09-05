@@ -334,7 +334,7 @@ class GitPlanTests(unittest.TestCase):
                 self.assert_error(self.plan_cli("--head", sha))
         self.assert_error(self.plan_cli("--base", self.head, "--head", self.base))
         self.git("checkout", "--quiet", "--detach", self.base)
-        self.write("docs/branch.md", "divergent\n")
+        self.write("divergent-fixture.txt", "divergent\n")
         other = self.commit()
         self.assert_error(self.plan_cli("--base", other))
         self.assertFalse(self.output.exists())
