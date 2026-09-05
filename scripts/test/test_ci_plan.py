@@ -147,6 +147,104 @@ class ClassificationTests(unittest.TestCase):
                     ("core", "observability", "automation", "ci-framework"),
                 )
 
+    def test_direct_cross_domain_validator_inputs(self):
+        cases = {
+            "kubernetes/apps/networking/public-webhook-gateway/app/gateway.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/app/namespace.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/app/address-pool.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/app/certificate.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/app/internal-dns.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/app/kustomization.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/route/kustomization.yaml": (
+                "core",
+                "automation",
+            ),
+            "kubernetes/apps/networking/public-webhook-gateway/ks.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/networking/external-dns/app/values.yaml": ("core", "automation"),
+            "kubernetes/apps/networking/kustomization.yaml": ("core", "automation"),
+            "kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/alerts/app/kustomization.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/alerts/app/n8n.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/gatus/app/kustomization.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/gatus/app/values.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            "kubernetes/apps/testing/echo/app/httproute.yaml": ("core", "observability"),
+            "kubernetes/apps/testing/echo/app/service.yaml": ("core", "observability"),
+            "kubernetes/apps/networking/internal-gateway/app/gateway.yaml": (
+                "core",
+                "observability",
+            ),
+            "kubernetes/apps/automation/n8n/ks.yaml": ("core", "observability", "automation"),
+            "kubernetes/apps/automation/n8n-postgresql/ks.yaml": (
+                "core",
+                "observability",
+                "automation",
+            ),
+            ".sops.yaml": ("core", "observability", "automation"),
+            "docs/README.md": ("core", "automation"),
+            "docs/guides/n8n-operations.md": ("core", "automation"),
+            "docs/runbooks/n8n-recovery.md": ("core", "automation"),
+            "docs/guides/automation-data-operations.md": ("core", "automation"),
+            "docs/runbooks/automation-data-recovery.md": ("core", "automation"),
+            "docs/runbooks/platform-disaster-recovery.md": ("core", "automation"),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
+
     def test_merge_gate_implementation_and_tests_select_explicit_full(self):
         for path in ("scripts/test/ci_reconcile.py", "scripts/test/test_ci_reconcile.py"):
             with self.subTest(path=path):
@@ -203,9 +301,9 @@ class GitPlanTests(unittest.TestCase):
         self.git("config", "user.email", "ci-planner@example.invalid")
         self.git("config", "commit.gpgsign", "false")
         self.git("config", "core.hooksPath", "/dev/null")
-        self.write("docs/README.md", "initial\n")
+        self.write("docs/planner-fixture.md", "initial\n")
         self.base = self.commit()
-        self.write("docs/README.md", "updated\n")
+        self.write("docs/planner-fixture.md", "updated\n")
         self.head = self.commit()
         self.output = self.repo / "plan.json"
 
@@ -276,7 +374,7 @@ class GitPlanTests(unittest.TestCase):
         self.git("mv", "kubernetes/apps/monitoring/old file\nname.yaml", "docs/renamed.yaml")
         (self.repo / "kubernetes/apps/automation-data/deleted.yaml").unlink()
         self.write("docs/added.yaml", "new content\n")
-        self.write("docs/README.md", "modified again\n")
+        self.write("docs/planner-fixture.md", "modified again\n")
         head = self.commit()
         plan = make_plan(self.repo, base, head, IMPACT, CATALOG)
         self.assertEqual(plan.groups, ("core", "observability", "automation"))
@@ -287,7 +385,7 @@ class GitPlanTests(unittest.TestCase):
                 "docs/renamed.yaml",
                 "kubernetes/apps/automation-data/deleted.yaml",
                 "docs/added.yaml",
-                "docs/README.md",
+                "docs/planner-fixture.md",
             }.issubset(paths)
         )
 
@@ -340,8 +438,8 @@ class GitPlanTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_unsupported_git_type_change_exits_two(self):
-        (self.repo / "docs/README.md").unlink()
-        (self.repo / "docs/README.md").symlink_to("somewhere")
+        (self.repo / "docs/planner-fixture.md").unlink()
+        (self.repo / "docs/planner-fixture.md").symlink_to("somewhere")
         self.head = self.commit()
         self.assert_error(self.plan_cli())
 

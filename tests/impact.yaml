@@ -69,6 +69,13 @@ full_paths:
   - talos/**
 conditional_paths:
   observability:
+    - .sops.yaml
+    - kubernetes/apps/testing/echo/app/httproute.yaml
+    - kubernetes/apps/testing/echo/app/service.yaml
+    - kubernetes/apps/networking/internal-gateway/app/gateway.yaml
+    - kubernetes/apps/networking/public-webhook-gateway/ks.yaml
+    - kubernetes/apps/automation/n8n/ks.yaml
+    - kubernetes/apps/automation/n8n-postgresql/ks.yaml
     - kubernetes/apps/monitoring/**
     - scripts/diagnose/flux-alerts.sh
     - scripts/verify/logging.sh
@@ -101,11 +108,27 @@ conditional_paths:
     - scripts/secrets/ntfy-*
     - tests/prometheus/monitoring-alerts_test.yaml
   automation:
+    - .sops.yaml
+    - docs/README.md
+    - docs/guides/n8n-operations.md
+    - docs/runbooks/n8n-recovery.md
+    - docs/guides/automation-data-operations.md
+    - docs/runbooks/automation-data-recovery.md
+    - docs/runbooks/platform-disaster-recovery.md
     - kubernetes/apps/automation/**
     - kubernetes/apps/automation-data/**
+    - kubernetes/apps/monitoring/alerts/app/kustomization.yaml
+    - kubernetes/apps/monitoring/alerts/app/n8n.yaml
+    - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
+    - kubernetes/apps/monitoring/gatus/app/values.yaml
+    - kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml
+    - kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml
+    - kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml
     - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json
     - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/automation-data-postgresql.json
-    - kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml
+    - kubernetes/apps/networking/public-webhook-gateway/**
+    - kubernetes/apps/networking/external-dns/app/values.yaml
+    - kubernetes/apps/networking/kustomization.yaml
     - scripts/verify/n8n.sh
     - scripts/verify/automation-data.sh
     - scripts/validate/n8n.sh
