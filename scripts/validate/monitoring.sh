@@ -80,6 +80,14 @@ if [[ "$scope" == all ]]; then
 		helm template kube-prometheus-stack kube-prometheus-stack --repo https://prometheus-community.github.io/helm-charts --version "$chart_version" --namespace monitoring --values "$values" >"$temp_dir/kps.yaml"
 	render_kinds="$(yq ea -r '[select(.kind == "Prometheus" or .kind == "Alertmanager") | .kind] | .[]' "$temp_dir/kps.yaml" | sort -u | tr '\n' ' ')"
 	[[ "$render_kinds" == 'Alertmanager Prometheus ' ]]
+	# Check the rendered workload, including chart defaults: Grafana updates must
+	# terminate the old pod before creating its replacement.
+	[[ "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-grafana")] | length' "$temp_dir/kps.yaml")" == '1' ]]
+	yq ea -e 'select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-grafana") |
+    .spec.strategy.type == "Recreate" and (.spec.strategy | has("rollingUpdate") | not)' "$temp_dir/kps.yaml" >/dev/null || {
+		echo 'Refusing: rendered Grafana Deployment must use Recreate without rollingUpdate settings.' >&2
+		exit 1
+	}
 fi
 
 # --- Loki: single-binary, filesystem-backed internal log store ---
@@ -583,11 +591,10 @@ if [[ "$scope" == all ]]; then
 	}
 	rg -qx '  - ./flux-podmonitor.yaml' "$cfg/kustomization.yaml"
 
-	# The bundled kube-state-metrics MUST stay untouched — changing KPS HelmRelease values trips
-	# the documented helm-controller upgrade wedge, which is exactly why the Flux exporter is a
-	# separate instance.
+	# Keep the dedicated exporter until a separately validated migration proves
+	# metric and alert parity. A successful KPS upgrade alone does not prove parity.
 	[[ "$(yq -r '.["kube-state-metrics"].customResourceState // "absent"' "$values")" == 'absent' ]] || {
-		echo 'Refusing: kube-prometheus-stack values must not configure customResourceState (KPS upgrade wedge).' >&2
+		echo 'Refusing: bundled customResourceState requires a validated Flux exporter migration.' >&2
 		exit 1
 	}
 
