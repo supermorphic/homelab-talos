@@ -337,7 +337,7 @@ done
 expect_fixture_failure "$durable_source" active '' rules-unhealthy
 expect_fixture_failure "$durable_source" active '' gatus-down
 
-run_verifier "$staged_source" active attended longhorn-detached-healthy >/dev/null
+expect_fixture_failure "$staged_source" active attended longhorn-detached-healthy
 
 if PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
   "$fixture/bin/curl" --request POST 'https://prometheus.lab.supermorphic.com/api/v1/query' >/dev/null 2>&1; then

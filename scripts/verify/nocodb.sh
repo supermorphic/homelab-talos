@@ -278,22 +278,12 @@ VOLUME_NAME="$volume_name" yq -p=json -e '
     (($matches | length) == 1),
     ($matches[0].metadata.labels."recurring-job-group.longhorn.io/default" == "enabled"),
     ($matches[0].spec.numberOfReplicas == 2),
-    ([
-      ([
-        ($matches[0].status.state == "attached"),
-        ($matches[0].status.robustness == "healthy"),
-        (($matches[0].status.replicaModeMap | length) == 2),
-        (([$matches[0].status.replicaModeMap[]? | select(. == "RW")] | length) == 2)
-      ] | all),
-      ([
-        ($matches[0].status.state == "detached"),
-        ($matches[0].status.robustness == "unknown"),
-        (($matches[0].status.replicaModeMap | type) == "!!map"),
-        (($matches[0].status.replicaModeMap | length) == 0)
-      ] | all)
-    ] | any)
+    ($matches[0].status.state == "attached"),
+    ($matches[0].status.robustness == "healthy"),
+    (($matches[0].status.replicaModeMap | length) == 2),
+    (([$matches[0].status.replicaModeMap[]? | select(. == "RW")] | length) == 2)
   ] | all
-' - >/dev/null <<<"$volumes" || fail 'NocoDB Longhorn volume identity, replica health, detached state, or default recurring group is invalid.'
+' - >/dev/null <<<"$volumes" || fail 'NocoDB Longhorn volume identity, attached health, two RW replicas, or default recurring group is invalid.'
 
 query_value() {
   local query="$1" response
