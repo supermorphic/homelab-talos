@@ -42,7 +42,6 @@ EXPECTED_INTEGRATION = [
     "test.storage-provisioning",
     "test.flux-canary",
     "test.n8n-restore-drill",
-    "test.automation-data-provisioning",
     "test.automation-data-restore-drill",
     "test.integration.media-hardlink",
     "test.plex-network-policy",
@@ -58,7 +57,10 @@ EXPECTED_RESILIENCE = [
     "chainsaw.resilience.test-reports-persistence",
     "chainsaw.resilience.tailscale-subnet-router-replica-recovery",
 ]
-STANDALONE_SUITES = {"test.resilience.node-abrupt-loss"}
+STANDALONE_SUITES = {
+    "test.automation-data-provisioning",
+    "test.resilience.node-abrupt-loss",
+}
 METADATA_FIELDS = (
     "source",
     "framework",

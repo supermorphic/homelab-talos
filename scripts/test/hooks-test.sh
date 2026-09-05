@@ -98,6 +98,47 @@ run_pre_commit_entry_with_minimal_path "$gitleaks_entry"
 run_pre_commit_entry_with_minimal_path "$sops_entry"
 run_pre_commit_hook_with_minimal_path
 
+secret_scan_repo="$fixture/secret-scan-repository"
+secret_scan_output="$fixture/secret-scan-output.log"
+mkdir -p "$secret_scan_repo/invoke"
+git -C "$secret_scan_repo" init --quiet --initial-branch=candidate
+git -C "$secret_scan_repo" config user.email tests@example.invalid
+git -C "$secret_scan_repo" config user.name 'Repository Secret Scan Test'
+printf '%s\n' safe >"$secret_scan_repo/candidate.txt"
+git -C "$secret_scan_repo" add candidate.txt
+git -C "$secret_scan_repo" commit --quiet -m candidate
+candidate_commit="$(git -C "$secret_scan_repo" rev-parse HEAD)"
+git -C "$secret_scan_repo" switch --quiet --orphan unrelated
+fixture_credential="$(printf '\147\154\160\141\164\055%s%s' 'A1b2C3d4E5' 'f6G7h8I9j0')"
+printf '%s\n' "$fixture_credential" >"$secret_scan_repo/unrelated.txt"
+git -C "$secret_scan_repo" add unrelated.txt
+git -C "$secret_scan_repo" commit --quiet -m unrelated
+git -C "$secret_scan_repo" switch --quiet --detach "$candidate_commit"
+
+run_repository_secret_scan() {
+  mise exec -- just --justfile "$repo_root/.just/repository.just" \
+    --working-directory "$secret_scan_repo/invoke" secret-scan
+}
+
+if ! run_repository_secret_scan >"$secret_scan_output" 2>&1; then
+  echo 'Repository secret scan must ignore findings reachable only from unrelated refs.' >&2
+  sed -n '1,80p' "$secret_scan_output" >&2
+  exit 1
+fi
+
+printf '%s\n' "$fixture_credential" >"$secret_scan_repo/reachable.txt"
+git -C "$secret_scan_repo" add reachable.txt
+git -C "$secret_scan_repo" commit --quiet -m reachable
+if run_repository_secret_scan >"$secret_scan_output" 2>&1; then
+  echo 'Repository secret scan accepted a finding in HEAD ancestry.' >&2
+  exit 1
+fi
+rg -q 'leaks found: 1' "$secret_scan_output" || {
+  echo 'Repository secret scan did not report the reachable synthetic finding.' >&2
+  sed -n '1,80p' "$secret_scan_output" >&2
+  exit 1
+}
+
 tracked_agent_files="$(
   mise exec -- git -C "$repo_root" ls-files -- 'AGENTS.md' '**/AGENTS.md'
 )"

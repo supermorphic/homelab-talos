@@ -244,6 +244,74 @@ node - "$workflow" <<'JS'
 const fs = require('fs');
 const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const byName = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
+const normalize = new Function('$json', byName['Normalize Request'].parameters.jsCode);
+const normal = normalize({ body: { domain: 'domain_one', operation: 'provision' } });
+if (normal[0].json.domain !== 'domain_one') throw new Error('normal domain changed');
+for (const domain of ['postgres', 'template0', 'template1', 'automation_data_control']) {
+  let rejected = false;
+  try { normalize({ body: { domain, operation: 'provision' } }); }
+  catch (error) { rejected = error.message === 'invalid_domain'; }
+  if (!rejected) throw new Error(`reserved domain accepted: ${domain}`);
+}
+// Execute the production response/error Code nodes and follow their real graph
+// outputs. PostgreSQL is a recording boundary, not a simulated database here.
+const dispatchResponse = (operation, result) => {
+  const request = { domain: 'domain_one', operation };
+  const lookup = () => ({ first: () => ({ json: request }) });
+  let name = 'Prepare Success Response';
+  let input = { result };
+  let recordings = 0;
+  for (let step = 0; step < 8; step++) {
+    const node = byName[name];
+    if (node.type === 'n8n-nodes-base.respondToWebhook') return { response: input, recordings };
+    let output = 0;
+    if (node.type === 'n8n-nodes-base.postgres') {
+      if (!node.parameters.query.includes('platform_operations.record_operation_error(')) {
+        throw new Error(`unexpected database call in error dispatch: ${name}`);
+      }
+      recordings++;
+      input = { result: null };
+    } else {
+      try { input = new Function('$json', '$', node.parameters.jsCode)(input, lookup)[0].json; }
+      catch (error) {
+        if (node.onError !== 'continueErrorOutput') throw error;
+        output = 1;
+        input = { error: error.message };
+      }
+    }
+    const edges = workflow.connections[name]?.main?.[output];
+    if (edges?.length !== 1) throw new Error(`error dispatch did not select one successor: ${name}`);
+    name = edges[0].node;
+  }
+  throw new Error('error dispatch failed to reach a response');
+};
+const validChecks = Object.fromEntries([
+  'ownerNoLogin', 'migratorCanSetOwner', 'runtimeCannotSetOwner',
+  'migratorControlConnectDenied', 'runtimeControlConnectDenied',
+  'migratorDomainConnectAllowed', 'runtimeDomainConnectAllowed',
+  'runtimePrivilegesValid', 'defaultPrivilegesValid', 'crossDomainConnectDenied',
+  'migratorDdlValid', 'runtimeCrudValid', 'runtimeDdlDenied',
+  'runtimeOwnerAssumptionDenied', 'runtimeRoleManagementDenied',
+].map((name) => [name, true]));
+for (const result of [
+  ...['provisioning', 'rotating', 'error'].map((state) => ({ domain: 'domain_one', state })),
+  { domain: 'domain_one', state: 'ready', ...validChecks, runtimePrivilegesValid: false },
+  '{invalid-json',
+]) {
+  for (const operation of ['validate', 'provision', 'rotate', 'reconcile']) {
+    const { response, recordings } = dispatchResponse(operation, result);
+    if (response.ok !== false || response.errorCode !== 'workflow_operation_failed') {
+      throw new Error(`${operation} validation failure did not return its bounded error`);
+    }
+    if (recordings !== (operation === 'validate' ? 0 : 1)) {
+      throw new Error(`${operation} validation failure reached ${recordings} mutation error recorders`);
+    }
+  }
+}
+const validResponse = dispatchResponse('validate', { domain: 'domain_one', state: 'ready', ...validChecks });
+if (validResponse.response.ok !== true || validResponse.recordings !== 0) {
+  throw new Error('successful validation changed the registry or failed');
+}
 const targetPages = [
   { json: { data: [{ id: 'unrelated', name: 'unrelated', type: 'postgres' }], nextCursor: 'page-two' } },
   { json: { data: [

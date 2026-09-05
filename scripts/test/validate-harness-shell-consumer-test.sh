@@ -18,6 +18,8 @@ real_bash="$(command -v bash)"
 run_id='bounded-harness-run'
 
 mkdir -p \
+	"$fixture_root/kubernetes/apps/automation-data/postgresql/app/scripts" \
+	"$fixture_root/scripts/operations" \
 	"$fixture_root/scripts/test/lib" \
 	"$fixture_root/scripts/test/safety" \
 	"$fixture_root/scripts/secrets" \
@@ -45,6 +47,10 @@ printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
 	>"$fixture_root/scripts/test/validate-catalog.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 97' \
 	>"$fixture_root/scripts/test/safety/require-chaos-confirmation-test.sh"
+printf '%s\n' '#!/bin/sh' 'exit 0' \
+	>"$fixture_root/kubernetes/apps/automation-data/postgresql/app/scripts/migrate-control.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
+	>"$fixture_root/scripts/operations/control-migrate.sh"
 printf '%s\n' '[tools]' 'shellcheck = "fake-1.0"' >"$fixture_root/.mise.toml"
 
 cat >"$tool_root/bash" <<EOF
@@ -91,7 +97,8 @@ while IFS= read -r -d '' candidate; do
 	expected_files+=("$candidate")
 done < <(
 	git -C "$fixture_root" ls-files -co --exclude-standard -z -- \
-		scripts/hooks scripts/repository scripts/secrets scripts/talos \
+		kubernetes/apps/automation-data/postgresql/app/scripts \
+		scripts/hooks scripts/operations scripts/repository scripts/secrets scripts/talos \
 		scripts/validate scripts/verify scripts/test tests/probes
 )
 mapfile -t expected_files < <(printf '%s\n' "${expected_files[@]}" | LC_ALL=C sort)

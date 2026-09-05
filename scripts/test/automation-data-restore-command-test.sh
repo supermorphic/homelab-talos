@@ -3,6 +3,8 @@ set -euo pipefail
 
 # shellcheck source=scripts/test/lib/automation-data-restore-command.sh
 source scripts/test/lib/automation-data-restore-command.sh
+# shellcheck source=scripts/test/lib/n8n-restore-command.sh
+source scripts/test/lib/n8n-restore-command.sh
 
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-restore-command-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -27,6 +29,91 @@ sed -n '/^resolve_backup_configmap()/,/^}/p' "$restore_scenario" \
   >"$test_root/resolve-backup-configmap.sh"
 # shellcheck disable=SC1091 # Extract the production resolver without running the live scenario.
 source "$test_root/resolve-backup-configmap.sh"
+
+sed -n '/^write_phase()/,/^}/p; /^validate_restore_selectors()/,/^}/p; /^validate_reported_restore_selection()/,/^}/p; /^wait_for_restore_job()/,/^}/p; /^restore_job_manifest()/,/^}/p' \
+  "$restore_scenario" >"$test_root/restore-scenario-functions.sh"
+# shellcheck disable=SC1091 # Extract production functions without running the live scenario.
+source "$test_root/restore-scenario-functions.sh"
+declare -F validate_restore_selectors >/dev/null ||
+  fail 'the full-chain scenario has no exact-pair selector validator'
+declare -F validate_reported_restore_selection >/dev/null ||
+  fail 'the full-chain scenario has no reported exact-pair invariant'
+
+validate_restore_selectors '' '' >/dev/null || fail 'default artifact selection was rejected'
+validate_restore_selectors automation-data-20260825T003000Z \
+  n8n-postgresql-20260825T003000Z.dump >/dev/null || fail 'canonical exact pair was rejected'
+if validate_restore_selectors automation-data-20260825T003000Z '' >/dev/null 2>&1; then
+  fail 'an automation-data selector without an n8n selector was accepted'
+fi
+if validate_restore_selectors '' n8n-postgresql-20260825T003000Z.dump >/dev/null 2>&1; then
+  fail 'an n8n selector without an automation-data selector was accepted'
+fi
+if validate_restore_selectors '../automation-data-20260825T003000Z' \
+  '../n8n-postgresql-20260825T003000Z.dump' >/dev/null 2>&1; then
+  fail 'path-bearing exact selectors were accepted'
+fi
+validate_reported_restore_selection \
+  automation-data-20260825T003000Z n8n-postgresql-20260825T003000Z.dump \
+  automation-data-20260825T003000Z n8n-postgresql-20260825T003000Z.dump ||
+  fail 'reported artifacts matching the exact pair were rejected'
+if validate_reported_restore_selection \
+  automation-data-20260825T003000Z n8n-postgresql-20260825T003000Z.dump \
+  automation-data-20260826T003000Z n8n-postgresql-20260825T003000Z.dump; then
+  fail 'a different canonical automation-data bundle satisfied the exact pair'
+fi
+if validate_reported_restore_selection \
+  automation-data-20260825T003000Z n8n-postgresql-20260825T003000Z.dump \
+  automation-data-20260825T003000Z n8n-postgresql-20260826T003000Z.dump; then
+  fail 'a different canonical n8n dump satisfied the exact pair'
+fi
+
+run_hash='123456789abc'
+prefix="ad-restore-$run_hash"
+ad_namespace='automation-data'
+n8n_namespace='automation'
+ad_restore_job="$prefix-ad-load"
+n8n_restore_job="$prefix-n8n-load"
+ad_service="$prefix-db"
+n8n_service="$prefix-n8n-db"
+backup_configmap='automation-data-postgresql-backup-bk2fk62b6h'
+automation_data_restore_bundle='automation-data-20260825T003000Z'
+n8n_restore_dump='n8n-postgresql-20260825T003000Z.dump'
+export run_hash prefix ad_namespace n8n_namespace ad_restore_job n8n_restore_job \
+  ad_service n8n_service backup_configmap automation_data_restore_bundle n8n_restore_dump
+restore_job_manifest automation-data >"$test_root/automation-data-job.yaml"
+restore_job_manifest n8n >"$test_root/n8n-job.yaml"
+[[ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "AUTOMATION_DATA_RESTORE_BUNDLE") | .value' \
+  "$test_root/automation-data-job.yaml")" == "$automation_data_restore_bundle" ]] ||
+  fail 'the exact automation-data bundle was not passed through the Job environment'
+[[ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "N8N_RESTORE_DUMP") | .value' \
+  "$test_root/n8n-job.yaml")" == "$n8n_restore_dump" ]] ||
+  fail 'the exact n8n dump was not passed through the Job environment'
+
+classification_run="$test_root/classification-run"
+mkdir -p "$classification_run"
+run_dir="$classification_run"
+export run_dir
+wait_for_job_terminal() {
+  printf 'restore_stage=%s\nrestore_failure=%s\n' "$WAIT_FAILURE_STAGE" "$WAIT_FAILURE_STAGE" >&2
+  return 1
+}
+WAIT_FAILURE_STAGE='artifact-selection'
+if wait_for_restore_job ad-load 1800 5 synthetic-kubectl >/dev/null 2>&1; then
+  fail 'an artifact-selection Job failure was accepted'
+fi
+[[ "$(yq -r '.status' "$classification_run/external-dependency.json")" == 'failed' ]] ||
+  fail 'artifact-selection failure was not classified as an external dependency'
+
+product_failure_run="$test_root/product-failure-run"
+mkdir -p "$product_failure_run"
+run_dir="$product_failure_run"
+export run_dir
+WAIT_FAILURE_STAGE='database-restore'
+if wait_for_restore_job ad-load 1800 5 synthetic-kubectl >/dev/null 2>&1; then
+  fail 'a database-restore Job failure was accepted'
+fi
+[[ ! -e "$product_failure_run/external-dependency.json" ]] ||
+  fail 'a non-artifact restore failure was classified as an external dependency'
 
 single_configmap='{"items":[{"metadata":{"name":"unrelated"},"data":{"backup.sh":"x","update-backup-status.sql":"x"}},{"metadata":{"name":"automation-data-postgresql-backup-bk2fk62b6h"},"data":{"backup.sh":"x","update-backup-status.sql":"x"}}]}'
 [[ "$(resolve_backup_configmap <<<"$single_configmap")" == \
@@ -166,6 +253,7 @@ run_restore() {
     env \
       PATH="$root/bin:$PATH" \
       BACKUP_DIR="$root/backups" \
+      AUTOMATION_DATA_RESTORE_BUNDLE="${AUTOMATION_DATA_RESTORE_BUNDLE_OVERRIDE:-}" \
       POST_RECOVERY_BACKUP_DIR="$root/post-recovery" \
       AUTOMATION_DATA_BACKUP_SCRIPT="$root/bin/backup" \
       AUTOMATION_DATA_UPDATE_BACKUP_STATUS_SQL="$root/update-status.sql" \
@@ -205,6 +293,51 @@ first_database_line="$(rg -n $'^pg_restore\t--exit-on-error' \
 rg -Fq 'backup' "$success/commands.log" || fail 'fresh post-recovery backup was not invoked'
 rg -Fq 'post_recovery_bundle=automation-data-20260828T003000Z' "$success/output" ||
   fail 'fresh post-recovery bundle was not validated'
+
+exact_bundle="$(new_case exact-bundle)"
+create_bundle "$exact_bundle/backups" 20260825T003000Z
+create_bundle "$exact_bundle/backups" 20260826T003000Z
+AUTOMATION_DATA_RESTORE_BUNDLE_OVERRIDE='automation-data-20260825T003000Z' \
+  run_restore "$exact_bundle"
+[[ "$(<"$exact_bundle/status")" == '0' ]] || fail 'exact bundle restore failed'
+rg -Fq 'selected_bundle=automation-data-20260825T003000Z' "$exact_bundle/output" ||
+  fail 'the exact requested bundle was not selected'
+
+for requested in \
+  automation-data-20260827T003000Z \
+  ../automation-data-20260826T003000Z; do
+  case_name="exact-invalid-$(printf '%s' "$requested" | tr -c 'A-Za-z0-9' '-')"
+  case_root="$(new_case "$case_name")"
+  create_bundle "$case_root/backups" 20260826T003000Z
+  AUTOMATION_DATA_RESTORE_BUNDLE_OVERRIDE="$requested" run_restore "$case_root"
+  [[ "$(<"$case_root/status")" != '0' ]] || fail "invalid exact bundle $requested was accepted"
+  rg -Fq 'restore_failure=artifact-selection' "$case_root/output" ||
+    fail "invalid exact bundle $requested did not fail artifact selection"
+  [[ ! -s "$case_root/commands.log" ]] ||
+    fail "invalid exact bundle $requested fell back to another bundle"
+done
+
+exact_corrupt="$(new_case exact-corrupt)"
+create_bundle "$exact_corrupt/backups" 20260825T003000Z
+create_bundle "$exact_corrupt/backups" 20260826T003000Z corrupt
+AUTOMATION_DATA_RESTORE_BUNDLE_OVERRIDE='automation-data-20260826T003000Z' \
+  run_restore "$exact_corrupt"
+[[ "$(<"$exact_corrupt/status")" != '0' ]] || fail 'corrupt exact bundle was accepted'
+rg -Fq 'restore_failure=artifact-selection' "$exact_corrupt/output" ||
+  fail 'corrupt exact bundle did not fail artifact selection'
+[[ ! -s "$exact_corrupt/commands.log" ]] ||
+  fail 'corrupt exact bundle fell back to an older valid bundle'
+
+exact_symlink="$(new_case exact-symlink)"
+mkdir -p "$exact_symlink/outside"
+create_bundle "$exact_symlink/outside" 20260826T003000Z
+ln -s "$exact_symlink/outside/automation-data-20260826T003000Z" \
+  "$exact_symlink/backups/automation-data-20260826T003000Z"
+AUTOMATION_DATA_RESTORE_BUNDLE_OVERRIDE='automation-data-20260826T003000Z' \
+  run_restore "$exact_symlink"
+[[ "$(<"$exact_symlink/status")" != '0' ]] || fail 'symlinked exact bundle was accepted'
+rg -Fq 'restore_failure=artifact-selection' "$exact_symlink/output" ||
+  fail 'symlinked exact bundle did not fail artifact selection'
 
 for mutation in corrupt extra missing; do
   case_root="$(new_case "$mutation")"

@@ -233,7 +233,36 @@ done
 
 error_job_manifest() {
   local error_command
-  error_command="psql --no-psqlrc --set=ON_ERROR_STOP=1 --command=\"SELECT platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');\" >/dev/null"
+  # This attended backup fixture is deliberately retained. Fresh platforms seed
+  # only the exact row, after proving that no similarly named object exists.
+  error_command="$(
+    cat <<'SQL'
+psql --no-psqlrc --set=ON_ERROR_STOP=1 >/dev/null <<'EOSQL'
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtextextended('automation-data:issue317_backup_error', 0));
+DO $fixture$
+BEGIN
+  IF NOT EXISTS (SELECT FROM platform_operations.managed_domains WHERE domain = 'issue317_backup_error') THEN
+    IF EXISTS (SELECT FROM pg_database WHERE datname = 'issue317_backup_error') OR
+      EXISTS (SELECT FROM pg_roles WHERE rolname IN ('issue317_backup_error_owner', 'issue317_backup_error_migrator', 'issue317_backup_error_runtime')) THEN
+      RAISE EXCEPTION 'backup_fixture_collision';
+    END IF;
+    INSERT INTO platform_operations.managed_domains
+      (domain, database_name, owner_role, migrator_role, runtime_role, state, generation)
+    VALUES ('issue317_backup_error', 'issue317_backup_error', 'issue317_backup_error_owner',
+      'issue317_backup_error_migrator', 'issue317_backup_error_runtime', 'error', platform_internal.bump_generation());
+  END IF;
+  IF EXISTS (SELECT FROM platform_operations.managed_domains WHERE domain = 'issue317_backup_error'
+      AND (has_reached_ready OR state <> 'error')) THEN
+    RAISE EXCEPTION 'backup_fixture_not_error';
+  END IF;
+  PERFORM platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');
+END;
+$fixture$;
+COMMIT;
+EOSQL
+SQL
+  )"
   JOB_NAME="$error_job" RUN_HASH="$run_hash" ERROR_COMMAND="$error_command" \
     yq --null-input --output-format yaml '
     {
@@ -275,9 +304,9 @@ error_job_manifest() {
                 {"name": "PGDATABASE", "value": "automation_data_control"},
                 {"name": "PGHOST", "value": "automation-data-postgresql"},
                 {"name": "PGPORT", "value": "5432"},
-                {"name": "PGUSER", "value": "automation_data_provisioner"},
+                {"name": "PGUSER", "value": "automation_data_backup"},
                 {"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {
-                  "name": "postgresql-credentials", "key": "provisioner-password"
+                  "name": "postgresql-credentials", "key": "backup-password"
                 }}}
               ],
               "resources": {

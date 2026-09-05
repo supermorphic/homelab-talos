@@ -15,6 +15,7 @@ configMapGenerator:
     files:
       - init-platform.sh=scripts/init-platform.sh
       - platform-control.sql=scripts/platform-control.sql
+      - migrate-control.sh=scripts/migrate-control.sh
   - name: automation-data-postgresql-backup
     files:
       - backup.sh=scripts/backup.sh

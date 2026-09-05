@@ -4,9 +4,10 @@ Use this runbook when the shared automation-data PostgreSQL service or its logic
 does not recover through normal reconciliation. This database platform is separate from
 n8n's own PostgreSQL database, but full credential recovery requires both systems.
 
-The recovery property described here does not exist until Issue 317 is merged, deployed,
-and the attended full-chain restore drill passes. Producing backup artifacts alone is
-not proof of recovery.
+The attended full-chain restore drill passed on 2026-09-05; see the
+[acceptance record](../specs/026-automation-data-postgresql-platform.md#implementation-status).
+Repeat the drill after recovery changes. Producing backup artifacts alone is not proof
+of recovery.
 
 Keep these operator-held recovery roots available:
 
@@ -51,7 +52,10 @@ Do not restore a logical bundle when rescheduling recovered the existing databas
 ## Longhorn volume recovery
 
 Use this path when `automation-data-postgresql-data` or
-`automation-data-postgresql-backups` is detached, degraded, faulted, or unavailable.
+`automation-data-postgresql-backups` is degraded, faulted, or unavailable, or the active
+data volume cannot attach. An idle backup volume may be detached with robustness
+`unknown`; that is normal when no backup Job mounts it. The read-only verifier checks
+claim identity, scheduling, and restore state before accepting that idle condition.
 Preserve the PVC and failed volume. Prefer a healthy existing Longhorn replica, then a
 verified off-cluster Longhorn backup. Follow the repository's
 [platform Longhorn recovery sequence](platform-disaster-recovery.md#recover-longhorn-and-application-state).
@@ -101,6 +105,25 @@ Use the registered attended drill for the supported isolated proof:
 AUTOMATION_DATA_RESTORE_CONFIRM='restore:automation-data:full-chain' \
   mise exec -- just kube automation-data-restore-drill
 ```
+
+By default, the drill selects the newest valid automation-data bundle and n8n dump
+independently. Their schedules are separate. After a credential rotation, wait for both
+backups to include the change before using this default.
+
+To recover a known matching older pair, supply both exact artifact names. Replace these
+synthetic example names with the retained pair selected for recovery:
+
+```bash
+AUTOMATION_DATA_RESTORE_BUNDLE='automation-data-20260827T003000Z' \
+  N8N_RESTORE_DUMP='n8n-postgresql-20260827T010000Z.dump' \
+  AUTOMATION_DATA_RESTORE_CONFIRM='restore:automation-data:full-chain' \
+  mise exec -- just kube automation-data-restore-drill
+```
+
+The command requires both selectors or neither. Each selected artifact must pass the
+same checksum and archive validation as the default selection. An absent or invalid
+explicit selection fails without substituting another backup. The restored credential
+authentication remains the proof that the selected pair matches.
 
 The drill also restores n8n into a second isolated PostgreSQL instance and starts a
 temporary n8n Deployment with `N8N_ENCRYPTION_KEY` supplied by Secret reference. Only

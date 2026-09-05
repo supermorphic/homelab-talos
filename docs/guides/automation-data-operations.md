@@ -8,18 +8,20 @@ Adding a domain, repository integration, or n8n workflow must not require a
 restore mechanics, monitoring, Cilium policy, and the generic role model once. The
 private provisioning workflow creates each domain at runtime.
 
-The recovery capability in this guide is not established until Issue 317 is merged,
-deployed, and the attended full-chain restore drill passes.
+The platform is active. Provisioning and full-chain recovery passed on 2026-09-04 and
+2026-09-05 respectively; [specification 026](../specs/026-automation-data-postgresql-platform.md#implementation-status)
+records the acceptance evidence.
 
-Use [Staged activation](#staged-activation) for the first deployment. Use
-[Routine operation](#routine-operation) for normal operation. For recovery, use
+Use [Routine operation](#routine-operation) for the active platform. The original
+first-deployment procedure is retained under [Staged activation](#staged-activation).
+For recovery, use
 [Recover automation-data PostgreSQL](../runbooks/automation-data-recovery.md).
 
 ## Before you start
 
-Start only when all of these conditions are true:
+For staged activation, start only when these conditions are true:
 
-- Issue 317 is merged and the checkout matches deployed `origin/main`;
+- the platform implementation is merged and the checkout matches deployed `origin/main`;
 - the feature branch used to create the encrypted Secret is clean;
 - the operator has the SOPS age private key and access to the private n8n UI; and
 - the operator can retain the n8n encryption key and access off-cluster backups.
@@ -45,6 +47,10 @@ chain without revealing a domain password.
 
 ## Staged activation
 
+These steps record the original rollout from suspended source. Current Git keeps the
+platform active, and `bootstrap automation-data` deliberately refuses that state. Do not
+repeat bootstrap for routine operation or recovery; use the linked recovery runbook.
+
 ### 1. Create the encrypted platform Secret
 
 Use the guarded writer from a clean feature branch. Enter the PostgreSQL superuser,
@@ -54,21 +60,22 @@ platform credentials, not dynamically generated domain passwords.
 
 ```bash
 (
+  set -e
   printf '%s' 'PostgreSQL superuser password: ' >&2
-  IFS= read -r -s POSTGRES_SUPERUSER_PASSWORD
+  IFS= read -r -s AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD
   printf '\n%s' 'Provisioner password: ' >&2
-  IFS= read -r -s POSTGRES_PROVISIONER_PASSWORD
+  IFS= read -r -s AUTOMATION_DATA_PROVISIONER_PASSWORD
   printf '\n%s' 'Backup role password: ' >&2
-  IFS= read -r -s POSTGRES_BACKUP_PASSWORD
+  IFS= read -r -s AUTOMATION_DATA_BACKUP_PASSWORD
   printf '\n%s' 'Exporter password: ' >&2
-  IFS= read -r -s POSTGRES_EXPORTER_PASSWORD
+  IFS= read -r -s AUTOMATION_DATA_EXPORTER_PASSWORD
   printf '\n' >&2
-  export POSTGRES_SUPERUSER_PASSWORD POSTGRES_PROVISIONER_PASSWORD
-  export POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD
+  export AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD AUTOMATION_DATA_PROVISIONER_PASSWORD
+  export AUTOMATION_DATA_BACKUP_PASSWORD AUTOMATION_DATA_EXPORTER_PASSWORD
   AUTOMATION_DATA_SECRETS_CONFIRM='write:automation-data:postgresql:sops' \
     mise exec -- just repo automation-data-secrets
-  unset POSTGRES_SUPERUSER_PASSWORD POSTGRES_PROVISIONER_PASSWORD
-  unset POSTGRES_BACKUP_PASSWORD POSTGRES_EXPORTER_PASSWORD
+  unset AUTOMATION_DATA_POSTGRES_SUPERUSER_PASSWORD AUTOMATION_DATA_PROVISIONER_PASSWORD
+  unset AUTOMATION_DATA_BACKUP_PASSWORD AUTOMATION_DATA_EXPORTER_PASSWORD
 )
 ```
 
@@ -160,9 +167,21 @@ Run the attended acceptance workflow with its private token supplied outside com
 output:
 
 ```bash
-AUTOMATION_DATA_PROVISIONING_CONFIRM='test:automation-data:provisioning' \
-  mise exec -- just kube automation-data-provisioning-test
+(
+  set -e
+  printf '%s' 'Provisioning webhook token: ' >&2
+  IFS= read -r -s AUTOMATION_DATA_PROVISIONING_TOKEN
+  printf '\n' >&2
+  export AUTOMATION_DATA_PROVISIONING_TOKEN
+  AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
+    AUTOMATION_DATA_PROVISIONING_CONFIRM='test:automation-data:provisioning' \
+    mise exec -- just kube automation-data-provisioning-test
+  unset AUTOMATION_DATA_PROVISIONING_TOKEN
+)
 ```
+
+Supply the token bound to **Automation Data Provisioning Header**. The command requires
+at least 32 URL-safe letters, digits, underscores, or hyphens.
 
 The test creates or reconciles `issue317_acceptance`, validates owner/migrator/runtime
 permissions, proves that an unchanged request is idempotent, performs an explicit
@@ -233,10 +252,51 @@ Do not add a domain list, domain credential, role, database, schema, grant, or
 domain-specific Cilium policy to this repository. PostgreSQL roles enforce domain
 isolation; the workload-scoped Cilium policy permits n8n to reach the shared service.
 
+From a private n8n HTTP Request node, send `POST` to
+`http://127.0.0.1:5678/webhook/automation-data-provision` using the
+**Automation Data Provisioning Header** credential and a JSON body such as
+`{"domain":"example_app","operation":"provision"}`. Domain names start with a lowercase
+letter and contain at most 48 lowercase letters, digits, or underscores. Use
+`operation: reconcile` to repair structure or `operation: validate` to inspect it.
+
+Use the resulting `automation-data/example_app/migrator` credential for reviewed
+migrations. Run `SET ROLE example_app_owner` before qualified DDL such as
+`CREATE TABLE app.example (...)`, then `RESET ROLE` afterward. This keeps new objects
+under the stable owner with the runtime default grants. Use
+`automation-data/example_app/runtime` for normal Postgres-node CRUD. Provisioning creates
+the database and initial schema; consumer migrations create and evolve their tables.
+
 ### Rotate a credential
 
 Use explicit rotation only when a domain credential must change. Retry a failed rotation
 through the same explicit operation. Do not use ordinary reconcile as password repair.
+Send the same authenticated request with
+`{"domain":"example_app","operation":"rotate","credential":"runtime"}` (or `migrator`).
+
+### Update platform control functions
+
+PostgreSQL runs initialization scripts only for an empty data directory. An update to
+control functions on an existing database therefore uses the guarded migration command.
+Merge the reviewed source and wait for Flux revision parity first.
+
+Deactivate **Automation Data Provisioner** and wait for its running executions to finish.
+From the operator checkout with credentials permitted to create the migration Jobs, run:
+
+```bash
+AUTOMATION_DATA_CONTROL_MIGRATE_CONFIRM='migrate:automation-data:control' \
+  mise exec -- just kube automation-data-control-migrate
+```
+
+The command checks deployed source, workload and catalog state, holds the shared mutation
+Lease, creates a fresh logical backup, and applies the selected control functions in one
+transaction. It uses the same SQL source as fresh initialization and removes its
+run-owned Jobs. It does not read or print credential values.
+
+After success, import the current provisioning template, preserve its three credential
+bindings and execution-data settings, and publish it. Run the standalone provisioning
+acceptance, wait for new backups of both systems, and run the full-chain restore drill.
+Finish with `mise exec -- just kube automation-data-verify`. On failure, keep provisioning
+paused and retain the backup while classifying the failed step.
 
 ## Destructive administration
 

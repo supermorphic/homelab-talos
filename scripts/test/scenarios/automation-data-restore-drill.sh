@@ -59,6 +59,8 @@ ad_policy="$prefix-ad-policy"
 n8n_policy="$prefix-n8n-policy"
 request_policy="$prefix-request-policy"
 backup_configmap=''
+automation_data_restore_bundle="${AUTOMATION_DATA_RESTORE_BUNDLE:-}"
+n8n_restore_dump="${N8N_RESTORE_DUMP:-}"
 k_ad=(kubectl --kubeconfig "$kubeconfig" --namespace "$ad_namespace")
 k_n8n=(kubectl --kubeconfig "$kubeconfig" --namespace "$n8n_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
@@ -73,15 +75,65 @@ write_phase() {
     }' >"$run_dir/$phase.json"
 }
 
+validate_restore_selectors() {
+  local bundle="$1" dump="$2"
+  if [[ -z "$bundle" && -z "$dump" ]]; then
+    return 0
+  fi
+  [[ -n "$bundle" && -n "$dump" ]] || {
+    echo 'AUTOMATION_DATA_RESTORE_BUNDLE and N8N_RESTORE_DUMP must be set together.' >&2
+    return 1
+  }
+  [[ "$bundle" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ ]] || {
+    echo 'AUTOMATION_DATA_RESTORE_BUNDLE must be a canonical bundle basename.' >&2
+    return 1
+  }
+  [[ "$dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
+    echo 'N8N_RESTORE_DUMP must be a canonical dump basename.' >&2
+    return 1
+  }
+}
+
+validate_reported_restore_selection() {
+  local requested_bundle="$1" requested_dump="$2" reported_bundle="$3" reported_dump="$4"
+  if [[ -z "$requested_bundle" && -z "$requested_dump" ]]; then
+    return 0
+  fi
+  [[ "$reported_bundle" == "$requested_bundle" && "$reported_dump" == "$requested_dump" ]]
+}
+
 write_phase assertion not-classified 'full-chain restore assertions have not completed'
 write_phase cleanup not-classified 'run-owned workloads and storage have not been removed'
 write_phase recovery not-required 'production workloads and databases are not modified'
+validate_restore_selectors "$automation_data_restore_bundle" "$n8n_restore_dump" || {
+  write_phase external-dependency failed 'exact backup selectors are incomplete or invalid'
+  write_phase cleanup not-required 'no restore resources were created'
+  exit 1
+}
 
 verify_lease() {
   verify_test_lease_holder "$kubeconfig" "$lease_holder" || {
     echo 'The shared state-changing test Lease is absent, expired, or owned by another run.' >&2
     return 1
   }
+}
+
+wait_for_restore_job() {
+  local job_name="$1" timeout_seconds="$2" poll_seconds="$3" wait_status wait_output
+  shift 3
+  local -a kubectl_command=("$@")
+
+  if wait_output="$(wait_for_job_terminal "$job_name" "$timeout_seconds" "$poll_seconds" \
+    "${kubectl_command[@]}" 2>&1)"; then
+    return 0
+  else
+    wait_status="$?"
+  fi
+  printf '%s\n' "$wait_output" >&2
+  if grep -Fxq 'restore_failure=artifact-selection' <<<"$wait_output"; then
+    write_phase external-dependency failed 'one or both selected backup fixtures are missing or unusable'
+  fi
+  return "$wait_status"
 }
 
 resource_absent() {
@@ -261,6 +313,7 @@ policy_manifests() {
 
 restore_job_manifest() {
   local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env backup_configmap_name=''
+  local selector_name='' selector_value='' selector_env='[]'
   case "$kind" in
     automation-data)
       [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
@@ -271,6 +324,8 @@ restore_job_manifest() {
       mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"post-recovery","emptyDir":{}},{"name":"scripts","configMap":{"name":"","defaultMode":365}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"BACKUP_DIR","value":"/backups"},{"name":"POST_RECOVERY_BACKUP_DIR","value":"/post-recovery"},{"name":"AUTOMATION_DATA_BACKUP_PASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"backup-password"}}}]'
+      selector_name='AUTOMATION_DATA_RESTORE_BUNDLE'
+      selector_value="${automation_data_restore_bundle:-}"
       ;;
     n8n)
       name="$n8n_restore_job"; command="$(n8n_restore_job_command)"
@@ -279,14 +334,21 @@ restore_job_manifest() {
       mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"RESTORE_DATABASE","value":"n8n"}]'
+      selector_name='N8N_RESTORE_DUMP'
+      selector_value="${n8n_restore_dump:-}"
       ;;
     *) return 2 ;;
   esac
+  if [[ -n "$selector_value" ]]; then
+    selector_env="$(SELECTOR_NAME="$selector_name" SELECTOR_VALUE="$selector_value" \
+      yq --null-input --output-format json --indent 0 \
+      '[{"name": strenv(SELECTOR_NAME), "value": strenv(SELECTOR_VALUE)}]')" || return 1
+  fi
   JOB_NAME="$name" NAMESPACE="$namespace" ROLE="$role" RUN_HASH="$run_hash" \
     JOB_COMMAND="$command" PGHOST_VALUE="$host" PGUSER_VALUE="$user" \
     SECRET_NAME="$secret_name" SECRET_KEY="$secret_key" \
     MOUNTS="$mounts" VOLUMES="$volumes" EXTRA_ENV="$extra_env" \
-    BACKUP_CONFIGMAP_NAME="$backup_configmap_name" \
+    BACKUP_CONFIGMAP_NAME="$backup_configmap_name" SELECTOR_ENV="$selector_env" \
     yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1", "kind": "Job",
@@ -305,7 +367,7 @@ restore_job_manifest() {
                 {"name": "PGHOST", "value": strenv(PGHOST_VALUE)}, {"name": "PGPORT", "value": "5432"},
                 {"name": "PGUSER", "value": strenv(PGUSER_VALUE)},
                 {"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {"name": strenv(SECRET_NAME), "key": strenv(SECRET_KEY)}}}
-              ] + (strenv(EXTRA_ENV) | from_json)),
+              ] + (strenv(EXTRA_ENV) | from_json) + (strenv(SELECTOR_ENV) | from_json)),
               "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "512Mi"}},
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true},
               "volumeMounts": (strenv(MOUNTS) | from_json)
@@ -477,7 +539,7 @@ backup_configmaps_json="$("${k_ad[@]}" get configmaps --output json)"
 backup_configmap="$(resolve_backup_configmap <<<"$backup_configmaps_json")"
 unset backup_configmaps_json
 restore_job_manifest automation-data | "${k_ad[@]}" create --filename - >/dev/null
-wait_for_job_terminal "$ad_restore_job" 1800 5 "${k_ad[@]}"
+wait_for_restore_job "$ad_restore_job" 1800 5 "${k_ad[@]}"
 ad_restore_output="$("${k_ad[@]}" logs "job/$ad_restore_job" --tail=20)"
 selected_bundle="$(sed -n 's/^selected_bundle=//p' <<<"$ad_restore_output" | tail -n 1)"
 post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' <<<"$ad_restore_output" | tail -n 1)"
@@ -489,12 +551,19 @@ post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' <<<"$ad_restore_out
 
 verify_lease
 restore_job_manifest n8n | "${k_n8n[@]}" create --filename - >/dev/null
-wait_for_job_terminal "$n8n_restore_job" 1800 5 "${k_n8n[@]}"
+wait_for_restore_job "$n8n_restore_job" 1800 5 "${k_n8n[@]}"
 selected_n8n_dump="$("${k_n8n[@]}" logs "job/$n8n_restore_job" --tail=20 | sed -n 's/^selected_dump=//p' | tail -n 1)"
 [[ "$selected_n8n_dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
   echo 'The n8n restore Job omitted bounded dump evidence.' >&2
   exit 1
 }
+validate_reported_restore_selection "$automation_data_restore_bundle" "$n8n_restore_dump" \
+  "$selected_bundle" "$selected_n8n_dump" || {
+  write_phase assertion failed 'restore Jobs did not honor the requested exact backup pair'
+  echo 'The restore Jobs reported artifacts that differ from the requested exact pair.' >&2
+  exit 1
+}
+write_phase external-dependency passed 'both selected backup fixtures passed artifact validation'
 
 ad_cluster_ip="$("${k_ad[@]}" get service "$ad_service" --output jsonpath='{.spec.clusterIP}')"
 [[ "$ad_cluster_ip" =~ ^[0-9a-fA-F:.]+$ && "$ad_cluster_ip" != 'None' ]] || {

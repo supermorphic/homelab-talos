@@ -130,8 +130,8 @@ init_config_contract="$(yq ea -r '
   [.data | keys | sort | join(","), (.data."init-platform.sh" | length > 0),
     (.data."platform-control.sql" | length > 0)] | join("|")
 ' "$temp_dir/postgresql.yaml")"
-[[ "$init_config_contract" == 'init-platform.sh,platform-control.sql|true|true' ]] || \
-  fail 'rendered init ConfigMap does not contain both executable platform sources'
+[[ "$init_config_contract" == 'init-platform.sh,migrate-control.sh,platform-control.sql|true|true' ]] || \
+  fail 'rendered init ConfigMap does not contain the initialization and migration sources'
 
 [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == false ]] || \
   fail 'accepted PostgreSQL Flux Kustomization must remain active'
@@ -234,5 +234,58 @@ policy_sources=(
 )
 ! rg -q '(_owner|_migrator|_runtime|domain_one|backup_test_domain)' "${policy_sources[@]}" || \
   fail 'Cilium policy contains domain-scoped selectors or names'
+
+# Execute the production migration assembler without a database. Its payload must
+# contain exactly the reviewed functions, preserving the fresh-install definition.
+mkdir "$temp_dir/bin"
+cat >"$temp_dir/bin/psql" <<'SH'
+#!/bin/sh
+for argument in "$@"; do
+  case "$argument" in --file=*) cp "${argument#--file=}" "$MIGRATION_CAPTURE";; esac
+done
+SH
+chmod +x "$temp_dir/bin/psql"
+MIGRATION_CAPTURE="$temp_dir/migration.sql" PATH="$temp_dir/bin:$PATH" \
+  /bin/sh "$postgresql_app/scripts/migrate-control.sh" >"$temp_dir/status"
+[[ "$(cat "$temp_dir/status")" == 'control_migration=applied' ]] || fail 'migration status missing'
+python - "$control_sql" "$temp_dir/migration.sql" <<'PYTHON'
+import re
+import sys
+from pathlib import Path
+source, migration = (Path(path).read_text() for path in sys.argv[1:])
+# Function bodies contain semicolons; delimit by the tagged body terminator.
+pattern = r"CREATE OR REPLACE FUNCTION ([a-z_.]+)\(.*?\$function\$;"
+def functions(sql):
+    return {match[1]: match[0] for match in re.finditer(pattern, sql, re.S)}
+actual = functions(migration)
+expected = {name: definition for name, definition in functions(source).items() if name in {
+    "platform_internal.assert_domain", "platform_operations.provision_domain",
+    "platform_operations.record_operation_error",
+}}
+assert actual == expected and len(actual) == 3, "migration differs from initialized control source"
+provision = actual["platform_operations.provision_domain"]
+assert provision.index("unmanaged_object_collision") < provision.index("INSERT INTO platform_operations.managed_domains") < provision.index("CREATE ROLE"), "ownership must precede role mutation"
+assert "FOR UPDATE" not in provision, "caller row locks conflict with independently committed ownership"
+assert "INSERT INTO" not in actual["platform_operations.record_operation_error"], "error reporting cannot establish ownership"
+PYTHON
+
+# Render the actual migration Job: exact source, workload identity and Secret ref.
+source "$repo_root/scripts/lib/automation-data-bootstrap.sh"
+automation_data_control_migration_job_manifest control-test test-run \
+  automation-data-postgresql-init-synthetic >"$temp_dir/migration-job.yaml"
+kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/migration-job.yaml" >/dev/null
+yq -o=json '.' "$temp_dir/migration-job.yaml" >"$temp_dir/migration-job.json"
+python - "$temp_dir/migration-job.json" <<'PYTHON'
+import json
+import sys
+from pathlib import Path
+job = json.loads(Path(sys.argv[1]).read_text())
+container = job["spec"]["template"]["spec"]["containers"][0]
+assert job["metadata"]["labels"]["homelab-talos/run-id"] == "test-run"
+assert container["image"] == "postgres:17.11-alpine3.24"
+assert container["args"] == ["/scripts/migrate-control.sh"]
+secret = next(env for env in container["env"] if env["name"] == "PGPASSWORD")
+assert secret["valueFrom"]["secretKeyRef"] == {"name": "postgresql-credentials", "key": "backup-password"}
+PYTHON
 
 echo 'automation-data rendered platform and control interface passed.'

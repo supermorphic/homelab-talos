@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'credential']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst domain = body.domain;\nconst operation = body.operation;\nconst credential = body.credential;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['provision', 'reconcile', 'rotate', 'validate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['migrator', 'runtime'].includes(credential)) throw new Error('invalid_credential');\n} else if (credential !== undefined) {\n  throw new Error('credential_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, ...(credential ? { credential } : {}) } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'credential']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst domain = body.domain;\nconst operation = body.operation;\nconst credential = body.credential;\nif (['postgres', 'template0', 'template1', 'automation_data_control'].includes(domain)) throw new Error('invalid_domain');\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['provision', 'reconcile', 'rotate', 'validate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['migrator', 'runtime'].includes(credential)) throw new Error('invalid_credential');\n} else if (credential !== undefined) {\n  throw new Error('credential_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, ...(credential ? { credential } : {}) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -690,12 +690,13 @@
       "onError": "continueErrorOutput"
     },
     {
-      "parameters": {"jsCode": "return [{ json: { domain: $('Normalize Request').first().json.domain, errorCode: 'workflow_operation_failed' } }];"},
+      "parameters": {"jsCode": "if ($('Normalize Request').first().json.operation === 'validate') throw new Error('validation_does_not_record_errors');\nreturn [{ json: { domain: $('Normalize Request').first().json.domain, errorCode: 'workflow_operation_failed' } }];"},
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [4800, 520],
       "id": "00000000-0000-4000-8000-000000000052",
-      "name": "Prepare Error"
+      "name": "Prepare Error",
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -742,11 +743,11 @@
     "Select Operation": {"main": [[{"node": "Probe Domain", "type": "main", "index": 0}], [{"node": "List Ready Credentials", "type": "main", "index": 0}], [{"node": "List Rotation Credentials", "type": "main", "index": 0}], [{"node": "Validate Requested Domain", "type": "main", "index": 0}]]},
     "Probe Domain": {"main": [[{"node": "Is Ready Domain", "type": "main", "index": 0}], [{"node": "List Provision Credentials", "type": "main", "index": 0}]]},
     "Is Ready Domain": {"main": [[{"node": "List Ready Credentials", "type": "main", "index": 0}], [{"node": "List Provision Credentials", "type": "main", "index": 0}]]},
-    "List Provision Credentials": {"main": [[{"node": "Analyze Provision Credential Snapshot", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Analyze Provision Credential Snapshot": {"main": [[{"node": "Generate Migrator Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Generate Migrator Password": {"main": [[{"node": "Generate Runtime Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Generate Runtime Password": {"main": [[{"node": "Provision Domain", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Provision Domain": {"main": [[{"node": "Prepare Migrator Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "List Provision Credentials": {"main": [[{"node": "Analyze Provision Credential Snapshot", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Analyze Provision Credential Snapshot": {"main": [[{"node": "Generate Migrator Password", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Generate Migrator Password": {"main": [[{"node": "Generate Runtime Password", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Generate Runtime Password": {"main": [[{"node": "Provision Domain", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Provision Domain": {"main": [[{"node": "Prepare Migrator Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Prepare Migrator Credential Write": {"main": [[{"node": "Migrator Credential Exists", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Migrator Credential Exists": {"main": [[{"node": "Patch Partial Migrator Credential", "type": "main", "index": 0}], [{"node": "Create Migrator Credential", "type": "main", "index": 0}]]},
     "Patch Partial Migrator Credential": {"main": [[{"node": "Normalize Migrator Credential Metadata", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
@@ -764,19 +765,19 @@
     "Require Initial Runtime Test": {"main": [[{"node": "Record Domain Credentials", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Record Domain Credentials": {"main": [[{"node": "Validate After Provision", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Validate After Provision": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "List Ready Credentials": {"main": [[{"node": "Ready Credential Set", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Ready Credential Set": {"main": [[{"node": "Reconcile Domain", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Reconcile Domain": {"main": [[{"node": "Prepare Ready Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "List Ready Credentials": {"main": [[{"node": "Ready Credential Set", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Ready Credential Set": {"main": [[{"node": "Reconcile Domain", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Reconcile Domain": {"main": [[{"node": "Prepare Ready Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Prepare Ready Migrator Test": {"main": [[{"node": "Test Ready Migrator Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Test Ready Migrator Credential": {"main": [[{"node": "Require Ready Migrator Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Require Ready Migrator Test": {"main": [[{"node": "Test Ready Runtime Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Test Ready Runtime Credential": {"main": [[{"node": "Require Ready Runtime Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Require Ready Runtime Test": {"main": [[{"node": "Validate After Reconcile", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Validate After Reconcile": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "List Rotation Credentials": {"main": [[{"node": "Prepare Rotation", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Prepare Rotation": {"main": [[{"node": "Generate Rotation Password", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Generate Rotation Password": {"main": [[{"node": "Rotate Domain Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Rotate Domain Credential": {"main": [[{"node": "Prepare Rotation Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "List Rotation Credentials": {"main": [[{"node": "Prepare Rotation", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Prepare Rotation": {"main": [[{"node": "Generate Rotation Password", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Generate Rotation Password": {"main": [[{"node": "Rotate Domain Credential", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
+    "Rotate Domain Credential": {"main": [[{"node": "Prepare Rotation Credential Write", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Prepare Rotation Credential Write": {"main": [[{"node": "Patch Rotation Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Patch Rotation Credential": {"main": [[{"node": "Prepare Rotation Test", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Prepare Rotation Test": {"main": [[{"node": "Test Rotated Credential", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
@@ -785,9 +786,9 @@
     "Prepare Rotation Metadata": {"main": [[{"node": "Record Rotation Credentials", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Record Rotation Credentials": {"main": [[{"node": "Validate After Rotation", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
     "Validate After Rotation": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Validate Requested Domain": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
+    "Validate Requested Domain": {"main": [[{"node": "Prepare Success Response", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Prepare Success Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}], [{"node": "Prepare Error", "type": "main", "index": 0}]]},
-    "Prepare Error": {"main": [[{"node": "Record Operation Error", "type": "main", "index": 0}]]},
+    "Prepare Error": {"main": [[{"node": "Record Operation Error", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Record Operation Error": {"main": [[{"node": "Prepare Error Response", "type": "main", "index": 0}], [{"node": "Prepare Error Response", "type": "main", "index": 0}]]},
     "Prepare Error Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]},
     "Prepare Request Error Response": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]}
