@@ -58,6 +58,7 @@ request_job="$prefix-request"
 ad_policy="$prefix-ad-policy"
 n8n_policy="$prefix-n8n-policy"
 request_policy="$prefix-request-policy"
+backup_configmap=''
 k_ad=(kubectl --kubeconfig "$kubeconfig" --namespace "$ad_namespace")
 k_n8n=(kubectl --kubeconfig "$kubeconfig" --namespace "$n8n_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
@@ -88,6 +89,23 @@ resource_absent() {
   resource="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
     get "$target" --ignore-not-found --output name)" || return 1
   [[ -z "$resource" ]]
+}
+
+resolve_backup_configmap() {
+  local resolved
+  resolved="$(yq -p=json -r '
+    [.items[]? |
+      select(.metadata.name | test("^automation-data-postgresql-backup-[a-z0-9]+$")) |
+      select(.data."backup.sh" != null and
+        .data."update-backup-status.sql" != null) |
+      .metadata.name] |
+    select(length == 1) | .[0]
+  ' -)" || return 1
+  [[ -n "$resolved" ]] || {
+    echo 'Expected exactly one generated automation-data backup ConfigMap with both required script keys.' >&2
+    return 1
+  }
+  printf '%s\n' "$resolved"
 }
 
 platform_manifests() {
@@ -242,14 +260,16 @@ policy_manifests() {
 }
 
 restore_job_manifest() {
-  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env
+  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env backup_configmap_name=''
   case "$kind" in
     automation-data)
+      [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
+      backup_configmap_name="$backup_configmap"
       name="$ad_restore_job"; command="$(automation_data_restore_job_command)"
       namespace="$ad_namespace"; role='ad-restore'; host="$ad_service"
       user='postgres'; secret_name='postgresql-credentials'; secret_key='postgres-superuser-password'
       mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
-      volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"post-recovery","emptyDir":{}},{"name":"scripts","configMap":{"name":"automation-data-postgresql-backup","defaultMode":365}},{"name":"tmp","emptyDir":{}}]'
+      volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"post-recovery","emptyDir":{}},{"name":"scripts","configMap":{"name":"","defaultMode":365}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"BACKUP_DIR","value":"/backups"},{"name":"POST_RECOVERY_BACKUP_DIR","value":"/post-recovery"},{"name":"AUTOMATION_DATA_BACKUP_PASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"backup-password"}}}]'
       ;;
     n8n)
@@ -266,6 +286,7 @@ restore_job_manifest() {
     JOB_COMMAND="$command" PGHOST_VALUE="$host" PGUSER_VALUE="$user" \
     SECRET_NAME="$secret_name" SECRET_KEY="$secret_key" \
     MOUNTS="$mounts" VOLUMES="$volumes" EXTRA_ENV="$extra_env" \
+    BACKUP_CONFIGMAP_NAME="$backup_configmap_name" \
     yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1", "kind": "Job",
@@ -289,7 +310,9 @@ restore_job_manifest() {
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true},
               "volumeMounts": (strenv(MOUNTS) | from_json)
             }],
-            "volumes": (strenv(VOLUMES) | from_json)
+            "volumes": ((strenv(VOLUMES) | from_json) |
+              (.[] | select(.name == "scripts") | .configMap.name) =
+                strenv(BACKUP_CONFIGMAP_NAME))
           }
         }}
       }'
@@ -450,6 +473,9 @@ platform_manifests | "${k_cluster[@]}" create --filename - >/dev/null
 "${k_n8n[@]}" rollout status "statefulset/$n8n_database" --timeout=10m >/dev/null
 
 verify_lease
+backup_configmaps_json="$("${k_ad[@]}" get configmaps --output json)"
+backup_configmap="$(resolve_backup_configmap <<<"$backup_configmaps_json")"
+unset backup_configmaps_json
 restore_job_manifest automation-data | "${k_ad[@]}" create --filename - >/dev/null
 wait_for_job_terminal "$ad_restore_job" 1800 5 "${k_ad[@]}"
 ad_restore_output="$("${k_ad[@]}" logs "job/$ad_restore_job" --tail=20)"

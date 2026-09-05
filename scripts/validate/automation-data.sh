@@ -237,11 +237,13 @@ request_job="$prefix-request"
 ad_policy="$prefix-ad-policy"
 n8n_policy="$prefix-n8n-policy"
 request_policy="$prefix-request-policy"
+backup_configmap='automation-data-postgresql-backup-bk2fk62b6h'
 # The extracted manifest functions consume these globals. Exporting also makes that
 # generated-source boundary explicit to ShellCheck's repository-wide batch.
 export run_hash prefix ad_namespace n8n_namespace request_namespace ad_database \
   ad_service ad_data_pvc n8n_database n8n_service n8n_data_pvc n8n_app \
-  ad_restore_job n8n_restore_job request_job ad_policy n8n_policy request_policy
+  ad_restore_job n8n_restore_job request_job ad_policy n8n_policy request_policy \
+  backup_configmap
 platform_manifests >"$temp_dir/platform.yaml"
 policy_manifests >"$temp_dir/policies.yaml"
 restore_job_manifest automation-data >"$temp_dir/automation-data-job.yaml"
@@ -249,6 +251,10 @@ restore_job_manifest n8n >"$temp_dir/n8n-job.yaml"
 n8n_application_manifests '192.0.2.10' >"$temp_dir/n8n.yaml"
 request_job_manifest >"$temp_dir/request.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/null
+
+[[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' \
+  "$temp_dir/automation-data-job.yaml")" == "$backup_configmap" ]] ||
+  fail 'the automation-data restore Job does not use the resolved backup ConfigMap'
 
 [[ "$(yq -r '.spec.template.spec.containers[0].env[].name' \
   "$temp_dir/automation-data-job.yaml" | LC_ALL=C sort | paste -sd, -)" == \
