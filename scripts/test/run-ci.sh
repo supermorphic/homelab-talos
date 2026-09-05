@@ -14,6 +14,100 @@ cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
 just_bin="${TEST_JUST_BIN:-just}"
+execution='ci'
+group=''
+plan=''
+grouped=false
+execution_set=false
+group_set=false
+plan_set=false
+execution_id_lines=''
+plan_id=''
+base_sha=''
+head_sha=''
+
+usage() {
+	echo 'Usage: run-ci.sh [--execution NAME --group GROUP --plan FILE]' >&2
+}
+
+if [[ "$#" -gt 0 ]]; then
+	while [[ "$#" -gt 0 ]]; do
+		case "$1" in
+		--execution)
+			[[ "$execution_set" == false && "$#" -ge 2 && -n "$2" ]] || {
+				usage
+				exit 2
+			}
+			execution="$2"
+			execution_set=true
+			shift 2
+			;;
+		--group)
+			[[ "$group_set" == false && "$#" -ge 2 && -n "$2" ]] || {
+				usage
+				exit 2
+			}
+			group="$2"
+			group_set=true
+			shift 2
+			;;
+		--plan)
+			[[ "$plan_set" == false && "$#" -ge 2 && -n "$2" ]] || {
+				usage
+				exit 2
+			}
+			plan="$2"
+			plan_set=true
+			shift 2
+			;;
+		*)
+			usage
+			exit 2
+			;;
+		esac
+	done
+	[[ "$execution_set" == true && "$group_set" == true && "$plan_set" == true ]] || {
+		usage
+		exit 2
+	}
+	grouped=true
+
+	current_head="$(git rev-parse HEAD)" || {
+		echo 'Failed to resolve the current Git head.' >&2
+		exit 2
+	}
+	if ! uv run --locked python scripts/test/ci_plan.py validate \
+		--plan "$plan" --head "$current_head"; then
+		echo 'The CI plan is invalid for the current Git head.' >&2
+		exit 2
+	fi
+	mapped_execution="$(GROUP="$group" yq -er \
+		'.groups[strenv(GROUP)].execution // ""' tests/impact.yaml)" || {
+		echo "Unknown CI group: $group." >&2
+		exit 2
+	}
+	[[ "$execution" == "$mapped_execution" ]] || {
+		echo "CI group '$group' maps to '$mapped_execution', not '$execution'." >&2
+		exit 2
+	}
+	GROUP="$group" yq -e '.groups | map(. == strenv(GROUP)) | any' "$plan" \
+		>/dev/null || {
+		echo "CI group '$group' is not selected by the plan." >&2
+		exit 2
+	}
+	read -r plan_id base_sha head_sha < <(
+		yq -r '[.plan_id, .base_sha, .head_sha] | @tsv' "$plan"
+	)
+	execution_id_lines="$(catalog_execution_ids "$catalog" "$execution")" || {
+		echo "Failed to resolve CI execution '$execution'." >&2
+		exit 2
+	}
+	[[ -n "$execution_id_lines" ]] || {
+		echo "CI execution '$execution' is empty." >&2
+		exit 2
+	}
+fi
+
 aggregate_entry="$(catalog_entry_by_id "$catalog" validation.ci)"
 execution_origin="$(resolve_execution_origin)"
 run_dir="$(create_run_directory "$results_root" "$execution_origin")"
@@ -32,14 +126,16 @@ run_result='passed'
 primary_exit_code=0
 signal_exit_code=0
 
-execution_id_lines="$(catalog_execution_ids "$catalog" ci)" || {
-	echo 'Failed to resolve the complete CI execution list.' >&2
-	exit 2
-}
-[[ -n "$execution_id_lines" ]] || {
-	echo 'The CI execution list is empty.' >&2
-	exit 2
-}
+if [[ "$grouped" == false ]]; then
+	execution_id_lines="$(catalog_execution_ids "$catalog" ci)" || {
+		echo 'Failed to resolve the complete CI execution list.' >&2
+		exit 2
+	}
+	[[ -n "$execution_id_lines" ]] || {
+		echo 'The CI execution list is empty.' >&2
+		exit 2
+	}
+fi
 mapfile -t execution_ids <<<"$execution_id_lines"
 
 epoch_milliseconds() {
@@ -195,6 +291,23 @@ finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 duration_seconds=$((EPOCHSECONDS - started_epoch))
 write_environment "$run_dir" "$run_id" "$aggregate_entry" "$execution_origin" \
 	"$started_at" "$finished_at" offline tests/.offline-validation-no-kubeconfig none
+if [[ "$grouped" == true ]]; then
+	binding_temporary="$(mktemp "$run_dir/diagnostics/.ci-binding.json.XXXXXX")"
+	if ! PLAN_ID="$plan_id" BASE_SHA="$base_sha" HEAD_SHA="$head_sha" \
+		GROUP="$group" EXECUTION="$execution" \
+		yq --null-input --output-format json '{
+      "schema_version": 1,
+      "plan_id": strenv(PLAN_ID),
+      "base_sha": strenv(BASE_SHA),
+      "head_sha": strenv(HEAD_SHA),
+      "group": strenv(GROUP),
+      "execution": strenv(EXECUTION)
+    }' >"$binding_temporary"; then
+		rm -f -- "$binding_temporary"
+		exit 1
+	fi
+	mv "$binding_temporary" "$run_dir/diagnostics/ci-binding.json"
+fi
 write_evidence_index "$run_dir" "$run_id"
 write_multi_summary "$run_dir" "$run_id" "$aggregate_entry" "$execution_origin" \
 	"$started_at" "$finished_at" "$duration_seconds" "$run_result" \
