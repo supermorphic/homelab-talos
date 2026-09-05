@@ -52,6 +52,7 @@ database="$prefix-db"
 database_service="$prefix-db"
 database_pvc="$prefix-db-data"
 restore_job="$prefix-load"
+preflight_job="$prefix-preflight"
 attachment_volume="$prefix-attachments"
 attachment_pv="$prefix-attachments-pv"
 attachment_pvc="$prefix-attachments"
@@ -87,6 +88,23 @@ verify_lease() {
 	}
 }
 
+# A multi-document create would hide several API mutations behind one Lease check.
+create_owned_manifests() { # <namespace-or-dash> <manifest>
+	local target_namespace="$1" manifest="$2" object
+	yq ea -o=json -I=0 '.' "$manifest" >"$temp_dir/create-objects.jsonl"
+	while IFS= read -r object; do
+		printf '%s\n' "$object" >"$temp_dir/create-object.json"
+		nocodb_restore_resource_is_owned "$run_hash" "$temp_dir/create-object.json" || return 1
+		verify_lease || return 1
+		if [[ "$target_namespace" == - ]]; then
+			"${kcluster[@]}" create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+		else
+			kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" \
+				create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+		fi
+	done <"$temp_dir/create-objects.jsonl"
+}
+
 resource_json() { # <namespace-or-dash> <target> <output>
 	local target_namespace="$1" target="$2" output="$3"
 	if [[ "$target_namespace" == - ]]; then
@@ -113,6 +131,7 @@ delete_owned() { # <namespace-or-dash> <target>
 		echo "Refusing cleanup of $target_namespace/$target because both run ownership labels do not match." >&2
 		return 1
 	}
+	verify_lease || return 1
 	if [[ "$target_namespace" == - ]]; then
 		"${kcluster[@]}" delete "$target" --wait=true --timeout=5m >/dev/null
 	else
@@ -124,11 +143,11 @@ delete_owned() { # <namespace-or-dash> <target>
 route_targets_service() {
 	local service_name="$1" routes="$2"
 	SERVICE_NAME="$service_name" NAMESPACE="$namespace" jq -e '
-    any(.items[]?;
-      .metadata.namespace == env.NAMESPACE and
+    any(.items[]?; . as $route |
       any(.spec.rules[]?.backendRefs[]?;
         (.kind // "Service") == "Service" and
         (.group // "") == "" and
+        (.namespace // $route.metadata.namespace) == env.NAMESPACE and
         .name == env.SERVICE_NAME
       )
     )
@@ -210,13 +229,13 @@ SELECT jsonb_build_object(
 FROM platform_operations.managed_nocodb_sources AS source
 WHERE source.domain = 'issue334_acceptance';
 ")" || restore_fail nocodb-source-registry-query
-printf '%s' "$source_registry" | jq -e '.items | type == "array"' >/dev/null 2>&1 ||
-  restore_fail nocodb-source-registry-shape
+# Validate decoded JSON in the caller; the pinned PostgreSQL image has no jq.
+test -n "$source_registry" || restore_fail nocodb-source-registry-shape
 printf 'source_registry_base64=%s\n' "$(printf '%s' "$source_registry" | base64 | tr -d '\n')"
 EOF
 	)"
 	JOB_NAME="$restore_job" JOB_COMMAND="$command" DATABASE_SERVICE="$database_service" \
-		RUN_HASH="$run_hash" yq --null-input --output-format yaml '
+		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
@@ -238,7 +257,7 @@ EOF
               "resources":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"memory":"512Mi"}},
               "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},
               "volumeMounts":[
-                {"name":"backups","mountPath":"/backups","readOnly":true},
+                {"name":"backups","mountPath":("/backups/" + strenv(SELECTED_BUNDLE)),"subPath":strenv(SELECTED_BUNDLE),"readOnly":true},
                 {"name":"post-recovery","mountPath":"/post-recovery"},
                 {"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},
                 {"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},
@@ -259,121 +278,9 @@ EOF
 
 request_job_manifest() {
 	local request_script
-	request_script="$(
-		cat <<'EOF'
-import {createHash} from 'node:crypto';
-import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-
-const root = mkdtempSync(join(tmpdir(), 'nocodb-restore-request-'));
-const baseUrl = `http://${process.env.APP_SERVICE}.automation-data.svc.cluster.local:8080`;
-const secretFile = join(root, 'signin.json');
-const tokenFile = join(root, 'session.jwt');
-const bounded = async (path, options = {}, allowed = [200], parseJson = true, maxBytes = 65536) => {
-  const response = await fetch(`${baseUrl}${path}`, {...options, signal: AbortSignal.timeout(60000)});
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maxBytes) throw new Error('response_exceeded_bound');
-  if (!allowed.includes(response.status)) throw new Error(`unexpected_http_${response.status}`);
-  return {status: response.status, bytes, json: parseJson && bytes.byteLength ? JSON.parse(new TextDecoder().decode(bytes)) : null};
-};
-const list = (value) => Array.isArray(value) ? value : (value?.list || value?.data || []);
-let insertedId = null;
-let decisionTable = null;
-let jwt = '';
-try {
-  const health = await bounded('/api/v1/health');
-  if (health.json?.message !== 'OK') throw new Error('health_contract_failed');
-
-  writeFileSync(secretFile, JSON.stringify({email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD}), {mode: 0o600});
-  const signin = await bounded('/api/v1/auth/user/signin', {method:'POST', headers:{'Content-Type':'application/json'}, body:readFileSync(secretFile)});
-  if (typeof signin.json?.token !== 'string' || !/^[A-Za-z0-9._-]+$/.test(signin.json.token)) throw new Error('signin_contract_failed');
-  writeFileSync(tokenFile, signin.json.token, {mode: 0o600});
-  jwt = readFileSync(tokenFile, 'utf8');
-  const headers = {'xc-auth':jwt};
-
-  const workspaces = list((await bounded('/api/v2/meta/workspaces', {headers})).json);
-  const workspaceMatches = workspaces.filter((item) => item?.title === 'Automation Data');
-  if (workspaceMatches.length !== 1 || !workspaceMatches[0].id) throw new Error('workspace_contract_failed');
-  const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
-  const baseMatches = bases.filter((item) => item?.title === 'issue334_acceptance' && (item.fk_workspace_id || item.workspace_id) === workspaceMatches[0].id);
-  if (baseMatches.length !== 1 || !baseMatches[0].id) throw new Error('base_contract_failed');
-  const base = baseMatches[0];
-
-  const sources = list((await bounded(`/api/v2/meta/bases/${base.id}/sources`, {headers})).json);
-  if (sources.length !== 2) throw new Error('source_count_failed');
-  const sourceObjects = [];
-  for (const summary of sources) sourceObjects.push((await bounded(`/api/v2/meta/bases/${base.id}/sources/${summary.id}`, {headers})).json);
-  const reader = sourceObjects.find((item) => item?.alias === 'Read Model');
-  const operator = sourceObjects.find((item) => item?.alias === 'Operator');
-  const pathOf = (source) => source?.config?.searchPath || source?.config?.search_path;
-  if (!reader || JSON.stringify(pathOf(reader)) !== JSON.stringify(['read_model']) || reader.is_data_readonly !== true || reader.is_schema_readonly !== true) throw new Error('reader_source_failed');
-  if (!operator || JSON.stringify(pathOf(operator)) !== JSON.stringify(['operator']) || operator.is_data_readonly !== false || operator.is_schema_readonly !== true) throw new Error('operator_source_failed');
-
-  const tables = list((await bounded(`/api/v2/meta/bases/${base.id}/tables`, {headers})).json);
-  const facts = tables.find((table) => table?.title === 'acceptance_facts' && table.table_name === 'acceptance_facts' && table.schema === 'read_model' && table.source_id === reader.id);
-  decisionTable = tables.find((table) => table?.title === 'acceptance_decision' && table.table_name === 'acceptance_decision' && table.schema === 'operator' && table.source_id === operator.id);
-  if (tables.length !== 2 || !facts?.id || !decisionTable?.id) throw new Error('schema_separation_failed');
-  await bounded(`/api/v2/tables/${facts.id}/records?limit=100`, {headers});
-  await bounded(`/api/v2/tables/${decisionTable.id}/records?limit=100`, {headers});
-
-  const views = list((await bounded(`/api/v2/meta/tables/${facts.id}/views`, {headers})).json);
-  if (views.length !== 1 || !views[0]?.id) throw new Error('saved_view_failed');
-
-  const readerDenied = await bounded(`/api/v2/tables/${facts.id}/records`, {
-    method:'POST', headers:{...headers,'Content-Type':'application/json'},
-    body:JSON.stringify({id:2147483647,fact:`restore-denial-${process.env.RUN_HASH}`})
-  }, [403]);
-  if (readerDenied.status !== 403) throw new Error('reader_denial_failed');
-
-  const inserted = await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
-    method:'POST', headers:{...headers,'Content-Type':'application/json'},
-    body:JSON.stringify({run_id:`restore-${process.env.RUN_HASH}`,decision:'restore-probe'})
-  });
-  insertedId = inserted.json?.id;
-  if (typeof insertedId !== 'number' && typeof insertedId !== 'string') throw new Error('operator_authentication_failed');
-  const protectedDenied = await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
-    method:'PATCH', headers:{...headers,'Content-Type':'application/json'},
-    body:JSON.stringify([{id:insertedId,protected_created_at:'2000-01-01T00:00:00Z'}])
-  }, [400]);
-  if (protectedDenied.status !== 400) throw new Error('operator_denial_failed');
-
-  const allRows = [...list((await bounded(`/api/v2/tables/${facts.id}/records?limit=100`, {headers})).json), ...list((await bounded(`/api/v2/tables/${decisionTable.id}/records?limit=100`, {headers})).json)];
-  let attachment = null;
-  const visit = (value) => {
-    if (attachment || value === null || typeof value !== 'object') return;
-    if (typeof value.url === 'string' && /^[0-9a-f]{64}$/i.test(value.sha256 || value.checksum || '')) {
-      attachment = {url:value.url, sha256:(value.sha256 || value.checksum).toLowerCase()};
-      return;
-    }
-    for (const nested of Object.values(value)) visit(nested);
-  };
-  visit(allRows);
-  if (!attachment) throw new Error('attachment_canary_missing');
-  const attachmentUrl = new URL(attachment.url, baseUrl);
-  if (attachmentUrl.origin !== new URL(baseUrl).origin) throw new Error('attachment_url_not_internal');
-  const downloaded = await bounded(`${attachmentUrl.pathname}${attachmentUrl.search}`, {headers}, [200], false, 16777216);
-  if (createHash('sha256').update(downloaded.bytes).digest('hex') !== attachment.sha256) throw new Error('attachment_checksum_failed');
-
-  await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
-    method:'DELETE', headers:{...headers,'Content-Type':'application/json'}, body:JSON.stringify([{id:insertedId}])
-  });
-  insertedId = null;
-  console.log('nocodb_restore_assertions=passed');
-} finally {
-  if (insertedId !== null && decisionTable?.id && jwt) {
-    try {
-      await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
-        method:'DELETE', headers:{'xc-auth':jwt,'Content-Type':'application/json'}, body:JSON.stringify([{id:insertedId}])
-      });
-    } catch {}
-  }
-  rmSync(root, {recursive:true,force:true});
-}
-EOF
-	)"
+	request_script="$(nocodb_restore_request_script)"
 	JOB_NAME="$request_job" APP_SERVICE="$app_service" REQUEST_SCRIPT="$request_script" \
-		RUN_HASH="$run_hash" yq --null-input --output-format yaml '
+		RUN_HASH="$run_hash" SOURCE_REGISTRY="$(jq -c . "$temp_dir/source-registry.json")" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
@@ -388,6 +295,7 @@ EOF
               "command":["node","--input-type=module","--eval"],"args":[strenv(REQUEST_SCRIPT)],
               "env":[
                 {"name":"APP_SERVICE","value":strenv(APP_SERVICE)},{"name":"RUN_HASH","value":strenv(RUN_HASH)},
+                {"name":"SOURCE_REGISTRY","value":strenv(SOURCE_REGISTRY)},
                 {"name":"ADMIN_EMAIL","valueFrom":{"secretKeyRef":{"name":"nocodb-credentials","key":"NC_ADMIN_EMAIL"}}},
                 {"name":"ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"nocodb-credentials","key":"NC_ADMIN_PASSWORD"}}},
                 {"name":"HOME","value":"/tmp"}
@@ -410,7 +318,7 @@ cleanup() {
 	verify_lease || cleanup_ok=false
 	if [[ "$cleanup_ok" == true ]]; then
 		for target in "job/$request_job" "deployment/$app" "service/$app_service" \
-			"job/$restore_job" "statefulset/$database" "service/$database_service" \
+			"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 			"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
 			delete_owned "$namespace" "$target" || cleanup_ok=false
 		done
@@ -418,7 +326,7 @@ cleanup() {
 		delete_owned "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" || cleanup_ok=false
 	fi
 	for target in "job/$request_job" "deployment/$app" "service/$app_service" \
-		"job/$restore_job" "statefulset/$database" "service/$database_service" \
+		"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 		"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
 		resource_absent "$namespace" "$target" || cleanup_ok=false
 	done
@@ -450,7 +358,7 @@ route_targets_service "$app_service" "$routes" && {
 }
 
 for target in "job/$request_job" "deployment/$app" "service/$app_service" \
-	"job/$restore_job" "statefulset/$database" "service/$database_service" \
+	"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 	"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
 	resource_absent "$namespace" "$target" || {
 		echo "Refusing to adopt existing $namespace/$target." >&2
@@ -466,39 +374,14 @@ resource_absent "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" |
 	exit 1
 }
 
-policy_manifest="$temp_dir/policy.yaml"
-nocodb_restore_policy_manifest "$policy" "$database" "$app" "$request_job" \
-	"$run_hash" >"$policy_manifest"
-verify_lease
-"${kc[@]}" create --filename "$policy_manifest" >/dev/null
-database_manifests | "${kc[@]}" create --filename - >/dev/null
-"${kc[@]}" rollout status "statefulset/$database" --timeout=10m >/dev/null
-
-verify_lease
-restore_job_manifest | "${kc[@]}" create --filename - >/dev/null
-wait_for_job_terminal "$restore_job" 1800 5 "${kc[@]}"
-restore_output="$temp_dir/restore-output.log"
-"${kc[@]}" logs "job/$restore_job" --tail=30 >"$restore_output"
-selected_bundle="$(sed -n 's/^selected_bundle=//p' "$restore_output" | tail -n 1)"
-post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' "$restore_output" | tail -n 1)"
-source_registry_base64="$(sed -n 's/^source_registry_base64=//p' "$restore_output" | tail -n 1)"
-[[ "$selected_bundle" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ &&
-	"$post_recovery_bundle" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ &&
-	"$source_registry_base64" =~ ^[A-Za-z0-9+/=]+$ ]] || {
-	echo 'The restore Job omitted bounded bundle or source-registry evidence.' >&2
-	exit 1
-}
-printf '%s' "$source_registry_base64" | base64 --decode >"$temp_dir/source-registry.json"
-nocodb_restore_validate_source_registry "$temp_dir/source-registry.json" || {
-	echo 'The restored issue334 source registry is incomplete or invalid.' >&2
-	exit 1
-}
-
 production_pvc="$temp_dir/production-pvc.json"
 production_pv="$temp_dir/production-pv.json"
 "${kc[@]}" get persistentvolumeclaim nocodb-data --output json >"$production_pvc"
 production_pv_name="$(jq -er '
   select(.status.phase == "Bound") |
+  select(.spec.resources.requests.storage == "10Gi" and .spec.storageClassName == "longhorn") |
+  select(.spec.accessModes == ["ReadWriteOnce"]) |
+  select(.metadata.uid | type == "string" and length > 0) |
   .spec.volumeName | select(type == "string" and length > 0)
 ' "$production_pvc")" || {
 	echo 'The production NocoDB attachment claim is not Bound to one PV.' >&2
@@ -508,6 +391,7 @@ production_pv_name="$(jq -er '
 production_volume="$(PVC_UID="$(jq -r '.metadata.uid' "$production_pvc")" jq -er '
   select(.spec.claimRef.namespace == "automation-data" and .spec.claimRef.name == "nocodb-data") |
   select(.spec.claimRef.uid == env.PVC_UID) |
+  select(.spec.capacity.storage == "10Gi" and .spec.accessModes == ["ReadWriteOnce"]) |
   select(.spec.csi.driver == "driver.longhorn.io") |
   .spec.csi.volumeHandle | select(type == "string" and length > 0)
 ' "$production_pv")" || {
@@ -526,42 +410,102 @@ jq -e '
 	exit 1
 }
 "${kl[@]}" get backups.longhorn.io --output json >"$backups"
+
+# Reject missing or malformed attachment recovery candidates before creating anything.
+jq -e --arg volume "$production_volume" '
+  [.items[] | select(.status.state == "Completed" and
+    .status.volumeName == $volume and .spec.backupTargetName == "default")] as $matching |
+  ($matching | length) > 0 and all($matching[];
+    .status.volumeSize == "10737418240" and
+    (.status.url | type == "string" and test("^[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+$")) and
+    (.status.backupCreatedAt | fromdateiso8601 | type == "number"))
+' "$backups" >/dev/null || {
+	echo 'No complete attachment recovery candidates with the required URL and size.' >&2
+	exit 1
+}
+
+# This observational Job is the only resource allowed before both recovery inputs pass.
+preflight_manifest="$temp_dir/preflight.yaml"
+nocodb_restore_preflight_manifest "$preflight_job" "$run_hash" >"$preflight_manifest"
+create_owned_manifests "$namespace" "$preflight_manifest"
+wait_for_job_terminal "$preflight_job" 300 5 "${kc[@]}"
+"${kc[@]}" logs "job/$preflight_job" --tail=2 >"$temp_dir/preflight.log"
+selected_bundle="$(sed -n 's/^selected_bundle=//p' "$temp_dir/preflight.log")"
+[[ "$selected_bundle" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ ]] || {
+	echo 'The logical preflight omitted exact complete-bundle evidence.' >&2
+	exit 1
+}
 selected_backup="$(nocodb_restore_select_attachment_backup "$selected_bundle" \
 	"$production_volume" default "$backups")" || {
 	echo 'No completed off-cluster attachment backup matches the bound NocoDB volume.' >&2
 	exit 1
 }
-nocodb_restore_require_inputs "/backups/$selected_bundle" "$selected_backup" || {
+selected_backup_url="$(jq -er '.url' <<<"$selected_backup")"
+selected_backup_size="$(jq -er '.volumeSize' <<<"$selected_backup")"
+nocodb_restore_require_inputs "/backups/$selected_bundle" "$selected_backup_url" "$selected_backup_size" || {
 	echo 'Both metadata and attachment recovery inputs are required.' >&2
+	exit 1
+}
+
+delete_owned "$namespace" "job/$preflight_job"
+resource_absent "$namespace" "job/$preflight_job"
+
+policy_manifest="$temp_dir/policy.yaml"
+nocodb_restore_policy_manifest "$policy" "$database" "$app" "$request_job" \
+	"$run_hash" >"$policy_manifest"
+verify_lease
+create_owned_manifests "$namespace" "$policy_manifest"
+database_manifests >"$temp_dir/database.yaml"
+create_owned_manifests "$namespace" "$temp_dir/database.yaml"
+"${kc[@]}" rollout status "statefulset/$database" --timeout=10m >/dev/null
+
+verify_lease
+restore_job_manifest >"$temp_dir/restore-job.yaml"
+create_owned_manifests "$namespace" "$temp_dir/restore-job.yaml"
+wait_for_job_terminal "$restore_job" 1800 5 "${kc[@]}"
+restore_output="$temp_dir/restore-output.log"
+"${kc[@]}" logs "job/$restore_job" --tail=30 >"$restore_output"
+restored_bundle="$(sed -n 's/^selected_bundle=//p' "$restore_output" | tail -n 1)"
+post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' "$restore_output" | tail -n 1)"
+source_registry_base64="$(sed -n 's/^source_registry_base64=//p' "$restore_output" | tail -n 1)"
+[[ "$restored_bundle" == "$selected_bundle" &&
+	"$post_recovery_bundle" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ &&
+	"$source_registry_base64" =~ ^[A-Za-z0-9+/=]+$ ]] || {
+	echo 'The restore Job omitted bounded bundle or source-registry evidence.' >&2
+	exit 1
+}
+printf '%s' "$source_registry_base64" | base64 --decode >"$temp_dir/source-registry.json"
+nocodb_restore_validate_source_registry "$temp_dir/source-registry.json" || {
+	echo 'The restored issue334 source registry is incomplete or invalid.' >&2
 	exit 1
 }
 
 volume_manifest="$temp_dir/attachment-volume.yaml"
 binding_manifest="$temp_dir/attachment-binding.yaml"
-nocodb_restore_longhorn_volume_manifest "$attachment_volume" "$selected_backup" \
-	"$run_hash" >"$volume_manifest"
+nocodb_restore_longhorn_volume_manifest "$attachment_volume" "$selected_backup_url" \
+	"$selected_backup_size" "$run_hash" >"$volume_manifest"
 verify_lease
-"${kl[@]}" create --filename "$volume_manifest" >/dev/null
+create_owned_manifests "$longhorn_namespace" "$volume_manifest"
 volume_healthy=false
 for _ in {1..180}; do
 	"${kl[@]}" get "volumes.longhorn.io/$attachment_volume" --output json \
 		>"$temp_dir/attachment-volume.json"
-	if nocodb_restore_validate_volume_health "$attachment_volume" \
-		"$temp_dir/attachment-volume.json"; then
+	if nocodb_restore_validate_volume_pre_bind "$attachment_volume" "$selected_backup_url" \
+		"$selected_backup_size" "$temp_dir/attachment-volume.json"; then
 		volume_healthy=true
 		break
 	fi
 	sleep 5
 done
 [[ "$volume_healthy" == true ]] || {
-	echo 'The restored attachment Volume did not complete a healthy two-replica rebuild.' >&2
+	echo 'The restored attachment Volume did not complete the detached restore phase.' >&2
 	exit 1
 }
 
 nocodb_restore_static_binding_manifests "$attachment_pv" "$attachment_pvc" \
 	"$attachment_volume" "$run_hash" >"$binding_manifest"
 verify_lease
-"${kcluster[@]}" create --filename "$binding_manifest" >/dev/null
+create_owned_manifests - "$binding_manifest"
 "${kc[@]}" wait --for=jsonpath='{.status.phase}'=Bound \
 	"persistentvolumeclaim/$attachment_pvc" --timeout=10m >/dev/null
 
@@ -582,8 +526,23 @@ nocodb_restore_validate_isolation "$app_manifest" "$live_policy" \
 }
 
 verify_lease
-"${kc[@]}" create --filename "$app_manifest" >/dev/null
+create_owned_manifests "$namespace" "$app_manifest"
 "${kc[@]}" rollout status "deployment/$app" --timeout=20m >/dev/null
+
+volume_healthy=false
+for _ in {1..180}; do
+	"${kl[@]}" get "volumes.longhorn.io/$attachment_volume" --output json >"$temp_dir/attachment-volume.json"
+	if nocodb_restore_validate_volume_attached "$attachment_volume" "$selected_backup_url" \
+		"$selected_backup_size" "$temp_dir/attachment-volume.json"; then
+		volume_healthy=true
+		break
+	fi
+	sleep 5
+done
+[[ "$volume_healthy" == true ]] || {
+	echo 'The mounted attachment Volume did not become healthy with exactly two RW replicas.' >&2
+	exit 1
+}
 
 # This drill creates no HTTPRoute. Recheck after Service creation before any request Job.
 "${kcluster[@]}" get httproutes.gateway.networking.k8s.io --all-namespaces --output json >"$routes"
@@ -593,7 +552,8 @@ route_targets_service "$app_service" "$routes" && {
 }
 
 verify_lease
-request_job_manifest | "${kc[@]}" create --filename - >/dev/null
+request_job_manifest >"$temp_dir/request-job.yaml"
+create_owned_manifests "$namespace" "$temp_dir/request-job.yaml"
 wait_for_job_terminal "$request_job" 600 5 "${kc[@]}"
 [[ "$("${kc[@]}" logs "job/$request_job" --tail=1)" == nocodb_restore_assertions=passed ]] || {
 	echo 'The restored NocoDB request Job omitted bounded recovery evidence.' >&2

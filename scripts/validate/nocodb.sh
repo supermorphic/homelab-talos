@@ -92,6 +92,8 @@ scripts/test/nocodb-alerts-test.sh
 scripts/test/nocodb-verification-contract-test.sh
 scripts/test/nocodb-access-command-test.sh
 scripts/test/nocodb-restore-command-test.sh
+scripts/test/nocodb-restore-request-test.sh
+scripts/test/nocodb-restore-scenario-test.sh
 
 just --dry-run kube nocodb-verify 2>&1 | rg -Fq \
   'run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh'

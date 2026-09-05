@@ -1,5 +1,187 @@
 #!/usr/bin/env bash
 
+nocodb_restore_preflight_manifest() { # <job-name> <run-hash>
+	local job_name="$1" run_hash="$2" command
+	# Reuse the full checksum, manifest, archive-list, and selection contract, stopping
+	# before the first PostgreSQL connection or any restore operation.
+	command="$(automation_data_restore_job_command | sed '/^initial_database_count=/,$d' |
+		sed '/^printf.*restore_stage=artifact-selection/d')"
+	command+=$'\n'
+	command+="$(
+		cat <<'EOF'
+for required_database in nocodb automation_data_control issue334_acceptance; do
+  encoded="$(printf '%s' "$required_database" | base64 | tr -d '\n')"
+  grep -Fxq "$encoded" /tmp/restore-expected-databases-base64 || restore_fail required-database-missing
+done
+printf 'selected_bundle=%s\n' "$selected_name"
+EOF
+	)"
+	JOB_NAME="$job_name" RUN_HASH="$run_hash" JOB_COMMAND="$command" \
+		yq --null-input --output-format yaml '
+      {
+        "apiVersion":"batch/v1", "kind":"Job",
+        "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
+          "homelab-talos/test":"nocodb-restore-drill","homelab-talos/run-id":strenv(RUN_HASH),"homelab-talos/role":"preflight"
+        }},
+        "spec":{"activeDeadlineSeconds":300,"backoffLimit":0,"template":{
+          "metadata":{"labels":{"homelab-talos/test":"nocodb-restore-drill","homelab-talos/run-id":strenv(RUN_HASH),"homelab-talos/role":"preflight"}},
+          "spec":{"automountServiceAccountToken":false,"restartPolicy":"Never",
+            "securityContext":{"fsGroup":70,"fsGroupChangePolicy":"OnRootMismatch","runAsNonRoot":true,"runAsUser":70,"runAsGroup":70,"seccompProfile":{"type":"RuntimeDefault"}},
+            "containers":[{
+              "name":"preflight","image":"postgres:17.11-alpine3.24","imagePullPolicy":"IfNotPresent",
+              "command":["/bin/sh","-ceu"],"args":[strenv(JOB_COMMAND)],
+              "env":[{"name":"BACKUP_DIR","value":"/backups"}],
+              "resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}},
+              "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},
+              "volumeMounts":[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]
+            }],
+            "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]
+          }
+        }}
+      }
+    '
+}
+
+nocodb_restore_request_script() {
+	cat <<'EOF'
+import {createHash} from 'node:crypto';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
+const root = mkdtempSync(join(tmpdir(), 'nocodb-restore-request-'));
+const baseUrl = `http://${process.env.APP_SERVICE}.automation-data.svc.cluster.local:8080`;
+const secretFile = join(root, 'signin.json');
+const tokenFile = join(root, 'session.jwt');
+const bounded = async (path, options = {}, allowed = [200], parseJson = true, maxBytes = 65536) => {
+  const response = await fetch(`${baseUrl}${path}`, {...options, redirect:'error', signal: AbortSignal.timeout(60000)});
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new Error('response_exceeded_bound');
+  if (!allowed.includes(response.status)) throw new Error(`unexpected_http_${response.status}`);
+  return {status: response.status, bytes, json: parseJson && bytes.byteLength ? JSON.parse(new TextDecoder().decode(bytes)) : null};
+};
+const list = (value) => Array.isArray(value) ? value : (value?.list || value?.data || []);
+let insertedId = null;
+let decisionTable = null;
+let jwt = '';
+try {
+  const health = await bounded('/api/v1/health');
+  if (health.json?.message !== 'OK') throw new Error('health_contract_failed');
+
+  writeFileSync(secretFile, JSON.stringify({email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD}), {mode: 0o600});
+  const signin = await bounded('/api/v1/auth/user/signin', {method:'POST', headers:{'Content-Type':'application/json'}, body:readFileSync(secretFile)});
+  if (typeof signin.json?.token !== 'string' || !/^[A-Za-z0-9._-]+$/.test(signin.json.token)) throw new Error('signin_contract_failed');
+  writeFileSync(tokenFile, signin.json.token, {mode: 0o600});
+  jwt = readFileSync(tokenFile, 'utf8');
+  const headers = {'xc-auth':jwt};
+
+  const workspaces = list((await bounded('/api/v2/meta/workspaces', {headers})).json);
+  const workspaceMatches = workspaces.filter((item) => item?.title === 'Automation Data');
+  if (workspaceMatches.length !== 1 || !workspaceMatches[0].id) throw new Error('workspace_contract_failed');
+  const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
+  const baseMatches = bases.filter((item) => item?.title === 'issue334_acceptance' && (item.fk_workspace_id || item.workspace_id) === workspaceMatches[0].id);
+  if (baseMatches.length !== 1 || !baseMatches[0].id) throw new Error('base_contract_failed');
+  const base = baseMatches[0];
+  const registry = JSON.parse(process.env.SOURCE_REGISTRY);
+  const retained = registry.items.filter((item) => item.domain === 'issue334_acceptance');
+  if (retained.length !== 2 || retained.some((item) => item.baseId !== base.id || item.state !== 'ready' || item.valid !== true)) throw new Error('registry_base_mismatch');
+  const integrations = list((await bounded(`/api/v2/meta/workspaces/${workspaceMatches[0].id}/integrations`, {headers})).json);
+
+
+  const sources = list((await bounded(`/api/v2/meta/bases/${base.id}/sources`, {headers})).json);
+  if (sources.length !== 2) throw new Error('source_count_failed');
+  const sourceObjects = [];
+  for (const summary of sources) sourceObjects.push((await bounded(`/api/v2/meta/bases/${base.id}/sources/${summary.id}`, {headers})).json);
+  const reader = sourceObjects.find((item) => item?.alias === 'Read Model');
+  const operator = sourceObjects.find((item) => item?.alias === 'Operator');
+  const pathOf = (source) => source?.config?.searchPath || source?.config?.search_path;
+  if (!reader || JSON.stringify(pathOf(reader)) !== JSON.stringify(['read_model']) || reader.is_data_readonly !== true || reader.is_schema_readonly !== true) throw new Error('reader_source_failed');
+  if (!operator || JSON.stringify(pathOf(operator)) !== JSON.stringify(['operator']) || operator.is_data_readonly !== false || operator.is_schema_readonly !== true) throw new Error('operator_source_failed');
+
+  for (const [kind, source] of [['reader', reader], ['operator', operator]]) {
+    const matches = retained.filter((item) => item.accessKind === kind);
+    if (matches.length !== 1 || source.id !== matches[0].sourceId || source.fk_integration_id !== matches[0].integrationId) throw new Error('registry_source_mismatch');
+    const integration = integrations.filter((item) => item.id === matches[0].integrationId);
+    if (integration.length !== 1 || integration[0].title !== `automation-data/issue334_acceptance/${kind}` ||
+        integration[0].type !== 'db' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
+  }
+
+  const tables = list((await bounded(`/api/v2/meta/bases/${base.id}/tables`, {headers})).json);
+  const facts = tables.find((table) => table?.title === 'acceptance_facts' && table.table_name === 'acceptance_facts' && table.schema === 'read_model' && table.source_id === reader.id);
+  decisionTable = tables.find((table) => table?.title === 'acceptance_decision' && table.table_name === 'acceptance_decision' && table.schema === 'operator' && table.source_id === operator.id);
+  if (tables.length !== 2 || !facts?.id || !decisionTable?.id) throw new Error('schema_separation_failed');
+  await bounded(`/api/v2/tables/${facts.id}/records?limit=100`, {headers});
+  await bounded(`/api/v2/tables/${decisionTable.id}/records?limit=100`, {headers});
+
+  const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify(keys.sort());
+  const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value);
+  const canaryResponse = (await bounded(`/api/v2/tables/${decisionTable.id}/records?where=(run_id,eq,recovery-canary-v1)&limit=2`, {headers})).json;
+  const rows = list(canaryResponse);
+  if (rows.length !== 1 || canaryResponse.pageInfo?.totalRows !== 1 || rows[0].run_id !== 'recovery-canary-v1' || typeof rows[0].decision !== 'string') throw new Error('attachment_canary_missing');
+  const canary = JSON.parse(rows[0].decision);
+  if (!exactKeys(canary, ['kind','version','state','baseId','sourceId','tableId','rowId','savedView','commentId','attachment']) ||
+      canary.kind !== 'nocodb-attachment-recovery-canary' || canary.version !== 1 || canary.state !== 'ready' ||
+      canary.baseId !== base.id || canary.sourceId !== operator.id || canary.tableId !== decisionTable.id ||
+      canary.rowId !== String(rows[0].id) || !id(canary.rowId) || !id(canary.commentId)) throw new Error('canary_identity_failed');
+  const view = canary.savedView;
+  if (!exactKeys(view, ['id','tableId','title','type']) || !id(view.id) || view.tableId !== facts.id ||
+      view.title !== 'acceptance_facts' || view.type !== 3) throw new Error('canary_view_failed');
+  const views = list((await bounded(`/api/v2/meta/tables/${facts.id}/views`, {headers})).json);
+  if (views.length !== 1 || views[0].id !== view.id || views[0].fk_model_id !== view.tableId ||
+      views[0].title !== view.title || views[0].type !== view.type) throw new Error('saved_view_failed');
+  const attachment = canary.attachment;
+  if (!exactKeys(attachment, ['id','path','title','mimetype','size','sha256']) || !id(attachment.id) ||
+      !/^download\/issue334_acceptance\/recovery-canary-v1\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\.txt$/.test(attachment.path) ||
+      attachment.title !== 'issue334-recovery-canary-v1.txt' || attachment.mimetype !== 'text/plain' ||
+      attachment.size !== 37 || attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') throw new Error('canary_attachment_failed');
+  const comments = list((await bounded(`/api/v2/meta/comments?fk_model_id=${decisionTable.id}&row_id=${canary.rowId}`, {headers})).json);
+  const matches = comments.filter((item) => item.id === canary.commentId);
+  if (comments.length !== 1 || matches.length !== 1) throw new Error('canary_comment_missing');
+  const comment = matches[0];
+  if (comment.base_id !== base.id || comment.source_id !== operator.id || comment.fk_model_id !== decisionTable.id ||
+      String(comment.row_id) !== canary.rowId || comment.comment !== 'issue334-recovery-canary-v1' ||
+      !Array.isArray(comment.attachments) || comment.attachments.length !== 1 ||
+      ['id','path','title','mimetype','size'].some((key) => comment.attachments[0][key] !== attachment[key])) throw new Error('canary_comment_mismatch');
+  const downloaded = await bounded(`/${attachment.path}`, {headers}, [200], false, 37);
+  if (downloaded.bytes.byteLength !== 37 || createHash('sha256').update(downloaded.bytes).digest('hex') !== attachment.sha256) throw new Error('attachment_checksum_failed');
+
+  const readerDenied = await bounded(`/api/v2/tables/${facts.id}/records`, {
+    method:'POST', headers:{...headers,'Content-Type':'application/json'},
+    body:JSON.stringify({id:2147483647,fact:`restore-denial-${process.env.RUN_HASH}`})
+  }, [403]);
+  if (readerDenied.status !== 403) throw new Error('reader_denial_failed');
+
+  const inserted = await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
+    method:'POST', headers:{...headers,'Content-Type':'application/json'},
+    body:JSON.stringify({run_id:`restore-${process.env.RUN_HASH}`,decision:'restore-probe'})
+  });
+  insertedId = inserted.json?.id;
+  if (typeof insertedId !== 'number' && typeof insertedId !== 'string') throw new Error('operator_authentication_failed');
+  const protectedDenied = await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
+    method:'PATCH', headers:{...headers,'Content-Type':'application/json'},
+    body:JSON.stringify([{id:insertedId,protected_created_at:'2000-01-01T00:00:00Z'}])
+  }, [400]);
+  if (protectedDenied.status !== 400) throw new Error('operator_denial_failed');
+
+  await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
+    method:'DELETE', headers:{...headers,'Content-Type':'application/json'}, body:JSON.stringify([{id:insertedId}])
+  });
+  insertedId = null;
+  console.log('nocodb_restore_assertions=passed');
+} finally {
+  if (insertedId !== null && decisionTable?.id && jwt) {
+    try {
+      await bounded(`/api/v2/tables/${decisionTable.id}/records`, {
+        method:'DELETE', headers:{'xc-auth':jwt,'Content-Type':'application/json'}, body:JSON.stringify([{id:insertedId}])
+      });
+    } catch {}
+  }
+  rmSync(root, {recursive:true,force:true});
+}
+EOF
+}
+
 nocodb_restore_bundle_is_complete() { # <bundle-directory>
 	local candidate="$1" candidate_name expected_files actual_files
 	candidate_name="$(basename "$candidate")"
@@ -77,25 +259,30 @@ nocodb_restore_select_attachment_backup() { # <bundle-name> <volume> <target> <b
         (.status.url | type == "string" and length > 0)
       ) | {
         url: .status.url,
+        volumeSize: .status.volumeSize,
         created: (.status.backupCreatedAt | fromdateiso8601),
         distance: (((.status.backupCreatedAt | fromdateiso8601) - $captured_epoch) | fabs),
         name: .metadata.name
       }] |
       sort_by(.distance, .created, .name) |
-      if length > 0 then .[0].url else error("no completed matching backup") end
+      if length > 0 then .[0] | {name, url, volumeSize} |
+        if .volumeSize == "10737418240" and (.url | test("^[A-Za-z][A-Za-z0-9+.-]*://[^\\s]+$"))
+        then . else error("invalid attachment backup URL or size") end
+      else error("no completed matching backup") end
     ' "$backups_json"
 }
 
-nocodb_restore_require_inputs() { # <bundle-path> <backup-url>
-	local bundle_path="$1" backup_url="$2" bundle_name
+nocodb_restore_require_inputs() { # <bundle-path> <backup-url> <volume-size>
+	local bundle_path="$1" backup_url="$2" volume_size="$3" bundle_name
 	bundle_name="$(basename "$bundle_path")"
 	[[ "$bundle_name" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ &&
-		"$backup_url" =~ ^[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+$ ]]
+		"$backup_url" =~ ^[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+$ && "$volume_size" == 10737418240 ]]
 }
 
-nocodb_restore_longhorn_volume_manifest() { # <volume-name> <backup-url> <run-hash>
-	local volume_name="$1" backup_url="$2" run_hash="$3"
-	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" RUN_HASH="$run_hash" \
+nocodb_restore_longhorn_volume_manifest() { # <volume-name> <backup-url> <volume-size> <run-hash>
+	local volume_name="$1" backup_url="$2" volume_size="$3" run_hash="$4"
+	[[ "$volume_size" == 10737418240 ]] || return 1
+	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" RUN_HASH="$run_hash" \
 		yq --null-input --output-format yaml '
       {
         "apiVersion": "longhorn.io/v1beta2",
@@ -117,7 +304,7 @@ nocodb_restore_longhorn_volume_manifest() { # <volume-name> <backup-url> <run-ha
           "frontend": "blockdev",
           "fromBackup": strenv(BACKUP_URL),
           "numberOfReplicas": 2,
-          "size": "10737418240",
+          "size": strenv(VOLUME_SIZE),
           "staleReplicaTimeout": 30
         }
       }
@@ -267,6 +454,19 @@ nocodb_restore_validate_isolation() { # <app-yaml> <policy-yaml> <database-ip> <
     ([.specs[].endpointSelector.matchLabels."homelab-talos/role"] | sort | join(",")) == "database,nocodb,request,restore" and
     ([.specs[] | select(.endpointSelector.matchLabels."homelab-talos/test" != "nocodb-restore-drill" or .endpointSelector.matchLabels."homelab-talos/run-id" != strenv(RUN_HASH))] | length) == 0 and
     ([.specs[] | select((.endpointSelector.matchLabels | length) != 3)] | length) == 0 and
+    ([.specs[].ingress[]?.fromEndpoints[]? | select(
+      (.matchLabels | length) != 3 or
+      .matchLabels."homelab-talos/test" != "nocodb-restore-drill" or
+      .matchLabels."homelab-talos/run-id" != strenv(RUN_HASH)
+    )] | length) == 0 and
+    ([.specs[].egress[]?.toEndpoints[]? | select(
+      ((.matchLabels | length) != 2 or
+       .matchLabels."k8s:io.kubernetes.pod.namespace" != "kube-system" or
+       .matchLabels."k8s:k8s-app" != "kube-dns") and
+      ((.matchLabels | length) != 3 or
+       .matchLabels."homelab-talos/test" != "nocodb-restore-drill" or
+       .matchLabels."homelab-talos/run-id" != strenv(RUN_HASH))
+    )] | length) == 0 and
     ([.. | select(tag == "!!map") | select(has("toCIDR") or has("toCIDRSet") or has("toEntities") or has("toFQDNs"))] | length) == 0 and
     ([.specs[] as $destination | $destination.ingress[]? as $rule |
       $rule.fromEndpoints[]? as $source | $rule.toPorts[]?.ports[]? |
@@ -281,12 +481,24 @@ nocodb_restore_validate_isolation() { # <app-yaml> <policy-yaml> <database-ip> <
   ' "$policy_yaml" >/dev/null
 }
 
-nocodb_restore_validate_volume_health() { # <volume-name> <volume-json>
-	local volume_name="$1" volume_json="$2"
-	VOLUME_NAME="$volume_name" jq -e '
+nocodb_restore_validate_volume_pre_bind() { # <volume-name> <backup-url> <volume-size> <volume-json>
+	local volume_name="$1" backup_url="$2" volume_size="$3" volume_json="$4"
+	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" jq -e '
     .metadata.name == env.VOLUME_NAME and
+    .spec.fromBackup == env.BACKUP_URL and .spec.size == env.VOLUME_SIZE and
     .spec.numberOfReplicas == 2 and
-    (.status.state == "detached" or .status.state == "attached") and
+    .status.state == "detached" and .status.robustness == "unknown" and
+    .status.restoreRequired == false and .status.replicaModeMap == {}
+  ' "$volume_json" >/dev/null
+}
+
+nocodb_restore_validate_volume_attached() { # <volume-name> <backup-url> <volume-size> <volume-json>
+	local volume_name="$1" backup_url="$2" volume_size="$3" volume_json="$4"
+	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" jq -e '
+    .metadata.name == env.VOLUME_NAME and
+    .spec.fromBackup == env.BACKUP_URL and .spec.size == env.VOLUME_SIZE and
+    .spec.numberOfReplicas == 2 and
+    .status.state == "attached" and
     .status.robustness == "healthy" and .status.restoreRequired == false and
     ([.status.replicaModeMap[]] | length) == 2 and
     all(.status.replicaModeMap[]; . == "RW")
