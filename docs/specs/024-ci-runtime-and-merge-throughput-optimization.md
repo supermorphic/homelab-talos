@@ -1157,6 +1157,20 @@ Stage 2 earns trust before it skips validation:
    setup and reconciliation overhead, runner consumption, failures, variance, and
    three-to-five-pull-request drain time.
 
+Stage 2 is now in shadow planning. The `ci` job remains the only pass-authoritative job
+and still runs the complete `mise exec -- just ci` gate. The advisory `plan-shadow` job
+plans from the exact pull-request base and head SHAs, or requests a full plan for the exact
+manual-dispatch SHA, and uploads its plan for review. It does not select, skip, approve, or
+reduce required validation.
+
+At this rollout boundary, the general harness contains 61 unique shell identities: 22
+`core`, 17 `observability`, three `automation`, and 19 `ci-framework`. The original 60
+identities are unchanged, and `ci-workflow-contract` is the one new permanent identity.
+The complete harness list also contains six setup identities, three Python discovery
+identities, and two Ruff identities, for 72 listed work identities. The catalog contains
+120 unique suite identities. Its full `ci` execution contains 43 suite identities: 32
+`core`, seven `observability`, three `automation`, and one `ci-framework`.
+
 The permanent tests prove that every tracked path resolves to `core`, one or more
 conditional groups, or `full`; every target in the canonical CI execution list belongs to
 exactly one group; the full group union equals `just ci`; representative changes select

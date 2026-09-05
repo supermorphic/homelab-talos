@@ -33,13 +33,13 @@ all="$(list_shell all)"
 
 expect_lines "$observability" $'flux-alerts-diagnostics\nflux-alert-delivery\nlogging-verifier-topology-storage-runtime\nlogging-verifier-labels\nlogging-verifier-counts-compaction\nlogging-verifier-prometheus-targets\nmonitoring-fixtures\nmonitoring-alloy-logs-validator\nmonitoring-loki-validator\nmonitoring-alloy-events-validator\ngrafana-admin-reset\nalertmanager-ntfy-verifier\nntfy-publish\ngatus-validator\nmonitoring-alerts-validator\nntfy-identity\nntfy-consumer-sync'
 expect_lines "$automation" $'n8n-secrets\nn8n-backup\nn8n-persistence-query'
-expect_lines "$ci_framework" $'chaos-confirmation\ne2e-confirmation\ncommon-library\nresult-contract\nchainsaw-inputs\nharness-case-timing\nharness-shell-runner\nnative-junit-validator\ncatalog-negative\nchainsaw-dispatch\nprobe-dispatch\nlease\ncatalog-suite-runner\nci-runner\ncampaign-runner\nallure-report\nreport-publish-install\nreport-publish-guard'
-expect_lines "$all" $'chaos-confirmation\ne2e-confirmation\ncommon-library\nresult-contract\nchainsaw-inputs\nharness-case-timing\nharness-shell-runner\nnative-junit-validator\ncatalog-negative\nflux-alerts-diagnostics\nflux-alert-delivery\ntailscale-routes\nchainsaw-dispatch\nmedia-hardlink\nprobe-dispatch\nlease\nnode-lifecycle\ncluster-commands\ncatalog-suite-runner\nci-runner\ncampaign-runner\nscoped-campaign-preflight\nagent-access-verifier\ntautulli-verifier\nmetrics-server-verifier\ncilium-verifier\nlogging-verifier-topology-storage-runtime\nlogging-verifier-labels\nlogging-verifier-counts-compaction\nlogging-verifier-prometheus-targets\ncilium-validator\nn8n-secrets\nn8n-backup\nn8n-persistence-query\nmonitoring-fixtures\nmonitoring-alloy-logs-validator\nmonitoring-loki-validator\nmonitoring-alloy-events-validator\ngrafana-admin-reset\nbootstrap-recovery\ntalos-apply-live\nportainer-rbac-verifier\nalertmanager-ntfy-verifier\nntfy-publish\nsecurity-alerts-verifier\nplex-verifier\nplex-validator\nsonobuoy-runner\nallure-report\nreport-publish-install\nreport-publish-guard\nqbit-manage-policy-validator\narr-validator\ngatus-validator\nmonitoring-alerts-validator\ngatus-media-integration-secrets\nqbittorrent-probe\ndns-isolation\nntfy-identity\nntfy-consumer-sync'
+expect_lines "$ci_framework" $'chaos-confirmation\ne2e-confirmation\ncommon-library\nresult-contract\nchainsaw-inputs\nharness-case-timing\nharness-shell-runner\nnative-junit-validator\ncatalog-negative\nchainsaw-dispatch\nprobe-dispatch\nlease\ncatalog-suite-runner\nci-runner\nci-workflow-contract\ncampaign-runner\nallure-report\nreport-publish-install\nreport-publish-guard'
+expect_lines "$all" $'chaos-confirmation\ne2e-confirmation\ncommon-library\nresult-contract\nchainsaw-inputs\nharness-case-timing\nharness-shell-runner\nnative-junit-validator\ncatalog-negative\nflux-alerts-diagnostics\nflux-alert-delivery\ntailscale-routes\nchainsaw-dispatch\nmedia-hardlink\nprobe-dispatch\nlease\nnode-lifecycle\ncluster-commands\ncatalog-suite-runner\nci-runner\nci-workflow-contract\ncampaign-runner\nscoped-campaign-preflight\nagent-access-verifier\ntautulli-verifier\nmetrics-server-verifier\ncilium-verifier\nlogging-verifier-topology-storage-runtime\nlogging-verifier-labels\nlogging-verifier-counts-compaction\nlogging-verifier-prometheus-targets\ncilium-validator\nn8n-secrets\nn8n-backup\nn8n-persistence-query\nmonitoring-fixtures\nmonitoring-alloy-logs-validator\nmonitoring-loki-validator\nmonitoring-alloy-events-validator\ngrafana-admin-reset\nbootstrap-recovery\ntalos-apply-live\nportainer-rbac-verifier\nalertmanager-ntfy-verifier\nntfy-publish\nsecurity-alerts-verifier\nplex-verifier\nplex-validator\nsonobuoy-runner\nallure-report\nreport-publish-install\nreport-publish-guard\nqbit-manage-policy-validator\narr-validator\ngatus-validator\nmonitoring-alerts-validator\ngatus-media-integration-secrets\nqbittorrent-probe\ndns-isolation\nntfy-identity\nntfy-consumer-sync'
 
 [[ "$(wc -l <<<"$observability" | tr -d ' ')" -eq 17 ]]
 [[ "$(wc -l <<<"$automation" | tr -d ' ')" -eq 3 ]]
-[[ "$(wc -l <<<"$ci_framework" | tr -d ' ')" -eq 18 ]]
-[[ "$(wc -l <<<"$all" | tr -d ' ')" -eq 60 ]]
+[[ "$(wc -l <<<"$ci_framework" | tr -d ' ')" -eq 19 ]]
+[[ "$(wc -l <<<"$all" | tr -d ' ')" -eq 61 ]]
 [[ -z "$(printf '%s\n' "$core" "$observability" "$automation" "$ci_framework" |
 	LC_ALL=C sort | uniq -d)" ]]
 
@@ -49,7 +49,7 @@ automation_work="$(list_work automation)"
 ci_framework_work="$(list_work ci-framework)"
 all_work="$(list_work all)"
 
-[[ "$(wc -l <<<"$all_work" | tr -d ' ')" -eq 71 ]]
+[[ "$(wc -l <<<"$all_work" | tr -d ' ')" -eq 72 ]]
 expect_lines "$(printf '%s\n' "$all_work" | sed -n '1,6p')" \
 	$'setup:catalog\nsetup:chainsaw-configuration\nsetup:chainsaw-conftest\nsetup:chainsaw-test-files\nsetup:chainsaw-yaml-support-files\nsetup:repository-shell-validation'
 expect_lines "$(printf '%s\n' "$all_work" | tail -n 5)" \
@@ -69,6 +69,10 @@ expect_lines "$(printf '%s\n' "$core_work" | sed -n 's/^ruff://p')" \
 [[ "$(printf '%s\n' "$all_work" | LC_ALL=C sort)" == \
 	"$(printf '%s\n' "$core_work" "$observability_work" "$automation_work" "$ci_framework_work" |
 		LC_ALL=C sort)" ]]
+
+# The explicit Ruff list prevents a new Python test from silently losing ongoing style checks.
+rg -q '^\s*scripts/test/test_repository_secret_scan\.py([[:space:]]|$)' \
+	scripts/test/validate-chainsaw.sh
 
 set +e
 invalid_output="$(scripts/test/validate-chainsaw.sh --list invalid 2>&1)"
