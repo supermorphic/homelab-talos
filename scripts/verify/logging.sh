@@ -366,6 +366,8 @@ start_port_forward() {
   local -n result_port="$5"
   local port=''
 
+  # The first poll can run before the background child's redirection opens this.
+  : >"$log_file"
   "${kc[@]}" --namespace "$ns" port-forward --address 127.0.0.1 \
     "service/$service_name" ":$remote_port" >"$log_file" 2>&1 &
   result_pid="$!"

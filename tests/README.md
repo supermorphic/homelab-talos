@@ -47,8 +47,8 @@ unstarted tail absent for the outer fail-fast reporter. Set
 accepted. This changes how the complete suite executes; it does not select or
 omit tests based on changed files.
 
-The logging verifier fixture retains all 64 layouts. The harness runs them as
-four deterministic groups: topology/storage/runtime, labels,
+The logging verifier fixture covers 65 layouts, including delayed port-forward startup.
+The harness runs them as four deterministic groups: topology/storage/runtime, labels,
 counts/compaction, and Prometheus targets. The existing four-worker harness
 owns their concurrency; the fixture does not create a nested worker pool.
 
