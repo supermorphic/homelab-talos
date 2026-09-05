@@ -647,16 +647,22 @@ identity. Its fixed file is `issue334-recovery-canary-v1.txt`, contains the UTF-
 SHA-256 `09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3`.
 
 The state transition is `pending` to `uploading` to `uploaded` to `ready`. A fixed
-owner-authority PostgreSQL update claims `pending` before the single multipart
-`POST /api/v2/storage/upload`. The returned canonical path is recorded immediately.
+owner-authority PostgreSQL `INSERT ... ON CONFLICT DO NOTHING` initializes the row, so
+concurrent probes re-list and join the same identity. A second fixed owner-authority
+update claims `pending` before the single multipart `POST /api/v2/storage/upload`.
+The returned canonical path is recorded immediately.
 The workflow then associates that file with the fixed row through
 `POST /api/v2/meta/comments`, reads the exact live comment and FileReference, records
 their IDs, and downloads the recorded `/download/*` path to compare the exact bytes.
 It also reads and records the exact default grid-view identity instead of guessing its
-title or type. A `ready` rerun performs only these reads and download. An `uploading`
-row is a lost-response ambiguity and fails closed; it never repeats the upload, which
-bounds an interrupted run to at most one unassociated upload. Responses expose only the
-bounded non-secret identities, path, size, media type, and checksum.
+title or type. A `ready` rerun performs only these reads and download. A probe that loses
+the upload claim or observes `uploading` waits five seconds and re-lists the fixed row,
+at most twelve times. It joins repair or verification if the winner reaches `uploaded`
+or `ready`. If the row remains `uploading` for 60 seconds, the lost-response ambiguity
+fails closed and never repeats the upload. This bounds an interrupted run to at most one
+unassociated upload. Responses expose only the bounded non-secret identities, path,
+size, media type, and checksum. Code nodes create and read binary values through n8n's
+binary-data helpers so the check works with the required filesystem binary mode.
 
 ## Command lifecycle
 

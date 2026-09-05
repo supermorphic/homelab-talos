@@ -302,11 +302,12 @@ PY
 node - "$source_workflow" "$acceptance_workflow" <<'JS'
 const fs = require('fs');
 const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 for (const workflowPath of process.argv.slice(2)) {
   const candidate = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
   for (const node of candidate.nodes.filter((item) => item.type === 'n8n-nodes-base.code')) {
     try {
-      new Function('$json', '$input', '$', node.parameters.jsCode);
+      new AsyncFunction('$json', '$input', '$', '$binary', 'helpers', node.parameters.jsCode);
     } catch (error) {
       throw new Error(`${candidate.name} Code node ${node.name} does not compile: ${error.message}`);
     }
@@ -883,7 +884,7 @@ for marker in (
     require(marker in grant_sql, f"Acceptance grant SQL omits {marker}")
 
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
-require(len(postgres_nodes) == 5, "Acceptance must have exactly five fixed migrator operations.")
+require(len(postgres_nodes) == 6, "Acceptance must have exactly six fixed migrator operations.")
 cleanup_sql = "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;"
 for name in ("Clear Reader Negative Residue", "Cleanup Unexpected Reader Insert"):
     parameters = by_name.get(name, {}).get("parameters", {})
@@ -911,6 +912,21 @@ require(
     claim.get("operation") == "executeQuery"
     and claim.get("options", {}).get("queryReplacement") == "={{ [$json.rowId] }}",
     "Recovery canary upload claim must bind only the validated row ID.",
+)
+initialize = by_name.get("Initialize Recovery Canary Row", {})
+initialize_sql = initialize.get("parameters", {}).get("query", "")
+for marker in (
+    "BEGIN;",
+    "SET LOCAL ROLE issue334_acceptance_owner;",
+    "INSERT INTO operator.acceptance_decision (run_id, decision)",
+    "VALUES ('recovery-canary-v1', '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"pending\"}')",
+    "ON CONFLICT DO NOTHING;",
+    "COMMIT;",
+):
+    require(marker in initialize_sql, f"Recovery canary initialization omits {marker}")
+require(
+    initialize.get("alwaysOutputData") is True,
+    "Recovery canary conflict initialization must always continue to the row re-list.",
 )
 require(
     by_name["Claim Recovery Canary Upload"].get("alwaysOutputData") is True,
@@ -954,7 +970,6 @@ for node in http_nodes:
 canary_http = {name: by_name.get(name, {}).get("parameters", {}) for name in (
     "Get Recovery Saved View",
     "List Recovery Canary Rows",
-    "Create Pending Recovery Canary",
     "Upload Recovery Canary",
     "Record Uploaded Recovery Canary",
     "List Recovery Canary Comments",
@@ -963,6 +978,7 @@ canary_http = {name: by_name.get(name, {}).get("parameters", {}) for name in (
     "Download Recovery Canary",
 )}
 require(all(canary_http.values()), "Acceptance recovery canary HTTP graph is incomplete.")
+require("Create Pending Recovery Canary" not in by_name, "Recovery canary initialization must not use a NocoDB create race.")
 require(
     canary_http["Get Recovery Saved View"].get("method", "GET") == "GET"
     and "/api/v2/meta/tables/" in canary_http["Get Recovery Saved View"].get("url", "")
@@ -1005,6 +1021,17 @@ require(
         "outputPropertyName": "canaryDownload",
     },
     "Recovery canary download must return one bounded binary property for exact verification.",
+)
+prepare_binary_code = by_name.get("Prepare Recovery Canary Binary", {}).get("parameters", {}).get("jsCode", "")
+verify_binary_code = by_name.get("Require Recovery Canary Download", {}).get("parameters", {}).get("jsCode", "")
+require(
+    "await helpers.prepareBinaryData(buffer, 'issue334-recovery-canary-v1.txt', 'text/plain')" in prepare_binary_code,
+    "Recovery canary upload binary must use the configured n8n binary manager.",
+)
+require(
+    "await helpers.getBinaryDataBuffer(0, 'canaryDownload')" in verify_binary_code
+    and "$binary" not in verify_binary_code,
+    "Recovery canary verification must resolve filesystem binary data through the Code helper.",
 )
 for name, parameters in canary_http.items():
     method = parameters.get("method", "GET")
@@ -1138,11 +1165,39 @@ def outgoing(name):
         for edge in output
     }
 
+def ordered_outputs(name):
+    return [
+        [edge["node"] for edge in output]
+        for output in connections.get(name, {}).get("main", [])
+    ]
+
+require(
+    ordered_outputs("Select Recovery Canary State") == [
+        ["Initialize Recovery Canary Row"],
+        ["Claim Recovery Canary Upload"],
+        ["List Recovery Canary Comments"],
+        ["List Recovery Canary Comments"],
+        ["Wait Recovery Canary Join"],
+    ],
+    "Recovery canary states do not route to the exact initialize/upload/associate/verify/join paths.",
+)
+require(
+    ordered_outputs("Recovery Canary Upload Claimed") == [
+        ["Prepare Recovery Canary Binary"],
+        ["Wait Recovery Canary Join"],
+    ],
+    "A losing recovery canary claim can reach the upload path.",
+)
+
 for source, target in (
     ("Confirm Probe Cleanup", "Get Recovery Saved View"),
     ("Get Recovery Saved View", "Require Recovery Saved View"),
     ("Require Recovery Saved View", "List Recovery Canary Rows"),
     ("List Recovery Canary Rows", "Inspect Recovery Canary Row"),
+    ("Initialize Recovery Canary Row", "List Recovery Canary Rows"),
+    ("Wait Recovery Canary Join", "Increment Recovery Canary Poll"),
+    ("Increment Recovery Canary Poll", "List Recovery Canary Rows"),
+    ("Require Recovery Canary Claim", "Recovery Canary Upload Claimed"),
     ("Prepare Recovery Canary Binary", "Upload Recovery Canary"),
     ("Upload Recovery Canary", "Require Recovery Canary Upload"),
     ("Require Recovery Canary Upload", "Record Uploaded Recovery Canary"),
@@ -1158,7 +1213,19 @@ for source, target in (
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
     require(label in notes, f"The acceptance setup note omits {label}.")
-require("all five Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all five Postgres nodes.")
+require("all six Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all six Postgres nodes.")
+wait = by_name.get("Wait Recovery Canary Join", {})
+require(
+    wait.get("type") == "n8n-nodes-base.wait"
+    and wait.get("parameters") == {"amount": 5, "unit": "seconds"},
+    "Recovery canary join polling must use exact five-second waits.",
+)
+increment_code = by_name.get("Increment Recovery Canary Poll", {}).get("parameters", {}).get("jsCode", "")
+inspect_code = by_name.get("Inspect Recovery Canary Row", {}).get("parameters", {}).get("jsCode", "")
+require(
+    "canaryPollCount > 12" in increment_code and "canaryPollCount >= 12" in inspect_code,
+    "Recovery canary join polling must stop after exactly twelve waits.",
+)
 PY
 
 node - "$acceptance_workflow" <<'JS'
@@ -1174,10 +1241,29 @@ const execute = (name, input, lookup = {}, itemInputs = [input], binary = {}) =>
     (nodeName) => ({
       isExecuted: Object.prototype.hasOwnProperty.call(lookup, nodeName),
       first: () => ({ json: lookup[nodeName] || input }),
+      last: () => ({ json: lookup[nodeName] || input }),
     }),
     binary,
   );
 };
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const executeAsync = async (name, input, lookup = {}, itemInputs = [input], binary = {}, helpers = {}) => {
+  const code = byName[name]?.parameters?.jsCode;
+  if (!code) throw new Error(`missing Code node ${name}`);
+  return await new AsyncFunction('$json', '$input', '$', '$binary', 'helpers', code)(
+    input,
+    { all: () => itemInputs.map((json) => ({ json })) },
+    (nodeName) => ({
+      isExecuted: Object.prototype.hasOwnProperty.call(lookup, nodeName),
+      first: () => ({ json: lookup[nodeName] || input }),
+      last: () => ({ json: lookup[nodeName] || input }),
+    }),
+    binary,
+    helpers,
+  );
+};
+
+(async () => {
 
 let reservedRunIdRejected = false;
 try {
@@ -1295,15 +1381,48 @@ const pendingCanary = execute(
   { 'Require Recovery Saved View': savedView },
 )[0].json;
 if (pendingCanary.canaryAction !== 'upload' || pendingCanary.rowId !== 41) throw new Error('pending recovery canary did not select one upload');
+const observedUploading = execute(
+  'Inspect Recovery Canary Row',
+  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify({ ...pendingDecision, state: 'uploading' }) }], pageInfo: { totalRows: 1 } },
+  { 'Require Recovery Saved View': savedView },
+)[0].json;
+if (observedUploading.canaryAction !== 'wait' || observedUploading.canaryPollCount !== 0) {
+  throw new Error('an in-progress recovery canary did not join with a bounded poll');
+}
+let missingDuringJoinRejected = false;
+try {
+  execute(
+    'Inspect Recovery Canary Row',
+    { list: [], pageInfo: { totalRows: 0 } },
+    { 'Require Recovery Saved View': savedView, 'Increment Recovery Canary Poll': { canaryPollCount: 1 } },
+  );
+} catch (error) { missingDuringJoinRejected = /recovery_canary_row_invalid/.test(error.message); }
+if (!missingDuringJoinRejected) throw new Error('a canary row that disappeared during join was reinitialized');
+const losingClaim = execute(
+  'Require Recovery Canary Claim',
+  {},
+  { 'Inspect Recovery Canary Row': pendingCanary },
+)[0].json;
+if (losingClaim.claimWon !== false || losingClaim.canaryAction !== 'wait') {
+  throw new Error('a losing upload claim did not join without uploading');
+}
+const winningClaim = execute(
+  'Require Recovery Canary Claim',
+  { rowId: 41 },
+  { 'Inspect Recovery Canary Row': pendingCanary },
+)[0].json;
+if (winningClaim.claimWon !== true || winningClaim.canaryAction !== 'upload') {
+  throw new Error('the exact winning upload claim was not selected');
+}
 let ambiguousUploadRejected = false;
 try {
   execute(
     'Inspect Recovery Canary Row',
     { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify({ ...pendingDecision, state: 'uploading' }) }], pageInfo: { totalRows: 1 } },
-    { 'Require Recovery Saved View': savedView },
+    { 'Require Recovery Saved View': savedView, 'Increment Recovery Canary Poll': { canaryPollCount: 12 } },
   );
 } catch (error) { ambiguousUploadRejected = /attachment_upload_ambiguous/.test(error.message); }
-if (!ambiguousUploadRejected) throw new Error('ambiguous uploading state permitted a repeated upload');
+if (!ambiguousUploadRejected) throw new Error('stale uploading state exceeded the join bound without failing');
 for (const rows of [
   [{ id: 41, run_id: 'recovery-canary-v1', decision: '{bad-json' }],
   [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }, { id: 42, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }],
@@ -1314,11 +1433,26 @@ for (const rows of [
   if (!rejected) throw new Error('malformed or duplicate recovery canary rows were accepted');
 }
 
-const preparedBinary = execute('Prepare Recovery Canary Binary', pendingCanary)[0];
+let preparedBytes = null;
+const preparedBinary = (await executeAsync(
+  'Prepare Recovery Canary Binary',
+  pendingCanary,
+  {},
+  [pendingCanary],
+  {},
+  {
+    prepareBinaryData: async (buffer, fileName, mimeType) => {
+      preparedBytes = Buffer.from(buffer);
+      return { data: 'filesystem-v2', id: 'filesystem-v2:prepared-canary', fileName, mimeType };
+    },
+  },
+))[0];
 if (
-  preparedBinary.binary?.canaryFile?.data !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg=='
+  preparedBinary.binary?.canaryFile?.data !== 'filesystem-v2'
+  || preparedBinary.binary?.canaryFile?.id !== 'filesystem-v2:prepared-canary'
   || preparedBinary.binary?.canaryFile?.fileName !== 'issue334-recovery-canary-v1.txt'
   || preparedBinary.binary?.canaryFile?.mimeType !== 'text/plain'
+  || preparedBytes?.toString('base64') !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg=='
 ) throw new Error('recovery canary binary bytes or metadata are not exact');
 const uploaded = execute(
   'Require Recovery Canary Upload',
@@ -1395,19 +1529,36 @@ const readyCanary = execute(
   { 'Require Recovery Saved View': savedView },
 )[0].json;
 if (readyCanary.canaryAction !== 'verify') throw new Error('ready recovery canary rerun selected a write path');
-const verifiedDownload = execute(
+const losingExecutionActions = [emptyCanary.canaryAction, losingClaim.canaryAction, observedUploading.canaryAction, readyCanary.canaryAction];
+if (losingExecutionActions.includes('upload') || losingExecutionActions.at(-1) !== 'verify') {
+  throw new Error('the losing concurrent execution uploaded instead of joining the ready canary');
+}
+let downloadHelperCalled = false;
+const verifiedDownload = (await executeAsync(
   'Require Recovery Canary Download',
   {},
   { 'Inspect Recovery Canary Comments': associated },
   [{}],
-  { canaryDownload: { data: 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', fileSize: '37' } },
-)[0].json;
-if (verifiedDownload.attachmentCanary?.state !== 'ready' || verifiedDownload.attachmentCanary?.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {
+  { canaryDownload: { data: 'filesystem-v2', id: 'filesystem-v2:downloaded-canary', fileSize: '37' } },
+  { getBinaryDataBuffer: async (index, property) => {
+    if (index !== 0 || property !== 'canaryDownload') throw new Error('wrong binary helper arguments');
+    downloadHelperCalled = true;
+    return Buffer.from('bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', 'base64');
+  } },
+))[0].json;
+if (!downloadHelperCalled || verifiedDownload.attachmentCanary?.state !== 'ready' || verifiedDownload.attachmentCanary?.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {
   throw new Error('exact downloaded canary bytes were not retained as bounded evidence');
 }
 let wrongDownloadRejected = false;
 try {
-  execute('Require Recovery Canary Download', {}, { 'Inspect Recovery Canary Comments': associated }, [{}], { canaryDownload: { data: 'd3JvbmcK' } });
+  await executeAsync(
+    'Require Recovery Canary Download',
+    {},
+    { 'Inspect Recovery Canary Comments': associated },
+    [{}],
+    { canaryDownload: { data: 'filesystem-v2', id: 'filesystem-v2:wrong-canary' } },
+    { getBinaryDataBuffer: async () => Buffer.from('wrong\n') },
+  );
 } catch (error) { wrongDownloadRejected = /recovery_canary_download_invalid/.test(error.message); }
 if (!wrongDownloadRejected) throw new Error('wrong recovery canary download bytes were accepted');
 const privateBase = execute(
@@ -1603,6 +1754,10 @@ for (const forbidden of ['password', 'token', 'header', 'credentialId', 'created
     throw new Error(`acceptance response exposed secret-bearing field ${forbidden}`);
   }
 }
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
 JS
 
 mapfile -t packaged_workflows < <(
