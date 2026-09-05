@@ -26,6 +26,7 @@ full_paths:
   - tests/fixtures/result-coordinator/**
   - tests/fixtures/ci-impact/**
   - scripts/lib/**
+  - scripts/repository/github_protection.py
   - scripts/test/actions/**
   - scripts/test/diagnostics/**
   - scripts/test/safety/**
@@ -56,6 +57,9 @@ full_paths:
   - scripts/test/lib/job.sh
   - scripts/test/lib/results*
   - kubernetes/apps/kustomization.yaml
+  - kubernetes/mod.just
+  - kubernetes/apps/monitoring/test-reports/app/install-report.sh
+  - kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh
   - kubernetes/apps/flux-system/**
   - kubernetes/apps/kube-system/**
   - kubernetes/flux/**
@@ -64,6 +68,9 @@ full_paths:
 conditional_paths:
   observability:
     - kubernetes/apps/monitoring/**
+    - scripts/diagnose/flux-alerts.sh
+    - scripts/verify/logging.sh
+    - scripts/verify/alertmanager-ntfy.sh
     - scripts/test/flux-alerts-diagnostics-test.sh
     - scripts/test/flux-alert-delivery-test.sh
     - scripts/test/logging-verify-test.sh
@@ -94,6 +101,11 @@ conditional_paths:
   automation:
     - kubernetes/apps/automation/**
     - kubernetes/apps/automation-data/**
+    - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json
+    - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/automation-data-postgresql.json
+    - kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml
+    - scripts/verify/n8n.sh
+    - scripts/verify/automation-data.sh
     - scripts/validate/n8n.sh
     - scripts/validate/automation-data.sh
     - scripts/test/n8n-*
@@ -110,7 +122,6 @@ core_paths:
   - README.md
   - docs/**
   - kubernetes/README.md
-  - kubernetes/mod.just
   - kubernetes/apps/media/**
   - kubernetes/apps/networking/**
   - kubernetes/apps/security/**
