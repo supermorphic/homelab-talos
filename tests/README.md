@@ -56,7 +56,8 @@ Repository validation owns Bash syntax and one batched machine-readable
 ShellCheck execution. The historical audit count of 166 shell files is audit
 history, not a fixed contract. The current sorted set is derived independently
 from tracked and unignored `.sh` files under the repository shell directories,
-including `scripts/talos` and current shell files added by the 023c work. Bash
+including `scripts/operations`, `scripts/talos`, and the automation-data PostgreSQL
+application scripts. Bash
 checks run first and stop at the first exact file and stderr failure; ShellCheck
 runs only after Bash passes. During one full CI run, the harness reuses only the
 matching passed repository artifact and does not emit a duplicate JUnit
@@ -85,6 +86,15 @@ campaign:
 - `chainsaw.smoke.platform.n8n` -> smoke coverage, `standard`, `weekly`, `full`
 - `test.n8n-restore-drill` -> `integration`, `weekly`, `full`
 - `test.n8n-persistence` -> `resilience`, `weekly`, `full`
+
+`test.automation-data-provisioning` remains a registered standalone acceptance suite.
+It is excluded from `integration`, `weekly`, and `full` because it rotates the acceptance
+runtime credential. For one-time acceptance, create both a new n8n logical dump and a new
+automation-data bundle after that rotation before starting
+`test.automation-data-restore-drill`. A pre-rotation n8n dump and a post-rotation
+automation-data bundle contain different credential ciphertext and password verifiers,
+so that pair is not valid recovery evidence. The restore drill remains in `integration`,
+`weekly`, and `full` for periodic recovery coverage.
 
 Before an operator starts a `weekly` or `full` campaign, they must silently prompt for
 and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
