@@ -197,6 +197,7 @@ The chart is configured with:
 - `updateStrategy.type: Recreate`;
 - worker and autoscaling disabled;
 - no Redis configuration;
+- `NC_SECURE_ATTACHMENTS=false` explicitly;
 - a `ClusterIP` Service;
 - chart Ingress and chart NetworkPolicy disabled in favor of repository patterns;
 - the external PostgreSQL URL and both auth keys from an existing Secret; and
@@ -210,6 +211,13 @@ the repository invariant for a Deployment that mounts a `ReadWriteOnce` PVC. The
 Longhorn replicas are two storage copies for that one volume, not two NocoDB application
 instances. A pod or node move can cause a short outage while the volume detaches and
 reattaches.
+
+The explicit secure-attachments setting is part of the pinned `2026.08.2` recovery
+contract. The retained canary is associated through a comment, and this release exposes
+comment attachment bytes through `/download/*` only when that setting is false. The
+route remains behind the existing private ingress. Do not enable secure attachments
+without redesigning the canary around a supported authenticated proxy or an Attachment
+column.
 
 The current Community edition uses NocoDB's Sustainable Use License rather than an
 OSI-approved open-source license. Internal self-hosted use is within the selected
@@ -629,6 +637,27 @@ successful probe returns only the resulting bounded public-sharing evidence and 
 the n8n `NocoDB Operator API` credential path; it does not restate the PostgreSQL source
 validation matrix as if the acceptance data API calls had measured it.
 
+Every successful synthetic `probe` also establishes or verifies one persistent
+attachment recovery canary. The operator table reserves
+`run_id=recovery-canary-v1` with a partial unique index; incoming commands cannot use
+that run ID and normal cleanup does not select it. The row records a versioned bounded
+state and exact observed base, source, table, default-view, comment, and attachment
+identity. Its fixed file is `issue334-recovery-canary-v1.txt`, contains the UTF-8 bytes
+`nocodb-issue334-attachment-canary-v1` followed by one newline, has size 37, and has
+SHA-256 `09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3`.
+
+The state transition is `pending` to `uploading` to `uploaded` to `ready`. A fixed
+owner-authority PostgreSQL update claims `pending` before the single multipart
+`POST /api/v2/storage/upload`. The returned canonical path is recorded immediately.
+The workflow then associates that file with the fixed row through
+`POST /api/v2/meta/comments`, reads the exact live comment and FileReference, records
+their IDs, and downloads the recorded `/download/*` path to compare the exact bytes.
+It also reads and records the exact default grid-view identity instead of guessing its
+title or type. A `ready` rerun performs only these reads and download. An `uploading`
+row is a lost-response ambiguity and fails closed; it never repeats the upload, which
+bounds an interrupted run to at most one unassociated upload. Responses expose only the
+bounded non-secret identities, path, size, media type, and checksum.
+
 ## Command lifecycle
 
 The command surface follows specification 021:
@@ -747,7 +776,10 @@ run ID and cleanup never broadens beyond those rows. It proves:
 10. unchanged sync is idempotent and does not alter ready credential generations, job
     IDs, source IDs, or integration IDs;
 11. explicit rotation restores one working source without revealing its password; and
-12. cleanup pages through and deletes at most 1,000 matching rows for the current run,
+12. every successful probe creates or verifies the fixed persistent attachment canary,
+    including its exact saved-view identity, durable comment/FileReference association,
+    canonical path, size, media type, checksum, and downloaded bytes; and
+13. cleanup pages through and deletes at most 1,000 matching rows for the current run,
     then reads again to prove their absence while retaining the synthetic recovery
     canary. Any unexpectedly permitted reader insert is also deleted by its unique ID
     before the test reports failure.

@@ -792,6 +792,8 @@ for (const name of [
 JS
 
 python - "$acceptance_workflow" <<'PY'
+import base64
+import hashlib
 import json
 import re
 import sys
@@ -806,6 +808,18 @@ by_name = {node.get("name"): node for node in nodes}
 def require(condition, message):
     if not condition:
         raise SystemExit(message)
+
+
+canary_bytes = base64.b64decode(
+    "bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==", validate=True
+)
+require(
+    canary_bytes == b"nocodb-issue334-attachment-canary-v1\n"
+    and len(canary_bytes) == 37
+    and hashlib.sha256(canary_bytes).hexdigest()
+    == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3",
+    "Recovery canary bytes, size, and checksum constants differ.",
+)
 
 
 require(len(by_name) == len(nodes), "Acceptance workflow node names must be unique.")
@@ -831,7 +845,7 @@ require(
     "The acceptance webhook contract is not exact.",
 )
 normalize = by_name.get("Normalize Acceptance Request", {}).get("parameters", {}).get("jsCode", "")
-for marker in ("operation", "runId", "structure", "grants", "probe", "cleanup", "Object.keys", "allowedFields"):
+for marker in ("operation", "runId", "structure", "grants", "probe", "cleanup", "Object.keys", "allowedFields", "recovery-canary-v1"):
     require(marker in normalize, f"Acceptance request validation omits {marker}.")
 for forbidden in ("domain", "sql"):
     require(not re.search(rf"['\"]{forbidden}['\"]", normalize), f"Acceptance accepts forbidden field {forbidden}.")
@@ -850,6 +864,8 @@ required_structure = (
     "run_id text NOT NULL,",
     "decision text NOT NULL,",
     "protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()",
+    "CREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_one",
+    "WHERE run_id = 'recovery-canary-v1';",
 )
 for marker in required_structure:
     require(marker in structure_sql, f"Acceptance structure SQL omits {marker}")
@@ -867,7 +883,7 @@ for marker in (
     require(marker in grant_sql, f"Acceptance grant SQL omits {marker}")
 
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
-require(len(postgres_nodes) == 4, "Acceptance must have exactly four fixed migrator operations.")
+require(len(postgres_nodes) == 5, "Acceptance must have exactly five fixed migrator operations.")
 cleanup_sql = "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;"
 for name in ("Clear Reader Negative Residue", "Cleanup Unexpected Reader Insert"):
     parameters = by_name.get(name, {}).get("parameters", {})
@@ -878,6 +894,28 @@ for name in ("Clear Reader Negative Residue", "Cleanup Unexpected Reader Insert"
         == "={{ [$json.readerProbeId, $json.readerProbeFact] }}",
         f"{name} must use the fixed owner-authority cleanup transaction.",
     )
+claim = by_name.get("Claim Recovery Canary Upload", {}).get("parameters", {})
+claim_sql = claim.get("query", "")
+for marker in (
+    "BEGIN;",
+    "SET LOCAL ROLE issue334_acceptance_owner;",
+    "UPDATE operator.acceptance_decision",
+    "WHERE id = $1",
+    "AND run_id = 'recovery-canary-v1'",
+    'AND decision = \'{"kind":"nocodb-attachment-recovery-canary","version":1,"state":"pending"}\'',
+    "RETURNING id AS \"rowId\";",
+    "COMMIT;",
+):
+    require(marker in claim_sql, f"Recovery canary upload claim omits {marker}")
+require(
+    claim.get("operation") == "executeQuery"
+    and claim.get("options", {}).get("queryReplacement") == "={{ [$json.rowId] }}",
+    "Recovery canary upload claim must bind only the validated row ID.",
+)
+require(
+    by_name["Claim Recovery Canary Upload"].get("alwaysOutputData") is True,
+    "A losing recovery canary upload claim must still reach the fail-closed guard.",
+)
 for node in postgres_nodes:
     query = node.get("parameters", {}).get("query", "")
     require(
@@ -902,13 +940,77 @@ for node in http_nodes:
         f"{node['name']} must use the NocoDB API Header Auth credential.",
     )
     url = parameters.get("url", "")
-    require("http://nocodb.automation-data.svc.cluster.local:8080/api/v2/" in url, f"{node['name']} has an unapproved API host.")
+    require("http://nocodb.automation-data.svc.cluster.local:8080/" in url, f"{node['name']} has an unapproved API host.")
     require(
         "/tables/" in url
         or url.endswith("/api/v2/meta/bases")
-        or ("/api/v2/meta/bases/" in url and ("/sources" in url or "/tables" in url or "/shared" in url)),
+        or ("/api/v2/meta/bases/" in url and ("/sources" in url or "/tables" in url or "/shared" in url))
+        or url.endswith("/api/v2/meta/comments")
+        or url.endswith("/api/v2/storage/upload")
+        or url.startswith("={{ 'http://nocodb.automation-data.svc.cluster.local:8080/' + $json.attachment.path }}"),
         f"{node['name']} has an unapproved acceptance API path.",
     )
+
+canary_http = {name: by_name.get(name, {}).get("parameters", {}) for name in (
+    "Get Recovery Saved View",
+    "List Recovery Canary Rows",
+    "Create Pending Recovery Canary",
+    "Upload Recovery Canary",
+    "Record Uploaded Recovery Canary",
+    "List Recovery Canary Comments",
+    "Create Recovery Canary Comment",
+    "Record Ready Recovery Canary",
+    "Download Recovery Canary",
+)}
+require(all(canary_http.values()), "Acceptance recovery canary HTTP graph is incomplete.")
+require(
+    canary_http["Get Recovery Saved View"].get("method", "GET") == "GET"
+    and "/api/v2/meta/tables/" in canary_http["Get Recovery Saved View"].get("url", "")
+    and canary_http["Get Recovery Saved View"].get("url", "").endswith("/views' }}"),
+    "Recovery canary must read the exact reflected facts-table views endpoint.",
+)
+upload = canary_http["Upload Recovery Canary"]
+upload_query = {item.get("name"): item.get("value") for item in upload.get("queryParameters", {}).get("parameters", [])}
+require(
+    upload.get("method") == "POST"
+    and upload.get("url", "").endswith("/api/v2/storage/upload")
+    and upload.get("contentType") == "multipart-form-data"
+    and upload_query == {"path": "issue334_acceptance/recovery-canary-v1"}
+    and upload.get("bodyParameters", {}).get("parameters") == [{
+        "parameterType": "formBinaryData",
+        "name": "file",
+        "inputDataFieldName": "canaryFile",
+    }],
+    "Recovery canary upload must use one fixed multipart file and storage path.",
+)
+comment_lists = [canary_http["List Recovery Canary Comments"]]
+for parameters in comment_lists:
+    query = {item.get("name"): item.get("value") for item in parameters.get("queryParameters", {}).get("parameters", [])}
+    require(
+        parameters.get("method", "GET") == "GET"
+        and parameters.get("url", "").endswith("/api/v2/meta/comments")
+        and set(query) == {"fk_model_id", "row_id"},
+        "Recovery canary comment discovery must use only exact model and row query parameters.",
+    )
+require(
+    canary_http["Create Recovery Canary Comment"].get("method") == "POST"
+    and canary_http["Create Recovery Canary Comment"].get("url", "").endswith("/api/v2/meta/comments"),
+    "Recovery canary association must use the pinned comment-create endpoint.",
+)
+download = canary_http["Download Recovery Canary"]
+require(
+    download.get("method", "GET") == "GET"
+    and download.get("options", {}).get("response", {}).get("response", {}) == {
+        "responseFormat": "file",
+        "outputPropertyName": "canaryDownload",
+    },
+    "Recovery canary download must return one bounded binary property for exact verification.",
+)
+for name, parameters in canary_http.items():
+    method = parameters.get("method", "GET")
+    url = parameters.get("url", "")
+    if "comment" in url or "/download/" in url or "attachment.path" in url:
+        require(method in {"GET", "POST"}, f"{name} uses a forbidden canary association or download mutation.")
 
 share_nodes = {
     node["name"]: node.get("parameters", {})
@@ -1029,25 +1131,59 @@ require(
     },
     "Acceptance must validate the base and both exact table share surfaces before probing or cleanup.",
 )
+def outgoing(name):
+    return {
+        edge["node"]
+        for output in connections.get(name, {}).get("main", [])
+        for edge in output
+    }
+
+for source, target in (
+    ("Confirm Probe Cleanup", "Get Recovery Saved View"),
+    ("Get Recovery Saved View", "Require Recovery Saved View"),
+    ("Require Recovery Saved View", "List Recovery Canary Rows"),
+    ("List Recovery Canary Rows", "Inspect Recovery Canary Row"),
+    ("Prepare Recovery Canary Binary", "Upload Recovery Canary"),
+    ("Upload Recovery Canary", "Require Recovery Canary Upload"),
+    ("Require Recovery Canary Upload", "Record Uploaded Recovery Canary"),
+    ("Record Uploaded Recovery Canary", "Require Uploaded Recovery Canary"),
+    ("Require Uploaded Recovery Canary", "List Recovery Canary Comments"),
+    ("Create Recovery Canary Comment", "List Recovery Canary Comments"),
+    ("Record Ready Recovery Canary", "Require Ready Recovery Canary"),
+    ("Require Ready Recovery Canary", "Download Recovery Canary"),
+    ("Download Recovery Canary", "Require Recovery Canary Download"),
+    ("Require Recovery Canary Download", "Prepare Acceptance Response"),
+):
+    require(target in outgoing(source), f"Recovery canary graph must route {source} to {target}.")
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
     require(label in notes, f"The acceptance setup note omits {label}.")
-require("all four Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all four Postgres nodes.")
+require("all five Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all five Postgres nodes.")
 PY
 
 node - "$acceptance_workflow" <<'JS'
 const fs = require('fs');
 const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const byName = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
-const execute = (name, input, lookup = {}, itemInputs = [input]) => {
+const execute = (name, input, lookup = {}, itemInputs = [input], binary = {}) => {
   const code = byName[name]?.parameters?.jsCode;
   if (!code) throw new Error(`missing Code node ${name}`);
-  return new Function('$json', '$input', '$', code)(
+  return new Function('$json', '$input', '$', '$binary', code)(
     input,
     { all: () => itemInputs.map((json) => ({ json })) },
-    (nodeName) => ({ first: () => ({ json: lookup[nodeName] || input }) }),
+    (nodeName) => ({
+      isExecuted: Object.prototype.hasOwnProperty.call(lookup, nodeName),
+      first: () => ({ json: lookup[nodeName] || input }),
+    }),
+    binary,
   );
 };
+
+let reservedRunIdRejected = false;
+try {
+  execute('Normalize Acceptance Request', { body: { operation: 'probe', runId: 'recovery-canary-v1' } });
+} catch (error) { reservedRunIdRejected = /reserved_run_id/.test(error.message); }
+if (!reservedRunIdRejected) throw new Error('the persistent recovery canary row can be targeted by an incoming cleanup/probe run ID');
 
 const reflection = {
   operation: 'probe',
@@ -1107,6 +1243,173 @@ if (
   || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
   || resolved.reflectedTables.some((table) => table.schema !== exactTables.find((candidate) => candidate.id === table.id).schema)
 ) throw new Error('exact reflected schemas and tables were not derived');
+const canaryContext = {
+  ...resolved,
+  inserted: true,
+  read: true,
+  readerRead: true,
+  decisionUpdated: true,
+  protectedUpdateDenied: true,
+  protectedUpdateStatus: 400,
+  protectedUpdateEvidence: 'postgresql_42501',
+  readerInsertDenied: true,
+  readerInsertStatus: 403,
+  readerInsertEvidence: 'nocodb_readonly_source',
+};
+const savedView = execute(
+  'Require Recovery Saved View',
+  {
+    list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }],
+  },
+  { 'Confirm Probe Cleanup': { list: [] }, 'Evaluate Reader Insert Denial': canaryContext },
+)[0].json;
+if (JSON.stringify(savedView.savedView) !== JSON.stringify({ id: 'view-facts', tableId: 'table-facts', title: 'acceptance_facts', type: 3 })) {
+  throw new Error('recovery canary did not preserve exact observed default-view identity');
+}
+for (const body of [
+  { list: [] },
+  { list: [{ id: 'view-facts', fk_model_id: 'table-decisions', title: 'acceptance_facts', type: 3, uuid: null }] },
+  { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 2, uuid: null }] },
+  { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: 'public' }] },
+  { list: [
+    { id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null },
+    { id: 'view-extra', fk_model_id: 'table-facts', title: 'extra', type: 3, uuid: null },
+  ] },
+]) {
+  let rejected = false;
+  try { execute('Require Recovery Saved View', body, { 'Confirm Probe Cleanup': { list: [] }, 'Evaluate Reader Insert Denial': canaryContext }); }
+  catch (error) { rejected = /recovery_saved_view_invalid/.test(error.message); }
+  if (!rejected) throw new Error('invalid or incomplete saved-view identity was accepted');
+}
+
+const emptyCanary = execute(
+  'Inspect Recovery Canary Row',
+  { list: [], pageInfo: { totalRows: 0 } },
+  { 'Require Recovery Saved View': savedView },
+)[0].json;
+if (emptyCanary.canaryAction !== 'create' || emptyCanary.canaryRow !== null) throw new Error('missing recovery canary row did not select create');
+const pendingDecision = { kind: 'nocodb-attachment-recovery-canary', version: 1, state: 'pending' };
+const pendingCanary = execute(
+  'Inspect Recovery Canary Row',
+  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }], pageInfo: { totalRows: 1 } },
+  { 'Require Recovery Saved View': savedView },
+)[0].json;
+if (pendingCanary.canaryAction !== 'upload' || pendingCanary.rowId !== 41) throw new Error('pending recovery canary did not select one upload');
+let ambiguousUploadRejected = false;
+try {
+  execute(
+    'Inspect Recovery Canary Row',
+    { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify({ ...pendingDecision, state: 'uploading' }) }], pageInfo: { totalRows: 1 } },
+    { 'Require Recovery Saved View': savedView },
+  );
+} catch (error) { ambiguousUploadRejected = /attachment_upload_ambiguous/.test(error.message); }
+if (!ambiguousUploadRejected) throw new Error('ambiguous uploading state permitted a repeated upload');
+for (const rows of [
+  [{ id: 41, run_id: 'recovery-canary-v1', decision: '{bad-json' }],
+  [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }, { id: 42, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }],
+]) {
+  let rejected = false;
+  try { execute('Inspect Recovery Canary Row', { list: rows, pageInfo: { totalRows: rows.length } }, { 'Require Recovery Saved View': savedView }); }
+  catch (error) { rejected = /recovery_canary_row_invalid/.test(error.message); }
+  if (!rejected) throw new Error('malformed or duplicate recovery canary rows were accepted');
+}
+
+const preparedBinary = execute('Prepare Recovery Canary Binary', pendingCanary)[0];
+if (
+  preparedBinary.binary?.canaryFile?.data !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg=='
+  || preparedBinary.binary?.canaryFile?.fileName !== 'issue334-recovery-canary-v1.txt'
+  || preparedBinary.binary?.canaryFile?.mimeType !== 'text/plain'
+) throw new Error('recovery canary binary bytes or metadata are not exact');
+const uploaded = execute(
+  'Require Recovery Canary Upload',
+  [{
+    path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt',
+    title: 'issue334-recovery-canary-v1.txt',
+    mimetype: 'text/plain',
+    size: 37,
+    signedPath: 'transient-must-not-persist',
+  }],
+  { 'Prepare Recovery Canary Binary': pendingCanary },
+)[0].json;
+if (
+  uploaded.canaryDecision.state !== 'uploaded'
+  || uploaded.canaryDecision.attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'
+  || JSON.stringify(uploaded.canaryDecision).includes('signedPath')
+) throw new Error('uploaded recovery canary metadata was not bounded and persisted exactly');
+for (const attachment of [
+  { path: 'download/other/file.txt', title: 'issue334-recovery-canary-v1.txt', mimetype: 'text/plain', size: 37 },
+  { path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt', title: 'wrong.txt', mimetype: 'text/plain', size: 37 },
+  { path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt', title: 'issue334-recovery-canary-v1.txt', mimetype: 'text/plain', size: 38 },
+]) {
+  let rejected = false;
+  try { execute('Require Recovery Canary Upload', [attachment], { 'Prepare Recovery Canary Binary': pendingCanary }); }
+  catch (error) { rejected = /recovery_canary_upload_invalid/.test(error.message); }
+  if (!rejected) throw new Error('untrusted recovery canary upload metadata was accepted');
+}
+
+const canonicalComment = {
+  id: 'comment-canary',
+  base_id: 'base-1',
+  source_id: 'source-operator',
+  fk_model_id: 'table-decisions',
+  row_id: '41',
+  comment: 'issue334-recovery-canary-v1',
+  attachments: [{
+    id: 'attachment-canary',
+    path: uploaded.canaryDecision.attachment.path,
+    title: 'issue334-recovery-canary-v1.txt',
+    mimetype: 'text/plain',
+    size: 37,
+  }],
+};
+const missingComment = execute(
+  'Inspect Recovery Canary Comments',
+  { list: [] },
+  { 'Require Uploaded Recovery Canary': uploaded },
+)[0].json;
+if (missingComment.createComment !== true) throw new Error('uploaded canary without a comment did not select association');
+const associated = execute(
+  'Inspect Recovery Canary Comments',
+  { list: [canonicalComment] },
+  { 'Require Uploaded Recovery Canary': uploaded },
+)[0].json;
+if (
+  associated.createComment !== false
+  || associated.canaryDecision.state !== 'ready'
+  || associated.canaryDecision.commentId !== 'comment-canary'
+  || associated.canaryDecision.attachment.id !== 'attachment-canary'
+) throw new Error('exact durable comment association did not produce ready canary metadata');
+for (const comments of [
+  [canonicalComment, { ...canonicalComment, id: 'comment-duplicate' }],
+  [{ ...canonicalComment, row_id: '42' }],
+  [{ ...canonicalComment, attachments: [{ ...canonicalComment.attachments[0], path: 'download/other/file.txt' }] }],
+]) {
+  let rejected = false;
+  try { execute('Inspect Recovery Canary Comments', { list: comments }, { 'Require Uploaded Recovery Canary': uploaded }); }
+  catch (error) { rejected = /recovery_canary_comment_invalid/.test(error.message); }
+  if (!rejected) throw new Error('duplicate or mismatched recovery canary comment association was accepted');
+}
+const readyCanary = execute(
+  'Inspect Recovery Canary Row',
+  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(associated.canaryDecision) }], pageInfo: { totalRows: 1 } },
+  { 'Require Recovery Saved View': savedView },
+)[0].json;
+if (readyCanary.canaryAction !== 'verify') throw new Error('ready recovery canary rerun selected a write path');
+const verifiedDownload = execute(
+  'Require Recovery Canary Download',
+  {},
+  { 'Inspect Recovery Canary Comments': associated },
+  [{}],
+  { canaryDownload: { data: 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', fileSize: '37' } },
+)[0].json;
+if (verifiedDownload.attachmentCanary?.state !== 'ready' || verifiedDownload.attachmentCanary?.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {
+  throw new Error('exact downloaded canary bytes were not retained as bounded evidence');
+}
+let wrongDownloadRejected = false;
+try {
+  execute('Require Recovery Canary Download', {}, { 'Inspect Recovery Canary Comments': associated }, [{}], { canaryDownload: { data: 'd3JvbmcK' } });
+} catch (error) { wrongDownloadRejected = /recovery_canary_download_invalid/.test(error.message); }
+if (!wrongDownloadRejected) throw new Error('wrong recovery canary download bytes were accepted');
 const privateBase = execute(
   'Require Acceptance Base Private',
   { uuid: null, roles: null, fk_custom_url_id: null },
@@ -1282,6 +1585,7 @@ const acceptanceResponse = execute(
       readerInsertStatus: 403,
       readerInsertEvidence: 'nocodb_readonly_source',
     },
+    'Require Recovery Canary Download': { ...verifiedDownload, ...noOperatorShares },
   },
 )[0].json;
 if (
@@ -1289,8 +1593,12 @@ if (
   || acceptanceResponse.credentialProof?.credentialName !== 'NocoDB Operator API'
   || acceptanceResponse.publicSharing?.basePublicShareUuid !== null
   || acceptanceResponse.publicSharing?.views?.length !== 2
+  || acceptanceResponse.attachmentCanary?.state !== 'ready'
+  || acceptanceResponse.attachmentCanary?.savedViewId !== 'view-facts'
+  || acceptanceResponse.attachmentCanary?.commentId !== 'comment-canary'
+  || acceptanceResponse.attachmentCanary?.attachmentId !== 'attachment-canary'
 ) throw new Error('successful HTTP probe omitted credential-path or public-sharing evidence');
-for (const forbidden of ['password', 'token', 'header', 'credentialId']) {
+for (const forbidden of ['password', 'token', 'header', 'credentialId', 'created_by', 'signedPath', 'signedUrl', 'bm9jb2ri']) {
   if (JSON.stringify(acceptanceResponse).toLowerCase().includes(forbidden.toLowerCase())) {
     throw new Error(`acceptance response exposed secret-bearing field ${forbidden}`);
   }

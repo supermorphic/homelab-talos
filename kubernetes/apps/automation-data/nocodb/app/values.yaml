@@ -49,6 +49,8 @@ nocodb:
       value: "true"
     - name: NC_DISABLE_SUPPORT_CHAT
       value: "true"
+    - name: NC_SECURE_ATTACHMENTS
+      value: "false"
     - name: NC_ADMIN_EMAIL
       valueFrom:
         secretKeyRef:

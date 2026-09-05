@@ -126,7 +126,7 @@ values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
   fail 'the NocoDB database, auth, persistence, service, or URL values are incorrect'
 [[ "$(yq -r '[.nocodb.disableMux, .nocodb.disableTelemetry] | join(",")' "$values")" == 'true,true' ]] ||
   fail 'the NocoDB privacy values are incorrect'
-[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SUPPORT_CHAT/true/' ]] ||
+[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SUPPORT_CHAT/true/,NC_SECURE_ATTACHMENTS/false/' ]] ||
   fail 'the NocoDB explicit environment contract is incorrect'
 ! rg -q 'envFrom|NC_INVITE_ONLY_SIGNUP|NC_REDIS_URL' "$values" ||
   fail 'NocoDB values must not bulk-load credentials or configure unsupported settings'

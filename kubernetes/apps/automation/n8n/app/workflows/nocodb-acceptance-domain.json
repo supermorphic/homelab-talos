@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to all four Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. Keep execution persistence disabled.",
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to all five Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. The retained recovery attachment uses pinned `NC_SECURE_ATTACHMENTS=false` and the private NocoDB route. Keep execution persistence disabled.",
         "height": 380,
         "width": 540
       },
@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nreturn [{ json: { operation, runId } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (runId === 'recovery-canary-v1') throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  fact text NOT NULL\n);\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact FROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  fact text NOT NULL\n);\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact FROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v1';\nCOMMIT;",
         "options": {}
       },
       "type": "n8n-nodes-base.postgres",
@@ -998,7 +998,164 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true || context.protectedUpdateDenied !== true || context.readerInsertDenied !== true || context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2) throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $('Evaluate Reader Insert Denial').first().json.factsTableId + '/views' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4800, 40],
+      "id": "20000000-0000-4000-8000-000000000057",
+      "name": "Get Recovery Saved View",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst cleanup = $('Confirm Probe Cleanup').first().json;\nconst cleanupRows = Array.isArray(cleanup) ? cleanup : (cleanup.list || []);\nif (cleanupRows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list) || list.length !== 1 || $json.pageInfo !== undefined) throw new Error('recovery_saved_view_invalid');\nconst view = list[0];\nif (view.fk_model_id !== context.factsTableId || view.title !== 'acceptance_facts' || view.type !== 3 || view.uuid !== null || typeof view.id !== 'string' || !view.id) throw new Error('recovery_saved_view_invalid');\nreturn [{ json: { ...context, savedView: { id: view.id, tableId: view.fk_model_id, title: view.title, type: view.type } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5040, 40],
+      "id": "20000000-0000-4000-8000-000000000058",
+      "name": "Require Recovery Saved View",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Require Recovery Saved View').first().json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "where", "value": "(run_id,eq,recovery-canary-v1)"}, {"name": "limit", "value": "2"}]},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5280, 40],
+      "id": "20000000-0000-4000-8000-000000000059",
+      "name": "List Recovery Canary Rows",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Saved View').first().json;\nconst list = Array.isArray($json) ? $json : $json.list;\nconst pageInfo = $json.pageInfo;\nif (!Array.isArray(list) || list.length > 1 || !pageInfo || pageInfo.totalRows !== list.length) throw new Error('recovery_canary_row_invalid');\nif (list.length === 0) return [{ json: { ...context, canaryRow: null, canaryAction: 'create' } }];\nconst row = list[0];\nif (row.run_id !== 'recovery-canary-v1' || !Number.isSafeInteger(Number(row.id))) throw new Error('recovery_canary_row_invalid');\nlet decision;\ntry { decision = JSON.parse(row.decision); } catch { throw new Error('recovery_canary_row_invalid'); }\nif (!decision || decision.kind !== 'nocodb-attachment-recovery-canary' || decision.version !== 1 || !['pending','uploading','uploaded','ready'].includes(decision.state)) throw new Error('recovery_canary_row_invalid');\nif (decision.state === 'uploading') throw new Error('attachment_upload_ambiguous');\nconst exact = (value, keys) => Object.keys(value).sort().join(',') === [...keys].sort().join(',');\nif (decision.state === 'pending' && !exact(decision, ['kind','version','state'])) throw new Error('recovery_canary_row_invalid');\nif (['uploaded','ready'].includes(decision.state)) {\n  if (!exact(decision, ['kind','version','state','baseId','sourceId','tableId','rowId','savedView','commentId','attachment']) || decision.baseId !== context.baseId || decision.sourceId !== context.operatorSourceId || decision.tableId !== context.decisionTableId || String(decision.rowId) !== String(row.id) || JSON.stringify(decision.savedView) !== JSON.stringify(context.savedView)) throw new Error('recovery_canary_row_invalid');\n  const attachment = decision.attachment;\n  if (!attachment || attachment.title !== 'issue334-recovery-canary-v1.txt' || attachment.mimetype !== 'text/plain' || attachment.size !== 37 || attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3' || !/^download\\/issue334_acceptance\\/recovery-canary-v1\\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$/.test(attachment.path)) throw new Error('recovery_canary_row_invalid');\n  if (decision.state === 'uploaded' && (decision.commentId !== null || attachment.id !== null)) throw new Error('recovery_canary_row_invalid');\n  if (decision.state === 'ready' && (typeof decision.commentId !== 'string' || !decision.commentId || typeof attachment.id !== 'string' || !attachment.id)) throw new Error('recovery_canary_row_invalid');\n}\nconst canaryAction = decision.state === 'pending' ? 'upload' : (decision.state === 'uploaded' ? 'associate' : 'verify');\nreturn [{ json: { ...context, canaryRow: row, rowId: Number(row.id), canaryDecision: decision, canaryAction } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5520, 40],
+      "id": "20000000-0000-4000-8000-000000000060",
+      "name": "Inspect Recovery Canary Row",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"rules": {"values": [
+        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "create", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
+        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "upload", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
+        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "associate", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
+        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "verify", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}}
+      ]}, "options": {}},
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [5760, 40],
+      "id": "20000000-0000-4000-8000-000000000061",
+      "name": "Select Recovery Canary State"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: 'recovery-canary-v1', decision: JSON.stringify({ kind: 'nocodb-attachment-recovery-canary', version: 1, state: 'pending' }) }) }}", "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [6000, -140],
+      "id": "20000000-0000-4000-8000-000000000062", "name": "Create Pending Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"operation": "executeQuery", "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nUPDATE operator.acceptance_decision\nSET decision = '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"uploading\"}'\nWHERE id = $1\nAND run_id = 'recovery-canary-v1'\nAND decision = '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"pending\"}'\nRETURNING id AS \"rowId\";\nCOMMIT;", "options": {"queryReplacement": "={{ [$json.rowId] }}"}},
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [6000, -40],
+      "id": "20000000-0000-4000-8000-000000000063", "name": "Claim Recovery Canary Upload", "alwaysOutputData": true, "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const claimed = Array.isArray($json) ? $json : [$json];\nconst context = $('Inspect Recovery Canary Row').first().json;\nif (claimed.length !== 1 || String(claimed[0].rowId) !== String(context.rowId)) throw new Error('recovery_canary_claim_failed');\nreturn [{ json: context }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6240, -40],
+      "id": "20000000-0000-4000-8000-000000000064", "name": "Require Recovery Canary Claim", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "return [{ json: $json, binary: { canaryFile: { data: 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', mimeType: 'text/plain', fileName: 'issue334-recovery-canary-v1.txt', fileExtension: 'txt' } } }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6480, -40],
+      "id": "20000000-0000-4000-8000-000000000065", "name": "Prepare Recovery Canary Binary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"method": "POST", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/storage/upload", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendQuery": true, "queryParameters": {"parameters": [{"name": "path", "value": "issue334_acceptance/recovery-canary-v1"}]}, "sendBody": true, "contentType": "multipart-form-data", "bodyParameters": {"parameters": [{"parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "canaryFile"}]}, "options": {}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [6720, -40],
+      "id": "20000000-0000-4000-8000-000000000066", "name": "Upload Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const context = $('Prepare Recovery Canary Binary').first().json;\nconst candidates = Array.isArray($json) ? $json : [$json];\nif (candidates.length !== 1) throw new Error('recovery_canary_upload_invalid');\nconst file = candidates[0];\nif (!file || !/^download\\/issue334_acceptance\\/recovery-canary-v1\\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$/.test(file.path) || file.title !== 'issue334-recovery-canary-v1.txt' || file.mimetype !== 'text/plain' || file.size !== 37) throw new Error('recovery_canary_upload_invalid');\nconst attachment = { id: null, path: file.path, title: file.title, mimetype: file.mimetype, size: file.size, sha256: '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3' };\nconst canaryDecision = { kind: 'nocodb-attachment-recovery-canary', version: 1, state: 'uploaded', baseId: context.baseId, sourceId: context.operatorSourceId, tableId: context.decisionTableId, rowId: String(context.rowId), savedView: context.savedView, commentId: null, attachment };\nreturn [{ json: { ...context, canaryDecision } }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6960, -40],
+      "id": "20000000-0000-4000-8000-000000000067", "name": "Require Recovery Canary Upload", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"method": "PATCH", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify([{ id: $json.rowId, decision: JSON.stringify($json.canaryDecision) }]) }}", "options": {}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [7200, -40],
+      "id": "20000000-0000-4000-8000-000000000068", "name": "Record Uploaded Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const context = $('Require Recovery Canary Upload').first().json;\nconst rows = Array.isArray($json) ? $json : [$json];\nif (rows.length !== 1 || String(rows[0].id) !== String(context.rowId)) throw new Error('recovery_canary_upload_record_invalid');\nreturn [{ json: context }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [7440, -40],
+      "id": "20000000-0000-4000-8000-000000000069", "name": "Require Uploaded Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"method": "GET", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/comments", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendQuery": true, "queryParameters": {"parameters": [{"name": "fk_model_id", "value": "={{ $('Inspect Recovery Canary Row').first().json.decisionTableId }}"}, {"name": "row_id", "value": "={{ String($('Inspect Recovery Canary Row').first().json.rowId) }}"}]}, "options": {}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [7680, 40],
+      "id": "20000000-0000-4000-8000-000000000070", "name": "List Recovery Canary Comments", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const context = $('Require Uploaded Recovery Canary').isExecuted ? $('Require Uploaded Recovery Canary').first().json : $('Inspect Recovery Canary Row').first().json;\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list)) throw new Error('recovery_canary_comment_invalid');\nif (list.length === 0) { if (context.canaryDecision.state !== 'uploaded') throw new Error('recovery_canary_comment_invalid'); return [{ json: { ...context, createComment: true, needsReadyWrite: true } }]; }\nif (list.length !== 1) throw new Error('recovery_canary_comment_invalid');\nconst comment = list[0]; const attachments = comment.attachments; const expected = context.canaryDecision.attachment;\nif (comment.base_id !== context.baseId || comment.source_id !== context.operatorSourceId || comment.fk_model_id !== context.decisionTableId || String(comment.row_id) !== String(context.rowId) || comment.comment !== 'issue334-recovery-canary-v1' || !Array.isArray(attachments) || attachments.length !== 1) throw new Error('recovery_canary_comment_invalid');\nconst file = attachments[0];\nif (typeof comment.id !== 'string' || !comment.id || typeof file.id !== 'string' || !file.id || file.path !== expected.path || file.title !== expected.title || file.mimetype !== expected.mimetype || file.size !== expected.size) throw new Error('recovery_canary_comment_invalid');\nconst canaryDecision = { ...context.canaryDecision, state: 'ready', commentId: comment.id, attachment: { ...expected, id: file.id } };\nif (context.canaryDecision.state === 'ready' && JSON.stringify(context.canaryDecision) !== JSON.stringify(canaryDecision)) throw new Error('recovery_canary_comment_invalid');\nreturn [{ json: { ...context, canaryDecision, attachment: canaryDecision.attachment, createComment: false, needsReadyWrite: context.canaryDecision.state !== 'ready' } }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [7920, 40],
+      "id": "20000000-0000-4000-8000-000000000071", "name": "Inspect Recovery Canary Comments", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.createComment }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [8160, 40],
+      "id": "20000000-0000-4000-8000-000000000072", "name": "Recovery Canary Comment Missing"
+    },
+    {
+      "parameters": {"method": "POST", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/comments", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ fk_model_id: $json.decisionTableId, row_id: String($json.rowId), comment: 'issue334-recovery-canary-v1', attachments: [{ path: $json.canaryDecision.attachment.path, title: $json.canaryDecision.attachment.title, mimetype: $json.canaryDecision.attachment.mimetype, size: $json.canaryDecision.attachment.size }] }) }}", "options": {}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [8400, -40],
+      "id": "20000000-0000-4000-8000-000000000073", "name": "Create Recovery Canary Comment", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.needsReadyWrite }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
+      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [8400, 120],
+      "id": "20000000-0000-4000-8000-000000000074", "name": "Recovery Canary Ready Recorded"
+    },
+    {
+      "parameters": {"method": "PATCH", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify([{ id: $json.rowId, decision: JSON.stringify($json.canaryDecision) }]) }}", "options": {}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [8640, 80],
+      "id": "20000000-0000-4000-8000-000000000075", "name": "Record Ready Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const context = $('Inspect Recovery Canary Comments').first().json;\nconst rows = Array.isArray($json) ? $json : [$json];\nif (rows.length !== 1 || String(rows[0].id) !== String(context.rowId) || context.canaryDecision.state !== 'ready') throw new Error('recovery_canary_ready_record_invalid');\nreturn [{ json: context }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [8880, 80],
+      "id": "20000000-0000-4000-8000-000000000076", "name": "Require Ready Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"method": "GET", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/' + $json.attachment.path }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "options": {"response": {"response": {"responseFormat": "file", "outputPropertyName": "canaryDownload"}}}},
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [9120, 120],
+      "id": "20000000-0000-4000-8000-000000000077", "name": "Download Recovery Canary", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const context = $('Require Ready Recovery Canary').isExecuted ? $('Require Ready Recovery Canary').first().json : $('Inspect Recovery Canary Comments').first().json;\nconst file = $binary?.canaryDownload;\nif (!file || file.data !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==' || context.canaryDecision.state !== 'ready') throw new Error('recovery_canary_download_invalid');\nconst decision = context.canaryDecision;\nreturn [{ json: { ...context, attachmentCanary: { state: 'ready', rowId: String(context.rowId), savedViewId: decision.savedView.id, savedViewTableId: decision.savedView.tableId, savedViewTitle: decision.savedView.title, savedViewType: decision.savedView.type, commentId: decision.commentId, attachmentId: decision.attachment.id, path: decision.attachment.path, title: decision.attachment.title, mimetype: decision.attachment.mimetype, size: decision.attachment.size, sha256: decision.attachment.sha256 } } }];"},
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [9360, 120],
+      "id": "20000000-0000-4000-8000-000000000078", "name": "Require Recovery Canary Download", "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Canary Download').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true || context.protectedUpdateDenied !== true || context.readerInsertDenied !== true || context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 || context.attachmentCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  attachmentCanary: context.attachmentCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1701,7 +1858,7 @@
       "main": [
         [
           {
-            "node": "Prepare Acceptance Response",
+            "node": "Get Recovery Saved View",
             "type": "main",
             "index": 0
           }
@@ -1777,6 +1934,77 @@
         [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}],
         [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
       ]
+    },
+    "Get Recovery Saved View": {
+      "main": [[{"node": "Require Recovery Saved View", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Recovery Saved View": {
+      "main": [[{"node": "List Recovery Canary Rows", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "List Recovery Canary Rows": {
+      "main": [[{"node": "Inspect Recovery Canary Row", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Inspect Recovery Canary Row": {
+      "main": [[{"node": "Select Recovery Canary State", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Select Recovery Canary State": {
+      "main": [
+        [{"node": "Create Pending Recovery Canary", "type": "main", "index": 0}],
+        [{"node": "Claim Recovery Canary Upload", "type": "main", "index": 0}],
+        [{"node": "List Recovery Canary Comments", "type": "main", "index": 0}],
+        [{"node": "List Recovery Canary Comments", "type": "main", "index": 0}]
+      ]
+    },
+    "Create Pending Recovery Canary": {
+      "main": [[{"node": "List Recovery Canary Rows", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Claim Recovery Canary Upload": {
+      "main": [[{"node": "Require Recovery Canary Claim", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Recovery Canary Claim": {
+      "main": [[{"node": "Prepare Recovery Canary Binary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Prepare Recovery Canary Binary": {
+      "main": [[{"node": "Upload Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Upload Recovery Canary": {
+      "main": [[{"node": "Require Recovery Canary Upload", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Recovery Canary Upload": {
+      "main": [[{"node": "Record Uploaded Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Record Uploaded Recovery Canary": {
+      "main": [[{"node": "Require Uploaded Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Uploaded Recovery Canary": {
+      "main": [[{"node": "List Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "List Recovery Canary Comments": {
+      "main": [[{"node": "Inspect Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Inspect Recovery Canary Comments": {
+      "main": [[{"node": "Recovery Canary Comment Missing", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Recovery Canary Comment Missing": {
+      "main": [[{"node": "Create Recovery Canary Comment", "type": "main", "index": 0}], [{"node": "Recovery Canary Ready Recorded", "type": "main", "index": 0}]]
+    },
+    "Create Recovery Canary Comment": {
+      "main": [[{"node": "List Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Recovery Canary Ready Recorded": {
+      "main": [[{"node": "Record Ready Recovery Canary", "type": "main", "index": 0}], [{"node": "Download Recovery Canary", "type": "main", "index": 0}]]
+    },
+    "Record Ready Recovery Canary": {
+      "main": [[{"node": "Require Ready Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Ready Recovery Canary": {
+      "main": [[{"node": "Download Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Download Recovery Canary": {
+      "main": [[{"node": "Require Recovery Canary Download", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    },
+    "Require Recovery Canary Download": {
+      "main": [[{"node": "Prepare Acceptance Response", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
     },
     "Prepare Acceptance Response": {
       "main": [
