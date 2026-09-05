@@ -34,6 +34,7 @@ full_paths:
   - scripts/test/catalog_*.py
   - scripts/test/ci_plan.py
   - scripts/test/ci_reconcile.py
+  - scripts/test/ci-workflow-contract-test.sh
   - scripts/test/generate-allure-report.sh
   - scripts/test/open-allure-report.sh
   - scripts/test/publish-report.sh
