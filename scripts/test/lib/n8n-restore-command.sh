@@ -9,17 +9,35 @@ restore_fail() {
 
 printf '%s\n' 'restore_stage=artifact-selection'
 backup_directory=/backups
-selected=''
-for dump in $(find "$backup_directory" -maxdepth 1 -type f -name 'n8n-postgresql-*.dump' | LC_ALL=C sort -r); do
+validate_dump() {
+  dump="$1"
   sidecar="$dump.sha256"
-  test -f "$sidecar" || continue
+  test -f "$dump" -a ! -L "$dump" || return 1
+  test -f "$sidecar" -a ! -L "$sidecar" || return 1
   target=$(awk 'NF == 2 { print $2; exit }' "$sidecar")
-  test "$target" = "$(basename "$dump")" || continue
-  (cd "$backup_directory" && sha256sum -c "$(basename "$sidecar")") >/dev/null 2>&1 || continue
-  pg_restore --list "$dump" >/dev/null 2>&1 || continue
+  test "$target" = "$(basename "$dump")" || return 1
+  (cd "$backup_directory" && sha256sum -c "$(basename "$sidecar")") \
+    >/dev/null 2>&1 || return 1
+  pg_restore --list "$dump" >/dev/null 2>&1 || return 1
+}
+
+selected=''
+requested_dump="${N8N_RESTORE_DUMP:-}"
+if test -n "$requested_dump"; then
+  printf '%s\n' "$requested_dump" |
+    grep -Eq '^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$' || restore_fail artifact-selection
+  dump="$backup_directory/$requested_dump"
+  validate_dump "$dump" || restore_fail artifact-selection
   selected="$dump"
-  break
-done
+else
+  for dump in $(find "$backup_directory" -maxdepth 1 -type f \
+    -name 'n8n-postgresql-*.dump' | LC_ALL=C sort -r); do
+    if validate_dump "$dump"; then
+      selected="$dump"
+      break
+    fi
+  done
+fi
 test -n "$selected" || restore_fail artifact-selection
 
 printf '%s\n' 'restore_stage=database-absence'
