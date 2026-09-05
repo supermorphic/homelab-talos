@@ -890,7 +890,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Evaluate Reader Job').first().json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Read Model');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+        "jsCode": "const context = $('Evaluate Reader Job').first().json;\nif (context.jobState !== 'completed') throw new Error('source_job_not_completed');\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Read Model');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -922,7 +922,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const base = $('Start Reader').first().json;\nconst registry = $('Read Reader State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Reader Source', 'Discover Reader Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('reader_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Read Model') throw new Error('reader_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('reader_schema_invalid');\nif (source.is_data_readonly !== true || source.is_schema_readonly !== true) throw new Error('reader_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nreturn [{ json: { ...base, ...registry, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, accessKind: 'reader', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+        "jsCode": "const base = $('Start Reader').first().json;\nconst registry = $('Read Reader State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Reader Source', 'Discover Reader Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('reader_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Read Model') throw new Error('reader_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('reader_schema_invalid');\nif (source.is_data_readonly !== true || source.is_schema_readonly !== true) throw new Error('reader_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'reader', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -954,7 +954,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Reader Ready Job').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'reader' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('reader_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'reader' } }];"
+        "jsCode": "const context = $('Validate Reader Source').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'reader' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('reader_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'reader' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1859,7 +1859,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Evaluate Operator Job').first().json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Operator');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+        "jsCode": "const context = $('Evaluate Operator Job').first().json;\nif (context.jobState !== 'completed') throw new Error('source_job_not_completed');\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Operator');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1891,7 +1891,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const base = $('Prepare Operator').first().json;\nconst registry = $('Read Operator State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Operator Source', 'Discover Operator Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('operator_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Operator') throw new Error('operator_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('operator_schema_invalid');\nif (source.is_data_readonly !== false || source.is_schema_readonly !== true) throw new Error('operator_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nreturn [{ json: { ...base, ...registry, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, accessKind: 'operator', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+        "jsCode": "const base = $('Prepare Operator').first().json;\nconst registry = $('Read Operator State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Operator Source', 'Discover Operator Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('operator_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Operator') throw new Error('operator_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('operator_schema_invalid');\nif (source.is_data_readonly !== false || source.is_schema_readonly !== true) throw new Error('operator_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'operator', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1923,7 +1923,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Operator Ready Job').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'operator' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('operator_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'operator' } }];"
+        "jsCode": "const context = $('Validate Operator Source').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'operator' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('operator_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'operator' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2424,36 +2424,7 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/jobs/' + $json.baseId }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ job: 'source-create' }) }}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [8760, 180],
-      "id": "10000000-0000-4000-8000-000000000131",
-      "name": "Observe Reader Ready Job",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const context = $json.sourceId ? $json : $('Validate Reader Source').first().json;\nconst raw = $json.jobs !== undefined ? $json.jobs : $json;\nconst items = $input.all().map((item) => item.json);\nconst jobs = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id && item.job) ? items : []));\nif (!context.sourceCreateJobId) throw new Error('reader_ready_job_invalid');\nconst matches = jobs.filter((job) => job && job.id === context.sourceCreateJobId && job.job === 'source-create');\nif (matches.length !== 1 || matches[0].status !== 'completed') throw new Error('reader_ready_job_invalid');\nreturn [{ json: { ...context, sourceCreateJobState: matches[0].status } }];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [9000, 180],
-      "id": "10000000-0000-4000-8000-000000000132",
-      "name": "Require Reader Ready Job",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'reader' ? 'Keep Rotated Reader' : 'Require Reader PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'reader' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || evidence.sourceCreateJobState !== 'completed' || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('reader_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: evidence.sourceCreateJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
+        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'reader' ? 'Keep Rotated Reader' : 'Require Reader PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nconst observedJobState = evidence.sourceCreateJobState;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'reader' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || (observedJobState !== null && observedJobState !== 'completed') || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('reader_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: observedJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2464,36 +2435,7 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/jobs/' + $json.baseId }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ job: 'source-create' }) }}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [19320, 180],
-      "id": "10000000-0000-4000-8000-000000000134",
-      "name": "Observe Operator Ready Job",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const context = $json.sourceId ? $json : $('Validate Operator Source').first().json;\nconst raw = $json.jobs !== undefined ? $json.jobs : $json;\nconst items = $input.all().map((item) => item.json);\nconst jobs = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id && item.job) ? items : []));\nif (!context.sourceCreateJobId) throw new Error('operator_ready_job_invalid');\nconst matches = jobs.filter((job) => job && job.id === context.sourceCreateJobId && job.job === 'source-create');\nif (matches.length !== 1 || matches[0].status !== 'completed') throw new Error('operator_ready_job_invalid');\nreturn [{ json: { ...context, sourceCreateJobState: matches[0].status } }];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [19560, 180],
-      "id": "10000000-0000-4000-8000-000000000135",
-      "name": "Require Operator Ready Job",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'operator' ? 'Keep Rotated Operator' : 'Require Operator PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'operator' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || evidence.sourceCreateJobState !== 'completed' || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('operator_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: evidence.sourceCreateJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
+        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'operator' ? 'Keep Rotated Operator' : 'Require Operator PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nconst observedJobState = evidence.sourceCreateJobState;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'operator' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || (observedJobState !== null && observedJobState !== 'completed') || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('operator_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: observedJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2530,7 +2472,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst final = $json.result || $json;\nlet reader = final.reader || (final.accessKind === 'reader' ? final : null);\nif (!reader) reader = $('Merge Reader Ready Evidence').first().json;\nconst operator = final.operator !== undefined ? final.operator : (final.accessKind === 'operator' ? final : null);\nconst validationFields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nconst present = (value) => typeof value === 'string' && value.length > 0;\nconst summarize = (source, accessKind) => {\n  if (!source) return null;\n  if (source.accessKind !== accessKind || typeof source.generation !== 'number' || typeof source.credentialGeneration !== 'number' || !present(source.operationStartedAt) || !present(source.updatedAt)) throw new Error('source_response_evidence_invalid');\n  const ready = source.state === 'ready';\n  if (ready && (!present(source.sourceId) || !present(source.integrationId) || !present(source.sourceCreateJobId) || source.sourceCreateJobState !== 'completed' || source.sourceDiscovered !== true || source.sourceReadBack !== true || typeof source.dataEditAllowed !== 'boolean' || typeof source.schemaEditAllowed !== 'boolean' || !present(source.validatedAt) || !source.postgresqlValidation || validationFields.some((field) => typeof source.postgresqlValidation[field] !== 'boolean') || source.postgresqlValidation.valid !== true)) throw new Error('source_response_evidence_invalid');\n  return {\n    accessKind, state: source.state, sourceId: source.sourceId || null, integrationId: source.integrationId || null,\n    sourceCreateJobId: source.sourceCreateJobId || null, sourceCreateJobState: ready ? source.sourceCreateJobState : null,\n    sourceDiscovered: ready ? source.sourceDiscovered : false, sourceReadBack: ready ? source.sourceReadBack : false,\n    generation: source.generation, credentialGeneration: source.credentialGeneration, operationStartedAt: source.operationStartedAt,\n    updatedAt: source.updatedAt, validatedAt: source.validatedAt || null, dataEditAllowed: ready ? source.dataEditAllowed : null,\n    schemaEditAllowed: ready ? source.schemaEditAllowed : null, postgresqlValidation: ready ? Object.fromEntries(validationFields.map((field) => [field, source.postgresqlValidation[field]])) : null\n  };\n};\nconst readerSummary = summarize(reader, 'reader');\nconst operatorSummary = summarize(operator, 'operator');\nconst ok = readerSummary?.state === 'ready' && (!operatorSummary || ['ready', 'awaiting_grants'].includes(operatorSummary.state)) && final.jobState !== 'timeout';\nreturn [{ json: { ok, domain: request.domain, operation: request.operation, baseId: reader.baseId, reader: readerSummary, operator: operatorSummary, errorCode: final.errorCode || null } }];"
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst final = $json.result || $json;\nlet reader = final.reader || (final.accessKind === 'reader' ? final : null);\nif (!reader) reader = $('Merge Reader Ready Evidence').first().json;\nconst operator = final.operator !== undefined ? final.operator : (final.accessKind === 'operator' ? final : null);\nconst validationFields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nconst present = (value) => typeof value === 'string' && value.length > 0;\nconst summarize = (source, accessKind) => {\n  if (!source) return null;\n  if (source.accessKind !== accessKind || typeof source.generation !== 'number' || typeof source.credentialGeneration !== 'number' || !present(source.operationStartedAt) || !present(source.updatedAt)) throw new Error('source_response_evidence_invalid');\n  const ready = source.state === 'ready';\n  const observedJobState = source.sourceCreateJobState ?? null;\n  if (ready && (!present(source.sourceId) || !present(source.integrationId) || !present(source.sourceCreateJobId) || (observedJobState !== null && observedJobState !== 'completed') || source.sourceDiscovered !== true || source.sourceReadBack !== true || typeof source.dataEditAllowed !== 'boolean' || typeof source.schemaEditAllowed !== 'boolean' || !present(source.validatedAt) || !source.postgresqlValidation || validationFields.some((field) => typeof source.postgresqlValidation[field] !== 'boolean') || source.postgresqlValidation.valid !== true)) throw new Error('source_response_evidence_invalid');\n  return {\n    accessKind, state: source.state, sourceId: source.sourceId || null, integrationId: source.integrationId || null,\n    sourceCreateJobId: source.sourceCreateJobId || null, sourceCreateJobState: ready ? observedJobState : null,\n    sourceDiscovered: ready ? source.sourceDiscovered : false, sourceReadBack: ready ? source.sourceReadBack : false,\n    generation: source.generation, credentialGeneration: source.credentialGeneration, operationStartedAt: source.operationStartedAt,\n    updatedAt: source.updatedAt, validatedAt: source.validatedAt || null, dataEditAllowed: ready ? source.dataEditAllowed : null,\n    schemaEditAllowed: ready ? source.schemaEditAllowed : null, postgresqlValidation: ready ? Object.fromEntries(validationFields.map((field) => [field, source.postgresqlValidation[field]])) : null\n  };\n};\nconst readerSummary = summarize(reader, 'reader');\nconst operatorSummary = summarize(operator, 'operator');\nconst ok = readerSummary?.state === 'ready' && (!operatorSummary || ['ready', 'awaiting_grants'].includes(operatorSummary.state)) && final.jobState !== 'timeout';\nreturn [{ json: { ok, domain: request.domain, operation: request.operation, baseId: reader.baseId, reader: readerSummary, operator: operatorSummary, errorCode: final.errorCode || null } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -3377,7 +3319,7 @@
       "main": [
         [
           {
-            "node": "Observe Reader Ready Job",
+            "node": "Reader Error Rotation",
             "type": "main",
             "index": 0
           }
@@ -4212,7 +4154,7 @@
       "main": [
         [
           {
-            "node": "Observe Operator Ready Job",
+            "node": "Operator Error Rotation",
             "type": "main",
             "index": 0
           }
@@ -4603,33 +4545,9 @@
         ]
       ]
     },
-    "Observe Reader Ready Job": {
-      "main": [
-        [{"node": "Require Reader Ready Job", "type": "main", "index": 0}],
-        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
-      ]
-    },
-    "Require Reader Ready Job": {
-      "main": [
-        [{"node": "Reader Error Rotation", "type": "main", "index": 0}],
-        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
-      ]
-    },
     "Merge Reader Ready Evidence": {
       "main": [
         [{"node": "Start Operator", "type": "main", "index": 0}],
-        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
-      ]
-    },
-    "Observe Operator Ready Job": {
-      "main": [
-        [{"node": "Require Operator Ready Job", "type": "main", "index": 0}],
-        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
-      ]
-    },
-    "Require Operator Ready Job": {
-      "main": [
-        [{"node": "Operator Error Rotation", "type": "main", "index": 0}],
         [{"node": "Prepare Source Error", "type": "main", "index": 0}]
       ]
     },

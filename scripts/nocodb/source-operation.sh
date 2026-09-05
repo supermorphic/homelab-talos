@@ -103,13 +103,60 @@ jq -e --arg domain "$domain" --arg operation "$operation" '
   ($sources | length >= 1) and
   ($sources | all(
     type == "object" and
-    (keys | sort == ["accessKind", "generation", "integrationId", "sourceCreateJobId", "sourceId", "state"]) and
+    (keys | sort == [
+      "accessKind", "credentialGeneration", "dataEditAllowed", "generation", "integrationId",
+      "operationStartedAt", "postgresqlValidation", "schemaEditAllowed", "sourceCreateJobId",
+      "sourceCreateJobState", "sourceDiscovered", "sourceId", "sourceReadBack", "state",
+      "updatedAt", "validatedAt"
+    ]) and
     (.accessKind == "reader" or .accessKind == "operator") and
     (.state == "ready" or .state == "awaiting_grants") and
     (.generation | type == "number") and
+    (.credentialGeneration | type == "number") and
     (.sourceId | . == null or type == "string") and
     (.integrationId | . == null or type == "string") and
-    (.sourceCreateJobId | . == null or type == "string")
+    (.sourceCreateJobId | . == null or type == "string") and
+    (.sourceCreateJobState | . == null or . == "completed") and
+    (.sourceDiscovered | type == "boolean") and
+    (.sourceReadBack | type == "boolean") and
+    (.operationStartedAt | type == "string" and length > 0) and
+    (.updatedAt | type == "string" and length > 0) and
+    (.validatedAt | . == null or (type == "string" and length > 0)) and
+    (.dataEditAllowed | . == null or type == "boolean") and
+    (.schemaEditAllowed | . == null or type == "boolean") and
+    (if .state == "ready" then
+      (.sourceId | type == "string" and length > 0) and
+      (.integrationId | type == "string" and length > 0) and
+      (.sourceCreateJobId | type == "string" and length > 0) and
+      .sourceDiscovered == true and .sourceReadBack == true and
+      (.validatedAt | type == "string" and length > 0) and
+      (.dataEditAllowed == (.accessKind == "operator")) and
+      .schemaEditAllowed == false and
+      (.postgresqlValidation | type == "object") and
+      (.postgresqlValidation | keys | sort == [
+        "controlledDmlPresent", "databaseIsolationValid", "ddlDenied", "defaultPrivilegesValid",
+        "forbiddenAttributesDenied", "forbiddenMembershipsDenied", "loginValid", "objectPrivilegesValid",
+        "outsideSchemaDenied", "schemaPrivilegesValid", "valid"
+      ]) and
+      (.postgresqlValidation | to_entries | all(.value | type == "boolean")) and
+      .postgresqlValidation.valid == true and
+      .postgresqlValidation.loginValid == true and
+      .postgresqlValidation.schemaPrivilegesValid == true and
+      .postgresqlValidation.objectPrivilegesValid == true and
+      .postgresqlValidation.defaultPrivilegesValid == true and
+      .postgresqlValidation.outsideSchemaDenied == true and
+      .postgresqlValidation.databaseIsolationValid == true and
+      .postgresqlValidation.forbiddenAttributesDenied == true and
+      .postgresqlValidation.forbiddenMembershipsDenied == true and
+      .postgresqlValidation.ddlDenied == true and
+      (.postgresqlValidation.controlledDmlPresent == (.accessKind == "operator"))
+    else
+      .accessKind == "operator" and
+      .sourceId == null and .integrationId == null and .sourceCreateJobId == null and
+      .sourceCreateJobState == null and .sourceDiscovered == false and .sourceReadBack == false and
+      .credentialGeneration == 0 and .validatedAt == null and .dataEditAllowed == null and
+      .schemaEditAllowed == null and .postgresqlValidation == null
+    end)
   )) and
   ($sources | map(.accessKind)) as $access_kinds |
   (($access_kinds | unique | length) == ($access_kinds | length)) and

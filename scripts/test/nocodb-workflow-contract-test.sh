@@ -270,10 +270,27 @@ for access_kind in ("Reader", "Operator"):
         f"{access_kind} rotation must probe NocoDB after patching the retained integration.",
     )
     require(
-        f"Observe {access_kind} Ready Job" in reachable(f"Validate {access_kind} Source")
-        and f"Require {access_kind} Ready Job" in reachable(f"Observe {access_kind} Ready Job")
-        and ready in reachable(f"Require {access_kind} Ready Job"),
-        f"{access_kind} ready output must observe the exact stored source-create job after source GET.",
+        f"Observe {access_kind} Ready Job" not in by_name
+        and f"Require {access_kind} Ready Job" not in by_name,
+        f"{access_kind} ready reconciliation must not query expiring completed-job history.",
+    )
+    require(
+        f"{access_kind} Error Rotation" in successors(f"Validate {access_kind} Source"),
+        f"{access_kind} source GET must proceed directly to current data and PostgreSQL checks.",
+    )
+    require(
+        f"Poll {access_kind} Jobs" not in reachable(f"Discover {access_kind} Source"),
+        f"An existing ready {access_kind.lower()} source must not enter job polling.",
+    )
+    require(
+        [successors(f"Select {access_kind} Source Action")[0], successors(f"Select {access_kind} Source Action")[1]]
+        == [f"Discover {access_kind} Source", f"Generate {access_kind} Password"],
+        f"{access_kind} existing-source selection must bypass source creation and password generation.",
+    )
+    require(
+        successors(f"Rotate {access_kind}")
+        == [f"Generate {access_kind} Rotation Value", ready],
+        f"{access_kind} non-rotation readiness must bypass password mutation.",
     )
     require(
         f"Merge {access_kind} Ready Evidence" in reachable(ready),
@@ -389,6 +406,22 @@ if (splitCompleted.jobState !== 'completed' || splitCompleted.sourceCreateJobId 
   throw new Error('split job-list items did not select the exact stored job');
 }
 
+for (const [kind, node, alias] of [
+  ['Reader', 'Discover Reader Source After Job', 'Read Model'],
+  ['Operator', 'Discover Operator Source After Job', 'Operator'],
+]) {
+  const context = { ...base, accessKind: kind.toLowerCase(), integrationId: `integration-${kind.toLowerCase()}`, jobState: 'completed' };
+  const source = { id: `source-${kind.toLowerCase()}`, fk_integration_id: context.integrationId, alias };
+  const discovered = execute(node, { list: [source] }, { [`Evaluate ${kind} Job`]: context })[0].json;
+  if (discovered.sourceId !== source.id || discovered.jobState !== 'completed') {
+    throw new Error(`${node} lost initial completed-job evidence`);
+  }
+  let noncompletedRejected = false;
+  try { execute(node, { list: [source] }, { [`Evaluate ${kind} Job`]: { ...context, jobState: 'pending' } }); }
+  catch (error) { noncompletedRejected = /source_job_not_completed/.test(error.message); }
+  if (!noncompletedRejected) throw new Error(`${node} accepted source discovery without completed-job evidence`);
+}
+
 const sourceContext = { ...base, integrationId: 'integration-1', alias: 'Read Model' };
 const mergedRotation = execute(
   'Merge Reader State',
@@ -488,7 +521,7 @@ const operatorTargetReaderGate = execute(
   'Require Reader PostgreSQL',
   { result: readerValidation },
   {
-    'Validate Reader Source': { ...sourceContext, requestedAccessKind: 'operator' },
+    'Validate Reader Source': { ...sourceContext, requestedAccessKind: 'operator', sourceCreateJobState: null },
     'Normalize Source Request': operatorRotateRequest,
   },
 )[0].json;
@@ -497,7 +530,7 @@ const operatorTargetOperatorGate = execute(
   'Require Operator PostgreSQL',
   { result: operatorValidation },
   {
-    'Validate Operator Source': { ...sourceContext, accessKind: 'operator', requestedAccessKind: 'operator' },
+    'Validate Operator Source': { ...sourceContext, accessKind: 'operator', requestedAccessKind: 'operator', sourceCreateJobState: null },
     'Normalize Source Request': operatorRotateRequest,
   },
 )[0].json;
@@ -516,14 +549,14 @@ const storedReader = {
 };
 const observedReader = {
   ...operatorTargetReaderGate, sourceId: 'source-1', integrationId: 'integration-1', sourceCreateJobId: 'job-1',
-  sourceCreateJobState: 'completed', sourceDiscovered: true, sourceReadBack: true,
+  sourceCreateJobState: null, sourceDiscovered: true, sourceReadBack: true,
   dataEditAllowed: false, schemaEditAllowed: false,
 };
 const mergedReaderReady = execute(
   'Merge Reader Ready Evidence', { result: storedReader },
   { 'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null }, 'Require Reader PostgreSQL': observedReader },
 )[0].json;
-if (mergedReaderReady.credentialGeneration !== 2 || mergedReaderReady.sourceCreateJobState !== 'completed' || mergedReaderReady.postgresqlValidation.valid !== true) {
+if (mergedReaderReady.credentialGeneration !== 2 || mergedReaderReady.sourceCreateJobState !== null || mergedReaderReady.postgresqlValidation.valid !== true) {
   throw new Error('reader stored state and observed readiness evidence were not merged');
 }
 const storedOperator = {
@@ -533,7 +566,7 @@ const storedOperator = {
 };
 const observedOperator = {
   ...operatorTargetOperatorGate, sourceId: 'source-operator', integrationId: 'integration-operator', sourceCreateJobId: 'job-operator',
-  sourceCreateJobState: 'completed', sourceDiscovered: true, sourceReadBack: true,
+  sourceCreateJobState: null, sourceDiscovered: true, sourceReadBack: true,
   dataEditAllowed: true, schemaEditAllowed: false,
 };
 const mergedOperatorReady = execute(
@@ -550,7 +583,7 @@ const mergedOperatorSync = execute(
     'Require Operator PostgreSQL': observedOperator,
   },
 )[0].json;
-if (mergedOperatorSync.sourceCreateJobState !== 'completed' || mergedOperatorSync.postgresqlValidation.valid !== true) {
+if (mergedOperatorSync.sourceCreateJobState !== null || mergedOperatorSync.postgresqlValidation.valid !== true) {
   throw new Error('unchanged operator sync lost observed readiness evidence');
 }
 const boundedSourceResponse = execute('Prepare Source Response', mergedOperatorReady, {
@@ -575,8 +608,8 @@ for (const kind of ['reader', 'operator']) {
   if (JSON.stringify(Object.keys(boundedSourceResponse[kind]).sort()) !== JSON.stringify(readyEvidenceKeys)) {
     throw new Error(`${kind} source response omitted or exposed readiness evidence fields`);
   }
-  if (boundedSourceResponse[kind].sourceCreateJobState !== 'completed' || boundedSourceResponse[kind].postgresqlValidation.valid !== true) {
-    throw new Error(`${kind} source response did not contain observed terminal job and PostgreSQL evidence`);
+  if (boundedSourceResponse[kind].sourceCreateJobState !== null || boundedSourceResponse[kind].postgresqlValidation.valid !== true) {
+    throw new Error(`${kind} day-two source response fabricated job history or omitted PostgreSQL evidence`);
   }
   if (JSON.stringify(Object.keys(boundedSourceResponse[kind].postgresqlValidation).sort()) !== JSON.stringify(validationEvidenceKeys)) {
     throw new Error(`${kind} source response exposed a non-boolean or unbounded PostgreSQL result`);
@@ -680,6 +713,9 @@ for (const fixture of [
   {
     name: 'reader',
     node: 'Validate Reader Source',
+    inspectNode: 'Inspect Reader Sources',
+    requireNode: 'Require Reader PostgreSQL',
+    validation: readerValidation,
     source: {
       id: 'source-1', base_id: 'base-1', fk_integration_id: 'integration-current', alias: 'Read Model',
       config: { searchPath: ['read_model'] }, is_data_readonly: true, is_schema_readonly: true,
@@ -693,6 +729,9 @@ for (const fixture of [
   {
     name: 'operator',
     node: 'Validate Operator Source',
+    inspectNode: 'Inspect Operator Sources',
+    requireNode: 'Require Operator PostgreSQL',
+    validation: operatorValidation,
     source: {
       id: 'source-operator', base_id: 'base-1', fk_integration_id: 'integration-current', alias: 'Operator',
       config: { searchPath: ['operator'] }, is_data_readonly: false, is_schema_readonly: true,
@@ -704,10 +743,30 @@ for (const fixture of [
     },
   },
 ]) {
+  const readySelection = execute(fixture.inspectNode, {
+    domain: 'domain_one', operation: 'sync', state: 'ready', accessKind: fixture.name,
+    alias: fixture.source.alias, sourceId: fixture.source.id, integrationId: fixture.source.fk_integration_id,
+    sources: [fixture.source],
+  })[0].json;
+  if (readySelection.action !== 'existing') {
+    throw new Error(`${fixture.name} ready sync selected source creation or password generation`);
+  }
   const valid = execute(fixture.node, fixture.source, fixture.lookup)[0].json;
   if (valid.integrationId !== 'integration-current') throw new Error(`${fixture.name} GET did not accept its selected current integration`);
   if (valid.dataEditAllowed !== (fixture.name === 'operator') || valid.schemaEditAllowed !== false || valid.sourceDiscovered !== true || valid.sourceReadBack !== true) {
     throw new Error(`${fixture.name} source GET flags were not preserved as observed evidence`);
+  }
+  if (valid.sourceCreateJobState !== null) throw new Error(`${fixture.name} ready source fabricated completed-job history`);
+  const currentEvidence = execute(
+    fixture.requireNode,
+    { result: fixture.validation },
+    {
+      [fixture.node]: valid,
+      'Normalize Source Request': { domain: 'domain_one', operation: 'sync', requestedAccessKind: null },
+    },
+  )[0].json;
+  if (currentEvidence.postgresqlValidation.valid !== true || currentEvidence.rotateTarget !== false || currentEvidence.sourceCreateJobState !== null) {
+    throw new Error(`${fixture.name} ready sync did not carry fresh source and PostgreSQL evidence without job history`);
   }
   let mismatchRejected = false;
   try { execute(fixture.node, { ...fixture.source, fk_integration_id: 'integration-other' }, fixture.lookup); }
@@ -722,7 +781,7 @@ for (const fixture of [
     lookup: {
       'Start Reader': { domain: 'domain_one', baseId: 'base-1' },
       'Read Reader State': { result: null },
-      'Discover Reader Source After Job': { sourceId: 'source-new-reader', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-reader' },
+      'Discover Reader Source After Job': { sourceId: 'source-new-reader', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-reader', jobState: 'completed' },
     },
     expected: 'job-current-reader',
   },
@@ -732,27 +791,14 @@ for (const fixture of [
     lookup: {
       'Prepare Operator': { domain: 'domain_one', baseId: 'base-1' },
       'Read Operator State': { result: null },
-      'Discover Operator Source After Job': { sourceId: 'source-new-operator', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-operator' },
+      'Discover Operator Source After Job': { sourceId: 'source-new-operator', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-operator', jobState: 'completed' },
     },
     expected: 'job-current-operator',
   },
 ]) {
-  if (execute(fixture.node, fixture.source, fixture.lookup)[0].json.sourceCreateJobId !== fixture.expected) {
+  const initialEvidence = execute(fixture.node, fixture.source, fixture.lookup)[0].json;
+  if (initialEvidence.sourceCreateJobId !== fixture.expected || initialEvidence.sourceCreateJobState !== 'completed') {
     throw new Error(`${fixture.node} did not carry the current completed job identity into read-back evidence`);
-  }
-}
-
-for (const [name, kind] of [['Require Reader Ready Job', 'reader'], ['Require Operator Ready Job', 'operator']]) {
-  const context = {
-    ...base, accessKind: kind, sourceId: `source-${kind}`, sourceCreateJobId: `job-${kind}`,
-    dataEditAllowed: kind === 'operator', schemaEditAllowed: false, sourceDiscovered: true, sourceReadBack: true,
-  };
-  const result = execute(name, { ...context, jobs: [{ id: `job-${kind}`, job: 'source-create', status: 'completed' }] })[0].json;
-  if (result.sourceCreateJobState !== 'completed') throw new Error(`${name} did not preserve observed completed job state`);
-  for (const jobs of [[], [{ id: `job-${kind}`, job: 'source-create', status: 'active' }]]) {
-    let rejected = false;
-    try { execute(name, { ...context, jobs }); } catch (error) { rejected = /ready_job_invalid/.test(error.message); }
-    if (!rejected) throw new Error(`${name} accepted missing or nonterminal job evidence`);
   }
 }
 

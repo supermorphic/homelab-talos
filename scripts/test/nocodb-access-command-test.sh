@@ -240,19 +240,22 @@ source_record() {
     }'
 }
 
-reader="$(source_record reader ready source-reader integration-reader job-reader 1 1 \
+reader_created="$(source_record reader ready source-reader integration-reader job-reader 1 1 \
   2026-09-04T12:01:00Z 2026-09-04T12:02:00Z 2026-09-04T12:02:00Z)"
+reader_current="$(jq -c '.sourceCreateJobState = null' <<<"$reader_created")"
 operator_waiting="$(source_record operator awaiting_grants '' '' '' 1 0 \
   2026-09-04T12:02:01Z 2026-09-04T12:02:01Z '')"
-operator_ready="$(source_record operator ready source-operator integration-operator job-operator 1 1 \
+operator_created="$(source_record operator ready source-operator integration-operator job-operator 1 1 \
   2026-09-04T12:03:00Z 2026-09-04T12:04:00Z 2026-09-04T12:04:00Z)"
+operator_current="$(jq -c '.sourceCreateJobState = null' <<<"$operator_created")"
 operator_rotated="$(source_record operator ready source-operator integration-operator job-operator 2 2 \
   2026-09-04T12:05:00Z 2026-09-04T12:06:00Z 2026-09-04T12:06:00Z)"
+operator_rotated="$(jq -c '.sourceCreateJobState = null' <<<"$operator_rotated")"
 
-jq -n --argjson reader "$reader" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
-jq -n --argjson reader "$reader" --argjson operator "$operator_ready" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
-cp "$fixture/responses/source-sync-2.json" "$fixture/responses/source-sync-3.json"
-jq -n --argjson reader "$reader" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
+jq -n --argjson reader "$reader_created" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
 
 producer_probe_code="$(jq -r '.nodes[] | select(.name == "Evaluate Reader Insert Denial") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
 producer_reader_insert_evidence="$(sed -n "s/.*readerInsertEvidence: '\([^']*\)'.*/\1/p" <<<"$producer_probe_code")"

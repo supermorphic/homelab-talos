@@ -129,8 +129,15 @@ assert_no_request() { [[ ! -s "$event_log" ]] || fail 'request precondition invo
 assert_no_curl() { ! rg -Fxq curl "$event_log" || fail 'invalid input reached curl'; }
 assert_no_secret_output() { ! rg -Fq -- "$token" <<<"$OUT" || fail 'output exposed the provisioning token'; }
 
-valid_sync_response='{"ok":true,"domain":"domain_one","operation":"sync","baseId":"base-1","reader":{"accessKind":"reader","state":"ready","sourceId":"source-reader","integrationId":"integration-reader","generation":1,"sourceCreateJobId":null},"operator":{"accessKind":"operator","state":"ready","sourceId":"source-operator","integrationId":"integration-operator","generation":1,"sourceCreateJobId":null},"errorCode":null}'
-valid_rotate_response='{"ok":true,"domain":"domain_one","operation":"rotate","baseId":"base-1","reader":{"accessKind":"reader","state":"ready","sourceId":"source-reader","integrationId":"integration-reader","generation":1,"sourceCreateJobId":null},"operator":{"accessKind":"operator","state":"ready","sourceId":"source-operator","integrationId":"integration-operator","generation":2,"sourceCreateJobId":null},"errorCode":null}'
+reader_validation='{"valid":true,"loginValid":true,"schemaPrivilegesValid":true,"objectPrivilegesValid":true,"defaultPrivilegesValid":true,"outsideSchemaDenied":true,"databaseIsolationValid":true,"forbiddenAttributesDenied":true,"forbiddenMembershipsDenied":true,"ddlDenied":true,"controlledDmlPresent":false}'
+operator_validation='{"valid":true,"loginValid":true,"schemaPrivilegesValid":true,"objectPrivilegesValid":true,"defaultPrivilegesValid":true,"outsideSchemaDenied":true,"databaseIsolationValid":true,"forbiddenAttributesDenied":true,"forbiddenMembershipsDenied":true,"ddlDenied":true,"controlledDmlPresent":true}'
+valid_sync_response="$(jq -cn --argjson reader_validation "$reader_validation" --argjson operator_validation "$operator_validation" '{
+  ok:true, domain:"domain_one", operation:"sync", baseId:"base-1",
+  reader:{accessKind:"reader",state:"ready",sourceId:"source-reader",integrationId:"integration-reader",sourceCreateJobId:"job-reader",sourceCreateJobState:null,sourceDiscovered:true,sourceReadBack:true,generation:1,credentialGeneration:1,operationStartedAt:"2026-09-04T12:00:00Z",updatedAt:"2026-09-04T12:01:00Z",validatedAt:"2026-09-04T12:01:00Z",dataEditAllowed:false,schemaEditAllowed:false,postgresqlValidation:$reader_validation},
+  operator:{accessKind:"operator",state:"ready",sourceId:"source-operator",integrationId:"integration-operator",sourceCreateJobId:"job-operator",sourceCreateJobState:null,sourceDiscovered:true,sourceReadBack:true,generation:1,credentialGeneration:1,operationStartedAt:"2026-09-04T12:02:00Z",updatedAt:"2026-09-04T12:03:00Z",validatedAt:"2026-09-04T12:03:00Z",dataEditAllowed:true,schemaEditAllowed:false,postgresqlValidation:$operator_validation},
+  errorCode:null
+}')"
+valid_rotate_response="$(jq -c '.operation = "rotate" | .operator.generation = 2 | .operator.credentialGeneration = 2' <<<"$valid_sync_response")"
 
 case_name='sync requires an exact confirmation before deployed-source checks'
 run_operation sync domain_one '' -
@@ -224,7 +231,7 @@ assert_status 28
 assert_no_secret_output
 
 case_name='response with an unready source fails closed'
-unready_response='{"ok":true,"domain":"domain_one","operation":"sync","baseId":"base-1","reader":{"accessKind":"reader","state":"provisioning","sourceId":null,"integrationId":null,"generation":1,"sourceCreateJobId":"job-1"},"operator":null,"errorCode":null}'
+unready_response="$(jq -c '.reader.state = "provisioning"' <<<"$valid_sync_response")"
 run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$unready_response"
 assert_status 1
 assert_contains 'response did not satisfy the source lifecycle contract'

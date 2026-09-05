@@ -314,14 +314,18 @@ source_request() { # <operation> <response>
     "$body" "$response" 200
 }
 
-validate_ready_source() { # <response> <kind>
-  local response="$1" kind="$2"
-  KIND="$kind" jq -e '
+validate_ready_source() { # <response> <kind> <completed|null>
+  local response="$1" kind="$2" expected_job_state="$3"
+  KIND="$kind" EXPECTED_JOB_STATE="$expected_job_state" jq -e '
     .accessKind == env.KIND and .state == "ready" and
     (.sourceId | type == "string" and length > 0) and
     (.integrationId | type == "string" and length > 0) and
     (.sourceCreateJobId | type == "string" and length > 0) and
-    .sourceCreateJobState == "completed" and
+    (if env.EXPECTED_JOB_STATE == "completed" then
+      .sourceCreateJobState == "completed"
+    else
+      .sourceCreateJobState == null
+    end) and
     .sourceDiscovered == true and .sourceReadBack == true and
     (.generation | type == "number" and . > 0) and
     (.credentialGeneration | type == "number" and . > 0) and
@@ -357,7 +361,7 @@ validate_source_envelope() { # <response> <operation>
 first_sync="$temp_dir/source-sync-first.json"
 source_request sync "$first_sync"
 if ! validate_source_envelope "$first_sync" sync ||
-  ! validate_ready_source "$first_sync" reader; then
+  ! validate_ready_source "$first_sync" reader completed; then
   echo 'Initial source sync omitted completed reader job, discovery, read-back, or timing evidence.' >&2
   exit 1
 fi
@@ -385,9 +389,9 @@ RUN_ID="$run_id" jq -e '
 ready_sync="$temp_dir/source-sync-ready.json"
 source_request sync "$ready_sync"
 if ! validate_source_envelope "$ready_sync" sync ||
-  ! validate_ready_source "$ready_sync" reader ||
-  ! validate_ready_source "$ready_sync" operator; then
-  echo 'Ready source sync omitted completed jobs, discovered sources, read-back, or timing evidence.' >&2
+  ! validate_ready_source "$ready_sync" reader null ||
+  ! validate_ready_source "$ready_sync" operator completed; then
+  echo 'Ready source sync omitted current source evidence or initial operator creation evidence.' >&2
   exit 1
 fi
 jq -e '
@@ -497,8 +501,8 @@ chmod 600 "$canary_evidence"
 unchanged_sync="$temp_dir/source-sync-unchanged.json"
 source_request sync "$unchanged_sync"
 if ! validate_source_envelope "$unchanged_sync" sync ||
-  ! validate_ready_source "$unchanged_sync" reader ||
-  ! validate_ready_source "$unchanged_sync" operator; then
+  ! validate_ready_source "$unchanged_sync" reader null ||
+  ! validate_ready_source "$unchanged_sync" operator null; then
   echo 'Unchanged sync omitted complete source evidence.' >&2
   exit 1
 fi
@@ -517,8 +521,8 @@ stable_source_signature() {
 rotated_source="$temp_dir/source-rotate-operator.json"
 source_request rotate "$rotated_source"
 if ! validate_source_envelope "$rotated_source" rotate ||
-  ! validate_ready_source "$rotated_source" reader ||
-  ! validate_ready_source "$rotated_source" operator; then
+  ! validate_ready_source "$rotated_source" reader null ||
+  ! validate_ready_source "$rotated_source" operator null; then
   echo 'Operator rotation omitted restored source evidence.' >&2
   exit 1
 fi
