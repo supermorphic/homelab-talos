@@ -652,8 +652,9 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert set(CI_GROUP_EXECUTIONS) <= set(canonical["executions"]), (
         "Catalog is missing one or more CI group executions."
     )
+    assert set(canonical["executions"]) == {"ci", *CI_GROUP_EXECUTIONS}
     assert len(ci_group_members(canonical)) == len(set(ci_group_members(canonical)))
-    assert set(ci_group_members(canonical)) == set(canonical["executions"]["ci"])
+    assert ci_group_members(canonical) == canonical["executions"]["ci"]
 
     harness_groups = {
         "core": "ci-core",
@@ -714,6 +715,20 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         "ci-target-absent-from-groups",
         lambda data: data["executions"]["ci-core"].pop(),
         "CI group executions are not the exact full CI partition.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "reordered-full-ci-execution",
+        lambda data: data["executions"]["ci"].reverse(),
+        "CI group executions are not in canonical full-CI order.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "extra-ci-execution",
+        lambda data: data["executions"].__setitem__("ci-security", []),
+        "Test catalog execution names must be ci plus the four CI group executions.\n",
     )
 
     expect_rejection(

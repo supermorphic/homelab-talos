@@ -36,8 +36,12 @@ ci_group_members="$(yq -r '.executions["ci-core"][], .executions["ci-observabili
 	echo 'CI group executions contain duplicate suite IDs.' >&2
 	exit 1
 }
-[[ "$(printf '%s\n' "$ci_group_members" | LC_ALL=C sort)" == "$(yq -r '.executions.ci[]' tests/catalog.yaml | LC_ALL=C sort)" ]] || {
-	echo 'CI group executions are not the exact full CI partition.' >&2
+[[ "$ci_group_members" == "$(yq -r '.executions.ci[]' tests/catalog.yaml)" ]] || {
+	echo 'CI group executions are not in canonical full-CI order.' >&2
+	exit 1
+}
+[[ "$(yq -r '.executions | keys | .[]' tests/catalog.yaml)" == $'ci\nci-core\nci-observability\nci-automation\nci-framework' ]] || {
+	echo 'Test catalog execution names must be ci plus the four CI group executions.' >&2
 	exit 1
 }
 
