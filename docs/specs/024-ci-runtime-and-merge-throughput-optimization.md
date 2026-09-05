@@ -1079,13 +1079,17 @@ application:
   dashboard packaging, and consumed operations documentation also select `automation`.
   Gatus's echo route/service, internal gateway, and n8n/PostgreSQL/public-route Flux
   entrypoints also select `observability`. The SOPS policy selects both conditional groups.
-- Foundation validation in `core` owns the repository-wide public webhook route
-  uniqueness check. n8n validation retains its direct route and workflow assertions.
+- Foundation validation in `core` owns the repository-wide public webhook route and
+  internal-audience `DNSEndpoint` uniqueness checks. n8n validation retains its direct
+  route, workflow, ExternalDNS, and endpoint assertions.
   This keeps the global invariant active for changes in every application domain.
 - Existing application and domain paths outside those breakouts select `core` unless an
   explicit foundational rule below selects `full`.
 - `.github/workflows/**`, the impact map, the planner, the merge gate, the catalog,
   shared coordinators, shared result code, and shared harness-control code select `full`.
+- The campaign runner's direct documentation inputs (`README.md`, `tests/README.md`,
+  the campaign operations guide, and the agent cluster-access guide) also select `full`.
+  Synthetic unconsumed documentation fixtures prove the default `core` classification.
 - `kubernetes/apps/kustomization.yaml`, `kubernetes/apps/flux-system/**`,
   `kubernetes/apps/kube-system/**`, `kubernetes/flux/**`, `talos/**`, foundational Cilium
   wiring, unknown top-level paths, and ambiguous shared inputs select `full`.

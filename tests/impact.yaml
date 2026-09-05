@@ -6,6 +6,10 @@ groups:
   ci-framework: {execution: ci-framework, always: false}
 full_groups: [core, observability, automation, ci-framework]
 full_paths:
+  - README.md
+  - tests/README.md
+  - docs/guides/test-campaign-operations.md
+  - docs/guides/agent-cluster-access.md
   - .github/**
   - .just/**
   - .justfile
@@ -144,7 +148,6 @@ core_paths:
   - .sops.yaml
   - AGENTS.md
   - CLAUDE.md
-  - README.md
   - docs/**
   - kubernetes/README.md
   - kubernetes/apps/media/**
@@ -211,7 +214,6 @@ core_paths:
   - scripts/test/scenarios/test_reports_persistence.py
   - scripts/test/scenarios/test_resilience_controllers.py
   - scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
-  - tests/README.md
   - tests/fixtures/cluster-commands/**
   - tests/fixtures/links/**
   - tests/fixtures/node-lifecycle/**

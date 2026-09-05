@@ -91,6 +91,42 @@ class ClassificationTests(unittest.TestCase):
     def test_empty_diff_still_requires_core(self):
         self.assertEqual(classify([], self.impact, full=False), ("core",))
 
+    def test_campaign_consumed_documentation_selects_explicit_full(self):
+        for path in (
+            "README.md",
+            "tests/README.md",
+            "docs/guides/test-campaign-operations.md",
+            "docs/guides/agent-cluster-access.md",
+        ):
+            with self.subTest(path=path):
+                groups, reasons = planner.select(
+                    [Change("M", None, path)], self.impact, full=False
+                )
+                self.assertEqual(groups, ("core", "observability", "automation", "ci-framework"))
+                self.assertEqual(reasons[0]["reason"], "full")
+
+    def test_unconsumed_synthetic_documentation_still_selects_core(self):
+        self.assertEqual(
+            classify([Change("M", None, "docs/planner-fixture.txt")], self.impact, full=False),
+            ("core",),
+        )
+
+    def test_internal_dns_invariant_has_explicit_core_and_full_owners(self):
+        cases = {
+            "scripts/validate/internal-dns-endpoints.sh": (("core",), "core"),
+            "scripts/test/test_internal_dns_endpoints.py": (
+                ("core", "observability", "automation", "ci-framework"),
+                "full",
+            ),
+        }
+        for path, (expected, reason) in cases.items():
+            with self.subTest(path=path):
+                groups, reasons = planner.select(
+                    [Change("M", None, path)], self.impact, full=False
+                )
+                self.assertEqual(groups, expected)
+                self.assertEqual(reasons[0]["reason"], reason)
+
     def test_shared_alert_validator_selects_observability(self):
         self.assertEqual(
             classify([Change("M", None, "scripts/validate/alerts.sh")], self.impact, full=False),

@@ -1,7 +1,7 @@
 schema_version: 1
 cases:
   documentation:
-    changes: [{status: M, old_path: null, new_path: docs/guides/test-campaign-operations.md}]
+    changes: [{status: M, old_path: null, new_path: docs/planner-fixture.txt}]
     groups: [core]
   observability:
     changes: [{status: M, old_path: null, new_path: kubernetes/apps/monitoring/loki/app/helmrelease.yaml}]
