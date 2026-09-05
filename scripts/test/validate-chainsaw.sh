@@ -25,6 +25,40 @@ cd "$repo_root"
 
 group_selected() { [[ "$group" == all || "$group" == "$1" ]]; }
 
+epoch_milliseconds() {
+	local now seconds fraction
+	now="$EPOCHREALTIME"
+	seconds="${now%%.*}"
+	fraction="${now#*.}000"
+	printf '%s\n' "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
+}
+
+run_shell_case() {
+	local case_name="$1"
+	shift
+	local exit_code result case_started_ms case_duration_ms case_duration
+	if [[ -z "$fragment_root" ]]; then
+		shell_case_index=$((shell_case_index + 1))
+		"$@"
+		return
+	fi
+	case_started_ms="$(epoch_milliseconds)"
+	set +e
+	"$@"
+	exit_code="$?"
+	set -e
+	case_duration_ms=$(( $(epoch_milliseconds) - case_started_ms ))
+	printf -v case_duration '%d.%03d' \
+		"$((case_duration_ms / 1000))" "$((case_duration_ms % 1000))"
+	result=passed
+	[[ "$exit_code" -eq 0 ]] || result=failed
+	shell_case_index=$((shell_case_index + 1))
+	write_result_case_junit \
+		"$fragment_root/bash-${shell_case_index}.xml" \
+		"$suite_id" "$case_name" "$result" "$case_duration"
+	return "$exit_code"
+}
+
 list_setup() {
 	local owner="$1" setup_name="$2"
 	group_selected "$owner" || return 0
@@ -61,40 +95,6 @@ if [[ "$mode" == run ]]; then
 	shell_case_index=0
 	test_harness_jobs="${TEST_HARNESS_JOBS-4}"
 	validate_harness_shell_jobs "$test_harness_jobs"
-
-	epoch_milliseconds() {
-		local now seconds fraction
-		now="$EPOCHREALTIME"
-		seconds="${now%%.*}"
-		fraction="${now#*.}000"
-		printf '%s\n' "$((10#$seconds * 1000 + 10#${fraction:0:3}))"
-	}
-
-	run_shell_case() {
-		local case_name="$1"
-		shift
-		local exit_code result case_started_ms case_duration_ms case_duration
-		if [[ -z "$fragment_root" ]]; then
-			shell_case_index=$((shell_case_index + 1))
-			"$@"
-			return
-		fi
-		case_started_ms="$(epoch_milliseconds)"
-		set +e
-		"$@"
-		exit_code="$?"
-		set -e
-		case_duration_ms=$(( $(epoch_milliseconds) - case_started_ms ))
-		printf -v case_duration '%d.%03d' \
-			"$((case_duration_ms / 1000))" "$((case_duration_ms % 1000))"
-		result=passed
-		[[ "$exit_code" -eq 0 ]] || result=failed
-		shell_case_index=$((shell_case_index + 1))
-		write_result_case_junit \
-			"$fragment_root/bash-${shell_case_index}.xml" \
-			"$suite_id" "$case_name" "$result" "$case_duration"
-		return "$exit_code"
-	}
 
 	# Keep this validation contract cluster-independent even on an operator workstation.
 	export KUBECONFIG="$repo_root/tests/.offline-validation-no-kubeconfig"
