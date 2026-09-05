@@ -387,6 +387,7 @@ nocodb_restore_application_manifests() { # <app> <service> <pvc> <database-ip> <
                   {"name":"NC_CONNECTION_ENCRYPT_KEY","valueFrom":{"secretKeyRef":{"name":"nocodb-credentials","key":"NC_CONNECTION_ENCRYPT_KEY"}}},
                   {"name":"NC_SITE_URL","value":("http://" + strenv(SERVICE_NAME) + ".automation-data.svc.cluster.local:8080")},
                   {"name":"NC_ALLOW_LOCAL_EXTERNAL_DBS","value":"true"},
+                  {"name":"NC_SECURE_ATTACHMENTS","value":"false"},
                   {"name":"NC_DISABLE_TELE","value":"true"},
                   {"name":"NC_DISABLE_SUPPORT_CHAT","value":"true"}
                 ],

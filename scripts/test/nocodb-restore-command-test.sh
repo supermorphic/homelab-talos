@@ -225,6 +225,13 @@ yq ea -e '
   .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"
 ' "$app_manifest" >/dev/null || fail 'restored NocoDB application render is unsafe'
 
+# The pinned producer and restore consumer use the canonical /download/* contract.
+# Require one literal string value; a duplicate, boolean, or absent setting is unsafe.
+yq ea -o=json 'select(.kind == "Deployment")' "$app_manifest" | jq -e '
+  [.spec.template.spec.containers[0].env[] | select(.name == "NC_SECURE_ATTACHMENTS")] |
+  length == 1 and .[0].value == "false" and (.[0] | has("valueFrom") | not)
+' >/dev/null || fail 'restored NocoDB must set NC_SECURE_ATTACHMENTS exactly once to string false'
+
 nocodb_restore_policy_manifest "$prefix-policy" "$prefix-db" "$prefix-nocodb" \
 	"$prefix-request" "$run_hash" >"$policy_manifest"
 nocodb_restore_validate_isolation "$app_manifest" "$policy_manifest" \
