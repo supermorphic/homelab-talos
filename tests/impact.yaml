@@ -137,6 +137,7 @@ conditional_paths:
     - scripts/verify/automation-data.sh
     - scripts/validate/n8n.sh
     - scripts/validate/automation-data.sh
+    - scripts/operations/automation-data-*
     - scripts/test/n8n-*
     - scripts/test/automation-data-*
     - scripts/test/lib/n8n-*

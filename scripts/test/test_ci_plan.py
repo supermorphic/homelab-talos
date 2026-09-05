@@ -111,6 +111,22 @@ class ClassificationTests(unittest.TestCase):
             ("core",),
         )
 
+    def test_automation_operation_selects_automation(self):
+        self.assertEqual(
+            classify(
+                [
+                    Change(
+                        "M",
+                        None,
+                        "scripts/operations/automation-data-control-migrate.sh",
+                    )
+                ],
+                self.impact,
+                full=False,
+            ),
+            ("core", "automation"),
+        )
+
     def test_internal_dns_invariant_has_explicit_core_and_full_owners(self):
         cases = {
             "scripts/validate/internal-dns-endpoints.sh": (("core",), "core"),
