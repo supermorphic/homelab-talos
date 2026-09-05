@@ -121,75 +121,36 @@ release. The extra exporter consumes a small amount of CPU and memory and introd
 one additional component to operate, but it has a narrow read-only authority surface
 and produces no duplicate standard Kubernetes metrics.
 
-## September 2026 upgrade investigation and bounded correction
+## September 2026 upgrade debrief
 
-Read-only inspection on September 5, 2026 found kube-prometheus-stack Ready at observed
-generation 10, with deployed release revision 52 from July 27. Revision 51 and revision
-52 use chart `87.19.0` but have different configuration digests. The July 27 change in
-[PR #133](https://github.com/supermorphic/homelab-talos/pull/133) added the Alertmanager
-route to ntfy. This is evidence of a successful later values-change upgrade, not proof
-that every future upgrade will succeed.
+A successful values-change upgrade disproved the assumption that all changes to the
+shared monitoring release fail. The earlier upgrade failure's cause remains unproven.
 
-The quoted `failed to wait for object to sync in-cache after patching` message comes
-from [helm-controller v1.6.2](https://github.com/fluxcd/helm-controller/blob/v1.6.2/internal/controller/helmrelease_controller.go#L156-L162)
-waiting for its cached HelmRelease history after patching the HelmRelease. That message
-alone does not identify the cause of a Helm upgrade failure or prove the earlier
-admission-webhook or drift-detection hypotheses. The original cause remains unproven.
+Grafana now uses `Recreate` so that Deployment updates terminate the old pod before
+creating its replacement. Its persistent-storage setup must not rely on overlapping
+update pods. `ReadWriteOnce` permits multiple pods on one node, so it does not imply
+that every rolling update deadlocks. Updates that replace Grafana's pod incur downtime.
 
-The bounded correction sets Grafana's Deployment strategy to `Recreate`. Grafana's
-persistent-storage setup should not rely on overlapping `RollingUpdate` pods. During
-Deployment updates, the old Grafana pod must terminate before its replacement is
-created. `ReadWriteOnce` permits access by multiple pods on one node; it does not enforce
-a single writer pod or imply that every rolling update deadlocks. `Recreate` supplies
-the ordering for Deployment updates, not a universal guarantee for manually deleted
-pods or failure recovery. See Kubernetes' [access-mode](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
-and [Deployment strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
-documentation. Updates that replace Grafana's pod incur downtime.
+The strategy transition initially failed because server-side apply retained
+API-defaulted `rollingUpdate` fields, even with explicit null. The correction selects
+client-side strategic merging for kube-prometheus-stack upgrades through
+`.spec.upgrade.serverSideApply: disabled`, retaining Grafana's `Recreate` and explicit
+`rollingUpdate: null` values. This applies to upgrades of the whole release; chart
+versions, drift detection, and the dedicated exporter remain unchanged. Returning to
+server-side apply requires separate transition evidence, not just a successful render.
 
-Cluster-independent validation checks that the pinned chart renders exactly one
-Grafana Deployment with `Recreate` and an explicit `rollingUpdate: null`. Chart versions,
-drift detection, and the dedicated exporter remain unchanged. Pre-change live
-`monitoring-verify` passed, including all five Flux resource kinds and both alert rules;
-it did not send a notification or prove external ntfy delivery.
+On September 5, 2026, the upgrade succeeded and Grafana was ready with `Recreate` and
+no remaining `rollingUpdate` fields. Live `monitoring-verify` passed, including all
+five Flux kinds, both alert rules, and the Alertmanager route. This establishes the
+bounded upgrade prerequisite for consolidation, not exporter migration or external
+firing-and-resolved delivery.
 
-Post-merge verification of [PR #367](https://github.com/supermorphic/homelab-talos/pull/367)
-found an explicit server-side-apply failure on the Grafana Deployment: Kubernetes
-rejected `spec.strategy.rollingUpdate` while the desired type was `Recreate`. Helm
-automatically rolled back; Grafana remained ready with its prior `RollingUpdate`
-strategy. `monitoring-verify` failed because the monitoring Kustomization was not Ready.
-This is direct evidence of the September failure, not proof of the July failure's cause.
+## Proposed exporter consolidation
 
-The first render omitted `rollingUpdate`. That was insufficient: the live object had
-API-defaulted rolling-update settings, while the controller's managed fields owned
-only `strategy.type`. The earlier review considered client-side strategic merging;
-the observed request instead used server-side apply. [PR #368](https://github.com/supermorphic/homelab-talos/pull/368)
-added an explicit `rollingUpdate: null`, but its first upgrade (revision 61) failed with
-the same rejection. Inspection confirmed that Flux's values ConfigMap contained the
-null. The chart-render check was insufficient. Kubernetes' guidance on
-[clearing defaulted fields](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/#default-field-values)
-describes client-side apply; it did not establish the server-side-apply behavior.
-
-A local reproduction used Kubernetes `v0.35.6` managed-fields libraries and the generated
-Deployment schema, with a synthetic live object matching the observed field ownership:
-the controller owns only `strategy.type`, not the API-defaulted `rollingUpdate` object.
-Both omission and explicit null retained the live rolling-update map after forced
-server-side apply. The typed three-way strategic-merge path instead produced a patch
-with `strategy.$retainKeys: [type]`, `rollingUpdate: null`, and `type: Recreate`; applying
-that patch removed the incompatible map. This reproduces the merge boundary without a
-live API server, admission webhooks, or Helm release storage.
-
-The correction sets `.spec.upgrade.serverSideApply: disabled` on kube-prometheus-stack.
-This selects Helm's supported client-side strategic-merge path for upgrades of the
-whole release, not just Grafana. No per-resource apply-mode override is used. It does
-not force replacement or change global controller settings. The explicit null and
-`Recreate` remain in Grafana's values; install, rollback, drift-detection settings, chart
-versions, and the dedicated exporter are unchanged. The validator requires the tested
-upgrade mode and the rendered strategy. Returning this release to server-side apply
-requires separate transition evidence; a successful chart render is not that evidence.
-
-Acceptance of the correction remains pending: verify a new successful Helm release
-revision, the live Grafana Deployment strategy and readiness, and `monitoring-verify`.
-Keep the dedicated exporter until that succeeds and a separate migration proves parity.
-If the corrected upgrade fails, diagnose current conditions, events, and bounded
-controller logs before considering another change. Do not infer success from the
-render alone or bypass Git with a manual live patch.
+Consolidation is not implemented yet. The intended approach is to compare bundled
+collection with the dedicated exporter before moving production alerts, then remove
+the dedicated exporter only after monitoring and firing-and-resolved acceptance.
+Preserve standard Kubernetes metrics and existing alert semantics; parallel collection
+must neither duplicate alerts nor conceal loss of the selected production source.
+Keep the dedicated exporter available for rollback until cutover is accepted.
+Detailed rollout sequencing and test procedures belong in the implementation plan.
