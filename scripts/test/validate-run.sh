@@ -122,8 +122,35 @@ id_origin="${id_origin%-*}"
   echo 'Git SHA differs between summary and environment.' >&2
   exit 1
 }
+binding_path="$run_dir/diagnostics/ci-binding.json"
+if [[ -e "$binding_path" || -L "$binding_path" ]]; then
+  [[ -f "$binding_path" && ! -L "$binding_path" ]] || {
+    echo 'CI binding must be a regular file.' >&2
+    exit 1
+  }
+  yq -e '
+    (keys | sort | join(",")) == "base_sha,execution,group,head_sha,plan_id,schema_version" and
+    .schema_version == 1 and
+    ((.plan_id | type) == "!!str" and (.plan_id | test("^[0-9a-f]{64}$"))) and
+    ((.base_sha | type) == "!!str" and (.base_sha | test("^[0-9a-f]{40}$"))) and
+    ((.head_sha | type) == "!!str" and (.head_sha | test("^[0-9a-f]{40}$"))) and
+    ((.group | type) == "!!str" and
+      (.group | test("^(core|observability|automation|ci-framework)$"))) and
+    ((.execution | type) == "!!str" and
+      (.execution | test("^ci-(core|observability|automation|framework)$")))
+  ' "$binding_path" >/dev/null || {
+    echo "ci-binding.json violates canonical schema v1: $run_dir" >&2
+    exit 1
+  }
+  binding_head="$(yq -r '.head_sha' "$binding_path")"
+  [[ "$binding_head" == "$(yq -r '.git_sha' "$run_dir/summary.json")" && \
+    "$binding_head" == "$(yq -r '.git.sha' "$run_dir/environment.json")" ]] || {
+    echo 'CI binding Git SHA differs from summary or environment.' >&2
+    exit 1
+  }
+fi
 summary_suite_count="$(yq -r '.suites | length' "$run_dir/summary.json")"
-if [[ "$summary_suite_count" -eq 1 ]]; then
+if [[ "$summary_suite_count" -eq 1 && ! -e "$binding_path" ]]; then
   [[ "$(yq -r '.suites[0].id' "$run_dir/summary.json")" == \
     "$(yq -r '.suite.id' "$run_dir/environment.json")" ]] || {
     echo 'Suite ID differs between summary and environment.' >&2

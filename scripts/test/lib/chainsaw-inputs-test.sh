@@ -137,7 +137,7 @@ while IFS= read -r test_script; do
 	chmod +x "$validator_root/$test_script"
 done < <(
 	awk '
-		/^[[:space:]]*(run_shell_case|register_harness_shell_case) / {
+		/^[[:space:]]*(run_group_shell_case|register_group_shell_case|run_shell_case|register_harness_shell_case) / {
 			for (field = 1; field <= NF; field++) {
 				if ($field ~ /^(scripts\/test|tests\/probes)\/.*\.sh$/) print $field
 			}
@@ -250,8 +250,8 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 60 ]]
-rg -Fx 'Harness shell cases passed: cases=60 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 61 ]]
+rg -Fx 'Harness shell cases passed: cases=61 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }

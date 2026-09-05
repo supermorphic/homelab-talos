@@ -3,12 +3,38 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := ".."
 
 # Validate Chainsaw configuration/tests and test harness scripts without a cluster.
-validate:
-    @scripts/test/validate-chainsaw.sh
+validate group="all":
+    @scripts/test/validate-chainsaw.sh {{quote(group)}}
 
 # Validate the canonical suite catalog and its dispatch safety invariants.
 catalog-validate:
     @scripts/test/validate-catalog.sh
+
+# Plan deterministic validation groups for an exact base and candidate head.
+ci-plan base head output:
+    @uv run --locked python scripts/test/ci_plan.py plan --base {{quote(base)}} \
+      --head {{quote(head)}} --impact tests/impact.yaml --catalog tests/catalog.yaml \
+      --output {{quote(output)}}
+
+# Request the complete validation set for an exact base and candidate head.
+ci-plan-full base head output:
+    @uv run --locked python scripts/test/ci_plan.py plan --base {{quote(base)}} \
+      --head {{quote(head)}} --impact tests/impact.yaml --catalog tests/catalog.yaml \
+      --output {{quote(output)}} --full
+
+# Run one selected CI group and bind its canonical result to the exact plan.
+ci-group group plan:
+    #!/usr/bin/env bash
+    group={{quote(group)}}
+    execution="ci-$group"
+    [[ "$group" != ci-framework ]] || execution=ci-framework
+    scripts/test/run-ci.sh --execution "$execution" --group "$group" \
+      --plan {{quote(plan)}}
+
+# Reconcile downloaded canonical CI runs against their required plan.
+ci-reconcile plan results output:
+    @uv run --locked python scripts/test/ci_reconcile.py \
+      --plan {{quote(plan)}} --results {{quote(results)}} --output {{quote(output)}}
 
 # Validate one canonical run directory by run ID.
 result-validate run:

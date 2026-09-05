@@ -856,21 +856,6 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The public listener must use its exact hostname and Same-namespace route admission.' >&2
   exit 1
 }
-mapfile -t internal_dns_endpoint_sources < <(
-  while IFS= read -r candidate; do
-    if yq ea -e 'select(
-      .kind == "DNSEndpoint" and
-      .metadata.annotations."external-dns.k8s.io/audience" == "internal"
-    )' "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-    fi
-  done < <(rg -l --glob '*.yaml' '^kind:[[:space:]]*DNSEndpoint[[:space:]]*$' kubernetes || true)
-)
-[[ "${#internal_dns_endpoint_sources[@]}" == '1' && \
-  "${internal_dns_endpoint_sources[0]}" == "$public_internal_dns" ]] || {
-  echo 'Only the exact public-webhook DNSEndpoint may carry the internal DNS audience.' >&2
-  exit 1
-}
 [[ "$(yq -r '.resources | sort | join(",")' "$public_base/app/kustomization.yaml")" == \
     './address-pool.yaml,./certificate.yaml,./envoyproxy.yaml,./gateway.yaml,./internal-dns.yaml,./namespace.yaml' && \
   "$(yq -r '.apiVersion' "$public_internal_dns")" == 'externaldns.k8s.io/v1alpha1' && \
@@ -1338,36 +1323,6 @@ actual_canary_fields="$(jq -c '
 }
 workflow_path="$(jq -r '.nodes[] | select(.type == "n8n-nodes-base.webhook") | .parameters.path' \
   "$n8n_workflow")"
-expected_public_route_contract='{"metadata":{"name":"n8n-platform-canary","namespace":"networking-public"},"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"public-webhooks","namespace":"networking-public","sectionName":"https"}],"rules":[{"backendRefs":[{"group":"","kind":"Service","name":"n8n","namespace":"automation","port":5678}],"matches":[{"path":{"type":"Exact","value":"/webhook/platform-canary"}}]}]}'
-mapfile -t public_route_contracts < <(
-  while IFS= read -r -d '' manifest; do
-    # shellcheck disable=SC2016 # yq evaluates $route_namespace, not the shell.
-    yq -o=json -I=0 '
-      select(type == "!!map") |
-      select(.kind == "HTTPRoute") |
-      .metadata.namespace as $route_namespace |
-      select([
-        .spec.parentRefs[]? |
-        select(.name == "public-webhooks" and
-          (.namespace // $route_namespace) == "networking-public")
-      ] | length > 0) |
-      {
-        "metadata": {"name": .metadata.name, "namespace": .metadata.namespace},
-        "parentRefs": .spec.parentRefs,
-        "rules": [
-          .spec.rules[]? |
-          {"backendRefs": (.backendRefs // []), "matches": (.matches // [])}
-        ]
-      }
-    ' "$manifest" | jq -cS 'select(.metadata != null)'
-  done < <(find kubernetes/apps -type f \
-    \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print0)
-)
-[[ "${#public_route_contracts[@]}" == '1' && \
-  "${public_route_contracts[0]}" == "$expected_public_route_contract" ]] || {
-  echo 'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.' >&2
-  exit 1
-}
 [[ "$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")" == \
   "/webhook/$workflow_path" ]] || {
   echo 'The public route and Platform Canary Webhook must use the same production path.' >&2

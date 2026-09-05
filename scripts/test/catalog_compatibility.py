@@ -17,6 +17,12 @@ import yaml
 REPO_ROOT = Path(__file__).parents[2]
 VALIDATOR = REPO_ROOT / "scripts/test/validate-catalog.sh"
 CATALOG = REPO_ROOT / "tests/catalog.yaml"
+CI_GROUP_EXECUTIONS = ("ci-core", "ci-observability", "ci-automation", "ci-framework")
+
+
+def ci_group_members(catalog: dict[str, Any]) -> list[str]:
+    executions = catalog["executions"]
+    return [suite_id for group in CI_GROUP_EXECUTIONS for suite_id in executions[group]]
 
 
 def run_validator(catalog: Path) -> subprocess.CompletedProcess[str]:
@@ -80,7 +86,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=117.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=120.\n"
     assert completed.stderr == ""
 
 
@@ -643,6 +649,88 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
 
 
 def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
+    assert set(CI_GROUP_EXECUTIONS) <= set(canonical["executions"]), (
+        "Catalog is missing one or more CI group executions."
+    )
+    assert set(canonical["executions"]) == {"ci", *CI_GROUP_EXECUTIONS}
+    assert len(ci_group_members(canonical)) == len(set(ci_group_members(canonical)))
+    assert ci_group_members(canonical) == canonical["executions"]["ci"]
+
+    harness_groups = {
+        "core": "ci-core",
+        "observability": "ci-observability",
+        "automation": "ci-automation",
+        "ci-framework": "ci-framework",
+    }
+    for group, execution in harness_groups.items():
+        suite_id = f"validation.test-harness-{group}"
+        assert canonical["executions"][execution].count(suite_id) == 1
+        assert (
+            sum(
+                suite_id in canonical["executions"][candidate] for candidate in CI_GROUP_EXECUTIONS
+            )
+            == 1
+        )
+        record = suite(canonical, suite_id)
+        assert record["runner"]["command"] == f"mise exec -- just test validate {group}"
+        assert record["runner"]["implementation"] == "scripts/test/validate-chainsaw.sh"
+        assert record["native_results"] == {"strategy": "native-junit"}
+
+    expect_rejection(
+        root,
+        canonical,
+        "missing-ci-group",
+        lambda data: data["executions"].pop("ci-observability"),
+        "Missing CI group execution: ci-observability.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "duplicate-ci-group-member",
+        lambda data: data["executions"]["ci-core"].append(
+            data["executions"]["ci-observability"][0]
+        ),
+        "CI group executions contain duplicate suite IDs.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "unknown-ci-group-member",
+        lambda data: data["executions"]["ci-core"].__setitem__(0, "validation.unknown"),
+        "CI group executions are not the exact full CI partition.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "wrong-ci-harness-command",
+        lambda data: suite(data, "validation.test-harness-core")["runner"].__setitem__(
+            "command", "mise exec -- just test validate automation"
+        ),
+        "CI harness suite validation.test-harness-core must use command "
+        "'mise exec -- just test validate core'.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "ci-target-absent-from-groups",
+        lambda data: data["executions"]["ci-core"].pop(),
+        "CI group executions are not the exact full CI partition.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "reordered-full-ci-execution",
+        lambda data: data["executions"]["ci"].reverse(),
+        "CI group executions are not in canonical full-CI order.\n",
+    )
+    expect_rejection(
+        root,
+        canonical,
+        "extra-ci-execution",
+        lambda data: data["executions"].__setitem__("ci-security", []),
+        "Test catalog execution names must be ci plus the four CI group executions.\n",
+    )
+
     expect_rejection(
         root,
         canonical,
@@ -661,7 +749,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=41 ci=40.\n",
+        "Validation catalog/executions.ci count differs: catalog=44 ci=43.\n",
     )
     expect_rejection(
         root,
@@ -1026,7 +1114,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=117.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=120.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

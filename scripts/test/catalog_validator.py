@@ -57,6 +57,13 @@ EXPECTED_RESILIENCE = [
     "chainsaw.resilience.test-reports-persistence",
     "chainsaw.resilience.tailscale-subnet-router-replica-recovery",
 ]
+CI_GROUP_EXECUTIONS = ("ci-core", "ci-observability", "ci-automation", "ci-framework")
+CI_HARNESS_GROUPS = (
+    ("core", "ci-core"),
+    ("observability", "ci-observability"),
+    ("automation", "ci-automation"),
+    ("ci-framework", "ci-framework"),
+)
 STANDALONE_SUITES = {
     "test.automation-data-provisioning",
     "test.resilience.node-abrupt-loss",
@@ -829,6 +836,48 @@ def duplicates(values: list[str]) -> list[str]:
     return sorted(value for value, count in counts.items() if count > 1)
 
 
+def validate_ci_partition(catalog: dict[str, Any]) -> None:
+    executions = catalog["executions"]
+    for execution in CI_GROUP_EXECUTIONS:
+        if execution not in executions:
+            fail(f"Missing CI group execution: {execution}.\n")
+        if not isinstance(executions[execution], list):
+            fail(f"CI group execution {execution} must be a list.\n")
+
+    if set(executions) != {"ci", *CI_GROUP_EXECUTIONS}:
+        fail("Test catalog execution names must be ci plus the four CI group executions.\n")
+
+    full = executions["ci"]
+    grouped = [suite_id for execution in CI_GROUP_EXECUTIONS for suite_id in executions[execution]]
+    if duplicates(grouped):
+        fail("CI group executions contain duplicate suite IDs.\n")
+    if set(grouped) != set(full) or len(grouped) != len(full):
+        fail("CI group executions are not the exact full CI partition.\n")
+    if grouped != full:
+        fail("CI group executions are not in canonical full-CI order.\n")
+
+    suites_by_id = {
+        entry["metadata"]["id"]
+        for entry in catalog["suites"]
+        if isinstance(entry, dict)
+        and isinstance(entry.get("metadata"), dict)
+        and isinstance(entry["metadata"].get("id"), str)
+    }
+    for group, execution in CI_HARNESS_GROUPS:
+        suite_id = f"validation.test-harness-{group}"
+        if suite_id not in executions[execution] or grouped.count(suite_id) != 1:
+            fail(f"CI harness suite {suite_id} must appear only in {execution}.\n")
+        if suite_id not in suites_by_id:
+            fail(f"CI harness suite {suite_id} is missing from the catalog.\n")
+        suite = next(
+            entry for entry in catalog["suites"] if entry.get("metadata", {}).get("id") == suite_id
+        )
+        command = suite.get("runner", {}).get("command")
+        expected_command = f"mise exec -- just test validate {group}"
+        if command != expected_command:
+            fail(f"CI harness suite {suite_id} must use command '{expected_command}'.\n")
+
+
 def exact_diff(description: str, expected: list[str], actual: list[str]) -> str:
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S.%f %z")
     with tempfile.TemporaryDirectory(prefix="homelab-catalog-diff-") as temporary:
@@ -1511,6 +1560,7 @@ def validate_catalog(catalog_argument: str) -> int:
         return 1
     try:
         CatalogValidator(resolved_path, catalog).validate()
+        validate_ci_partition(catalog)
     except ValidationFailure as error:
         print(error.message, file=sys.stderr, end="")
         return error.status

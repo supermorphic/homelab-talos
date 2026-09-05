@@ -48,11 +48,13 @@ The governing principle is:
 - Exceptional platform changes may require materially longer pre-merge validation.
 - Correctness and production protection take precedence over a runtime target.
 
-The desired ordinary merge-gate experience is approximately two minutes p95 when that is
-realistically achievable without reducing confidence. Approximately three minutes is a
-possible upper design target for broader changes. Five minutes is not the ordinary target
-because that delay is repeatedly serialized across three to five work streams. These are
-design targets, not unconditional acceptance criteria.
+The earlier approximately two-minute p95 objective was a diagnostic target used to expose
+the cost of a gate that had grown beyond 20 minutes. It is not a Stage 2 acceptance
+threshold. Stage 2 instead optimizes for a correct, maintainable, extensible gate that
+avoids recomputing unrelated expensive evidence. Measurement must continue to report
+validation time separately from checkout, setup, queue, and reporting time, including
+p50, p95 when the sample is large enough, runner consumption, and multi-pull-request drain
+time. No runtime target overrides correctness or justifies disproportionate orchestration.
 
 ## Measured baseline
 
@@ -204,9 +206,9 @@ failure headroom, not the runtime objective.
 
 The issue-330 result demonstrates the governing optimization order: close the evidence
 lifecycle, remove work without a current consumer, and retain cheaper independent
-oracles before adding runners or selective execution. It does not establish the final
-required-check p95 because the complete Stage 1 gate and GitHub execution distribution
-still require remeasurement after the remaining CI work is integrated. Specification 017
+oracles before adding runners or selective execution. It did not establish the final
+required-check distribution because the complete Stage 1 gate and GitHub execution still
+required remeasurement after the remaining CI work was integrated. Specification 017
 subsequently recorded the completed 144-row evaluation and terminal no-go decision, so
 these 39 identities and their operational surfaces no longer have a current consumer.
 
@@ -223,11 +225,12 @@ Stage 1: audit, remove, deduplicate, and optimize existing CI
 -> Stage 3 only when runner or advanced techniques remain justified
 ```
 
-Stage 1 is the only immediate implementation scope. Stage 2 and Stage 3 require their
-specified evidence and a new implementation decision. This specification describes their
-minimum acceptable shape so Stage 1 does not create incompatible foundations. After this
-specification merges and becomes historical, either later stage uses a new numbered
-specification when its measured decision is material enough to require implementation.
+Stage 1 is complete. Its retained validation passed and its final GitHub measurement
+established the residual cost distribution. The reviewed Stage 2 analysis below authorizes
+a small category selector and split execution model. Stage 3 still requires its specified
+external prerequisites and a later implementation decision. This living specification is
+updated for Stage 2 because selective execution is an evolution of the same CI-runtime
+subject rather than a separate design subject.
 
 The reviewed execution boundary is:
 
@@ -237,12 +240,13 @@ The reviewed execution boundary is:
   removes the remaining harness instead of optimizing or scheduling it. This also
   supersedes Plan 023b's proposed split runner, runner-contract fixes, and fixture
   micro-optimizations.
-- The remaining Stage 1 work removes duplicate repository and general-harness work,
-  optimizes retained slow cases, and remeasures the complete gate.
-- Bounded concurrency is considered only when retained independent work still dominates
-  the measured critical path.
-- Stage 2 gets a plan only if the post-Stage-1 result still justifies impact selection.
-- Stage 3 remains gated by issue 275 and its later decision gate.
+- The remaining Stage 1 work removed duplicate repository and general-harness work,
+  optimized retained slow cases, and remeasured the complete gate.
+- Bounded concurrency retained all evidence and reduced the general-harness critical path.
+- Stage 2 uses only three measured heavyweight breakouts. Smaller domains remain in the
+  always-running core rather than creating a category for every cluster responsibility.
+- Stage 3 remains gated by the Forgejo deployment and runner-isolation work that superseded
+  issue 275, plus its later benchmark decision gate.
 
 ## Validation inventory and lifecycle
 
@@ -510,9 +514,9 @@ required suite causing the complete gate to fail.
 
 The pre-issue-330 observational and controlled baselines and the issue-330 encode
 distribution remain historical pre-removal evidence. They are not a complete Stage 1
-gate or GitHub p95. After the remaining Stage 1 branches finish, rebase onto final current
-`main`, regenerate the exact inventory, and collect controlled complete-gate and GitHub
-measurements. Historical and current samples must not be combined.
+gate or GitHub p95. The Stage 1 protocol therefore required a rebase onto final current
+`main`, a refreshed inventory, and controlled complete-gate and GitHub measurements.
+Historical and current samples were not combined.
 
 The 2026-08-31 quiet-window remeasurement on the rebased issue-303 branch independently
 confirmed the focused encode result. Three complete `encode-benchmark-validate` runs
@@ -522,12 +526,12 @@ process guard found no foreign CI or benchmark work during the samples.
 
 One clean complete `mise exec -- just ci` run then passed in 727.76s on the same host and
 conditions. This single 12m07.76s observation is not a p95 and does not replace the
-required repeated GitHub measurements. It does show that the complete offline gate still
-missed the approximately two-minute objective while the encode harness remained in the
-gate. The later lifecycle removal is expected to eliminate its approximately 77-second
-focused cost, but the actual full-gate change must be measured. Stage 1 must continue by
-profiling and reducing the remaining Active validation and harness costs. This result does
-not by itself justify Stage 2 target selection.
+required repeated GitHub measurements. It showed that the complete offline gate missed
+the then-current approximately two-minute objective while the encode harness remained in
+the gate. The later lifecycle removal was expected to eliminate its approximately
+77-second focused cost, but the actual full-gate change still needed measurement. Stage 1
+therefore continued by profiling and reducing the remaining Active validation and harness
+costs. This result did not by itself justify Stage 2 target selection.
 
 Measurements separate:
 
@@ -602,13 +606,12 @@ task's own exited ShellCheck. QW-8 accepted harness sample 3 and complete-CI sam
 1--3; its final guard was clean. Excluded samples do not enter any distribution.
 
 The six duplicate removals and their canonical owners are correctness-verified. No
-end-to-end speedup is claimed: the observed repository-validation median decrease is
-outweighed by observed median increases for both the retained harness and full gate. Stage
-1 is not complete. Continue intrinsic optimization and profiling of retained Active heavy
-harnesses and the remaining Stage 1 backlog, then collect controlled local and repeated
-GitHub measurements. Stage 2 is not authorized: ordinary latency is unacceptable, but the
-four-part Stage 2 decision gate remains unmet because Stage 1 is incomplete and the
-residual impact and deterministic-selection case are not yet established.
+end-to-end speedup was claimed at this 023c boundary: the observed repository-validation
+median decrease was outweighed by observed median increases for both the retained harness
+and full gate. Stage 1 was incomplete, so work continued with intrinsic optimization,
+profiling, and later controlled measurements. Stage 2 was not authorized at this boundary
+because Stage 1 was incomplete and the residual impact and deterministic-selection case
+were not yet established.
 
 ### 023d retained-harness result and post-removal rebaseline
 
@@ -694,21 +697,21 @@ skips and clean before/after guards. It took 2,574.80s, of which the harness rep
 is therefore evidence of severe elapsed-time variance, not a complete-gate distribution,
 steady-state estimate, or p95.
 
-The post-removal result is not operationally acceptable and does not meet the
-approximately two-minute objective. The sum of the 54 shell-case medians is 694.104s and
+The post-removal result was not operationally acceptable and did not meet the then-current
+approximately two-minute objective. The sum of the 54 shell-case medians was 694.104s and
 the largest indivisible measured case is 159.353s. Ignoring all orchestration overhead,
 ideal load-balancing floors are 347.052s for two workers, 231.368s for three, and 173.526s
 for four. At that measurement boundary, bounded split execution was therefore justified as
 the next Stage 1 candidate because several independently meaningful retained groups were
-material, but splitting the current work alone could not reach two minutes. The 023e result
+material, but splitting that work alone could not reach two minutes. The 023e result
 below records the required isolation, deterministic JUnit, fail-fast, and measured-runtime
 decision.
 
-Stage 1 remains full-suite validation: all retained Active evidence still runs for every
-pull request. Stage 2 remains unauthorized. The residual bottleneck is dominated by
-universally executed harness implementation and variance; no current evidence shows that
-unrelated component validation is the main remaining cost or that an impact planner would
-provide the required saving.
+At this 023d boundary, Stage 1 remained full-suite validation: all retained Active evidence
+still ran for every pull request. Stage 2 remained unauthorized. The residual bottleneck
+was dominated by universally executed harness implementation and variance; the evidence
+did not yet show that unrelated component validation was the main remaining cost or that
+an impact planner would provide the required saving.
 
 ### 023e bounded execution and current-main rebaseline
 
@@ -811,19 +814,20 @@ for monitoring-alert validation, and 15.214 seconds for n8n validation. The resi
 | 14 | `chainsaw-inputs` | 11.971s |
 | 15 | `arr-validator` | 11.462s |
 
-The approximately two-minute objective is not met: the current median is 8m15s, and the
-serial `catalog-negative` case alone has a 2m54s median. Stage 1 must continue with intrinsic
-optimization of the retained catalog, logging, and monitoring harnesses. The stable result
-does remove the immediate 20-minute timeout failure, but that operational recovery is not
-the design target.
+The then-current approximately two-minute objective was not met: the median was 8m15s, and
+the serial `catalog-negative` case alone had a 2m54s median. Stage 1 therefore continued
+with intrinsic optimization of the retained catalog, logging, and monitoring harnesses.
+The stable result removed the immediate 20-minute timeout failure, but that operational
+recovery was not the design target.
 
-The Stage 2 gate remains closed. Correctness passes and latency remains unacceptable, but
-the dominant residual work is still universally invoked harness implementation whose
-intrinsic optimization is incomplete. The measurements do not yet show how much retained
-work is unrelated to representative ordinary changes, and they do not establish that a
-planner would save enough to justify its enforcement complexity. Issue 275 remains the
-prerequisite for the separate Forgejo/NUC comparison. Natural GitHub and later Forgejo runs
-must supply the larger stable sample needed for a remote p95 claim.
+At this 023e boundary, the Stage 2 gate remained closed. Correctness passed and latency
+remained unacceptable, but the dominant residual work was still universally invoked
+harness implementation whose intrinsic optimization was incomplete. The measurements did
+not yet show how much retained work was unrelated to representative ordinary changes or
+that a planner would save enough to justify its enforcement complexity. Issue 275 was then
+the tracked prerequisite for the separate Forgejo/NUC comparison. Natural GitHub and later
+Forgejo runs were expected to supply the larger stable sample needed for a remote p95
+claim.
 
 ### 023f intrinsic hotspot reduction and Stage 2 decision
 
@@ -900,6 +904,13 @@ multiset, the same ordered 60 shell identities inside the 296-test harness repor
 failure, error, or skip. Three local samples do not establish p95 and do not include remote
 queue or runner-start behavior.
 
+PR #361 GitHub run `33829906089` supplied the final Stage 1 hosted-runner observation at
+candidate SHA `0eceb5aad8ba3a42418c4c84be317128e7936646`. The job passed in 346 seconds:
+checkout took about two seconds, pinned-tool setup took ten seconds, and the complete
+cluster-independent validation step took 323 seconds. The canonical result contained all
+40 suites and 735 passing tests with no failure, error, or skip. This one run validates the
+hosted critical-path model but is not a remote distribution or p95.
+
 A later rebase onto `origin/main` `110feaa` exposed a coordinator correctness defect
 before publication. The new automation-data exporter-grant fixture intentionally consumes
 its command stdin. `run-ci.sh` was still reading suite IDs from a process substitution
@@ -948,40 +959,45 @@ The residual top 15 shell-case medians are:
 | 14 | `chainsaw-inputs` | 12.985s |
 | 15 | `arr-validator` | 12.199s |
 
-Stage 1 produced a material and stable improvement, but its complete-gate median remains
-2.66 times the 120-second design target. The residual evidence is no longer dominated by
-obsolete or duplicated encode work or by one unsplit test. It now includes many retained
-component-specific validators and fixture groups. Further global concurrency does not
-remove their CPU and I/O cost, and four workers already outperformed six in the 023e
-comparison.
+Stage 1 produced a material and stable improvement. The residual evidence is no longer
+dominated by obsolete or duplicated encode work or by one unsplit test. It contains
+retained component-specific validators, fixture groups, and CI-framework contracts.
+Further global concurrency does not remove their CPU and I/O cost, and four workers
+already outperformed six in the 023e comparison.
 
-These measurements justify evaluating Stage 2, but they do not yet authorize its
-implementation. The suite-level and shell-case profiles do not map representative ordinary
-changes to the validation they can affect. They therefore do not prove how much work a
-deterministic selector would omit, what the selected critical path would be, or whether the
-expected saving justifies the new enforcement surface. The next Stage 2 artifact must first
-inventory repository-owned target inputs and dependency or reverse-impact relationships,
-then evaluate representative change sets and their predicted selected paths against the
-approximately two-minute objective.
+The Stage 2 review allocated the 60 shell identities in the general harness to coherent
+owners and combined those results with the separately cataloged suites. The resulting
+GitHub-timing model identifies three useful breakouts:
 
-If that analysis opens the decision gate, the leading candidate is the middle-weight,
-deterministic gated approach used by `homelab-playbook`: repository-owned input mappings
-select universal and affected Active targets, dependency or reverse-impact rules broaden
-the set when required, unknown or malformed impact fails closed to broad validation, and
-one static merge-gate reconciles that every planned target ran and passed. This repository
-must define its own target boundaries and dependency rules from its audit. An agent, PR
-author, or Renovate source cannot de-escalate the deterministic result. Stage 2 must
-preserve fresh pre-merge execution against the complete rebased tree and must not become a
-generalized build system.
+| Breakout | Current evidence | Estimated marginal full-lane saving |
+| --- | --- | ---: |
+| `observability` | 17 harness cases plus monitoring, logging, Loki, Alloy, Gatus, and alert validation | about 113.2s |
+| `ci-framework` | 18 harness cases covering the catalog, coordinators, campaigns, reporting, dispatch, result contracts, and harness behavior | about 65.4s after `observability` is removed |
+| `automation` | Three harness cases plus n8n and automation-data validation | about 21.4s after the first two breakouts |
 
-Issue 275 remains the prerequisite for the Forgejo/NUC comparison. Runner persistence,
-caching, and capacity experiments remain Stage 3 work and must not be used to assume the
-outcome of the Stage 2 impact analysis.
+After those breakouts, the modeled always-running core is about 122 seconds of validation.
+The next candidate breakouts have materially smaller marginal savings: media about 17.6
+seconds, platform about 13.1 seconds, documentation about five seconds, security about
+five seconds, networking about four seconds, and storage about 1.6 seconds. Those domains
+remain in the core. They are ownership descriptions, not initial execution categories.
+
+A coherent validation group that contributes at least 30 seconds of measured marginal
+wall time must be reviewed for conditional extraction. The threshold is a review trigger,
+not an automatic split: the group also needs clear ownership, useful skip frequency, low
+classification ambiguity, and savings that justify another enforcement surface. Groups
+below the trigger normally remain in the core. `automation` is the explicit initial
+exception because its current boundary is clear and the planned NocoDB and other
+automation consumers will increase its responsibility and runtime. This measured,
+runner-dependent threshold belongs in this specification, not as a fixed numeric rule in
+`AGENTS.md`.
+
+The approximately two-minute target is no longer used to decide whether the architecture
+succeeds. The relevant outcome is a safe reduction in unrelated recomputation with bounded
+configuration and enforcement cost. Runtime distributions remain required evidence.
 
 ## Stage 2 decision gate
 
-Stage 2 is optional. It proceeds only when measurements satisfy all of the following
-conditions:
+Stage 2 proceeds only when measurements satisfy all of the following conditions:
 
 1. Stage 1 correctness and coverage checks pass.
 2. Ordinary merge latency remains operationally unacceptable.
@@ -990,34 +1006,99 @@ conditions:
 4. Deterministic target selection offers enough expected savings to justify its
    maintenance and enforcement complexity.
 
-The 023f result satisfies conditions 1 and 2: retained correctness checks passed, and the
-319.31-second median remains operationally unacceptable. It does not yet satisfy conditions
-3 and 4. The residual profile identifies potentially separable application and subsystem
-validation, but no deterministic target-to-input inventory or representative ordinary
-change analysis establishes the unrelated fraction, selected critical path, or expected
-saving. Stage 2 planner implementation is not authorized by this result. A separate
-analysis/design step must establish those facts before an implementation plan is approved.
+The Stage 1 result and the reviewed allocation above satisfy this gate. Retained coverage
+passed, the 319.31-second controlled local median and approximately 322-second GitHub
+validation step remain a material merge-drain cost, and the two largest coherent groups
+have estimated marginal savings above the review trigger. `automation` is the approved
+growth exception. The selected model adds three categories rather than reproducing the
+repository's full domain taxonomy as scheduling configuration. Stage 2 planning and
+implementation are therefore authorized after this specification is approved.
 
-If later evidence shows that the residual selected path is dominated by universally
-required validation, the planner is not the remedy for that portion. Further intrinsic
-optimization remains valid and can continue alongside Stage 2 when it preserves the same
-evidence.
+If later evidence shows that the residual selected path is dominated by always-required
+validation, the classifier is not the remedy for that portion. Intrinsic optimization
+remains valid alongside Stage 2 when it preserves the same evidence.
 
-## Conditional Stage 2 architecture
+## Stage 2 architecture
 
-If the decision gate is satisfied, implement the smallest deterministic affected-target
-planner that solves the residual problem. Do not create a general build system.
+Implement a small deterministic category selector, not a generalized affected-target DAG
+or build system. The execution groups are:
 
-The existing test catalog is the preferred metadata owner if it can accept a small impact
-block without confusing its assurance and live-dispatch responsibilities. Retained
-offline targets need only enough metadata to express:
+| Group | Behavior |
+| --- | --- |
+| `core` | Always runs. It contains every retained offline target not explicitly assigned to a conditional group. |
+| `observability` | Runs when monitoring, logging, Loki, Alloy, Gatus, alerting, or their owned fixtures and validators can be affected. |
+| `automation` | Runs when n8n, automation-data, or their owned fixtures and validators can be affected. |
+| `ci-framework` | Contains the test catalog, coordinator, campaign, reporting, dispatch, result-contract, and harness-control evidence. CI-framework input changes select `full`. |
+| `full` | Selects the exact union of `core`, `observability`, `automation`, and `ci-framework`. It is a fallback plan, not another implementation of the tests. |
 
-- input paths;
-- dependencies or reverse impacts;
-- universal or exceptional behavior; and
-- their existing command.
+The repository owns one small category-level impact map, initially `tests/impact.yaml`.
+It records category input paths, catalog members, and paths that require `full`. It does
+not add path metadata to every test. `tests/catalog.yaml` remains authoritative for
+commands, execution ownership, safety guards, and result contracts.
 
-The exact schema follows the Stage 1 inventory and cannot be assumed in advance.
+New validation belongs to `core` unless a later measured review approves another
+breakout. Missing optimization metadata must cause extra work, never missing evidence.
+
+### General-harness decomposition
+
+`validation.test-harness` is one mixed suite inside the current 40-suite CI flow; it is
+not the complete CI flow. Its `scripts/test/validate-chainsaw.sh` entry point currently
+owns Chainsaw and Conftest setup, repository-shell result consumption, approximately 60
+shell cases, Python groups, and Ruff checks spanning multiple subsystems.
+
+Stage 2 splits that mixed content into category-selectable catalog identities:
+
+- `validation.test-harness-core`;
+- `validation.test-harness-observability`;
+- `validation.test-harness-automation`; and
+- `validation.test-harness-ci-framework`.
+
+The identities may share runner libraries, but each has one deterministic case list and
+its own canonical result. Every existing test-harness case belongs to exactly one group.
+The category executor combines its harness identity with existing standalone catalog
+suites. For example, `observability` combines its harness cases with
+`validation.monitoring`, `validation.monitoring-alerts`, `validation.gatus`, and the other
+owned observability suites. `automation` combines its harness cases with
+`validation.n8n` and `validation.automation-data`. Tests are not deleted, weakened, or
+duplicated by this decomposition.
+
+`mise exec -- just ci` remains the canonical full, cluster-independent, secret-free gate.
+Its execution set is the exact union of all four groups.
+
+### Input ownership
+
+The current directory structure supports coarse selection without one mapping per
+application:
+
+- `kubernetes/apps/monitoring/**` and explicitly owned monitoring or logging test fixtures
+  select `observability` in addition to `core`.
+- `kubernetes/apps/automation/**`, `kubernetes/apps/automation-data/**`, their
+  domain-prefixed `scripts/operations/automation-data-*` commands, and explicitly owned
+  test fixtures select `automation` in addition to `core`.
+- Direct validator inputs retain cross-domain ownership. The public webhook gateway,
+  ExternalDNS values, networking graph, selected Gatus and alert resources, PostgreSQL
+  dashboard packaging, and consumed operations documentation also select `automation`.
+  Gatus's echo route/service, internal gateway, and n8n/PostgreSQL/public-route Flux
+  entrypoints also select `observability`. The SOPS policy selects both conditional groups.
+- Foundation validation in `core` owns the repository-wide public webhook route and
+  internal-audience `DNSEndpoint` uniqueness checks. n8n validation retains its direct
+  route, workflow, ExternalDNS, and endpoint assertions.
+  This keeps the global invariant active for changes in every application domain.
+- Existing application and domain paths outside those breakouts select `core` unless an
+  explicit foundational rule below selects `full`.
+- `.github/workflows/**`, the impact map, the planner, the merge gate, the catalog,
+  shared coordinators, shared result code, and shared harness-control code select `full`.
+- The campaign runner's direct documentation inputs (`README.md`, `tests/README.md`,
+  the campaign operations guide, and the agent cluster-access guide) also select `full`.
+  Synthetic unconsumed documentation fixtures prove the default `core` classification.
+- `kubernetes/apps/kustomization.yaml`, `kubernetes/apps/flux-system/**`,
+  `kubernetes/apps/kube-system/**`, `kubernetes/flux/**`, `talos/**`, foundational Cilium
+  wiring, unknown top-level paths, and ambiguous shared inputs select `full`.
+
+The flat `scripts/test/**` and fixture trees are not classified from filenames. Their
+existing files receive explicit group ownership during decomposition. New shared or
+unmapped test infrastructure selects `full`. The implementation does not require a bulk
+directory move.
 
 ### Plan and execution flow
 
@@ -1025,10 +1106,9 @@ For each fresh pull-request synchronization or rebase:
 
 ```text
 always-running required workflow
--> trusted deterministic plan against current main and the complete rebased head
--> universal targets
-   + directly affected targets
-   + dependency/reverse-impact closure
+-> deterministic plan against current main and the complete rebased head
+-> core
+   + affected conditional groups
    + operator-requested escalation
 -> execute all planned targets against the complete candidate tree
 -> always-running merge-gate reconciliation
@@ -1038,18 +1118,19 @@ The plan records the exact current-`main` base and candidate-head identities. Fa
 resolve or verify either identity selects the full suite or fails the gate; it cannot
 produce a reduced plan.
 
-Unknown paths, missing mappings, malformed definitions, dependency cycles, deleted
-mappings, ambiguous relationships, and CI or planner changes select the full retained
-suite. Impact uncertainty fails broad, not narrow.
+Unknown paths, missing mappings, malformed definitions, deleted mappings, ambiguous
+relationships, and CI or planner changes select `full`. Renames and copies classify both
+the old and new paths. Impact uncertainty fails broad, not narrow.
 
 A rebase triggers a fresh plan but not an automatic deep classification. An unrelated
-change already in `main` does not make every candidate target affected. A relevant shared
-dependency broadens the target closure, and every selected target executes against the
+change already in `main` does not make every candidate group affected. A relevant shared
+input selects every group it can affect, and every selected target executes against the
 complete current tree.
 
-The planner does not reuse an earlier passing result. It produces a fresh statement of
-which retained evidence this candidate can affect, then obtains that evidence in the
-current run.
+The plan records the base SHA, candidate-head SHA, plan identity, selected groups, and
+selection reasons. Each group result is bound to that identity. The planner does not reuse
+an earlier passing result. It produces a fresh statement of which retained evidence this
+candidate can affect, then obtains that evidence in the current run.
 
 ### Merge enforcement and trust
 
@@ -1057,34 +1138,98 @@ The required branch-protection name remains a static `merge-gate`. It fails when
 planned target is missing, unexpectedly skipped, cancelled, failed, or bound to another
 plan identity.
 
+Reconciliation resolves `tests/catalog.yaml` from the immutable Git commit recorded in
+the plan's `head_sha` and validates it through the established catalog validator. The
+plan schema stays unchanged: its identity already binds that exact candidate commit.
+An unavailable commit or missing, inaccessible, or malformed catalog is a configuration
+error. Each group must report exactly the suites in its catalog execution, with every
+suite marked `passed`, independently of aggregate status or JUnit counts. All reported
+groups, including unexpected groups, use the complete canonical group order.
+
 The required workflow cannot use top-level path filters. Provider workflow files remain
 thin wrappers around repository-owned planning, execution, and reconciliation commands.
 
-Planner and CI-framework changes must use trusted current-`main` bootstrap logic and
-select full validation. The exact provider mechanism must be proven on both GitHub and
-Forgejo before Stage 2 is accepted. If the planner cannot be made trustworthy on Forgejo,
-Stage 2 is not deployed.
+The present single-operator, private-repository threat model does not require a protected
+base-owned planner or hostile-pull-request bootstrap architecture. Branch and review policy
+protect CI and planner changes, those changes select `full`, and the static required check
+is sufficient. The design accepts that a trusted repository administrator can weaken
+their own validation policy. Repository commands and result contracts remain compatible
+with a later base-owned planner if the contributor trust model changes.
 
 No LLM, author label, Renovate identity, or declarative risk claim can reduce the plan.
 An operator or agent can request full or deep validation as an escalation.
 
+### Verification and rollout
+
+Stage 2 earns trust before it skips validation:
+
+1. **Offline verification:** classifier, category membership, plan identity, and merge-gate
+   tests run while the existing required workflow remains unchanged.
+2. **Shadow planning:** the complete current gate remains required while the planner
+   reports what it would select. Evidence covers core-only, each conditional category, a
+   combined change, and the `full` fallback; synthetic change fixtures cover paths not
+   present in natural pull requests.
+3. **Split-all execution:** all four groups run as separate jobs regardless of the plan.
+   This proves concurrency, complete test identity, result publication, and reconciliation
+   without relying on reduced selection.
+4. **Selective enforcement:** conditional execution is enabled and the static
+   `merge-gate` becomes the required branch check. Any uncertainty selects `full`.
+5. **Post-enable review:** measurements cover selected groups, validation wall time,
+   setup and reconciliation overhead, runner consumption, failures, variance, and
+   three-to-five-pull-request drain time.
+
+Stage 2 is now in shadow planning. The `ci` job remains the only pass-authoritative job
+and still runs the complete `mise exec -- just ci` gate. The advisory `plan-shadow` job
+plans from the exact pull-request base and head SHAs, or requests a full plan for the exact
+manual-dispatch SHA, and uploads its plan for review. It does not select, skip, approve, or
+reduce required validation.
+
+At this rollout boundary, the general harness contains 61 unique shell identities: 22
+`core`, 17 `observability`, three `automation`, and 19 `ci-framework`. The original 60
+identities are unchanged, and `ci-workflow-contract` is the one new permanent identity.
+The complete harness list also contains six setup identities, three Python discovery
+identities, and two Ruff identities, for 72 listed work identities. The catalog contains
+120 unique suite identities. Its full `ci` execution contains 43 suite identities: 32
+`core`, seven `observability`, three `automation`, and one `ci-framework`.
+
+The permanent tests prove that every tracked path resolves to `core`, one or more
+conditional groups, or `full`; every target in the canonical CI execution list belongs to
+exactly one group; the full group union equals `just ci`; representative changes select
+the expected groups; renames and copies use both paths; escalation cannot reduce a plan;
+and malformed input, missing results, failed results, cancellation, unexpected skips, or
+mismatched plan identity fail the gate. Workflow-contract tests reject a top-level path
+filter on the required workflow.
+
+Rollback forces the selector to return `full`. This restores complete validation without
+undoing the useful harness decomposition.
+
+The current planning estimates, excluding checkout, are about 122 seconds for `core`, 115
+seconds for `observability`, 88 seconds for `ci-framework`, and 25 seconds for
+`automation`. A full concurrent gate should approach the slowest selected lane plus setup
+and reconciliation rather than their sum. These figures guide measurement; they are not
+acceptance thresholds and must be replaced or qualified by controlled execution results.
+
 ## Stage 3: Forgejo Runner and NUC #4
 
-Stage 3 depends on
-[issue 275](https://github.com/supermorphic/homelab-talos/issues/275), which establishes
-Forgejo as the canonical self-hosted Git platform on NUC #4. Issue 275 owns Forgejo
-installation, repository hosting, GitHub disaster-recovery mirrors, Forgejo Actions,
-runner registration, rootless Podman execution, and the access model used by this
-benchmark.
+Stage 3 depends on the Forgejo deployment and runner-isolation initiatives. Closed
+[issue 275](https://github.com/supermorphic/homelab-talos/issues/275) is the historical
+origin of that dependency. It is superseded by
+[`homelab-playbook` issue 7](https://github.com/supermorphic/homelab-playbook/issues/7),
+which owns Forgejo deployment on NUC #4, and
+[issue 292](https://github.com/supermorphic/homelab-talos/issues/292), which owns Forgejo
+CI quality gates and runner isolation.
 
-Issue 303 does not duplicate that provisioning. Stage 1 and conditional Stage 2 can
-proceed before issue 275 completes. The NUC comparison cannot start until issue 275
-provides a usable Forgejo repository and runner.
+Issue 303 does not duplicate that provisioning. Stage 2 can proceed on GitHub with
+provider-neutral commands and result contracts. The NUC comparison cannot start until
+the other initiatives provide a usable Forgejo repository, runner, rootless Podman job
+boundary, and task-scoped access.
 
-At the audit boundary, issue 275 is an external blocker for Stage 3. There is no Stage 3
-implementation plan and no NUC comparison activity. After issue 275 supplies the usable
-Forgejo repository, runner, and scoped access model, a later decision gate must still
-authorize the comparison.
+There is no Stage 3 implementation plan or NUC comparison activity at this design
+boundary. After those prerequisites exist, a later decision gate must still authorize
+the comparison. Before Forgejo becomes the authoritative merge gate, issue 292 must prove
+pull-request execution and required-check semantics and verify that candidate jobs cannot
+obtain cluster or deployment credentials, access a privileged socket, or receive
+unnecessary host access.
 
 ### Comparison scope
 
@@ -1120,7 +1265,8 @@ Cold trials use task-owned cache namespaces rather than deleting shared caches.
 
 ### Operator effort
 
-After issue 275 and NUC #4 setup are complete, the operator should need only to:
+After the Forgejo deployment, runner-isolation work, and NUC #4 setup are complete, the
+operator should need only to:
 
 - provide task-scoped access to Forgejo, Forgejo Runner, and non-sensitive NUC telemetry;
 - authorize a benchmark window if load testing could affect other NUC services; and
@@ -1227,9 +1373,31 @@ Stage 1 is complete when:
 6. Retained representative positive and negative coverage passes.
 7. The complete `mise exec -- just ci` gate passes.
 8. Controlled post-change timing separates validation, setup, queue, and reporting
-   costs, reports sample sizes with its percentiles, and evaluates the ordinary gate
-   against the approximately two-minute p95 objective.
-9. The Stage 2 decision gate is evaluated explicitly rather than assumed.
+   costs and reports sample sizes with its supported percentiles.
+9. The Stage 2 decision gate is evaluated explicitly rather than assumed; the reviewed
+   residual category model records why Stage 2 now proceeds.
 
-If later stages proceed, their implementation specifications and plans must reconcile
-their measured results, provider trust model, and runner-placement decision before merge.
+Stage 2 is complete when:
+
+1. The general harness has deterministic `core`, `observability`, `automation`, and
+   `ci-framework` groups, with every existing case assigned exactly once.
+2. Every target in the canonical CI execution list belongs to exactly one group, and the
+   category executors combine their harness groups and standalone catalog suites without
+   deleting or duplicating evidence.
+3. `mise exec -- just ci` remains the exact full union and passes.
+4. Classifier tests prove representative selection, complete path handling, old-and-new
+   rename handling, escalation-only overrides, and fail-closed behavior.
+5. Merge-gate tests reject every missing, failed, cancelled, unexpectedly skipped, or
+   wrong-plan required result.
+6. Shadow planning and split-all execution prove plan accuracy, complete test identity,
+   provider result transport, and reconciliation before reduced selection is required.
+7. The static `merge-gate` is the only branch-protection result needed for the conditional
+   workflow, and the required workflow has no top-level path filter.
+8. Controlled post-enable measurements report category selection, validation wall time,
+   setup and reconciliation overhead, runner consumption, variance, and representative
+   multi-pull-request drain time without treating two minutes as a pass/fail threshold.
+9. Specification 024 is reconciled with the implemented groups, exact input mappings,
+   measured results, and any retained exceptions before merge.
+
+Stage 3 must reconcile its measured Forgejo compatibility, runner-isolation evidence,
+and runner-placement decision in an approved implementation specification before merge.

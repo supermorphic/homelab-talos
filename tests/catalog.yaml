@@ -7,12 +7,10 @@ executions:
     - validation.repo-lint
     - validation.repo-validate
     - validation.links
-    - validation.test-harness
+    - validation.test-harness-core
     - validation.policy-unit
     - validation.kubeconform
     - validation.cilium
-    - validation.n8n
-    - validation.automation-data
     - validation.metrics-server
     - validation.flux
     - validation.foundation
@@ -27,23 +25,75 @@ executions:
     - validation.seerr
     - validation.tautulli
     - validation.media-alerts
-    - validation.monitoring-alerts
     - validation.security-alerts
     - validation.flaresolverr
     - validation.media-policy
-    - validation.monitoring
-    - validation.gatus
     - validation.portainer
     - validation.portainer-policy
-    - validation.test-reports
     - validation.homepage
     - validation.trivy
     - validation.tailscale-operator
     - validation.tailscale-subnet-router
     - validation.networking-alerts
     - validation.alerts-coverage
+    - validation.test-harness-observability
+    - validation.monitoring-alerts
+    - validation.monitoring
+    - validation.gatus
+    - validation.test-reports
     - validation.ntfy
     - validation.alertmanager-ntfy
+    - validation.test-harness-automation
+    - validation.n8n
+    - validation.automation-data
+    - validation.test-harness-ci-framework
+  ci-core:
+    - validation.repo-lint
+    - validation.repo-validate
+    - validation.links
+    - validation.test-harness-core
+    - validation.policy-unit
+    - validation.kubeconform
+    - validation.cilium
+    - validation.metrics-server
+    - validation.flux
+    - validation.foundation
+    - validation.storage
+    - validation.csi-driver-smb
+    - validation.media-storage
+    - validation.plex
+    - validation.intel-gpu-plugin
+    - validation.qbittorrent
+    - validation.arr
+    - validation.qbit-manage
+    - validation.seerr
+    - validation.tautulli
+    - validation.media-alerts
+    - validation.security-alerts
+    - validation.flaresolverr
+    - validation.media-policy
+    - validation.portainer
+    - validation.portainer-policy
+    - validation.homepage
+    - validation.trivy
+    - validation.tailscale-operator
+    - validation.tailscale-subnet-router
+    - validation.networking-alerts
+    - validation.alerts-coverage
+  ci-observability:
+    - validation.test-harness-observability
+    - validation.monitoring-alerts
+    - validation.monitoring
+    - validation.gatus
+    - validation.test-reports
+    - validation.ntfy
+    - validation.alertmanager-ntfy
+  ci-automation:
+    - validation.test-harness-automation
+    - validation.n8n
+    - validation.automation-data
+  ci-framework:
+    - validation.test-harness-ci-framework
 
 campaigns:
   validation:
@@ -275,9 +325,21 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just repo links-validate", implementation: scripts/validate/links.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: validation.test-harness, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: validate, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.test-harness-core, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: core, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
-    runner: {command: "mise exec -- just test validate", implementation: scripts/test/validate-chainsaw.sh}
+    runner: {command: "mise exec -- just test validate core", implementation: scripts/test/validate-chainsaw.sh}
+    native_results: {strategy: native-junit}
+  - metadata: {id: validation.test-harness-observability, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: observability, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test validate observability", implementation: scripts/test/validate-chainsaw.sh}
+    native_results: {strategy: native-junit}
+  - metadata: {id: validation.test-harness-automation, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: automation, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test validate automation", implementation: scripts/test/validate-chainsaw.sh}
+    native_results: {strategy: native-junit}
+  - metadata: {id: validation.test-harness-ci-framework, source: validation, framework: mixed, suite: ci, tier: offline, target: test-harness, scenario: ci-framework, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test validate ci-framework", implementation: scripts/test/validate-chainsaw.sh}
     native_results: {strategy: native-junit}
   - metadata: {id: validation.policy-unit, source: validation, framework: conftest, suite: ci, tier: offline, target: policy, scenario: unit, scope: repository, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}

@@ -1,0 +1,19 @@
+schema_version: 1
+cases:
+  documentation:
+    changes: [{status: M, old_path: null, new_path: docs/planner-fixture.txt}]
+    groups: [core]
+  observability:
+    changes: [{status: M, old_path: null, new_path: kubernetes/apps/monitoring/loki/app/helmrelease.yaml}]
+    groups: [core, observability]
+  automation:
+    changes: [{status: M, old_path: null, new_path: kubernetes/apps/automation/n8n/app/helmrelease.yaml}]
+    groups: [core, automation]
+  combined:
+    changes:
+      - {status: M, old_path: null, new_path: kubernetes/apps/monitoring/loki/app/helmrelease.yaml}
+      - {status: M, old_path: null, new_path: kubernetes/apps/automation-data/postgresql/app/statefulset.yaml}
+    groups: [core, observability, automation]
+  full:
+    changes: [{status: M, old_path: null, new_path: .github/workflows/ci.yml}]
+    groups: [core, observability, automation, ci-framework]

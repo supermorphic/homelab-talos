@@ -71,3 +71,52 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 90
+
+  plan-shadow:
+    name: plan-shadow
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install mise and repository tools
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          install: true
+          cache: true
+
+      - name: Fetch exact pull request base if necessary
+        if: github.event_name == 'pull_request'
+        run: |
+          git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}" ||
+            git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+
+      - name: Plan pull request validation
+        if: github.event_name == 'pull_request'
+        run: |
+          mise exec -- just test ci-plan \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            "$RUNNER_TEMP/ci-plan.json"
+
+      - name: Plan complete manual validation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          mise exec -- just test ci-plan-full \
+            "${{ github.sha }}" \
+            "${{ github.sha }}" \
+            "$RUNNER_TEMP/ci-plan.json"
+
+      - name: Upload shadow validation plan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-plan-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-plan.json
+          if-no-files-found: warn
+          retention-days: 30
