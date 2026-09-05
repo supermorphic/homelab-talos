@@ -10,13 +10,18 @@ metrics source for the `FluxReconciliationFailure` / `FluxResourceMetricsMissing
 Flux `v2.9.2` no longer exposes the per-object `gotk_reconcile_condition` controller metric,
 so custom-resource readiness must come from kube-state-metrics `customResourceState`
 (`gotk_resource_info`). The natural home for that config would be the kube-state-metrics
-**bundled inside kube-prometheus-stack** — but this repository has a **confirmed KPS upgrade
-wedge**: any change to the KPS HelmRelease values makes its helm upgrade hang
-(`failed to wait for object to sync in-cache after patching: context deadline exceeded`,
-prime suspect the prometheus-operator admission webhook re-validating the chart's ~30
-PrometheusRule objects). Reconfiguring the bundled KSM would trip that wedge.
+**bundled inside kube-prometheus-stack**. Reported upgrade failures on July 22, 2026
+motivated keeping Flux readiness collection separate from that release.
 
-This instance sidesteps it entirely: it is its own HelmRelease, independently reconciled and
+Read-only verification on September 5 found a later successful values-change upgrade:
+release revision 52 deployed on July 27 after the Alertmanager routing change in PR #133,
+using the same chart version, `87.19.0`. The earlier claim that every values change hangs
+is therefore not supported. The recorded in-cache timeout concerns the HelmRelease's
+cached status; it does not establish an admission-webhook failure. The original root
+cause remains unproven. See [specification 005](../../../../docs/specs/005-flux-reconciliation-alerting.md)
+for the evidence and staged validation boundary.
+
+This instance remains its own HelmRelease, independently reconciled and
 independently removable, and **does not touch KPS values**. It runs CRS-only
 (`collectors: []` + `--custom-resource-state-only=true`) so it emits no `kube_*` metrics and
 does not duplicate the bundled KSM.
@@ -50,9 +55,10 @@ sanitized canonical evidence under `.test-results/`.
 A synthetic notification is intentionally outside both commands. It must remain a separate
 explicit, confirmation-guarded E2E test because it delivers an external ntfy message.
 
-## Future consolidation (do NOT do in this PR)
+## Future consolidation
 
-Once the KPS HelmRelease upgrade path is fixed and values changes are proven safe:
+Keep this exporter during the bounded Grafana `Recreate` change. After that KPS
+values-change upgrade is verified, a separate migration must:
 
 1. Move this `customResourceState` config (and the minimal RBAC) into the bundled
    kube-state-metrics under `../kube-prometheus-stack/app/values.yaml`.

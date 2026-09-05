@@ -37,10 +37,10 @@ header, so the help strings are part of the correctness contract.
 
 ## Isolation and authority boundary
 
-The dedicated exporter avoids changing kube-prometheus-stack values. That release had a
-confirmed upgrade wedge in which a values change could leave the Helm upgrade waiting
-for an in-cache object. Reusing its bundled kube-state-metrics instance would have
-coupled reconciliation visibility to that risky shared upgrade path.
+The dedicated exporter isolates Flux readiness collection from kube-prometheus-stack
+values changes. Reported upgrade failures on July 22, 2026 motivated this separation.
+The September 5 investigation below revises the original assumption that all values
+changes fail; it does not yet establish a validated exporter migration.
 
 The exporter has only `list` and `watch` access to the five Flux resource kinds and to
 CustomResourceDefinitions needed for collector discovery. It cannot read Secrets or
@@ -100,14 +100,14 @@ run would prove synchronous ntfy publication rather than human handset receipt.
 - Controller metrics alone cannot report readiness of individual Flux objects.
 - The removed `gotk_reconcile_condition` metric is not available in the deployed Flux
   version and must not be treated as a source.
-- Extending the kube-prometheus-stack bundled exporter would re-enter the known upgrade
-  failure path.
+- Extending the kube-prometheus-stack bundled exporter was deferred because of the
+  reported upgrade failures. Consolidation still requires independent migration evidence.
 - One family-wide absence alert would allow partial collector loss to remain invisible.
 
 ## Reconsideration boundaries
 
-The dedicated exporter can be consolidated into kube-prometheus-stack only after its
-upgrade path is no longer wedged and a migration proves parity for all five metric
+The dedicated exporter can be consolidated into kube-prometheus-stack only after a
+bounded values-change upgrade is verified and a migration proves parity for all five metric
 families, the scrape target, both alert behaviors, routing, and resolved delivery. A
 future Flux-native signal is a replacement only if it again exposes per-resource Ready
 state with equivalent missing-signal detection. Routine reconciliation events should
@@ -116,7 +116,44 @@ deduplication, inhibition, repeat, and resolution semantics.
 
 ## Consequences
 
-Flux object failures are visible without changing the upgrade-fragile monitoring
+Flux object failures are visible independently of changes to the shared monitoring
 release. The extra exporter consumes a small amount of CPU and memory and introduces
 one additional component to operate, but it has a narrow read-only authority surface
 and produces no duplicate standard Kubernetes metrics.
+
+## September 2026 upgrade investigation and bounded correction
+
+Read-only inspection on September 5, 2026 found kube-prometheus-stack Ready at observed
+generation 10, with deployed release revision 52 from July 27. Revision 51 and revision
+52 use chart `87.19.0` but have different configuration digests. The July 27 change in
+[PR #133](https://github.com/supermorphic/homelab-talos/pull/133) added the Alertmanager
+route to ntfy. This is evidence of a successful later values-change upgrade, not proof
+that every future upgrade will succeed.
+
+The quoted `failed to wait for object to sync in-cache after patching` message comes
+from [helm-controller v1.6.2](https://github.com/fluxcd/helm-controller/blob/v1.6.2/internal/controller/helmrelease_controller.go#L156-L162)
+waiting for its cached HelmRelease history after patching the HelmRelease. That message
+alone does not identify the cause of a Helm upgrade failure or prove the earlier
+admission-webhook or drift-detection hypotheses. The original cause remains unproven.
+
+The bounded correction sets Grafana's Deployment strategy to `Recreate`. Grafana's
+persistent-storage setup should not rely on overlapping `RollingUpdate` pods. During
+Deployment updates, the old Grafana pod must terminate before its replacement is
+created. `ReadWriteOnce` permits access by multiple pods on one node; it does not enforce
+a single writer pod or imply that every rolling update deadlocks. `Recreate` supplies
+the ordering for Deployment updates, not a universal guarantee for manually deleted
+pods or failure recovery. See Kubernetes' [access-mode](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
+and [Deployment strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
+documentation. Updates that replace Grafana's pod incur downtime.
+
+Cluster-independent validation checks that the pinned chart renders exactly one
+Grafana Deployment with `Recreate` and no `rollingUpdate` settings. Chart versions,
+drift detection, and the dedicated exporter remain unchanged. Pre-change live
+`monitoring-verify` passed, including all five Flux resource kinds and both alert rules;
+it did not send a notification or prove external ntfy delivery.
+
+Post-merge acceptance remains pending: verify a new successful Helm release revision,
+the live Grafana Deployment strategy and readiness, and `monitoring-verify`. Do not
+consolidate the exporters on the strength of the offline render alone. If the upgrade
+fails, retain the dedicated exporter and diagnose the new conditions, events, and
+bounded controller logs before considering another change.

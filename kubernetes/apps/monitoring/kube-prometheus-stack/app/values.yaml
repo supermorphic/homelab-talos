@@ -78,13 +78,11 @@ alertmanager:
         equal: ["namespace"]
 
 grafana:
-  # KNOWN ISSUE (deferred): Grafana's PVC is ReadWriteOnce and this Deployment
-  # uses RollingUpdate, which will deadlock on its next pod roll (README:
-  # "ReadWriteOnce volumes require the Recreate deployment strategy"). The
-  # deploymentStrategy.type=Recreate fix cannot be applied while KPS HelmRelease
-  # upgrades wedge on a helm-controller in-cache-sync timeout. Specification 005
-  # records why this release is treated as upgrade-fragile; fix that path before
-  # setting Recreate (docs/specs/005-flux-reconciliation-alerting.md).
+  # Grafana's persistent-storage setup should not rely on overlapping
+  # RollingUpdate pods. Use Recreate so that, during Deployment updates, the old
+  # Grafana pod terminates before its replacement is created.
+  deploymentStrategy:
+    type: Recreate
   admin:
     existingSecret: grafana-admin-secret
     userKey: admin-user
