@@ -82,8 +82,8 @@ the selected logical bundle.
 
 ### 1. Create the encrypted NocoDB Secret
 
-From a clean feature branch, set the six required values without putting them in shell
-history, then run:
+From a clean feature branch, set the six initial-creation values without putting them in
+shell history, then run:
 
 ```bash
 mise exec -- just repo nocodb-secrets
@@ -98,7 +98,8 @@ The guarded writer requires:
 | `NOCODB_CONNECTION_ENCRYPT_KEY` | Stable key that encrypts stored source credentials |
 | `NOCODB_ADMIN_EMAIL` | Initial local administrator email |
 | `NOCODB_ADMIN_PASSWORD` | Initial local administrator password |
-| `NOCODB_SOURCE_PROVISIONING_HEADER` | Private source-webhook authentication value |
+| `NOCODB_SOURCE_PROVISIONING_HEADER` | Bare private source-webhook authentication token |
+| `NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY` | Update-only proof that must exactly equal the decrypted retained connection encryption key |
 
 Set `NOCODB_SECRETS_CONFIRM='write:automation-data:nocodb:sops'` only after reviewing the
 target. A safe invocation can read values silently inside a subshell:
@@ -117,6 +118,11 @@ target. A safe invocation can read values silently inside a subshell:
   IFS= read -r -s NOCODB_ADMIN_PASSWORD
   printf '\n%s' 'NocoDB source provisioning header: ' >&2
   IFS= read -r -s NOCODB_SOURCE_PROVISIONING_HEADER
+  if [[ -f kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml ]]; then
+    printf '\n%s' 'Existing decrypted NocoDB connection encryption key: ' >&2
+    IFS= read -r -s NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY
+    export NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY
+  fi
   printf '\n' >&2
   export NOCODB_METADATA_PASSWORD NOCODB_AUTH_JWT_SECRET
   export NOCODB_CONNECTION_ENCRYPT_KEY NOCODB_ADMIN_EMAIL NOCODB_ADMIN_PASSWORD
@@ -125,16 +131,20 @@ target. A safe invocation can read values silently inside a subshell:
     mise exec -- just repo nocodb-secrets
   unset NOCODB_METADATA_PASSWORD NOCODB_AUTH_JWT_SECRET
   unset NOCODB_CONNECTION_ENCRYPT_KEY NOCODB_ADMIN_EMAIL NOCODB_ADMIN_PASSWORD
-  unset NOCODB_SOURCE_PROVISIONING_HEADER
+  unset NOCODB_SOURCE_PROVISIONING_HEADER NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY
 )
 ```
 
 The writer creates or updates
-`kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml`. On an update,
-it refuses to replace `NC_CONNECTION_ENCRYPT_KEY` unless
-`NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY` proves that the supplied value equals the
-decrypted retained key. Review only ciphertext and non-secret structure. Merge the
-Secret while `nocodb.spec.suspend` remains `true`, then wait for Flux source parity.
+`kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml`. On first
+creation, `NOCODB_CONNECTION_ENCRYPT_KEY` becomes the retained key. On every update,
+retrieve that key through the approved SOPS workflow and enter the same retained value
+for both `NOCODB_CONNECTION_ENCRYPT_KEY` and
+`NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY`. The recovery variable is proof, not a
+replacement input: the writer decrypts the existing Secret, verifies the proof, and
+writes the existing key back. It never replaces the retained key. Review only ciphertext
+and non-secret structure. Merge the Secret while `nocodb.spec.suspend` remains `true`,
+then wait for Flux source parity.
 
 **Expected result:** The encrypted Secret is selected by the application Kustomization,
 contains only SOPS ciphertext, and the Git-managed NocoDB Kustomization remains
@@ -185,8 +195,11 @@ credential. Git still records `nocodb.spec.suspend: true` until all acceptance p
 
 In the private n8n editor, import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json`. Create a
-Header Auth credential named **NocoDB Source Provisioning Header** from the retained
-source-provisioning value. Bind:
+Header Auth credential named **NocoDB Source Provisioning Header**. Set its header name
+to `Authorization` and its value to `Bearer <token>`, where `<token>` is the retained
+bare source-provisioning value. Keep that bare token outside Git for
+`NOCODB_SOURCE_PROVISIONING_HEADER` and `NOCODB_SOURCE_PROVISIONING_TOKEN`; the command
+and access test add the `Bearer` prefix. Bind:
 
 - **Automation Data Provisioner** to every Postgres node;
 - **NocoDB Operator API** to every HTTP Request node; and
@@ -240,9 +253,11 @@ NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:operator' \
 ```
 
 The final argument must be `reader` or `operator`. Rotation repeats identity and
-readiness checks immediately before mutation. It is convergent, not transactional: an
-interruption can temporarily leave that source unable to authenticate. Retry the same
-targeted rotation to replace both sides and restore the fixed login attributes.
+readiness checks immediately before mutation. The PostgreSQL update keeps the selected
+role as `LOGIN` while changing its password. It is convergent, not transactional: an
+interruption can temporarily leave PostgreSQL and NocoDB with different credentials.
+Retry the same targeted rotation only after the retained base, integration, and source
+IDs match.
 
 This command does not rotate `NC_CONNECTION_ENCRYPT_KEY`, the NocoDB administrator, or
 the broad NocoDB API token stored in **NocoDB Operator API**.
@@ -267,14 +282,45 @@ Import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Bind
 `automation-data/issue334_acceptance/migrator` to all six Postgres nodes,
 **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to
-**Acceptance Webhook**. Keep execution persistence disabled and publish the workflow.
+**Acceptance Webhook**. Before publishing, generate and retain a separate token with at
+least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Create the
+**NocoDB Acceptance Header** Header Auth credential with header name `Authorization`
+and value `Bearer <token>`. Keep the bare token outside Git as
+`NOCODB_ACCEPTANCE_TOKEN`. Keep execution persistence disabled and publish the workflow.
 
-Set the three exact private webhook URLs and their three retained authentication values
-in the environment, then run:
+The access script requires these six exact environment variables:
+
+| Variable | Required value |
+| --- | --- |
+| `AUTOMATION_DATA_PROVISIONING_URL` | `https://n8n.lab.supermorphic.com/webhook/automation-data-provision` |
+| `NOCODB_SOURCE_PROVISIONING_URL` | `https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source` |
+| `NOCODB_ACCEPTANCE_URL` | `https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain` |
+| `AUTOMATION_DATA_PROVISIONING_TOKEN` | Bare retained token for **Automation Data Provisioning Header** |
+| `NOCODB_SOURCE_PROVISIONING_TOKEN` | Bare retained token used by **NocoDB Source Provisioning Header** |
+| `NOCODB_ACCEPTANCE_TOKEN` | Bare retained token used by **NocoDB Acceptance Header** |
+
+Each token must contain at least 32 URL-safe characters from the set above. Load all
+three tokens through an approved secret-input method, export the exact URLs, and run:
 
 ```bash
-NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
-  mise exec -- just kube nocodb-access-test
+(
+  export AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision'
+  export NOCODB_SOURCE_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source'
+  export NOCODB_ACCEPTANCE_URL='https://n8n.lab.supermorphic.com/webhook/nocodb-acceptance-domain'
+  printf '%s' 'Automation-data provisioning token: ' >&2
+  IFS= read -r -s AUTOMATION_DATA_PROVISIONING_TOKEN
+  printf '\n%s' 'NocoDB source-provisioning token: ' >&2
+  IFS= read -r -s NOCODB_SOURCE_PROVISIONING_TOKEN
+  printf '\n%s' 'NocoDB acceptance token: ' >&2
+  IFS= read -r -s NOCODB_ACCEPTANCE_TOKEN
+  printf '\n' >&2
+  export AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
+  export NOCODB_ACCEPTANCE_TOKEN
+  NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
+    mise exec -- just kube nocodb-access-test
+  unset AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
+  unset NOCODB_ACCEPTANCE_TOKEN
+)
 ```
 
 The command provisions the synthetic domain, runs the two-phase source adoption, proves

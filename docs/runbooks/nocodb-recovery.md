@@ -200,11 +200,13 @@ the partial source created by its failed processor; the workflow does not call a
 delete endpoint as compensation.
 
 Before retrying, inspect the bounded workflow result and correct the fixed prerequisite.
-An explicit sync may start a replacement initial generation only after it proves the
-base contains zero matching or conflicting sources. One source can be preserved and
-reconciled when it is the unique deterministic match. More than one match is a hard stop
-for attended repair. Do not delete a base, source, role, or registry row as automatic
-cleanup.
+An explicit sync may start a replacement initial generation only after it proves that
+the base contains no source with the deterministic alias and no source tied to the
+retained integration. A surviving error-state or partial source with that alias is not
+adopted, even when it is the only match. Stop for attended cleanup under the existing
+decommission and destructive-change boundaries before retrying. The workflow does not
+delete a base, source, role, or registry row as automatic cleanup. If NocoDB has already
+removed its own failed partial source, the zero-source proof permits the explicit retry.
 
 ## Timed-out source-creation job
 
@@ -231,11 +233,15 @@ NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:operator' \
   mise exec -- just kube nocodb-source-rotate <domain> operator
 ```
 
-Choose `reader` or `operator`. The command deliberately sets only that PostgreSQL login
-to `NOLOGIN` during the convergent update, replaces the verifier and matching NocoDB
-integration credential, retests privileges and authentication, and restores the fixed
-login attributes. If interrupted, repeat only the same target-bound rotation. Ordinary
-sync and rotation of the other access kind fail closed while the operation is incomplete.
+Choose `reader` or `operator`. The PostgreSQL function first records `rotating` with
+`operation=rotate`, increments the credential generation, and changes only the selected
+role with `ALTER ROLE ... LOGIN ... PASSWORD`. It does not set the role to `NOLOGIN`.
+The workflow then updates the matching NocoDB integration and retests privileges and
+authentication. If a later step fails, the handled error records `state=error`, retains
+`operation=rotate` and the exact base, integration, and source IDs, and can leave the
+PostgreSQL and NocoDB credentials temporarily mismatched. Retry only the same
+target-bound rotation after verifying all three retained IDs. Ordinary sync and rotation
+of the other access kind are rejected while that recorded rotation error remains.
 
 This workflow is not broad NocoDB-token rotation. No supported lifecycle command rotates
 the token in the n8n **NocoDB Operator API** credential.

@@ -591,11 +591,13 @@ in-memory loop; the stored source-creation job ID lets the next explicit sync re
 NocoDB state without retaining the password in n8n execution history.
 
 The workflow never calls a source-delete endpoint as compensation. NocoDB `2026.08.2`
-does delete its own partially created source when the source-creation processor reports
+can delete its own partially created source when the source-creation processor reports
 an error; the registry still retains the failed job and generation. The next explicit
-sync first proves that no deterministic source exists, then may start a new initial
-generation and set a replacement password because no ready contract exists. A timeout
-with a nonterminal job is not a failed generation and only resumes polling.
+sync first proves that no source has the deterministic alias and that no source uses the
+retained integration, then may start a new initial generation and set a replacement
+password because no ready contract exists. A surviving error-state or partial alias
+requires attended cleanup under the decommission boundary before retry. A timeout with a
+nonterminal job is not a failed generation and only resumes polling.
 
 Once a source is `ready`, sync preserves its PostgreSQL verifier, NocoDB encrypted
 credential, source ID, and integration ID. A missing ready-side object is an error that
@@ -614,13 +616,17 @@ being evaluated, so one target can never enter or resume the other target's rota
 Rotation repeats readiness and source-identity checks immediately before mutation,
 updates PostgreSQL and the same NocoDB integration, tests authentication and denials, and
 reads back the new generation.
-It is convergent, not transactional. If a rotation fails after PostgreSQL is deliberately
-set to `NOLOGIN`, its registry row keeps `operation=rotate` and the exact base,
-integration, and source IDs. A later explicit rotation may replace both sides again and
-restore the fixed login attributes only when all three retained IDs match current NocoDB
-state. Ordinary sync, a different access kind, or any missing or mismatched identity
-must fail closed. An error from initial source creation remains a separate case and can
-retry only after proving that the base contains zero matching or conflicting sources.
+It is convergent, not transactional. The PostgreSQL function records `rotating` with
+`operation=rotate`, increments the credential generation, and changes the selected role
+with `ALTER ROLE ... LOGIN ... PASSWORD`; it does not set the role to `NOLOGIN`. If a
+later workflow step fails, the handled error records `state=error` while retaining
+`operation=rotate` and the exact base, integration, and source IDs. PostgreSQL can then
+have the new verifier while NocoDB still has the old credential. A later explicit
+rotation may replace both sides again only when all three retained IDs match current
+NocoDB state. Ordinary sync, a different access kind, or any missing or mismatched
+identity is rejected. An error from initial source creation remains a separate case and
+can retry only after proving that the base contains zero matching or conflicting
+sources; a surviving partial alias requires attended cleanup first.
 
 The workflow exposes no operation that deletes a source, base, login, registry row, or
 domain. NocoDB's internal cleanup of a partial failed source is the only automatic source
