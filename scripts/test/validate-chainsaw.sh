@@ -259,6 +259,7 @@ if group_selected core; then
 		scripts/test/test_report_publish.py scripts/test/junit_report.py
 		scripts/test/junit_tools.py scripts/test/test_junit_tools.py
 		scripts/test/repository_shell_validation.py scripts/test/test_repository_shell_validation.py
+		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
 		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py
