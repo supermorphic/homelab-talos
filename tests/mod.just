@@ -31,6 +31,11 @@ ci-group group plan:
     scripts/test/run-ci.sh --execution "$execution" --group "$group" \
       --plan {{quote(plan)}}
 
+# Reconcile downloaded canonical CI runs against their required plan.
+ci-reconcile plan results output:
+    @uv run --locked python scripts/test/ci_reconcile.py \
+      --plan {{quote(plan)}} --results {{quote(results)}} --output {{quote(output)}}
+
 # Validate one canonical run directory by run ID.
 result-validate run:
     @scripts/test/validate-run.sh ".test-results/{{run}}"
