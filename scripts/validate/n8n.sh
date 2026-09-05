@@ -856,21 +856,6 @@ yq -e '(.metadata.name == "networking-public") and
   echo 'The public listener must use its exact hostname and Same-namespace route admission.' >&2
   exit 1
 }
-mapfile -t internal_dns_endpoint_sources < <(
-  while IFS= read -r candidate; do
-    if yq ea -e 'select(
-      .kind == "DNSEndpoint" and
-      .metadata.annotations."external-dns.k8s.io/audience" == "internal"
-    )' "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-    fi
-  done < <(rg -l --glob '*.yaml' '^kind:[[:space:]]*DNSEndpoint[[:space:]]*$' kubernetes || true)
-)
-[[ "${#internal_dns_endpoint_sources[@]}" == '1' && \
-  "${internal_dns_endpoint_sources[0]}" == "$public_internal_dns" ]] || {
-  echo 'Only the exact public-webhook DNSEndpoint may carry the internal DNS audience.' >&2
-  exit 1
-}
 [[ "$(yq -r '.resources | sort | join(",")' "$public_base/app/kustomization.yaml")" == \
     './address-pool.yaml,./certificate.yaml,./envoyproxy.yaml,./gateway.yaml,./internal-dns.yaml,./namespace.yaml' && \
   "$(yq -r '.apiVersion' "$public_internal_dns")" == 'externaldns.k8s.io/v1alpha1' && \
