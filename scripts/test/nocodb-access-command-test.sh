@@ -263,10 +263,14 @@ producer_canary_title="$(sed -n "s/.*attachment.title !== '\([^']*\)'.*/\1/p" <<
 producer_canary_mimetype="$(sed -n "s/.*attachment.mimetype !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
 producer_canary_size="$(sed -n 's/.*attachment.size !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_canary_inspect")"
 producer_canary_sha256="$(sed -n "s/.*attachment.sha256 !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
+producer_canary_path_regex="$(sed -n 's@.*!/\^\(.*\)\$/.test(attachment.path).*@^\1$@p' \
+  <<<"$producer_canary_inspect" | sed 's@\\/@/@g')"
 producer_saved_view_title="$(sed -n "s/.*view.title !== '\([^']*\)'.*/\1/p" <<<"$producer_saved_view")"
 producer_saved_view_type="$(sed -n 's/.*view.type !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_saved_view")"
 producer_canary_literal="$(sed -n 's/.*attachmentCanary: { \(.*\) } } }\];/\1/p' <<<"$producer_canary_download")"
 producer_canary_fields="$(tr ',' '\n' <<<"$producer_canary_literal" | sed 's/^ *//;s/:.*//' | paste -sd, -)"
+consumer_canary_path_regex='^download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\.txt$'
+fixture_canary_path='download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt'
 [[ "$producer_reader_insert_evidence" =~ ^[a-z0-9_]+$ ]] || {
   echo 'Could not derive reader-insert denial evidence from the committed acceptance producer.' >&2
   exit 1
@@ -275,6 +279,8 @@ producer_canary_fields="$(tr ',' '\n' <<<"$producer_canary_literal" | sed 's/^ *
   "$producer_canary_mimetype" =~ ^[a-z0-9.+-]+/[a-z0-9.+-]+$ &&
   "$producer_canary_size" =~ ^[0-9]+$ &&
   "$producer_canary_sha256" =~ ^[a-f0-9]{64}$ &&
+  "$producer_canary_path_regex" == "$consumer_canary_path_regex" &&
+  "$fixture_canary_path" =~ $consumer_canary_path_regex &&
   "$producer_saved_view_title" =~ ^[A-Za-z0-9_-]+$ &&
   "$producer_saved_view_type" =~ ^[0-9]+$ &&
   "$producer_canary_fields" == 'state,rowId,savedViewId,savedViewTableId,savedViewTitle,savedViewType,commentId,attachmentId,path,title,mimetype,size,sha256' ]] || {
@@ -285,7 +291,8 @@ producer_canary_fields="$(tr ',' '\n' <<<"$producer_canary_literal" | sed 's/^ *
 probe_response() {
   jq -n --arg run_id "$run_id" --arg reader_insert_evidence "$producer_reader_insert_evidence" \
     --arg canary_title "$producer_canary_title" --arg canary_mimetype "$producer_canary_mimetype" \
-    --arg canary_sha256 "$producer_canary_sha256" --arg saved_view_title "$producer_saved_view_title" \
+    --arg canary_sha256 "$producer_canary_sha256" --arg canary_path "$fixture_canary_path" \
+    --arg saved_view_title "$producer_saved_view_title" \
     --argjson canary_size "$producer_canary_size" --argjson saved_view_type "$producer_saved_view_type" '{
     ok: true,
     operation: "probe",
@@ -307,7 +314,7 @@ probe_response() {
       state:"ready",rowId:"41",savedViewId:"view-facts",savedViewTableId:"table-facts",
       savedViewTitle:$saved_view_title,savedViewType:$saved_view_type,
       commentId:"comment-canary",attachmentId:"attachment-canary",
-      path:"download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt",
+      path:$canary_path,
       title:$canary_title,mimetype:$canary_mimetype,size:$canary_size,sha256:$canary_sha256
     },
     forbiddenOperations: {
@@ -414,6 +421,16 @@ jq -e '
   .beforeRotation.sha256 == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
 ' "$run_dir/diagnostics/attachment-canary.json" >/dev/null || fail 'durable attachment-canary evidence is absent or incomplete'
 [[ "$(file_mode "$run_dir/diagnostics/attachment-canary.json")" == 600 ]] || fail 'durable attachment-canary evidence is not mode 0600'
+assert_no_secret_output
+
+case_name='probe reflection must contain exactly the two approved tables'
+cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
+jq '.reflectedTables += [{id:"table-extra"}]' \
+  "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'extra reflected table did not clean current-run rows'
+mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
 assert_no_secret_output
 
 case_name='each successful probe must return the complete attachment canary'

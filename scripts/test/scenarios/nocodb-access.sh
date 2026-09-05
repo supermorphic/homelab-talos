@@ -431,6 +431,11 @@ validate_probe() { # <response> <source-response>
     .inserted == true and .read == true and .readerRead == true and
     .decisionUpdated == true and .removed == true and
     .reflectedSchemas == ["operator","read_model"] and
+    (.reflectedTables | type == "array" and length == 2) and
+    ([.reflectedTables[] | [.schema,.title]] | sort) == [
+      ["operator","acceptance_decision"],
+      ["read_model","acceptance_facts"]
+    ] and
     ([.reflectedTables[] | select(.schema == "read_model" and .tableName == "acceptance_facts")]) as $facts_tables |
     ([.reflectedTables[] | select(.schema == "operator" and .tableName == "acceptance_decision")]) as $decision_tables |
     ($facts_tables | length) == 1 and ($decision_tables | length) == 1 and
