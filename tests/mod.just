@@ -22,6 +22,15 @@ ci-plan-full base head output:
       --head {{quote(head)}} --impact tests/impact.yaml --catalog tests/catalog.yaml \
       --output {{quote(output)}} --full
 
+# Run one selected CI group and bind its canonical result to the exact plan.
+ci-group group plan:
+    #!/usr/bin/env bash
+    group={{quote(group)}}
+    execution="ci-$group"
+    [[ "$group" != ci-framework ]] || execution=ci-framework
+    scripts/test/run-ci.sh --execution "$execution" --group "$group" \
+      --plan {{quote(plan)}}
+
 # Validate one canonical run directory by run ID.
 result-validate run:
     @scripts/test/validate-run.sh ".test-results/{{run}}"
