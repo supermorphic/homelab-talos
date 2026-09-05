@@ -83,8 +83,8 @@ grafana:
   # Grafana pod terminates before its replacement is created.
   deploymentStrategy:
     type: Recreate
-    # Explicitly clear the API-defaulted object during server-side apply.
-    # Omitting it leaves live rollingUpdate settings incompatible with Recreate.
+    # Clear the API-defaulted object using the HelmRelease's client-side merge.
+    # Explicit null alone is insufficient with server-side apply.
     rollingUpdate: null
   admin:
     existingSecret: grafana-admin-secret

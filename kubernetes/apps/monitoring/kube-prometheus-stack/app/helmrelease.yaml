@@ -28,6 +28,9 @@ spec:
   targetNamespace: monitoring
   timeout: 20m
   upgrade:
+    # SSA retains Grafana's unowned rollingUpdate defaults even with explicit
+    # null. Use typed strategic merge for this release; never force replacement.
+    serverSideApply: disabled
     cleanupOnFail: true
     crds: CreateReplace
     remediation:

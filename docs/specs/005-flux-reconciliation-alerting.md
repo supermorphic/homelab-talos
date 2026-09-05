@@ -162,12 +162,30 @@ This is direct evidence of the September failure, not proof of the July failure'
 The first render omitted `rollingUpdate`. That was insufficient: the live object had
 API-defaulted rolling-update settings, while the controller's managed fields owned
 only `strategy.type`. The earlier review considered client-side strategic merging;
-the observed request instead used server-side apply. The corrected chart values render
-an explicit `rollingUpdate: null` to clear the field, following Kubernetes' guidance on
-[clearing defaulted fields](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/#default-field-values).
-The regression check distinguishes explicit null from an absent field. It proves the
-rendered deletion instruction, not API-server acceptance; no local API server was
-available for a full offline transition test.
+the observed request instead used server-side apply. [PR #368](https://github.com/supermorphic/homelab-talos/pull/368)
+added an explicit `rollingUpdate: null`, but its first upgrade (revision 61) failed with
+the same rejection. Inspection confirmed that Flux's values ConfigMap contained the
+null. The chart-render check was insufficient. Kubernetes' guidance on
+[clearing defaulted fields](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/#default-field-values)
+describes client-side apply; it did not establish the server-side-apply behavior.
+
+A local reproduction used Kubernetes `v0.35.6` managed-fields libraries and the generated
+Deployment schema, with a synthetic live object matching the observed field ownership:
+the controller owns only `strategy.type`, not the API-defaulted `rollingUpdate` object.
+Both omission and explicit null retained the live rolling-update map after forced
+server-side apply. The typed three-way strategic-merge path instead produced a patch
+with `strategy.$retainKeys: [type]`, `rollingUpdate: null`, and `type: Recreate`; applying
+that patch removed the incompatible map. This reproduces the merge boundary without a
+live API server, admission webhooks, or Helm release storage.
+
+The correction sets `.spec.upgrade.serverSideApply: disabled` on kube-prometheus-stack.
+This selects Helm's supported client-side strategic-merge path for upgrades of the
+whole release, not just Grafana. No per-resource apply-mode override is used. It does
+not force replacement or change global controller settings. The explicit null and
+`Recreate` remain in Grafana's values; install, rollback, drift-detection settings, chart
+versions, and the dedicated exporter are unchanged. The validator requires the tested
+upgrade mode and the rendered strategy. Returning this release to server-side apply
+requires separate transition evidence; a successful chart render is not that evidence.
 
 Acceptance of the correction remains pending: verify a new successful Helm release
 revision, the live Grafana Deployment strategy and readiness, and `monitoring-verify`.
