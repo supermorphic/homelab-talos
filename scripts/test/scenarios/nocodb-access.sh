@@ -100,6 +100,7 @@ http_request() { # <label> <url> <token-kind|none> <body> <response> <expected-s
   local config="$temp_dir/${label}.curl" status curl_status
   {
     printf '%s\n' 'silent' 'show-error' 'request = "POST"' 'max-time = 720' \
+      'max-filesize = 65536' \
       'header = "Content-Type: application/json"'
     case "$token_kind" in
       provisioning)
@@ -142,7 +143,7 @@ http_request() { # <label> <url> <token-kind|none> <body> <response> <expected-s
 acceptance_request() { # <operation> <response>
   local operation="$1" response="$2" body
   body="$temp_dir/acceptance-${operation}.json"
-  verify_lease
+  verify_lease || return
   jq -n --arg operation "$operation" --arg run_id "$run_id" \
     '{operation: $operation, runId: $run_id}' >"$body"
   http_request "acceptance-${operation}" "$acceptance_url" acceptance \
@@ -187,40 +188,93 @@ namespace='automation-data'
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 pods_json="$temp_dir/pods.json"
 workloads_json="$temp_dir/workloads.json"
-"${kc[@]}" get pods --selector app.kubernetes.io/name=nocodb --output json >"$pods_json"
-"${kc[@]}" get deployments,statefulsets --output json >"$workloads_json"
+services_json="$temp_dir/services.json"
+"${kc[@]}" get pods --output json >"$pods_json"
+"${kc[@]}" get deployments,statefulsets,daemonsets,jobs,cronjobs --output json >"$workloads_json"
+"${kc[@]}" get services --output json >"$services_json"
 jq -e '
-  (.items | length) == 1 and
-  .items[0].metadata.labels["app.kubernetes.io/name"] == "nocodb" and
-  .items[0].status.phase == "Running" and
-  (.items[0].status.containerStatuses | length) == 1 and
-  .items[0].status.containerStatuses[0].name == "nocodb" and
-  .items[0].status.containerStatuses[0].ready == true
+  def marked:
+    (({name: .metadata.name, labels: (.metadata.labels // {})} | tostring | ascii_downcase) | test("nocodb|redis")) or
+    ([.spec.containers[]?, .spec.initContainers[]?, .spec.ephemeralContainers[]? |
+      select(((.name + " " + (.image // "")) | ascii_downcase) | test("nocodb|redis"))] | length > 0);
+  [.items[] | select(.metadata.labels["app.kubernetes.io/name"] == "nocodb")] as $apps |
+  [.items[] | select(marked)] as $marked |
+  ($apps | length) == 1 and
+  $apps[0].status.phase == "Running" and
+  ($apps[0].spec.containers | length) == 1 and
+  $apps[0].spec.containers[0].name == "nocodb" and
+  $apps[0].spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  (($apps[0].spec.initContainers // []) | length) == 0 and
+  (($apps[0].spec.ephemeralContainers // []) | length) == 0 and
+  ($apps[0].status.containerStatuses | length) == 1 and
+  $apps[0].status.containerStatuses[0].name == "nocodb" and
+  $apps[0].status.containerStatuses[0].ready == true and
+  all($marked[];
+    (.metadata.name == $apps[0].metadata.name) or
+    (
+      .metadata.labels["app.kubernetes.io/name"] == "nocodb-metadata-bootstrap" and
+      (.spec.containers | length) == 1 and
+      .spec.containers[0].name == "bootstrap" and
+      .spec.containers[0].image == "postgres:17.11-alpine3.24" and
+      ((.spec.initContainers // []) | length) == 0 and
+      ((.spec.ephemeralContainers // []) | length) == 0
+    )
+  )
 ' "$pods_json" >/dev/null || {
-  echo 'NocoDB must have exactly one ready application pod.' >&2
+  echo 'NocoDB must have one ready application pod and no unapproved NocoDB or Redis pod.' >&2
+  exit 1
+}
+jq -e '
+  def containers: [
+    .spec.template.spec.containers[]?,
+    .spec.template.spec.initContainers[]?,
+    .spec.jobTemplate.spec.template.spec.containers[]?,
+    .spec.jobTemplate.spec.template.spec.initContainers[]?
+  ];
+  def marked:
+    (({name: .metadata.name, labels: (.metadata.labels // {})} | tostring | ascii_downcase) | test("nocodb|redis")) or
+    ([containers[] | select(((.name + " " + (.image // "")) | ascii_downcase) | test("nocodb|redis"))] | length > 0);
+  [.items[] | select(marked)] as $marked |
+  [$marked[] | select(.kind == "Deployment" and .metadata.name == "nocodb")] as $apps |
+  [$marked[] | select(.kind == "Job" and .metadata.name == "nocodb-metadata-bootstrap")] as $bootstraps |
+  ($marked | length) == 2 and ($apps | length) == 1 and ($bootstraps | length) == 1 and
+  $apps[0].metadata.labels["app.kubernetes.io/name"] == "nocodb" and
+  $apps[0].spec.replicas == 1 and
+  $apps[0].spec.strategy.type == "Recreate" and
+  ($apps[0].spec.template.spec.containers | length) == 1 and
+  $apps[0].spec.template.spec.containers[0].name == "nocodb" and
+  $apps[0].spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  (($apps[0].spec.template.spec.initContainers // []) | length) == 0 and
+  $bootstraps[0].metadata.labels["app.kubernetes.io/name"] == "nocodb-metadata-bootstrap" and
+  ($bootstraps[0].spec.template.spec.containers | length) == 1 and
+  $bootstraps[0].spec.template.spec.containers[0].name == "bootstrap" and
+  $bootstraps[0].spec.template.spec.containers[0].image == "postgres:17.11-alpine3.24" and
+  (($bootstraps[0].spec.template.spec.initContainers // []) | length) == 0
+' "$workloads_json" >/dev/null || {
+  echo 'NocoDB workload inventory must contain only the approved Recreate app and metadata bootstrap Job.' >&2
   exit 1
 }
 jq -e '
   [.items[] | select(
-    (.metadata.name | ascii_downcase | test("nocodb|redis")) or
-    ((.metadata.labels // {} | tostring | ascii_downcase) | test("nocodb|redis"))
-  )] as $related |
-  ($related | length) == 1 and
-  $related[0].kind == "Deployment" and
-  $related[0].metadata.name == "nocodb" and
-  $related[0].spec.replicas == 1 and
-  $related[0].spec.strategy.type == "Recreate" and
-  ([$related[] | select((.metadata.name | ascii_downcase | test("worker|redis")) or ((.metadata.labels // {} | tostring | ascii_downcase) | test("worker|redis")))] | length) == 0 and
-  ([$related[].spec.template.spec.containers[]? | select((.name | ascii_downcase | test("worker|redis")) or ([.env[]? | (.name + "=" + (.value // "")) | ascii_downcase | test("redis")] | any))] | length) == 0
-' "$workloads_json" >/dev/null || {
-  echo 'NocoDB runtime must be one Recreate application Deployment without a worker or Redis.' >&2
+    (({name: .metadata.name, labels: (.metadata.labels // {}), selector: (.spec.selector // {}), ports: (.spec.ports // [])} | tostring | ascii_downcase) | test("nocodb|redis"))
+  )] as $marked |
+  ($marked | length) == 1 and
+  $marked[0].kind == "Service" and
+  $marked[0].metadata.name == "nocodb" and
+  $marked[0].metadata.labels["app.kubernetes.io/name"] == "nocodb" and
+  $marked[0].spec.type == "ClusterIP" and
+  $marked[0].spec.selector["app.kubernetes.io/name"] == "nocodb" and
+  ($marked[0].spec.ports | length) == 1 and
+  $marked[0].spec.ports[0].port == 8080
+' "$services_json" >/dev/null || {
+  echo 'NocoDB service inventory must contain only the approved application Service and no Redis service.' >&2
   exit 1
 }
 
 provision_body="$temp_dir/provision.json"
 provision_response="$temp_dir/provision-response.json"
 jq -n '{domain: "issue334_acceptance", operation: "provision"}' >"$provision_body"
-verify_lease
+verify_lease || exit 1
 http_request provision "$provisioning_url" provisioning "$provision_body" \
   "$provision_response" 200
 jq -e '
@@ -250,7 +304,7 @@ RUN_ID="$run_id" jq -e '
 source_request() { # <operation> <response>
   local operation="$1" response="$2" body
   body="$temp_dir/source-${operation}-$(basename "$response")"
-  verify_lease
+  verify_lease || return
   if [[ "$operation" == sync ]]; then
     jq -n '{domain: "issue334_acceptance", operation: "sync"}' >"$body"
   else
@@ -343,11 +397,18 @@ jq -e '
   echo 'Reader completion did not precede operator creation.' >&2
   exit 1
 }
+reader_source_signature() {
+  jq -cS '[.baseId, (.reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration})]' "$1"
+}
+[[ "$(reader_source_signature "$ready_sync")" == "$(reader_source_signature "$first_sync")" ]] || {
+  echo 'Second source sync replaced the ready reader or its base, job, or generation identity.' >&2
+  exit 1
+}
 
 signup_body="$temp_dir/signup.json"
 signup_response="$temp_dir/signup-response.json"
 jq -n '{email:"acceptance-denied@example.invalid",password:"acceptance-only-not-a-secret"}' >"$signup_body"
-verify_lease
+verify_lease || exit 1
 http_request signup-denial 'https://nocodb.lab.supermorphic.com/api/v1/auth/user/signup' none \
   "$signup_body" "$signup_response" '400 401 403'
 jq -e 'type == "object" and length > 0' "$signup_response" >/dev/null || {
@@ -370,7 +431,7 @@ validate_probe() {
     .forbiddenOperations.protectedUpdateEvidence == "postgresql_42501" and
     .forbiddenOperations.readerInsertDenied == true and
     .forbiddenOperations.readerInsertStatus == 403 and
-    .forbiddenOperations.readerInsertEvidence == "nocodb_readonly_source" and
+    .forbiddenOperations.readerInsertEvidence == "source_read_only" and
     .publicSharing.basePublicShareUuid == null and
     (.publicSharing.views | length) == 2 and
     ([.publicSharing.views[] | [.title,.publicShareUuid]] | sort) == [["acceptance_decision",null],["acceptance_facts",null]]
@@ -393,7 +454,11 @@ if ! validate_source_envelope "$unchanged_sync" sync ||
   exit 1
 fi
 stable_source_signature() {
-  jq -cS '[.baseId, .reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}, .operator | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}]' "$1"
+  jq -cS '[
+    .baseId,
+    (.reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}),
+    (.operator | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration})
+  ]' "$1"
 }
 [[ "$(stable_source_signature "$unchanged_sync")" == "$(stable_source_signature "$ready_sync")" ]] || {
   echo 'Unchanged source sync changed job, source, integration, or generation identity.' >&2
@@ -409,7 +474,11 @@ if ! validate_source_envelope "$rotated_source" rotate ||
   exit 1
 fi
 rotation_stable_signature() {
-  jq -cS '[.baseId, .reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}, .operator | {sourceId,integrationId,sourceCreateJobId}]' "$1"
+  jq -cS '[
+    .baseId,
+    (.reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration}),
+    (.operator | {sourceId,integrationId,sourceCreateJobId})
+  ]' "$1"
 }
 [[ "$(rotation_stable_signature "$rotated_source")" == \
   "$(rotation_stable_signature "$unchanged_sync")" ]] &&

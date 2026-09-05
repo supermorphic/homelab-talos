@@ -42,7 +42,12 @@ set -euo pipefail
 printf 'kubectl\n' >>"${NOCODB_ACCESS_EVENT_LOG:?}"
 args=" $* "
 if [[ "$args" == *' get lease '* ]]; then
-  jq -n --arg holder "${TEST_CAMPAIGN_LEASE_HOLDER:-${TEST_RUN_ID:?}}" '{
+  holder="${TEST_CAMPAIGN_LEASE_HOLDER:-${TEST_RUN_ID:?}}"
+  if [[ "${NOCODB_ACCESS_LOSE_LEASE_ON_CLEANUP:-false}" == true &&
+    "$(rg -c '^acceptance-probe$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true)" -eq 2 ]]; then
+    holder='another-test-run'
+  fi
+  jq -n --arg holder "$holder" '{
     metadata: {resourceVersion: "7"},
     spec: {
       holderIdentity: $holder,
@@ -52,13 +57,50 @@ if [[ "$args" == *' get lease '* ]]; then
     }
   }'
 elif [[ "$args" == *' get pods '* ]]; then
-  if [[ "${NOCODB_ACCESS_BAD_RUNTIME:-false}" == true ]]; then
-    jq -n '{items: []}'
+  case "${NOCODB_ACCESS_BAD_RUNTIME_KIND:-none}" in
+    empty) jq -n '{items: []}' ;;
+    pod)
+      jq -n '{items: [
+        {metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}},
+        {metadata: {name: "opaque-helper", labels: {component: "alternate"}}, spec: {containers: [{name: "helper", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "helper", ready: true}]}}
+      ]}'
+      ;;
+    *)
+      jq -n '{items: [{metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}}]}'
+      ;;
+  esac
+elif [[ "$args" == *' get deployments,statefulsets,daemonsets,jobs,cronjobs '* ]]; then
+  case "${NOCODB_ACCESS_BAD_RUNTIME_KIND:-none}" in
+    daemonset)
+      jq -n '{items: [
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}},
+        {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}},
+        {kind: "DaemonSet", metadata: {name: "opaque-runtime", labels: {component: "alternate"}}, spec: {template: {spec: {containers: [{name: "executor", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}}
+      ]}'
+      ;;
+    job)
+      jq -n '{items: [
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}},
+        {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}},
+        {kind: "Job", metadata: {name: "opaque-cache", labels: {component: "alternate"}}, spec: {template: {spec: {containers: [{name: "cache", image: "docker.io/library/redis:8"}]}}}}
+      ]}'
+      ;;
+    *)
+      jq -n '{items: [
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9", env: [{name: "NC_SITE_URL", value: "https://nocodb.lab.supermorphic.com"}]}]}}}},
+        {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}}
+      ]}'
+      ;;
+  esac
+elif [[ "$args" == *' get services '* ]]; then
+  if [[ "${NOCODB_ACCESS_BAD_RUNTIME_KIND:-none}" == service ]]; then
+    jq -n '{items: [
+      {kind: "Service", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {type: "ClusterIP", selector: {"app.kubernetes.io/name": "nocodb"}, ports: [{name: "http", port: 8080}]}},
+      {kind: "Service", metadata: {name: "opaque-cache", labels: {component: "alternate"}}, spec: {selector: {component: "redis"}}}
+    ]}'
   else
-    jq -n '{items: [{metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}}]}'
+    jq -n '{items: [{kind: "Service", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {type: "ClusterIP", selector: {"app.kubernetes.io/name": "nocodb"}, ports: [{name: "http", port: 8080}]}}]}'
   fi
-elif [[ "$args" == *' get deployments,statefulsets '* ]]; then
-  jq -n '{items: [{kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", env: [{name: "NC_SITE_URL", value: "https://nocodb.lab.supermorphic.com"}]}]}}}}]}'
 elif [[ "$args" == *' config view '* ]]; then
   printf 'fixture-cluster'
 else
@@ -82,6 +124,7 @@ body_path="$(awk -F'"' '/^data-binary = / {value=$2; sub(/^@/, "", value); print
 [[ "$(mode "$body_path")" == 600 ]] || exit 67
 rg -Fxq 'request = "POST"' "$config" || exit 68
 rg -Fxq 'header = "Content-Type: application/json"' "$config" || exit 69
+rg -Fxq 'max-filesize = 65536' "$config" || exit 81
 
 case "$url" in
   https://n8n.lab.supermorphic.com/webhook/automation-data-provision)
@@ -130,6 +173,10 @@ case "$url" in
 esac
 
 printf '%s\n' "$event" >>"${NOCODB_ACCESS_EVENT_LOG:?}"
+if [[ "${NOCODB_ACCESS_OVERSIZE_RESPONSE:-}" == "$event" ]]; then
+  dd if=/dev/zero of="$output" bs=65537 count=1 2>/dev/null
+  exit 63
+fi
 cp "${NOCODB_ACCESS_RESPONSES:?}/$response" "$output"
 if [[ "$event" == signup-denial ]]; then
   printf '%s' "${NOCODB_ACCESS_SIGNUP_STATUS:-403}"
@@ -207,8 +254,15 @@ jq -n --argjson reader "$reader" --argjson operator "$operator_ready" '{ok:true,
 cp "$fixture/responses/source-sync-2.json" "$fixture/responses/source-sync-3.json"
 jq -n --argjson reader "$reader" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
 
+producer_probe_code="$(jq -r '.nodes[] | select(.name == "Evaluate Reader Insert Denial") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
+producer_reader_insert_evidence="$(sed -n "s/.*readerInsertEvidence: '\([^']*\)'.*/\1/p" <<<"$producer_probe_code")"
+[[ "$producer_reader_insert_evidence" =~ ^[a-z0-9_]+$ ]] || {
+  echo 'Could not derive reader-insert denial evidence from the committed acceptance producer.' >&2
+  exit 1
+}
+
 probe_response() {
-  jq -n --arg run_id "$run_id" '{
+  jq -n --arg run_id "$run_id" --arg reader_insert_evidence "$producer_reader_insert_evidence" '{
     ok: true,
     operation: "probe",
     runId: $run_id,
@@ -227,7 +281,7 @@ probe_response() {
     publicSharing: {basePublicShareUuid:null,views:[{title:"acceptance_facts",publicShareUuid:null},{title:"acceptance_decision",publicShareUuid:null}]},
     forbiddenOperations: {
       protectedUpdateDenied:true,protectedUpdateStatus:400,protectedUpdateEvidence:"postgresql_42501",
-      readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:"nocodb_readonly_source"
+      readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:$reader_insert_evidence
     }
   }'
 }
@@ -240,8 +294,9 @@ STATUS=0
 run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
 
-run_scenario() { # [confirmation|-] [bad-runtime] [signup-status]
-  local confirmation="${1:--}" bad_runtime="${2:-false}" signup_status="${3:-403}"
+run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup]
+  local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
+  local oversize_event="${4:-}" lose_lease_on_cleanup="${5:-false}"
   local result_root="$fixture/run-$RANDOM-$RANDOM"
   mkdir -p "$result_root/logs" "$result_root/diagnostics"
   run_dir="$result_root/$run_id"
@@ -254,7 +309,8 @@ run_scenario() { # [confirmation|-] [bad-runtime] [signup-status]
     OUT="$(PATH="$fixture/bin:$PATH" \
       NOCODB_ACCESS_EVENT_LOG="$fixture/events.log" NOCODB_ACCESS_RESPONSES="$fixture/responses" \
       NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
-      NOCODB_ACCESS_BAD_RUNTIME="$bad_runtime" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      NOCODB_ACCESS_BAD_RUNTIME_KIND="$bad_runtime_kind" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      NOCODB_ACCESS_OVERSIZE_RESPONSE="$oversize_event" NOCODB_ACCESS_LOSE_LEASE_ON_CLEANUP="$lose_lease_on_cleanup" \
       TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
       AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
       AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
@@ -267,7 +323,8 @@ run_scenario() { # [confirmation|-] [bad-runtime] [signup-status]
     OUT="$(PATH="$fixture/bin:$PATH" \
       NOCODB_ACCESS_EVENT_LOG="$fixture/events.log" NOCODB_ACCESS_RESPONSES="$fixture/responses" \
       NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
-      NOCODB_ACCESS_BAD_RUNTIME="$bad_runtime" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      NOCODB_ACCESS_BAD_RUNTIME_KIND="$bad_runtime_kind" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
+      NOCODB_ACCESS_OVERSIZE_RESPONSE="$oversize_event" NOCODB_ACCESS_LOSE_LEASE_ON_CLEANUP="$lose_lease_on_cleanup" \
       TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
       AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
       AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
@@ -298,11 +355,30 @@ assert_no_secret_output
 case_name='successful acceptance follows the exact lifecycle and writes separate phase evidence'
 run_scenario test:nocodb:access
 assert_status 0
-expected_order=$'kubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
+expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "unexpected lifecycle order: $(tr '\n' ' ' <"$fixture/events.log")"
 yq -e '.status == "passed" and .reason == "the fixed NocoDB access contract passed"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
 yq -e '.status == "passed" and .reason == "current-run acceptance rows were removed; domain, base, and sources were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
 yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
+assert_no_secret_output
+
+case_name='second sync must preserve the first base identity'
+cp "$fixture/responses/source-sync-2.json" "$fixture/responses/sync-two.valid.json"
+jq '.baseId = "replacement-base"' "$fixture/responses/sync-two.valid.json" >"$fixture/responses/source-sync-2.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'base drift did not clean current-run rows'
+mv "$fixture/responses/sync-two.valid.json" "$fixture/responses/source-sync-2.json"
+assert_no_secret_output
+
+case_name='second sync must preserve the first reader source identity and generations'
+cp "$fixture/responses/source-sync-2.json" "$fixture/responses/sync-two.valid.json"
+jq '.reader.sourceId = "replacement-reader" | .reader.generation = 2' \
+  "$fixture/responses/sync-two.valid.json" >"$fixture/responses/source-sync-2.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'reader drift did not clean current-run rows'
+mv "$fixture/responses/sync-two.valid.json" "$fixture/responses/source-sync-2.json"
 assert_no_secret_output
 
 case_name='a false denial boolean cannot be hidden behind a successful webhook'
@@ -333,14 +409,30 @@ yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'rotation
 mv "$fixture/responses/rotate.valid.json" "$fixture/responses/source-rotate.json"
 assert_no_secret_output
 
-case_name='runtime shape must be one ready application pod without worker or Redis'
-run_scenario test:nocodb:access true
+for invalid_runtime in empty daemonset job pod service; do
+  case_name="runtime inventory rejects $invalid_runtime alternate form"
+  run_scenario test:nocodb:access "$invalid_runtime"
+  assert_status 1
+  [[ "$(rg -c '^provision$' "$fixture/events.log" || true)" -eq 0 ]] || fail 'invalid runtime reached provisioning'
+  assert_no_secret_output
+done
+
+case_name='cleanup-time Lease loss prevents the cleanup webhook mutation'
+run_scenario test:nocodb:access none 403 '' true
 assert_status 1
-[[ "$(rg -c '^provision$' "$fixture/events.log" || true)" -eq 0 ]] || fail 'invalid runtime reached provisioning'
+yq -e '.status == "passed"' "$run_dir/assertion.json" >/dev/null || fail 'Lease loss changed the completed primary assertion'
+yq -e '.status == "failed"' "$run_dir/cleanup.json" >/dev/null || fail 'Lease loss was not recorded as failed cleanup'
+[[ "$(rg -c '^acceptance-cleanup$' "$fixture/events.log" || true)" -eq 0 ]] || fail 'cleanup webhook ran after Lease loss'
+assert_no_secret_output
+
+case_name='oversize response fails during bounded curl transfer and still cleans current-run rows'
+run_scenario test:nocodb:access none 403 provision
+assert_status 63
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'oversize response did not clean current-run rows'
 assert_no_secret_output
 
 case_name='signup must return an explicit denial status'
-run_scenario test:nocodb:access false 200
+run_scenario test:nocodb:access none 200
 assert_status 1
 yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'signup failure did not clean current-run rows'
 assert_no_secret_output
