@@ -5,6 +5,21 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+case "$#" in
+0) test_mode='full' ;;
+1)
+	[[ "$1" == --offline ]] || {
+		echo 'Usage: automation-data-upgrade-test.sh [--offline]' >&2
+		exit 2
+	}
+	test_mode='offline'
+	;;
+*)
+	echo 'Usage: automation-data-upgrade-test.sh [--offline]' >&2
+	exit 2
+	;;
+esac
+
 upgrade_command='scripts/upgrade/automation-data.sh'
 upgrade_sql='kubernetes/apps/automation-data/postgresql/app/scripts/upgrade-nocodb.sql'
 extension_sql='kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql'
@@ -15,6 +30,44 @@ kustomization='kubernetes/apps/automation-data/postgresql/app/kustomization.yaml
 fail() {
 	echo "automation-data upgrade test failed: $*" >&2
 	exit 1
+}
+
+remove_owned_containers() { # <run-marker> [container...]
+	local marker="$1" container exists_status label cleanup_failed=false
+	shift
+	for container in "$@"; do
+		set +e
+		podman container exists "$container" >/dev/null 2>&1
+		exists_status=$?
+		set -e
+		case "$exists_status" in
+		1) continue ;;
+		0) ;;
+		*)
+			cleanup_failed=true
+			continue
+			;;
+		esac
+		label="$(podman inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' \
+			"$container" 2>/dev/null)" || {
+			cleanup_failed=true
+			continue
+		}
+		if [[ "$label" != "$marker" ]]; then
+			cleanup_failed=true
+			continue
+		fi
+		podman rm --force "$container" >/dev/null 2>&1 || cleanup_failed=true
+		set +e
+		podman container exists "$container" >/dev/null 2>&1
+		exists_status=$?
+		set -e
+		[[ "$exists_status" == 1 ]] || cleanup_failed=true
+	done
+	if [[ "$cleanup_failed" == true ]]; then
+		echo 'Failed to remove or prove absence of run-owned PostgreSQL fixture containers.' >&2
+		return 1
+	fi
 }
 
 for source in "$upgrade_command" "$upgrade_sql" "$extension_sql" "$control_sql" \
@@ -103,10 +156,27 @@ case "$*" in
     fi
     ;;
   *'--namespace automation-data get job automation-data-nocodb-upgrade --output json')
-    if [[ "${UPGRADE_TEST_CASE:-}" == overlap ]]; then
+    echo 'legacy Job lookup without an explicit NotFound contract' >&2
+    exit 65
+    ;;
+  *'--namespace automation-data get job automation-data-nocodb-upgrade --ignore-not-found --output name')
+    if [[ "${UPGRADE_TEST_CASE:-}" == api-error ]]; then
+      exit 69
+    elif [[ "${UPGRADE_TEST_CASE:-}" == overlap ]]; then
+      printf '%s\n' 'job.batch/automation-data-nocodb-upgrade'
+    elif [[ -f "$UPGRADE_TEST_CASE_ROOT/job-exists" ]]; then
+      printf '%s\n' 'job.batch/automation-data-nocodb-upgrade'
+    fi
+    ;;
+  *'--namespace automation-data get job automation-data-nocodb-upgrade --ignore-not-found --output json')
+    if [[ "${UPGRADE_TEST_CASE:-}" == api-error ]]; then
+      exit 69
+    elif [[ "${UPGRADE_TEST_CASE:-}" == overlap ]]; then
       printf '%s\n' '{"metadata":{"name":"automation-data-nocodb-upgrade"}}'
+    elif [[ -f "$UPGRADE_TEST_CASE_ROOT/job-exists" ]]; then
+      yq -o=json "$UPGRADE_TEST_CASE_ROOT/job.yaml"
     else
-      exit 1
+      printf '%s' ''
     fi
     ;;
   *'--namespace automation-data get configmaps --output json')
@@ -114,7 +184,9 @@ case "$*" in
     ;;
   *'--namespace automation-data create --filename -')
     cat >"$UPGRADE_TEST_CASE_ROOT/job.yaml"
+    : >"$UPGRADE_TEST_CASE_ROOT/job-exists"
     printf 'create-job\n' >>"$UPGRADE_TEST_LOG"
+    [[ "${UPGRADE_TEST_CASE:-}" != ambiguous-create ]] || exit 74
     ;;
   *'--namespace automation-data wait --for=condition=Complete job/automation-data-nocodb-upgrade --timeout=5m')
     case "${UPGRADE_TEST_CASE:-}" in
@@ -122,10 +194,18 @@ case "$*" in
     esac
     ;;
   *'--namespace automation-data logs job/automation-data-nocodb-upgrade --container=upgrade')
-    printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
+    if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
+      printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
+    else
+      printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
+    fi
+    ;;
+  *'--namespace automation-data get pods --selector='*'--output json')
+    printf '%s\n' '{"items":[{"metadata":{"name":"owned-upgrade-pod"},"spec":{"containers":[{"env":[{"value":"UNSAFE_POD_SPEC"}]}]},"status":{"phase":"Failed","containerStatuses":[{"name":"upgrade","state":{"terminated":{"reason":"Error","exitCode":3}}}]}}]}'
     ;;
   *'--namespace automation-data delete job automation-data-nocodb-upgrade --wait=true --timeout=2m')
     printf 'delete-job\n' >>"$UPGRADE_TEST_LOG"
+    rm -f -- "$UPGRADE_TEST_CASE_ROOT/job-exists"
     ;;
   *) echo "unexpected kubectl invocation: $*" >&2; exit 64 ;;
 esac
@@ -149,13 +229,20 @@ run_case() {
 	return "$status"
 }
 
-for rejected in stale-source wrong-target missing-backup overlap; do
+for rejected in stale-source wrong-target missing-backup overlap api-error; do
 	if run_case "$rejected"; then
 		fail "$rejected was accepted"
 	fi
 	! rg -Fxq create-job "$UPGRADE_TEST_LOG" ||
 		fail "$rejected created a Job"
 done
+
+if run_case ambiguous-create; then
+	fail 'ambiguous create response was accepted'
+fi
+rg -Fxq create-job "$UPGRADE_TEST_LOG" || fail 'ambiguous create did not reach the API'
+rg -Fxq delete-job "$UPGRADE_TEST_LOG" || fail 'ambiguous create left its owned Job'
+[[ ! -e "$case_root/job-exists" ]] || fail 'ambiguous create cleanup did not prove absence'
 
 for sql_rejection in sql-unknown sql-partial sql-overlap; do
 	if run_case "$sql_rejection"; then
@@ -165,6 +252,16 @@ for sql_rejection in sql-unknown sql-partial sql-overlap; do
 		fail "$sql_rejection did not reach its bounded SQL Job"
 	rg -Fxq delete-job "$UPGRADE_TEST_LOG" ||
 		fail "$sql_rejection did not remove its bounded SQL Job"
+	if [[ "$sql_rejection" == sql-unknown ]]; then
+		rg -Fq 'upgrade_job_state=' "$case_root/output" ||
+			fail 'failed Job omitted bounded structured Job diagnostics'
+		rg -Fq 'upgrade_pod_state=' "$case_root/output" ||
+			fail 'failed Job omitted bounded structured Pod diagnostics'
+		rg -Fq 'upgrade_failure=unknown_platform_revision' "$case_root/output" ||
+			fail 'failed Job omitted its reviewed SQL failure classification'
+		! rg -F 'UNSAFE_RAW_DIAGNOSTIC\|UNSAFE_POD_SPEC' "$case_root/output" >/dev/null ||
+			fail 'failed Job exposed raw log or Pod-spec content'
+	fi
 done
 
 run_case valid || fail 'valid fixed upgrade was rejected'
@@ -182,6 +279,42 @@ rg -Fxq 'installed_revision=026-nocodb-v1' "$case_root/output" ||
 
 echo 'automation-data fixed upgrade command contract passed.'
 
+cleanup_bin="$fixture/cleanup-bin"
+mkdir -p "$cleanup_bin"
+cat >"$cleanup_bin/podman" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'podman\t%s\n' "$*" >>"$UPGRADE_TEST_LOG"
+case "$*" in
+  'container exists owned-fixture') exit 0 ;;
+  'inspect --format {{ index .Config.Labels "homelab-talos.test-run" }} owned-fixture')
+    printf '%s\n' 'test-run-marker'
+    ;;
+  'rm --force owned-fixture') exit 80 ;;
+  *) exit 81 ;;
+esac
+EOF
+chmod 700 "$cleanup_bin/podman"
+: >"$UPGRADE_TEST_LOG"
+if PATH="$cleanup_bin:$PATH" remove_owned_containers test-run-marker owned-fixture \
+	>"$fixture/cleanup-output" 2>&1; then
+	fail 'Podman cleanup suppressed a run-owned removal failure'
+fi
+rg -Fq 'Failed to remove or prove absence' "$fixture/cleanup-output" ||
+	fail 'Podman cleanup failure was not reported'
+rg -Fq $'podman\tinspect --format {{ index .Config.Labels "homelab-talos.test-run" }} owned-fixture' \
+	"$UPGRADE_TEST_LOG" || fail 'Podman cleanup did not validate exact run ownership'
+rg -Fq $'podman\trm --force owned-fixture' "$UPGRADE_TEST_LOG" ||
+	fail 'Podman cleanup did not attempt removal of its exact container'
+
+rg -Fq 'scripts/test/automation-data-upgrade-test.sh --offline' \
+	scripts/validate/automation-data.sh || fail 'offline upgrade command regressions are not enrolled in automation-data validation'
+
+[[ "$test_mode" == full ]] || {
+	echo 'automation-data offline upgrade regressions passed.'
+	exit 0
+}
+
 # Real database proof. The old initialization sources come from committed Git objects;
 # no file from another checkout or worktree participates in this fixture.
 command -v podman >/dev/null || fail 'Podman is required for the upgrade integration test'
@@ -190,22 +323,27 @@ podman info >/dev/null 2>&1 || fail 'Podman engine is unavailable'
 integration_root="$(mktemp -d "$repo_root/.tmp/automation-data-upgrade-pg.XXXXXX")"
 chmod 700 "$integration_root"
 containers=()
+podman_run_marker="task1-${integration_root##*.}-$$"
 cleanup_integration() {
-	local container
+	local original_exit="$?" cleanup_failed=false
+	trap - EXIT
 	set +e
-	for container in "${containers[@]}"; do
-		podman rm --force "$container" >/dev/null 2>&1 || true
-	done
-	rm -rf -- "$integration_root"
+	remove_owned_containers "$podman_run_marker" "${containers[@]}" || cleanup_failed=true
+	rm -rf -- "$integration_root" || cleanup_failed=true
+	rm -rf -- "$fixture" || cleanup_failed=true
+	set -e
+	[[ "$cleanup_failed" == false ]] || exit 1
+	exit "$original_exit"
 }
-trap 'cleanup_integration; rm -rf -- "$fixture"' EXIT
+trap cleanup_integration EXIT
 
 baseline='508a1b8f4562'
 image='postgres:17.11-alpine3.24'
 baseline_scripts="$integration_root/baseline-scripts"
 candidate_scripts="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts"
 mkdir -p "$baseline_scripts" "$integration_root/backups/old" \
-	"$integration_root/backups/new" "$integration_root/private"
+	"$integration_root/backups/new" "$integration_root/backups/malformed-old" \
+	"$integration_root/backups/malformed-new" "$integration_root/private"
 chmod 700 "$integration_root/private"
 for source_name in init-platform.sh platform-control.sql update-backup-status.sql; do
 	git show "$baseline:kubernetes/apps/automation-data/postgresql/app/scripts/$source_name" \
@@ -271,18 +409,24 @@ start_database() { # <name> <baseline|candidate|empty>
 	empty) environment_overrides+=(--env POSTGRES_DB=postgres) ;;
 	*) return 2 ;;
 	esac
-	podman run --detach --name "$name" --env-file "$credential_env" \
+	set +e
+	podman container exists "$name" >/dev/null 2>&1
+	local exists_status=$?
+	set -e
+	[[ "$exists_status" == 1 ]] || fail "refusing non-absent $mode PostgreSQL fixture name"
+	containers+=("$name")
+	podman run --detach --name "$name" --label "homelab-talos.test-run=$podman_run_marker" \
+		--env-file "$credential_env" \
 		"${environment_overrides[@]}" "${volumes[@]}" "$image" >"$log" 2>&1 ||
 		fail "could not start $mode PostgreSQL fixture"
-	containers+=("$name")
 	for _attempt in {1..60}; do
 		if podman exec "$name" pg_isready --username postgres >/dev/null 2>&1; then
 			return 0
 		fi
 		sleep 1
 	done
-	tail -n 60 "$log" >&2
-	podman logs --tail 60 "$name" >&2 || true
+	podman inspect --format='postgres_fixture_state={{.State.Status}} exit_code={{.State.ExitCode}}' \
+		"$name" 2>/dev/null >&2 || true
 	fail "$mode PostgreSQL fixture did not become ready"
 }
 
@@ -353,11 +497,31 @@ run_backup_in_container() { # <container> <host-output-directory>
 	container_output="/tmp/$(basename "$output")"
 	podman exec "$container" mkdir -p "$container_output"
 	podman cp "$candidate_scripts/backup.sh" "$container:/tmp/candidate-backup.sh"
-	podman exec --env BACKUP_DIR="$container_output" --env PGDATABASE=automation_data_control \
-		--env PGUSER=postgres "$container" /bin/sh /tmp/candidate-backup.sh >/dev/null
+	if ! podman exec --env BACKUP_DIR="$container_output" \
+		--env PGDATABASE=automation_data_control --env PGUSER=postgres \
+		"$container" /bin/sh /tmp/candidate-backup.sh >/dev/null; then
+		return 1
+	fi
 	podman cp "$container:$container_output/." "$output"
 }
-run_backup_in_container "$old_container" "$integration_root/backups/old"
+
+# The recognized baseline is an exact bounded catalog, not merely absence of the two
+# extension tables. A leftover extension function must stop backup publication.
+# shellcheck disable=SC2016 # PostgreSQL dollar quoting is intentionally literal.
+psql_query "$old_container" automation_data_control \
+	'CREATE FUNCTION platform_internal.assert_nocodb_access_kind(text) RETURNS void LANGUAGE sql AS $$SELECT NULL::void$$;' \
+	>/dev/null
+if run_backup_in_container "$old_container" "$integration_root/backups/malformed-old" \
+	>"$integration_root/private/malformed-old-backup.log" 2>&1; then
+	fail 'baseline backup accepted a leftover NocoDB extension function'
+fi
+! find "$integration_root/backups/malformed-old" -type f -name COMPLETE -print -quit | rg -q . ||
+	fail 'malformed baseline published a complete backup'
+psql_query "$old_container" automation_data_control \
+	'DROP FUNCTION platform_internal.assert_nocodb_access_kind(text);' >/dev/null
+
+run_backup_in_container "$old_container" "$integration_root/backups/old" ||
+	fail 'candidate backup rejected the exact old schema'
 old_bundle="$(find "$integration_root/backups/old" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$old_bundle" && -s "$old_bundle/COMPLETE" ]] ||
@@ -462,7 +626,34 @@ installed_at_after="$(psql_query "$old_container" automation_data_control \
 rg -Fxq 'installed_revision=026-nocodb-v1' "$rerun_output" ||
 	fail 'no-op rerun did not validate the installed revision'
 
-run_backup_in_container "$old_container" "$integration_root/backups/new"
+expect_oracle_grant_failure() { # <mutation> <restoration> <description>
+	local mutation="$1" restoration="$2" description="$3"
+	psql_query "$old_container" automation_data_control "$mutation" >/dev/null
+	if psql_query "$old_container" automation_data_control \
+		'SELECT platform_operations.read_platform_revision();' \
+		>"$integration_root/private/oracle-grant-drift.log" 2>&1; then
+		fail "revision oracle accepted $description"
+	fi
+	psql_query "$old_container" automation_data_control "$restoration" >/dev/null
+}
+expect_oracle_grant_failure \
+	'REVOKE EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM automation_data_provisioner;' \
+	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_provisioner;' \
+	'missing provisioner execute grant'
+expect_oracle_grant_failure \
+	'REVOKE EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM automation_data_backup;' \
+	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_backup;' \
+	'missing backup execute grant'
+expect_oracle_grant_failure \
+	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO PUBLIC;' \
+	'REVOKE EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM PUBLIC;' \
+	'PUBLIC execute grant'
+[[ "$(psql_query "$old_container" automation_data_control \
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	fail 'revision oracle did not recover after restoring exact grants'
+
+run_backup_in_container "$old_container" "$integration_root/backups/new" ||
+	fail 'candidate backup rejected the oracle-validated upgraded schema'
 new_bundle="$(find "$integration_root/backups/new" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$new_bundle" && -s "$new_bundle/COMPLETE" ]] ||
@@ -495,6 +686,22 @@ psql_query "$fresh_container" automation_data_control "$extension_catalog_query"
 	>"$integration_root/fresh-catalog"
 cmp -s "$integration_root/upgraded-catalog" "$integration_root/fresh-catalog" ||
 	fail 'fresh and upgraded extension catalogs differ'
+
+# Upgraded backup classification must execute the revision oracle. A concrete missing
+# required function therefore makes both the oracle and backup publication fail.
+psql_query "$fresh_container" automation_data_control \
+	'DROP FUNCTION platform_operations.record_nocodb_source_job(text, text, text);' >/dev/null
+if psql_query "$fresh_container" automation_data_control \
+	'SELECT platform_operations.read_platform_revision();' \
+	>"$integration_root/private/malformed-new-oracle.log" 2>&1; then
+	fail 'revision oracle accepted a missing required NocoDB function'
+fi
+if run_backup_in_container "$fresh_container" "$integration_root/backups/malformed-new" \
+	>"$integration_root/private/malformed-new-backup.log" 2>&1; then
+	fail 'upgraded backup bypassed the revision oracle'
+fi
+! find "$integration_root/backups/malformed-new" -type f -name COMPLETE -print -quit | rg -q . ||
+	fail 'malformed upgraded catalog published a complete backup'
 
 restore_bundle() { # <bundle> <expected-revision>
 	local bundle="$1" expected="$2" name restore_container globals_filtered
@@ -543,6 +750,9 @@ printf '%s\n' \
 	'managed_domain_registry_unchanged=true' \
 	'platform_generation_unchanged=true' \
 	'backup_capture_detects_revision_change=true' \
+	'old_catalog_leftover_rejected=true' \
+	'upgraded_catalog_oracle_enforced=true' \
+	'revision_oracle_grants_enforced=true' \
 	'password_verifiers_equal=true' \
 	'old_bundle_restore_valid=true' \
 	'upgraded_bundle_restore_valid=true' \

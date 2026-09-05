@@ -64,18 +64,29 @@ case "$tool" in
       printf 'status-attempt\t%s\n' "$*" >>"$FAKE_LOG"
       [[ "${FAIL_STAGE:-}" != status ]] || exit 41
       printf 'freshness-advanced\n' >>"$FAKE_LOG"
-    elif [[ "$command_text" == *capture_backup_state* ]]; then
+    elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
       case "${STATE_SCHEMA:-new}" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43
+          printf '%s\n' '025-baseline'
           ;;
         new)
-          [[ "$command_text" == *"026-nocodb-v1"* ]] || exit 44
+          printf '%s\n' 'upgraded-candidate'
           ;;
         unknown | partial)
-          exit 45
+          printf '%s\n' 'invalid'
           ;;
         *) exit 46 ;;
+      esac
+    elif [[ "$command_text" == *read_platform_revision* ]]; then
+      [[ "${STATE_SCHEMA:-new}" == new ]] || exit 48
+      printf '%s\n' '026-nocodb-v1'
+      printf 'revision-oracle\n' >>"$FAKE_LOG"
+    elif [[ "$command_text" == *capture_backup_state* ]]; then
+      case "${STATE_SCHEMA:-new}" in
+        old) [[ "$command_text" == *"025-baseline"* ]] || exit 43 ;;
+        new) [[ "$command_text" == *"026-nocodb-v1"* ]] || exit 44 ;;
+        *) exit 45 ;;
       esac
       count=0
       [[ ! -f "$FAKE_STATE_COUNT" ]] || count="$(<"$FAKE_STATE_COUNT")"
@@ -91,7 +102,12 @@ case "$tool" in
         printf 'stuck\tstuck\tstuck_owner\tstuck_migrator\tstuck_runtime\terror\tfalse\t7\t\t\t\t\t2026-08-26T00:00:00Z\t2026-08-26T00:00:00Z\tworkflow_operation_failed'
       )"
       encoded_registry="$(printf '%s' "$registry" | base64 | tr -d '\n')"
-      printf '%s|%s\n' "$generation" "$encoded_registry"
+      state_marker='stable'
+      if [[ "${UNSTABLE_ONCE:-}" == state && "$count" == 2 ]]; then
+        state_marker='revision-changed'
+      fi
+      encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
+      printf '%s|%s|%s\n' "$generation" "$encoded_state" "$encoded_registry"
       printf 'capture-state\t%s\n' "$generation" >>"$FAKE_LOG"
     elif [[ "$command_text" == *pg_database* ]]; then
       count=0
@@ -256,6 +272,8 @@ rename_target="$(cut -f3 <<<"$rename_record")"
   fail 'bundle publication must rename within one filesystem'
 rg -q '^freshness-advanced$' "$success_case/commands.log" ||
   fail 'successful final validation did not advance freshness'
+[[ "$(rg -c '^revision-oracle$' "$success_case/commands.log")" == 2 ]] ||
+  fail 'upgraded backup did not validate revision through the oracle before both captures'
 
 for failure_stage in globals dump restore checksum rename final_validation status; do
   failure_case="$(new_case "failure-$failure_stage")"
@@ -268,7 +286,7 @@ for failure_stage in globals dump restore checksum rename final_validation statu
     fail "$failure_stage failure advanced freshness"
 done
 
-for unstable_kind in database generation; do
+for unstable_kind in database generation state; do
   retry_case="$(new_case "retry-$unstable_kind")"
   run_backup "$retry_case" '' "$unstable_kind"
   [[ "$(rg -c '^pg_dumpall\t' "$retry_case/commands.log")" == 2 ]] ||

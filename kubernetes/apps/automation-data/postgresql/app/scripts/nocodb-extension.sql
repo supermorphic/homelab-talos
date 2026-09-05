@@ -787,6 +787,17 @@ BEGIN
       'platform_operations.capture_backup_state()'::regprocedure,
       'EXECUTE'
     ) OR
+    (SELECT array_agg((CASE WHEN privilege.grantee = 0 THEN 'PUBLIC'
+        ELSE grantee_role.rolname::text END) ORDER BY
+        CASE WHEN privilege.grantee = 0 THEN 'PUBLIC' ELSE grantee_role.rolname::text END)
+     FROM pg_proc AS oracle
+     CROSS JOIN LATERAL aclexplode(
+       COALESCE(oracle.proacl, acldefault('f', oracle.proowner))
+     ) AS privilege
+     LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = privilege.grantee
+     WHERE oracle.oid = 'platform_operations.read_platform_revision()'::regprocedure
+       AND privilege.privilege_type = 'EXECUTE') IS DISTINCT FROM
+      ARRAY['automation_data_backup', 'automation_data_provisioner', 'postgres']::text[] OR
     has_table_privilege('public', 'platform_operations.managed_nocodb_sources', 'SELECT') OR
     EXISTS (
       SELECT 1 FROM pg_tables

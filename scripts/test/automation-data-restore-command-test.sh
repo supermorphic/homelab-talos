@@ -6,6 +6,15 @@ source scripts/test/lib/automation-data-restore-command.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 
+rg -Fq 'read_platform_revision' scripts/test/lib/automation-data-restore-command.sh || {
+  echo 'automation-data restore command test failed: upgraded classification bypasses the revision oracle' >&2
+  exit 1
+}
+rg -Fq 'assert_nocodb_access_kind' scripts/test/lib/automation-data-restore-command.sh || {
+  echo 'automation-data restore command test failed: old classification accepts leftover extension functions' >&2
+  exit 1
+}
+
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-restore-command-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
 real_sha256sum="$(command -v sha256sum)"
@@ -225,6 +234,15 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
     printf '%s' "$database" | base64 | tr -d '\n'
     printf '\n'
   done
+elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
+  case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v1}" in
+    025-baseline) printf '%s\n' '025-baseline' ;;
+    026-nocodb-v1) printf '%s\n' 'upgraded-candidate' ;;
+    *) printf '%s\n' 'invalid' ;;
+  esac
+elif [[ "$command_text" == *read_platform_revision* ]]; then
+  [[ "${ORACLE_FAILURE:-false}" != true ]] || exit 51
+  printf '%s\n' '026-nocodb-v1'
 elif [[ "$command_text" == *'025-baseline'* && "$command_text" == *'026-nocodb-v1'* ]]; then
   printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v1}"
 elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
@@ -265,7 +283,8 @@ EOF
 
 run_restore() {
   local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}"
-  local platform_revision="${4:-026-nocodb-v1}" output status=0 command
+  local platform_revision="${4:-026-nocodb-v1}" oracle_failure="${5:-false}"
+  local output status=0 command
   command="$(automation_data_restore_job_command)"
   output="$(
     env \
@@ -283,6 +302,7 @@ run_restore() {
       VALIDATION_RESULT="$validation_result" \
       NOCODB_VALIDATION_RESULT="$nocodb_validation_result" \
       RESTORED_PLATFORM_REVISION="$platform_revision" \
+      ORACLE_FAILURE="$oracle_failure" \
       REAL_SHA256SUM="$real_sha256sum" \
       /bin/sh -ceu "$command" 2>&1
   )" || status="$?"
@@ -303,6 +323,12 @@ create_bundle "$unknown_schema_restore/backups" 20260824T003001Z
 run_restore "$unknown_schema_restore" true true unknown
 [[ "$(<"$unknown_schema_restore/status")" != '0' ]] ||
   fail 'unknown restored platform revision was accepted'
+
+oracle_failure_restore="$(new_case oracle-failure-restore)"
+create_bundle "$oracle_failure_restore/backups" 20260824T003002Z
+run_restore "$oracle_failure_restore" true true 026-nocodb-v1 true
+[[ "$(<"$oracle_failure_restore/status")" != '0' ]] ||
+  fail 'upgraded restore accepted a revision-oracle failure'
 
 success="$(new_case success)"
 create_bundle "$success/backups" 20260825T003000Z

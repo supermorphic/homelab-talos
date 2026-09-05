@@ -14,21 +14,59 @@ expected_confirmation='upgrade:automation-data:nocodb-v1'
 expected_revision='026-nocodb-v1'
 job_name='automation-data-nocodb-upgrade'
 namespace='automation-data'
-job_created=false
+job_cleanup_pending=false
 temp_dir=''
 captured_main_sha=''
+run_marker=''
+
+job_name_if_present() {
+	local found
+	found="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
+		"$job_name" --ignore-not-found --output name 2>/dev/null)" || {
+		echo "Could not determine whether $namespace/$job_name exists." >&2
+		return 1
+	}
+	case "$found" in
+	'') ;;
+	job.batch/"$job_name") printf '%s\n' "$found" ;;
+	*)
+		echo "Unexpected identity returned for $namespace/$job_name." >&2
+		return 1
+		;;
+	esac
+}
+
+delete_owned_job() {
+	local job_json remaining
+	job_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
+		"$job_name" --ignore-not-found --output json 2>/dev/null)" || {
+		echo "Could not inspect run-owned Job $namespace/$job_name." >&2
+		return 1
+	}
+	[[ -n "$job_json" ]] || return 0
+	jq -e --arg marker "$run_marker" --arg name "$job_name" '
+    .metadata.name == $name and
+    .metadata.labels."homelab-talos/role" == "nocodb-platform-upgrade" and
+    .metadata.labels."homelab-talos/run-id" == $marker
+  ' >/dev/null <<<"$job_json" || {
+		echo "Refusing to delete $namespace/$job_name because its run ownership differs." >&2
+		return 1
+	}
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete job \
+		"$job_name" --wait=true --timeout=2m >/dev/null || return 1
+	remaining="$(job_name_if_present)" || return 1
+	[[ -z "$remaining" ]] || {
+		echo "Failed to prove removal of run-owned Job $namespace/$job_name." >&2
+		return 1
+	}
+}
 
 cleanup_upgrade() {
 	local original_exit="$?" cleanup_failed=false
 	trap - EXIT
 	set +e
-	if [[ "$job_created" == true ]]; then
-		kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete job \
-			"$job_name" --wait=true --timeout=2m >/dev/null || cleanup_failed=true
-		if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
-			"$job_name" --output json >/dev/null 2>&1; then
-			cleanup_failed=true
-		fi
+	if [[ "$job_cleanup_pending" == true ]]; then
+		delete_owned_job || cleanup_failed=true
 	fi
 	[[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir" || cleanup_failed=true
 	set -e
@@ -66,6 +104,7 @@ git cat-file -e "${captured_main_sha}^{commit}" 2>/dev/null || {
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-upgrade.XXXXXX")"
 chmod 700 "$temp_dir"
+run_marker="${captured_main_sha:0:12}-${temp_dir##*.}"
 
 require_source() {
 	local -a source_paths=(
@@ -115,8 +154,9 @@ require_target() {
 }
 
 require_no_overlap() {
-	if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
-		"$job_name" --output json >/dev/null 2>&1; then
+	local found
+	found="$(job_name_if_present)" || return 1
+	if [[ -n "$found" ]]; then
 		echo "Refusing automation-data upgrade: $namespace/$job_name already exists." >&2
 		return 1
 	fi
@@ -144,8 +184,8 @@ require_preconditions() {
 }
 
 render_job() {
-	local configmap_name="$1" run_id="${captured_main_sha:0:12}"
-	JOB_NAME="$job_name" RUN_ID="$run_id" CONFIGMAP_NAME="$configmap_name" \
+	local configmap_name="$1"
+	JOB_NAME="$job_name" RUN_ID="$run_marker" CONFIGMAP_NAME="$configmap_name" \
 		yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1",
@@ -218,6 +258,49 @@ render_job() {
     '
 }
 
+report_job_failure() {
+	local job_json pod_json raw_log failure
+	job_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
+		"$job_name" --ignore-not-found --output json 2>/dev/null)" || return 1
+	[[ -n "$job_json" ]] || return 1
+	jq -r '
+    "upgrade_job_state=active=" + ((.status.active // 0) | tostring) +
+    ",succeeded=" + ((.status.succeeded // 0) | tostring) +
+    ",failed=" + ((.status.failed // 0) | tostring),
+    ((.status.conditions // [])[] |
+      (.type // "Unknown") as $type |
+      (.status // "Unknown") as $status |
+      (.reason // "Unknown") as $reason |
+      "upgrade_job_condition=" +
+      (if ($type | test("^[A-Za-z0-9_.-]{1,64}$")) then $type else "Unknown" end) + ":" +
+      (if ($status | test("^[A-Za-z0-9_.-]{1,64}$")) then $status else "Unknown" end) + ":" +
+      (if ($reason | test("^[A-Za-z0-9_.-]{1,64}$")) then $reason else "Unknown" end))
+  ' <<<"$job_json" >&2
+	pod_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pods \
+		--selector="job-name=$job_name,homelab-talos/run-id=$run_marker" \
+		--output json 2>/dev/null)" || return 1
+	jq -r '
+    if (.items | length) == 0 then "upgrade_pod_state=absent"
+    else .items[] |
+      (.status.phase // "Unknown") as $phase |
+      ([.status.containerStatuses[]? | select(.name == "upgrade") |
+        .state.terminated][0] // {}) as $terminated |
+      "upgrade_pod_state=phase=" +
+      (if ($phase | test("^[A-Za-z0-9_.-]{1,64}$")) then $phase else "Unknown" end) +
+      ",reason=" +
+      (if (($terminated.reason // "Unknown") | test("^[A-Za-z0-9_.-]{1,64}$"))
+        then ($terminated.reason // "Unknown") else "Unknown" end) +
+      ",exit_code=" + (($terminated.exitCode // -1) | tostring)
+    end
+  ' <<<"$pod_json" >&2
+	raw_log="$temp_dir/failed-job.log"
+	if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$job_name" \
+		--container=upgrade >"$raw_log" 2>/dev/null; then
+		failure="$(rg -o -m1 'platform_upgrade_already_running|unknown_platform_revision|incomplete_nocodb_extension|invalid_nocodb_[a-z_]+|incompatible_pre_extension_[a-z_]+' "$raw_log" || true)"
+		[[ -z "$failure" ]] || printf 'upgrade_failure=%s\n' "$failure" >&2
+	fi
+}
+
 # Reviewable preflight, attended confirmation, then the same safety-critical checks
 # immediately before the only mutation.
 require_preconditions
@@ -241,13 +324,17 @@ require_target
 just kube automation-data-verify >/dev/null
 require_no_overlap
 
-render_job "$configmap_name" | kubectl --kubeconfig "$kubeconfig" \
-	--namespace "$namespace" create --filename - >/dev/null
-job_created=true
+job_cleanup_pending=true
+if ! render_job "$configmap_name" | kubectl --kubeconfig "$kubeconfig" \
+	--namespace "$namespace" create --filename - >/dev/null; then
+	echo 'The fixed automation-data upgrade Job create response was ambiguous.' >&2
+	exit 1
+fi
 
 if ! kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" wait \
 	--for=condition=Complete "job/$job_name" --timeout=5m >/dev/null; then
 	echo 'The fixed automation-data upgrade Job did not complete.' >&2
+	report_job_failure || echo 'upgrade_job_diagnostics=unavailable' >&2
 	exit 1
 fi
 
@@ -263,14 +350,8 @@ kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$job_name"
 	exit 1
 }
 
-kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete job \
-	"$job_name" --wait=true --timeout=2m >/dev/null
-if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
-	"$job_name" --output json >/dev/null 2>&1; then
-	echo "Failed to prove removal of run-owned Job $namespace/$job_name." >&2
-	exit 1
-fi
-job_created=false
+delete_owned_job
+job_cleanup_pending=false
 
 trap - EXIT
 rm -rf -- "$temp_dir"
