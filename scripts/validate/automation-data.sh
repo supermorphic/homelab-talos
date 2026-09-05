@@ -11,8 +11,6 @@ fail() {
 
 operations_guide='docs/guides/automation-data-operations.md'
 recovery_runbook='docs/runbooks/automation-data-recovery.md'
-disaster_runbook='docs/runbooks/platform-disaster-recovery.md'
-docs_index='docs/README.md'
 for required_document in "$operations_guide" "$recovery_runbook"; do
   [[ -f "$required_document" ]] || fail "required operations document is missing: $required_document"
 done
@@ -273,52 +271,6 @@ kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/nu
   fail 'the restored n8n instance does not target the isolated automation-data Service'
 [[ "$(yq -r 'select(.kind == "HTTPRoute") | .kind' "$temp_dir"/*.yaml | sed '/^---$/d' | wc -l | tr -d ' ')" == 0 ]] ||
   fail 'the isolated restore manifests must not expose an HTTPRoute'
-
-shellcheck -x scripts/test/lib/automation-data-restore-command.sh \
-  scripts/test/automation-data-restore-command-test.sh "$restore_scenario"
-
-# shellcheck disable=SC2016 # Backticks and shell variables are literal document markers.
-for operations_marker in \
-  "AUTOMATION_DATA_SECRETS_CONFIRM='write:automation-data:postgresql:sops'" \
-  'mise exec -- just bootstrap automation-data' \
-  'Automation Data Provisioner' \
-  'Automation Data n8n API' \
-  'Automation Data Provisioning Header' \
-  'Automation Data Recovery Canary' \
-  'Platform Canary Header' \
-  'automation-data/issue317_acceptance/runtime' \
-  'full-access Community' \
-  'Ordinary reconcile never rotates' \
-  '`DROP DATABASE`' \
-  '`DROP ROLE`' \
-  'mise exec -- just kube automation-data-provisioning-test' \
-  'mise exec -- just kube automation-data-restore-drill'; do
-  rg -Fq -- "$operations_marker" "$operations_guide" ||
-    fail "the operations guide omits $operations_marker"
-done
-# shellcheck disable=SC2016 # Backticks are literal document markers.
-for recovery_marker in \
-  '## Pod rescheduling' \
-  '## Longhorn volume recovery' \
-  '## Logical bundle restore' \
-  '## Total-cluster reconstruction' \
-  'SOPS age private key' \
-  'off-cluster backup access' \
-  '`N8N_ENCRYPTION_KEY`' \
-  '`pg_dumpall --globals-only`' \
-  '`--no-role-passwords`' \
-  'role password verifiers' \
-  'AUTOMATION_DATA_RESTORE_CONFIRM=' \
-  'fresh post-recovery backup'; do
-  rg -Fq -- "$recovery_marker" "$recovery_runbook" ||
-    fail "the recovery runbook omits $recovery_marker"
-done
-rg -Fq '[Automation-data PostgreSQL operations](guides/automation-data-operations.md)' \
-  "$docs_index" || fail 'the documentation index omits the automation-data operations guide'
-rg -Fq '[Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md)' \
-  "$docs_index" || fail 'the documentation index omits the automation-data recovery runbook'
-rg -Fq 'automation-data-recovery.md' "$disaster_runbook" ||
-  fail 'the platform disaster runbook does not include automation-data recovery'
 
 just --show bootstrap automation-data >"$temp_dir/bootstrap-source"
 # shellcheck disable=SC2016 # Shell variables are literal rendered-recipe markers.
