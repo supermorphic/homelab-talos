@@ -210,7 +210,11 @@ report service does not become an authenticated write endpoint and CI does not g
 cluster credential.
 
 The server installs exact run paths and switches the active generation atomically. Its
-retained Longhorn `ReadWriteOnce` claim is mounted by a one-replica `Recreate`
+checksum manifest uses byte ordering of complete relative paths on both the publisher
+and installer, so archive integrity checks do not depend on host locale or programming
+language path-ordering conventions.
+
+The server's retained Longhorn `ReadWriteOnce` claim is mounted by a one-replica `Recreate`
 Deployment, and Flux prune protection prevents Kustomization removal from implicitly
 authorizing archive deletion.
 
@@ -290,6 +294,15 @@ drift requires a new campaign.
   visible to Flux. The Caddy image startup still needs the narrowly bound
   `NET_BIND_SERVICE` capability even though the configured listener is unprivileged; it
   receives no ServiceAccount token or Kubernetes API authority.
+
+### Publication debrief — September 2026
+
+Publishing an automation-data acceptance report exposed a mismatch between Python's
+path-component ordering and the installer's full-filename ordering. Valid report assets
+could therefore fail manifest verification. Both sides now use the same byte ordering.
+Offline validation reproduced the rejection and confirmed successful installation after
+the correction; checksum rejection and atomic publication remain intact. Live publication
+of the corrected revision remains to be confirmed.
 
 ## Deferred assurance coverage
 

@@ -472,10 +472,9 @@ complete chain.
 
 The default selects the newest valid bundle and n8n dump independently. Both must contain
 the same credential version. An operator can instead select a known matching retained
-pair with `AUTOMATION_DATA_RESTORE_BUNDLE` and `N8N_RESTORE_DUMP`; both selectors are
-required together, accept exact basenames only, and never fall back after an invalid
-explicit selection. Unavailable backup fixtures are classified separately from SQL,
-permission, and credential-authentication failures.
+pair; an invalid explicit selection must fail rather than silently restore another pair.
+The [recovery runbook](../runbooks/automation-data-recovery.md) describes selection and
+diagnosis of unavailable backup artifacts.
 
 The globals dump contains password verifiers and remains sensitive even though it does
 not contain plaintext passwords. Repository files, CI output, test evidence, logs, and
@@ -632,13 +631,10 @@ repository contracts already proved by CI.
 
 ### Initial deployment
 
-The implementation merged in [PR #352](https://github.com/supermorphic/homelab-talos/pull/352).
-Follow-up PRs #355, #357–360, and #362 corrected idle backup-volume health, live
-acceptance contracts, exporter permissions, offline test execution, canonical result
-layout, and restore ConfigMap discovery. [PR #364](https://github.com/supermorphic/homelab-talos/pull/364)
-activated reconciliation after acceptance. PostgreSQL, the guarded Secret, offline
-contracts, n8n credential bindings, and operational commands are deployed as of
-2026-09-05.
+The initial implementation delivered PostgreSQL, the encrypted platform Secret, private
+n8n credential bindings, monitoring, recovery, and the operational interfaces defined
+here. Permanent Flux reconciliation was activated after attended provisioning and
+recovery acceptance on 2026-09-05.
 
 The attended provisioning run
 `20260904T022844Z-df8824b737bd-operator-1f4ca77c` passed domain creation, unchanged
@@ -656,33 +652,32 @@ specification without operator escrow of domain plaintext passwords. Following t
 acceptance, the repository keeps the `automation-data-postgresql` Flux Kustomization
 active with `spec.suspend: false`.
 
-### Closeout audit
+### Initiative debrief
 
-The closeout audit repeated `mise exec -- just kube automation-data-verify` against
-revision `0d678994c5f8` using task-scoped credentials. Run
-`20260905T151755Z-0d678994c5f8-operator-90f1a303` passed live verification and canonical
-result validation: Flux and StatefulSet readiness, both retained claims and Longhorn
-volumes, private Service, healthy scrape target, all 12 alert rules, dashboard, backup
-freshness, registry consistency, and incomplete-operation age. This baseline observation
-and the initial attended results predate the audit's control-function changes.
+The audit confirmed the shared PostgreSQL and private n8n provisioning design. Durable
+ownership reservations make interrupted provisioning recoverable without inferring
+ownership from matching object names; validation failures no longer change another
+operation's state. Existing databases receive function changes through an explicit
+control migration rather than rerunning initialization.
 
-The audit also corrected the operations guide's Secret variable names and provisioning
-test inputs, documented consumer provisioning and migration requests, and distinguished
-normal idle backup-volume detachment from a storage fault. At the operator's request,
-the automation-data specification moved from identifier 025 to 026 to resolve the
-identifier collision with node lifecycle.
+Credential-changing acceptance remains attended and separate from periodic recovery
+coverage. Recovery supports an explicitly selected compatible backup pair. These changes
+preserve the original self-service and recovery boundaries without adding a provisioning
+service or container-based database testing to CI.
 
-The source corrections retain the provisioning API, add durable ownership reservations,
-and provide an explicit update command for initialized databases. Recovery accepts an
-exact retained backup pair. Credential-rotating acceptance is standalone, while the
-restore drill remains in periodic integration coverage. Canonical CI now scans candidate
-Git ancestry without unrelated local refs and owns shell validation for the migration
-sources. Redundant focused ShellCheck and documentation keyword checks were removed.
+After the operator reported completing the control migration, the private workflow's
+PostgreSQL bindings were corrected to use the platform provisioner credential. The
+operator-reported run `20260905T182837Z-eeeb571af05c-operator-af3d1b16` passed provisioning,
+unchanged reconciliation, permissions, runtime rotation, and complete backup creation.
+Read-only run `20260905T180611Z-eeeb571af05c-operator-454910b9` independently passed
+deployment, storage, monitoring, and registry verification. The initial full-chain
+recovery evidence above predates these corrections; recovery acceptance using the new
+credential version remains outstanding.
 
-Control-function updates on retained storage require
-[`kube automation-data-control-migrate`](../guides/automation-data-operations.md#update-platform-control-functions)
-and updated private workflow bindings before attended acceptance. Initial deployment
-evidence does not establish acceptance of a later control-function revision.
+At the operator's request, this specification moved from identifier 025 to 026 to resolve
+the collision with node lifecycle. The [operations guide](../guides/automation-data-operations.md)
+and [recovery runbook](../runbooks/automation-data-recovery.md) retain the operational
+procedures; implementation sequencing and test mechanics belong in the transient plan.
 
 ## Rejected alternatives
 

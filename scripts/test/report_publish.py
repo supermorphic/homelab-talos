@@ -600,7 +600,10 @@ def write_redirect(path: Path, target: str) -> None:
 
 def checksum_manifest(bundle: Path) -> None:
     lines = []
-    for path in sorted(item for item in bundle.rglob("*") if item.is_file()):
+    for path in sorted(
+        (item for item in bundle.rglob("*") if item.is_file()),
+        key=lambda item: item.relative_to(bundle).as_posix().encode("utf-8"),
+    ):
         if path.name == "manifest.sha256":
             continue
         relative = path.relative_to(bundle).as_posix()
