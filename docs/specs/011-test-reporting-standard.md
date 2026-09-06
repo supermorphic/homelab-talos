@@ -302,7 +302,8 @@ path-component ordering and the installer's full-filename ordering. Valid report
 could therefore fail manifest verification. Both sides now use the same byte ordering.
 Offline validation reproduced the rejection and confirmed successful installation after
 the correction; checksum rejection and atomic publication remain intact. Live publication
-of the corrected revision remains to be confirmed.
+of the corrected revision was confirmed with automation-data recovery run
+`20260906T103531Z-bfd6c1b6793c-operator-1efda0f5`.
 
 ## Deferred assurance coverage
 
