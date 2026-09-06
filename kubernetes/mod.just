@@ -402,6 +402,10 @@ flux-status:
 flux-verify: flux-validate require-bash
     @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
 
+# Compare the dedicated and bundled Flux resource metrics against Kubernetes API inventory.
+flux-exporter-parity-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.flux-exporter-parity -- scripts/verify/flux-exporter-parity.sh {{quote(kubeconfig)}}
+
 # Validate the complete local internal foundation graph, encrypted providers, and pinned chart renders.
 foundation-validate: require-bash
     @scripts/validate/foundation.sh

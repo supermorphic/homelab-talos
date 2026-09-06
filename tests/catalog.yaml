@@ -61,6 +61,7 @@ campaigns:
       - verification.metrics-server
       - verification.cilium
       - verification.flux
+      - verification.flux-exporter-parity
       - verification.foundation
       - verification.n8n
       - verification.automation-data
@@ -123,6 +124,7 @@ campaigns:
       - verification.metrics-server
       - verification.cilium
       - verification.flux
+      - verification.flux-exporter-parity
       - verification.foundation
       - verification.n8n
       - verification.automation-data
@@ -438,6 +440,11 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flux-verify", implementation: scripts/verify/flux.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.flux-exporter-parity, source: verification, framework: bash, suite: platform, tier: verification, target: flux-exporter-parity, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube flux-exporter-parity-verify", implementation: scripts/verify/flux-exporter-parity.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.foundation, source: verification, framework: bash, suite: platform, tier: verification, target: foundation, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

@@ -102,6 +102,8 @@ run_shell_case native-junit-validator scripts/test/run-native-junit-validator-te
 run_shell_case catalog-negative scripts/test/validate-catalog-test.sh
 register_harness_shell_case flux-alerts-diagnostics \
 	scripts/test/flux-alerts-diagnostics-test.sh
+register_harness_shell_case flux-exporter-parity \
+	scripts/test/flux-exporter-parity-test.sh
 register_harness_shell_case flux-alert-delivery \
 	scripts/test/flux-alert-delivery-test.sh
 register_harness_shell_case tailscale-routes scripts/test/tailscale-routes-test.sh
