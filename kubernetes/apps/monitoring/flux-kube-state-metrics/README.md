@@ -21,10 +21,16 @@ cached status; it does not establish an admission-webhook failure. The original 
 cause remains unproven. See [specification 005](../../../../docs/specs/005-flux-reconciliation-alerting.md)
 for the evidence and staged validation boundary.
 
-This instance remains its own HelmRelease, independently reconciled and
-independently removable, and **does not touch KPS values**. It runs CRS-only
-(`collectors: []` + `--custom-resource-state-only=true`) so it emits no `kube_*` metrics and
-does not duplicate the bundled KSM.
+This instance remains its own HelmRelease and is the explicit production source
+for Flux alerts. It runs CRS-only (`collectors: []` +
+`--custom-resource-state-only=true`) so it emits no `kube_*` metrics and does
+not duplicate the bundled KSM's standard metrics.
+
+The bundled KPS exporter now shadow-collects the same five Flux kinds. Its
+ServiceMonitor renames only `gotk_resource_info` to
+`gotk_candidate_resource_info`, so the candidate cannot match production
+rules. It retains standard collectors and receives only the CRD-discovery and
+Flux list/watch additions required for custom-resource collection.
 
 ## Scope
 
@@ -57,11 +63,6 @@ explicit, confirmation-guarded E2E test because it delivers an external ntfy mes
 
 ## Future consolidation
 
-Keep this exporter during the bounded Grafana `Recreate` change. After that KPS
-values-change upgrade is verified, a separate migration must:
-
-1. Move this `customResourceState` config (and the minimal RBAC) into the bundled
-   kube-state-metrics under `../kube-prometheus-stack/app/values.yaml`.
-2. Verify `gotk_resource_info` parity (same labels/values) from the bundled exporter.
-3. Confirm Prometheus scrapes the bundled target and the alerts keep firing/resolving.
-4. Remove this application (`ks.yaml` entry + directory).
+The next stage validates candidate parity and alert behavior while production
+continues to use this exporter. Only a later accepted cutover may select the
+candidate metric and remove this application (`ks.yaml` entry + directory).

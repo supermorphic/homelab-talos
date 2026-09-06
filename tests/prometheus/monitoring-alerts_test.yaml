@@ -600,15 +600,15 @@ tests:
   - name: reconciliation failure fires for every unsuspended resource not Ready=True
     interval: 1m
     input_series:
-      - series: 'gotk_resource_info{customresource_kind="Kustomization",exported_namespace="flux-system",name="broken",ready="False",suspended=""}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",exported_namespace="flux-system",name="broken",ready="False",suspended=""}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="OCIRepository",exported_namespace="flux-system",name="unknown",ready="Unknown",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="OCIRepository",exported_namespace="flux-system",name="unknown",ready="Unknown",suspended="false"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="HelmRepository",exported_namespace="monitoring",name="missing-ready",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository",exported_namespace="monitoring",name="missing-ready",suspended="false"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="HelmRelease",exported_namespace="monitoring",name="suspended",ready="False",suspended="true"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease",exported_namespace="monitoring",name="suspended",ready="False",suspended="true"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="GitRepository",exported_namespace="flux-system",name="healthy",ready="True",suspended=""}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository",exported_namespace="flux-system",name="healthy",ready="True",suspended=""}'
         values: 1x20
     alert_rule_test:
       - eval_time: 14m
@@ -621,8 +621,10 @@ tests:
               customresource_kind: Kustomization
               exported_namespace: flux-system
               name: broken
+              namespace: monitoring
               ready: "False"
               severity: warning
+              service: flux-kube-state-metrics
             exp_annotations:
               summary: Flux Kustomization flux-system/broken is failing to reconcile
               description: >-
@@ -635,8 +637,10 @@ tests:
               customresource_kind: OCIRepository
               exported_namespace: flux-system
               name: unknown
+              namespace: monitoring
               ready: Unknown
               severity: warning
+              service: flux-kube-state-metrics
               suspended: "false"
             exp_annotations:
               summary: Flux OCIRepository flux-system/unknown is failing to reconcile
@@ -650,7 +654,9 @@ tests:
               customresource_kind: HelmRepository
               exported_namespace: monitoring
               name: missing-ready
+              namespace: monitoring
               severity: warning
+              service: flux-kube-state-metrics
               suspended: "false"
             exp_annotations:
               summary: Flux HelmRepository monitoring/missing-ready is failing to reconcile
@@ -664,13 +670,13 @@ tests:
   - name: one missing resource kind triggers the watchdog independently
     interval: 1m
     input_series:
-      - series: 'gotk_resource_info{customresource_kind="Kustomization",ready="True",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",ready="True",suspended="false"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="HelmRelease",ready="True",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease",ready="True",suspended="false"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="GitRepository",ready="True",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository",ready="True",suspended="false"}'
         values: 1x20
-      - series: 'gotk_resource_info{customresource_kind="HelmRepository",ready="True",suspended="false"}'
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository",ready="True",suspended="false"}'
         values: 1x20
     alert_rule_test:
       - eval_time: 14m
@@ -681,7 +687,9 @@ tests:
         exp_alerts:
           - exp_labels:
               customresource_kind: OCIRepository
+              namespace: monitoring
               severity: warning
+              service: flux-kube-state-metrics
             exp_annotations:
               summary: Flux OCIRepository resource-state metrics are missing
               description: >-
@@ -690,6 +698,85 @@ tests:
                 Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
                 custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
                 the Flux APIs).
+
+  - name: candidate resource failure cannot fire the production rule
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",exported_namespace="flux-system",name="candidate-broken",ready="False",suspended="false"}'
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FluxReconciliationFailure
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: FluxReconciliationFailure
+        exp_alerts: []
+
+  - name: candidate kind cannot satisfy the dedicated missing-metrics watchdog
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository",ready="True",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="OCIRepository",ready="True",suspended="false"}'
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FluxResourceMetricsMissing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: FluxResourceMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              customresource_kind: OCIRepository
+              namespace: monitoring
+              severity: warning
+              service: flux-kube-state-metrics
+            exp_annotations:
+              summary: Flux OCIRepository resource-state metrics are missing
+              description: >-
+                gotk_resource_info has contained no OCIRepository series for more than 15
+                minutes, so reconciliation failures for that resource kind are undetectable.
+                Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
+                custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
+                the Flux APIs).
+
+  - name: dedicated and candidate copies produce one production failure alert
+    interval: 1m
+    input_series:
+      - series: 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",exported_namespace="flux-system",name="duplicated-broken",ready="False",suspended="false"}'
+        values: 1x20
+      - series: 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization",exported_namespace="flux-system",name="duplicated-broken",ready="False",suspended="false"}'
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FluxReconciliationFailure
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: FluxReconciliationFailure
+        exp_alerts:
+          - exp_labels:
+              customresource_kind: Kustomization
+              exported_namespace: flux-system
+              name: duplicated-broken
+              namespace: monitoring
+              ready: "False"
+              severity: warning
+              service: flux-kube-state-metrics
+              suspended: "false"
+            exp_annotations:
+              summary: Flux Kustomization flux-system/duplicated-broken is failing to reconcile
+              description: >-
+                The Flux Kustomization flux-system/duplicated-broken has not reported Ready=True
+                for more than 15 minutes, so its desired state may no longer be reconciling.
+                Inspect it (`flux get all -A`, `flux logs`) and check its source (Git/OCI/Helm
+                repository) and rendered manifests. Intentionally suspended resources are
+                excluded.
 
   # --- ntfy and portainer ---
   #

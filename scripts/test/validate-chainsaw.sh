@@ -102,6 +102,10 @@ run_shell_case native-junit-validator scripts/test/run-native-junit-validator-te
 run_shell_case catalog-negative scripts/test/validate-catalog-test.sh
 register_harness_shell_case flux-alerts-diagnostics \
 	scripts/test/flux-alerts-diagnostics-test.sh
+register_harness_shell_case flux-exporter-parity \
+	scripts/test/flux-exporter-parity-test.sh
+register_harness_shell_case flux-exporter-parity-verifier \
+	scripts/test/flux-exporter-parity-verify-test.sh
 register_harness_shell_case flux-alert-delivery \
 	scripts/test/flux-alert-delivery-test.sh
 register_harness_shell_case tailscale-routes scripts/test/tailscale-routes-test.sh
@@ -131,6 +135,8 @@ register_harness_shell_case cilium-validator scripts/test/cilium-validator-test.
 register_harness_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
 register_harness_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 register_harness_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
+register_harness_shell_case monitoring-flux-exporter \
+	scripts/test/monitoring-flux-exporter-test.sh
 register_harness_shell_case monitoring-fixtures scripts/test/lib/monitoring-fixtures-test.sh
 register_harness_shell_case monitoring-alloy-logs-validator \
 	scripts/test/monitoring-alloy-logs-validator-test.sh

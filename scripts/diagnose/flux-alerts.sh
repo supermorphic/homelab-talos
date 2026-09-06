@@ -5,11 +5,14 @@ source scripts/lib/network.sh
 source scripts/lib/flux-alerts.sh
 source scripts/test/lib/results.sh
 
+flux_alerts_source
+
 readonly suite_id='diagnostics.flux-alerts'
 readonly namespace='monitoring'
-readonly exporter_name='flux-kube-state-metrics'
-readonly exporter_subject='system:serviceaccount:monitoring:flux-kube-state-metrics'
-readonly exporter_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
+readonly exporter_name="$flux_alerts_service"
+readonly exporter_subject="system:serviceaccount:monitoring:${flux_alerts_serviceaccount}"
+readonly exporter_values="$flux_alerts_values"
+readonly exporter_values_root="$flux_alerts_values_root"
 readonly prometheus_base_url='https://prometheus.lab.supermorphic.com'
 readonly prometheus_resolve="prometheus.lab.supermorphic.com:443:${HOMELAB_GATEWAY_VIP}"
 readonly alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
@@ -31,7 +34,7 @@ bounded_text() {
 
 load_configured_gvks() {
   local configured
-  if ! configured="$(flux_alerts_configured_gvks "$exporter_values" 2>&1)"; then
+  if ! configured="$(flux_alerts_configured_gvks "$exporter_values" "$exporter_values_root" 2>&1)"; then
     echo "Could not read configured Flux GVKs: $(printf '%s' "$configured" | bounded_text)" >&2
     return 1
   fi
@@ -372,10 +375,10 @@ stage_prometheus_target() {
     echo 'Prometheus targets API did not return status=success.' >&2
     return 1
   }
-  target_count="$(flux_alerts_target_count "$exporter_name" <<<"$response")"
-  healths="$(flux_alerts_target_healths "$exporter_name" <<<"$response")"
+  target_count="$(flux_alerts_target_count "$exporter_name" "$namespace" <<<"$response")"
+  healths="$(flux_alerts_target_healths "$exporter_name" "$namespace" <<<"$response")"
   printf '  discovered targets=%s health=%s\n' "$target_count" "${healths:-none}"
-  errors="$(flux_alerts_target_errors "$exporter_name" <<<"$response")"
+  errors="$(flux_alerts_target_errors "$exporter_name" "$namespace" <<<"$response")"
   if [[ -n "$errors" ]]; then
     echo '  bounded target errors:'
     printf '%s\n' "$errors" | bounded_text | sed 's/^/    /'
@@ -390,7 +393,7 @@ stage_prometheus_metric() {
 
   if ! response="$(
     flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
-      'gotk_resource_info' 2>&1
+      "$(flux_alerts_metric_selector)" 2>&1
   )"; then
     echo "Prometheus metric query failed: $(printf '%s' "$response" | bounded_text)" >&2
     return 1

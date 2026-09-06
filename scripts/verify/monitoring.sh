@@ -4,6 +4,8 @@ set -euo pipefail
 source scripts/lib/network.sh
 source scripts/lib/flux-alerts.sh
 
+flux_alerts_source
+
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: monitoring.sh <kubeconfig>' >&2
   exit 2
@@ -12,8 +14,9 @@ source scripts/lib/flux-alerts.sh
 kubeconfig="$1"
 ns='monitoring'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
-exporter_name='flux-kube-state-metrics'
-exporter_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
+exporter_name="$flux_alerts_service"
+exporter_values="$flux_alerts_values"
+exporter_values_root="$flux_alerts_values_root"
 prometheus_base_url='https://prometheus.lab.supermorphic.com'
 prometheus_resolve="prometheus.lab.supermorphic.com:443:${gateway_ip}"
 alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
@@ -80,8 +83,8 @@ targets_response="$(
   echo 'Prometheus targets API did not return status=success.' >&2
   exit 1
 }
-target_count="$(flux_alerts_target_count "$exporter_name" <<<"$targets_response")"
-target_healths="$(flux_alerts_target_healths "$exporter_name" <<<"$targets_response")"
+target_count="$(flux_alerts_target_count "$exporter_name" "$ns" <<<"$targets_response")"
+target_healths="$(flux_alerts_target_healths "$exporter_name" "$ns" <<<"$targets_response")"
 [[ "$target_count" -gt 0 ]] || {
   echo 'Prometheus has not discovered the flux-kube-state-metrics scrape target.' >&2
   exit 1
@@ -93,7 +96,7 @@ target_healths="$(flux_alerts_target_healths "$exporter_name" <<<"$targets_respo
 
 metric_response="$(
   flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
-    'gotk_resource_info'
+    "$(flux_alerts_metric_selector)"
 )"
 [[ "$(yq -r '.status // ""' <<<"$metric_response")" == 'success' ]] || {
   echo 'Prometheus gotk_resource_info query did not return status=success.' >&2
@@ -110,7 +113,7 @@ while IFS=$'\t' read -r _group _version expected_kind; do
     echo "Prometheus gotk_resource_info is missing configured Flux kind $expected_kind." >&2
     exit 1
   }
-done < <(flux_alerts_configured_gvks "$exporter_values")
+done < <(flux_alerts_configured_gvks "$exporter_values" "$exporter_values_root")
 
 rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
