@@ -99,12 +99,12 @@ flux_exporter_parity_load_inventory() {
   }
 
   for ((index = 0; index < expected_count; index++)); do
-    api_version="$(yq -r ".items[$index].apiVersion // \"\"" <<<"$inventory")"
-    kind="$(yq -r ".items[$index].kind // \"\"" <<<"$inventory")"
-    resource_namespace="$(yq -r ".items[$index].metadata.namespace // \"\"" <<<"$inventory")"
-    name="$(yq -r ".items[$index].metadata.name // \"\"" <<<"$inventory")"
-    ready="$(yq -r "[.items[$index].status.conditions[]? | select(.type == \"Ready\") | .status] | join(\"\\u001f\")" <<<"$inventory")"
-    suspended="$(yq -r "(.items[$index].spec.suspend // false) | tostring" <<<"$inventory")"
+    api_version="$(yq -r ".items[$index].apiVersion // \"\"" <<<"$inventory")" || return 1
+    kind="$(yq -r ".items[$index].kind // \"\"" <<<"$inventory")" || return 1
+    resource_namespace="$(yq -r ".items[$index].metadata.namespace // \"\"" <<<"$inventory")" || return 1
+    name="$(yq -r ".items[$index].metadata.name // \"\"" <<<"$inventory")" || return 1
+    ready="$(yq -r "[.items[$index].status.conditions[]? | select(.type == \"Ready\") | .status] | join(\"\\u001f\")" <<<"$inventory")" || return 1
+    suspended="$(yq -r "(.items[$index].spec.suspend // false) | tostring" <<<"$inventory")" || return 1
     group="${api_version%/*}"
     version="${api_version##*/}"
     [[ -n "$api_version" && "$group" != "$api_version" && -n "$version" && -n "$kind" && -n "$resource_namespace" && -n "$name" && "$ready" != *$'\x1f'* ]] || {

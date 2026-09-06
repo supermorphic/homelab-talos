@@ -83,6 +83,19 @@ missing_ready_inventory_json="$(yq -o=json 'del(.items[] | select(.kind == "GitR
 matching_missing_ready_dedicated_json="$(yq -o=json 'del(.data.result[] | select(.metric.customresource_kind == "GitRepository") | .metric.ready)' <<<"$dedicated_json")"
 matching_missing_ready_candidate_json="$(yq -o=json 'del(.data.result[] | select(.metric.customresource_kind == "GitRepository") | .metric.ready)' <<<"$candidate_json")"
 flux_exporter_compare "$matching_missing_ready_dedicated_json" "$matching_missing_ready_candidate_json" "$missing_ready_inventory_json"
+# The production change that must make this assertion fail is ignoring a per-item
+# yq extraction error and treating malformed Ready conditions as absent.
+malformed_conditions_inventory_json='{"apiVersion":"v1","kind":"List","items":[
+{"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"Kustomization","metadata":{"namespace":"flux-system","name":"cluster-apps"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmRelease","metadata":{"namespace":"monitoring","name":"kube-prometheus-stack"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepository","metadata":{"namespace":"flux-system","name":"flux-system"},"spec":{"suspend":false},"status":{"conditions":[[]]}},
+{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository","metadata":{"namespace":"monitoring","name":"grafana"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},
+{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepository","metadata":{"namespace":"monitoring","name":"prometheus-community"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}}
+]}'
+if flux_exporter_compare "$matching_missing_ready_dedicated_json" "$matching_missing_ready_candidate_json" "$malformed_conditions_inventory_json"; then
+  echo 'Malformed Ready conditions were accepted as absent.' >&2
+  exit 1
+fi
 invalid_value_json="$(yq -o=json '(.data.result[] | select(.metric.customresource_kind == "OCIRepository") | .value[1]) = "zero"' <<<"$candidate_json")"
 assert_rejected 'invalid sample value' "$dedicated_json" "$invalid_value_json" "$inventory_json"
 wrong_gvk_json="$(yq -o=json '(.data.result[] | select(.metric.customresource_kind == "OCIRepository") | .metric.customresource_version) = "v2"' <<<"$candidate_json")"
